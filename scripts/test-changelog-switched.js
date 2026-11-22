@@ -123,7 +123,7 @@ const mdItemAt = (needle) => {
   const A = await import("../src/speech-additions.js");
   const G = await import("../src/tools/llm-gateway-kit.js");
   const S = await import("../src/tools/stt-kit.js");
-  const { namedSpeechShown, namedTranscriptionShown } = await import("../src/changelog.js");
+  const { namedSpeechShown, namedTranscriptionShown, elevenV3ConversationalShown, ELEVEN_V3_CONVERSATIONAL } = await import("../src/changelog.js");
   const EXAMPLE = JSON.parse(readFileSync(new URL("../docs/example-upstream-costs.json", import.meta.url), "utf8"));
   const speechPrice = Number(G.LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-audio-speech").price.replace("$", ""));
   const speechRows = Object.fromEntries(A.SPEECH_ADDITIONS.map((m) => [m.id, 0.5 * A.ADDITION_MARGIN * speechPrice / G.SPEECH_MAX_CHARS]));
@@ -133,10 +133,14 @@ const mdItemAt = (needle) => {
   const speech = CHANGELOG_ENTRIES.find((x) => x.title === SPEECH), stt = CHANGELOG_ENTRIES.find((x) => x.title === STT);
   ok(speech && speech.shownWhen === namedSpeechShown && stt && stt.shownWhen === namedTranscriptionShown, "the named speech and transcription entries each read whether this server serves such a model (shownWhen)");
   const naming = CHANGELOG_ENTRIES.filter((x) => x.items.some((i) => i.includes("NAMED_AUDIO_MODELS")));
-  ok(naming.length === 2 && naming.every((x) => x === speech || x === stt), "every item that names NAMED_AUDIO_MODELS sits in one of those two entries");
+  const LENGTH = "Named speech model length";
+  const length = CHANGELOG_ENTRIES.find((x) => x.title === LENGTH);
+  ok(A.SPEECH_ADDITIONS.some((m) => m.id === ELEVEN_V3_CONVERSATIONAL) && length && length.shownWhen === elevenV3ConversationalShown, `the "${LENGTH}" entry reads whether this server serves ${ELEVEN_V3_CONVERSATIONAL} (shownWhen)`);
+  ok(naming.length === 3 && naming.every((x) => x === speech || x === stt || x === length), "every item that names NAMED_AUDIO_MODELS sits in one of those three entries");
+  ok(mdItemAt("`elevenlabs/eleven-v3-conversational` takes").includes("NAMED_AUDIO_MODELS"), "the CHANGELOG.md length item is scoped to a server that lists the model in NAMED_AUDIO_MODELS");
   ok(mdItemAt("`POST /v1/audio/speech`, each").includes("NAMED_AUDIO_MODELS") && mdItemAt("URL transcribe").includes("NAMED_AUDIO_MODELS"), "both CHANGELOG.md items are scoped to a server that lists the models in NAMED_AUDIO_MODELS");
-  const shown = () => { const out = render(); return { speech: out.includes(SPEECH), stt: out.includes(STT) }; };
-  const state = (want, m) => { const got = shown(); ok(got.speech === want.speech && got.stt === want.stt, `${m}: speech entry ${want.speech ? "shown" : "hidden"}, transcription entry ${want.stt ? "shown" : "hidden"} (got ${JSON.stringify(got)})`); };
+  const shown = () => { const out = render(); return { speech: out.includes(SPEECH), stt: out.includes(STT), length: out.includes(LENGTH) }; };
+  const state = (want, m) => { const got = shown(); want = { length: want.speech, ...want }; ok(got.speech === want.speech && got.stt === want.stt && got.length === want.length, `${m}: speech entry ${want.speech ? "shown" : "hidden"}, transcription entry ${want.stt ? "shown" : "hidden"} (got ${JSON.stringify(got)})`); };
 
   process.env.OPENROUTER_TTS_ENABLED = "true";
   delete process.env.NAMED_AUDIO_MODELS;
@@ -155,6 +159,10 @@ const mdItemAt = (needle) => {
   state({ speech: true, stt: true }, "switch on, every row");
   process.env.NAMED_AUDIO_MODELS = A.STT_ADDITIONS[0].id;
   state({ speech: false, stt: true }, "switch names one transcription model");
+  const otherSpeech = A.SPEECH_ADDITIONS.find((m) => m.id !== ELEVEN_V3_CONVERSATIONAL);
+  if (otherSpeech) { process.env.NAMED_AUDIO_MODELS = otherSpeech.id; state({ speech: true, stt: false, length: false }, `switch names ${otherSpeech.id} only`); }
+  process.env.NAMED_AUDIO_MODELS = ELEVEN_V3_CONVERSATIONAL;
+  state({ speech: true, stt: false, length: true }, `switch names ${ELEVEN_V3_CONVERSATIONAL} only`);
   process.env.NAMED_AUDIO_MODELS = "all";
   delete process.env.OPENROUTER_TTS_ENABLED;
   state({ speech: false, stt: true }, "the speech route not served");
