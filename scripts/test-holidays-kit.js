@@ -14,6 +14,10 @@ import { __setHolidayReadForTests, __setNowForTests, __caches, MAX_ENTRIES, FRES
 import { EXCHANGES, daySchedule } from "../src/tools/exchange-calendars.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { KIT2 } from "../src/tools/kit2.js";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { upstreamHostsForSlug, declaresUpstreamHosts, requestMatchesDefinition } from "./lib/upstream-outage.js";
+import * as holidaySource from "../src/tools/holiday-source.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -398,6 +402,9 @@ function fixtureRead(url) {
 }
 const row = (cc, y, [md, name, subs, types]) => ({ date: `${y}-${md}`, name, countryCode: cc, nationalHoliday: !subs, subdivisionCodes: subs ? subs.split(",") : null, holidayTypes: types.split("/") });
 __setHolidayReadForTests(fixtureRead);
+// sha256 of JSON.stringify(public-holidays' answer to its published example)
+// over the fixture rows before v3's end of life, recorded from main 50a3fb622.
+const PUBLISHED_EXAMPLE_DIGEST = "edf41151512d5a86d9e5c0bcd65641c5a46c2dbbd66f30661c1a8703f82a7f30";
 const BEFORE_EOL = Date.parse("2026-11-18T12:00:00Z"), AFTER_EOL = Date.parse("2027-02-01T00:00:00Z");
 __setNowForTests(() => BEFORE_EOL);
 
@@ -644,6 +651,58 @@ for (const t of [tool("public-holidays"), ...HOLIDAY_TOOLS]) {
     ok(missing.length === 0, `${t.slug} answers its published example with every example field${missing.length ? ` (missing ${missing})` : ""}`);
   } catch (e) { ok(false, `${t.slug} example threw ${e.statusCode} ${e.message}`); }
   ok(/Holiday data by Nager\.Date\.$/.test(t.description) === (t.slug !== "market-calendar"), `${t.slug} carries the holiday-data credit exactly when it reads the holiday source`);
+}
+
+// ── the source's address: one module names it ─────────────────────────────────
+{
+  const { HOLIDAY_HOSTS } = holidaySource;
+  const apiHosts = [HOLIDAY_API, V3_API].map((u) => new URL(u).hostname);
+  ok(Array.isArray(HOLIDAY_HOSTS) && Object.isFrozen(HOLIDAY_HOSTS) && apiHosts.every((h) => HOLIDAY_HOSTS.includes(h)) && HOLIDAY_HOSTS.length === new Set(apiHosts).size,
+    `HOLIDAY_HOSTS is exactly the hosts of HOLIDAY_API and V3_API (${HOLIDAY_HOSTS}; want ${apiHosts})`);
+  ok(new URL(HOLIDAY_API).pathname === "/api/v4", `the holiday source is read on its v4 path (${HOLIDAY_API})`);
+  // A move of the source edits holiday-source.js alone: no other tool module
+  // names a holiday-source host in code (a comment may cite a page).
+  const hostWords = (HOLIDAY_HOSTS || apiHosts).map((h) => h.toLowerCase());
+  const elsewhere = [];
+  for (const dir of ["src/tools"]) {
+    for (const f of readdirSync(dir).filter((x) => x.endsWith(".js") && x !== "holiday-source.js")) {
+      const text = readFileSync(`${dir}/${f}`, "utf8").toLowerCase().split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+      for (const h of hostWords) if (text.split(/[^a-z0-9.-]+/).some((w) => w === h || w.endsWith(`.${h}`))) elsewhere.push(`${dir}/${f}: ${h}`);
+    }
+  }
+  ok(elsewhere.length === 0, `no module but holiday-source.js names a holiday-source host${elsewhere.length ? ` (${elsewhere.join("; ")})` : ""}`);
+  // Every tool that reads the source declares its hosts, so an outage there is
+  // read as the source's and a request it builds is recognized as its own.
+  for (const t of [tool("public-holidays"), ...HOLIDAY_TOOLS.filter((x) => x.slug !== "market-calendar")]) {
+    const hosts = [...upstreamHostsForSlug(t.slug)].sort();
+    ok(declaresUpstreamHosts(t.slug) && hosts.join() === [...apiHosts].sort().join(), `${t.slug} declares the holiday source's hosts (${hosts})`);
+    ok(requestMatchesDefinition(t.slug, `${HOLIDAY_API}/Holidays/US/2026`), `${t.slug}: a v4 read is the shape its definition builds`);
+  }
+  ok(requestMatchesDefinition("public-holidays", `${V3_API}/PublicHolidays/2026/US`), "public-holidays: a v3 read is the shape its definition builds");
+}
+
+// ── public-holidays' published example: today's answer, byte for byte ─────────
+{
+  __setNowForTests(() => BEFORE_EOL);
+  __caches.V3_CACHE.clear(); __caches.YEAR_CACHE.clear();
+  __setHolidayReadForTests(fixtureRead);
+  const t = tool("public-holidays");
+  const r = await t.handler(t.discovery.input);
+  const ex = t.discovery.output.example;
+  eq(Object.keys(r), Object.keys(ex), "public-holidays answers the published example's top-level fields in their published order");
+  eq(Object.keys(r.holidays[0]), Object.keys(ex.holidays[0]), "each holiday row carries the published row fields in their published order");
+  eq(r.holidays[0], ex.holidays[0], "the first row equals the published example row");
+  // Digest of the whole answer to the published example over the fixture rows,
+  // taken from the code before this change: the answer is unchanged byte for byte.
+  const digest = createHash("sha256").update(JSON.stringify(r)).digest("hex");
+  ok(digest === PUBLISHED_EXAMPLE_DIGEST, `the published example's answer is byte-identical to before (${digest})`);
+  // Upstream failures keep their statuses: 404 and a window refusal are 400s,
+  // a source failure with nothing cached is a 502, non-JSON and a wrong shape are 502s.
+  const failWith = async (fn, input = t.discovery.input) => { __setHolidayReadForTests(fn); try { await t.handler(input); return 200; } catch (e) { return e.statusCode; } finally { __setHolidayReadForTests(fixtureRead); } };
+  ok(await failWith(() => { throw Object.assign(new Error("Source URL returned HTTP 404"), { statusCode: 422, upstreamStatus: 404 }); }) === 400, "a source 404 is a 400");
+  ok(await failWith((u) => { if (u.startsWith(V3_API)) return []; throw Object.assign(new Error("Source URL returned HTTP 400"), { statusCode: 422, upstreamStatus: 400 }); }) === 200, "a v4 window refusal is answered from v3 before its end of life");
+  ok(await failWith(() => { throw Object.assign(new Error("Source URL's host returned HTTP 503"), { statusCode: 502, upstreamStatus: 503 }); }) === 502, "a source 5xx with nothing cached is a 502");
+  ok(await failWith(() => ({ not: "a list" })) === 502, "an unexpected shape from the source is a 502");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
