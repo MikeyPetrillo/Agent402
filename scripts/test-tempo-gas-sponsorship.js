@@ -63,8 +63,9 @@ const realFetch = globalThis.fetch;
 const relayCalls = [];
 globalThis.fetch = async (input, init) => {
   const url = String(input?.url || input);
-  if (url.startsWith("http://fixture.local/")) return new Response(FIXTURE, { status: 200, headers: { "content-type": "application/xml" } });
-  if (/api\.tempo\.xyz/.test(new URL(url).hostname)) { relayCalls.push(url); return new Response(JSON.stringify({ success: false, error: { code: "invalid_payment", message: "stub" } }), { status: 200, headers: { "content-type": "application/json" } }); }
+  const host = new URL(url).hostname;
+  if (host === "fixture.local") return new Response(FIXTURE, { status: 200, headers: { "content-type": "application/xml" } });
+  if (host === "api.tempo.xyz") { relayCalls.push(url); return new Response(JSON.stringify({ success: false, error: { code: "invalid_payment", message: "stub" } }), { status: 200, headers: { "content-type": "application/json" } }); }
   return realFetch(input, init);
 };
 
