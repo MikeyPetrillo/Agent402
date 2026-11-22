@@ -17,7 +17,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { conso
 const throws = (fn, re, m) => { let e = null; try { fn(); } catch (err) { e = err; } ok(e && re.test(e.message), `${m} (${e ? e.message.slice(0, 80) : "did not throw"})`); };
 
 // --- the registry rules ---------------------------------------------------------
-const liveSet = new Set(["coin-search", "lending-rates", "defi-screener", "coin-profile", "chain-board", "stablecoin-depeg-watch", "stablecoin-peg", "dex-volume-board", "global-defi", "dex-pool-health", "l2-gas-comparison", "options-summary", "perp-orderbook", "crypto-options-chain", "kalshi-markets", "kalshi-event", "kalshi-live-data", "stock-quote", "price-coingecko", "business-days", "cron-next", "slugify", "hash", "contract-source", "wallet-balance", "token-metadata", "tx-receipt", "color", "xml-to-json", "skill-company-dossier", "checksum", "lorem", "password-strength", "qr", "semver", "case", "uuid", "place-lookup", "geo-lookup", "search", "answer", "extract"]);
+const liveSet = new Set(["coin-search", "lending-rates", "defi-screener", "coin-profile", "chain-board", "stablecoin-depeg-watch", "stablecoin-peg", "dex-volume-board", "global-defi", "dex-pool-health", "l2-gas-comparison", "options-summary", "perp-orderbook", "crypto-options-chain", "kalshi-markets", "kalshi-event", "kalshi-live-data", "stock-quote", "price-coingecko", "crypto-price", "business-days", "cron-next", "slugify", "hash", "contract-source", "wallet-balance", "token-metadata", "tx-receipt", "color", "xml-to-json", "skill-company-dossier", "checksum", "lorem", "password-strength", "qr", "semver", "case", "uuid", "place-lookup", "geo-lookup", "search", "answer", "extract"]);
 ok(assertRetiredRegistryConsistent(liveSet) === true, "control: the registry is consistent against a live set that carries every replacement");
 throws(() => assertRetiredRegistryConsistent(new Set([...liveSet, "options-chain"])), /listed as retired but is live/, "a retired tool that is live again fails the boot");
 throws(() => assertRetiredRegistryConsistent(new Set([...liveSet, "skill-market-open"])), /pack "market-open" is listed as retired but is live/, "a retired pack that is live again fails the boot");
@@ -135,10 +135,10 @@ ok(advertisedRetired("/api/business-days /api/skill/company-dossier /api/unit-co
 const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-])`);
 {
-  const ORDINARY_WORDS = new Set(["stablecoins", "soundex", "combinatorics", "pbkdf2"]);
+  const ORDINARY_WORDS = new Set(["market", "stablecoins", "soundex", "combinatorics", "pbkdf2"]);
   const oneWord = Object.keys(RETIRED_TOOLS).filter((slug) => !slug.includes("-"));
   ok([...ORDINARY_WORDS].every((w) => oneWord.includes(w)), "every allowlisted ordinary word is a one-word retired slug");
-  ok(oneWord.join() === "geocode,stablecoins,combinatorics,pbkdf2,soundex", `each one-word retired slug has been read against the ordinary-word list (${oneWord.join()}): a new one is added to this line, and to ORDINARY_WORDS when it is an everyday noun`);
+  ok(oneWord.join() === "market,geocode,stablecoins,combinatorics,pbkdf2,soundex", `each one-word retired slug has been read against the ordinary-word list (${oneWord.join()}): a new one is added to this line, and to ORDINARY_WORDS when it is an everyday noun`);
   const asToolName = (slug) => {
     const w = escRe(slug), end = "(?![a-z0-9-])", start = "(?<![a-z0-9/-])";
     const forms = [
@@ -242,7 +242,7 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
   const pointers = due.filter(([, e]) => e.replacement).length;
   ok(items.length >= 2 && problems.length === 0, `each changelog retirement sentence matches the registry (${problems.join("; ") || `${items.length} items`})`);
   ok(unsaid.length === 0, `every route retired since ${SINCE} is announced in a changelog retirement sentence (missing: ${unsaid.join(", ") || "none"})`);
-  ok(due.length === 22 && pointers === 4 && due.length - pointers === 18, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
+  ok(due.length === 23 && pointers === 5 && due.length - pointers === 18, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
   // Controls: each way a sentence can part from the registry is reported.
   const REG = { geocode: { replacement: "place-lookup" }, "reverse-geocode": { replacement: null }, "place-search": { replacement: null }, "exa-search": { replacement: "search" }, "exa-answer": { replacement: "answer" } };
   const good = "geocode, reverse-geocode and place-search are retired and answer 410: geocode names place-lookup as the replacement, and reverse-geocode and place-search name none. exa-search and exa-answer are retired and answer 410 naming search and answer.";
@@ -299,7 +299,11 @@ try {
     for (const p of ["/openapi.json", "/llms.txt", "/llms-full.txt", "/.well-known/x402", "/api/pricing", "/api/index", "/sitemap.xml", "/api/skill-packs.json", "/skills", "/tools", "/.well-known/agent.json", "/.well-known/glama.json", "/robots.txt"]) {
       const r = await fetch(`${base}${p}`);
       if (r.status !== 200) { found.push(`${p} answered ${r.status}`); continue; }
-      for (const name of advertisedRetired(await r.text())) found.push(`${p}: ${name}`);
+      // A robots Disallow line keeps crawlers off a path; it offers nothing
+      // (Disallow: /api/market/ covers the live chain panels, not a retired tool).
+      let text = await r.text();
+      if (p === "/robots.txt") text = text.split("\n").filter((l) => !/^\s*Disallow:/i.test(l)).join("\n");
+      for (const name of advertisedRetired(text)) found.push(`${p}: ${name}`);
     }
     const mcp = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) });
     const mcpText = await mcp.text();
@@ -358,6 +362,9 @@ try {
     const b = await r.json();
     ok(r.status === 410 && b.slug === "market" && b.retiredAt === "2026-11-22" && b.replacement?.slug === "crypto-price" && /retired on 2026-11-22/.test(b.hint),
       `GET /api/market/tick is 410 naming crypto-price (got ${r.status} ${JSON.stringify(b.replacement)})`);
+    // Control: the live chain panel under the same segment is still served.
+    const panel = await fetch(`${base}/api/market/base/panel`);
+    ok(panel.status !== 410 && panel.status !== 404, `GET /api/market/base/panel is still served (got ${panel.status})`);
   }
   const none = await fetch(`${base}/api/stock-dividends`);
   const nb = await none.json();
