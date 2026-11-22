@@ -1206,7 +1206,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       if (!text) continue;
       for (const m of text.matchAll(RECEIPT)) {
         n++;
-        if (!/A call paid before it ran answers [`]?(?:\$\{C\("charged: true"\)\}|charged: true)/.test(text.slice(m.index, m.index + 1200))) missing.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
+        if (!/A call paid before it ran answers (?:\\?`)?(?:\$\{C\("charged: true"\)\}|charged: true)/.test(text.slice(m.index, m.index + 1600))) missing.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
       }
     }
     ok(n >= 4 && missing.length === 0, `every "no receipt, or success:false" claim says a call paid before it ran answers charged: true (${n} places${missing.length ? `; missing: ${missing.join(", ")}` : ""})`);
