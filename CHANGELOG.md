@@ -132,6 +132,9 @@ Payments:
 - A Solana payment that names its accounts through an address lookup table
   is counted against the largest single token account of the mint the wallet
   holds.
+- A Solana wallet's calls in flight that name their token account and those
+  that name it through a lookup table are counted together on every server
+  of a deployment, since one account can back both.
 Operations:
 - A balance read that is dropped before it is made gives a unit of the daily
   read budget back only when it took one, so the day's count matches the

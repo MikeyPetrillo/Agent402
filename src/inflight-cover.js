@@ -624,7 +624,7 @@ async function procAlive(proc, now) {
   return alive;
 }
 /** A window reading without the reservations of processes that are gone. */
-async function withoutDead(coverKey, r, now = Date.now()) {
+async function withoutDead(coverKey, r, now = Date.now(), departKey = coverKey) {
   if (!r?.ok || !Array.isArray(r.entries) || !r.entries.length) return r;
   const grace = LIVE_TTL_MS();
   const dead = [];
@@ -640,16 +640,18 @@ async function withoutDead(coverKey, r, now = Date.now()) {
   // A dropped reservation is a departure like any other container's: its
   // process may have settled it, or may be stalled and settle it yet, so the
   // wallet's next judgment is made on a read taken after it.
-  noteDeparture(coverKey);
+  noteDeparture(departKey);
   const gone = new Set(dead.map((e) => e.member));
   const entries = r.entries.filter((e) => !gone.has(e.member));
   return { ...r, entries, count: entries.length, sum: entries.reduce((a, e) => a + Number(e.weight || 0), 0) };
 }
-const sharedWindowAdd = async (coverKey, member, atomic, now) => {
+// `departKey`: the ledger a dropped reservation's departure is noted on (the
+// wallet's, for its static window).
+const sharedWindowAdd = async (coverKey, member, atomic, now, departKey = coverKey) => {
   ownReservations.set(member, { coverKey, atomic });
-  return withoutDead(coverKey, await shared.windowAdd(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS(), member, weight: Number(atomic), now }), now);
+  return withoutDead(coverKey, await shared.windowAdd(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS(), member, weight: Number(atomic), now }), now, departKey);
 };
-const sharedWindowRead = async (coverKey) => withoutDead(coverKey, await shared.windowRead(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS() }));
+const sharedWindowRead = async (coverKey, departKey = coverKey) => withoutDead(coverKey, await shared.windowRead(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS() }), Date.now(), departKey);
 const removeShared = (coverKey, id, atomic) => { ownReservations.delete(id); return sharedWrite(SHARED_NAME, shared.windowRemove(SHARED_NAME, coverKey, { member: id, weight: Number(atomic) })); };
 
 function unreadPaidMax() {
@@ -954,7 +956,18 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
   // shape hold in this process (see ownerStatic): nothing for every other rail.
   const walletKey = terms.rail === "svm" && terms.owner ? `${terms.network}|${terms.asset || "-"}|${terms.owner}` : null;
   const sourceKeyed = walletKey !== null && terms.byOwner !== true && walletKey !== coverKey;
-  const otherShape = () => (walletKey === null ? null : sourceKeyed ? ledger.get(walletKey) : terms.byOwner === true ? ownerStatic.get(walletKey) : null) || null;
+  // Across containers the same pairing is kept in the shared store: a
+  // source-keyed run is also reserved under the wallet's static key
+  // (`|static`), and each shape's judgment reads the other shape's window
+  // once (otherForeign: the runs other containers hold there).
+  const staticKey = walletKey === null ? null : `${walletKey}|static`;
+  let otherForeign = null;
+  const otherLocal = () => (walletKey === null ? null : sourceKeyed ? ledger.get(walletKey) : terms.byOwner === true ? ownerStatic.get(walletKey) : null) || null;
+  const otherShape = () => {
+    const o = otherLocal();
+    if (!otherForeign || otherForeign.count <= 0) return o;
+    return { count: (o?.count || 0) + otherForeign.count, atomic: (o?.atomic || 0n) + otherForeign.atomic };
+  };
   const withOtherShape = (set) => { const o = otherShape(); return o && o.count > 0 ? { ...set, count: set.count + o.count, atomic: set.atomic + o.atomic } : set; };
   // Which daily ceiling this wallet's reads count against, if any (an
   // unproven sender is judged on no balance, so it makes no read).
@@ -993,6 +1006,17 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     // holds has left: this run is judged on a read, whatever else is in flight.
     if (r.ok) { others = othersOf(r, sharedId, terms.atomic); sharedSeq = ++eventSeq; noteView(coverKey, others); }
     else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
+    if (walletKey !== null && (sourceKeyed || terms.byOwner === true)) {
+      if (sourceKeyed) await sharedWindowAdd(staticKey, `${sharedId}s`, terms.atomic, now, walletKey).catch(() => null);
+      const o = await sharedWindowRead(sourceKeyed ? walletKey : staticKey, walletKey).catch(() => null);
+      if (o?.ok) {
+        const v = othersOf(o, null, 0n, false);
+        // Without a listing, what the window holds less this process's own.
+        const mine = otherLocal();
+        otherForeign = v.foreignCount != null ? { count: v.foreignCount, atomic: v.foreignAtomic }
+          : { count: Math.max(0, v.count - (mine?.count || 0)), atomic: v.atomic > (mine?.atomic || 0n) ? v.atomic - (mine?.atomic || 0n) : 0n };
+      } else if (o) { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, o); }
+    }
   }
   let admitted = false, how = "covered";
   try {
@@ -1020,13 +1044,23 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     // The wallet's last-settlement mark in the shared store, read at most
     // once in a judgment (markRead). A settlement this process did not make
     // was never taken off this wallet's reads, so the last good read goes.
+    // A source-keyed Solana run reads its wallet's mark as well: a
+    // lookup-table payment of the wallet may have come out of this account.
     const readSettledMark = async () => {
-      try {
-        const m = await shared.flagGet(SETTLED_NAME, coverKey, { now: Date.now() });
-        const at = m?.ok && m.until > Date.now() ? m.until - SETTLED_MARK_MS : 0;
-        if (at > w.settledAt) { w.settledAt = at; w.good = null; stats.foreignSettlementsSeen++; }
-      } catch { /* the mark could not be read: this process's own stands */ }
+      for (const k of sourceKeyed ? [coverKey, walletKey] : [coverKey]) {
+        try {
+          const m = await shared.flagGet(SETTLED_NAME, k, { now: Date.now() });
+          const at = m?.ok && m.until > Date.now() ? m.until - SETTLED_MARK_MS : 0;
+          if (at > w.settledAt) { w.settledAt = at; w.good = null; stats.foreignSettlementsSeen++; }
+        } catch { /* the mark could not be read: this process's own stands */ }
+      }
     };
+    // In this process: a settlement of the wallet's lookup-table runs since
+    // this account's records last heard of one.
+    if (sourceKeyed) {
+      const ws = wallets.get(walletKey)?.settledAt || 0;
+      if (ws > w.settledAt) { w.settledAt = ws; w.good = null; }
+    }
     for (;;) {
       if (terms.unproven) {
         // AN UNPROVEN SENDER is judged on no balance: the account it names
@@ -1067,7 +1101,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       const seqAtStart = eventSeq;
       // Another container's run is in flight: verify's proof may predate its
       // settlement, so only a read begun after the shared view decides.
-      const foreign = foreignHeld(others, held, judges.size);
+      const foreign = foreignHeld(others, held, judges.size) || otherForeign?.count > 0;
       if (foreign) stats.foreignReads++;
       // JUDGED AT ONCE on the wallet's last good read (keptAtOnceMs): only
       // off the report and media routes, only before this judgment has asked
@@ -1285,7 +1319,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     w.open--;
     judges.delete(me);
     if (!judges.size && judging.get(coverKey) === judges) judging.delete(coverKey);
-    if (sharedId && !admitted) void removeShared(coverKey, sharedId, terms.atomic);
+    if (sharedId && !admitted) { void removeShared(coverKey, sharedId, terms.atomic); if (sourceKeyed) void removeShared(staticKey, `${sharedId}s`, terms.atomic); }
   }
   if (how === "unread") stats.admittedUnread++; else if (how === "trusted") stats.admittedTrusted++; else stats.admittedByRead++;
   const entry = ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 };
@@ -1299,7 +1333,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     if (released) return;
     released = true;
     if (sourceKeyed) { const o = ownerStatic.get(walletKey); if (o) { o.count -= 1; o.atomic -= terms.atomic; if (o.count <= 0) ownerStatic.delete(walletKey); } }
-    if (sharedId) void removeShared(coverKey, sharedId, terms.atomic);
+    if (sharedId) { void removeShared(coverKey, sharedId, terms.atomic); if (sourceKeyed) void removeShared(staticKey, `${sharedId}s`, terms.atomic); }
     const e = ledger.get(coverKey);
     if (e) {
       e.count -= 1;
@@ -1328,6 +1362,15 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       walletOf(coverKey).settledAt = at;
       // The mark other containers read before they trust verify's proof.
       if (SHARED) void sharedWrite(SHARED_NAME, shared.flagSet(SETTLED_NAME, coverKey, at + SETTLED_MARK_MS));
+      // A Solana payment from a named source account came out of an account
+      // the wallet's lookup-table payments may be judged on: the wallet's
+      // records are told too, here and through its shared mark. (A wallet's
+      // settlement is read by its source-keyed judgments, below.)
+      if (sourceKeyed) {
+        walletOf(walletKey).settledAt = at;
+        noteDeparture(walletKey);
+        if (SHARED) void sharedWrite(SHARED_NAME, shared.flagSet(SETTLED_NAME, walletKey, at + SETTLED_MARK_MS));
+      }
       // An unproven sender's payment that SETTLED was taken by the chain from
       // the account it named, a run that account's own ledger never held: the
       // account's records are told as they are of a settlement another

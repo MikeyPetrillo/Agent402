@@ -44,7 +44,10 @@ import { fileURLToPath } from "node:url";
 
 const ROLE = process.argv[2] || "main";
 let pass = 0;
-const fail = (m) => { console.error(`FAIL - ${m}`); process.exit(1); };
+// Holders this process started: a failure stops them before it exits, so no
+// container is left holding the output pipe open.
+const holders = new Set();
+const fail = (m) => { console.error(`FAIL - ${m}`); for (const c of holders) { try { c.kill("SIGKILL"); } catch { /* gone */ } } process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 
 const PRICE = 600000n;
@@ -62,6 +65,48 @@ const turn = () => new Promise((r) => setImmediate(r));
 // regression fails here and never hangs the suite.
 const until = async (cond, what, ms = 15_000) => { const end = performance.now() + ms; while (!cond()) { if (performance.now() > end) { fail(`timed out waiting for ${what}`); return false; } await turn(); } return true; };
 
+// A Solana payment of one fixed wallet (the same keys in every process for
+// one `seed`), in
+// either shape: `lookup` puts the source, mint and destination in a lookup
+// table, so the source account is not known and the run is keyed on the
+// wallet; otherwise it is keyed on the source token account.
+const SOL_NET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+async function solReq(lookup, seed = 10) {
+  const kit = await import("@solana/kit");
+  const signer = (n) => kit.createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(n));
+  const [buyer, fp, src, payTo, table] = await Promise.all([1, 2, 3, 4, 5].map((i) => signer(seed + i)));
+  const u64 = (v) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(v), true); return b; };
+  const CB = "ComputeBudget111111111111111111111111111111", TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const ixs = [
+    { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([2, 0x20, 0x4e, 0, 0]) },
+    { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([3, ...u64(Date.now())]) },
+    { programAddress: kit.address(TOKEN), accounts: [
+      { address: src.address, role: kit.AccountRole.WRITABLE },
+      { address: kit.address(SOL_USDC), role: kit.AccountRole.READONLY },
+      { address: payTo.address, role: kit.AccountRole.WRITABLE },
+      { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer },
+    ], data: new Uint8Array([12, ...u64(PRICE), 6]) },
+  ];
+  const blockhash = { blockhash: kit.blockhash("11111111111111111111111111111111"), lastValidBlockHeight: 0n };
+  let msg = kit.pipe(kit.createTransactionMessage({ version: 0 }), (x) => kit.setTransactionMessageFeePayer(fp.address, x), (x) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, x), (x) => kit.appendTransactionMessageInstructions(ixs, x));
+  if (lookup) msg = kit.compressTransactionMessageUsingAddressLookupTables(msg, { [table.address]: [src.address, kit.address(SOL_USDC), payTo.address] });
+  const transaction = kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction([buyer.keyPair], kit.compileTransaction(msg)));
+  const h = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: SOL_NET, asset: SOL_USDC, amount: String(PRICE), payTo: payTo.address, extra: { feePayer: fp.address } }, payload: { transaction } })).toString("base64");
+  return { header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined) };
+}
+
+if (ROLE === "svm-holder") {
+  // A container that admits one Solana run of the fixed wallet, in the shape
+  // HOLD_SHAPE names, on a balance of one price, and holds it until killed.
+  const C = await import("../src/inflight-cover.js");
+  C._setBalanceReaderForTest(async () => PRICE);
+  (await import("../src/paid-record.js"))._setPaidRecordForTest(() => true);
+  let r;
+  try { r = { release: await C.admitCoveredRun(await solReq(process.env.HOLD_SHAPE === "lookup", Number(process.env.HOLD_SEED)), QUICK) }; } catch (e) { r = { err: e }; }
+  console.log(typeof r.release === "function" ? "HOLDING" : `NOT-HOLDING ${r.err?.message}`);
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+}
 if (ROLE === "holder") {
   // A container that admits one run for the wallet named in HOLD_WALLET and
   // holds it until it is killed (the Redis half kills it with SIGKILL).
@@ -921,6 +966,7 @@ shared.windowAdd = realAdd; shared.windowRead = realRead;
   C._setBalanceReaderForTest(async () => PRICE);
   const K = "0x" + "e1".repeat(20);
   const child = spawn(process.execPath, [here, "holder"], { env: { ...process.env, HOLD_WALLET: K }, stdio: ["ignore", "pipe", "inherit"] });
+  holders.add(child);
   let said = "";
   child.stdout.on("data", (d) => { said += d; });
   await until(() => /HOLDING/.test(said), "the other container to hold a run", 30_000);
@@ -937,6 +983,42 @@ shared.windowAdd = realAdd; shared.windowRead = realRead;
   const w = await windowOf(K);
   ok(w.count === 1 && C.inflightCoverStatus().deadReservationsIgnored >= 1, `redis: the dead reservation was taken out of the window (${w.count} left: this run's own)`);
   after.release();
+}
+{
+  // ONE SOLANA WALLET, TWO SHAPES, TWO CONTAINERS. A payment that names its
+  // source account and one that names it through a lookup table may draw on
+  // the same account, so a run of one shape held by another container counts
+  // against the other shape here. One price in the account: whichever shape
+  // the other container holds, the second shape here is refused.
+  for (const [held, shape, seed, name] of [["static", "lookup", 10, "a static run held elsewhere, a lookup-table payment here"], ["lookup", "static", 20, "a lookup-table run held elsewhere, a static payment here"]]) {
+    C._resetInflightCoverForTest();
+    C._setBalanceReaderForTest(async () => PRICE);
+    const child = spawn(process.execPath, [here, "svm-holder"], { env: { ...process.env, HOLD_SHAPE: held, HOLD_SEED: String(seed) }, stdio: ["ignore", "pipe", "inherit"] });
+    holders.add(child);
+    let said = "";
+    child.stdout.on("data", (d) => { said += d; });
+    try {
+      await until(() => /HOLDING/.test(said), "the other container to hold a Solana run", 30_000);
+      ok(/^HOLDING/m.test(said), `redis: ${name}: the other container holds its run`);
+      let r;
+      try { r = { release: await C.admitCoveredRun(await solReq(shape === "lookup", seed), QUICK) }; } catch (e) { r = { err: e }; }
+      ok(r.err?.statusCode === 429, `redis: ${name}: one price in the account covers one run, so the second is refused (${r.err?.statusCode || "admitted"} ${r.err?.coverRefusal || ""})`);
+      r.release?.();
+    } finally {
+      child.kill("SIGKILL");
+      await new Promise((res) => child.once("exit", res));
+    }
+  }
+  // Control: with nothing held elsewhere, either shape here is admitted on
+  // that one price.
+  for (const [shape, seed] of [["static", 30], ["lookup", 40]]) {
+    C._resetInflightCoverForTest();
+    C._setBalanceReaderForTest(async () => PRICE);
+    let r;
+    try { r = { release: await C.admitCoveredRun(await solReq(shape === "lookup", seed), QUICK) }; } catch (e) { r = { err: e }; }
+    ok(typeof r.release === "function", `redis control: a ${shape} payment with nothing held elsewhere is admitted (${r.err?.statusCode || "admitted"})`);
+    r.release?.();
+  }
 }
 // Clean up this run's keys.
 try {
