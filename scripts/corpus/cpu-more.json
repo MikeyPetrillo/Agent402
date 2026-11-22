@@ -1929,6 +1929,46 @@
       }
     },
     {
+      "slug": "vat-validate",
+      "name": "a French number with a numeric key",
+      "input": {
+        "vat": "FR 11 123456782"
+      },
+      "expect": {
+        "equals": {
+          "valid": true,
+          "country": "FR",
+          "checksumValid": true,
+          "normalized": "FR11123456782"
+        }
+      }
+    },
+    {
+      "slug": "vat-validate",
+      "name": "Greek GR prefix reads as EL, bad check digit",
+      "input": {
+        "vat": "GR123456780"
+      },
+      "expect": {
+        "equals": {
+          "valid": false,
+          "country": "EL",
+          "formatValid": true,
+          "checksumValid": false
+        }
+      }
+    },
+    {
+      "slug": "vat-validate",
+      "name": "no prefix and no country is a 400",
+      "input": {
+        "vat": "123456788"
+      },
+      "expect": {
+        "status": 400
+      }
+    },
+    {
       "slug": "isbn-validate",
       "name": "isbn-10",
       "input": {
