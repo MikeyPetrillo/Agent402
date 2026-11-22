@@ -557,16 +557,18 @@ function csvEscape(v) {
 
 // A CSV delimiter from a caller's field: a name (comma, semicolon, tab, pipe),
 // "\\t", or any one character that is not a quote or a line break. Absent reads
-// as a comma; anything else is a 400 that names the field.
+// as a comma. Any other value also reads as a comma, as it always has, and the
+// answer says so (`note`) rather than refusing a call that used to be served.
 const CSV_DELIMITER_NAMES = { comma: ",", semicolon: ";", tab: "\t", pipe: "|", space: " ", "\\t": "\t" };
-export function csvDelimiterOf(raw, field = "delimiter") {
-  if (raw === undefined || raw === null || raw === "") return ",";
+export const CSV_DELIMITER_NOTE = "unrecognized delimiter value; comma used (use comma, semicolon, tab, pipe, or one character other than a quote or a line break)";
+export function csvDelimiterOf(raw) {
+  if (raw === undefined || raw === null || raw === "") return { delimiter: "," };
   if (typeof raw === "string") {
     const named = CSV_DELIMITER_NAMES[raw.trim().toLowerCase()];
-    if (named) return named;
-    if (raw.length === 1 && raw !== '"' && raw !== "\n" && raw !== "\r") return raw;
+    if (named) return { delimiter: named };
+    if (raw.length === 1 && raw !== '"' && raw !== "\n" && raw !== "\r") return { delimiter: raw };
   }
-  throw bad(`"${field}" must be comma, semicolon, tab, pipe, or one character other than a quote or a line break`);
+  return { delimiter: ",", note: CSV_DELIMITER_NOTE };
 }
 
 export function parseCsv(text, delimiter = ",") {
@@ -749,14 +751,16 @@ const dataTools = [
     },
     handler: (input) => {
       const text = capText(need(input, "csv"), 100_000, "csv");
-      const delimiter = csvDelimiterOf(input.delimiter);
+      const { delimiter, note } = csvDelimiterOf(input.delimiter);
+      // Shown only when the value sent was not read, so every other answer is unchanged.
+      const fellBack = note ? { delimiterUsed: delimiter, delimiterNote: note } : {};
       const grid = parseCsv(text, delimiter).filter((r) => !(r.length === 1 && r[0] === ""));
       if (!grid.length) throw bad("Empty CSV");
       const header = input.header !== false && input.header !== "false";
-      if (!header) return { rows: grid, count: grid.length };
+      if (!header) return { rows: grid, count: grid.length, ...fellBack };
       const cols = grid[0];
       const rows = grid.slice(1).map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i] ?? ""])));
-      return { rows, count: rows.length };
+      return { rows, count: rows.length, ...fellBack };
     },
   },
   {

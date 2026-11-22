@@ -507,7 +507,7 @@ function listField(input, name) {
 
 function csvAggregate(input) {
   const text = textField(input, "csv", { max: CSV_AGG_MAX });
-  const delimiter = csvDelimiterOf(input.delimiter);
+  const { delimiter, note: delimiterNote } = csvDelimiterOf(input.delimiter);
   const grid = parseCsv(text, delimiter).filter((r) => !(r.length === 1 && r[0] === ""));
   if (!grid.length) throw bad('"csv" is empty');
   const header = headerNames(grid[0]);
@@ -540,7 +540,7 @@ function csvAggregate(input) {
     });
   }
   const statsOf = (list) => Object.fromEntries(cols.map((c, k) => [header[c], finishStats(list[k])]));
-  const out = { rows: rows.length, delimiter, columns: statsOf(overall) };
+  const out = { rows: rows.length, delimiter, ...(delimiterNote ? { delimiterNote } : {}), columns: statsOf(overall) };
   if (g >= 0) {
     const all = [...groups.values()].sort((a, b) => b.rows - a.rows || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const shown = all.slice(0, limit);
@@ -856,7 +856,7 @@ export const PARSE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Check JSON text and point at the first syntax error: its line, column, character position (offset), the path in the document where it stopped, and a short excerpt with a marker under the spot, with a clear message for trailing commas, comments, single quotes, unclosed brackets and bad escapes. Also lists duplicate object keys, which most parsers accept silently. Input up to 100,000 characters.",
+      "Check JSON text and point at the first syntax error: its line, column, character position (offset), the path in the document where it stopped, and a short excerpt with a marker under the spot, with a clear message for trailing commas, comments, single quotes, unclosed brackets and bad escapes. Also lists duplicate object keys, which JSON.parse accepts silently. Input up to 100,000 characters.",
     tags: ["json", "lint", "validate", "syntax", "error", "line", "column", "duplicate-keys"],
     discovery: {
       bodyType: "json",

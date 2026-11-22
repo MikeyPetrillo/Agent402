@@ -172,7 +172,11 @@ await refuses("log-timestamps", { text: "x".repeat(100_001) }, "text", "text pas
 }
 await refuses("csv-aggregate", { csv: "a,b\n1,2\n", groupBy: "c" }, "groupBy", "a groupBy column that is not there");
 await refuses("csv-aggregate", { csv: "a,b\n1,2\n", columns: ["a", "z"] }, "columns", "a column that is not there");
-await refuses("csv-aggregate", { csv: "a,b\n1,2\n", delimiter: "::" }, "delimiter", "a two-character delimiter");
+{
+  const r = await call("csv-aggregate", { csv: "a,b\n1,2\n", delimiter: "::" });
+  ok(r.delimiter === "," && /comma used/.test(r.delimiterNote || "") && r.columns.b.sum === 2, "csv-aggregate: an unrecognized delimiter reads as a comma and says so");
+  ok((await call("csv-aggregate", { csv: "a;b\n1;2\n", delimiter: ";" })).delimiterNote === undefined, "csv-aggregate: a recognized delimiter carries no note");
+}
 await refuses("csv-aggregate", { csv: "a,b\n1,2\n", columns: { a: 1 } }, "columns", "columns that are not a list");
 await refuses("csv-aggregate", { csv: "x".repeat(100_001) }, "csv", "CSV past the cap");
 await refuses("csv-aggregate", { csv: Array.from({ length: 201 }, (_, i) => `c${i}`).join(",") + "\n" }, "csv", "more than 200 columns");
@@ -252,8 +256,12 @@ await refuses("json-lint", { json: { a: 1 } }, "json", "an object");
     const r = await cj.handler({ csv, delimiter });
     ok(r.rows[0]?.age === "36", `csv-to-json: delimiter ${JSON.stringify(delimiter)} splits the columns`);
   }
-  await refuses("csv-to-json", { csv: "a,b", delimiter: "ab" }, "delimiter", "a two-character delimiter");
-  await refuses("csv-to-json", { csv: "a,b", delimiter: '"' }, "delimiter", "a quote as delimiter");
+  // A value that is not read falls back to a comma, as it always did, and the answer says so.
+  for (const delimiter of ["ab", '"', "\n", 5, ["x"]]) {
+    const r = await cj.handler({ csv: "name,age\nAda,36\n", delimiter });
+    ok(r.rows[0]?.age === "36" && r.delimiterUsed === "," && /comma used/.test(r.delimiterNote || ""), `csv-to-json: delimiter ${JSON.stringify(delimiter)} is not refused; comma is used and named`);
+  }
+  ok(JSON.stringify(await cj.handler({ csv: "name;age\nAda;36\n", delimiter: "semicolon" })) === '{"rows":[{"name":"Ada","age":"36"}],"count":1}', "csv-to-json: a recognized delimiter adds no field");
   ok(/semicolon, tab, pipe/.test(cj.description) && /semicolon, tab, pipe/.test(cj.discovery.inputSchema.properties.delimiter.description), "csv-to-json: the description and schema name the delimiters");
 }
 
