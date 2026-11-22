@@ -438,11 +438,11 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     try { claimed = await store.claim(cKey); } catch { claimed = false; }
     if (!claimed) {
       res.setHeader("Retry-After", "2");
-      res.status(409).json({ error: "idempotent_request_in_flight", charged: false, hint: "A call carrying this same payment is still running. Retry shortly with the same payment; nothing more is charged." });
+      res.status(409).json({ error: "idempotent_request_in_flight", charged: true, hint: "A call carrying this same payment is still running. Retry shortly with the same payment; nothing more is charged." });
       return true;
     }
     let verdict;
-    try { verdict = await onSettledFirstResend(req, credit); } catch { verdict = { serve: false, status: 503, retryAfter: 10, body: { error: "resend_pending", hint: "The payment this request carries could not be read against its charge just now. Nothing more is charged. Retry shortly with the same payment." } }; }
+    try { verdict = await onSettledFirstResend(req, credit); } catch { verdict = { serve: false, status: 503, retryAfter: 10, body: { error: "resend_pending", charged: true, hint: "The payment this request carries could not be read against its charge just now. Nothing more is charged. Retry shortly with the same payment." } }; }
     if (!verdict || verdict.serve !== true) {
       store.release(cKey).catch(() => {});
       if (Number(verdict?.retryAfter) > 0) res.setHeader("Retry-After", String(Math.ceil(Number(verdict.retryAfter))));

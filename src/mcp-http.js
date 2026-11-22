@@ -5,7 +5,6 @@ import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
 import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
 import { inputDepthRefusal } from "./handler-input.js";
 import { runAsCallerOf } from "./dispatch-caller.js";
-import { SETTLED_FIRST_FAILURE_NOTE } from "./settle-first-body.js";
 // The report/monitor ladder, DERIVED from the same tables that sell them.
 // No cycle: report-tiers is a leaf over the kit tier tables, and neither
 // checkout module imports this one.
@@ -1158,9 +1157,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
      *  answer (a verify refusal carries no receipt and keeps its offer).
      *  `settle` is the decoded PAYMENT-RESPONSE (or null), `body` the 402's
      *  JSON body. */
-    /** True for a route answer whose body says its payment was settled
-     *  before the run and is owed back (src/settle-first-body.js). */
-    const settledBeforeRun = (json) => !!json && typeof json === "object" && json.charged === true && json.refundOwed === true && json.payment === SETTLED_FIRST_FAILURE_NOTE;
+    /** True for a route answer whose body says its payment was charged: a
+     *  payment settled before the run and owed back (src/settle-first-body.js),
+     *  or the same settled payment sent again while its charge is read
+     *  (resend_pending, idempotent_request_in_flight). No "not charged" line
+     *  is written over it. */
+    const settledBeforeRun = (json) => !!json && typeof json === "object" && json.charged === true;
     function failedSettleResult(def, r, body, settle) {
       const failed = Boolean(settle) && typeof settle === "object" && settle.success === false;
       const bare = !settle && !r.headers.get("payment-required") && body?.error === "settlement_failed";

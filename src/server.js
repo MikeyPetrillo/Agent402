@@ -12388,10 +12388,10 @@ async function settledFirstResend(req, credit) {
     let row = null;
     try { row = await refundByEvidenceFresh(credit.tx); } catch { row = null; }
     if (!row || row.status === "owed") {
-      return { serve: false, status: 503, retryAfter: 10, body: { error: "resend_pending", charged: false, retry: RETRY_SAME_PAYMENT, hint: "The charge this payment made is not confirmed on the books yet. Nothing more is charged. Retry shortly with the same payment." } };
+      return { serve: false, status: 503, retryAfter: 10, body: { error: "resend_pending", charged: true, retry: RETRY_SAME_PAYMENT, hint: "The charge this payment made is not confirmed on the books yet. Nothing more is charged. Retry shortly with the same payment." } };
     }
     if (row.status === "void") {
-      return { serve: false, status: 409, retryAfter: 2, body: { error: "idempotent_request_in_flight", charged: false, hint: "A call carrying this same payment is running, or was already served. Nothing more is charged." } };
+      return { serve: false, status: 409, retryAfter: 2, body: { error: "idempotent_request_in_flight", charged: true, hint: "A call carrying this same payment is running, or was already served. Nothing more is charged." } };
     }
     return { serve: false, status: 402, body: {
       error: "payment_refunded",
