@@ -33,6 +33,7 @@
 // presents. A transaction matches at most one challenge.
 import { Credential } from "mppx";
 import { keccak256, fromRlp, toBytes } from "viem";
+import { sponsoredTxIdFor } from "./tempo-charge-sponsor.js";
 
 // TIP-20 TransferWithMemo(address indexed from, address indexed to, uint256 amount, bytes32 indexed memo)
 export const TRANSFER_WITH_MEMO_TOPIC = keccak256(toBytes("TransferWithMemo(address,address,uint256,bytes32)"));
@@ -121,12 +122,22 @@ export async function confirmTempoSettlement(authorizationHeader, {
     try { minAmount = BigInt(String(r.amount)); } catch { return null; }
     if (!currency.startsWith("0x") || !recipient.startsWith("0x") || !(minAmount > 0n)) return null;
     const candidates = candidateTxIds(payload.signature);
+    // A fee-sponsored transaction lands under the id of the bytes this server
+    // co-signed, not the buyer's (src/tempo-charge-sponsor.js books it when
+    // it is sent, which may be after this watch starts: read on every pass).
+    const sponsored = ch.request?.methodDetails?.feePayer === true;
+    const addSponsored = () => {
+      const id = sponsored ? sponsoredTxIdFor(ch.id) : null;
+      if (id && !candidates.includes(id)) candidates.push(id);
+    };
+    addSponsored();
     if (!candidates.length) return null;
 
     for (let i = 0; i < attempts; i++) {
       const wait = i > 0 ? delayMs : initialDelayMs;
       if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
       if (stop?.()) return null;
+      addSponsored();
       for (const txId of candidates) {
         let receipt;
         if (trace) trace.reads = (trace.reads || 0) + 1;

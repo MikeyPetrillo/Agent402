@@ -67,7 +67,9 @@ export const WALLET_PROOF_HEADER = "X-Agent402-Wallet-Proof";
 export const PROOF_SKEW_SECONDS = 300;
 /** Most proofs whose uses are kept at once; past it a new proof is refused (quoted list) until old ones expire. */
 export const PROOF_SEEN_MAX = 20_000;
-export const RETURNING_WALLET_DEFAULTS = Object.freeze({ discountBps: 1000, minPaidDays: 3, windowDays: 30 });
+export const RETURNING_WALLET_DEFAULTS = Object.freeze({ discountBps: 1000, minPaidDays: 3, windowDays: 30, minDaySpendUsd: 0.05 });
+/** The largest per-day spend floor a setting can name, in dollars. */
+export const RETURNING_WALLET_MAX_DAY_SPEND_USD = 100;
 /** The largest discount a setting can name (a malformed or larger value reads as the default). */
 export const RETURNING_WALLET_MAX_BPS = 5000;
 export const CACHE_MS = 10 * 60_000;
@@ -90,6 +92,15 @@ const intEnv = (env, name, dflt, { min, max }) => {
   return Number.isInteger(n) && n >= min && n <= max ? n : dflt;
 };
 
+// RETURNING_WALLET_MIN_DAY_SPEND_USD: what a wallet must spend on one UTC day
+// for that day to count toward the bar, whole micro-dollars; 0 counts every
+// paid day. A malformed, negative or larger value reads as the default.
+const daySpendEnv = (env) => {
+  const raw = String(env.RETURNING_WALLET_MIN_DAY_SPEND_USD ?? "").trim();
+  const n = Number(raw);
+  if (raw === "" || !Number.isFinite(n) || n < 0 || n > RETURNING_WALLET_MAX_DAY_SPEND_USD) return RETURNING_WALLET_DEFAULTS.minDaySpendUsd;
+  return Math.round(n * 1e6) / 1e6;
+};
 /** Call-time config. A malformed value reads as the default, never as a deeper discount or a lower bar. */
 export function returningWalletConfig(env = process.env) {
   return {
@@ -97,6 +108,7 @@ export function returningWalletConfig(env = process.env) {
     discountBps: intEnv(env, "RETURNING_WALLET_DISCOUNT_BPS", RETURNING_WALLET_DEFAULTS.discountBps, { min: 1, max: RETURNING_WALLET_MAX_BPS }),
     minPaidDays: intEnv(env, "RETURNING_WALLET_MIN_PAID_DAYS", RETURNING_WALLET_DEFAULTS.minPaidDays, { min: 1, max: 365 }),
     windowDays: intEnv(env, "RETURNING_WALLET_WINDOW_DAYS", RETURNING_WALLET_DEFAULTS.windowDays, { min: 1, max: 365 }),
+    minDaySpendUsd: daySpendEnv(env),
   };
 }
 export function returningWalletEnabled(env = process.env) { return returningWalletConfig(env).enabled; }
@@ -160,14 +172,15 @@ export function walletHintOf(req) {
 let paidDaysOf = null;
 let isOursFn = () => false;
 let serverHost = null;
-/** Hand in the ledger read (wallet, sinceMs) => distinct paid days, the own-wallet
+/** Hand in the ledger read (wallet, sinceMs, minDayUsd) => distinct paid days on
+ *  which the wallet spent at least minDayUsd, the own-wallet
  *  check, and this server's host name (a proof names it; with none set no proof holds). */
 export function configureReturningWallet({ paidDays = null, isOurs = null, host = null } = {}) {
   paidDaysOf = typeof paidDays === "function" ? paidDays : null;
   isOursFn = typeof isOurs === "function" ? isOurs : () => false;
   serverHost = typeof host === "string" && host.trim() ? host.trim().toLowerCase() : null;
 }
-const cache = new Map(); // wallet -> { at, days, window }, oldest read first
+const cache = new Map(); // wallet -> { at, days, window, floor }, oldest read first
 const byAddress = new Map(); // client address -> fresh reads this minute
 let minute = 0, lookups = 0, sweeper = null;
 const counters = { hinted: 0, unproven: 0, quotedDiscount: 0, paidDiscount: 0, paidOtherWallet: 0, notQualified: 0, lookupsHeld: 0, lookupsHeldAddress: 0, settleRefused: 0 };
@@ -187,7 +200,7 @@ const HELD = Symbol("held");
  */
 function paidDays(wallet, cfg, now, client = null) {
   const hit = cache.get(wallet);
-  if (hit && now - hit.at < CACHE_MS && hit.window === cfg.windowDays) return hit.days;
+  if (hit && now - hit.at < CACHE_MS && hit.window === cfg.windowDays && hit.floor === cfg.minDaySpendUsd) return hit.days;
   if (typeof paidDaysOf !== "function") return null;
   const m = Math.floor(now / 60_000);
   if (m !== minute) { minute = m; lookups = 0; byAddress.clear(); }
@@ -197,12 +210,12 @@ function paidDays(wallet, cfg, now, client = null) {
   lookups++;
   if (key !== null) byAddress.set(key, (byAddress.get(key) || 0) + 1);
   let days = null;
-  try { days = Number(paidDaysOf(wallet, now - cfg.windowDays * 86_400_000)); } catch { days = null; }
+  try { days = Number(paidDaysOf(wallet, now - cfg.windowDays * 86_400_000, cfg.minDaySpendUsd)); } catch { days = null; }
   if (!Number.isFinite(days) || days < 0) return null;
   sweepReturningWallet(now);
   cache.delete(wallet);
   if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
-  cache.set(wallet, { at: now, days, window: cfg.windowDays });
+  cache.set(wallet, { at: now, days, window: cfg.windowDays, floor: cfg.minDaySpendUsd });
   // A wallet nobody names again still leaves memory when its window is over.
   if (!sweeper) { sweeper = setInterval(() => sweepReturningWallet(), 30_000); sweeper.unref?.(); }
   return days;
@@ -453,7 +466,11 @@ export function returningWalletOfferMiddleware(defOf) {
   };
 }
 
-/** The rule's two clauses every prose surface shares, from the settings in force. */
+/** The rule's clauses every prose surface shares, from the settings in force. */
+const usd = (n) => "$" + (Number.isInteger(Math.round(Number(n) * 1e6) / 1e4) ? Number(n).toFixed(2) : String(Number(n)));
+const barClause = (cfg) => cfg.minDaySpendUsd > 0
+  ? `has paid here at least ${usd(cfg.minDaySpendUsd)} on each of ${cfg.minPaidDays} or more UTC days in the last ${cfg.windowDays}`
+  : `has paid here on ${cfg.minPaidDays} or more UTC days in the last ${cfg.windowDays}`;
 const quotedClause = (cfg, route) => `quoted ${cfg.discountBps / 100}% under ${route} list price on its x402 exact accepts on EVM chains; a chain's premium and price floor still apply, so a chain at its floor can quote the same amount`;
 const SIGNER_CLAUSE = "a payment of the lower amount from any other wallet is answered 402 at the list price, and nothing is charged";
 /** How a request proves the wallet, in the words every prose surface shares. */
@@ -463,7 +480,7 @@ const proofClause = () => `prove that wallet in the \`${WALLET_PROOF_HEADER}\` h
 export function returningWalletSentence() {
   const cfg = returningWalletConfig();
   if (!cfg.enabled) return "";
-  return `Returning wallets pay less: send your wallet address in the \`${WALLET_HINT_HEADER}\` request header and ${proofClause()}. When that wallet has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays}, that same call is ${quotedClause(cfg, "the route's")}. An eligible route's 402 carries \`returningWalletPrice\`: the header, the percentage and the bar, \`applied\` (true when this request's quote is lower), \`why\` when a named wallet's quote is not (\`unproven\`: no valid proof; \`unqualified\`: under the bar; \`lookup_busy\`: not read this minute, ask again; \`other_payer\`: the payment is signed by another wallet; \`other_rail\`: the payment is not an x402 exact EIP-3009 authorization on an EVM chain; \`min_price\`: the price has no room under it; \`price_floor\`: every chain quoted sits at its floor) and \`atListOn\` (the chains a price floor held at list). A route whose 402 does not carry it stays at list, for example a route priced per request, a metered or model-backed route, a routing tier or a route whose effect outlives the answer. Send both headers again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`;
+  return `Returning wallets pay less: send your wallet address in the \`${WALLET_HINT_HEADER}\` request header and ${proofClause()}. When that wallet ${barClause(cfg)}, that same call is ${quotedClause(cfg, "the route's")}. An eligible route's 402 carries \`returningWalletPrice\`: the header, the percentage, the bar's days (\`minPaidDays\`, \`windowDays\`), \`applied\` (true when this request's quote is lower), \`why\` when a named wallet's quote is not (\`unproven\`: no valid proof; \`unqualified\`: under the bar; \`lookup_busy\`: not read this minute, ask again; \`other_payer\`: the payment is signed by another wallet; \`other_rail\`: the payment is not an x402 exact EIP-3009 authorization on an EVM chain; \`min_price\`: the price has no room under it; \`price_floor\`: every chain quoted sits at its floor) and \`atListOn\` (the chains a price floor held at list). A route whose 402 does not carry it stays at list, for example a route priced per request, a metered or model-backed route, a routing tier or a route whose effect outlives the answer. Send both headers again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`;
 }
 /** The header parameters an eligible route's OpenAPI operation declares (the hint and its proof), or []. */
 export function returningWalletHeaderParams(def) {
@@ -473,7 +490,7 @@ export function returningWalletHeaderParams(def) {
     name: WALLET_HINT_HEADER,
     in: "header",
     required: false,
-    description: `Your EVM wallet address, read only with a valid ${WALLET_PROOF_HEADER}. A wallet that has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays} is ${quotedClause(cfg, "this route's")}. Send both headers again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`,
+    description: `Your EVM wallet address, read only with a valid ${WALLET_PROOF_HEADER}. A wallet that ${barClause(cfg)} is ${quotedClause(cfg, "this route's")}. Send both headers again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`,
     schema: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
   }, {
     name: WALLET_PROOF_HEADER,

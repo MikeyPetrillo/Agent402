@@ -1151,15 +1151,24 @@ export function payerHasPaidSale(payer) {
 // (the returning-wallet price's bar, src/returning-wallet.js). One seek on
 // idx_sales_payer over that payer's rows in the window; INDEXED BY pins it
 // (the table carries no ANALYZE statistics). The caller caches the answer.
+// A day counts only when that day's sales sum to at least the caller's floor
+// (in whole micro-dollars, so a float sum of many small prices meets a floor
+// it reaches exactly); a floor of 0 counts every paid day.
 const qPayerPaidDays = db.prepare(`
-  SELECT COUNT(DISTINCT CAST(ts / 86400000 AS INTEGER)) AS d
-    FROM sales INDEXED BY idx_sales_payer
-   WHERE payer = ? AND ts >= ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL}`);
-/** Distinct paid UTC days of a payer since `sinceMs` (0 for an unreadable address). Database mode: the mirror. */
-export function payerPaidDays(payer, sinceMs) {
+  SELECT COUNT(*) AS d FROM (
+    SELECT CAST(ts / 86400000 AS INTEGER) AS day
+      FROM sales INDEXED BY idx_sales_payer
+     WHERE payer = ? AND ts >= ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL}
+     GROUP BY day
+    HAVING ROUND(SUM(price_usd) * 1000000) >= ?)`);
+/** Distinct paid UTC days of a payer since `sinceMs` on which it spent at least
+ *  `minDayUsd` (0 for an unreadable address). Database mode: the mirror. */
+export function payerPaidDays(payer, sinceMs, minDayUsd = 0) {
   const p = normalizePayerAddress(payer);
   if (!p) return 0;
-  return Number(qPayerPaidDays.get(p, Number(sinceMs) || 0)?.d) || 0;
+  const floor = Number(minDayUsd);
+  const floorMicro = Number.isFinite(floor) && floor > 0 ? Math.round(floor * 1e6) : 0;
+  return Number(qPayerPaidDays.get(p, Number(sinceMs) || 0, floorMicro)?.d) || 0;
 }
 // The return rate of outside payers over a window, for the operator view: how
 // many wallets paid on one day only, on two, and on `minPaidDays` or more.
