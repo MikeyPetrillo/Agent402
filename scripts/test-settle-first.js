@@ -306,6 +306,33 @@ if (ONLY.includes("1")) {
   loud();
   await ok((await b.gatewaySettleFirstDue(reqOf(PAYER))) === null, "a failure recorded by the catalog consult alone (not a /v1 run) is not counted toward settle first");
 
+  // ---- THE RESEND BOUND: a resend of a payment settled first that is not served ----
+  // It runs with no new payment: counted toward settling the wallet's next
+  // runs first and on the budget meter, like a run that did not settle; never
+  // toward refusing the wallet. A served resend is not.
+  {
+    const { markSettledFirstResend } = await import("../src/settle-first.js");
+    let metered = 0;
+    b.setUnsettledRunListener(() => { metered++; });
+    const resend = (status) => { const r = reqOf(PAYER, { nonce: NONCE }); markSettledFirstResend(r, { tx: "0x" + "ab".repeat(32) }); return { r, end: () => { r.res.statusCode = status; r.res.emit("finish"); } }; };
+    await b._gatewaySettleBreakerReset();
+    quiet();
+    for (let i = 0; i < 2; i++) { const { r, end } = resend(200); await consult(r); end(); }
+    loud();
+    const dueServed = await b.gatewaySettleFirstDue(reqOf(PAYER)), meteredServed = metered;
+    await b._gatewaySettleBreakerReset();
+    quiet();
+    let refused = 0;
+    for (let i = 0; i < 6; i++) { const { r, end } = resend(502); if (!(await consult(r))) refused++; end(); }
+    loud();
+    const dueFailed = await b.gatewaySettleFirstDue(reqOf(PAYER)), dueAuth = await b.gatewaySettleFirstDue(reqOf(PAYER, { nonce: NONCE }));
+    const servedAfter = await consult(reqOf(PAYER));
+    b.setUnsettledRunListener((req) => { if (!settleFirstRefused.has(req)) meter.noteUnsettledRunCost(req.__cost ?? COST, clock); });
+    await ok(dueServed === null && meteredServed === 0, `a resend that is served is the payment's settled call: not an unsettled run, not metered (${dueServed?.reason}, ${meteredServed})`);
+    await ok(dueFailed?.reason === "unsettled-runs" && dueAuth?.reason === "unsettled-runs" && metered === 6 && refused === 0 && servedAfter === true,
+      `each resend that is not served counts like a run that did not settle: the wallet settles first (${dueFailed?.reason}), each is metered (${metered}), and the wallet is never refused for them (${refused} refused)`);
+  }
+
   // ---- where "never settled" comes from ---------------------------------------
   // (Read with the mode forced on: under the budget no never-settled run is due.)
   process.env.GATEWAY_SETTLE_FIRST = "always";

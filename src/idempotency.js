@@ -11,6 +11,7 @@ import { isX402McpRequest } from "./mcp-x402-routes.js";
 import { MAX_SETTLED_VALIDITY_HOLD_MS, paymentReplayKey } from "./replay-guard.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { base64BytesOf } from "./base64-bytes.js";
+import { SETTLE_FIRST_MAX_RESENDS } from "./settle-first.js";
 
 // A stored answer is the body as served, or, when it was charged but never
 // delivered (the buyer left while the payment settled), the body under this
@@ -237,8 +238,12 @@ export async function chargedReplayVerdict(tx, { voidOnClaim, rowOf }) {
  *  answer not delivered); else null. onSettledFirstResend(req, credit):
  *  awaited when the same payment is sent again; resolves { serve: true } to
  *  run it (the server marked the request), or { serve: false, status, body,
- *  retryAfter? } to answer that instead. Both from the server. */
-export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null, onCappedResend = null, settledFirstCredit = null, onSettledFirstResend = null }) {
+ *  retryAfter? } to answer that instead. Both from the server. The credit
+ *  passed carries `resends`: how many times the payment already ran again.
+ *  settledFirstResendSpent(req, credit): the answer ({ status, body }) to a
+ *  resend past SETTLE_FIRST_MAX_RESENDS (src/settle-first.js THE RESEND
+ *  BOUND): nothing runs and nothing is charged. */
+export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null, onCappedResend = null, settledFirstCredit = null, onSettledFirstResend = null, settledFirstResendSpent = null }) {
   // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
   // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
   // gate credential it presented (the x402 payment authorization or the
@@ -441,10 +446,29 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       res.status(409).json({ error: "idempotent_request_in_flight", charged: false, hint: "A call carrying this same payment is still running. Retry shortly with the same payment; nothing more is charged." });
       return true;
     }
-    let verdict;
-    try { verdict = await onSettledFirstResend(req, credit); } catch { verdict = { serve: false, status: 503, retryAfter: 10, body: { error: "resend_pending", hint: "The payment this request carries could not be read against its charge just now. Nothing more is charged. Retry shortly with the same payment." } }; }
-    if (!verdict || verdict.serve !== true) {
+    // THE RESEND BOUND (src/settle-first.js): the count is written before
+    // the run, under the claim, so a run that never ends still counts; a
+    // resend that does not run (the server answered it) gives it back.
+    const resends = Number.isInteger(credit.resends) && credit.resends > 0 ? credit.resends : 0;
+    if (resends >= SETTLE_FIRST_MAX_RESENDS) {
+      let spent = null;
+      try { spent = typeof settledFirstResendSpent === "function" ? await settledFirstResendSpent(req, { ...credit, resends }) : null; } catch { spent = null; }
       store.release(cKey).catch(() => {});
+      res.status(Number(spent?.status) || 402).json(spent?.body && typeof spent.body === "object" ? spent.body : { error: "resend_limit_reached", charged: false, resends: { max: SETTLE_FIRST_MAX_RESENDS } });
+      return true;
+    }
+    const recOf = (n) => ({ [CREDIT]: 1, sig: credit.sig, tx: credit.tx, network: credit.network ?? null, wire: credit.wire ?? null, note: typeof credit.note === "string" ? credit.note : null, receipt: typeof credit.receipt === "string" ? credit.receipt : null, at: Number(credit.at) || Date.now(), resends: n });
+    const keepCount = async (n) => { const rec = recOf(n); await store.set(cKey, rec, Buffer.byteLength(JSON.stringify(rec), "utf8"), { ttlMs: CREDIT_TTL_MS }); };
+    try { await keepCount(resends + 1); } catch {
+      store.release(cKey).catch(() => {});
+      res.setHeader("Retry-After", "10");
+      res.status(503).json({ error: "resend_pending", charged: false, hint: "The payment this request carries could not be read against its charge just now. Nothing more is charged. Retry shortly with the same payment." });
+      return true;
+    }
+    let verdict;
+    try { verdict = await onSettledFirstResend(req, { ...credit, resends }); } catch { verdict = { serve: false, status: 503, retryAfter: 10, body: { error: "resend_pending", hint: "The payment this request carries could not be read against its charge just now. Nothing more is charged. Retry shortly with the same payment." } }; }
+    if (!verdict || verdict.serve !== true) {
+      keepCount(resends).catch(() => {}).then(() => store.release(cKey)).catch(() => {});
       if (Number(verdict?.retryAfter) > 0) res.setHeader("Retry-After", String(Math.ceil(Number(verdict.retryAfter))));
       res.status(Number(verdict?.status) || 402).json(verdict?.body && typeof verdict.body === "object" ? verdict.body : { error: "resend_refused" });
       return true;
