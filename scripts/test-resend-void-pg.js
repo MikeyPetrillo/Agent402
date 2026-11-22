@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
+import pg from "pg";
 delete process.env.REDIS_URL;
 const { url, schema } = requireTestPg({ label: "test-resend-void-pg" });
 
@@ -50,6 +51,11 @@ const rl = await import("../src/refund-ledger.js");
 const { chargedReplayVerdict, RESEND_SERVED_NOTE } = await import("../src/idempotency.js");
 const T = `${schema}.refunds`, M = `${schema}.refund_marks`;
 const NOTE = RESEND_SERVED_NOTE || "served on the resend of the same payment";
+// A connection of the test's own, straight to Postgres (not through the
+// relay): what a statement that reached the database left there.
+const directClient = new pg.Client({ connectionString: url });
+await directClient.connect();
+const direct = (sql, params) => directClient.query(sql, params);
 const rowOf = async (ev) => (await sdb.stateQuery(`SELECT * FROM ${T} WHERE evidence = $1`, [ev])).rows[0] || null;
 const markOf = async (ev) => (await sdb.stateQuery(`SELECT state FROM ${M} WHERE evidence = $1`, [ev])).rows[0]?.state ?? null;
 const voidOnResend = (ev, attempt = null) => (rl.voidOwedOnResend || rl.voidOwedOnClaim)(ev, NOTE, { attempt });
@@ -89,9 +95,13 @@ try {
   const C = "0x" + "c3".repeat(32);
   ok((await debt(C, 3)) === true, "setup: a third owed debt");
   cutRelay();
+  // What landed is written before the call sees its failure, as it happens:
+  // a statement reaches the database and its answer is what is lost. Written
+  // after the heal instead, it would race the undo's own retry, which may
+  // already have run against the healed store and found nothing to take back.
+  await direct(`INSERT INTO ${M} (evidence, state, at) VALUES ($1, 'void', $2) ON CONFLICT (evidence) DO UPDATE SET state = 'void'`, [C, Date.now()]);
   ok((await voidOnResend(C)) === false, "the void is not confirmed while the store is down");
   healRelay();
-  await sdb.stateQuery(`INSERT INTO ${M} (evidence, state, at) VALUES ($1, 'void', $2) ON CONFLICT (evidence) DO UPDATE SET state = 'void'`, [C, Date.now()]);
   await settle();
   ok((await rowOf(C)).status === "owed" && (await markOf(C)) === "owed", `a mark that landed alone is taken back (row ${(await rowOf(C)).status}, mark ${await markOf(C)})`);
   ok((await rl.claimRefundForSend(Number((await rowOf(C)).id), "refund-run")) === true, "and the refund run can claim the debt");
@@ -101,11 +111,12 @@ try {
   ok((await debt(D, 4)) === true, "setup: a fourth owed debt");
   const before = await rowOf(D);
   cutRelay();
+  // The void and its mark reached the database; the answer did not.
+  const full = before.note ? `${before.note}; ${noteOf("d4d4d4d4")}` : noteOf("d4d4d4d4");
+  await direct(`UPDATE ${T} SET status = 'void', note = $2, resolved_at = $3 WHERE evidence = $1`, [D, full, Date.now()]);
+  await direct(`INSERT INTO ${M} (evidence, state, at) VALUES ($1, 'void', $2) ON CONFLICT (evidence) DO UPDATE SET state = 'void'`, [D, Date.now()]);
   ok((await voidOnResend(D, "d4d4d4d4")) === false, "the void is not confirmed while the store is down (again)");
   healRelay();
-  const full = before.note ? `${before.note}; ${noteOf("d4d4d4d4")}` : noteOf("d4d4d4d4");
-  await sdb.stateQuery(`UPDATE ${T} SET status = 'void', note = $2, resolved_at = $3 WHERE evidence = $1`, [D, full, Date.now()]);
-  await sdb.stateQuery(`INSERT INTO ${M} (evidence, state, at) VALUES ($1, 'void', $2) ON CONFLICT (evidence) DO UPDATE SET state = 'void'`, [D, Date.now()]);
   await settle();
   {
     const r = await rowOf(D);
@@ -205,6 +216,7 @@ try {
   try { await sdb.stateQuery(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); } catch { /* best effort */ }
   relay.close();
   for (const s of live) s.destroy();
+  await directClient.end().catch(() => {});
   rmSync(DIR, { recursive: true, force: true });
 }
 console.log(`\ntest-resend-void-pg: ${pass} passed, ${fail} failed`);
