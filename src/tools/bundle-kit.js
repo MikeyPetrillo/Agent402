@@ -31,6 +31,7 @@ import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
 import { markEndsAtCeiling, ceilingLeftMs, CEILING_TIMER_SLACK_MS } from "../run-ceiling.js";
+import { markResaleComputed } from "../resale-terms.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
 import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION } from "../data-attribution.js";
 
@@ -670,3 +671,5 @@ export const BUNDLE_MAX_UNITS = Object.freeze({ "weather-risk-brief": WEATHER_RI
 // taken when it would end after the ceiling. A caller that stops waiting at a
 // deadline of its own can serve them (src/run-ceiling.js).
 markEndsAtCeiling(BUNDLE_TOOLS, ["weather-risk-brief", "filings-brief", "token-diligence"]);
+// Resale terms (src/resale-terms.js): the diligence read is computed.
+markResaleComputed(BUNDLE_TOOLS, ["token-diligence"]);

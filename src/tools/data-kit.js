@@ -19,6 +19,7 @@ import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { ratesUrl, latestShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 import { attribute } from "../data-attribution.js";
+import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON } from "../resale-terms.js";
 import { publicHolidaysCompat, HOLIDAY_HOSTS, parseCountry, parseYear, parseSubdivision, parseTypes, appliesIn, hasAnyType } from "./holiday-source.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
@@ -346,4 +347,6 @@ export const DATA_TOOLS = [
 // (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
 // can serve them. A handler that gains another kind of wait leaves this list.
 markEndsAtCeiling(DATA_TOOLS, ["fx-rate", "public-holidays", "weather-forecast"]);
+// Resale terms (src/resale-terms.js): a whole year's list is not resold through a third party.
+markResaleBarred(DATA_TOOLS, ["public-holidays"], HOLIDAY_PORTAL_RESALE_REASON);
 attribute(DATA_TOOLS.find((t) => t.slug === "public-holidays"), "nager");
