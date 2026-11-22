@@ -855,9 +855,25 @@ try {
     // with 500: the seller now holds a signed authorization it may redeem.
     const failsPaidRow = { slug: "fails-paid", method: "POST", path: "/api/fails-paid", price: "$0.01", description: "fails after payment", category: "util", computePayable: false };
     seen.failsPaidSigned = 0;
+    // /api/charged-first answers its first signed request as a seller that
+    // settled the payment before the call ran and whose run failed (charged:
+    // true, retry: "same-payment"); a request with that same signature again
+    // is answered per seen.chargedResend ("ok" serves it, "charged" fails again).
+    const chargedRow = { slug: "charged-first", method: "POST", path: "/api/charged-first", price: "$0.01", description: "settled first, then failed", category: "util", computePayable: false };
+    seen.chargedSigs = []; seen.chargedResend = "ok";
+    const chargedBody = { error: "Upstream error (HTTP 500)", charged: true, refundOwed: true, retry: "same-payment", transaction: "0x" + "ab".repeat(32) };
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, proRow, bigRow, fixedRow, ...redirRows, flooredRow, failsPaidRow, ...validityRows], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, proRow, bigRow, fixedRow, ...redirRows, flooredRow, failsPaidRow, chargedRow, ...validityRows], payment: { network: "base" } });
+      if (req.url.startsWith("/api/charged-first")) {
+        req.resume();
+        const sig = req.headers["payment-signature"] || req.headers["x-payment"];
+        if (!sig) return send(402, {}, { "PAYMENT-REQUIRED": signable("/api/charged-first", 10000) });
+        const again = seen.chargedSigs.includes(sig);
+        seen.chargedSigs.push(sig);
+        if (!again || seen.chargedResend === "charged") return send(502, chargedBody);
+        return send(200, { ok: true, resent: true });
+      }
       if (req.url.startsWith("/api/floored")) {
         req.resume();
         if (req.headers.authorization) { seen.flooredPaid++; return send(200, { ok: true }); }
@@ -1074,6 +1090,24 @@ try {
         if (info.spendControls?.spentThisSessionUsd !== 0 || info.spendControls?.heldThisSessionUsd !== 0.06) fail(`held and spent are reported apart: ${JSON.stringify(info.spendControls)}`);
         console.log("a payment the seller answered with 500 stays held against the budget; the seventh call is refused unsigned ✓");
       } finally { await held.close().catch(() => {}); }
+    }
+
+    // A seller that took the payment before the call ran and whose run failed
+    // (charged: true, retry: "same-payment"): the same signed payment is sent
+    // once more, and its amount counts once, as spent, never held.
+    {
+      const c = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "off", AGENT402_BUDGET: "1" });
+      try {
+        seen.chargedSigs = []; seen.chargedResend = "ok";
+        const r = await c.callTool({ name: "catalog.call", arguments: { slug: "charged-first", params: { text: "a" } } });
+        const info = JSON.parse(text(await c.callTool({ name: "get_payment_info", arguments: {} })));
+        if (r.isError || !/"resent":true/.test(text(r)) || seen.chargedSigs.length !== 2 || seen.chargedSigs[0] !== seen.chargedSigs[1] || info.spendControls?.spentThisSessionUsd !== 0.01 || info.spendControls?.heldThisSessionUsd !== 0) fail(`a charged failure must be resent once with the same signed payment and counted once as spent (${seen.chargedSigs.length} sends): ${text(r).slice(0, 200)} ${JSON.stringify(info.spendControls)}`);
+        seen.chargedSigs = []; seen.chargedResend = "charged";
+        const r2 = await c.callTool({ name: "catalog.call", arguments: { slug: "charged-first", params: { text: "b" } } });
+        const info2 = JSON.parse(text(await c.callTool({ name: "get_payment_info", arguments: {} })));
+        if (!r2.isError || !/taken before the call ran/.test(text(r2)) || !/owed back/.test(text(r2)) || /not charged/.test(text(r2)) || seen.chargedSigs.length !== 2 || seen.chargedSigs[0] !== seen.chargedSigs[1] || info2.spendControls?.spentThisSessionUsd !== 0.02 || info2.spendControls?.heldThisSessionUsd !== 0) fail(`a charged failure whose resend fails too must say it was taken and is owed back, be sent no third time, and count once as spent: ${text(r2).slice(0, 300)} ${JSON.stringify(info2.spendControls)}`);
+        console.log("a payment the seller took before a failed run is resent once as signed and counted once as spent ✓");
+      } finally { await c.close().catch(() => {}); }
     }
 
     // The default host (https://agent402.tools, exact origin) never settles an
