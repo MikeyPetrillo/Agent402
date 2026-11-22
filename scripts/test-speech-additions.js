@@ -40,9 +40,11 @@ const SPEECH_PRICE = Number(speechTool.price.replace("$", ""));
 const CHAIN = G.SPEECH_MODELS.map((m) => m.id);
 const EL = "elevenlabs/eleven-v3-conversational", VOX = "mistralai/voxtral-mini-tts-3-0";
 const STT_IDS = A.STT_ADDITIONS.map((m) => m.id);
-// A per-character rate at a share of the speech route's margin bound, and a
-// per-minute one at a share of a tier's.
-const speechRate = (share) => share * A.ADDITION_MARGIN * SPEECH_PRICE / G.SPEECH_MAX_CHARS;
+// A per-character rate at a share of the speech route's margin bound at a
+// model's own cap (the route's where it declares none), and a per-minute one
+// at a share of a tier's.
+const speechCap = (id) => A.speechMaxCharsFor(A.speechAdditionNamed(id), G.SPEECH_MAX_CHARS);
+const speechRate = (share, id = VOX) => share * A.ADDITION_MARGIN * SPEECH_PRICE / speechCap(id);
 const sttRate = (tier, share) => share * A.ADDITION_MARGIN * S.STT_TIERS[tier].priceUsd / S.STT_TIERS[tier].maxMinutes;
 const install = ({ speech = {}, stt = {} } = {}) => U.setUpstreamCostsForTest({ ...EXAMPLE, speech: { "your/speech-model": EXAMPLE.speech["your/speech-model"], ...speech }, sttPerMinute: { "gpt-transcribe": EXAMPLE.sttPerMinute["gpt-transcribe"], ...stt } });
 const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v1-audio-speech").map((m) => m.id);
@@ -79,7 +81,7 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
 // ---- the switch: a complete table turns nothing on by itself -------------------------
 {
   const [MINI] = STT_IDS;
-  const rows = () => install({ speech: { [EL]: speechRate(0.5), [VOX]: speechRate(0.5) }, stt: Object.fromEntries(STT_IDS.map((id) => [id, Math.min(...Object.keys(S.STT_TIERS).map((t) => sttRate(t, 0.5)))])) });
+  const rows = () => install({ speech: { [EL]: speechRate(0.5, EL), [VOX]: speechRate(0.5) }, stt: Object.fromEntries(STT_IDS.map((id) => [id, Math.min(...Object.keys(S.STT_TIERS).map((t) => sttRate(t, 0.5)))])) });
   rows();
   ok(G.speechAdditions().length === 2 && S.sttAdditions("transcribe").length === 3, "control: with the switch on all and every row inside the bound, every model is served");
   for (const off of [undefined, "", "off", "none-of-these", "gpt-transcribe"]) {
@@ -116,7 +118,7 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
 
 // ---- a row past the bound: the same as no row ---------------------------------------
 {
-  install({ speech: { [EL]: speechRate(1.01), [VOX]: speechRate(50) }, stt: Object.fromEntries(STT_IDS.map((id) => [id, sttRate("transcribe", 1.01)])) });
+  install({ speech: { [EL]: speechRate(1.01, EL), [VOX]: speechRate(50) }, stt: Object.fromEntries(STT_IDS.map((id) => [id, sttRate("transcribe", 1.01)])) });
   ok(G.speechAdditions().length === 0 && speechListed().join() === CHAIN.join(), "a row past the bound: not served, not listed");
   ok(thrown(() => G.validateSpeechRequest({ input: "hi", model: EL }))?.statusCode === 400, "a row past the bound: refused");
   ok(S.sttAdditions("transcribe").length === 0 && thrown(() => S.sttModelOf({ model: STT_IDS[0] }, "transcribe"))?.statusCode === 400, "a transcription row past the tier's bound: refused");
@@ -124,7 +126,7 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
 
 // ---- a row inside the bound: served and listed ---------------------------------------
 {
-  install({ speech: { [EL]: speechRate(1), [VOX]: speechRate(0.5) } });
+  install({ speech: { [EL]: speechRate(1, EL), [VOX]: speechRate(0.5) } });
   ok(G.speechAdditions().map((m) => m.id).join() === [EL, VOX].join(), "rows inside the bound (one exactly on it): both speech models are served");
   const v = G.validateSpeechRequest({ input: "hello", model: EL });
   ok(v.bodies.map((b) => b.model).join() === [EL, ...CHAIN].join(), "a named model goes first and the whole chain stays behind it");
@@ -212,6 +214,72 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
     try { await tool.handler({ url: AUDIO_URL, model: MINI }); } catch (e) { refused = e; }
     ok(refused?.statusCode === 400 && calls.length === 0, "with its row gone the model is refused again");
   } finally { globalThis.fetch = realFetch; S.__setMeasureForTest(null); }
+}
+
+// ---- per-model caps: a model held to its own cap, under the route's ---------------------
+{
+  // The speech model with its own cap is served at a row the route's cap would not fit.
+  const elCap = speechCap(EL);
+  ok(elCap < G.SPEECH_MAX_CHARS && speechCap(VOX) === G.SPEECH_MAX_CHARS, `${EL} declares its own cap under the route's (${elCap} < ${G.SPEECH_MAX_CHARS}); ${VOX} keeps the route's`);
+  const overRoute = 0.9 * A.ADDITION_MARGIN * SPEECH_PRICE / elCap; // inside the bound at its cap, past it at the route's
+  ok(!A.withinMargin(G.SPEECH_MAX_CHARS, overRoute, SPEECH_PRICE) && A.withinMargin(elCap, overRoute, SPEECH_PRICE), "control: the row fits the model's cap and not the route's");
+  install({ speech: { [EL]: overRoute, [VOX]: speechRate(0.5) } });
+  ok(G.speechAdditions().map((m) => m.id).join() === [EL, VOX].join(), "a model whose own cap fits the bound is served");
+  ok(G.validateSpeechRequest({ input: "x".repeat(elCap), model: EL }).bodies[0].model === EL, `${EL} takes an input at its cap (${elCap} chars)`);
+  const over = thrown(() => G.validateSpeechRequest({ input: "x".repeat(elCap + 1), model: EL }));
+  ok(over?.statusCode === 400 && over.message.includes(EL) && over.message.includes(`up to ${elCap} chars`) && over.message.includes(`${G.SPEECH_MAX_CHARS} chars`), `one char past its cap is a 400 naming the model and its cap (${over?.message?.slice(0, 120)})`);
+  ok(G.validateSpeechRequest({ input: "x".repeat(G.SPEECH_MAX_CHARS), model: VOX }).bodies[0].model === VOX && G.validateSpeechRequest({ input: "x".repeat(G.SPEECH_MAX_CHARS) }).bodies[0].model === CHAIN[0], "the other named model and the default chain keep the route's cap");
+  ok(thrown(() => G.validateSpeechRequest({ input: "x".repeat(G.SPEECH_MAX_CHARS + 1), model: VOX }))?.statusCode === 400, "and are refused past it as before");
+  const listed = G.modelsList().data.filter((m) => m.x402?.tier === "v1-audio-speech");
+  ok(listed.find((m) => m.id === EL)?.x402.maxInputChars === elCap && listed.find((m) => m.id === VOX)?.x402.maxInputChars === G.SPEECH_MAX_CHARS && listed.filter((m) => CHAIN.includes(m.id)).every((m) => m.x402.maxInputChars === G.SPEECH_MAX_CHARS), "/v1/models lists each model's own cap");
+  const unknown = thrown(() => G.validateSpeechRequest({ input: "hi", model: "nope/none" }));
+  ok(unknown?.message.includes(`${EL} (up to ${elCap.toLocaleString("en-US")} chars)`) && !unknown.message.includes(`${VOX} (up to`), "the unknown-model refusal names the cap beside the model that has one");
+  // Past the bound at its own cap: not served.
+  install({ speech: { [EL]: speechRate(1.01, EL) } });
+  ok(G.speechAdditions().length === 0, "a row past the bound at the model's own cap: not served");
+
+  // Transcription: a model given its own cap on a tier (through the test seam;
+  // none is declared today) is admitted at a row the tier's cap would not fit,
+  // takes audio to its cap and refuses audio past it with a 400 naming it.
+  const [MINI] = STT_IDS;
+  const tier = "transcribe", T = S.STT_TIERS[tier];
+  const ownMin = 1;
+  const row = 0.9 * A.ADDITION_MARGIN * T.priceUsd / ownMin;
+  ok(!A.withinMargin(T.maxMinutes, row, T.priceUsd), "control: the row does not fit the tier's own cap");
+  install({ stt: { [MINI]: row } });
+  ok(S.sttAdditions(tier).length === 0, "without its own cap the model is not served on the tier");
+  A.__setAdditionCapsForTest({ [MINI]: { maxMinutes: { [tier]: ownMin } } });
+  try {
+    ok(S.sttAdditions(tier).map((m) => m.id).join() === MINI && S.sttCapMinutesFor(tier, MINI) === ownMin && S.sttCapMinutesFor(tier) === T.maxMinutes, "with its own cap it is served, at that cap; the tier's own model keeps the tier's");
+    ok(S.sttAdditions("transcribe-pro").length === 0 || A.withinMargin(S.STT_TIERS["transcribe-pro"].maxMinutes, row, S.STT_TIERS["transcribe-pro"].priceUsd), "a per-tier cap applies to its tier only");
+    const desc = S.sttModelProperty(tier).model?.description || "";
+    ok(desc.includes(`${MINI} (up to 1 minute of audio)`) && !desc.includes("same price and cap"), `the schema names the model's own cap (${desc.slice(0, 160)})`);
+    const sr = 8000;
+    const wavOf = (sec) => { const n = sr * sec, b = Buffer.alloc(44 + n, 0x80); b.write("RIFF", 0); b.writeUInt32LE(36 + n, 4); b.write("WAVE", 8); b.write("fmt ", 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(sr, 24); b.writeUInt32LE(sr, 28); b.writeUInt16LE(1, 32); b.writeUInt16LE(8, 34); b.write("data", 36); b.writeUInt32LE(n, 40); return b; };
+    const AUDIO = "http://93.184.216.34/";
+    let audio = wavOf(60);
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      if (new URL(String(url)).origin === new URL(AUDIO).origin) return new Response(audio, { status: 200, headers: { "content-type": "audio/wav" } });
+      if (!(init?.body instanceof FormData)) throw new Error(`unexpected fetch in an offline suite: ${String(url).slice(0, 60)}`);
+      calls.push(Object.fromEntries([...init.body.entries()].filter(([, v]) => typeof v === "string")));
+      return new Response(JSON.stringify({ text: "ok", language: "en", duration: 60 }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    S.__setMeasureForTest(async (b) => ({ seconds: (b.length - 44) / sr }));
+    try {
+      const tool = S.STT_TOOLS.find((t) => t.slug === tier);
+      const at = await tool.handler({ url: `${AUDIO}a.wav`, model: MINI });
+      ok(at.model === MINI && calls.length === 1 && calls[0].model === MINI, `a ${ownMin}-minute file is served by ${MINI} at its cap`);
+      audio = wavOf(70); calls.length = 0;
+      let refused = null;
+      try { await tool.handler({ url: `${AUDIO}b.wav`, model: MINI }); } catch (e) { refused = e; }
+      ok(refused?.statusCode === 400 && refused.message.includes(MINI) && refused.message.includes("up to 1 minute") && refused.message.includes(`${T.maxMinutes} minutes`) && calls.length === 0, `a longer file is a 400 naming the model's cap, with no upstream call (${refused?.message?.slice(0, 140)})`);
+      calls.length = 0;
+      const own = await tool.handler({ url: `${AUDIO}c.wav` });
+      ok(own.model === T.model && calls.length === 1, "the same file without \"model\" is served on the tier's own cap");
+    } finally { globalThis.fetch = realFetch; S.__setMeasureForTest(null); }
+  } finally { A.__setAdditionCapsForTest(null); }
 }
 
 // ---- the tools stay marked model-backed ------------------------------------------------

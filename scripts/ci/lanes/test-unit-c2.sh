@@ -53,5 +53,7 @@ t node scripts/test-issue-title-adoption.js
 t node scripts/test-router-benchmarks.js
 # Price webhooks: input rules, the registrant's cap (never the host's), renewal, expiry and the store's bound, a registration kept only when its call settles, one change set stored once, signed delivery, retries, a delivery turn fair across receivers that never runs beside itself, the fetch guard, the served tool and its removal route (offline, port 0)
 t node scripts/test-price-webhooks.js
-# Named speech and transcription models: served and listed only with a cost row inside the margin bound (offline, stubbed upstream)
+# Named speech and transcription models: served and listed only with a cost row inside the margin bound at the model's own cap where it declares one (offline, stubbed upstream)
 t node scripts/test-speech-additions.js
+# Speech answers name the model that spoke (X-Agent402-Model, X-Agent402-Model-Fallback on a named model that fell back) and log it; a named model's own character cap (FREE_MODE boot, stubbed upstream, port 0)
+t node scripts/test-speech-served-model.js
