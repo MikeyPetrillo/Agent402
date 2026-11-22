@@ -3427,7 +3427,7 @@ startSharedLimitsProbe();
 // The returning-wallet price reads a wallet's paid days from the sales ledger
 // (the mirror, in database mode) and never discounts one of our own wallets;
 // a wallet proof names this server's host name (BASE_URL's).
-configureReturningWallet({ paidDays: (wallet, sinceMs) => payerPaidDays(wallet, sinceMs), isOurs: (w) => isOwnWallet(w), host: (() => { try { return new URL(BASE_URL).hostname; } catch { return null; } })() });
+configureReturningWallet({ paidDays: (wallet, sinceMs, minDayUsd) => payerPaidDays(wallet, sinceMs, minDayUsd), isOurs: (w) => isOwnWallet(w), host: (() => { try { return new URL(BASE_URL).hostname; } catch { return null; } })() });
 if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerReady(); return topExternalPayersAsync(o); }, isOwn: (p) => isOwnWallet(p), firstMs: Math.min(5_000, topRefreshMs()) });
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.

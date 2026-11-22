@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1095 variables in 113 groups.
+1096 variables in 113 groups.
 
 ## Contents
 
@@ -994,7 +994,8 @@ may still clamp it, and the read site is the reference.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `RETURNING_WALLET_DISCOUNT_BPS` | Returning-wallet discount in basis points (default 1000; at most 5000). |  | `src/returning-wallet.js` |
-| `RETURNING_WALLET_MIN_PAID_DAYS` | Distinct paid days a wallet needs inside the window for the returning-wallet price (default 3). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_MIN_DAY_SPEND_USD` | Dollars a wallet must spend on one UTC day for that day to count toward the returning-wallet bar (default 0.05; 0 counts every paid day; at most 100). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_MIN_PAID_DAYS` | Distinct paid days a wallet needs inside the window for the returning-wallet price (default 3; a day counts only at RETURNING_WALLET_MIN_DAY_SPEND_USD or more). |  | `src/returning-wallet.js` |
 | `RETURNING_WALLET_PRICE` | Set to on to quote a qualifying wallet named in the X-Agent402-Wallet header, and proven in X-Agent402-Wallet-Proof, a lower price on eligible routes' x402 EVM exact accepts (off by default; a proof names the host name of BASE_URL). |  | `src/returning-wallet.js` |
 | `RETURNING_WALLET_WINDOW_DAYS` | Window, in days, the returning-wallet price counts paid days over (default 30). |  | `src/returning-wallet.js` |
 
