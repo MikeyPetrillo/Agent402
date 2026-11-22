@@ -172,7 +172,7 @@ jobs:
           RAILS=$(curl -s --max-time 15 "$PROD/api/rails" || echo '{}')
           DEGRADED=$(echo "$RAILS" | jq -r '.degraded // empty' 2>/dev/null || echo "")
           TITLE="Scheduled check needs review: rail-offers"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           # An unreadable surface is NOT evidence of health: say so and stop,
           # rather than closing a real issue on the back of a failed curl.
           if [ -z "$DEGRADED" ]; then
@@ -207,7 +207,7 @@ jobs:
           UNKNOWN_MIN=$(echo "$BODY" | jq -r '.unknownForMinutes // 0' 2>/dev/null || echo 0)
           echo "gateway credits: $STATUS (credits leg: $(echo "$BODY" | jq -r '.credits // "-"' 2>/dev/null), key-limit leg: $(echo "$BODY" | jq -r '.keyLimit // "-"' 2>/dev/null), unknown for ${UNKNOWN_MIN}m)"
           TITLE="Scheduled check needs review: gateway-credits"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -222,7 +222,7 @@ jobs:
           # several heartbeat runs, well past any OpenRouter blip (server caches
           # the read for 5 min and only goes unknown when BOTH legs are unreadable).
           TITLE2="Scheduled check needs review: gateway-credits-read"
-          OPEN2=$(ISSUE_TITLE="$TITLE2" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN2=$(ISSUE_TITLE="$TITLE2" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "unknown" ] && [ "${UNKNOWN_MIN:-0}" -ge 180 ] 2>/dev/null; then
             if [ -z "$OPEN2" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -271,7 +271,7 @@ jobs:
           echo "$OUT" | tail -40
           echo "$OUT" | grep '^WARN not-indexed ' | while IFS= read -r LINE; do echo "::warning::Bazaar: $LINE"; echo "- Bazaar: $LINE" >> "$GITHUB_STEP_SUMMARY"; done || true
           TITLE="Scheduled check needs review: listing-validation"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$CODE" = "1" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -305,7 +305,7 @@ jobs:
           case "$PREV_N" in ''|*[!0-9]*) PREV_N=0 ;; esac
           case "$PREV_SINCE" in ''|*[!0-9]*) PREV_SINCE=0 ;; esac
           TITLE="Scheduled check needs review: listing-validation-read"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$CODE" in
             2)
               N=$((PREV_N + 1))
@@ -410,7 +410,7 @@ jobs:
           USD=$(node -e "console.log((parseInt('$BAL',16)/1e6).toFixed(4))")
           echo "canary burner Base USDC read"
           TITLE="Scheduled check needs review: canary-wallet"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           LOW=$(node -e "console.log($USD < $WARN_USD ? 1 : 0)")
           if [ "$LOW" = "1" ]; then
             if [ -z "$OPEN" ]; then
@@ -464,7 +464,7 @@ jobs:
             || { echo "::warning::PayAI credit watch UNREADABLE - /api/revenue/daily missing or unparseable. NOT skipping silently: investigate."; exit 0; }
           echo "PayAI weighted credits since $CUT: $CREDITS (warn at $THRESH)"
           TITLE="Scheduled check needs review: facilitator-allowance"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if awk -v c="$CREDITS" -v t="$THRESH" 'BEGIN { exit !(c >= t) }'; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -495,7 +495,7 @@ jobs:
           fi
           echo "CDP-first-chain settles, rolling 30d: $COUNT (warn at $THRESH)"
           TITLE="Scheduled check needs review: facilitator-metering"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$COUNT" -ge "$THRESH" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -518,7 +518,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyer.status // "unknown"' 2>/dev/null || echo unknown)
           echo "upstream buyer wallet: $STATUS"
           TITLE="Scheduled check needs review: buyer-wallet"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -547,7 +547,7 @@ jobs:
           BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
           STATUS=$(echo "$BODY" | jq -r '.upstreamBudgets.status // "unknown"' 2>/dev/null || echo unknown)
           TITLE="Scheduled check needs review: upstream-call-budget"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -567,7 +567,7 @@ jobs:
           BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
           STATUS=$(echo "$BODY" | jq -r '.upstreamHardCaps.status // "unknown"' 2>/dev/null || echo unknown)
           TITLE="Scheduled check needs review: upstream-ceiling"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -589,7 +589,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.xDataSpend.status // "unknown"' 2>/dev/null || echo unknown)
           echo "x data spend: $STATUS"
           TITLE="Scheduled check needs review: post-data-spend"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -613,7 +613,7 @@ jobs:
           STATUS=${ROW%% *}; ALERT=${ROW##* }
           echo "gateway balance: $STATUS (alert $ALERT)"
           TITLE="Scheduled check needs review: gateway-balance"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "withdraw" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -636,7 +636,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.topBuyerFailures.status // "unknown"' 2>/dev/null || echo unknown)
           echo "top buyer failures: $STATUS"
           TITLE="Scheduled check needs review: top-buyer-failures"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -659,7 +659,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.onchainSqlBusy.status // "unknown"' 2>/dev/null || echo unknown)
           echo "onchain sql busy: $STATUS"
           TITLE="Scheduled check needs review: query-service"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -683,7 +683,7 @@ jobs:
           STATUS=${ROW%% *}; ALERT=${ROW##* }
           echo "shared limits: $STATUS (alert $ALERT)"
           TITLE="Scheduled check needs review: shared-limits-store"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$ALERT" = "sustained" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -707,7 +707,7 @@ jobs:
           STATUS=${ROW%% *}; ALERT=${ROW##* }
           echo "replay store: $STATUS (alert $ALERT)"
           TITLE="Scheduled check needs review: replay-store-marks"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$ALERT" = "sustained" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -730,7 +730,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.jevSpend.status // "unknown"' 2>/dev/null || echo unknown)
           echo "jevSpend: $STATUS"
           TITLE="Scheduled check needs review: route-judgment-budget"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -754,7 +754,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.externalSpendGlobal.status // "unknown"' 2>/dev/null || echo unknown)
           echo "externalSpendGlobal: $STATUS"
           TITLE="Scheduled check needs review: external-spend"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "refusing" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -778,7 +778,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.solanaHistory.status // "unknown"' 2>/dev/null || echo unknown)
           echo "solanaHistory: $STATUS"
           TITLE="Scheduled check needs review: history-reads"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "failing" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -801,7 +801,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.evmLogs.status // "unknown"' 2>/dev/null || echo unknown)
           echo "evmLogs: $STATUS"
           TITLE="Scheduled check needs review: log-reads"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "failing" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -881,7 +881,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.firstCallAllowance.status // "unknown"' 2>/dev/null || echo unknown)
           echo "firstCallAllowance: $STATUS"
           TITLE="Scheduled check needs review: first-call-allowance"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "unavailable" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -904,7 +904,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.xSearchAuthors.status // "unknown"' 2>/dev/null || echo unknown)
           echo "xSearchAuthors: $STATUS"
           TITLE="Scheduled check needs review: post-author-reads"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -929,7 +929,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.referralSettlement.status // "unknown"' 2>/dev/null || echo unknown)
           echo "referralSettlement: $STATUS"
           TITLE="Scheduled check needs review: referral-settlement"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "attention" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -946,7 +946,7 @@ jobs:
             # With no mark key set, one fixed comment is posted per issue, with
             # no mark. The tag itself is printed nowhere: not on the issue and
             # not in this job's log, which is as public as the issue is.
-            EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+            EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
             if [ -n "$EXISTING" ] && [ -n "$OP_TOKEN" ]; then
               TAG=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/referral.json" | jq -r '.status.tag // ""' 2>/dev/null || echo "")
               if printf '%s' "$TAG" | grep -Eq '^[0-9a-f]{8}$'; then
@@ -1037,7 +1037,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.mppSubscriptions.status // "unknown"' 2>/dev/null || echo unknown)
           echo "mppSubscriptions: $STATUS"
           TITLE="Scheduled check needs review: subscription-engine"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "failed" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -1060,7 +1060,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.openMeteo.status // "unknown"' 2>/dev/null || echo unknown)
           echo "openMeteo: $STATUS"
           TITLE="Scheduled check needs review: weather-keyed-reads"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "refused" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -1084,7 +1084,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.mppReconcile.run // "unknown"' 2>/dev/null || echo unknown)
           echo "mppReconcile.run: $STATUS"
           TITLE="Scheduled check needs review: payment-reconciliation-run"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "stale" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -1108,7 +1108,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.routerSpendWindow.status // "unknown"' 2>/dev/null || echo unknown)
           echo "router spend window: $STATUS"
           TITLE="Scheduled check needs review: router-spend"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -1125,7 +1125,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerAvm.status // "unknown"' 2>/dev/null || echo unknown)
           echo "algorand upstream buyer wallet: $STATUS"
           TITLE="Scheduled check needs review: algorand-buyer-wallet"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1146,7 +1146,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerSvm.status // "unknown"' 2>/dev/null || echo unknown)
           echo "solana upstream buyer wallet: $STATUS"
           TITLE="Scheduled check needs review: solana-buyer-wallet"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1173,7 +1173,7 @@ jobs:
           LOW=$(echo "$BODY" | jq -r '[.upstreamBuyerEvm.chains // {} | to_entries[] | select(.value.status == "low") | .key] | join(", ")' 2>/dev/null || echo "")
           echo "evm chains upstream buyer wallet: $STATUS ${LOW:+(low: $LOW)}"
           TITLE="Scheduled check needs review: evm-buyer-wallets"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1191,7 +1191,7 @@ jobs:
           fi
           UNKNOWN_MIN=$(echo "$BODY" | jq -r '.upstreamBuyerEvm.unknownForMinutes // 0' 2>/dev/null || echo 0)
           TITLE2="Scheduled check needs review: evm-buyer-wallets-read"
-          OPEN2=$(ISSUE_TITLE="$TITLE2" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN2=$(ISSUE_TITLE="$TITLE2" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "unknown" ] && [ "${UNKNOWN_MIN:-0}" -ge 60 ] 2>/dev/null; then
             if [ -z "$OPEN2" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1210,7 +1210,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerTempo.status // "unknown"' 2>/dev/null || echo unknown)
           echo "tempo upstream buyer wallet: $STATUS"
           TITLE="Scheduled check needs review: tempo-buyer-wallet"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1239,7 +1239,7 @@ jobs:
           if [ "$STATUS" = "degraded" ]; then sleep 30; STATUS=$(read_sdb); fi
           echo "state database: $STATUS"
           TITLE="Scheduled check needs review: state-database"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1269,7 +1269,7 @@ jobs:
           case "$WORD" in held|failed|stale|unencrypted|unconfigured) sleep 30; WORD=$(read_bk) ;; esac
           echo "offsite backup: $WORD"
           TITLE="Scheduled check needs review: offsite-backup"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             held|failed|stale|unencrypted|unconfigured)
               if [ -z "$OPEN" ]; then
@@ -1299,7 +1299,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.stellarFacilitator.status // "unknown"' 2>/dev/null || echo unknown)
           echo "stellar facilitator fee account: $STATUS"
           TITLE="Scheduled check needs review: stellar-fee-account"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1322,7 +1322,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.sanctions.status // "unknown"' 2>/dev/null || echo unknown)
           echo "sanctions lists: $STATUS"
           TITLE="Scheduled check needs review: screening-lists"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "stale" ] || [ "$STATUS" = "unloaded" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1349,7 +1349,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.sanctionsScreen.status // "absent"' 2>/dev/null || echo unknown)
           echo "payment-party screen: $STATUS"
           TITLE="Scheduled check needs review: payment-party-screen"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "stale" ] || [ "$STATUS" = "missing" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1375,7 +1375,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.subscriptionFeePayer.status // "unknown"' 2>/dev/null || echo unknown)
           echo "subscription gas sponsor: $STATUS"
           TITLE="Scheduled check needs review: subscription-gas-sponsor"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1396,7 +1396,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.subscriptionFeePayer.ceiling // "unknown"' 2>/dev/null || echo unknown)
           echo "subscription gas sponsor ceiling: $WORD"
           TITLE="Scheduled check needs review: subscription-gas-sponsor-limit"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$WORD" = "reached" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -1420,7 +1420,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.operatorAuth.status // "unknown"' 2>/dev/null || echo unknown)
           echo "operator auth: $STATUS"
           TITLE="Scheduled check needs review: operator-auth"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
@@ -1442,7 +1442,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.tweetQueue.status // "unknown"' 2>/dev/null || echo unknown)
           echo "tweet queue: $WORD"
           TITLE="Scheduled check needs review: post-queue"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             halted|no_credentials|refused|in_doubt)
               if [ -z "$OPEN" ]; then
@@ -1468,7 +1468,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.circlePending.status // "unknown"' 2>/dev/null || echo unknown)
           echo "circle pending: $WORD"
           TITLE="Scheduled check needs review: arc-settlements"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
@@ -1496,7 +1496,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.gatewayPending.status // "unknown"' 2>/dev/null || echo unknown)
           echo "gateway pending: $WORD"
           TITLE="Scheduled check needs review: gateway-settlements"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
@@ -1523,7 +1523,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.lateSettlements.status // "unknown"' 2>/dev/null || echo unknown)
           echo "late settlements: $WORD"
           TITLE="Scheduled check needs review: late-settlements"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
@@ -1550,7 +1550,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.revenueLive.status // "unknown"' 2>/dev/null || echo unknown)
           echo "revenue live: $WORD"
           TITLE="Scheduled check needs review: revenue-read"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             stale)
               if [ -z "$OPEN" ]; then
@@ -1589,7 +1589,7 @@ jobs:
           echo "refunds owed: $WORD (ledger ${LEDGER:-unread}, card ${CARD:-unread})"
           WF="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/refund.yml"
           TITLE="Scheduled check needs review: refunds"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             owed|aging|stuck)
               # A debt can stay owed for days (held for review), so an open
@@ -1621,7 +1621,7 @@ jobs:
           case "$WORD" in owed|ok|unknown) ;; *) WORD=unknown ;; esac
           echo "credits refunds: $WORD"
           TITLE="Scheduled check needs review: credits-refund"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             owed)
               BODY="/api/gateway-status reports creditsRefunds.status=owed at $(date -u +%FT%TZ): a credits purchase was refused (the daily purchase limit, or an EU or UK billing address without a VAT number), issued no key, and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {\"session\":\"cs_...\"}. Auto-closes when nothing is owed."
@@ -1650,7 +1650,7 @@ jobs:
           case "$WORD" in unauthenticated|ok|off|unknown) ;; *) WORD=unknown ;; esac
           echo "cdn origin: $WORD"
           TITLE="Scheduled check needs review: cdn-origin"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unauthenticated)
               BODY="/api/gateway-status reports cdnOrigin.status=unauthenticated at $(date -u +%FT%TZ): requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok."
@@ -1683,7 +1683,7 @@ jobs:
           if [ "$WORD" = "burst" ]; then sleep 30; WORD=$(read_od); fi
           echo "outbound destinations: $WORD"
           TITLE="Scheduled check needs review: outbound-payments"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             burst)
               if [ -z "$OPEN" ]; then
@@ -1722,7 +1722,7 @@ jobs:
             FIELD="$1"; BAD="$2"; GOOD="$3"; ENDPOINT="${4:-/__operator/tool-failures.json}"
             WORD=$(echo "$GS" | jq -r ".${FIELD}.status // \"unknown\"" 2>/dev/null || echo unknown)
             echo "$FIELD: $WORD"
-            OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+            OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
             if echo " $BAD " | grep -q " $WORD "; then
               if [ -z "$OPEN" ]; then
                 gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
@@ -1938,7 +1938,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.toolAnswers.status // "unknown"' 2>/dev/null || echo unknown)
           echo "toolAnswers: $WORD"
           TITLE="Scheduled check needs review: tool-answers"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             degraded)
               if [ -z "$OPEN" ]; then
@@ -1974,7 +1974,7 @@ jobs:
           if [ "$WORD" = "stuck" ] || [ "$WORD" = "local" ]; then sleep 30; WORD=$(read_dl); fi
           echo "ledger dead-letter: $WORD"
           TITLE="Scheduled check needs review: ledger-rows"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             stuck|local)
               if [ -z "$OPEN" ]; then
@@ -2007,7 +2007,7 @@ jobs:
           if [ "$WORD" = "off" ] || [ "$WORD" = "degraded" ]; then sleep 30; WORD=$(read_rp); fi
           echo "redis persistence: $WORD"
           TITLE="Scheduled check needs review: store-persistence"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             off|degraded)
               if [ -z "$OPEN" ]; then
@@ -2035,7 +2035,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.email.status // "unknown"' 2>/dev/null || echo unknown)
           echo "email: $WORD"
           TITLE="Scheduled check needs review: transactional-email"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             exhausted|failing)
               if [ -z "$OPEN" ]; then
@@ -2069,7 +2069,7 @@ jobs:
           fi
           echo "mcp pin: $WORD ($OUT)"
           TITLE="Scheduled check needs review: served-package-version"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             missing)
               if [ -z "$OPEN" ]; then
@@ -2100,7 +2100,7 @@ jobs:
           if [ "$WORD" = "missing" ] || [ "$WORD" = "partial" ]; then sleep 30; WORD=$(read_uc); fi
           echo "upstream costs: $WORD"
           TITLE="Scheduled check needs review: cost-table"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             partial)
               if [ -z "$OPEN" ]; then
@@ -2162,7 +2162,7 @@ jobs:
           echo "stall culprits: ${CULPRITS:-none named} cause: ${STALL_CAUSE:-none}"
           echo "slow paid calls: ${SLOW_SLUGS:-none}"
           TITLE="Scheduled check needs review: serving-health"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
@@ -2207,7 +2207,7 @@ jobs:
           fi
           echo "postgres: leads=$LEADS analytics=$ANALYTICS"
           TITLE="Scheduled check needs review: analytics-store"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$LEADS" = "unreachable" ] || [ "$ANALYTICS" = "unreachable" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -2236,7 +2236,7 @@ jobs:
           if [ "$STATUS" = "mismatch" ]; then echo "mpp reconcile: first read mismatch - re-reading in 30s before paging"; sleep 30; STATUS=$(read_rec); fi
           echo "mpp reconcile: $STATUS"
           TITLE="Scheduled check needs review: payment-reconciliation"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "mismatch" ]; then
             CATS=$(curl -s --max-time 20 "$PROD/api/gateway-status" | jq -r '[.mppReconcile.categories // {} | to_entries[] | select(.value=="mismatch") | .key] | join(", ")' 2>/dev/null || echo "")
             DAY=$(curl -s --max-time 20 "$PROD/api/gateway-status" | jq -r '.mppReconcile.day // "?"' 2>/dev/null || echo "?")
@@ -2276,7 +2276,7 @@ jobs:
           if [ "$WIN" = "mismatch" ] && [ "$DAILY" = "ok" ]; then echo "mpp reconcile window: first read mismatch - re-reading in 30s before paging"; sleep 30; read -r WIN DAILY DAY <<< "$(read_win)" || true; WIN=${WIN:-unknown}; DAILY=${DAILY:-unknown}; fi
           echo "mpp reconcile 7-day window: $WIN (latest day: $DAILY)"
           TITLE="Scheduled check needs review: payment-reconciliation-window"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$WIN" = "mismatch" ] && [ "$DAILY" = "ok" ]; then
             if [ -z "$OPEN" ]; then
               case "$DAY" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) DAY="the latest day" ;; esac
@@ -2306,7 +2306,7 @@ jobs:
           if [ "$CF" = "charged_failed" ]; then echo "mpp charged-failed: first read positive - re-reading in 30s before paging"; sleep 30; CF=$(read_cf); fi
           echo "mpp charged-failed: $CF"
           TITLE="Scheduled check needs review: payment-call-outcome"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || true)
           if [ "$CF" = "charged_failed" ]; then
             ROWS=""
             if [ -n "$OP_TOKEN" ]; then
@@ -2341,7 +2341,7 @@ jobs:
           TREND=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyer.trend // "unknown"' 2>/dev/null || echo unknown)
           echo "upstream buyer trend: $TREND"
           TITLE="Scheduled check needs review: buyer-wallet-trend"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$TREND" = "draining" ]; then
             if [ -z "$OPEN" ]; then
               # Single-quoted heredoc: the curl line below is text for the
@@ -2405,7 +2405,7 @@ jobs:
           # evidence we could not look. The prod-down alarm above owns that.
           [ "$STATE" = "unreadable" ] && exit 0
           TITLE="Scheduled check needs review: settlement-age"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$STATE" = "unknown" ]; then
             if [ -z "$OPEN" ]; then
               gh workflow run paid-canary.yml --repo "$GITHUB_REPOSITORY" --ref main \
@@ -2421,7 +2421,7 @@ jobs:
 
       - name: Alert (open issue) or clear (close issue)
         run: |
-          OPEN=$(ISSUE_TITLE='Scheduled check needs review: availability' gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Scheduled check needs review: availability"' --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE='Scheduled check needs review: availability' ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Scheduled check needs review: availability"' --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "${{ steps.probe.outputs.status }}" = "down" ]; then
             BODY="Heartbeat failed 3 consecutive probes (checks:${{ steps.probe.outputs.fails }}).
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID

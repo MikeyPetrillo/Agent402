@@ -133,10 +133,15 @@ fs.writeFileSync(${JSON.stringify(STATE)}, JSON.stringify(issues));
   const adopt = (over) => spawnSync(process.execPath, [join(ROOT, "scripts/adopt-issue-titles.js")], { env: env(over), encoding: "utf8", timeout: 60_000 });
   // The lookup line the workflows use, taken from the heartbeat itself.
   const hb = readFileSync(join(WF, "heartbeat.yml"), "utf8");
-  const lookupLine = hb.split("\n").map((l) => l.trim()).find((l) => /^[A-Z_0-9]+=\$\(([A-Z_]+)="\$TITLE" gh issue list --repo "\$GITHUB_REPOSITORY" --state open .* --jq '\[\.\[\] \| select\(\.title == env\.\1\)\]\[0\]\.number \/\/ empty'\)$/.test(l)) || "";
+  const lookupLine = hb.split("\n").map((l) => l.trim()).find((l) => /^[A-Z_0-9]+=\$\(([A-Z_]+)="\$TITLE" ISSUE_OWNER="\$\{GITHUB_REPOSITORY%%\/\*\}" gh issue list --repo "\$GITHUB_REPOSITORY" --state open .* --jq '\[\.\[\] \| select\(\.title == env\.\1\) \| select\(\(\.author\.login .*\)\]\[0\]\.number \/\/ empty'\)$/.test(l)) || "";
   const lookupVar = lookupLine.split("=")[0];
   const lookup = (title) => spawnSync("bash", ["-c", ["set -euo pipefail", lookupLine, `echo "found=\${${lookupVar}}"`].join("\n")], { env: env({ TITLE: title }), encoding: "utf8", timeout: 60_000 });
-  ok(lookupLine.length > 0, "the heartbeat's own lookup line is read (by exact title)");
+  ok(lookupLine.length > 0, "the heartbeat's own lookup line is read (by exact title, the bot's or the owner's issue only)");
+  // A stranger's issue under the check's CURRENT title is not the check's.
+  seed([{ number: 2060, title: NEW, author: "stranger", state: "open" }]);
+  ok(lookup(NEW).stdout.trim() === "found=", "a stranger's issue under the check's current title is not found by the lookup");
+  seed([{ number: 2060, title: NEW, author: "stranger", state: "open" }, { number: 2061, title: NEW, author: "owner", state: "open" }]);
+  ok(lookup(NEW).stdout.trim() === "found=2061", "the repository owner's issue under that title is");
 
   seed([{ number: 2047, title: OLD, author: "app/github-actions", state: "open" }, { number: 2050, title: OLD, author: "stranger", state: "open" }, { number: 2051, title: "Unrelated", author: "app/github-actions", state: "open" }]);
   const before = lookup(NEW);

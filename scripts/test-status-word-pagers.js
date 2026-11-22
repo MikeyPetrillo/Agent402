@@ -883,7 +883,7 @@ for (const [name, T, field, sameBody] of SPEND) {
     const log = path.join(dir, "gh.log");
     await writeFile(log, "");
     const r = spawnSync("bash", ["-c", step.run], {
-      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", CODE: code, STREAK_FILE: stateFile, ISSUES_JSON: JSON.stringify(issues), GH_LOG: log },
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", CODE: code, STREAK_FILE: stateFile, ISSUES_JSON: JSON.stringify(issues.map((x) => ({ author: { login: "github-actions[bot]" }, ...x }))), GH_LOG: log },
       encoding: "utf8",
     });
     assert.equal(r.status, 0, r.stderr);

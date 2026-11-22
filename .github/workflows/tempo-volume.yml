@@ -74,7 +74,7 @@ jobs:
           CODE="${{ steps.vol.outputs.code }}"
           [ -n "$CODE" ] || CODE="timeout"
           TITLE="Scheduled check needs review: mpp-volume"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           # Public issue body: the script's own summary lines only (counts,
           # bucketed balance, a truncated last error) - never the raw log tail.
           if [ "$CODE" != "0" ]; then

@@ -51,9 +51,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 100 \
+          ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 100 \
             --search '"Buyer reported a fault via the wish board" in:title' \
-            --json body --jq '.[].body' > /tmp/judged.txt 2>/dev/null || : > /tmp/judged.txt
+            --json body,author --jq '.[] | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase)) | .body' > /tmp/judged.txt 2>/dev/null || : > /tmp/judged.txt
           echo "judged issue bodies: $(wc -c < /tmp/judged.txt) bytes"
 
       - name: Read the board
@@ -98,7 +98,7 @@ jobs:
           # decided what to do about it.
           BODY=$(printf 'A buyer reported a fault through the wish board (POST /api/wish). They have no other channel.\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s' "$(cat /tmp/reports.log)" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
           TITLE="Buyer reported a fault via the wish board ($(date -u +%F))"
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          EXISTING=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY"
           else

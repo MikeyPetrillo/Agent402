@@ -167,7 +167,7 @@ jobs:
             })()" 2>/dev/null || echo "?")
           echo "agent402.tools listings after the sweep: $LISTED"
           TITLE="Scheduled check needs review: listing-keep-alive"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$SWEEP" != "success" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."

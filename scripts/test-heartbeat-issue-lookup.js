@@ -58,13 +58,17 @@ await check("each lookup's own jq picks the exact title over a near-identical on
     const jq = jqOf(line), name = boundName(line);
     if (!jq || !name) continue; // reported by the check above
     const runJq = (issues) => {
-      const r = spawnSync("jq", ["-r", jq], { input: JSON.stringify(issues), env: { ...process.env, [name]: T, ALARM_OWNER: "o" }, encoding: "utf8" });
+      const r = spawnSync("jq", ["-r", jq], { input: JSON.stringify(issues), env: { ...process.env, [name]: T, ALARM_OWNER: "o", ISSUE_OWNER: "o" }, encoding: "utf8" });
       assert.equal(r.status, 0, `${n}: ${r.stderr}`);
       return r.stdout.trim();
     };
     assert.equal(runJq([{ number: 7, title: `EVM chains ${T}`, author: bot }]), "", `${n}: matched another alarm's title`);
     assert.equal(runJq([{ number: 7, title: `EVM chains ${T}`, author: bot }, { number: 3, title: T, author: bot }]), "3", `${n}: missed its own title`);
     assert.equal(runJq([]), "", `${n}: an empty list must read as no issue (not "null")`);
+    // Anyone can open an issue under the check's title: only the bot's or
+    // the owner's is the check's own.
+    assert.equal(runJq([{ number: 5, title: T, author: { login: "stranger" } }]), "", `${n}: took a stranger's issue under its title`);
+    assert.equal(runJq([{ number: 5, title: T, author: { login: "stranger" } }, { number: 3, title: T, author: bot }]), "3", `${n}: missed its own issue beside a stranger's`);
   }
 });
 
@@ -122,7 +126,7 @@ for (const [prefix, title] of WALLETS) {
     const log = path.join(dir, "gh.log");
     await writeFile(log, "");
     const r = spawnSync("bash", ["-c", step.run], {
-      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r", GS_BODY: JSON.stringify(evm === undefined ? {} : { upstreamBuyerEvm: evm }), ISSUES_JSON: JSON.stringify(issues), GH_LOG: log },
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r", GS_BODY: JSON.stringify(evm === undefined ? {} : { upstreamBuyerEvm: evm }), ISSUES_JSON: JSON.stringify(issues.map((x) => ({ author: bot, ...x }))), GH_LOG: log },
       encoding: "utf8",
     });
     assert.equal(r.status, 0, r.stderr);

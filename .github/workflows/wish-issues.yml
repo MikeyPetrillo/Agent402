@@ -53,7 +53,7 @@ jobs:
             || { echo "detailed wishes feed unavailable (token unset or endpoint down) — nothing to do"; exit 0; }
           gh label create tool-wish --repo "$REPO" --description "Agent-requested tool (wish loop)" --color D63C1A --force
           THRESHOLD=$(echo "$WISHES" | jq -r '.threshold // 5')
-          EXISTING=$(gh issue list --repo "$REPO" --label tool-wish --state all --limit 200 --json title --jq '.[].title')
+          EXISTING=$(ISSUE_OWNER="${REPO%%/*}" gh issue list --repo "$REPO" --label tool-wish --state all --limit 200 --json title,author --jq '.[] | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase)) | .title')
           CREATED=0
           # Qualified clusters, minus any the listing screen flags (hidden
           # characters, oversized text, instructions to whoever reads it).

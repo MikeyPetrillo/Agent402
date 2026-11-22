@@ -291,13 +291,13 @@ jobs:
           RAILS: ${{ steps.canary.outputs.rails }}
         run: |
           TITLE="Scheduled check needs review: paid-canary"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           # Funding starvation gets its own issue and CLOSES the outage-class
           # one: "buying may be broken" must not stay open when the run proved
           # buying works and only our wallet is empty.
           if [ "$RESULT" = "underfunded" ]; then
             FTITLE="Scheduled check needs review: canary-wallet (b)"
-            FOPEN=$(ISSUE_TITLE="$FTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+            FOPEN=$(ISSUE_TITLE="$FTITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
             if [ -z "$FOPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$FTITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
@@ -311,7 +311,7 @@ jobs:
           # may be broken). Page a rail-scoped issue instead (2026-08-10).
           if [ "$RESULT" = "partial-rail" ]; then
             RTITLE="Scheduled check needs review: paid-canary-rail"
-            ROPEN=$(ISSUE_TITLE="$RTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+            ROPEN=$(ISSUE_TITLE="$RTITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
             RAIL_LIST="${RAILS:-see run log}"
             if [ -z "$ROPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$RTITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
@@ -323,7 +323,7 @@ jobs:
           fi
           if [ "$RESULT" = "ok-low" ]; then
             LTITLE="Scheduled check needs review: canary-wallet (c)"
-            LOPEN=$(ISSUE_TITLE="$LTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$LTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+            LOPEN=$(ISSUE_TITLE="$LTITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$LTITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
             if [ -z "$LOPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$LTITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
@@ -332,13 +332,13 @@ jobs:
           fi
           if [ "$RESULT" = "ok" ]; then
             FTITLE="Scheduled check needs review: canary-wallet (b)"
-            FOPEN=$(ISSUE_TITLE="$FTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+            FOPEN=$(ISSUE_TITLE="$FTITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
             [ -n "$FOPEN" ] && gh issue close "$FOPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             LTITLE="Scheduled check needs review: canary-wallet (c)"
-            LOPEN=$(ISSUE_TITLE="$LTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$LTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+            LOPEN=$(ISSUE_TITLE="$LTITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$LTITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
             [ -n "$LOPEN" ] && gh issue close "$LOPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             RTITLE="Scheduled check needs review: paid-canary-rail"
-            ROPEN=$(ISSUE_TITLE="$RTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+            ROPEN=$(ISSUE_TITLE="$RTITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
             [ -n "$ROPEN" ] && gh issue close "$ROPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
           if [ "$RESULT" = "fail" ]; then

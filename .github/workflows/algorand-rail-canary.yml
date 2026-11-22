@@ -122,8 +122,8 @@ jobs:
         run: |
           TITLE="Scheduled check needs review: algorand-rail-canary"
           FUND_TITLE="Scheduled check needs review: algorand-rail-canary-funding"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
-          FUND_OPEN=$(ISSUE_TITLE="$FUND_TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FUND_TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
+          FUND_OPEN=$(ISSUE_TITLE="$FUND_TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FUND_TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           # The sweep's own wallet ran short: its own issue, and the rail issue
           # is left alone (nothing about the rail was measured either way).
           if [ "$RESULT" = "unfunded" ]; then

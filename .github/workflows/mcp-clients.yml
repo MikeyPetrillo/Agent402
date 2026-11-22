@@ -75,7 +75,7 @@ jobs:
         run: |
           TITLE="Scheduled check needs review: mcp-client"
           RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          find_issue() { gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$1\"" --json number,title --jq "[.[] | select(.title == \"$1\")][0].number // empty"; }
+          find_issue() { ISSUE_TITLE="$1" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$1\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty'; }
           OPEN=$(find_issue "$TITLE")
           if [ "$RESULT" != "0" ]; then
             LINES=$(grep -E '^(ok|FAIL) - ' check.log 2>/dev/null | head -40 || true)

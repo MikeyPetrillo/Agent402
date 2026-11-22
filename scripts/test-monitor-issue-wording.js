@@ -20,6 +20,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ghIssueCalls, unquoted } from "./lib/shell-words.js";
@@ -122,6 +123,38 @@ for (const f of withIssues) {
     check(/select\(\.title == /.test(stmt) || /\.title===|i\.title ===|\.title==/.test(stmt), `${f}:${i + 1}: an issue lookup filters by the exact title`);
   });
 }
+
+// ---- 4b. every lookup acts only on an issue the check itself could have filed ------
+// Anyone can open an issue under any title, so a lookup by title keeps only
+// an issue authored by the Actions bot or the repository owner (as
+// scripts/adopt-issue-titles.js does); a stranger's issue under the same
+// title is neither commented on, closed, nor taken as already filed. Every
+// workflow, the buyer-report ones included. Each lookup's own jq is run over
+// a stranger's issue under its title and over the bot's.
+const AUTHOR_SELECT = /select\(\(\.author\.login \/\/ "" \| ascii_downcase\) as \$a \| \$a == "github-actions\[bot\]" or \$a == "app\/github-actions"/;
+let authorLookups = 0;
+for (const f of withIssues) {
+  const lines = readFileSync(join(WF, f), "utf8").split("\n");
+  lines.forEach((line, i) => {
+    if (!/gh issue list\b/.test(line) || /^\s*#/.test(line)) return;
+    authorLookups++;
+    const stmt = lines.slice(i, i + 3).join("\n");
+    const byNode = /author:app\/github-actions/.test(stmt) && /author\.login/.test(stmt);
+    const jq = (stmt.match(/--jq '([^']*)'/) || [])[1];
+    if (byNode) return;
+    check(Boolean(jq) && AUTHOR_SELECT.test(jq) && /--json [^ ]*\bauthor\b/.test(stmt), `${f}:${i + 1}: an issue lookup keeps only the bot's or the owner's issues`);
+    if (!jq || !AUTHOR_SELECT.test(jq)) return;
+    const title = "Scheduled check needs review: some-check";
+    const env = { ...process.env, ISSUE_TITLE: title, ALARM_NAME: title, TITLE: title, MCP_TITLE: title, ISSUE_OWNER: "owner", ALARM_OWNER: "owner" };
+    const run = (rows) => { const r = spawnSync("jq", ["-r", jq], { input: JSON.stringify(rows), env, encoding: "utf8" }); return r.status === 0 ? r.stdout.trim() : `jq failed: ${r.stderr}`; };
+    const row = (number, login) => ({ number, title, body: `b${number}`, author: { login } });
+    const stranger = run([row(5, "stranger")]);
+    const bot = run([row(5, "stranger"), row(6, "app/github-actions")]);
+    check(stranger === "", `${f}:${i + 1}: a stranger's issue under the check's title is not taken (${stranger})`);
+    check(bot !== "" && !/\b5\b|b5/.test(bot), `${f}:${i + 1}: the bot's own issue is (${bot})`);
+  });
+}
+check(authorLookups >= 100, `every issue lookup was read (found ${authorLookups})`);
 
 // ---- 5. the status Worker ----------------------------------------------------------
 const { ALARMS, DOWN_TITLE, PAYWALL_UNOBSERVED_TITLE, syncAlarms, syncOutage, neutralIssueBody, NEUTRAL_ISSUE_TEXT } = await import("../workers/status-probe/src/index.js");

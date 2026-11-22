@@ -317,7 +317,7 @@ echo "$1 $2 $3" >> "$GH_LOG"
     const r = spawnSync("bash", ["-e", "-c", step.run], {
       cwd: dir,
       env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", BURNER: step.env.BURNER, FLOOR_USD: "1", LW_OUT: lw,
-        BAL_HEX: `0x${(balance * 1e6).toString(16)}`, ISSUES_JSON: JSON.stringify(open ? [{ number: 5, title: TITLE }] : []), VIEW_JSON: JSON.stringify(view || {}), GH_LOG: log },
+        BAL_HEX: `0x${(balance * 1e6).toString(16)}`, ISSUES_JSON: JSON.stringify(open ? [{ number: 5, title: TITLE, author: { login: "github-actions[bot]" } }] : []), VIEW_JSON: JSON.stringify(view || {}), GH_LOG: log },
       encoding: "utf8",
     });
     return { status: r.status, calls: readFileSync(log, "utf8").split("\n").filter(Boolean), out: r.stdout + r.stderr };

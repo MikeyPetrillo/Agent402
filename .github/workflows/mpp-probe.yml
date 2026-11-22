@@ -77,7 +77,7 @@ jobs:
           CODE="${{ steps.probe.outputs.code }}"
           [ -n "$CODE" ] || CODE="timeout"
           TITLE="Scheduled check needs review: mpp-probe"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           # Public issue body: the script's own summary lines only (route, verdict,
           # tx hash, bucketed balance) - never the raw log.
           if [ "$CODE" != "0" ]; then
