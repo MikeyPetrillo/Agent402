@@ -1055,7 +1055,7 @@ import { withBudgetCeiling } from "./upstream-deadline.js";
 import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedOnResend, noteResendAnswerSent, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { refundLedgerBackend, recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedOnResend, noteResendAnswerSent, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, CAIP2_NAMES, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
@@ -12211,8 +12211,8 @@ app.use(createIdempotency({
   onCappedResend: async (req, { payment }) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (!def) return null;
-    const [{ cappedResendVerdict }, { proveAuthorizationSettled }, claims] = await Promise.all([
-      import("./settle-deadlines.js"), import("./settle-onchain-proof.js"), import("./settlement-claims.js"),
+    const [{ cappedResendVerdict, bookCappedServe }, { proveAuthorizationSettled }, claims, { saleByTxFresh }] = await Promise.all([
+      import("./settle-deadlines.js"), import("./settle-onchain-proof.js"), import("./settlement-claims.js"), import("./sales-ledger.js"),
     ]);
     const v = await cappedResendVerdict(payment, {
       prove: proveAuthorizationSettled,
@@ -12220,9 +12220,17 @@ app.use(createIdempotency({
       isLateHolder: claims.isLateSettleHolder,
       rowOf: (tx) => refundByEvidenceFresh(tx),
       replayVerdict: (tx) => chargedReplayVerdict(tx, { voidOnClaim: (t) => voidOwedOnResend(t, RESEND_SERVED_NOTE), rowOf: (t) => refundByEvidenceFresh(t) }),
-      recordSale: ({ tx, network, payer, priceUsd }) => recordSale({
-        slug: def.slug, priceUsd, rail: "usdc", payer, tx, wire: "x402",
-        network: CAIP2_NAMES[network] || network,
+      // Only on the state database (src/refund-ledger.js): its void marks the
+      // evidence before a later owed insert can land.
+      ledgerShared: refundLedgerBackend === "pg",
+      book: ({ tx, network, payer, priceUsd }) => bookCappedServe({
+        slug: def.slug, tx, network, payer, priceUsd, wire: x402WireOf(req),
+        synthetic: isSyntheticRequest(req), internal: isSyntheticRequest(req) || isOwnWallet(payer), ownWallet: isOwnWallet(payer),
+        clientUa: String(req.headers["user-agent"] || "").trim().split(/\s+/)[0].slice(0, 40) || null,
+      }, {
+        saleExists: async (t) => !!(await saleByTxFresh(t).catch(() => null)),
+        networkName: (n) => CAIP2_NAMES[n] || n,
+        recordSale, recordServedCall, capturePostHogSettlement,
       }),
       refundLookup: (tx) => `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(tx)}`,
     });

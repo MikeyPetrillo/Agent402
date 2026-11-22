@@ -792,8 +792,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   Robinhood, Ink, Arc, non-EVM, Permit2 or Gateway batched) with an RPC the late book reads, and
   only the first settle call for a payload (the fallback chain's own calls pass through). Rows come
   from the chain's block time (`src/chain-block-time.js`): chain check from max(2 s, 2 blocks),
-  every max(1 s, 1 block); slow over max(6 s, 4 blocks); cap max(20 s, 10 blocks); `switch` on
-  Celo only. `SETTLE_DEADLINES` (off, or JSON per network) overrides. The chain check
+  every max(1 s, 1 block); slow over max(6 s, 4 blocks); cap max(60 s, 10 blocks), so a settle
+  that succeeds today is never cut and the route's own time still fits the CDN's 100 s first-byte
+  window; Celo's cap max(20 s, 10 blocks) and `switch` on Celo only. `SETTLE_DEADLINES` (off, or JSON per network) overrides. The chain check
   (`proveAuthorizationSettled`, then `recoverAlreadyOnChain` with that proof) serves a transfer
   proven to be this payment's before the facilitator answers; while it is claiming, no other outcome
   decides, so a claimed transfer is always the one served. The slow record is per (network,
@@ -809,11 +810,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`noteCappedRequest`), and the idempotency store keeps the route's 200 answer beside the
   unconfirmed 402 when the route replays implicitly and it fits; the same payment for the same call
   (route, query and body digest) sent again is asked of `cappedResendVerdict` (server.js
-  `onCappedResend`): landed and proven (mined after first seen), the transaction is claimed under the
-  payment's own holder (`settle-cap:...`) and the answer served with its receipt and a sale; held by
+  `onCappedResend`), only when the refund ledger is the state database (its void marks the evidence
+  before a later owed insert; on file stores the kept 402 stands): landed and proven (mined after first seen), the transaction is claimed under the
+  payment's own holder (`settle-cap:...`) and the answer served with its receipt, booked once per transfer (`bookCappedServe`: the sale on
+  its real rail and wire, MPP when it came through the shim, the served-call counter and the
+  payment_settled event); held by
   the late book, its debt row is voided first (`chargedReplayVerdict` over `voidOwedOnResend`; no row
   yet keeps the 402; a debt being repaid refuses as refunded). Anything else keeps the 402
-  (`scripts/test-settle-deadlines.js`).
+  (`scripts/test-settle-deadlines.js`, `scripts/test-settle-deadlines-pg.js`).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client

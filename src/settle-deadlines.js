@@ -76,9 +76,12 @@ export const SETTLE_DEADLINE_NETWORKS = Object.freeze({
   sei: "eip155:1329",
 });
 const NAME_OF = Object.freeze(Object.fromEntries(Object.entries(SETTLE_DEADLINE_NETWORKS).map(([n, c]) => [c, n])));
-/** The cap's floor: under the library's 90 s and under the 30 s an agent's
- *  HTTP client commonly waits. */
-export const CAP_FLOOR_MS = 20_000;
+/** The cap's floor: over any settle that succeeds today (so nothing served
+ *  today is cut), under the library's 90 s, and with the route's own time
+ *  still under the CDN's 100 s window for a first byte. */
+export const CAP_FLOOR_MS = 60_000;
+/** Celo's floor: 20 s, where a slow primary was traced and the switch is on. */
+const CAP_FLOOR_BY_NETWORK = Object.freeze({ celo: 20_000 });
 /** Networks whose slow primary switches to the fallback by default: Celo,
  *  where a slow primary was traced. Every other network keeps the order its
  *  facilitators were chosen in (Base and the CDP chains stay CDP first). */
@@ -93,7 +96,7 @@ const SWITCH_BY_DEFAULT = new Set(["celo"]);
  *   slowMs        max(6 s, 4 blocks): a broadcast, two blocks and the
  *                 receipt read, with room; the traced slow primary's fixed
  *                 wait after the block alone was over 6 s;
- *   capMs         max(20 s, 10 blocks);
+ *   capMs         max(60 s, 10 blocks); Celo max(20 s, 10 blocks);
  *   switch        on for Celo only.
  */
 export function defaultDeadlineRow(name, { now = Date.now(), env = process.env } = {}) {
@@ -102,7 +105,7 @@ export function defaultDeadlineRow(name, { now = Date.now(), env = process.env }
     checkAfterMs: Math.max(2000, 2 * b),
     checkEveryMs: Math.max(1000, b),
     slowMs: Math.max(6000, 4 * b),
-    capMs: Math.max(CAP_FLOOR_MS, 10 * b),
+    capMs: Math.max(CAP_FLOOR_BY_NETWORK[name] ?? CAP_FLOOR_MS, 10 * b),
     switch: SWITCH_BY_DEFAULT.has(name),
   };
 }
@@ -430,10 +433,15 @@ export const cappedResendHolder = (p) => `settle-cap:${p.network}:${String(p.fro
  * deps: prove(args) (proveAuthorizationSettled), claimTx(network, tx, holder)
  * -> { claimed, holder }, isLateHolder(holder), rowOf(tx) (the refund row or
  * null), replayVerdict(tx) (src/idempotency.js chargedReplayVerdict over the
- * ledger's void-on-resend), recordSale({ tx, network, payer, priceUsd }),
- * refundLookup(tx).
+ * ledger's void-on-resend), book({ tx, network, payer, priceUsd }) (books the
+ * serve, bookCappedServe), refundLookup(tx), and ledgerShared: true only when
+ * the refund ledger is the state database, whose void marks the evidence
+ * before any later owed insert can land. On any other store a void racing
+ * the late book's insert could leave a payment both served and owed, so
+ * there the resend is answered the kept 402, as before this path existed.
  */
 export async function cappedResendVerdict(p, deps) {
+  if (deps?.ledgerShared !== true) return null;
   if (!p || typeof p !== "object" || !ADDR.test(String(p.from || "")) || !B32.test(String(p.nonce || "")) || !NAME_OF[String(p.network || "")]) return null;
   let proof = null;
   try {
@@ -449,7 +457,7 @@ export async function cappedResendVerdict(p, deps) {
   try { c = await deps.claimTx(p.network, tx, cappedResendHolder(p)); } catch { return null; }
   const receipt = Buffer.from(JSON.stringify({ success: true, transaction: tx, network: p.network, payer: p.from })).toString("base64");
   const serve = async () => {
-    try { await deps.recordSale({ tx, network: p.network, payer: p.from, priceUsd: Number(p.amount) / 1e6 }); } catch { /* the serve does not wait on the books */ }
+    try { await deps.book({ tx, network: p.network, payer: p.from, priceUsd: Number(p.amount) / 1e6 }); } catch { /* the serve does not wait on the books */ }
     return { serve: true, tx, receipt };
   };
   if (c?.claimed === true) return serve();
@@ -474,4 +482,25 @@ export async function cappedResendVerdict(p, deps) {
     hint: "The payment this request carries was refunded (or is being refunded) because its settlement did not confirm in time, so it no longer pays for a request. Request the resource again with a fresh payment.",
     refund: { status: st, lookup: deps.refundLookup(tx) },
   } };
+}
+
+/**
+ * Book a resend served after a cut the way the normal served path books a
+ * settled call (src/server.js): the sale on its real rail and wire (`wire`:
+ * "mpp" when the payment came through the MPP shim, else "x402"), the
+ * served-call counter (MPP counted as MPP) and the payment_settled event.
+ * Once per transfer: a resend served again after its answer was lost finds
+ * the sale (saleExists) and books nothing more. `networkName(caip2)` names
+ * the chain as the books do. Answers whether it booked.
+ */
+export async function bookCappedServe({ slug, tx, network, payer, priceUsd, wire, internal = false, synthetic = false, clientUa = null, ownWallet = false }, sinks) {
+  let exists = false;
+  try { exists = !!(await sinks.saleExists(tx)); } catch { exists = false; }
+  if (exists) return false;
+  const net = sinks.networkName(network) || network;
+  const w = wire === "mpp" ? "mpp" : "x402";
+  try { await sinks.recordSale({ slug, priceUsd, rail: "usdc", network: net, payer, tx, synthetic, wire: w }); } catch { /* never break serving for accounting */ }
+  try { sinks.recordServedCall(slug, "usdc", net, w === "mpp" ? "mpp" : null, { internal }); } catch { /* counting only */ }
+  try { sinks.capturePostHogSettlement({ slug, rail: "usdc", network: net, priceUsd, synthetic, payer, clientUa, wire: w, ownWallet }); } catch { /* telemetry only */ }
+  return true;
 }
