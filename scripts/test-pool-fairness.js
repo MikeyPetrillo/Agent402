@@ -7,6 +7,10 @@
 // exactly, with no real decode.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { KIT } from "../src/tools/kit.js";
 import { runAsCallerOf } from "../src/dispatch-caller.js";
 import { createPoolAdmission } from "../src/pool-admission.js";
 import * as office from "../src/tools/office-pool.js";
@@ -94,6 +98,44 @@ await scenario("html", {
   setWorker: html.__setHtmlWorkerForTest, workers: 2, soft: 32, hard: 48,
   submit: (d) => html.runHtml("tool", d, 10), waiting: () => html.htmlPoolState().queued, callers: () => html.htmlPoolState().callers,
 });
+// The tools that parse in the HTML worker (P13: xml-to-json, feed-parse,
+// the page-change selector) take places by caller like every other HTML job:
+// one caller flooding the free xml-to-json tool, through its real handler,
+// cannot keep a paid HTML call from another caller out.
+{
+  html.__setHtmlWorkerForTest(STUB);
+  const xml = KIT.find((t) => t.slug === "xml-to-json");
+  const dir = mkdtempSync(join(tmpdir(), "a402-xmlflood-"));
+  const gate = new SharedArrayBuffer(4 * 4), started = new SharedArrayBuffer(4 * 4);
+  const g = new Int32Array(gate), st = new Int32Array(started);
+  const A = "203.0.113.70", B = "198.51.100.90";
+  const outcomes = [];
+  const settle = (p) => Promise.resolve(p).then((r) => ({ ok: true, r }), (e) => ({ ok: false, status: e?.statusCode, message: String(e?.message || e) }));
+  const flood = (i) => { const o = settle(runAsCallerOf({ ip: A, headers: {} }, () => xml.handler({ xml: `<hold idx="${i}" dir="${dir}"/>` }))); outcomes.push(o); return o; };
+  const within = (o, ms) => Promise.race([o, sleep(ms).then(() => null)]);
+  try {
+    ok(xml && /runHtml\("xmlToJson"/.test(String(xml.handler)), "xml-to-json parses through the HTML pool (runHtml), so its admission applies");
+    for (let i = 0; i < 2; i++) flood(i);
+    ok(await until(() => existsSync(join(dir, "started-0")) && existsSync(join(dir, "started-1"))), "xml flood: one caller's first two xml-to-json calls hold both HTML workers");
+    for (let i = 2; i < 34; i++) flood(i);
+    await sleep(20);
+    const own = await within(flood(34), 300);
+    ok(html.htmlPoolState().queued === 32 && own && own.ok === false && own.status === 503, `xml flood: the flooding caller fills the queue to its bound and its next call is answered busy (${html.htmlPoolState().queued} waiting, ${own?.status})`);
+    const paid = settle(runAsCallerOf({ ip: B, headers: {} }, () => html.runHtml("tool", { gate, started, idx: 0 }, 10)));
+    outcomes.push(paid);
+    ok((await within(paid, 150)) === null, "xml flood: a paid HTML call from another caller is queued, not refused");
+    writeFileSync(join(dir, "open-0"), "");
+    await until(() => st[0] === 1 || existsSync(join(dir, "started-2")), 3000);
+    ok(st[0] === 1 && !existsSync(join(dir, "started-2")), "xml flood: the next free worker takes the other caller's paid call, ahead of the flood");
+  } finally {
+    for (let i = 0; i < 40; i++) writeFileSync(join(dir, `open-${i}`), "");
+    Atomics.store(g, 0, 1); Atomics.notify(g, 0);
+    await Promise.allSettled(outcomes);
+    ok(html.htmlPoolState().callers === 0 && html.htmlPoolState().queued === 0, "xml flood: every place is released");
+    html.__setHtmlWorkerForTest(null);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 await scenario("pdf", {
   setWorker: pdf.__setPdfWorkerForTest, workers: pdf.PDF_WORKERS_MAX, soft: pdf.PDF_QUEUE_MAX, hard: pdf.PDF_QUEUE_HARD_MAX,
   submit: (d) => pdf.runPdfOp("info", [Buffer.from("stand-in")], [d]), waiting: () => pdf.pdfPoolState().waiting, callers: () => pdf.pdfPoolState().callers,
