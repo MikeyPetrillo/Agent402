@@ -7,7 +7,7 @@
 import { partialFields, clampFields } from "./partial-answer.js";
 import { toolList } from "./pages.js";
 import { queryTerms, singularCandidates, versionTerms } from "./query-terms.js";
-import { applySynonyms } from "./find-synonyms.js";
+import { applySynonyms, FIND_OPERATION_WORDS } from "./find-synonyms.js";
 import { withoutAttributions } from "./data-attribution.js";
 import { rankSkillPacks } from "./skills.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
@@ -681,6 +681,9 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     // "how does X work"): the rest of the query is the topic, a value the
     // tool takes, so its words never decide whether the query was served.
     if (!rarestTermCovered && top && doorTerms.some((d) => top.tagSet.has(d) || top.slug === d)) rarestTermCovered = true;
+    // An operation the top hit never mentions (src/find-synonyms.js) keeps the
+    // query a miss, whichever rule above read it as served.
+    if (rarestTermCovered && own.some((t) => FIND_OPERATION_WORDS.has(t) && !covers(t))) rarestTermCovered = false;
   }
 
   // A stated direction that only a reversed tool matches. When some tool's

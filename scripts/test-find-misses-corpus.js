@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { bootServer } from "./lib/boot-server.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const { cases } = JSON.parse(readFileSync(join(ROOT, "scripts", "fixtures", "find-misses.json"), "utf8"));
+const { cases, gaps = [] } = JSON.parse(readFileSync(join(ROOT, "scripts", "fixtures", "find-misses.json"), "utf8"));
 // The weak floor /api/find reads (FIND_WEAK_SCORE in src/server.js), read from
 // the answer's own field when it carries one.
 const FIND_WEAK_SCORE = 3;
@@ -43,6 +43,16 @@ try {
     // (computeFind returns the sketch first), the same reading here.
     const miss = !j.plan && (!j.count || (top?.score ?? 0) < floor || j.rarestTermCovered === false);
     ok(!miss && !j.weakMatches, `"${c.q}" reads as served (count ${j.count}, score ${Math.round(top?.score ?? 0)}, rarest ${j.rarestTerm} covered ${j.rarestTermCovered})`);
+  }
+  // Real gaps stay misses: the nearby tool that ranks first does not do the operation.
+  ok(gaps.length >= 5, `fixture lists gaps (${gaps.length})`);
+  for (const q of gaps) {
+    const j = await (await fetch(`${srv.url}/api/find?q=${encodeURIComponent(q)}&k=3`)).json();
+    const top = j.results?.[0];
+    const floor = Number.isFinite(j.weakScore) ? j.weakScore : FIND_WEAK_SCORE;
+    // A plan records each step that has no strong match as its own need.
+    const miss = j.plan ? j.plan.steps.some((st) => st.match !== "strong") : (!j.count || (top?.score ?? 0) < floor || j.rarestTermCovered === false);
+    ok(miss, `gap "${q}" stays a miss (top ${top?.slug || "none"}, rarest ${j.rarestTerm} covered ${j.rarestTermCovered}${j.plan ? ", plan" : ""})`);
   }
 } finally {
   await srv.stop();

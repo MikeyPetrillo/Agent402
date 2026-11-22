@@ -56,3 +56,16 @@ export function applySynonyms(terms) {
   }
   return from;
 }
+
+// OPERATION WORDS: what a task asks to compute or check. A top hit whose own
+// text (slug, name, description, tags, aliases) never mentions the operation
+// does not do the job, however strongly the rest of the query names it: "sum
+// the totals of a csv" reaches csv-to-json on "csv" and "parse", and csv-to-json
+// sums nothing (the demand board's real gaps, 2026-11-22). /api/find keeps
+// such a query a miss, so the need is still recorded. Words only; each one is
+// an operation in every phrasing that uses it.
+export const FIND_OPERATION_WORDS = Object.freeze(new Set([
+  "sum", "sums", "total", "totals", "aggregate", "distinct",
+  "signature", "signatures", "position", "validity", "adjusted",
+  "headers", "clean",
+]));

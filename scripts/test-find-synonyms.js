@@ -11,7 +11,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { FIND_SYNONYMS, applySynonyms } from "../src/find-synonyms.js";
+import { FIND_SYNONYMS, FIND_OPERATION_WORDS, applySynonyms } from "../src/find-synonyms.js";
 import { findTools } from "../src/find.js";
 import { SKILL_PACKS } from "../src/skills.js";
 
@@ -64,6 +64,20 @@ for (const [q, want] of [
   ["convert time zones", "timezone-convert"],
   ["count the rows and columns of a csv", "csv-lint"],
 ]) ok(top(q) === want, `"${q}" -> ${want} (got ${top(q)})`);
+
+// Operation words: a top hit that never mentions the operation is not served.
+ok(Object.isFrozen(FIND_OPERATION_WORDS) && FIND_OPERATION_WORDS.has("sum"), "the operation words are a frozen set");
+{
+  const O = {
+    "POST /api/csv-to-json": { name: "CSV to JSON", slug: "csv-to-json", category: "data", price: "$0.001", description: "Parse CSV into a JSON array of objects.", tags: ["csv", "json", "parse"], discovery: { example: {} } },
+    "POST /api/csv-sum": { name: "CSV column sums", slug: "csv-sum", category: "data", price: "$0.001", description: "Sum each numeric column of a CSV.", tags: ["csv"], discovery: { example: {} } },
+  };
+  const only = { "POST /api/csv-to-json": O["POST /api/csv-to-json"] };
+  const gap = findTools(only, "parse a csv into json objects with a sum", {});
+  ok(gap.results[0]?.slug === "csv-to-json" && gap.rarestTermCovered === false, `a hit that does not mention the operation reads as a miss (covered ${gap.rarestTermCovered})`);
+  const served = findTools(O, "parse csv and sum a column", {});
+  ok(served.results[0]?.slug === "csv-sum" && served.rarestTermCovered !== false, `a hit that names the operation is served (top ${served.results[0]?.slug}, covered ${served.rarestTermCovered})`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
