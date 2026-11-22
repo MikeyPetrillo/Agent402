@@ -164,6 +164,18 @@ export function takeHardCap(name, now = Date.now()) {
   return true;
 }
 
+/** True when `name`'s ceiling is already reached today (nothing is taken or
+ *  counted): a check made before a payment is settled ahead of the call. */
+export function hardCapReached(name, now = Date.now()) {
+  try {
+    const c = byName.get(name);
+    if (!c) return false;
+    const cap = hardCapOf(c);
+    if (cap === null) return false;
+    return seenToday(rowOf(c, now)) >= cap;
+  } catch { return false; }
+}
+
 // Failures that happen before a request is written: name resolution, and a
 // connection that was refused, unroutable or never opened. A reset, a body
 // timeout or a closed socket is not here: the request may have been read.

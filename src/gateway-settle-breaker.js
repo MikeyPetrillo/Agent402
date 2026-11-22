@@ -858,7 +858,7 @@ function noteOverrunFailure(key, now) {
  *  `fault` (WHO IS COUNTED): "buyer" counts at MAX_FAILS, "unknown" at
  *  UNKNOWN_MAX_FAILS, "not-buyer" never; both of the latter feed the one-key
  *  alarm. `walletCount:false` keeps a buyer failure off the wallet. */
-export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, withdrawn = false, walletCount = true, fault = "buyer", blocklisted = false, authKey = null } = {}) {
+export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, withdrawn = false, walletCount = true, fault = "buyer", blocklisted = false, authKey = null, settleFirstRoute = false } = {}) {
   const isBuyer = fault !== "unknown" && fault !== "not-buyer";
   const unknown = fault === "unknown" && !!key;
   // ONE AUTHORIZATION RE-PRESENTED: a served run that did not settle for a
@@ -886,7 +886,10 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
   // never whether the run was paid. Not a payment still settling
   // (walletCount:false), a withdrawn refusal (keyless) or a key that names
   // no wallet. Refuses nobody.
-  const unsettled = !!global && !!key && !withdrawn && walletCount && !!payerOfKey(key);
+  // A catalog route the server arms for settle first (settleFirstRoute:
+  // search, image, speech, transcription, judgment, code runs) counts the same
+  // way, and only toward this: its failures stay off the /v1 burst alarm.
+  const unsettled = (!!global || !!settleFirstRoute) && !!key && !withdrawn && walletCount && !!payerOfKey(key);
   const unsettledAuthKey = unsettled && typeof authKey === "string" && authKey ? authKey : null;
   if (unsettled) noteUnsettledRun(key, unsettledAuthKey, now);
   if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown, blocklisted: blocklisted && isBuyer, authKey: authCounted ? authKey : null, wide, unsettled, unsettledAuthKey });
@@ -1139,6 +1142,16 @@ function decodeReceipt(res) {
 let unsettledRunListener = null;
 /** Register `fn(req)`, called once per /v1 run whose settlement failed. */
 export function setUnsettledRunListener(fn) { unsettledRunListener = typeof fn === "function" ? fn : null; }
+// The server's reader of whether a request is on a catalog route it arms for
+// settle first (beyond the /v1 routes, which consult with global:true): such a
+// route's unsettled runs count toward the wallet's settle-first count and the
+// budget meter like a /v1 run's, and nothing else.
+let settleFirstRouteReader = null;
+/** Register `fn(req)`: true for a request on a settle-first catalog route. */
+export function setSettleFirstRouteReader(fn) { settleFirstRouteReader = typeof fn === "function" ? fn : null; }
+function onSettleFirstRoute(req) {
+  try { return !!(settleFirstRouteReader && settleFirstRouteReader(req)); } catch { return false; }
+}
 
 export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
   if (!req || typeof req !== "object") return false;
@@ -1201,10 +1214,12 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
           ? settleFailureFault({ receipt, raw: req[RAW_SETTLE_RECEIPT] || null, network: gatewaySettleBreakerNetwork(req) })
           : marked === "buyer" || marked === "not-buyer" ? marked : "unknown";
         const blocklisted = receipt?.success === false && isBlocklistSettleVerdict({ receipt, raw: req[RAW_SETTLE_RECEIPT] || null });
-        recordGatewaySettleFailure(key, Date.now(), { global, fault, blocklisted, authKey });
-        // A /v1 run served and not paid, whatever the cause: its upstream
-        // cost feeds the settle-first budget meter (src/settle-first-meter.js).
-        if (global && typeof unsettledRunListener === "function") { try { unsettledRunListener(req); } catch { /* metering only */ } }
+        const sfRoute = !global && onSettleFirstRoute(req);
+        recordGatewaySettleFailure(key, Date.now(), { global, fault, blocklisted, authKey, settleFirstRoute: sfRoute });
+        // A /v1 run (or a settle-first catalog route's run) served and not
+        // paid, whatever the cause: its upstream cost feeds the settle-first
+        // budget meter (src/settle-first-meter.js).
+        if ((global || sfRoute) && typeof unsettledRunListener === "function") { try { unsettledRunListener(req); } catch { /* metering only */ } }
       } else if (st === 200) recordGatewaySettleSuccess(key, Date.now(), { authKey });
       // Anything else (a 4xx/5xx the handler threw) was never settled and is
       // not this wallet's doing: neither counted nor cleared.

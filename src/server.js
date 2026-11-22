@@ -80,7 +80,7 @@ import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
-import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger, gatewaySettleFirstPlan, noteSettleFirst, setUnsettledRunListener } from "./gateway-settle-breaker.js";
+import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger, gatewaySettleFirstPlan, noteSettleFirst, setUnsettledRunListener, setSettleFirstRouteReader } from "./gateway-settle-breaker.js";
 import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD } from "./settle-first.js";
 import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
 import { admitServedFirst, noteUnsettledRunCost, runUpstreamUsdOf, bindRunScope } from "./settle-first-meter.js";
@@ -13731,7 +13731,15 @@ async function admitPaidRun(req, res, def) {
 // resumed across calls.
 // Also dub (translate-and-speak): its first paid upstream call is the chat
 // gateway's translation, behind the same settle point, after dub's own checks.
-const SETTLE_FIRST_SLUGS = new Set([...GATEWAY_TOOLS_ENABLED, ...IMAGES_FAST_TOOLS.filter((t) => t.slug !== "v1-videos"), ...DUB_TOOLS].map((t) => t.slug));
+// And the catalog routes with a real upstream cost, each with its settle point
+// after its own input checks and before its first paid call: web search and
+// answer (src/tools/search.js), image generation (image-gen-kit), speech
+// (tts-kit), transcription (stt-kit), judgment (judge-kit) and code runs
+// (code-run-kit). Their unsettled runs count toward the wallet's settle-first
+// count and the budget meter like a /v1 run's (setSettleFirstRouteReader).
+const SETTLE_FIRST_CATALOG_SLUGS = new Set([...SEARCH_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...JUDGE_TOOLS, ...CODE_RUN_TOOLS].map((t) => t.slug));
+const SETTLE_FIRST_SLUGS = new Set([...[...GATEWAY_TOOLS_ENABLED, ...IMAGES_FAST_TOOLS.filter((t) => t.slug !== "v1-videos"), ...DUB_TOOLS].map((t) => t.slug), ...SETTLE_FIRST_CATALOG_SLUGS]);
+setSettleFirstRouteReader((req) => SETTLE_FIRST_CATALOG_SLUGS.has(CATALOG[`${req.method} ${req.path}`]?.slug));
 /**
  * Arm this run to settle its payment before its upstream work, or null (it
  * settles after the handler, as every run does in normal operation). Armed

@@ -113,6 +113,25 @@ export function settleBeforeUpstream(req = null) {
   return s.promise;
 }
 
+/**
+ * The settle point with one check of ours made first: for an armed request
+ * whose settlement has not started, `refusal()` is called and, when it
+ * returns an error (a daily usage ceiling already reached, say), that error
+ * is thrown BEFORE any payment is taken, so a refusal of ours is never a
+ * charge booked as owed. Any other request: exactly settleBeforeUpstream().
+ */
+export function settleBeforeUpstreamUnless(refusal, req = null) {
+  let r = req;
+  if (!r && ambient) { try { r = ambient(); } catch { r = null; } }
+  const s = stateOf(r);
+  if (s && s.armed && !s.promise && typeof refusal === "function") {
+    let e = null;
+    try { e = refusal(); } catch { e = null; }
+    if (e) throw e;
+  }
+  return settleBeforeUpstream(r);
+}
+
 /** The error a settle point throws when the payment did not settle: `response`
  *  is the settle-failure answer to send (status, headers, body). */
 export function settleFirstRefusal(response, message = "The payment did not settle, so the call was not run.") {

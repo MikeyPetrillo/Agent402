@@ -37,6 +37,8 @@ import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { ourKeyRefusedError, readUpstreamBody } from "../upstream-deadline.js";
+import { settleBeforeUpstreamUnless } from "../settle-first.js";
+import { hardCapReached, hardCapError } from "../upstream-hard-caps.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -189,6 +191,10 @@ function parseError(text) {
 async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATION) {
   const key = OPENAI_KEY();
   if (!key) throw bad("OpenAI not configured", 503);
+  // THE SETTLE POINT (src/settle-first.js): after the input checks and the
+  // key check, before the paid images request (the daily usage ceiling read
+  // first). A run the server did not arm: nothing.
+  await settleBeforeUpstreamUnless(() => (hardCapReached("openai") ? hardCapError() : null));
 
   const tier = TIERS[tierSlug];
   const body = {

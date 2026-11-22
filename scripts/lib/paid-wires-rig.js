@@ -50,6 +50,9 @@ const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) =>
 const decode = (h) => JSON.parse(Buffer.from(String(h), "base64").toString("utf8"));
 
 export async function bootPaidWires({ label = "paid-wires", env = {}, operatorToken = "paid-wires-operator-token-0123456789abcdef" } = {}) {
+  // `env` may be a function of the stubs' base URL, for a setting that names it.
+  let envF = null;
+  const envNow = () => (typeof env === "function" ? (envF ? env(envF) : {}) : env);
   const secret = "paid-wires-secret-" + randomBytes(6).toString("hex");
   const feePayer = await kit.generateKeyPairSigner();
   const solPayTo = await kit.generateKeyPairSigner();
@@ -170,6 +173,16 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       }
       return reply(404, { error: { type: "invalid_request_error", message: "no such route on the stub" } });
     }
+    // other upstreams (UPSTREAM_STUB_HOSTS): recorded like a model call, and
+    // answered by st.upHook({ host, path, j, req, res, reply }) when a test
+    // sets one, else a 404.
+    if (path.startsWith("/up/")) {
+      const rest = path.slice(4), slash = rest.indexOf("/");
+      const host = slash < 0 ? rest : rest.slice(0, slash), sub = slash < 0 ? "/" : rest.slice(slash);
+      st.events.push({ t: "upstream", path: `${host}${sub}`, at: Date.now() });
+      if (typeof st.upHook === "function" && await st.upHook({ host, path: sub, j, req, res, reply })) return;
+      return reply(404, { error: "no such route on the stub" });
+    }
     // the model upstream
     if (path.startsWith("/llm")) {
       if (req.method === "POST") st.events.push({ t: "upstream", path, at: Date.now() });
@@ -209,7 +222,7 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     const [, fam, kind] = m;
     if (kind === "supported") {
       // With X402_UPTO_NETWORKS set for the server, the Base facilitator advertises upto too.
-      if (fam === "evm") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: BASE }, ...(env.X402_UPTO_NETWORKS ? [{ x402Version: 2, scheme: "upto", network: BASE }] : []), { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: feePayer.address } }], extensions: [], signers: {} });
+      if (fam === "evm") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: BASE }, ...(envNow().X402_UPTO_NETWORKS ? [{ x402Version: 2, scheme: "upto", network: BASE }] : []), { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: feePayer.address } }], extensions: [], signers: {} });
       if (fam === "stellar") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: "stellar:pubnet", extra: { areFeesSponsored: true } }], extensions: [], signers: {} });
       return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: ALGORAND_MAINNET_CAIP2 }], extensions: [], signers: {} });
     }
@@ -230,6 +243,7 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   });
   await new Promise((r) => stub.listen(0, "127.0.0.1", r));
   const F = `http://127.0.0.1:${stub.address().port}`;
+  envF = F;
   const srv = await bootServer({
     stores: label,
     args: ["--import", "./scripts/lib/paid-wires-preload.js"],
@@ -247,12 +261,12 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       TEMPO_API_BASE_URL: `${F}/relay`, TEMPO_RPC_URL: `${F}/tempo-rpc`, TEMPO_LATE_CONFIRM_DELAYS_MS: "300,600", SLOW_SYNC_WINDOW_SECONDS: "off",
       STRIPE_SECRET_KEY: "", CIRCLE_FACILITATOR_API_KEY: "", ROBINHOOD_RELAYER_KEY: "", FIRST_CALL_ALLOWANCE: "", GATEWAY_NANOPAYMENTS: "",
       REDIS_URL: "", TARGET_URL: "", AGENT402_OPERATOR_TOKEN: operatorToken,
-      OPENROUTER_API_KEY: "sk-or-paid-wires-never-used", OPENROUTER_STUB_URL: `${F}/llm`, OPENAI_STUB_URL: `${F}/llm`, STRIPE_STUB_URL: `${F}/stripe`, OPENAI_API_KEY: "", BRAVE_API_KEY: "", EXA_API_KEY: "", X_BEARER_TOKEN: "",
+      OPENROUTER_API_KEY: "sk-or-paid-wires-never-used", OPENROUTER_STUB_URL: `${F}/llm`, OPENAI_STUB_URL: `${F}/llm`, UPSTREAM_STUB_URL: F, STRIPE_STUB_URL: `${F}/stripe`, OPENAI_API_KEY: "", BRAVE_API_KEY: "", EXA_API_KEY: "", X_BEARER_TOKEN: "",
       UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: fileURLToPath(new URL("../../docs/example-upstream-costs.json", import.meta.url)),
       STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
       RECEIPT_SIGNING_KEY: "", RECEIPT_SIGNING_KEY_ID: "", RECEIPT_RETIRED_KEYS: "",
       MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off", REVENUE_LEDGER: "off",
-      ...env,
+      ...envNow(),
     },
   });
   const url = srv.url;

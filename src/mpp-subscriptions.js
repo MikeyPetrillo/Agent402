@@ -69,9 +69,14 @@
 //     Stripe path uses). A period whose charge has not confirmed leaves the
 //     subscription "past_due", which the scheduler reads as not-active, so no
 //     paid report is produced. Free probes and change detection keep running.
-//   - A failed charge backs off (1h doubling to 24h) and is retried. If it has
-//     not cleared within PAST_DUE_GRACE_MS the subscription is canceled as
-//     unpaid and never charged again.
+//   - A failed charge is retried on a bounded schedule inside the grace
+//     window (RENEWAL RETRIES below): a leased sweep pulls every past_due
+//     record whose retry time has come, through the same refreshStatus a
+//     scheduled run uses (its per-subscription lease, the period claim and the
+//     chain check of an unconfirmed send), so a retry can never charge a
+//     period twice. Only a retry that fails at or after the end of
+//     PAST_DUE_GRACE_MS cancels the subscription as unpaid; it is then never
+//     charged again.
 //   - The paying wallet is screened (src/sanctions-screen.js: the exact OFAC
 //     SDN match, then the one-hop funding check with its per-payer cache)
 //     BEFORE the first payment is sent and BEFORE every renewal is signed,
@@ -190,6 +195,39 @@ export const MAX_CHARGE_BACKOFF_MS = 24 * 60 * 60_000;
 // price, and for the canary it read as "the pull half of the rail is broken".
 // A refused transfer (insufficient funds, revoked key) keeps the hour.
 export const TRANSIENT_CHARGE_BACKOFF_MS = 2 * 60_000;
+
+// RENEWAL RETRIES. A past_due subscription is not listed to the monitor
+// scheduler (listActive lists active records only), so the scheduler's gate
+// never pulls it again: the retry sweep below does. The schedule, counted from
+// the first failed attempt of the episode (firstFailedAt):
+//   - a transient (RPC or network) failure, for the first
+//     TRANSIENT_RETRIES_MAX failures of the episode: 2, 4, then 6 minutes;
+//   - any other failure (and a transient one after those): 1 h, doubling,
+//     at most 24 h between attempts;
+//   - no retry is ever placed past the end of the grace window: the last
+//     one is placed AT firstFailedAt + PAST_DUE_GRACE_MS;
+//   - a failure at or after that instant cancels the subscription (unpaid).
+// So an episode makes at most about 15 attempts over 7 days, and ends either
+// renewed (the first attempt that confirms) or canceled after the last one.
+// Each attempt is one pull under the subscription's lease with the period
+// claimed on the record first; a send whose landing is unknown is asked of the
+// chain before any new signature (unconfirmedCharge), so no retry ever pays a
+// period twice.
+export const TRANSIENT_RETRIES_MAX = 3;
+/** How often the retry sweep runs, and the most records one run pulls. */
+export const RENEWAL_RETRY_SWEEP_MS = 5 * 60_000;
+export const RENEWAL_RETRY_MAX_PER_RUN = 50;
+/** When the attempt after the `failures`-th failed one is due (ms since the
+ *  epoch), or null when the episode is over (the failure came at or after the
+ *  end of the grace window). */
+export function nextRenewalAttemptAt({ failures, transient, firstFailedAtMs, atMs }) {
+  const graceEnd = firstFailedAtMs + PAST_DUE_GRACE_MS;
+  if (atMs >= graceEnd) return null;
+  const backoff = transient && failures <= TRANSIENT_RETRIES_MAX
+    ? TRANSIENT_CHARGE_BACKOFF_MS * failures
+    : Math.min(CHARGE_BACKOFF_MS * 2 ** Math.max(0, failures - 1), MAX_CHARGE_BACKOFF_MS);
+  return Math.min(atMs + backoff, graceEnd);
+}
 
 /**
  * Hours a renewal may stay unconfirmed (a send whose landing the chain read
@@ -1504,14 +1542,53 @@ export function createMppSubscriptions({
     return out;
   }
   const sweepEnded = leased("mpp-subscription-ended-sweep", { ttlMs: 10 * 60_000, log }, sweepEndedUnleased);
+  /**
+   * The renewal retry sweep (RENEWAL RETRIES; leased, every
+   * RENEWAL_RETRY_SWEEP_MS, at most `max` pulls per run). Every past_due
+   * monitor subscription whose retry time has come is pulled through
+   * refreshStatus, the same gate a scheduled run takes: under the
+   * subscription's own lease, with the period claimed on the record before
+   * anything is signed and an unconfirmed send asked of the chain first, so a
+   * second container's sweep, a scheduler run or a canary refresh at the same
+   * moment can never pay one period twice. A rail-canary record is left to its
+   * own run. Logs counts only.
+   */
+  async function retryDueRenewalsUnleased({ max = RENEWAL_RETRY_MAX_PER_RUN } = {}) {
+    await ready;
+    // The other container's writes (a renewal it confirmed, a cancel) reach
+    // the mirror before the pick; refreshStatus re-reads each record anyway.
+    if (kv.backend === "pg") { try { await refreshMirror(true); } catch { /* refreshStatus re-reads */ } }
+    const at = now();
+    const due = [...cache.values()].filter((rec) => rec && typeof rec.subId === "string" && rec.status === "past_due" && !rec.tombstone
+      && Object.hasOwn(MONITOR_PRODUCTS, String(rec.product)) && !isCanaryProduct(rec.product)
+      && !(Date.parse(rec.nextChargeAttemptAt || "") > at))
+      .sort((a, b) => (Date.parse(a.nextChargeAttemptAt || "") || 0) - (Date.parse(b.nextChargeAttemptAt || "") || 0));
+    const limit = Math.max(1, Number(max) || RENEWAL_RETRY_MAX_PER_RUN);
+    const out = { tried: 0, renewed: 0, canceled: 0, pastDue: 0, other: 0, more: due.length > limit };
+    for (const rec of due.slice(0, limit)) {
+      out.tried++;
+      let st = null;
+      try { st = await refreshStatus(rec.subId); }
+      catch (e) { log(`[mpp-subs] renewal retry of ${rec.subId} failed to run (${String(e?.message || e).slice(0, 120)}); next run tries again`); }
+      if (st === "active") out.renewed++;
+      else if (st === "canceled") out.canceled++;
+      else if (st === "past_due") out.pastDue++;
+      else out.other++;
+    }
+    if (out.tried) log(`[mpp-subs] renewal retry sweep: tried ${out.tried}, renewed ${out.renewed}, canceled ${out.canceled}, still past due ${out.pastDue}${out.more ? " (more next run)" : ""}`);
+    return out;
+  }
+  const retryDueRenewals = leased("mpp-subscription-renewal-retry", { ttlMs: 10 * 60_000, log }, retryDueRenewalsUnleased);
   // The offer sweep also runs on a timer, not only in front of a mint: an
   // offer's marker carries the buyer's email and target, and with no mint
   // after it they would otherwise stay until the next one.
   const sweepOffersLeased = leased("mpp-subscription-offer-sweep", { ttlMs: OFFER_SWEEP_LEASE_TTL_MS, log }, () => sweepOffers());
-  let sweepTimer = null, sweepFirst = null, offerTimer = null, offerFirst = null;
+  let sweepTimer = null, sweepFirst = null, offerTimer = null, offerFirst = null, retryTimer = null;
   /** Start the ended-subscription and offer sweeps' timers (unref'd; the first ended run is held back off the boot path). */
-  function start({ intervalMs = ENDED_SWEEP_INTERVAL_MS, firstMs = 2 * 60_000, offerIntervalMs = OFFER_SWEEP_INTERVAL_MS, offerFirstMs = OFFER_SWEEP_FIRST_MS } = {}) {
+  function start({ intervalMs = ENDED_SWEEP_INTERVAL_MS, firstMs = 2 * 60_000, offerIntervalMs = OFFER_SWEEP_INTERVAL_MS, offerFirstMs = OFFER_SWEEP_FIRST_MS, retryIntervalMs = RENEWAL_RETRY_SWEEP_MS } = {}) {
     if (sweepTimer) return;
+    const runRetry = () => { retryDueRenewals().catch((e) => log(`[mpp-subs] renewal retry sweep failed: ${String(e?.message || e).slice(0, 160)}`)); };
+    retryTimer = setInterval(runRetry, retryIntervalMs); retryTimer.unref?.();
     const run = () => { sweepEnded().catch((e) => log(`[mpp-subs] ended-subscription sweep failed: ${String(e?.message || e).slice(0, 160)}`)); };
     sweepTimer = setInterval(run, intervalMs); sweepTimer.unref?.();
     sweepFirst = setTimeout(run, firstMs); sweepFirst.unref?.();
@@ -1525,7 +1602,8 @@ export function createMppSubscriptions({
     if (sweepFirst) clearTimeout(sweepFirst);
     if (offerTimer) clearInterval(offerTimer);
     if (offerFirst) clearTimeout(offerFirst);
-    sweepTimer = null; sweepFirst = null; offerTimer = null; offerFirst = null;
+    if (retryTimer) clearInterval(retryTimer);
+    sweepTimer = null; sweepFirst = null; offerTimer = null; offerFirst = null; retryTimer = null;
   }
 
   // --- the offer -------------------------------------------------------------
@@ -2305,10 +2383,11 @@ export function createMppSubscriptions({
       const failures = (rec.chargeFailures || 0) + 1;
       const firstFailedAt = rec.firstFailedAt || new Date(at).toISOString();
       const transient = isTransientChargeError(err);
-      const backoff = transient
-        ? Math.min(TRANSIENT_CHARGE_BACKOFF_MS * failures, CHARGE_BACKOFF_MS)
-        : Math.min(CHARGE_BACKOFF_MS * 2 ** (failures - 1), MAX_CHARGE_BACKOFF_MS);
-      const givenUp = at - Date.parse(firstFailedAt) >= PAST_DUE_GRACE_MS;
+      // The bounded schedule (RENEWAL RETRIES): null once a failure lands at
+      // or after the end of the grace window, which ends the subscription.
+      const nextAt = nextRenewalAttemptAt({ failures, transient, firstFailedAtMs: Date.parse(firstFailedAt), atMs: at });
+      const givenUp = nextAt === null;
+      const backoff = givenUp ? 0 : nextAt - at;
       const ambiguous = isSendPhaseAmbiguity(err);
       // The transaction was signed before this failure surfaced, so its
       // validBefore is at most now + the window: past that (plus slack) it
@@ -2316,14 +2395,14 @@ export function createMppSubscriptions({
       const settleableUntil = now() + renewalValidForS * 1000 + SETTLEABLE_SLACK_MS;
       const next = {
         ...rec, chargeFailures: failures, firstFailedAt,
-        nextChargeAttemptAt: new Date(ambiguous ? Math.max(at + backoff, settleableUntil) : at + backoff).toISOString(),
+        nextChargeAttemptAt: givenUp ? null : new Date(ambiguous ? Math.max(at + backoff, settleableUntil) : at + backoff).toISOString(),
         lastChargeError: String(err?.message || err).slice(0, 200),
         ...(ambiguous ? { unconfirmedCharge: { at: new Date(at).toISOString(), periodIndex: due, settleableUntil: new Date(settleableUntil).toISOString() } } : {}),
         status: givenUp ? "canceled" : "past_due",
         ...(givenUp ? { canceledAt: new Date(at).toISOString(), canceledReason: "unpaid" } : {}),
       };
       await writeRecKeepingCancel(next, { ownPull: true });
-      log(`[mpp-subs] period charge failed for ${subId} (attempt ${failures}${givenUp ? ", giving up: past the grace window" : `, retry in ${Math.round(backoff / 60000)}m${transient ? " (transient)" : ""}${ambiguous ? ", chain checked before any retry" : ""}`}): ${diagnoseError(err)}`);
+      log(`[mpp-subs] period charge failed for ${subId} (attempt ${failures}${givenUp ? ", giving up: every retry in the grace window failed" : `, retry in ${Math.round(backoff / 60000)}m${transient ? " (transient)" : ""}${ambiguous ? ", chain checked before any retry" : ""}`}): ${diagnoseError(err)}`);
       return next.status;
     } finally { inFlight.delete(subId); }
   }
@@ -2544,7 +2623,7 @@ export function createMppSubscriptions({
 
   return {
     offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub, sweepStaleCanaries,
-    sweepEnded, sweepOffers: sweepOffersLeased, _sweepOffers: sweepOffers, start, stop, _sweepEndedUnleased: sweepEndedUnleased, _finishEnded: finishEnded, payerScreenView,
+    sweepEnded, retryDueRenewals, _retryDueRenewalsUnleased: retryDueRenewalsUnleased, sweepOffers: sweepOffersLeased, _sweepOffers: sweepOffers, start, stop, _sweepEndedUnleased: sweepEndedUnleased, _finishEnded: finishEnded, payerScreenView,
     listActive, get, getFresh, isMine, status, renewalsStatus, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
     ready: () => ready, flush: () => kv.flush(),
     _store: kv, _subStore: subStore, _method: method,
