@@ -57,8 +57,8 @@ import { answerLanguage } from "../text-language.js";
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
-import { settleBeforeUpstream, settleBeforeUpstreamUnless, isSettleFirstRefusal } from "../settle-first.js";
-import { hardCapReached, hardCapError } from "../upstream-hard-caps.js";
+import { settleBeforeUpstream, settleBeforeUpstreamHolding, isSettleFirstRefusal } from "../settle-first.js";
+import { hardCapHold } from "../upstream-hard-caps.js";
 import { measureAudio, transcodeSpeech, inputFormatOf, SPEECH_CODECS } from "./media-kit.js";
 import { admissionCallerOf } from "../dispatch-caller.js";
 import { redactSecrets } from "./redact.js";
@@ -574,8 +574,9 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
   if (!key) throw bad("OpenAI not configured", 503);
   // The settle point (src/settle-first.js): after the audio was read, decoded
   // and held to the tier's cap, before the paid transcription request (the
-  // daily usage ceiling read first). A run the server did not arm: nothing.
-  await settleBeforeUpstreamUnless(() => (hardCapReached("openai") ? hardCapError() : null));
+  // daily usage ceiling's unit taken first and held for the call). A run the
+  // server did not arm: nothing.
+  await settleBeforeUpstreamHolding(hardCapHold("openai"));
 
   const form = new FormData();
   form.append("file", new Blob([audioBuffer]), filename);
