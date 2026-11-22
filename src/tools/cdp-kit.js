@@ -514,11 +514,15 @@ export const SQL_SEND_LIMIT_BYTES = 500_000;
 // spent the recovery answers the uncharged narrow-query 422. The health
 // probe (queryServiceHealth) is not counted: it runs at most once per table
 // every HEALTH_TTL_MS (HEALTH_UNKNOWN_TTL_MS for an unknown verdict) across
-// every call, under its own memo and timeout. One path widens it: a plain
-// row select whose whole range ran past the service's window is read one day
-// at a time (dayWindowAnswer), one query a day for at most
-// SQL_WINDOW_MAX_DAYS plus one days, each still taking a send slot.
+// every call, under its own memo and timeout. A plain row select whose whole
+// range ran past the service's window is read one day at a time
+// (dayWindowAnswer) inside the same budget: the days spend what the
+// whole-range send left, and the answer marks the rest as not read.
 export const SQL_QUERY_BUDGET = 3;
+// Queries a call that is read one day at a time may send in all, the
+// whole-range send included. scripts/test-pricing-margin.js holds this many
+// queries plus a settlement inside onchain-sql's margin bound at its price.
+export const SQL_WINDOW_MAX_QUERIES = SQL_QUERY_BUDGET;
 // The budget also carries how the call's sends are paced: `own` (this
 // server's own read) and `callerGone` (the buyer's connection closed before
 // any byte of the answer).
@@ -1225,14 +1229,15 @@ export function dayWindowPlan(sql, now = Date.now()) {
  *  rows with what was read in fields, or throws `whole` when no row came. */
 async function dayWindowAnswer(plan, body, queries, whole) {
   const target = plan.limit !== null && plan.limit <= SQL_MAX_ROWS ? plan.limit : SQL_MAX_ROWS + 1;
-  // Each day is one more query: the call's query budget grows by the days.
-  queries.max = queries.sent + plan.spans.length;
+  // Each day is one more query, inside the windowed call's query limit.
+  queries.max = Math.max(queries.sent, Math.min(queries.sent + plan.spans.length, SQL_WINDOW_MAX_QUERIES));
   const rows = [];
   let read = 0, stopped = null;
   for (const span of plan.spans) {
     if (rows.length >= target) break;
     // A buyer who left gets nothing delivered: no more days are sent.
     if (queries.callerGone?.()) throw clientGoneError("The connection closed while the query was read one day at a time; nothing more was sent and nothing was charged.");
+    if (queries.left() <= 0) { stopped = "query-limit"; break; }
     const budget = currentBudget();
     if (budget && budget.remaining() < SQL_WINDOW_MIN_LEFT_MS) { stopped = "time"; break; }
     const sql = cappedSql(plan.windowSql(span), { wrap: true }).limitTo(target - rows.length);
@@ -1262,7 +1267,7 @@ async function dayWindowAnswer(plan, body, queries, whole) {
   const covered = !last ? null : plan.direction === "asc"
     ? { from: iso(plan.lo), to: iso(last.to ?? plan.hi) }
     : { from: iso(last.from ?? plan.lo), to: iso(plan.hi) };
-  const why = stopped === "time" ? "the call's time ran out" : stopped === "day-past-window" ? "one day of it also ran past the service's window" : stopped ? "the query service did not answer one day of it" : null;
+  const why = stopped === "query-limit" ? `the call's limit of ${SQL_WINDOW_MAX_QUERIES} queries was reached` : stopped === "time" ? "the call's time ran out" : stopped === "day-past-window" ? "one day of it also ran past the service's window" : stopped ? "the query service did not answer one day of it" : null;
   const note = cut
     ? `The whole range ran past the query service's window of about 10 s, so it was read one day at a time (${read} of ${plan.spans.length} days, ${plan.direction === "desc" ? "newest" : "oldest"} first); more than ${SQL_MAX_ROWS} rows matched and the first ${SQL_MAX_ROWS} are returned.`
     : complete
