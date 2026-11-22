@@ -78,7 +78,9 @@ if (!isShallow() && stored) {
     ok(toolSources[slug] === "src/server.js" && ISO.test(pageLastmod(`/tools/${slug}`) || ""), `/tools/${slug} is dated by the server module that defines it inline (${toolSources[slug]}, ${pageLastmod(`/tools/${slug}`)})`);
   }
   ok(toolSources["price-webhook"] === "src/tools/price-webhook-kit.js", `price-webhook (slug: PRICE_WEBHOOK_SLUG) maps to its kit (${toolSources["price-webhook"]})`);
-  ok(toolSources["market-tick"] === "src/tools/market-tick-kit.js", `market-tick (slug: MARKET_TICK_SLUG) maps to its kit (${toolSources["market-tick"]})`);
+  ok(toolSources["audit-report"] === "src/tools/audit-report-kit.js", `audit-report (slug: AUDIT_SLUG) maps to its kit (${toolSources["audit-report"]})`);
+  // A retired tool's kit is gone, and its slug dates no page.
+  ok(!("market-tick" in toolSources), `a retired tool keeps no source (${toolSources["market-tick"]})`);
   ok(toolPatterns["*-messages"] === "src/tools/llm-messages-kit.js" && toolPatterns["*-gemini"] === "src/tools/llm-gemini-kit.js" && toolPatterns["*-responses"] === "src/tools/llm-responses-kit.js", "the per-tier wire slugs are built by their kits' templates");
   for (const [slug, kit] of [["v1-chat-nano-messages", "llm-messages-kit.js"], ["v1-chat-metered-gemini", "llm-gemini-kit.js"], ["v1-chat-pro-responses", "llm-responses-kit.js"]]) {
     ok(toolLastmod(slug) === filesLastmod([`src/tools/${kit}`]) && ISO.test(toolLastmod(slug) || ""), `/tools/${slug} is dated by ${kit} (${toolLastmod(slug)})`);

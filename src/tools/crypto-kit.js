@@ -67,11 +67,6 @@ const SYMBOL_TO_ID = {
 // CoinGecko 404 (which we map to 422). IDs go lowercase — that's CoinGecko's
 // convention. Restrict to a defensive whitelist; CoinGecko ids are slug-style
 // (alphanumeric + hyphen).
-/** Whether a bare ticker is one the symbol map above resolves (market-tick-kit
- *  reads a known symbol as crypto and anything else as a US equity). */
-export function isKnownCryptoSymbol(symbol) {
-  return typeof symbol === "string" && Object.hasOwn(SYMBOL_TO_ID, symbol.trim().toUpperCase());
-}
 
 const ID_TO_SYMBOL = Object.freeze(Object.fromEntries(Object.entries(SYMBOL_TO_ID).map(([sym, id]) => [id, sym])));
 
