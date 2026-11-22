@@ -390,6 +390,10 @@ try {
       UPSTREAM_COSTS_FILE: process.env.UPSTREAM_COSTS_FILE || join(process.cwd(), "docs/example-upstream-costs.json"),
       LATE_SETTLE_RECONCILE: "", X402_SYNC_ON_START: "", LATE_SETTLE_RECONCILE_MS: "500", LATE_SETTLE_UNCONFIRMED_PER_PAYER_MAX: "5",
       PENDING_SETTLE_RECEIPT_WAIT_MS: "1000",
+      // Section 8 holds a settle open past the late book's first read (30 s),
+      // which Base's settle cap now ends first; the cap has its own suite
+      // (scripts/test-settle-deadlines.js).
+      SETTLE_DEADLINES: "off",
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", CIRCLE_FACILITATOR_API_KEY: "",
       MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "", POSTHOG_API_KEY: "",
       REDIS_URL: "", STATE_DATABASE_URL: "", TARGET_URL: "",
