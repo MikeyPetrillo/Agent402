@@ -14,9 +14,10 @@
 // throws at the read site, and there is no number read: a price, a cap or a
 // spend limit is never read through here.
 //
-// No provider is registered by this module. A provider is an object with a
-// synchronous `getBoolean(name)`; registering one is a separate change with
-// its own account setup.
+// A provider is an object with a synchronous `getBoolean(name)`. This module
+// registers none itself: src/feature-flags-railway.js registers Railway's
+// feature flags at boot when FEATURE_FLAGS_RAILWAY_TOKEN is set, and with it
+// unset no provider exists and every read is the variable, then the default.
 
 /** Every runtime switch, with its default and a purpose line. */
 export const RUNTIME_FLAGS = Object.freeze({

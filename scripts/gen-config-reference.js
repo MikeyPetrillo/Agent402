@@ -43,6 +43,21 @@ export function defaultOf(name, texts) {
   return null;
 }
 
+// A default that reads as a cost is never printed. A name is cost-shaped when
+// it names a margin or markup, or a money figure (USD, BPS) of a gas, fee,
+// query, relayer, exchange or vendor cost; a low-water alarm threshold is not
+// a cost. Such a variable is listed in docs/configuration.json
+// `withheldDefaults` and its row reads WITHHELD_DEFAULT_TEXT
+// (scripts/test-config-reference.js fails a printed one).
+export const WITHHELD_DEFAULT_TEXT = "not listed";
+const COST_WORDS = new Set(["GAS", "COST", "COSTS", "FEE", "FEES", "QUERY", "RELAYER", "ETH", "RATE", "RATES", "VENDOR"]);
+export function isCostShapedName(name) {
+  const t = String(name).split("_");
+  if (t.includes("MARGIN") || t.includes("MARKUP")) return true;
+  if (!(t.includes("USD") || t.includes("BPS")) || t.includes("LOW")) return false;
+  return t.some((w) => COST_WORDS.has(w));
+}
+
 const GROUP_MIN = 3;
 const esc = (s) => String(s).replace(/[\\|]/g, "\\$&");
 
@@ -72,7 +87,8 @@ export function buildReference({ root = ROOT, config = JSON.parse(readFileSync(C
   out.push("Every value is set on the host, never in the repository. \"Default\" is the plain literal the code falls back to at");
   out.push("its first read site when there is one, else the value `docs/configuration.json` `defaults` gives for a fallback that is a");
   out.push("named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper");
-  out.push("may still clamp it, and the read site is the reference.", "");
+  out.push("may still clamp it, and the read site is the reference. A default marked \"" + WITHHELD_DEFAULT_TEXT + "\" is kept off this page; the read site");
+  out.push("holds it.", "");
   out.push(`${names.length} variables in ${order.length} groups.`, "");
   out.push("## Contents", "");
   out.push(order.map((g) => `[${g}](#${g.toLowerCase()})`).join(" · "), "");
@@ -81,9 +97,10 @@ export function buildReference({ root = ROOT, config = JSON.parse(readFileSync(C
     out.push("| Variable | Purpose | Default | Read in |", "| --- | --- | --- | --- |");
     for (const n of groups.get(g)) {
       const files = [...scan.vars.get(n).files].sort();
-      const d = defaultOf(n, files.map((f) => texts.get(f)).filter(Boolean)) ?? config.defaults?.[n] ?? null;
+      const withheld = Object.hasOwn(config.withheldDefaults || {}, n);
+      const d = withheld ? null : defaultOf(n, files.map((f) => texts.get(f)).filter(Boolean)) ?? config.defaults?.[n] ?? null;
       const where = files.length > 3 ? `${files.slice(0, 3).map((f) => `\`${f}\``).join(", ")} and ${files.length - 3} more` : files.map((f) => `\`${f}\``).join(", ");
-      out.push(`| \`${n}\` | ${esc(config.vars[n] || "(no purpose line)")} | ${d === null ? "" : `\`${esc(d)}\``} | ${where} |`);
+      out.push(`| \`${n}\` | ${esc(config.vars[n] || "(no purpose line)")} | ${withheld ? WITHHELD_DEFAULT_TEXT : d === null ? "" : `\`${esc(d)}\``} | ${where} |`);
     }
     out.push("");
   }

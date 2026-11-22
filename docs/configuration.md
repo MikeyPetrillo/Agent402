@@ -10,9 +10,10 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one, else the value `docs/configuration.json` `defaults` gives for a fallback that is a
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
-may still clamp it, and the read site is the reference.
+may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
+holds it.
 
-1110 variables in 113 groups.
+1111 variables in 113 groups.
 
 ## Contents
 
@@ -107,9 +108,9 @@ may still clamp it, and the read site is the reference.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `ATTEST_ETH_USD` | Attest ETH, in USD. | `5000` | `src/tools/attest-kit.js` |
-| `ATTEST_MAX_GAS_USD` | Attest maximum gas, in USD. | `0.035` | `src/tools/attest-kit.js` |
-| `ATTEST_SCHEMA_MAX_GAS_USD` | Attest schema maximum gas, in USD. | `0.05` | `src/tools/attest-kit.js` |
+| `ATTEST_ETH_USD` | Attest ETH, in USD. | not listed | `src/tools/attest-kit.js` |
+| `ATTEST_MAX_GAS_USD` | Attest maximum gas, in USD. | not listed | `src/tools/attest-kit.js` |
+| `ATTEST_SCHEMA_MAX_GAS_USD` | Attest schema maximum gas, in USD. | not listed | `src/tools/attest-kit.js` |
 
 ## AVM
 
@@ -309,7 +310,7 @@ may still clamp it, and the read site is the reference.
 | `DATABENTO_BACKGROUND_DAILY_MAX_CALLS` | Databento background daily maximum calls. |  | `src/tools/databento.js` |
 | `DATABENTO_COST_TIMEOUT_MS` | Databento cost timeout, in milliseconds. | `5000` | `src/tools/databento.js` |
 | `DATABENTO_DATA_TIMEOUT_MS` | Databento data timeout, in milliseconds. | `12000` | `src/tools/databento.js` |
-| `DATABENTO_MAX_QUERY_USD` | Databento maximum query, in USD. | `0.0002` | `src/tools/databento.js` |
+| `DATABENTO_MAX_QUERY_USD` | Databento maximum query, in USD. | not listed | `src/tools/databento.js` |
 | `DATABENTO_PRIMARY_SKIP_MS` | Databento primary skip, in milliseconds. |  | `src/tools/databento.js` |
 | `DATABENTO_QUOTE_STALE_MAX_MS` | Databento quote stale maximum, in milliseconds. | `24` | `src/tools/databento.js` |
 | `DATABENTO_RANGE_MAX_AGE_MS` | Databento range maximum age, in milliseconds. | `60` | `src/tools/databento.js` |
@@ -1041,7 +1042,7 @@ may still clamp it, and the read site is the reference.
 | `ROBINHOOD_RELAYER_KEY` | Robinhood relayer key (a credential, set on the host). |  | `src/changelog.js`, `src/payments.js` |
 | `ROBINHOOD_RELAYER_LOCK_WAIT_MS` | Robinhood relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_RELAYER_MAX_GWEI` | Robinhood relayer maximum gwei. |  | `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood relayer settles (0: any). | `0.004` | `src/changelog.js`, `src/network-floors.js` |
+| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood relayer settles (0: any). | not listed | `src/changelog.js`, `src/network-floors.js` |
 | `ROBINHOOD_RELAYER_RECEIPT_MS` | Robinhood relayer receipt, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` | Robinhood skip dry below settlements. |  | `src/robinhood-order.js` |
 | `ROBINHOOD_USDG_ADDRESS` | Robinhood usdg address. | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` | `src/payments.js` |
@@ -1579,6 +1580,7 @@ may still clamp it, and the read site is the reference.
 | `EDGAR_FETCH_TIMEOUT_MS` | Edgar fetch timeout, in milliseconds. | `12000` | `src/tools/edgar-13f-datasets.js`, `src/tools/edgar-kit.js` |
 | `EDGAR_USER_AGENT` | Edgar user agent. |  | `src/tools/edgar-kit.js` |
 | `ERC8004_AGENT_ID` | ERC-8004 agent id this server publishes in its agent card. |  | `src/tools/a2a-card.js` |
+| `FEATURE_FLAGS_RAILWAY_TOKEN` | A Railway project token (a credential, set on the host); set, runtime switches read Railway feature flags first (src/feature-flags-railway.js). |  | `src/feature-flags-railway.js` |
 | `FLIGHT_SELLERS_JSON` | Flight sellers JSON. |  | `src/server.js` |
 | `FOLLOWUPS` | off stops the follow-up loop. |  | `src/server.js` |
 | `FRED_API_KEY` | Fred API key (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/macro-kit.js` |

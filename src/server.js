@@ -816,6 +816,7 @@ import { AUDIT_TOOLS, setAuditReportContext } from "./tools/audit-report-kit.js"
 import { keepReceiptOnFinalOk, startReceiptStoreSweep, receiptStoreCounts } from "./receipt-store.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
 import { PRICE_WEBHOOK_TOOLS, setPriceWebhookCatalog } from "./tools/price-webhook-kit.js";
+import { startRailwayFlags } from "./feature-flags-railway.js";
 import { priceWebhooks, startPriceWebhooks, signingKeyOf as priceWebhookSigningKey, UNSUBSCRIBE_PATH as PRICE_WEBHOOK_UNSUBSCRIBE_PATH } from "./price-webhooks.js";
 import { CHAIN_RPC_TOOLS } from "./tools/chain-rpc-kit.js";
 import { chainNamespaceMiddleware, chainNamespaceMap, chainVerbAliasesByRoute } from "./chain-namespace.js";
@@ -14771,6 +14772,10 @@ if (!x402Crawl.on) {
     })().catch((e) => console.warn(`[index] boot warm failed (the first reader builds it): ${String(e?.message || e).slice(0, 120)}`));
   } });
 }
+// Runtime switches (src/feature-flags.js) read Railway's feature flags once
+// FEATURE_FLAGS_RAILWAY_TOKEN is set (src/feature-flags-railway.js); until the
+// first sync, and with it unset, they read the environment and their defaults.
+void startRailwayFlags();
 // Price webhooks (src/price-webhooks.js): with a signing key set, record the
 // catalog's list prices (queueing one delivery per subscription that watches a
 // changed price) and start the delivery turn. Leased, so one replica does each.

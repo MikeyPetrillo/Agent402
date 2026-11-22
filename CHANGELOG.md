@@ -657,8 +657,8 @@ Payments:
   it keeps that floor, and `/api/pricing` `payment.minPriceUsdByNetwork`,
   llms.txt and the guides state the floor only when it is set.
 - The optional own settler on Robinhood Chain (`ROBINHOOD_RELAYER_KEY`)
-  settles a sale only when its price is at least
-  `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default 0.004). Under it, a refusal from
+  settles a sale only at or above a minimum price; set
+  `ROBINHOOD_RELAYER_MIN_PRICE_USD` to change it. Under it, a refusal from
   the listed facilitators is answered as a 402 and the x402 payment is not
   settled.
 
