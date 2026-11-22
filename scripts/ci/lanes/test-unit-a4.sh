@@ -72,6 +72,8 @@ t node scripts/test-settle-preference.js
 t node scripts/test-svm-facilitator-split.js
 # Tool resolver (/api/find ranking, guards)
 t node scripts/test-find.js
+# /api/find synonym table: every rule names a catalog word and ranks its tool (offline)
+t node scripts/test-find-synonyms.js
 # Reader searches find the article extractor through its aliases, on the real catalog (booted free-mode server)
 t node scripts/test-find-reader-aliases.js
 # Discovery gate: every compute under a deadline, slot released, self-healing in-flight count, perf fields (booted, offline)
