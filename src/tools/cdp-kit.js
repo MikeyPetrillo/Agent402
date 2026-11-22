@@ -514,7 +514,10 @@ export const SQL_SEND_LIMIT_BYTES = 500_000;
 // spent the recovery answers the uncharged narrow-query 422. The health
 // probe (queryServiceHealth) is not counted: it runs at most once per table
 // every HEALTH_TTL_MS (HEALTH_UNKNOWN_TTL_MS for an unknown verdict) across
-// every call, under its own memo and timeout.
+// every call, under its own memo and timeout. One path widens it: a plain
+// row select whose whole range ran past the service's window is read one day
+// at a time (dayWindowAnswer), one query a day for at most
+// SQL_WINDOW_MAX_DAYS plus one days, each still taking a send slot.
 export const SQL_QUERY_BUDGET = 3;
 // The budget also carries how the call's sends are paced: `own` (this
 // server's own read) and `callerGone` (the buyer's connection closed before
