@@ -38,6 +38,23 @@ const CDP_HOST = "api.cdp.coinbase.com";
 
 const keyId = () => (process.env.CDP_API_KEY_ID || "").trim();
 const keySecret = () => (process.env.CDP_API_KEY_SECRET || "").trim();
+// The SQL API (query run and schema) may sign with a key pair of its own,
+// CDP_SQL_API_KEY_ID + CDP_SQL_API_KEY_SECRET, so its request budget is the
+// SQL key's and settlement (src/cdp-facilitator.js, the main pair only) never
+// shares it. Both halves must be set: with either missing the SQL reads sign
+// with the main pair whole, never one half of each. Read at call time; a key
+// is never logged (the id rides the token's kid and sub, and redactSecrets
+// scrubs both variables by name from any upstream text).
+const sqlKeyId = () => (process.env.CDP_SQL_API_KEY_ID || "").trim();
+const sqlKeySecret = () => (process.env.CDP_SQL_API_KEY_SECRET || "").trim();
+const SQL_API_PATH_RE = /^\/platform\/v2\/data\/query\/(run|schema)$/;
+/** The key pair a CDP call to `path` signs with: { apiKeyId, apiKeySecret,
+ *  source } with source "sql" (the SQL API's own pair) or "main". */
+export function cdpCredentialsFor(path) {
+  const pathname = String(path ?? "").split("?")[0];
+  if (SQL_API_PATH_RE.test(pathname) && sqlKeyId() && sqlKeySecret()) return { apiKeyId: sqlKeyId(), apiKeySecret: sqlKeySecret(), source: "sql" };
+  return { apiKeyId: keyId(), apiKeySecret: keySecret(), source: "main" };
+}
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -686,7 +703,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
   // A query the handler rewrote (the row-size measure and filter) is ours:
   // its failure is never logged as the buyer's query.
   const logFailed = (status, tookMs) => { if (!rewritten) logFailedBuyerQuery(status, tookMs, body?.sql); };
-  if (!keyId() || !keySecret()) {
+  if (!cdpCredentialsFor(path).apiKeyId || !cdpCredentialsFor(path).apiKeySecret) {
     throw bad("This tool is temporarily unavailable: the operator has not configured Coinbase Developer Platform credentials (CDP_API_KEY_ID / CDP_API_KEY_SECRET).", 503);
   }
   // Ride out a transient CDP-side blip (a 5xx from their indexer, a timeout)
@@ -734,7 +751,9 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       if (queries.left() <= 0) throw queryBudgetSpentError(queries);
       queries.sent++;
     }
-    const jwt = await mintCdpJwt({ method, path });
+    // Read per attempt, so a pair set or cleared between attempts is honored.
+    const { apiKeyId, apiKeySecret } = cdpCredentialsFor(path);
+    const jwt = await mintCdpJwt({ method, path, apiKeyId, apiKeySecret });
     const started = Date.now();
     let res;
     try {
@@ -841,7 +860,10 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
 
 /** True when CDP credentials are configured (cdpSql/cdpFetch can run). Cheap
  *  pre-check so hot paths can fall back without triggering cdpFetch's 503 throw. */
-export function cdpConfigured() { return !!(keyId() && keySecret()); }
+export function cdpConfigured() { const c = cdpCredentialsFor(SQL_QUERY_PATH); return !!(c.apiKeyId && c.apiKeySecret); }
+/** How often, and how far apart (times the attempt), one of this server's own reads is tried when buyers' queries hold the send slots. */
+const OWN_SQL_ATTEMPTS = 3;
+const OWN_SQL_RETRY_WAIT_MS = 2_000;
 
 /** Run a read-only ClickHouse SELECT over Coinbase's indexed, decoded chain data
  *  (base.events, base.transactions, …) and return the result rows as an array.
@@ -849,12 +871,24 @@ export function cdpConfigured() { return !!(keyId() && keySecret()); }
  *  and surfaces CDP's own 4xx on a bad query — callers in latency-sensitive paths
  *  should cdpConfigured()-gate and/or catch to fall back. `cacheSeconds` (≤900)
  *  sets CDP's server-side result cache. */
-export async function cdpSql(sql, { cacheSeconds } = {}) {
+export async function cdpSql(sql, { cacheSeconds, retryWaitMs = OWN_SQL_RETRY_WAIT_MS } = {}) {
   const body = { sql: String(sql) };
   if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
     body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
   }
-  const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true });
+  // One of this server's own reads (the revenue page, src/revenue-live.js):
+  // like ownSqlQuery it takes a send slot only when no other query is
+  // waiting for one, so it never moves a buyer's query later. Refused that
+  // way it is tried again a little later, a bounded number of times; the
+  // caller reads the last refusal as any other failure.
+  let res;
+  for (let attempt = 1; ; attempt++) {
+    try { res = await cdpFetch("POST", SQL_QUERY_PATH, body, { idempotent: true, queries: newQueryBudget({ own: true }) }); break; }
+    catch (e) {
+      if (!(e?.statusCode === 429 && e.retryAfter && attempt < OWN_SQL_ATTEMPTS && retryWaitMs > 0)) throw e;
+      await new Promise((r) => setTimeout(r, retryWaitMs * attempt));
+    }
+  }
   const rows = res?.result ?? res?.rows ?? res?.data ?? res;
   return Array.isArray(rows) ? rows : [];
 }
@@ -1245,7 +1279,7 @@ export const CDP_TOOLS = [
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base", amount: "10" },
       inputSchema: {
         properties: {
-          address: { type: "string", description: "Destination wallet address (EVM 0x… or Solana base58, matching the network)" },
+          address: { type: "string", maxLength: 64, description: "Destination wallet address (EVM 0x… or Solana base58, matching the network)" },
           network: { type: "string", description: "base (default) | ethereum | polygon | arbitrum | optimism | solana" },
           asset: { type: "string", description: "Ticker to purchase (default USDC)" },
           amount: { type: "string", description: "Crypto amount the wallet should receive (default 10)" },
@@ -1323,7 +1357,7 @@ export const CDP_TOOLS = [
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated. A result the query service cannot send is served in part and says so: rows over its ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB per-row limit are omitted and counted (recovered "row-size", rowsOmitted, omittedReason, rowLimitBytes, maxRowBytes, note), and a result too large as a whole is re-run with LIMIT ${SQL_RECOVER_ROWS} (recovered "result-size", rowBytes, a note with the LIMIT that fits).` },
+          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated. A result the query service cannot send is served in part and says so: rows over its ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB per-row limit are omitted and counted (recovered "row-size", rowsOmitted, omittedReason, rowLimitBytes, maxRowBytes, note), and a result too large as a whole is re-run with LIMIT ${SQL_RECOVER_ROWS} (recovered "result-size", rowBytes, a note with the LIMIT that fits).` },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],

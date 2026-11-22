@@ -60,7 +60,7 @@ const TOP_TOOLS_SHOW = 10; // rows in the public topTools ranking (allTools' LIM
 
 // The router-execute tiers: the only catalog slugs Agent402 earns a margin
 // on (every other paid call is buyer wallet straight to seller wallet).
-const ROUTER_SLUGS = new Set(["route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro"]);
+const ROUTER_SLUGS = new Set(["route-execute", "route-execute-plus", "route-execute-mid", "route-execute-max", "route-execute-pro"]);
 
 const today = () => new Date().toISOString().slice(0, 10);
 

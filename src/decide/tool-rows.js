@@ -150,7 +150,8 @@ export function localToolRow(def, { baseUrl = "https://agent402.tools", networks
     inputSchemaState: schema ? "declared" : "absent",
     example,
     hasExample: !!example,
-    hasOutputSchema: !!def.discovery?.output?.example,
+    // An object (or array) sample only: a string sample names raw bytes, not a shape.
+    hasOutputSchema: !!def.discovery?.output?.example && typeof def.discovery.output.example === "object",
     // Field NAMES of the answer (never its values), so a plan can see that an
     // ENS lookup produces an "address" a later step consumes.
     outputFields: outputFieldsOf(def.discovery?.output?.example),

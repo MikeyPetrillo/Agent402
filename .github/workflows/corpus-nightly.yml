@@ -102,13 +102,22 @@ jobs:
             server.log
           if-no-files-found: ignore
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Page (open / update / close the issue)
         if: always()
         env:
           RESULT: ${{ steps.corpus.outputs.exit }}
         run: |
-          TITLE="Correctness corpus FAILING"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: corpus"
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "$RESULT" != "0" ]; then
             FAILS=$(grep -E '^FAIL ' corpus.log | head -30 || true)
@@ -129,26 +138,13 @@ jobs:
           \`\`\`
           $UPSTREAM
           \`\`\`"; fi
-            BODY="The nightly correctness corpus found tools answering wrong on a second input. Run: $RUN
-
-          Only OUR code failing reaches here: a hollow 200, a silent fallback, our own 4xx on a valid input, or a 500. An outside host's 5xx, timeout or 429 is reported as upstream with the host named and never opens this issue.
-
-          \`\`\`
-          $FAILS
-          \`\`\`$UPSTREAM_SECTION
-
-          Reproduce locally: \`node scripts/test-corpus.js --only <slug>\` (boots its own FREE_MODE server). Decide first whether the tool or the expectation is wrong (scripts/corpus/README.md)."
             if [ -n "$OPEN" ]; then
               # The comment carries the cases too: a different case failing on
               # the second night is a second defect, not the first one persisting.
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Run: $RUN
-
-          \`\`\`
-          $FAILS
-          \`\`\`$UPSTREAM_SECTION"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the corpus passed at $(date -u +%FT%TZ). Run: $RUN"
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

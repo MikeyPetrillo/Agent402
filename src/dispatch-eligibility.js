@@ -22,7 +22,7 @@
 //   listed -> crawl ready -> payment networks known -> settlement observed
 //   -> router dispatch eligible.
 // The output is a boolean plus a reason string, never a bare boolean.
-import { baseUnprovenAllowanceUsd, baseUnprovenSellerDailyUsd, baseUnprovenLaneDailyUsd } from "./base-unproven.js";
+import { baseUnprovenAllowanceUsd, baseUnprovenSellerDailyUsd, baseUnprovenLaneDailyUsd, evmUnprovenAllowanceByChain } from "./base-unproven.js";
 import { meetsRouterGate } from "./settlement-proof.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail } from "./evm-usdc-domain.js";
 import { routeExcludedCategory } from "./route-category.js";
@@ -77,6 +77,24 @@ export const DISPATCH_REASONS = Object.freeze({
 export function unprovenLaneTerms({ sellerDailyUsd = baseUnprovenSellerDailyUsd(), laneDailyUsd = baseUnprovenLaneDailyUsd() } = {}) {
   const caps = [Number(sellerDailyUsd) > 0 ? "its daily cap per seller" : "", Number(laneDailyUsd) > 0 ? "the lane's daily total" : ""].filter(Boolean);
   return `on Base the router may still pay the seller, but only after every proven seller for the task, only at the wallet its own live 402 names, never above that ceiling, ${caps.length ? `never past ${caps.join(" or ")}, ` : ""}and flagged unproven on the buyer's receipt`;
+}
+/**
+ * The unproven lane's verdict for one resolver candidate, read at the address
+ * its live 402 names on the chain being paid: the same labelled verdict the
+ * index publishes, with the origin's evidence, so an origin whose withheld
+ * history sits at a shared wallet (which the label keeps out of the lane) is
+ * not paid in it. Returns that chain's verdict; `unprovenTier === true` admits.
+ */
+export function unprovenLaneAtLivePayTo({ chain, row, livePayTo, minSettled, minPayers } = {}) {
+  const caip2 = EVM_BUYER_CHAINS[chain]?.caip2;
+  if (!caip2 || !row) return null;
+  const domain = row.evmDomainByNetwork?.[caip2] || null;
+  const v = dispatchEligibility({
+    routable: true, networks: row.networks, settled: row.settled, payers: row.payers, priceUsd: row.priceUsd, urlTemplate: !!row.urlTemplate,
+    spendChains: [chain], minSettled, minPayers, routeText: row, evidence: row.binding || undefined,
+    ...(chain === "base" ? { usdcDomain: domain, livePayTo } : { usdcDomainByChain: { [chain]: domain }, livePayToByChain: { [chain]: livePayTo } }),
+  });
+  return v.chains?.[chain] || { eligible: false, reason: v.reason };
 }
 const REASON_PRECEDENCE = ["category_excluded", "crawl_failed", "network_unknown", "no_supported_route", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "payment_method_unsupported", "delivery_failing", "settlement_self_funded", "settlement_required"];
 // `detail` values a settlement_required verdict can carry beyond the gate's
@@ -239,7 +257,7 @@ export function spendChainsOf(networks = []) {
  *                                     category_excluded on every chain, whatever else is true of it. Omit/null
  *                                     = a seller-level verdict, which no single route's category decides.
  */
-export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, livePayToByChain = null, usdcDomainByChain = null, deliveryFailing = null, unprovenMaxUsd = baseUnprovenAllowanceUsd(), routeText = null } = {}) {
+export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, livePayToByChain = null, usdcDomainByChain = null, deliveryFailing = null, unprovenMaxUsd = baseUnprovenAllowanceUsd(), unprovenMaxUsdByChain = evmUnprovenAllowanceByChain(), routeText = null } = {}) {
   if (local) return { eligible: true, reason: "local_catalog", chains: {} };
   const livePayToBase = livePayTo, usdcDomainBase = usdcDomain;
   const byChain = {};
@@ -286,7 +304,8 @@ export function dispatchEligibility({ routable, networks = [], settled = 0, paye
       // THE EVM FAMILY (Base and every chain src/evm-buyer-chains.js lists):
       // the same domain refusal and the same settlement gate, read at the
       // wallet that chain's 402 names. Off Base the observation and the
-      // address come from the per-chain maps; the unproven tier stays Base's.
+      // address come from the per-chain maps, and the unproven tier is on only
+      // for a chain the operator lists (unprovenMaxUsdByChain).
       const livePayTo = c === "base" ? livePayToBase : (livePayToByChain && typeof livePayToByChain === "object" ? livePayToByChain[c] ?? null : null);
       const usdcDomain = c === "base" ? usdcDomainBase : (usdcDomainByChain && typeof usdcDomainByChain === "object" ? usdcDomainByChain[c] ?? null : null);
       const caip2 = EVM_BUYER_CHAINS[c].caip2;
@@ -334,9 +353,10 @@ export function dispatchEligibility({ routable, networks = [], settled = 0, paye
       // A detail naming a wallet problem (shared, mismatched, unverified)
       // is something else wrong, and so is a self-funded history.
       const b = byChain[c];
-      if (c === "base" && b.reason === "settlement_required" && !Object.hasOwn(DISPATCH_DETAILS, b.detail || "") && unprovenMaxUsd > 0 && Number(priceUsd) > 0 && Number(priceUsd) <= unprovenMaxUsd) {
+      const ceiling = c === "base" ? Number(unprovenMaxUsd) : Number(unprovenMaxUsdByChain && typeof unprovenMaxUsdByChain === "object" && Object.hasOwn(unprovenMaxUsdByChain, c) ? unprovenMaxUsdByChain[c] : 0);
+      if (b.reason === "settlement_required" && !Object.hasOwn(DISPATCH_DETAILS, b.detail || "") && ceiling > 0 && Number(priceUsd) > 0 && Number(priceUsd) <= ceiling) {
         b.unprovenTier = true;
-        b.unprovenMaxUsd = unprovenMaxUsd;
+        b.unprovenMaxUsd = ceiling;
       }
     } else {
       // solana / algorand / tempo: the router TRIES these; proven-ness is a
@@ -368,7 +388,7 @@ export function dispatchLegend({ spendChains = ["base"], settlementNetting = sel
     // here: off, the settlement evidence is each wallet's gross count with
     // no netting and no settlement_self_funded verdict.
     settlementNetting: settlementNetting ? "on" : "off",
-    corrections: "every field here is a reading of public data (the seller's own manifest and 402 challenges, and on-chain settlements) taken at the scan time shown, so it can be stale or, where wallets fold to the wrong operator, wrong. A seller who believes a row misreads them can write to mike@agent402.tools and we will re-scan and correct or withdraw it. Listing is free and unreviewed, and so is delisting: an origin that stops serving x402 drops out on its own.",
+    corrections: "every field here is a reading of public data (the seller's own manifest and 402 challenges, and on-chain settlements) taken at the scan time shown, so it can be stale or, where wallets fold to the wrong operator, wrong. A seller who believes a row misreads them can write to help@agent402.tools and we will re-scan and correct or withdraw it. Listing is free and unreviewed, and so is delisting: an origin that stops serving x402 drops out on its own.",
     routerDispatchByChain: `one entry per chain this host holds a spending wallet for (${chains.join(", ")}) that the seller also advertises, each with the router's verdict there. A chain missing from this map is one this host cannot pay on at all, whatever the seller's networks list says; it is never an eligibility verdict about that chain. A seller advertising only chains outside that set reads routerDispatchReason no_supported_route.`,
     routable: "the last crawl of this origin succeeded (manifest, OpenAPI or a live 402 was read). It is crawl readiness, never a promise that the router will pay the seller.",
     health: "a score from the last crawl outcomes of this origin; 1 = every recent crawl succeeded.",
@@ -378,6 +398,9 @@ export function dispatchLegend({ spendChains = ["base"], settlementNetting = sel
     routerDispatchEligible: "true when this host's Smart Order Router will buy from the seller right now as a PROVEN seller on at least one chain it holds a spending wallet for. A row that is false here can still be paid through the Base unproven tier, after every proven candidate: such a row carries executeViaCallableNow: true and executeViaLane: \"unproven\".",
     routerDispatchReason: DISPATCH_REASONS,
     "routerDispatchByChain.base.unprovenTier": `present and true on a Base verdict of settlement_required when the floor is the only thing in the way and this route's price is within unprovenMaxUsd: ${unprovenLaneTerms()}. Absent when the ceiling is switched off.`,
+    // The same tier on each other EVM chain this host lists for it; absent
+    // while none is listed.
+    ...(Object.keys(evmUnprovenAllowanceByChain()).length ? { "routerDispatchByChain.<chain>.unprovenTier": `the same tier on each other EVM chain this host lists for it (${Object.keys(evmUnprovenAllowanceByChain()).join(", ")}): present and true on that chain's verdict of settlement_required when the floor is the only thing in the way and this route's price is within the verdict's unprovenMaxUsd. A buy there counts toward the same daily caps as a Base one, and the row carries executeViaLane: "unproven".` } : {}),
     "routerDispatchReason.settlement_self_funded": "read only while settlementNetting is on (off, every wallet's settlement count is its gross count and this verdict is never given). Measured from the chain by this host: the wallet's own outbound USDC transfers are read beside its inbound payments, in chain order. USDC the wallet sent a payer is set against that payer's later payments to it, first in first out, until it is spent: that much of those payments is self-funded, and a payment at least half covered this way does not count as a settlement. Money a payer sends the wallet that is too large to count as a call pays that back first, and a later transfer returning it covers nothing. A transfer the seller makes to a payer that fits inside that payer's own earlier payments not yet refunded is a refund: the refunded payments, newest first, are not counted at all, neither as settlements nor as self-funded, and only what is left over covers later payments, up to its own amount. Third-party counts of the same wallet include the same payments, so they are reduced by the payments found self-funded and by the payers that paid only with the wallet's own money, over the days those counts cover; where more than half of the dollars a wallet received were self-funded, they are not counted at all.",
     evmDomainByNetwork: "the EIP-712 domain (asset + extra.name) each of the seller's EVM accepts advertised on its 402; the router label refuses a Base accept whose name is not the token's own (usdc_domain_mismatch) because no stock x402 signature under it can verify.",
     routerDispatchDetail: { ...DISPATCH_DETAILS, _note: "settlement_required may carry one of these in routerDispatchByChain.base.detail beside the gate's own sentence; settlement history is kept per wallet and counts for an origin only when the wallet its own 402 asks to be paid at clears the floor on that wallet's own history, which the router checks live before it signs and again on the payment it signs; a wallet this host lists as a settlement contract shared by many sellers credits its own history to none of them" },

@@ -243,7 +243,7 @@ export const WEB_TOOLS = [
       input: { url: "https://example.com" },
       inputSchema: {
         properties: {
-          url: { type: "string", description: "The URL to look up in the Wayback Machine" },
+          url: { type: "string", maxLength: 2048, description: "The URL to look up in the Wayback Machine" },
           timestamp: { type: "string", description: "Optional target time, 4-14 digits (YYYY, YYYYMM, YYYYMMDD, … up to YYYYMMDDhhmmss) - returns the snapshot closest to it" },
         },
         required: ["url"],
@@ -359,7 +359,7 @@ export const WEB_TOOLS = [
       input: { url: "https://agent402.tools/changelog.xml", limit: 5 },
       inputSchema: {
         properties: {
-          url: { type: "string", description: "Feed URL (RSS 2.0, Atom, or RSS 1.0/RDF)" },
+          url: { type: "string", maxLength: 2048, description: "Feed URL (RSS 2.0, Atom, or RSS 1.0/RDF)" },
           limit: { type: "number", description: "Max items to return, 1-50 (default 20)" },
         },
         required: ["url"],
@@ -459,7 +459,7 @@ export const WEB_TOOLS = [
       input: { url: "https://www.agent402.tools/" },
       inputSchema: {
         properties: {
-          url: { type: "string", description: "The (short) URL whose redirect chain to follow" },
+          url: { type: "string", maxLength: 2048, description: "The (short) URL whose redirect chain to follow" },
         },
         required: ["url"],
       },

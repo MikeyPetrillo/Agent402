@@ -147,8 +147,8 @@ export const DATA_TOOLS = [
       input: { from: "USD", to: "EUR", amount: 100 },
       inputSchema: {
         properties: {
-          from: { type: "string", description: "3-letter currency code, e.g. USD" },
-          to: { type: "string", description: "3-letter currency code, e.g. EUR" },
+          from: { type: "string", maxLength: 3, description: "3-letter currency code, e.g. USD" },
+          to: { type: "string", maxLength: 3, description: "3-letter currency code, e.g. EUR" },
           amount: { type: "number", description: "amount to convert (default 1)" },
         },
         required: ["from", "to"],
@@ -299,8 +299,8 @@ export const DATA_TOOLS = [
       input: { name: "Japan" },
       inputSchema: {
         properties: {
-          name: { type: "string", description: "country name (common or official), e.g. Japan" },
-          code: { type: "string", description: "alternative: ISO 3166-1 alpha-2 or alpha-3 code, e.g. JP or JPN" },
+          name: { type: "string", maxLength: 80, description: "country name (common or official), e.g. Japan" },
+          code: { type: "string", maxLength: 3, description: "alternative: ISO 3166-1 alpha-2 or alpha-3 code, e.g. JP or JPN" },
         },
       },
       output: {

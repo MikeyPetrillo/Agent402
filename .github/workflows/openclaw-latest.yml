@@ -76,6 +76,26 @@ jobs:
       contents: read
       issues: write
     steps:
+      # Only the two files the next step runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
+        if: always()
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/adopt-issue-titles.js
+            workers/status-probe/src/previous-issue-titles.js
+
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Page if the newest OpenClaw rejects the plugin
         env:
           GH_TOKEN: ${{ github.token }}
@@ -83,19 +103,14 @@ jobs:
           PINNED: ${{ needs.latest.outputs.pinned }}
           LATEST: ${{ needs.latest.outputs.latest }}
         run: |
-          TITLE="agent402-openclaw FAILS on the newest OpenClaw"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: provider-package-latest"
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$RESULT" != "success" ]; then
-            BODY="openclaw/test-real-install.js failed against openclaw@${LATEST:-unknown} (the merge lane is pinned to ${PINNED:-unknown}, so this did NOT block any merge).
-
-          Users installing the plugin on the newest host are affected; CI is not. Fix the plugin, republish, then raise the pin in openclaw/test-real-install.js so the merge lane proves the new host too.
-
-          Re-run: \`gh workflow run openclaw-latest.yml --ref main\`"
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ) against openclaw@${LATEST:-unknown}."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Passing at $(date -u +%FT%TZ) against openclaw@${LATEST:-unknown}."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

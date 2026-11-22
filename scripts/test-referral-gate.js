@@ -336,7 +336,7 @@ const ENV = {
   REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT,
   // The receipt of a settle success is read once in the suite (no waiting on a stub).
   REFERRAL_RECEIPT_WAIT_MS: "0",
-  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,exbig,mb,late,picky", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
+  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,exbig,mb,late,picky,units", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
   // Synthetic figures, chosen to be no real rate.
   REFERRAL_COMMISSION_BPS: "default:1234,busy:4321", REFERRAL_FEE_BPS: "0",
   REFERRAL_DEADLINE_MS: "1000", REFERRAL_SETTLE_RESERVE_MS: "1000", REFERRAL_SETTLE_MS: "2000", REFERRAL_VERIFY_MS: "1000",
@@ -610,6 +610,8 @@ const TOOLS = {
   // Tools with a published example: an empty request runs it.
   exa: { slug: "exa", name: "Example", category: "test", price: "$0.03", discovery: { input: { text: "the published example", n: 2 } }, handler: async (i) => { seen.exa = { ...i }; return { got: i.text ?? null, n: i.n ?? null }; } },
   chatx: { slug: "chatx", name: "Chat example", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), discovery: { input: { max_tokens: 3, messages: [{ role: "user", content: "example" }], stream: true } }, handler: async (i, req) => { seen.chatx = { max_tokens: i.max_tokens, stream: i.stream, content: i.messages?.[0]?.content, stash: req.__meteredQuoteUsd }; return { id: "cx", choices: [] }; } },
+  // Priced per unit, with a declared smallest request: an empty request runs that, at the list price, not the three-unit example.
+  units: { slug: "units", name: "Units", category: "test", price: "$0.002", quote: (b) => 0.002 * Math.max(1, Array.isArray(b?.items) ? b.items.length : 1), discovery: { input: { items: ["a", "b", "c"] }, startingInput: { items: ["a"] }, inputSchema: { properties: { items: { type: "array", description: "Items" } }, required: ["items"] } }, handler: async (i, req) => { seen.units = { items: i.items, stash: req.__meteredQuoteUsd }; return { count: (i.items || []).length }; } },
   // A tool the catalog marks model-backed: each call has upstream cost.
   mb: { slug: "mb", name: "Model", category: "test", price: "$0.03", modelBacked: true, handler: async (i) => { await wait(Number(i.ms) || 0); if (i.fail) throw Object.assign(new Error("that input cannot be served"), { statusCode: 422 }); return { said: "ok" }; } },
   // Comes back with an answer after the run's ceiling (the deadline less 500 ms) and before the deadline itself.
@@ -773,6 +775,33 @@ try {
     const none = await send(R("echo"), { method: "POST", body: {} });
     ok(none.status === 402 && none.json.accepts[0].amount === "30000", "a tool with no published example answers an empty request as before");
     ok(app1.gate.stats().exampleRuns === 3, `the example runs are counted (${app1.gate.stats().exampleRuns})`);
+    // A per-request priced tool that declares its smallest request: an empty
+    // request is quoted its LIST price and runs that request, not the example.
+    {
+      const uGet = await send(R("units"), { method: "GET" });
+      const uBare = await send(R("units"), { method: "POST", body: {} });
+      const uOwn = await send(R("units"), { method: "POST", body: { items: ["x", "y"] } });
+      const uExample = await send(R("units"), { method: "POST", body: { items: ["a", "b", "c"] } });
+      ok(uGet.status === 402 && uGet.json?.accepts?.[0]?.amount === "2000" && uBare.json?.accepts?.[0]?.amount === "2000", `an empty request to a tool that declares a starting input is quoted its list price (${uGet.json?.accepts?.[0]?.amount}), not its example's`);
+      ok(JSON.stringify(uGet.json?.emptyRequest?.input) === JSON.stringify({ items: ["a"] }) && /list price/.test(uGet.json?.emptyRequest?.note || "") && !/published example/.test(uGet.json?.emptyRequest?.note || ""), `its 402 shows the request an empty call runs and says the price is the list price (${JSON.stringify(uGet.json?.emptyRequest)})`);
+      ok(uOwn.json?.accepts?.[0]?.amount === "4000" && uExample.json?.accepts?.[0]?.amount === "6000" && !("emptyRequest" in (uOwn.json || {})), `the buyer's own request is quoted by its own units (${uOwn.json?.accepts?.[0]?.amount}, ${uExample.json?.accepts?.[0]?.amount})`);
+      const uPaid = await send(R("units"), { method: "POST", body: {}, headers: { "payment-signature": (await signPayment(uGet.json.accepts[0])).header } });
+      ok(uPaid.status === 200 && uPaid.json?.count === 1 && JSON.stringify(seen.units?.items) === JSON.stringify(["a"]) && Math.abs(seen.units.stash - 0.002) < 1e-12 && fac.of("/settle").at(-1).json.paymentRequirements.amount === "2000", `the paid empty call runs the starting input and settles the list price exactly (${uPaid.status} ${JSON.stringify(seen.units)})`);
+      const uPaidOwn = await send(R("units"), { method: "POST", body: { items: ["x", "y"] }, headers: { "payment-signature": (await signPayment(uOwn.json.accepts[0])).header } });
+      ok(uPaidOwn.status === 200 && uPaidOwn.json?.count === 2 && JSON.stringify(seen.units.items) === JSON.stringify(["x", "y"]) && fac.of("/settle").at(-1).json.paymentRequirements.amount === "4000", `the buyer's own request is served as sent and settles its own quote exactly (${uPaidOwn.status})`);
+      const uUnder = await send(R("units"), { method: "POST", body: { items: ["x", "y", "z"] }, headers: { "payment-signature": (await signPayment(uGet.json.accepts[0])).header } });
+      ok(uUnder.status === 402 && uUnder.json?.errorReason === "invalid_exact_evm_payload_authorization_value_mismatch", `an authorization for the list price does not pay a larger request (${uUnder.status} ${uUnder.json?.errorReason})`);
+      // The boot rules: the starting input is what an empty request runs, must be quoted at the list price, and may not name this host.
+      const u = TOOLS.units;
+      ok(gateMod.bareInputOf(u) === u.discovery.startingInput && gateMod.bareInputOf(TOOLS.chatx) === TOOLS.chatx.discovery.input && gateMod.bareInputOf(TOOLS.echo) === null, "a per-request priced tool's bare input is its declared starting input, else the published example, else none");
+      ok(gateMod.bareInputOf({ ...TOOLS.exa, discovery: { ...TOOLS.exa.discovery, startingInput: { text: "x" } } }) === TOOLS.exa.discovery.input, "a flat-priced tool's bare input is always its published example");
+      ok(referralIneligibility(u, { compute: true }) === null, "a starting input quoted at the list price is eligible");
+      const dear = { ...u, slug: "units-dear", discovery: { ...u.discovery, startingInput: { items: ["a", "b"] } } };
+      const broken = { ...u, slug: "units-broken", quote: () => { throw new Error("no"); } };
+      ok(referralIneligibility(dear, { compute: true }) === "its starting input is not quoted at its list price" && referralIneligibility(broken, { compute: true }) === "its starting input is not quoted at its list price", "a starting input that is not quoted at the list price is refused at boot");
+      const homing = { ...u, slug: "units-home", discovery: { ...u.discovery, startingInput: { items: ["https://agent402.tools/x"] } } };
+      ok(/own host/.test(referralIneligibility(homing, { compute: true, ownHosts: ["agent402.tools"] }) || ""), "a starting input that names this server's own host is refused at boot");
+    }
   }
   fac.reset(); sales.length = 0; trusted.length = 0;
 
@@ -2368,6 +2397,89 @@ try {
     ok(fixed.status === 200 && fixed.json?.echo === "sig0" && runs.echo === ran + 3, `after the cool-down a call probes: the signer is accepted, and the same payment settles and returns the kept answer (${fixed.status})`);
     const flowing = await send(R("echo"), { body: { text: "flowing" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
     ok(flowing.status === 200 && app1.gate.stats().ownFaultStreak === 0, "and calls flow again: the streak is cleared by an accepted settle");
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // The hold stands on refusals of our signature, never on who holds the
+    // probe slot. THE ATTACK: after the signer is fixed, a third party takes
+    // the one probe slot with a call that ends at the deadline (no /settle, no
+    // charge) and takes it again each time it frees, so no probe ever brings
+    // a verdict. The hold used to stand for as long as that went on.
+    const acceptSlow = (await send(R("slow"), { method: "GET" })).json?.accepts?.[0];
+    const payAt = async (base, slug, acc, text, account = newAccount(), ip = freshIp()) => send(`${base}/ref/${slug}`, { body: { text }, headers: { "payment-signature": (await signPayment(acc, { account, validBefore: String(Math.floor((Date.now() + skew.ms) / 1000) + 60) })).header, "x-test-ip": ip } });
+    const refuseOurs = () => ({ status: 401, body: { error: "merchant_signature" } });
+    const settleFine = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()) } });
+    // The longest a hold stands after the last refusal: its cool-down, then the time one probe can take.
+    const idleMs = (cfg) => cfg.ownFaultCooldownMs + cfg.verifyMs + cfg.deadlineMs + cfg.settleMs + 5_000;
+    fac.mode.settle = refuseOurs;
+    for (let i = 0; i < 3; i++) await payAt(app1.url, "echo", accept, `hold${i}`);
+    const lastRefusal = Date.now();
+    const started = app1.gate.stats().ownFaultStreak;
+    fac.mode.settle = settleFine; // the signer is fixed: from here every /settle would succeed
+    const settlesAtFix = settles();
+    await wait(1100); // the cool-down ends: one call at a time probes
+    const attacker = newAccount(), attackerIp = freshIp();
+    const slowBefore = runs.slow;
+    const held = [], attackerGot = [];
+    let served = null, servedAt = 0, settlesWhenServed = 0;
+    const giveUp = lastRefusal + idleMs(app1.config) + 6_000;
+    while (!served && Date.now() < giveUp) {
+      const probe = payAt(app1.url, "slow", acceptSlow, "probe", attacker, attackerIp);
+      await wait(150); // the third party's call holds the probe slot
+      const h = await payAt(app1.url, "echo", accept, "honest");
+      if (h.status === 200) { served = h; servedAt = Date.now(); settlesWhenServed = settles() - settlesAtFix; } else held.push(h);
+      attackerGot.push((await probe).status);
+    }
+    ok(started === 3 && held.length >= 3 && held.every((r) => r.status === 503 && r.json?.errorReason === "settlement_unavailable" && Number(r.headers.get("retry-after")) >= 1), `own-fault hold: three refusals of our signature at /settle start it, and while it is on a call beside the probe is answered 503 with Retry-After (${held.length} held: ${[...new Set(held.map((r) => `${r.status} ${r.json?.errorReason}`))].join(", ")})`);
+    ok(attackerGot.length >= 4 && attackerGot.every((x) => x === 504) && runs.slow - slowBefore === attackerGot.length && !sales.some((x) => String(x.payer).toLowerCase() === attacker.address.toLowerCase()), `own-fault hold: CONTROL: every one of the third party's calls took the probe slot, ran to the deadline and was never settled (${attackerGot.length} calls: ${[...new Set(attackerGot)].join(",")}; its tool ran ${runs.slow - slowBefore} times)`);
+    ok(served !== null && settlesWhenServed === 1 && app1.gate.stats().ownFaultStreak === 0, `own-fault hold: with the probe slot re-taken the whole time and no /settle verdict since the fix, the hold still ends and an honest buyer is served (${served ? `200 after ${held.length} held calls` : `never: ${held.length} calls answered 503 over ${Date.now() - lastRefusal} ms`}; /settle calls since the fix ${settlesWhenServed}; streak ${app1.gate.stats().ownFaultStreak})`);
+    // (Read from this side of the wire: the last refusal's answer arrived a few milliseconds after the gate noted it.)
+    ok(served !== null && servedAt - lastRefusal >= idleMs(app1.config) - 250 && servedAt - lastRefusal < idleMs(app1.config) + 3_000, `own-fault hold: it ends the cool-down plus one probe's time after the last refusal, not before (${servedAt - lastRefusal} ms; ${idleMs(app1.config)} ms)`);
+    const pair = await Promise.all([payAt(app1.url, "echo", accept, "pair-a"), payAt(app1.url, "echo", accept, "pair-b")]);
+    ok(pair.every((r) => r.status === 200), `own-fault hold: and calls run side by side again (${pair.map((r) => r.status).join(",")})`);
+    // A fault that is still there starts the hold again after the usual refusals.
+    fac.mode.settle = refuseOurs;
+    const ranBefore = runs.echo, heldBefore = app1.gate.stats().ownFaultHeld;
+    const again = [];
+    for (let i = 0; i < 4; i++) again.push(await payAt(app1.url, "echo", accept, `again${i}`));
+    const wordOn = app1.gate.statusWord();
+    ok(again.every((r) => r.status === 503 && r.json?.errorReason === "settlement_unavailable") && runs.echo === ranBefore + 3 && app1.gate.stats().ownFaultHeld === heldBefore + 1 && app1.gate.stats().ownFaultStreak === 3, `own-fault hold: a signer refused again starts the hold after three refusals: the fourth call is answered before the handler (${runs.echo - ranBefore} ran; streak ${app1.gate.stats().ownFaultStreak})`);
+    ok(wordOn.status === "attention" && wordOn.reasons.some((x) => /own request: paid calls are held/.test(x)), "own-fault hold: and the status word says paid calls are held");
+    fac.mode.settle = settleFine;
+    await wait(1100);
+    const healed = await payAt(app1.url, "echo", accept, "healed");
+    const wordOff = app1.gate.statusWord();
+    ok(healed.status === 200 && app1.gate.stats().ownFaultStreak === 0 && wordOff.reasons.some((x) => /own request$/.test(x)) && !wordOff.reasons.some((x) => /paid calls are held/.test(x)), `own-fault hold: a probe the facilitator settles ends it as before, and the word names the recent refusal without a hold (${healed.status})`);
+
+    // The status word names the hold for as long as it is on: a cool-down
+    // longer than the fifteen minutes a refusal is named for.
+    const appH = await mount({ REFERRAL_OWN_FAULT_COOLDOWN_MS: String(20 * 60_000) });
+    try {
+      const names = (re) => appH.gate.statusWord().reasons.some((x) => re.test(x));
+      fac.mode.settle = refuseOurs;
+      for (let i = 0; i < 3; i++) await payAt(appH.url, "echo", accept, `long${i}`);
+      fac.mode.settle = settleFine;
+      const atOnce = names(/own request: paid calls are held/);
+      skew.ms = 16 * 60_000;
+      const inCooldown = await payAt(appH.url, "echo", accept, "sixteen");
+      ok(atOnce && inCooldown.status === 503 && inCooldown.json?.errorReason === "settlement_unavailable" && appH.gate.statusWord().status === "attention" && names(/own request: paid calls are held/), `own-fault hold: sixteen minutes into a twenty-minute cool-down a paid call is still held, and the status word still names the hold (${inCooldown.status}; ${appH.gate.statusWord().reasons.filter((x) => /own request/.test(x)).join("; ") || "no reason named"})`);
+      // After the cool-down, five seconds into the probe time, with the slot
+      // taken: the wait named is no longer than the hold has left.
+      skew.ms = 20 * 60_000 + 5_000;
+      const left = Math.ceil((idleMs(appH.config) - 20 * 60_000 - 5_000) / 1000);
+      const probeH = payAt(appH.url, "slow", acceptSlow, "probe");
+      await wait(150);
+      const beside = await payAt(appH.url, "echo", accept, "beside");
+      const ra = Number(beside.headers.get("retry-after"));
+      await probeH;
+      ok(beside.status === 503 && ra >= 1 && ra <= left && left < Math.ceil((idleMs(appH.config) - 20 * 60_000) / 1000), `own-fault hold: a call held beside a probe is told to retry no later than the hold can last (Retry-After ${ra} s, ${left} s left)`);
+      skew.ms = idleMs(appH.config) + 1_000;
+      const probeLate = payAt(appH.url, "slow", acceptSlow, "probe");
+      await wait(150);
+      const after = await payAt(appH.url, "echo", accept, "after");
+      await probeLate;
+      ok(after.status === 200 && appH.gate.stats().ownFaultStreak === 0 && !names(/own request/), `own-fault hold: past the cool-down plus one probe's time with no new refusal the hold is over, the slot taken or not, and the word no longer names it (${after.status})`);
+    } finally { skew.ms = 0; await appH.close(); }
   }
   fac.reset(); sales.length = 0;
   {
@@ -4162,7 +4274,8 @@ try {
       const raised = (wordFn.match(/reasons\.push\(/g) || []).length;
       const heartbeat = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"), worker = readFileSync(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
       const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "under the amount the commission map expects", "product id differs", "under its stop floor", "charged before its rate was proven", "this server does not serve", "published example answer is over the answer bound", "contradicted successes came from several payers", "unsettled runs from many payers", "answers over the answer bound from one client address", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "failed or were late in the last five minutes", "went without a verdict in the last day", "book is full", "retired at capacity", "closed as unrecognized"];
-      const missing = FAMILIES.filter((f) => !heartbeat.includes(f) || !worker.includes(f));
+      // The Worker's detail text (its own log) names them; the public issue, opened by either pager, is the fixed text.
+      const missing = FAMILIES.filter((f) => !worker.includes(f) || heartbeat.includes(f));
       // The raw tag is never output anywhere (an issue, a comment, the job log): every line that
       // names it is its own assignment, its shape check, or the keyed digest made from it.
       // Every line that names the tag (its assignment and its two uses) is EXACTLY the expected text:
@@ -4205,12 +4318,12 @@ try {
         const noKey = [cycle("aaaaaaaa", ""), cycle("aaaaaaaa", ""), cycle("bbbbbbbb", ""), cycle("cccccccc", "")];
         const noKeyComments = readFileSync(comments, "utf8").split("\n").filter(Boolean);
         const noKeyPrinted = noKey.map((r) => `${r.stdout}${r.stderr}`).join("\n") + noKeyComments.join("\n");
-        ok(noKey.every((r) => r.status === 0) && noKeyComments.length === 1 && !/reasons mark|[0-9a-f]{12,}|aaaaaaaa|bbbbbbbb|cccccccc/.test(noKeyPrinted) && /the reasons on this issue can change while it is open/.test(noKeyComments[0]), `with no mark key set the step posts one fixed comment per issue, with no mark, however the reasons change (${noKeyComments.length} comment in four cycles)`);
-        ok(afterSame[0].includes(`reasons mark ${markOf("a-dedicated-mark-key", "aaaaaaaa")} `) && !printed.includes(markOf("operator-token-for-the-test", "aaaaaaaa")) && !printed.includes(markOf("operator-token-for-the-test", "aaaaaaaa").slice(0, 12)), "the mark is the tag keyed with the dedicated mark key, 24 hex, and is not what the operator token would give");
-        ok(step && existsSync(comments) && runs3.every((r) => r.status === 0) && afterSame.length === 1 && /reasons mark [0-9a-f]{24} /.test(afterSame[0]) && afterNew.length === 2 && afterNew[0] !== afterNew[1] && !/aaaaaaaa|bbbbbbbb/.test(printed), `the heartbeat step, run for three cycles on one reasons tag against an open issue, comments once; a new tag adds one more comment; the raw tag is in no output (${afterSame.length} then ${afterNew.length} comments)`);
+        ok(noKey.every((r) => r.status === 0) && noKeyComments.length === 1 && !/reasons mark|[0-9a-f]{12,}|aaaaaaaa|bbbbbbbb|cccccccc/.test(noKeyPrinted) && / state: unmarked$/.test(noKeyComments[0]), `with no mark key set the step posts one fixed comment per issue, with no mark, however the reasons change (${noKeyComments.length} comment in four cycles)`);
+        ok(afterSame[0].endsWith(`reasons mark ${markOf("a-dedicated-mark-key", "aaaaaaaa")}`) && !printed.includes(markOf("operator-token-for-the-test", "aaaaaaaa")) && !printed.includes(markOf("operator-token-for-the-test", "aaaaaaaa").slice(0, 12)), "the mark is the tag keyed with the dedicated mark key, 24 hex, and is not what the operator token would give");
+        ok(step && existsSync(comments) && runs3.every((r) => r.status === 0) && afterSame.length === 1 && /reasons mark [0-9a-f]{24}$/.test(afterSame[0]) && afterNew.length === 2 && afterNew[0] !== afterNew[1] && !/aaaaaaaa|bbbbbbbb/.test(printed), `the heartbeat step, run for three cycles on one reasons tag against an open issue, comments once; a new tag adds one more comment; the raw tag is in no output (${afterSame.length} then ${afterNew.length} comments)`);
       }
       const owedWording = "include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review";
-      ok(raised === 25 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && tokenHashed === false && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with a dedicated mark key (never the operator token, which only reads the operator view), never the tag itself (${missing.join("; ") || "all named"})`);
+      ok(raised === 25 && !heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && tokenHashed === false && /reasons mark \$MARK/.test(heartbeat), `the Worker's detail text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with a dedicated mark key (never the operator token, which only reads the operator view), never the tag itself (${missing.join("; ") || "all named"})`);
     }
     // P7. During a drain a settle ends before the database pool starts closing, with room for its book write.
     {
@@ -4994,6 +5107,8 @@ const baseAmountOf = (r) => {
   const a = (offer?.accepts || []).find((x) => x.network === "eip155:8453" && x.scheme === "exact");
   return a ? { amount: String(a.amount ?? a.maxAmountRequired), accept: a } : null;
 };
+// Tools priced per unit that declare their smallest request (src/tools/bundle-kit.js).
+const UNIT_PRICED = ["weather-risk-brief", "filings-brief", "token-diligence"];
 const REF_ENV = { AGENT402_BASE_RPC: `${fac.url}/rpc`, EVM_LOGS_PUBLIC_RPCS_BASE: "", REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT, REFERRAL_RECEIPT_WAIT_MS: "0", REFERRAL_PAY_TO: PAY_TO, REFERRAL_FACILITATOR_URL: fac.url, REFERRAL_SIGNER_KEY: SIGNER_KEY, REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral", REFERRAL_SLUGS: "hash", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_COMMISSION_BPS: "default:1234" };
 const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGNER_KEY: "", REFERRAL_SLUGS: "", REFERRAL_SETUP_URL: "", REFERRAL_COMMISSION_BPS: "" };
 
@@ -5180,7 +5295,7 @@ const srv = await bootPaidServer({
     ...REF_ENV, ...COSTS,
     WALLET_ADDRESS: OUR_WALLET, TRUST_PROXY_HOPS: "1",
     FACILITATOR_URL: `http://127.0.0.1:${directFac.address().port}`, AGENT402_BASE_RPC: `${fac.url}/rpc`,
-    REFERRAL_SLUGS: "hash,mime,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,stablecoin-peg,edgar-company-facts,image-gen,image-gen-premium,attest,qr,no-such-tool," + DATA_SLUGS.join(","),
+    REFERRAL_SLUGS: "hash,mime,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,stablecoin-peg,edgar-company-facts,image-gen,image-gen-premium,attest,qr,no-such-tool," + UNIT_PRICED.join(",") + "," + DATA_SLUGS.join(","),
     // The price feed stablecoin-peg reads never answers: its run has to be cut off at the deadline.
     HANG_FETCH_HOSTS: "api.coingecko.com,pro-api.coingecko.com",
     // The handler deadline is short so a stalled upstream is cut off inside the test.
@@ -5201,7 +5316,7 @@ try {
   const served = servedLine ? servedLine[2].split(",").map((s) => s.trim()) : [];
   // Left out since they were listed: three whose published examples name this server's own host, and mime (free by proof-of-work on the public route).
   const OWN_HOST_SLUGS = ["http-check", "robots-check", "sitemap"];
-  const SERVED = ["hash", "onchain-sql", "perp-funding", "perp-basis", "stablecoin-peg", "edgar-company-facts", "v1-chat-auto", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered", "v1-chat"];
+  const SERVED = ["hash", "onchain-sql", "perp-funding", "perp-basis", "stablecoin-peg", "edgar-company-facts", "v1-chat-auto", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered", "v1-chat", ...UNIT_PRICED];
   ok(servedLine && SERVED.every((x) => served.includes(x)) && DATA_SLUGS.every((x) => served.includes(x) !== OWN_HOST_SLUGS.includes(x)) && served.length === SERVED.length + DATA_SLUGS.length - OWN_HOST_SLUGS.length, `the boot serves the eligible slugs (${servedLine ? servedLine[2] : "no line"})`);
   const whyServed = Object.fromEntries([...bootLog.matchAll(/\[referral\] (\S+) is served under \/ref: ([^\n]*)/g)].map((m) => [m[1], m[2]]));
   console.log(`# boot verdicts: ${JSON.stringify(whyServed)}`);
@@ -5222,6 +5337,31 @@ try {
       if (q.status !== 402 || want === null || q.json?.accepts?.[0]?.amount !== want.toString() || q.json.accepts[0].payTo !== PAY_TO) wrongPrice.push(`${slug}: ${q.status} ${q.json?.accepts?.[0]?.amount} want ${want}`);
     }
     ok(priceOf.size > 400 && wrongPrice.length === 0, `each one's 402 pays the split contract the tool's direct list price (${wrongPrice.join("; ") || "34 of 34"})`);
+    // Tools priced per unit: served because the deadline ends every leg's
+    // reads; a request with no input is quoted the LIST price and shows the
+    // one-unit request it runs; the buyer's own request is quoted exactly what
+    // the direct route quotes the same body.
+    {
+      const UNIT_BODY = { "weather-risk-brief": (n) => ({ sites: Array.from({ length: n }, (_, k) => ({ lat: 40 + k, lon: -74 - k })) }), "filings-brief": (n) => ({ tickers: ["MSFT", "AAPL", "NVDA"].slice(0, n) }), "token-diligence": (n) => ({ coins: ["bitcoin", "ethereum", "solana"].slice(0, n) }) };
+      const unitFaults = [];
+      for (const slug of UNIT_PRICED) {
+        if (!/^upstream work ends at the deadline/.test(whyServed[slug] || "")) unitFaults.push(`${slug}: boot says ${whyServed[slug] || "not served"}`);
+        const list = baseUnitsOf(priceOf.get(slug));
+        const bare = await call(`${srv.url}/ref/${slug}`, { method: "POST", body: {}, headers: xff() });
+        const bareInput = bare.json?.emptyRequest?.input;
+        const units = bareInput ? Object.values(bareInput)[0] : null;
+        if (bare.status !== 402 || list === null || bare.json?.accepts?.[0]?.amount !== list.toString() || !Array.isArray(units) || units.length !== 1 || !/list price/.test(bare.json?.emptyRequest?.note || "")) unitFaults.push(`${slug}: bare ${bare.status} ${bare.json?.accepts?.[0]?.amount} want ${list} ${JSON.stringify(bare.json?.emptyRequest || null).slice(0, 120)}`);
+        const directBare = baseAmountOf(await call(`${srv.url}/api/${slug}`, { method: "POST", body: bareInput || {}, headers: xff() }));
+        if (!directBare || directBare.amount !== bare.json?.accepts?.[0]?.amount) unitFaults.push(`${slug}: the direct route quotes the starting input ${directBare?.amount}`);
+        for (const n of [2, 3]) {
+          const body = UNIT_BODY[slug](n);
+          const viaRef = await call(`${srv.url}/ref/${slug}`, { method: "POST", body, headers: xff() });
+          const direct = baseAmountOf(await call(`${srv.url}/api/${slug}`, { method: "POST", body, headers: xff() }));
+          if (viaRef.status !== 402 || !direct || viaRef.json?.accepts?.[0]?.amount !== direct.amount || BigInt(direct.amount) <= list || "emptyRequest" in (viaRef.json || {}) || viaRef.json.accepts[0].scheme !== "exact") unitFaults.push(`${slug} x${n}: /ref ${viaRef.status} ${viaRef.json?.accepts?.[0]?.amount}, direct ${direct?.amount}`);
+        }
+      }
+      ok(unitFaults.length === 0, `each tool priced per unit is served under /ref, quotes a request with no input its list price for the one-unit request it shows, and quotes the buyer's own request exactly what the direct route does (${unitFaults.join("; ") || "3 of 3"})`);
+    }
     // NO POINTER to this server's own surfaces, on anything a /ref route of a served slug answers:
     // the 402 (with its example, for an empty request), an input the route refuses unpaid, and the same input paid.
     const hostOf = new URL(srv.url).host;

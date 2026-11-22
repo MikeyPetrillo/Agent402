@@ -17,7 +17,7 @@
 - [[Content Pipeline|Content-Pipeline]]
 - [[MCP Connector]]
 - [[Adapters]]
-- [[AWS Bedrock AgentCore]]
+- [[Amazon Bedrock AgentCore|AWS-Bedrock-AgentCore]]
 - [[Decide]] - describe a job, get a plan
 - [[Tool Catalog]]
 - [[Skill Packs|Skill-Packs]]

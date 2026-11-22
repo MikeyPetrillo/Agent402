@@ -62,6 +62,7 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg, withHtmlFramesFailureBound } from "./tools/render.js";
+import { LOGO_SVG, FAVICON_SVG, FAVICON_VERSION, brandMarkTile } from "./brand-mark.js";
 import { renderWithStaticRead } from "./tools/render-static.js";
 import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
@@ -552,7 +553,7 @@ import { proofPage } from "./proof.js";
 import { glossaryPage } from "./glossary.js";
 import { x402101Page } from "./x402-101.js";
 import { aifiCardSvg } from "./aifi-card.js";
-import { sectionCardSvg, ogSectionIds } from "./og-cards.js";
+import { sectionCardSvg, ogSectionIds, toolCardSvg } from "./og-cards.js";
 import { robotsTxt, sitemapXml, llmsTxt, llmsFullTxt, sitemapIndex, sitemapPages, sitemapTools, sitemapGuides, sitemapSkills, sitemapReports, sitemapCategories, sitemapLearn } from "./seo.js";
 import { clampedTitles, META_TITLE_MAX } from "./seo-meta.js";
 import { integrationPage } from "./integration-pages.js";
@@ -586,6 +587,7 @@ import { partialFields } from "./partial-answer.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
+import { addBoardRefreshQuietCheck, boardRefreshStatus } from "./board-refresh-slots.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
@@ -806,6 +808,8 @@ import { USAGE_TOOLS } from "./tools/usage-kit.js";
 import { AUDIT_TOOLS, setAuditReportContext } from "./tools/audit-report-kit.js";
 import { keepReceiptOnFinalOk, startReceiptStoreSweep, receiptStoreCounts } from "./receipt-store.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
+import { PRICE_WEBHOOK_TOOLS, setPriceWebhookCatalog } from "./tools/price-webhook-kit.js";
+import { priceWebhooks, startPriceWebhooks, signingKeyOf as priceWebhookSigningKey, UNSUBSCRIBE_PATH as PRICE_WEBHOOK_UNSUBSCRIBE_PATH } from "./price-webhooks.js";
 import { CHAIN_RPC_TOOLS } from "./tools/chain-rpc-kit.js";
 import { chainNamespaceMiddleware, chainNamespaceMap, chainVerbAliasesByRoute } from "./chain-namespace.js";
 import { corsMiddleware, allowCorsPrefix } from "./cors.js";
@@ -813,7 +817,7 @@ import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
 import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-media-type.js";
-import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe } from "./idempotency.js";
+import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe, RESEND_SERVED_NOTE } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
@@ -863,7 +867,7 @@ import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
-import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
+import { dispatchEligibility, dispatchLegend, unprovenLaneAtLivePayTo } from "./dispatch-eligibility.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { tempoCandidateOf, resolvedCandidateOf } from "./sor-candidates.js";
 import { baseUnprovenAllowanceUsd, configureUnprovenSharedPayTos } from "./base-unproven.js";
@@ -871,7 +875,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
+import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -880,6 +884,8 @@ import { hostFigures, hostFiguresFromPayments, hostIndexEntry, isSelfSellerQuery
 import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
+import { routerBenchmarks, ROUTER_BENCHMARKS_PATH } from "./router-benchmarks.js";
+import { agentcorePage, AGENTCORE_SLUG } from "./agentcore-page.js";
 import { creditsSalesEnabled, creditsTopupFields, creditsBalanceMaxCents, creditsTermsVersion } from "./credits-sales.js";
 
 // The /v1 settle breaker reads whether a wallet has ever paid from the sales
@@ -896,7 +902,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -979,6 +985,8 @@ import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, l
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
+import { judgeTimingReport } from "./judge-timing.js";
+import { returningWalletEnabled, returningWalletOfferMiddleware, returningWalletStatus, configureReturningWallet } from "./returning-wallet.js";
 import { JUDGE_PREVIEW_TOOLS, judgePreviewEnabled } from "./tools/judge-preview-kit.js";
 import { LOOP_GATE_TOOLS } from "./tools/loop-gate-kit.js";
 
@@ -1047,7 +1055,7 @@ import { withBudgetCeiling } from "./upstream-deadline.js";
 import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedOnResend, noteResendAnswerSent, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
@@ -1798,11 +1806,12 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
   // `executeViaWhenEligible` and `executeViaCallableNow` says false in so many
   // words. The tier is still useful (it is what the buyer would pay once the
   // seller proves out), it just must not look like a button.
-  // A row in the Base unproven tier IS dispatched (after every proven
-  // candidate, src/base-unproven.js and resolveExternalSeller), so it is
-  // callable now too, marked as the unproven lane.
+  // A row in the unproven tier (Base's, or a listed chain's) IS dispatched
+  // (after every proven candidate, src/base-unproven.js and
+  // resolveExternalSeller), so it is callable now too, marked as the
+  // unproven lane.
   const { executeVia, ...rest } = row;
-  const unprovenLane = !verdict.eligible && rowLevel && verdict.chains?.base?.unprovenTier === true;
+  const unprovenLane = !verdict.eligible && rowLevel && Object.values(verdict.chains || {}).some((c) => c?.unprovenTier === true);
   const affordance = executeVia === undefined ? {} : (verdict.eligible
     ? { executeVia, executeViaCallableNow: true }
     : unprovenLane
@@ -1995,7 +2004,8 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // THE EVM FAMILY: Base, and every other chain src/evm-buyer-chains.js
     // lists that SOR_EVM_CHAINS enables (route-execute never asks for one it
     // does not). One gate for all of them, keyed on the chain's CAIP-2 id;
-    // the unproven tier below stays Base's.
+    // the unproven tier below is Base's and each chain's the operator lists
+    // (SOR_EVM_UNPROVEN_CHAINS), read from the same labelled verdict.
     const evmCfg = evmBuyerChain(chain);
     const { results } = await routeRows({ query: task, top: onlyUrl ? 200 : 20, include: "external", ...(chain !== "base" ? { networkFilter: evmCfg.caip2, strictNetwork: true } : {}), ...indexCtx() });
     // The SAME evidence object every public label reads (dispatchEvidence):
@@ -2040,7 +2050,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // else wrong and a price within the ceiling. Kept, marked, and
         // ordered after every proven candidate; paid only at the wallet its
         // own live 402 names (below) and never above the ceiling (payX402).
-        if (!eligible && chain === "base" && verdict.chains.base?.unprovenTier === true) {
+        if (!eligible && verdict.chains[chain]?.unprovenTier === true) {
           r.unproven = true;
           gateDrops.byReason.unproven_admitted = (gateDrops.byReason.unproven_admitted || 0) + 1;
           return true;
@@ -2316,13 +2326,14 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // gate with the origin's binding and the address its live 402 actually
         // asks us to pay: it counts only when THAT wallet's own evidence clears
         // the floor; unreadable is not a match.
-        // An UNPROVEN Base candidate has no evidence to bind; it is pinned to
-        // the address its own live 402 names instead, and an unreadable one
-        // is not paid (the payment re-checks the accept it signs against it).
-        if (live && chain === "base" && r.unproven) {
+        // An UNPROVEN candidate has no evidence to bind; it is pinned to
+        // the address its own live 402 names on the chain being paid instead,
+        // and an unreadable one is not paid (the payment re-checks the accept
+        // it signs against it).
+        if (live && isEvmBuyerChain(chain) && r.unproven) {
           const livePayTo = await readLivePayTo();
           if (!livePayTo) {
-            console.warn(`[sor] skipping unproven Base candidate ${r.seller}: its live payTo could not be read`);
+            console.warn(`[sor] skipping unproven ${chain} candidate ${r.seller}: its live payTo could not be read`);
             live = false;
           } else {
             // The unproven lane is the label's (withDispatchFields): the same
@@ -2331,16 +2342,16 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
             // without this an origin whose withheld history sits at a shared
             // wallet (evidence_payto_shared, which the label keeps out of the
             // lane) was paid in it.
-            const lane = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null, evidence: r.binding || undefined, livePayTo });
-            if (lane.chains.base?.unprovenTier !== true) {
-              console.warn(`[sor] skipping unproven Base candidate ${r.seller}: ${lane.chains.base?.detail || lane.reason} at its live payTo`);
+            const lane = unprovenLaneAtLivePayTo({ chain, row: r, livePayTo, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS });
+            if (lane?.unprovenTier !== true) {
+              console.warn(`[sor] skipping unproven ${chain} candidate ${r.seller}: ${lane?.detail || lane?.reason || "not in the lane"} at its live payTo`);
               live = false;
               gateDrops.total++;
-              const why = lane.chains.base?.reason || "other";
+              const why = lane?.reason || "other";
               gateDrops.byReason[why] = (gateDrops.byReason[why] || 0) + 1;
             } else {
               r.chainProvenPayTo = livePayTo;
-              console.log(`[sor] admitting Base candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
+              console.log(`[sor] admitting ${chain} candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
             }
           }
         }
@@ -2377,7 +2388,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // `wire` rides through: a Tempo candidate settles over MPP and its receipt
     // must say so (the first live Tempo SOR buy labelled it x402, 2026-08-27).
     if (live) {
-      resolved.push(resolvedCandidateOf(r, { provenPayTo: (r.unproven && chain === "base" && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets }));
+      resolved.push(resolvedCandidateOf(r, { provenPayTo: (r.unproven && isEvmBuyerChain(chain) && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets }));
       // Only PROVEN candidates count toward the limit: an unproven one must
       // never crowd out a proven seller ranked below it.
       if (resolved.filter((x) => !x.unproven).length >= Math.max(1, limit)) break;
@@ -2680,11 +2691,29 @@ for (const def of Object.values(CATALOG)) {
   if (typeof def.quote === "function") def.quoteRange = { minUsd: floor, maxUsd: Number.isFinite(def.quoteMaxUsd) && def.quoteMaxUsd >= floor ? def.quoteMaxUsd : METERED_MAX_QUOTE_USD };
   else if (typeof def.tierQuote === "function") def.quoteRange = { minUsd: floor, maxUsd: Math.max(floor, FLAT_TIER_MAX_USD) };
 }
+// A quoted tool may declare `fromInput`: a small valid body its 402 quotes at
+// or under the list price. /api/pricing publishes it, and the Bazaar
+// keep-alive pays with it, since a quoted route's published example can ask
+// more than the list price and the keep-alive never pays over list. A body
+// that does not quote inside the list price is dropped here, so a published
+// one always does (scripts/test-quoted-from-price.js reads the live 402s).
+for (const def of Object.values(CATALOG)) {
+  if (def.fromInput === undefined) continue;
+  const list = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+  let q = NaN;
+  try { q = typeof def.quote === "function" && def.fromInput && typeof def.fromInput === "object" ? Number(def.quote(def.fromInput)) : NaN; } catch { q = NaN; }
+  if (!(Number.isFinite(q) && q > 0 && q <= list + 1e-9)) {
+    console.warn(`[catalog] ${def.slug}: fromInput dropped (its quote is not inside the list price)`);
+    delete def.fromInput;
+  }
+}
 // The attest tool refuses to attest a sale of an identity-bound route (a
 // memory read or a usage report is the buyer's own business, and an
 // attestation is public and permanent); it learns which slugs those are here,
 // from the same predicate, so the two can never disagree.
 setIdentityBoundSlugs(new Set(Object.values(CATALOG).filter((d) => d.identityBound).map((d) => d.slug)));
+// Price webhooks (src/price-webhooks.js): a registration names catalog slugs.
+setPriceWebhookCatalog(() => new Set(Object.values(CATALOG).map((d) => d?.slug).filter(Boolean)));
 // The audit report (src/tools/audit-report-kit.js) names each row's route
 // from the same catalog, and its summary receipt the same issuer.
 {
@@ -3395,6 +3424,10 @@ startSharedLimitsProbe();
 // the sales ledger shortly after boot and then on a timer, never on a
 // request's path: topBuyerFailures on /api/gateway-status watches their
 // verified paid calls for failures.
+// The returning-wallet price reads a wallet's paid days from the sales ledger
+// (the mirror, in database mode) and never discounts one of our own wallets;
+// a wallet proof names this server's host name (BASE_URL's).
+configureReturningWallet({ paidDays: (wallet, sinceMs) => payerPaidDays(wallet, sinceMs), isOurs: (w) => isOwnWallet(w), host: (() => { try { return new URL(BASE_URL).hostname; } catch { return null; } })() });
 if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerReady(); return topExternalPayersAsync(o); }, isOwn: (p) => isOwnWallet(p), firstMs: Math.min(5_000, topRefreshMs()) });
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
@@ -3410,6 +3443,24 @@ if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerRea
 // imageGenModeration: image-gen renders and content-check refusals by the
 // moderation level sent, and requests sent again without the parameter, since
 // boot (src/tools/image-gen-kit.js; counts only).
+// The returning-wallet price (src/returning-wallet.js): the settings in
+// force, this process's counts (hints seen, discounted quotes and payments,
+// payments from another wallet) and the outside payers' return rate over the
+// last 60 days from the sales ledger (wallets by distinct paid days).
+app.get("/__operator/returning-wallets.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  const cfg = returningWalletStatus();
+  let returnRate = null;
+  try { await salesLedgerReady(); returnRate = await externalReturnRateAsync({ days: 60, minPaidDays: cfg.minPaidDays }); } catch (e) { returnRate = { error: redactSecrets(String(e?.message || e)).slice(0, 120) }; }
+  res.set("Cache-Control", "private, no-store").json({ ...cfg, returnRate });
+});
+// Judge timing (src/judge-timing.js): p50 and p95 per backend read and per
+// whole walk, outcomes, and how often a fallback answered. This process's own
+// samples; no payer, input or answer.
+app.get("/__operator/judge-timing.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(judgeTimingReport());
+});
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
@@ -3527,8 +3578,8 @@ try {
     // Each paid period (the first invoice and every renewal) gets a signed
     // receipt while receipts are served (src/receipt-signing.js).
     signPeriod: (d) => (receiptsServed() ? createSubscriptionReceipt({ iss: BASE_URL, ...d }) : null),
-    onInvoicePaid: ({ invoiceId, product, amountUsd }) => {
-      recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" });
+    onInvoicePaid: ({ invoiceId, product, amountUsd, source }) => {
+      recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription", source });
       try { capturePostHogHumanFunnel({ step: "monitor_paid", product: product || "monitor", priceUsd: amountUsd }); } catch { /* telemetry never breaks the request */ }
     },
     // One-shot payment sessions are fulfilled from the webhook too, so a buyer
@@ -4364,7 +4415,7 @@ app.get("/.well-known/mta-sts.txt", (_req, res) => {
   res.set("Cache-Control", "public, max-age=3600").type("text/plain").send(policy);
 });
 app.get("/.well-known/security.txt", (_req, res) => {
-  const contact = (process.env.SECURITY_CONTACT_EMAIL || "").trim() || "mike@agent402.tools";
+  const contact = (process.env.SECURITY_CONTACT_EMAIL || "").trim() || "security@agent402.tools";
   const expires = new Date(Date.now() + 180 * 24 * 3600 * 1000).toISOString();
   const body = [
     `Contact: mailto:${contact}`,
@@ -4697,6 +4748,13 @@ app.get("/api/gateway-status", async (req, res) => {
     // consecutive minutes; the names are on the operator view and the counts
     // on /__operator/perf.json.
     containedTurns: (() => { try { return containedTurnsStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // boardRefresh reads ok / held / stalled: a seller board's rebuild gave an
+    // attempt up while the heap was high (held; it tries again every hour),
+    // has given up three in a row, or passed its run bound with none finished
+    // since (stalled; src/board-refresh-slots.js). In memory: a restart reads
+    // ok. Paged with containedTurns, as one issue. One word publicly; each
+    // board's counts for the operator.
+    boardRefresh: (() => { try { return boardRefreshStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // brokenListings reads ok / widespread: inside a rolling window (15
     // minutes) the distinct seller origins whose listings broke while they
     // were read (a statics or decoration throw, src/x402-index.js) reach both
@@ -5044,6 +5102,8 @@ app.get("/og/agentic-finance.png", async (_req, res) => {
 });
 app.get("/faq", (_req, res) => htmlCache(res, 300, 900).send(faqPage(BASE_URL)));
 app.get("/integrations", (_req, res) => htmlCache(res, 300, 900).send(ledgerIntegrationsPage(BASE_URL)));
+// Amazon Bedrock AgentCore (src/agentcore-page.js): a platform page, not a package page.
+app.get(`/integrations/${AGENTCORE_SLUG}`, (_req, res) => htmlCache(res, 300, 900).send(agentcorePage(BASE_URL, CATALOG)));
 // One page per published package (src/integration-pages.js); tool links resolve against CATALOG.
 app.get("/integrations/:slug", (req, res) => {
   const html = integrationPage(BASE_URL, String(req.params.slug || ""), CATALOG, guideTitles());
@@ -5586,8 +5646,8 @@ if (humanCheckoutEnabled()) {
       // Card sales land in the SAME sales ledger as x402 settlements (rail
       // "card", network "stripe", the PaymentIntent as tx) so /revenue and the
       // operator surfaces see the human front door.
-      onSale: ({ product, priceUsd, paymentIntent }) => {
-        recordSale({ slug: product, priceUsd, rail: "card", network: "stripe", payer: null, tx: paymentIntent, wire: "stripe-checkout" });
+      onSale: ({ product, priceUsd, paymentIntent, source }) => {
+        recordSale({ slug: product, priceUsd, rail: "card", network: "stripe", payer: null, tx: paymentIntent, wire: "stripe-checkout", source });
         try { capturePostHogHumanFunnel({ step: "paid", product, priceUsd }); } catch { /* telemetry never breaks the request */ }
       },
       // A signed receipt over the purchase and the delivered report, while
@@ -5615,7 +5675,7 @@ if (humanCheckoutEnabled()) {
       if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
       const product = typeof req.body?.product === "string" ? req.body.product.slice(0, 40) : null;
       try {
-        const url = (await _humanCheckout.createSession(req.body?.product, req.body?.input)).url;
+        const url = (await _humanCheckout.createSession(req.body?.product, req.body?.input, { source: req.body?.source })).url;
         try { capturePostHogHumanFunnel({ step: "checkout_started", product, kind: HUMAN_PRODUCTS[product]?.kind, priceUsd: HUMAN_PRODUCTS[product] ? HUMAN_PRODUCTS[product].price / 100 : null }); } catch { /* telemetry never breaks the request */ }
         res.json({ url });
       }
@@ -5676,7 +5736,7 @@ if (_subs) {
   app.post("/api/subscribe", async (req, res) => {
     if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     try {
-      const url = (await _subs.createCheckout(req.body?.product, req.body?.target)).url;
+      const url = (await _subs.createCheckout(req.body?.product, req.body?.target, { source: req.body?.source })).url;
       try { capturePostHogHumanFunnel({ step: "monitor_checkout_started", product: typeof req.body?.product === "string" ? req.body.product.slice(0, 40) : null }); } catch { /* telemetry never breaks the request */ }
       res.json({ url });
     }
@@ -5937,7 +5997,10 @@ app.get("/__operator/sales.json", async (req, res) => {
     try { mppAgentsThisWeek = mppAgentsThisWeekCount(); } catch { /* count is optional */ }
     // The detailed summary walks the whole window: read across turns, never in line.
     const summary = await salesSummaryAsync({ detailed: true });
-    res.json({ ...summary, mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
+    // settlementRepeats: rows on the books that repeat an earlier row's
+    // settlement (left out of every figure above) and the repeats the writer
+    // refused since boot (src/sale-repeats.js). Operator only.
+    res.json({ ...summary, mppAgentsThisWeek, settlementRepeats: saleRepeatStats(), feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
@@ -9840,6 +9903,27 @@ function reputationKeyOf(raw) {
   const qBare = q.replace(/^https?:\/\//, "");
   return reputationKeys.bare.get(qBare) || (qBare.includes("/") ? null : reputationKeys.byHost.get(qBare) || null);
 }
+// Remove a price webhook (src/price-webhooks.js): free, by the id and secret
+// the registration returned. An unknown id and a wrong secret read the same.
+app.post(PRICE_WEBHOOK_UNSUBSCRIBE_PATH, express.json({ limit: "4kb" }), async (req, res) => {
+  try {
+    const out = await priceWebhooks().unsubscribe(req.body);
+    res.set("Cache-Control", "no-store").status(out.removed ? 200 : 404).json(out.removed ? out : { removed: false, error: "no price webhook with that id and secret" });
+  } catch (e) {
+    const status = Number(e?.statusCode) >= 400 && Number(e?.statusCode) < 600 ? Number(e.statusCode) : 500;
+    if (e?.retryAfterSeconds) res.set("Retry-After", String(e.retryAfterSeconds));
+    res.set("Cache-Control", "no-store").status(status).json({ removed: false, error: status === 500 ? "the removal failed on this server; retry" : redactSecrets(String(e.message)) });
+  }
+});
+// Router benchmarks (src/router-benchmarks.js): aggregates over the reputation
+// records this process holds; computed once per record version, no seller named.
+app.get(ROUTER_BENCHMARKS_PATH, async (_req, res) => {
+  try {
+    res.set("Cache-Control", "public, max-age=300").json(await routerBenchmarks());
+  } catch {
+    res.status(503).set("Retry-After", "30").set("Cache-Control", "no-store").json({ error: "the benchmark could not be computed on this server right now - retry in 30s", retryAfterSeconds: 30 });
+  }
+});
 app.get("/api/reputation", (req, res) => {
   const raw = typeof req.query.seller === "string" ? req.query.seller.trim() : "";
   if (!raw) return res.status(400).json({ error: "name one seller: ?seller=<host or origin>", example: `${BASE_URL}/api/reputation?seller=seller.example` });
@@ -10181,7 +10265,7 @@ app.get("/api/route/external-debug", async (req, res) => {
 // TOP N of that board and never the whole of it. Free, like /api/find +
 // /api/route:
 // discovery primitives shouldn't cost money. Snapshot is cached in memory and
-// refreshed every 4 hours (see startLeaderboardRefresh below): each request is a
+// refreshed twice a day (see startLeaderboardRefresh below): each request is a
 // sub-millisecond read, never a live Bazaar walk.
 //
 // Query params (all optional):
@@ -10448,28 +10532,27 @@ const BRAND_FONT_STYLE = `<style>
 // design-tokens: off-start (rasterized logo, favicon and social-card SVG: no CSS engine)
 const BRAND = { paper: "#0B0C0E", card: "#141619", panel: "#141619", panel2: "#1C2024", ink: "#E9EAEC", muted: "#B3B9C0", faint: "#868D95", hairline: "#2C3136", accent: "#9EF0B0", amber: "#F0B35E", milledA: "#F6F7F8", milledB: "#C9CED3", mono: "'Geist Mono',Menlo,Consolas,monospace", display: "'Geist',system-ui,sans-serif" };
 // design-tokens: off-end
-const BRAND_DEFS = `<defs><linearGradient id="milled" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.milledA}"/><stop offset="1" stop-color="${BRAND.milledB}"/></linearGradient><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
+const BRAND_DEFS = `<defs><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
 
-// Brand mark — the milled square: a light brushed-aluminum rounded square on
-// the obsidian ground with "402" in dark mono, matching the nav/footer mark.
-// The PNG is rasterized once via the existing headless Chromium and cached for
-// the process lifetime (marketplaces and link previews often refuse SVG).
-const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="512" height="512" rx="96" fill="${BRAND.paper}"/><rect x="106" y="106" width="300" height="300" rx="72" fill="url(#milled)"/><text x="256" y="301" font-size="118" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-6" fill="${BRAND.paper}">402</text></svg>`;
+// Brand mark: the vector logo and the favicon crop (src/brand-mark.js, from
+// assets/brand/logo.svg), the same art as the PNG below.
 app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(LOGO_SVG));
 
-// Favicon-scale mark: the logo's 150px glyphs cover ~40% of the canvas, which
-// reads as a plain black square in a 16px browser tab. This variant fills the
-// frame ("402" at 82% width, the brand period as a corner dot) so the mark
-// survives tab scale. Marketplaces/link previews keep the roomier LOGO_SVG.
-const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="512" height="512" rx="112" fill="${BRAND.paper}"/><rect x="40" y="40" width="432" height="432" rx="104" fill="url(#milled)"/><text x="256" y="322" font-size="196" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-12" fill="${BRAND.paper}">402</text></svg>`;
-
+// The PNG logo is the brand mark (black ground, "402", red dot), 512 by 512,
+// a committed file (assets/brand/logo.png, the same art as
+// docs/logo-current.png): the apple-touch-icon, the schema.org logo, the MCP
+// and A2A icons and the press kit read it. A change of art bumps the ?v= on
+// the apple-touch-icon link (src/ledger-chrome.js) and LOGO_PNG_VERSION. Only
+// that versioned URL is immutable: the bare one (schema.org, MCP, A2A) keeps a
+// day's cache, so a new mark reaches those readers.
+const LOGO_PNG_VERSION = "3";
 let logoPngCache = null;
-app.get("/logo.png", async (_req, res) => {
+app.get("/logo.png", (req, res) => {
   try {
-    logoPngCache ??= await rasterizeSvg(LOGO_SVG, 512);
-    res.type("image/png").set("Cache-Control", "public, max-age=31536000, immutable").send(logoPngCache);
+    logoPngCache ??= readFileSync(new URL("../assets/brand/logo.png", import.meta.url));
+    res.type("image/png").set("Cache-Control", req.query?.v === LOGO_PNG_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=86400").send(logoPngCache);
   } catch {
-    // No Chromium on this instance — the SVG is always available.
+    // The file is part of the image; the SVG stands in if it is ever missing.
     res.redirect(302, "/logo.svg");
   }
 });
@@ -10477,14 +10560,17 @@ app.get("/logo.png", async (_req, res) => {
 // Anthropic directory) resolve our 402 mark instead of a generic globe. The SVG
 // is always available; the .ico serves the rasterized PNG (favicon clients
 // accept PNG bytes) and falls back to the SVG if Chromium is unavailable.
-app.get("/favicon.svg", (_req, res) =>
-  res.type("image/svg+xml").set("Cache-Control", "public, max-age=31536000, immutable").send(FAVICON_SVG)
+// Only the URL the page head links (?v=FAVICON_VERSION) is immutable; a bare
+// one (the x402 listing icon, outside fetchers) keeps a day's cache.
+const faviconCache = (req) => (req.query?.v === FAVICON_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=86400");
+app.get("/favicon.svg", (req, res) =>
+  res.type("image/svg+xml").set("Cache-Control", faviconCache(req)).send(FAVICON_SVG)
 );
 let faviconPngCache = null;
-const sendFaviconPng = async (_req, res) => {
+const sendFaviconPng = async (req, res) => {
   try {
     faviconPngCache ??= await rasterizeSvg(FAVICON_SVG, 512);
-    res.type("image/png").set("Cache-Control", "public, max-age=31536000, immutable").send(faviconPngCache);
+    res.type("image/png").set("Cache-Control", faviconCache(req)).send(faviconPngCache);
   } catch {
     res.redirect(302, "/favicon.svg");
   }
@@ -10507,8 +10593,8 @@ const cardSvg = (width = 1200, height = 630) => {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="${width}" height="${height}" fill="${BRAND.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
-  <!-- nav row: milled mark + wordmark -->
-  <rect x="72" y="64" width="44" height="44" rx="12" fill="url(#milled)"/>
+  <!-- nav row: the brand mark + wordmark -->
+  ${brandMarkTile(72, 64, 44, { stroke: BRAND.hairline })}
   <text x="132" y="96" font-size="30" font-weight="600" font-family=${display} letter-spacing="-0.5" fill="${BRAND.ink}">Agent402</text>
   <text x="1128" y="95" font-size="20" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">agent402.tools</text>
   <!-- headline -->
@@ -10551,7 +10637,7 @@ const xHeaderSvg = (width = 1500, height = 500) => {
     <stop offset="1" stop-color="${BRAND.milledA}" stop-opacity="0.13"/>
   </linearGradient></defs>
   <rect x="760" y="0" width="740" height="500" fill="url(#xfade)"/>
-  <rect x="88" y="66" width="62" height="62" rx="16" fill="url(#milled)"/>
+  ${brandMarkTile(88, 66, 62, { stroke: BRAND.hairline })}
   <text x="170" y="115" font-size="50" font-weight="600" font-family=${display} letter-spacing="-1" fill="${BRAND.ink}">Agent402</text>
   <text x="88" y="238" font-size="80" font-weight="600" font-family=${display} letter-spacing="-3" fill="${BRAND.ink}">The web, priced per call.</text>
   <text x="88" y="292" font-size="30" font-family=${display} fill="${BRAND.muted}">${n.toLocaleString("en-US")} tools an agent can pay for and use, in one call.</text>
@@ -10885,12 +10971,7 @@ app.get("/tools/:slug/card.png", async (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);
   if (!tool) return res.status(404).json({ error: "not found" });
-  const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
-  const svgEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const nameT = tool.name.length > 36 ? tool.name.slice(0, 34) + "\u2026" : tool.name;
-  const descT = tool.description.length > 74 ? tool.description.slice(0, 72) + "\u2026" : tool.description;
-  const free = POW_SLUGS.has(tool.slug) ? "FREE w/ PoW \u00b7 " : "";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="1200" height="630" fill="${BRAND.paper}"/><g><rect x="36" y="36" width="1128" height="558" rx="20" fill="${BRAND.card}" stroke="${BRAND.hairline}" stroke-width="2"/><rect x="84" y="88" width="56" height="56" rx="14" fill="url(#milled)"/><text x="112" y="128" font-size="24" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-1" fill="${BRAND.paper}">402</text><text x="162" y="118" font-size="26" font-weight="600" font-family=${JSON.stringify(BRAND.display)} fill="${BRAND.ink}">Agent402</text><text x="170" y="146" font-size="20" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.muted}">${svgEsc(catLabel)}</text><line x1="84" y1="172" x2="1116" y2="172" stroke="${BRAND.hairline}" stroke-width="2"/><text x="84" y="308" font-size="58" font-weight="600" font-family=${JSON.stringify(BRAND.display)} letter-spacing="-2" fill="${BRAND.ink}">${svgEsc(nameT)}</text><text x="84" y="372" font-size="22" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.muted}">${svgEsc(descT)}</text><line x1="84" y1="440" x2="1116" y2="440" stroke="${BRAND.hairline}" stroke-width="2"/><text x="84" y="496" font-size="29" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.accent}">${svgEsc(free)}${svgEsc(tool.price)} per call \u00b7 ${svgEsc(tool.method)} ${svgEsc(tool.path)}</text><text x="84" y="550" font-size="23" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.muted}">Pay in USDC on Base via x402 - no API key, no signup</text></g></svg>`;
+  const svg = toolCardSvg({ name: tool.name, description: tool.description, price: tool.price, method: tool.method, path: tool.path, categoryLabel: CATEGORIES[tool.category]?.label ?? tool.category, free: POW_SLUGS.has(tool.slug) }, { BRAND, BRAND_DEFS, BRAND_FONT_STYLE });
   try {
     if (!toolCardCache.has(tool.slug)) toolCardCache.set(tool.slug, await rasterizeSvg(svg, { width: 1200, height: 630 }));
     res.set("Cache-Control", "public, max-age=86400").type("image/png").send(toolCardCache.get(tool.slug));
@@ -11289,7 +11370,7 @@ app.get("/api/pricing", (_req, res) => {
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, def]) => {
-      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula } = def;
+      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula, fromInput } = def;
       const [method, path] = route.split(" ");
       return {
         method,
@@ -11313,7 +11394,8 @@ app.get("/api/pricing", (_req, res) => {
         // Said on the row so a consumer that budgets per route never takes the
         // floor for the price: the live 402 for a given body lands anywhere in
         // the range. Absent on fixed-price routes, whose 402 is the list price.
-        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}) } : {}),
+        // fromInput, when the tool declares one: a body quoted at or under `price`.
+        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}), ...(fromInput ? { fromInput } : {}) } : {}),
         // Published per row because the doc's own description says these are
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.
@@ -11867,6 +11949,10 @@ if (!FREE_MODE) {
   // header, `async` block in the JSON body). Mounted after the mirror so its
   // send wrapper runs first and the mirror's protocol keys still win.
   app.use(asyncAdviceMiddleware((req) => CATALOG[`${req.method} ${req.path}`] || null));
+  // The returning-wallet price (src/returning-wallet.js; off unless its
+  // switch is on): an eligible route's JSON 402 names the hint header and
+  // the terms, and says whether this request's quote carries the discount.
+  if (returningWalletEnabled()) app.use(returningWalletOfferMiddleware((req) => CATALOG[`${req.method} ${req.path}`] || null));
   app.use(verifyHintMiddleware());
 
   const mppShim = createMppShim({
@@ -12090,14 +12176,19 @@ app.use(createIdempotency({
     // has already claimed or paid is not voided, and then the answer is not
     // served either, so a buyer is served once, never both served and
     // refunded. No row, or one already void, serves. A void that did not land
-    // while the row still reads owed (a failed or queued ledger write, which
-    // lands later) asks for a retry instead of refusing as refunded.
+    // while the row still reads owed (a failed ledger write) asks for a retry
+    // instead of refusing as refunded; that void is never replayed later
+    // (voidOwedOnResend), so a buyer who does not retry before the stored
+    // answer expires keeps the debt owed.
     const { verdict, voided, row } = await chargedReplayVerdict(charged.tx, {
-      voidOnClaim: (tx) => voidOwedOnClaim(tx, "served on the resend of the same payment"),
+      voidOnClaim: (tx) => voidOwedOnResend(tx, RESEND_SERVED_NOTE),
       rowOf: (tx) => refundByEvidenceFresh(tx),
     });
     if (verdict === "serve") {
       if (voided) console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`);
+      // A row an earlier resend voided without being served (its void's
+      // answer was lost): this answer goes out, and the note says so.
+      else if (row) { try { await noteResendAnswerSent(charged.tx, row, RESEND_SERVED_NOTE); } catch { /* best effort */ } }
       return;
     }
     if (verdict === "pending") {
@@ -12707,10 +12798,12 @@ if (FREE_MODE) {
         // allowance: src/hangup-settlement.js grantedUnsettled) leaves the
         // authorization live on chain, so its mark is held until the
         // authorization itself expires. A settled grant is held that long
-        // too, up to the guard's settled bound (MAX_SETTLED_VALIDITY_HOLD_MS):
-        // its nonce is spent on chain, but the gateway cache reader takes a
+        // too (to the guard's hard bound, MAX_SETTLED_MARK_HOLD_MS): its
+        // nonce is spent on chain, but the gateway cache reader takes a
         // still-valid authorization the guard does not hold as its payer's
-        // proof, and a far validBefore must not keep a key per paid call.
+        // proof. Only its twin under the earlier key name ends sooner
+        // (MAX_SETTLED_VALIDITY_HOLD_MS), so a far validBefore keeps one
+        // long-lived key per paid call.
         if (granted()) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
@@ -13115,7 +13208,7 @@ if (!FREE_MODE) {
   try {
     const r = loadHangupForgiveness();
     if (r.loaded) console.log(`[hangup] forgiveness records restored: ${r.global} service-wide, ${r.keys} keys`);
-  } catch (err) { console.warn(`[hangup] forgiveness records not restored: ${err?.message || err}`); }
+  } catch (err) { console.warn(`[hangup] forgiveness records not restored: ${redactSecrets(String(err?.message || err))}`); }
   app.use(async (req, res, next) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     // Every catalog answer past the gates is counted by its final status
@@ -13188,7 +13281,7 @@ if (!FREE_MODE) {
     // price through the chain's premium and floor), so a ticket holds the
     // charge it may forgive.
     try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: ticketPriceUsd({ basePriceUsd: quotedPriceUsd(def, req), paymentHeader: paymentHeaderOf(req) }), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
-    catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
+    catch (err) { console.warn(`[hangup] ticket reservation failed (${redactSecrets(String(err?.message || err)).slice(0, 80)}); the call runs without a ticket`); }
     reserved = true;
     if (decided) settle();
     if (closed || res.destroyed) {
@@ -13213,7 +13306,7 @@ if (!FREE_MODE) {
     if (res.getHeader("X-Pow-Accepted") || res.getHeader("X-Trial-Accepted")) return next();
     let a = null;
     try { a = await claimFirstCallAllowance(req, res, def, { ip: req.ip, synthetic: isSyntheticRequest(req), hasPaidSale: payerHasPaidSale }); }
-    catch (err) { console.warn(`[allowance] claim failed (${String(err?.message || err).slice(0, 80)}); the call is paid as usual`); }
+    catch (err) { console.warn(`[allowance] claim failed (${redactSecrets(String(err?.message || err)).slice(0, 80)}); the call is paid as usual`); }
     if (a?.granted) onResponseEnd(req, res, () => { void finishFirstCallAllowance(req).catch(() => {}); });
     next();
   });
@@ -14286,6 +14379,12 @@ if (!x402Crawl.on) {
     })().catch((e) => console.warn(`[index] boot warm failed (the first reader builds it): ${String(e?.message || e).slice(0, 120)}`));
   } });
 }
+// Price webhooks (src/price-webhooks.js): with a signing key set, record the
+// catalog's list prices (queueing one delivery per subscription that watches a
+// changed price) and start the delivery turn. Leased, so one replica does each.
+if (priceWebhookSigningKey()) {
+  startPriceWebhooks({ prices: () => Object.fromEntries(Object.values(CATALOG).filter((d) => d?.slug && typeof d.price === "string").map((d) => [d.slug, d.price])) });
+}
 // Seller reputation (src/seller-reputation.js): recorded and computed only
 // where the production crawl runs (the same switch), never on a CI, test or
 // local boot unless X402_INDEX_CRAWL=on says so; SELLER_REPUTATION=off turns
@@ -14333,12 +14432,12 @@ if (!mppCrawl.on) {
   // MPP leaderboard: on-chain ranking of the verified sellers above by inbound
   // USDC.e transfers on Tempo (src/mpp-leaderboard.js). Rides the crawler's
   // switch (nothing to rank without it) plus its own escape hatch; the
-  // rebuild is one batched eth_getLogs per 33k-block chunk every 30 min.
+  // rebuild is one batched eth_getLogs per 33k-block chunk at its fixed slots.
   if (String(process.env.MPP_LEADERBOARD || "").toLowerCase() === "off") {
     console.log("[mpp-leaderboard] disabled (MPP_LEADERBOARD=off)");
   } else {
     startMppLeaderboard({ self: tempoSelfRecipient() });
-    // Solana SPL leaderboard: hourly batched credits scan over every Solana
+    // Solana SPL leaderboard: a batched credits scan at its fixed slots over every Solana
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
       listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOriginsAsync(),
@@ -14436,7 +14535,8 @@ if (_monitors && process.env.MONITOR_SCHEDULER !== "off") bootStep("monitors.sta
 // chain's public RPC from it.
 if (revenueWarmupEnabled()) bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => { /* first pageview warms instead */ }));
 
-// x402 Leaderboard cache: warms once at boot, refreshes every 4 hours. Failures keep
+// x402 Leaderboard cache: warm-started at boot, rebuilt at its fixed slots
+// (src/board-refresh-slots.js). Failures keep
 // the previous good snapshot rather than wiping it — a transient RPC outage
 // shouldn't make /api/leaderboard return nothing. Fire-and-forget so a slow
 // Bazaar walk can't delay boot or /health.
@@ -14481,6 +14581,8 @@ bootStep("setAlgorandCrawlSources", () => {
     countInbound: makeIndexerInboundCount(getJsonAcross, ALGORAND_INDEXER_BASES),
   });
 });
+// A board rebuild that is due waits while an index crawl is in flight.
+addBoardRefreshQuietCheck(() => (crawlInProgress() ? "an index crawl is in flight" : null));
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh({
   crawledWallets: (chain) => allPayToOriginsAsync(chain?.caip2 || "eip155:8453"),
   // The prices those wallets' own routes publish, so a transfer to a wallet

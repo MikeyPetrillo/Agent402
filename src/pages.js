@@ -9,6 +9,7 @@ import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
 import { leaderboardCadence } from "./refresh-cadence.js";
+import { returningWalletHeaderParams } from "./returning-wallet.js";
 import { binaryTypesOf, responseTypesOf, JSON_MIME } from "./tool-media-type.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { REPO_URL } from "./repo-link.js";
@@ -45,6 +46,7 @@ import { kalshiToolsEnabled } from "./kalshi-switch.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { toolJudgeEnabled } from "./tool-judge.js";
 import { fromPriceLabel } from "./quoted-from.js";
+import { CARD_ART_VERSION } from "./brand-mark.js";
 
 // A price in base units of an offer's token (src/base-units.js), or null
 // when the price is not a dollar figure.
@@ -598,7 +600,7 @@ ${paidCallScript()}`;
     canonical,
     baseUrl,
     activePath: "/tools",
-    ogImage: `${baseUrl}/tools/${tool.slug}/card.png`,
+    ogImage: `${baseUrl}/tools/${tool.slug}/card.png?v=${CARD_ART_VERSION}`,
     jsonLd,
     extraCss: TOOL_PAGE_CSS + PAID_CALL_CSS,
     body,
@@ -702,8 +704,8 @@ export function faqItems() {
   { g: "paying", q: "Can I use it without any money or a wallet?", a: `Yes. Most pure-CPU tools accept proof-of-work - a sha256 puzzle solved by your own CPU (${powCostPhrase()}) - and the hosted MCP connector runs that same set for free (rate-limited).` },
   { g: "paying", q: "Which blockchain and asset does it use?", a: `${RAILS_PAREN}. The buyer needs only the stablecoin - gas is sponsored by the facilitator on EVM chains.` },
   { g: "paying", q: "What happens if a tool fails after I pay?", a: "Over x402 an error is not charged: settlement runs only after a successful (under-400) response. A payment final before the call runs (a Tempo push transfer over MPP) is recorded when the call fails and repaid on chain; look one up with <code>GET /api/refunds/lookup?tx=&lt;hash&gt;</code>. A few tools charge a partial result by design and say so in their description." },
-  { g: "protocols", q: "What is x402?", a: 'An open HTTP payment standard built on the 402 Payment Required status code, for machine-to-machine pay-per-call payments in stablecoins, with settlement infrastructure from Coinbase. Plain-English explainer: <a href="/what-is-x402">/what-is-x402</a>.' },
-  { g: "protocols", q: "What is MPP, and does Agent402 support it?", a: 'Yes. MPP (Machine Payments Protocol) carries the same pay-per-call handshake in HTTP&rsquo;s standard auth headers. Every paid endpoint accepts its evm method, and most also accept its tempo method (memory and the long-running report routes take evm only), at the same URL and price. Header by header: <a href="/what-is-x402#compare">the comparison table</a>; the full explainer: <a href="/what-is-mpp">/what-is-mpp</a>.' },
+  { g: "protocols", q: "What is x402?", a: 'An open HTTP payment standard built on the 402 Payment Required status code, for machine-to-machine pay-per-call payments in stablecoins, with settlement infrastructure from Coinbase. How a paid request works here: <a href="/what-is-x402">x402 and MPP on Agent402</a>.' },
+  { g: "protocols", q: "What is MPP, and does Agent402 support it?", a: 'Yes. MPP (Machine Payments Protocol) carries the same pay-per-call handshake in HTTP&rsquo;s standard auth headers. Every paid endpoint accepts its evm method, and most also accept its tempo method (memory and the long-running report routes take evm only), at the same URL and price. Header by header: <a href="/what-is-x402#compare">the comparison table</a>; how a payment works here: <a href="/what-is-mpp">MPP on Agent402</a>.' },
   { g: "models", q: "Does using this spend my AI tokens?", a: "No. You never hand us a model key; a model we run is billed to us and priced into the call. Most of the catalog is deterministic code (parsers, hashes, math, a real browser). The model-backed ones are named: the /v1 gateway tiers, the report products, Decide (<code>/api/decide</code>), the router's judgment model, and the image, speech, transcription, embedding and AI-answer tools." },
   { g: "models", q: "Is there an OpenAI-compatible endpoint?", a: 'Yes. Point any OpenAI SDK at <code>base_url https://agent402.tools/v1/metered</code> (with <code>/v1/metered/messages</code> and <code>/v1/metered/responses</code> twins), paid per call in USDC over x402 or MPP with no API key. How each request is quoted: <a href="/guides/x402-in-5-minutes">the five-minute guide</a>; flat tiers, embeddings and images: <a href="/pricing">/pricing</a>.' },
   { g: "models", q: "Is my data stored?", a: 'Tool inputs are processed in memory. The memory tools store data by design (wallet-keyed, owner-deletable, optional TTL); the other cases, such as short-lived response caches and decisions bought on /api/decide (30 days), are listed in <a href="/privacy">/privacy</a>.' },
@@ -713,7 +715,7 @@ export function faqItems() {
   { g: "sellers", q: "How does the Smart Order Router decide which seller to route to?", a: `${routerRankingSentence()} If the model declines every candidate, route-and-execute refuses before anything is paid. ${routingProofSentence()} More: <a href="/guides/smart-order-router">the router guide</a>.` },
   { g: "service", q: "How do I know the service is honest?", a: 'The server is open source; CI re-tests every tool that runs without a third-party key against its own documented example before each deploy. The wallet-identity tools (memory and usage), which need a paying wallet, ' + (kalshiToolsEnabled() ? 'and one prediction-market family whose upstream throttles CI runners ' : '') + 'get a looser check, and one rate-limited data family runs on a rotation, covered across runs. Revenue settles on chain to the receiving wallets listed in <a href="/.well-known/x402">/.well-known/x402</a> (agent402.base.eth on Base and the other EVM chains).' },
   { g: "service", q: "Is Agent402 self-hostable and open source?", a: 'Yes - the server is open source under the AGPL-3.0 license (the client SDK, MCP connector, and tollbooth are MIT). Clone the repo and run it yourself for free, with or without payments enabled. It also ships agent402-tollbooth, an open-source pay-per-crawl gate for charging AI crawlers on your own site.' },
-  { g: "service", q: "Who runs Agent402?", a: `Havok Holdings LLC - a public, contactable maintainer reachable at <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>, on <a href="${REPO_URL}">GitHub</a>, and on <a href="https://x.com/Agent402Tools">X</a>.` },
+  { g: "service", q: "Who runs Agent402?", a: `Havok Holdings LLC - a public, contactable maintainer reachable at <a href="mailto:help@agent402.tools">help@agent402.tools</a>, on <a href="${REPO_URL}">GitHub</a>, and on <a href="https://x.com/Agent402Tools">X</a>.` },
   ];
 }
 
@@ -1036,6 +1038,7 @@ export function openapiSpec(baseUrl, catalog) {
           ? { type: "string", examples: ["respond-async", `wait=${tool.asyncProfile.maxSeconds}`] }
           : { type: "string", enum: ["respond-async"] },
       }] : []),
+      ...returningWalletHeaderParams(tool),
       ...(isComputePayable(tool) ? [{
         name: "X-Pow-Solution",
         in: "header",
@@ -1051,7 +1054,14 @@ export function openapiSpec(baseUrl, catalog) {
           in: "query",
           required: required.includes(name),
           description: schema.description,
-          schema: { type: QUERY_PARAM_TYPES.has(schema.type) ? schema.type : "string" },
+          // A string field's published length cap (maxLength, the number the
+          // handler enforces) and its closed set of values (enum) ride on the
+          // parameter as they do on a JSON body.
+          schema: {
+            type: QUERY_PARAM_TYPES.has(schema.type) ? schema.type : "string",
+            ...(Number.isInteger(schema.maxLength) && (!QUERY_PARAM_TYPES.has(schema.type) || schema.type === "string") ? { maxLength: schema.maxLength } : {}),
+            ...(schema.type === "string" && Array.isArray(schema.enum) && schema.enum.length > 0 && schema.enum.every((v) => typeof v === "string") ? { enum: [...schema.enum] } : {}),
+          },
           ...(discovery?.input?.[name] !== undefined ? { example: discovery.input[name] } : {}),
         })),
         ...headerParams,
@@ -1177,6 +1187,19 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
   };
+  paths["/api/router-benchmarks"] = {
+    get: {
+      operationId: "getRouterBenchmarks",
+      security: [],
+      summary: "Router benchmarks: measured outcomes across outside sellers, in aggregate",
+      description: "Free. Aggregates over the 30-day reputation records this server holds: the share of the router's recorded purchases an outside seller answered 200 after taking the payment, and the measured uptime, 402 responsiveness and price-match scores of the sellers the router bought from beside the indexed sellers it did not buy from. No seller is named; a statistic is published only when at least five sellers are scored on it and otherwise reads not-enough-data; no field counts payments, purchases, buyers or settlements. One seller's own record is on /api/reputation?seller=.",
+      tags: ["transparency"],
+      responses: {
+        200: { description: "The benchmark document.", content: { "application/json": { schema: { type: "object", required: ["benchmark", "recordState", "windowDays", "delivery", "cohorts", "comparison", "legend"], properties: { benchmark: { type: "string" }, recordState: { type: "string", enum: ["ready", "loading", "not-measured-here"] }, windowDays: { type: "integer" }, minCohortSellers: { type: "integer" }, delivery: { type: "object" }, cohorts: { type: "object" }, comparison: { type: "object" }, legend: { type: "string" } } } } } },
+        503: { description: "The benchmark could not be computed right now; retry after Retry-After seconds." },
+      },
+    },
+  };
   paths["/api/reputation/recheck"] = {
     post: {
       operationId: "recheckSellerReputation",
@@ -1212,7 +1235,7 @@ export function openapiSpec(baseUrl, catalog) {
         `${frontDoorOneLine(catalog)} ${leadSentence({ mpp: Boolean(mppShort), receipts: receiptsServed() })} ${SUPPORT_LINE} The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
-      contact: { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: baseUrl },
+      contact: { name: "Havok Holdings LLC", email: "help@agent402.tools", url: baseUrl },
       // Agent-facing quickstart read by MPP/x402 discovery crawlers
       // (info.x-guidance in MPPScan's audit).
       "x-guidance":

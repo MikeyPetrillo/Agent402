@@ -64,6 +64,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           exit 0
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Open or close the issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -71,30 +80,23 @@ jobs:
           DETAIL: ${{ steps.check.outputs.body }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          TITLE="Refund ledger needs attention"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: refund-ledger"
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
 
           if [ "$CODE" = "0" ]; then
             if [ -n "$OPEN" ]; then
-              gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" \
-                --comment "Refund ledger clean at $(date -u +%FT%TZ). $DETAIL"
+              gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
             echo "clean"
             exit 0
           fi
 
-          if [ "$CODE" = "2" ]; then
-            HEAD="**The refund ledger could not be READ.** That is not the same as clean - an unreadable ledger and an empty one look identical, which is how an alarm stays dead without anyone noticing. Check the operator token and that production is serving /__operator/refunds.json."
-          else
-            HEAD="The refund ledger has rows that need a human. **A row stuck in \`sending\` means a send began and never resolved - the money may already have left with no recorded transaction, and it will never retry by design.** Check the chain before resolving it, then mark it paid with the outbound tx or void it with a note."
-          fi
-
-          BODY=$(printf '%s\n\n```\n%s\n```\n\nOperator view (token-gated, resolves ids to wallets privately):\n`GET /__operator/refunds.json?status=sending`\n\nRun: %s\n\n_Counts and ids only - never addresses. This issue is public._' \
-            "$HEAD" "$DETAIL" "$RUN_URL")
-
+          # Code 2 is a ledger that could not be read, which is not the same as clean;
+          # any other code is rows that need a person. The detail (counts and ids,
+          # never addresses) is in the check step's log.
+          echo "refund ledger check: code $CODE"
           if [ -n "$OPEN" ]; then
-            gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+            echo "already tracked in #$OPEN"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
           fi

@@ -386,7 +386,7 @@ export const ATTEST_TOOLS = [
       input: { tx: "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb" },
       inputSchema: {
         properties: {
-          tx: { type: "string", description: "Settlement transaction of a call you paid for, as carried in that response's PAYMENT-RESPONSE (x402) or Payment-Receipt (MPP) header: EVM hash, Solana or Stellar signature, or Algorand id." },
+          tx: { type: "string", maxLength: 130, description: "Settlement transaction of a call you paid for, as carried in that response's PAYMENT-RESPONSE (x402) or Payment-Receipt (MPP) header: EVM hash, Solana or Stellar signature, or Algorand id." },
         },
         required: ["tx"],
       },

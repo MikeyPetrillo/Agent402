@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Strands agent on AWS Bedrock AgentCore that buys an Agent402 tool over x402.
+Strands agent on Amazon Bedrock AgentCore that buys an Agent402 tool over x402.
 
 This is the SHOWCASE: a Strands agent with the AgentCore Payments plugin and an
 HTTP tool. You prompt it to run a web search and then a cited answer, two paid

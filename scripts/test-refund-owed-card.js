@@ -14,11 +14,10 @@
 // poll is answered inside its bounded wait with the refund still owed, and a
 // second poll starts no second refund call.
 import "./lib/file-mode.js";
-import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { ownStoreEnv } from "./lib/own-stores.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -32,22 +31,28 @@ mkdirSync(DIR, { recursive: true });
 const restore = () => { try { rmSync(dirname(DIR), { recursive: true, force: true }); } catch { /* best effort */ } };
 const seed = (entries) => writeFileSync(ISSUES, JSON.stringify(entries));
 
-const PORT = await getFreePort();
+// Booted on PORT=0 with the port read back from its listening line: the port
+// the suite addresses is the one the child bound, never one picked earlier
+// and released for the child to take later (scripts/lib/boot-server.js).
 const TOKEN = "owed-card-test-operator-token-0123456789";
-const child = spawn(process.execPath, ["--import", "./scripts/lib/stripe-hang-preload.js", "src/server.js"], {
-  env: { ...process.env, ...STORES, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
-         AGENT402_OPERATOR_TOKEN: TOKEN, STRIPE_SECRET_KEY: "sk_test_offline_never_called" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let log = "";
-child.stdout.on("data", (d) => { log += d; });
-child.stderr.on("data", (d) => { log += d; });
-const base = `http://127.0.0.1:${PORT}`;
+let srv;
 try {
-  for (let i = 0; i < 120; i++) {
-    try { const r = await fetch(`${base}/health`); if (r.ok) break; } catch { /* booting */ }
-    await new Promise((r) => setTimeout(r, 500));
-  }
+  srv = await bootServer({
+    stores: false,
+    args: ["--import", "./scripts/lib/stripe-hang-preload.js"],
+    env: { ...STORES, FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
+           AGENT402_OPERATOR_TOKEN: TOKEN, STRIPE_SECRET_KEY: "sk_test_offline_never_called" },
+  });
+} catch (e) {
+  restore();
+  console.error(`FAIL - the server did not boot: ${e.message}`);
+  process.exit(1);
+}
+const log = () => srv.log();
+// A failed request names its cause and whether the server is still running.
+const why = (e) => [e?.name, e?.cause?.code, srv.exited() ? `server exited ${JSON.stringify(srv.exited())}` : ""].filter(Boolean).join(" ");
+const base = srv.url;
+try {
   // A status read is given READ_BOUND_MS: one held by a call that never
   // answers fails here instead of holding the suite.
   const READ_BOUND_MS = 10_000;
@@ -57,9 +62,9 @@ try {
     try {
       const r = await fetch(`${base}/api/gateway-status`, { headers: operator ? { "X-Operator-Token": TOKEN } : {}, signal: AbortSignal.timeout(READ_BOUND_MS) });
       return (await r.json()).refundsOwed;
-    } catch (e) { return { status: `no answer inside ${READ_BOUND_MS} ms (${e?.name})` }; } finally { slowest = Math.max(slowest, Date.now() - t0); }
+    } catch (e) { return { status: `no answer inside ${READ_BOUND_MS} ms (${why(e)})` }; } finally { slowest = Math.max(slowest, Date.now() - t0); }
   };
-  const sessionReads = (id) => log.split("\n").filter((l) => l.startsWith("[stripe-hang-preload] request ") && l.endsWith(` GET /v1/checkout/sessions/${id}`)).length;
+  const sessionReads = (id) => log().split("\n").filter((l) => l.startsWith("[stripe-hang-preload] request ") && l.endsWith(` GET /v1/checkout/sessions/${id}`)).length;
   const MIN = 60_000, HOUR = 3600_000;
   const iso = (ago) => new Date(Date.now() - ago).toISOString();
 
@@ -107,11 +112,11 @@ try {
     const REC = join(DIR, "cs_test_poll.json");
     writeFileSync(REC, JSON.stringify({ status: "error", refundId: null, error: "We couldn't complete this report. Your refund is being processed.", refundOwed: true, refundAttempts: 1, lastRefundAttemptAt: 0, paymentIntent: "pi_test_poll", product: "research", at: iso(20 * MIN) }));
     try {
-      const refundCalls = () => log.split("\n").filter((l) => l.startsWith("[stripe-hang-preload] request ") && l.endsWith(" POST /v1/refunds")).length;
+      const refundCalls = () => log().split("\n").filter((l) => l.startsWith("[stripe-hang-preload] request ") && l.endsWith(" POST /v1/refunds")).length;
       const POLL_BOUND_MS = 30_000; // the poll's own wait is far inside this; the Stripe client's is far past it
       const poll = async () => {
         try { const r = await fetch(`${base}/api/r/cs_test_poll`, { signal: AbortSignal.timeout(POLL_BOUND_MS) }); return { status: r.status, body: await r.json() }; }
-        catch (e) { return { status: 0, body: { error: `no answer inside ${POLL_BOUND_MS} ms (${e?.name})` } }; }
+        catch (e) { return { status: 0, body: { error: `no answer inside ${POLL_BOUND_MS} ms (${why(e)})` } }; }
       };
       const first = await poll();
       ok(first.status === 200 && first.body.status === "error" && first.body.refundOwed === true && !first.body.refundId && /Your refund is being processed\.$/.test(first.body.error || ""), `buyer poll: with Stripe not answering the poll is answered, the refund still owed and not reported as sent (${first.status} ${String(first.body.error).slice(0, 80)})`);
@@ -125,9 +130,9 @@ try {
   ok((await read(false)).status === "ok", "control: once nothing is owed the word reads ok again");
   ok(slowest < READ_BOUND_MS / 2, `no status read waited on Stripe (slowest ${slowest} ms of ${READ_BOUND_MS} ms)`);
 } finally {
+  await srv.stop();
   restore();
-  child.kill("SIGKILL");
 }
-if (fail) console.error(log.slice(-3000));
+if (fail) console.error(log().slice(-3000));
 console.log(`\ntest-refund-owed-card: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

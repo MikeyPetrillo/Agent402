@@ -72,7 +72,7 @@ export function mppFlagshipSnippet(row, baseUrl, query = "") {
 import { privateKeyToAccount } from "viem/accounts";
 
 const account = privateKeyToAccount(process.env.AGENT_KEY);
-const mppx = Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account })] });
+const mppx = Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })] });
 
 // ${row.price} per call; the first request returns 402, mppx pays and retries.
 const res = await mppx.fetch("${url}");

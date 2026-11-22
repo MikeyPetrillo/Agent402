@@ -13,6 +13,8 @@
 // Neither field is a buyer input on these routes; the /v1/audio/speech
 // `zdr` opt-in a buyer already had still applies on top (it can only add zdr).
 
+import { ADDITION_MODEL_IDS } from "./speech-additions.js";
+
 export const AUDIO_ZDR_MODELS = new Set([
   "elevenlabs/scribe-v2",
   "mistralai/voxtral-mini-tts-2603",
@@ -26,6 +28,9 @@ export const AUDIO_ZDR_MODELS = new Set([
   "elevenlabs/eleven-v4",
   "elevenlabs/eleven-v3",
   "elevenlabs/eleven-multilingual-v2",
+  // The named models beside the chains (src/speech-additions.js): each lists
+  // one endpoint, a ZDR one (read 2026-11-21; the live guard re-reads it).
+  ...ADDITION_MODEL_IDS,
 ]);
 
 /** The `provider` object for one OpenRouter audio request to `model`. */

@@ -8,7 +8,7 @@
 // client that hardcodes one name signs a digest no facilitator and no contract
 // will ever accept on the chains that use the other.
 //
-// Measured 2026-08-28: AWS Bedrock AgentCore Payments (Stripe/Privy instrument)
+// Measured 2026-08-28: Amazon Bedrock AgentCore Payments (Stripe/Privy instrument)
 // signs Base USDC authorizations under `{name:"USDC"}`, so CDP answers
 // `invalid_exact_evm_payload_signature` and the buy dies - while the SAME
 // instrument settles our plain x402 path fine (Base tx 0x9b48b7fe...). Their

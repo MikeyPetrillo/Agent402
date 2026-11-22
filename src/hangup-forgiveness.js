@@ -113,6 +113,7 @@ export const DEFAULT_GLOBAL_BUDGET_USD = 2;
 //     grants, remembered documents) has changed;
 //   - attest: an attestation on Base is permanent and paid for in gas;
 //   - feedback: the verdict is stored against the sale;
+//   - price-webhook: the registration is kept and later delivered to;
 //   - every route that spends our own wallet (catalog `spendsOwnWallet` or
 //     `paysThirdPartySeller`: the route-execute tiers, seller-payability, the
 //     flight tools, decide-execute): it pays outside sellers or gas from our

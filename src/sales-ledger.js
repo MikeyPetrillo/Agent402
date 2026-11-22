@@ -54,8 +54,10 @@ import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtim
 import { retryingLoad } from "./store-retry.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
 import { cleanSalePath, salePathGroup } from "./sale-path.js";
+import { cleanSaleSource } from "./sale-source.js";
 import { ARRIVALS, arrivalOfSale } from "./funnel.js";
 import { enableWal } from "./sqlite-wal.js";
+import { isOneSaleSettlement, oneSaleScopeSql, repeatRowsSql } from "./sale-repeats.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.SALES_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-sales.db");
@@ -157,6 +159,45 @@ for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUM
 // keyed rows, so building it on an existing file is one pass and no entries.
 for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN run_key TEXT"); } catch { /* exists */ } }
 for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_run_key ON sales (run_key) WHERE run_key IS NOT NULL"); } catch { /* exists */ } }
+// One settlement, one sale (src/sale-repeats.js). The rows that repeat an
+// earlier row's Solana settlement signature are listed here by id, and every
+// reader that counts or sums sales leaves them out (ONCE_SQL), so a settlement
+// is one sale in every figure while the rows themselves stay on the books.
+// The list is derived, never stored: a TEMP table of this connection, built
+// from the rows at open (file mode) and kept as rows arrive (the mirror).
+db.exec("CREATE TEMP TABLE IF NOT EXISTS sale_repeats (sale_id INTEGER PRIMARY KEY)");
+const ONCE_SQL = "id NOT IN (SELECT sale_id FROM temp.sale_repeats)";
+db.exec(`INSERT OR IGNORE INTO temp.sale_repeats (sale_id) ${repeatRowsSql("sales")}`);
+const unmarkRepeatsOfTx = db.prepare("DELETE FROM temp.sale_repeats WHERE sale_id IN (SELECT id FROM sales WHERE tx = ?)");
+const markRepeatsOfTx = db.prepare(`INSERT OR IGNORE INTO temp.sale_repeats (sale_id)
+  SELECT r.id FROM sales r WHERE r.tx = ? AND ${oneSaleScopeSql("r")}
+    AND r.id > (SELECT MIN(f.id) FROM sales f WHERE f.tx = r.tx AND ${oneSaleScopeSql("f")})`);
+/** Re-read which rows under this settlement id are repeats (after a row under it was written). */
+function noteSettlementRows(tx) { if (typeof tx === "string" && tx) { unmarkRepeatsOfTx.run(tx); markRepeatsOfTx.run(tx); } }
+// The writer asks this once per Solana sale, on the loop. INDEXED BY pins the
+// lookup to the settlement id: the table carries no ANALYZE statistics, and
+// left to itself the planner reads every usdc row through (rail, ts).
+const qSettlementBooked = db.prepare(`SELECT 1 AS hit FROM sales f INDEXED BY idx_sales_tx WHERE f.tx = ? AND ${oneSaleScopeSql("f")} AND f.${PUBLIC_RAIL_SQL} LIMIT 1`).pluck();
+/** The plan of the writer's settlement lookup, for scripts/test-sale-repeats.js. */
+export function settlementBookedPlan() { return db.prepare(`EXPLAIN QUERY PLAN ${qSettlementBooked.source}`).all("x").map((r) => r.detail); }
+const qRepeatRowCount = db.prepare("SELECT COUNT(*) FROM temp.sale_repeats").pluck();
+let repeatSalesRefused = 0;
+/** A second sale for a settlement that already holds one is not written; counted and logged (slug and network only). */
+function refuseRepeatSale(slug, network) {
+  repeatSalesRefused++;
+  console.warn(`[sales-ledger] a sale was not written: its settlement already holds one (${String(slug).slice(0, 60)} on ${String(network).slice(0, 40)}; ${repeatSalesRefused} since boot)`);
+}
+/** Operator figures: the rows on the books that repeat an earlier row's settlement, and the repeats refused since boot. */
+export function saleRepeatStats() {
+  let rows = 0;
+  try { rows = Number(qRepeatRowCount.get()) || 0; } catch { /* unreadable: 0 */ }
+  return { repeatRows: rows, refusedSinceBoot: repeatSalesRefused };
+}
+// Additive column: the named source a card sale arrived from
+// (src/sale-source.js), carried from the checkout request through the checkout
+// session's metadata. NULL on every sale that named none and on every rail
+// but the card's. Read only by the operator's count of card sales by source.
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN source TEXT"); } catch { /* exists */ } }
 const RUN_KEY_RE = /^[0-9a-f]{32}$/;
 /** A run key safe to store: 32 lower-case hex characters, else null. */
 export const cleanRunKey = (v) => (typeof v === "string" && RUN_KEY_RE.test(v) ? v : null);
@@ -204,7 +245,7 @@ const IMPORT_NAME = basename(DB_PATH);
 // in-memory mirror and the write-through file only in database mode, so file
 // mode's file is untouched.
 if (USE_PG) for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN sale_uid TEXT"); } catch { /* exists */ } }
-const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", "via", "run_key", ...(USE_PG ? ["sale_uid"] : [])];
+const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", "via", "run_key", "source", ...(USE_PG ? ["sale_uid"] : [])];
 const FEEDBACK_COLS = ["tx", "sale_id", "slug", "payer", "verdict", "reason", "ts"];
 const PG_DDL = () => `
   CREATE TABLE IF NOT EXISTS ${T("sales")} (
@@ -230,6 +271,7 @@ const PG_DDL = () => `
   CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_uid ON ${T("sales")} (sale_uid);
   ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS via TEXT;
   ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS run_key TEXT;
+  ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS source TEXT;
   CREATE TABLE IF NOT EXISTS ${T("sale_feedback")} (
     tx          TEXT PRIMARY KEY,
     sale_id     BIGINT NOT NULL,
@@ -255,6 +297,7 @@ const saleRowOf = (r) => cleanRow({
   response_sha256: r.response_sha256 ?? null, attest_uid: r.attest_uid ?? null, attest_tx: r.attest_tx ?? null,
   via: r.via ?? null,
   run_key: cleanRunKey(r.run_key),
+  source: r.source ?? null,
   ...(USE_PG ? { sale_uid: r.sale_uid ?? null } : {}),
 });
 const feedbackRowOf = (r) => cleanRow({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
@@ -262,7 +305,7 @@ let watermark = 0; // refresh pulls rows stamped after this (database clock, ms)
 let importedThrough = 0; // the newest updated_at an import in this process wrote (database clock, ms)
 const warnOnce = makeWarnOnce("sales-ledger");
 const enqueue = serialQueue();
-function applySale(r) { mirrorSale.run(saleRowOf(r)); }
+function applySale(r) { mirrorSale.run(saleRowOf(r)); if (isOneSaleSettlement(r)) noteSettlementRows(r.tx); }
 function applyFeedback(r) { mirrorFeedback.run(feedbackRowOf(r)); }
 const applySales = db.transaction((rows) => { for (const r of rows) applySale(r); });
 const applyFeedbacks = db.transaction((rows) => { for (const r of rows) applyFeedback(r); });
@@ -289,7 +332,8 @@ const SALE_INS_TYPES = ["bigint", "text", "double precision", "text", "text", "t
 /** A sale's values carry its sale_uid as a twelfth value (an entry queued
  *  before sale_uid existed has eleven), its path as a thirteenth (an entry
  *  queued before the path existed has twelve and lands with NULL) and its run
- *  key as a fourteenth (an entry queued before it existed lands with NULL). */
+ *  key as a fourteenth (an entry queued before it existed lands with NULL),
+ *  and its source as a fifteenth (the same). */
 const uidOf = (vals) => (Array.isArray(vals) && typeof vals[11] === "string" && vals[11] ? vals[11] : null);
 /** INSERT a sale unless the same sale is already there. With a sale_uid that
  *  is the identity (the live write and the replay of one sale share it, two
@@ -297,16 +341,22 @@ const uidOf = (vals) => (Array.isArray(vals) && typeof vals[11] === "string" && 
  *  existed), the whole row: ts, slug, rail, payer and tx. A tx alone is never
  *  a sale's identity: two sales can name one payment (a subscription invoice,
  *  a webhook sent twice), so a replay must not drop the second. */
-const INSERT_SALE_BY_UID = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")}, sale_uid, via, run_key)
-  VALUES (${SALE_INS_COLS.map((_, i) => `$${i + 1}`).join(", ")}, $12, $13, $14) ON CONFLICT (sale_uid) DO NOTHING RETURNING *`;
+/** False for a sale whose settlement can hold one sale only (src/sale-repeats.js) and already holds one. */
+const PG_NOT_BOOKED = () => `NOT (${oneSaleScopeSql().replace(/\brail\b/g, "$4::text").replace(/\bnetwork\b/g, "$5::text").replace(/\btx\b/g, "$7::text")}
+    AND EXISTS (SELECT 1 FROM ${T("sales")} f WHERE f.tx = $7::text AND ${oneSaleScopeSql("f")}))`;
+const INSERT_SALE_BY_UID = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")}, sale_uid, via, run_key, source)
+  SELECT ${SALE_INS_COLS.map((_, i) => `$${i + 1}::${SALE_INS_TYPES[i]}`).join(", ")}, $12::text, $13::text, $14::text, $15::text
+  WHERE ${PG_NOT_BOOKED()}
+  ON CONFLICT (sale_uid) DO NOTHING RETURNING *`;
 const INSERT_SALE_IF_ABSENT_ROW = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")})
   SELECT ${SALE_INS_COLS.map((_, i) => `$${i + 1}::${SALE_INS_TYPES[i]}`).join(", ")}
   WHERE NOT EXISTS (SELECT 1 FROM ${T("sales")} WHERE tx IS NOT DISTINCT FROM $7::text
     AND ts = $1::bigint AND slug = $2::text AND rail = $4::text AND payer IS NOT DISTINCT FROM $6::text)
+    AND ${PG_NOT_BOOKED()}
   RETURNING *`;
 /** Insert-if-absent for one queued sale; resolves the row when this call inserted it. */
 async function insertSaleIfAbsent(vals) {
-  if (uidOf(vals)) return (await stateQuery(INSERT_SALE_BY_UID(), [...vals.slice(0, 12), cleanSalePath(vals[12]), cleanRunKey(vals[13])])).rows[0] || null;
+  if (uidOf(vals)) return (await stateQuery(INSERT_SALE_BY_UID(), [...vals.slice(0, 12), cleanSalePath(vals[12]), cleanRunKey(vals[13]), cleanSaleSource(vals[14])])).rows[0] || null;
   return (await stateQuery(INSERT_SALE_IF_ABSENT_ROW(), vals.slice(0, 11))).rows[0] || null;
 }
 const FEEDBACK_IF_NEWER = () => `INSERT INTO ${T("sale_feedback")} (tx, sale_id, slug, payer, verdict, reason, ts) VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -446,7 +496,7 @@ async function pullAll() {
   const now = await pgNowMs(stateQuery);
   const s = await stateQuery(`SELECT * FROM ${T("sales")} ORDER BY id`);
   const f = await stateQuery(`SELECT * FROM ${T("sale_feedback")} ORDER BY ts`);
-  db.transaction(() => { db.exec("DELETE FROM sales; DELETE FROM sale_feedback"); for (const r of s.rows) applySale(r); for (const r of f.rows) applyFeedback(r); })();
+  db.transaction(() => { db.exec("DELETE FROM sales; DELETE FROM sale_feedback; DELETE FROM temp.sale_repeats"); for (const r of s.rows) applySale(r); for (const r of f.rows) applyFeedback(r); })();
   // An import this process just ran stamped every row it inserted within
   // the margin: the full pull holds them, so the refreshes start after the
   // newest imported stamp instead of pulling them again.
@@ -523,7 +573,7 @@ export function salesDeadLetterState() {
 export async function _salesDeadLetterEntries() { return deadLetter ? deadLetter.entries() : []; }
 
 const insertSale = db.prepare(
-  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, via, run_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, via, run_key, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 );
 
 /** Settle tx hash/signature out of the base64 PAYMENT-RESPONSE receipt. */
@@ -544,7 +594,7 @@ export function txFromPaymentResponse(headerValue) {
  * when the write failed), queued behind earlier writes so rows land in call
  * order; the serving path does not wait on it.
  */
-export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd, responseSha256, via, runKey = null }) {
+export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd, responseSha256, via, runKey = null, source = null }) {
   try {
     const p = normalizePayerAddress(payer); // lowercases EVM only — base58/Stellar stay case-exact
     const internal = Boolean(synthetic) || rail === "heartbeat" || (p !== null && BURNERS.has(p));
@@ -566,16 +616,19 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       // The sale's own id, and the sale on local disk BEFORE it is queued: a
       // crash, a kill or a database that hangs through the shutdown flush
       // leaves it there, and the replay lands it once (by this id).
-      const pgVals = [...vals, randomUUID(), cleanSalePath(via), cleanRunKey(runKey)];
+      const pgVals = [...vals, randomUUID(), cleanSalePath(via), cleanRunKey(runKey), cleanSaleSource(source)];
       return trackQueuedSale(pgVals[6], writer.write("record-sale", async () => {
         let row = await insertSaleIfAbsent(pgVals);
         // No row: this sale is already there (an earlier attempt whose reply was lost).
         if (!row) row = (await stateQuery(`SELECT * FROM ${T("sales")} WHERE sale_uid = $1`, [pgVals[11]])).rows[0];
         if (row) { applySale(row); writeThrough(fileSale, saleRowOf(row)); }
+        // Neither written nor there: its settlement already holds a sale.
+        else if (isOneSaleSettlement({ rail: pgVals[3], network: pgVals[4], tx: pgVals[6] })) refuseRepeatSale(pgVals[1], pgVals[4]);
         return true;
       }, { kind: "sale", payload: pgVals, onError: false }));
     }
-    insertSale.run(...vals, cleanSalePath(via), cleanRunKey(runKey));
+    if (isOneSaleSettlement({ rail: vals[3], network: vals[4], tx: vals[6] }) && qSettlementBooked.get(vals[6])) { refuseRepeatSale(vals[1], vals[4]); return undefined; }
+    insertSale.run(...vals, cleanSalePath(via), cleanRunKey(runKey), cleanSaleSource(source));
   } catch { /* never break serving for accounting */ }
   return USE_PG ? Promise.resolve(false) : undefined;
 }
@@ -866,11 +919,11 @@ export function setAttestation(id, { uid, attestTx }) {
 
 const qExtBySlug = db.prepare(`
   SELECT slug, COUNT(*) AS sales, SUM(${SALE_AMOUNT_SQL}) AS revenue, MAX(ts) AS last_ts
-  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ?
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?
   GROUP BY slug ORDER BY sales DESC, revenue DESC LIMIT 20`);
 const qExtRecent = db.prepare(`
   SELECT ts, slug, ${SALE_AMOUNT_SQL} AS price_usd, rail, network, payer, tx
-  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL}
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL}
   ORDER BY ts DESC LIMIT 20`);
 const qIntRecent = db.prepare(`
   SELECT ts, slug, price_usd, rail, network, payer, tx
@@ -943,7 +996,7 @@ const qMppTx = db.prepare("SELECT tx FROM sales WHERE wire IN ('mpp', 'mpp-tempo
 const qClaimedSettlements = db.prepare(`
   SELECT ts, slug, price_usd AS usd, network, tx
   FROM sales
-  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?
+  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts < ?
   ORDER BY ts`);
 /** External paid settlements in [since, until) as recorded at serve time. */
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
@@ -961,7 +1014,7 @@ export function claimedSettlements(since, until = Date.now()) {
 // rowid range (the rowid stays usable); an index would walk the whole window
 // once per page.
 const SUMMARY_PAGE_IDS = 2000;
-const WINDOW_PAGE = "FROM sales NOT INDEXED WHERE id >= ? AND id < ? AND ts >= ?";
+const WINDOW_PAGE = `FROM sales NOT INDEXED WHERE id >= ? AND id < ? AND ts >= ? AND ${ONCE_SQL}`;
 // The first id the window can hold and the last id on the books when the walk
 // starts (a row recorded during the walk is read by the next summary).
 const qWindowIdSpan = db.prepare("SELECT (SELECT MIN(id) FROM sales WHERE ts >= ?) AS lo, (SELECT MAX(id) FROM sales) AS hi");
@@ -1000,7 +1053,7 @@ const qExtDistinctPayersPage = db.prepare(`
   SELECT DISTINCT payer ${WINDOW_PAGE} AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL`).pluck();
 const qExtByPayer = db.prepare(`
   SELECT payer, COUNT(*) AS sales, SUM(${SALE_AMOUNT_SQL}) AS revenue, MAX(ts) AS last_ts
-  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND payer IS NOT NULL AND ts >= ?
   GROUP BY payer ORDER BY revenue DESC LIMIT 10`);
 // Demand composition: external tools ranked by how many DISTINCT verified
 // wallets bought each (breadth, not dollars) — the public /index "what agents
@@ -1010,7 +1063,7 @@ const qExtByPayer = db.prepare(`
 const qExtBuyersBySlug = db.prepare(`
   SELECT slug, COUNT(DISTINCT payer) AS buyers, COUNT(*) AS sales, SUM(${SALE_AMOUNT_SQL}) AS revenue
   FROM sales
-  WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
+  WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND payer IS NOT NULL AND ts >= ?
   GROUP BY slug ORDER BY buyers DESC, sales DESC LIMIT ?`);
 // Money is added across pages as integer nano-dollars (each row's price rounded
 // to 1e-9 USD, exact for any price the ledger records): a float sum's value
@@ -1039,7 +1092,7 @@ const qFirstTs = db.prepare(`SELECT MIN(ts) AS ts FROM sales WHERE ${PUBLIC_RAIL
 const qExtSlugWindow = db.prepare(`
   SELECT slug, COUNT(*) AS sales, SUM(${SALE_AMOUNT_SQL}) AS revenue,
          COUNT(DISTINCT payer) AS buyers, MIN(ts) AS first_ts, MAX(ts) AS last_ts
-  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts < ?
   GROUP BY slug`);
 
 // Payer-scoped view (the /api/my-usage tool). Money rails only — PoW rows
@@ -1080,12 +1133,12 @@ const qToolSalesInWindow = db.prepare(`
    LIMIT ?`);
 const qPayerTotals = db.prepare(`
   SELECT COUNT(*) AS n, SUM(${BUYER_AMOUNT_SQL}) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
-  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ?`);
+  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?`);
 const qPayerBySlug = db.prepare(`
   SELECT slug, COUNT(*) AS n, SUM(${BUYER_AMOUNT_SQL}) AS usd, MAX(ts) AS last_ts
-  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ?
+  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?
   GROUP BY slug ORDER BY n DESC, usd DESC LIMIT 50`);
-const qPayerAnySale = db.prepare(`SELECT 1 AS hit FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} LIMIT 1`);
+const qPayerAnySale = db.prepare(`SELECT 1 AS hit FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL} LIMIT 1`);
 /** True when this payer has any paid sale on the books, at any time (the
  *  first-call allowance's "not new" test, src/first-call-allowance.js).
  *  Database mode: the mirror, at most REFRESH_MS behind another container. */
@@ -1094,6 +1147,50 @@ export function payerHasPaidSale(payer) {
   if (!p) return false;
   return Boolean(qPayerAnySale.get(p));
 }
+// Distinct UTC days on which a payer has an outside paid sale since `sinceMs`
+// (the returning-wallet price's bar, src/returning-wallet.js). One seek on
+// idx_sales_payer over that payer's rows in the window; INDEXED BY pins it
+// (the table carries no ANALYZE statistics). The caller caches the answer.
+const qPayerPaidDays = db.prepare(`
+  SELECT COUNT(DISTINCT CAST(ts / 86400000 AS INTEGER)) AS d
+    FROM sales INDEXED BY idx_sales_payer
+   WHERE payer = ? AND ts >= ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL}`);
+/** Distinct paid UTC days of a payer since `sinceMs` (0 for an unreadable address). Database mode: the mirror. */
+export function payerPaidDays(payer, sinceMs) {
+  const p = normalizePayerAddress(payer);
+  if (!p) return 0;
+  return Number(qPayerPaidDays.get(p, Number(sinceMs) || 0)?.d) || 0;
+}
+// The return rate of outside payers over a window, for the operator view: how
+// many wallets paid on one day only, on two, and on `minPaidDays` or more.
+// Read a page at a time (one row per payer and day), our own wallets left out.
+const qPayerDaysPage = db.prepare(`
+  SELECT DISTINCT payer, CAST(ts / 86400000 AS INTEGER) AS day
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL`);
+function* externalReturnRateSteps({ days = 60, minPaidDays = 3, now = Date.now() } = {}) {
+  const since = now - days * 86_400_000;
+  const byPayer = new Map();
+  yield* windowPages(since, (a, b) => {
+    for (const r of qPayerDaysPage.all(a, b, since)) {
+      if (BURNERS.has(r.payer) || BURNERS.has(String(r.payer).toLowerCase())) continue;
+      let set = byPayer.get(r.payer);
+      if (!set) { set = new Set(); byPayer.set(r.payer, set); }
+      set.add(r.day);
+    }
+  });
+  let one = 0, two = 0, more = 0, qualifying = 0;
+  for (const set of byPayer.values()) {
+    if (set.size === 1) one++; else if (set.size === 2) two++; else more++;
+    if (set.size >= minPaidDays) qualifying++;
+  }
+  const payers = byPayer.size;
+  return { windowDays: days, minPaidDays, payers, paidOneDayOnly: one, paidTwoDays: two, paidThreeOrMoreDays: more, paidAgainOnAnotherDay: two + more, returnRate: payers ? Math.round(((two + more) / payers) * 1000) / 1000 : null, qualifying };
+}
+/** The outside payers' return rate over `days`, spread over event-loop turns. */
+export function externalReturnRateAsync({ days = 60, minPaidDays = 3, now = Date.now() } = {}) { return runStepsAsync(externalReturnRateSteps({ days, minPaidDays, now })); }
+/** The same, in one turn (tests and small ledgers). */
+export function externalReturnRate({ days = 60, minPaidDays = 3, now = Date.now() } = {}) { return runSteps(externalReturnRateSteps({ days, minPaidDays, now })); }
+
 // Returning grant holders (the first-call allowance's operator figure): for
 // each (payer, grant time) pair, the first outside paid sale strictly after
 // the grant. One query per chunk of pairs, never one per wallet. Each pair is
@@ -1142,7 +1239,7 @@ export function firstPaidSaleAfterAsync(grants, { chunk = FIRST_PAID_AFTER_CHUNK
 }
 const qPayerByNetwork = db.prepare(`
   SELECT network, COUNT(*) AS n, SUM(${BUYER_AMOUNT_SQL}) AS usd
-  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ?
+  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?
   GROUP BY network`);
 // External settlements and distinct external buyers per settlement network,
 // for the per-rail host entry on the chain marketplace pages (2026-08-28).
@@ -1225,7 +1322,7 @@ function* externalByNetworkSteps({ days = 30 } = {}) {
 }
 const qPayerRecent = db.prepare(`
   SELECT ts, slug, ${BUYER_AMOUNT_SQL} AS price_usd, network, tx
-  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL}
+  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ${ONCE_SQL}
   ORDER BY ts DESC LIMIT ?`);
 
 /**
@@ -1249,7 +1346,7 @@ export function externalSalesForSlugs(slugs, sinceMs, untilMs) {
     return db.prepare(
       `SELECT ts, slug, price_usd AS priceUsd, network, payer, tx, rail
          FROM sales
-        WHERE internal = 0 AND ${PUBLIC_RAIL_SQL} AND ts >= ? AND ts < ? AND slug IN (${holes})
+        WHERE internal = 0 AND ${PUBLIC_RAIL_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts < ? AND slug IN (${holes})
         ORDER BY ts ASC`
     ).all(Number(sinceMs) || 0, Number(untilMs) || Date.now(), ...list);
   } catch { return []; }
@@ -1468,19 +1565,19 @@ export function payerUsage(payer, { days = 30, limit = 50 } = {}) {
 const qAuditPage = db.prepare(`
   SELECT id, ts, slug, ${BUYER_AMOUNT_SQL} AS price_usd, quote_usd, rail, network, wire, tx, response_sha256
     FROM sales /* buyer-view */
-   WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ? AND (ts > ? OR (ts = ? AND id > ?))
+   WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts <= ? AND (ts > ? OR (ts = ? AND id > ?))
    ORDER BY ts, id
    LIMIT ?`);
 const qAuditTotals = db.prepare(`
   SELECT COUNT(*) AS n, SUM(CAST(ROUND(${BUYER_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano, MIN(ts) AS first_ts, MAX(ts) AS last_ts
-    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ?`);
+    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts <= ?`);
 const qAuditBySlug = db.prepare(`
   SELECT slug, COUNT(*) AS n, SUM(CAST(ROUND(${BUYER_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
-    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ?
+    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts <= ?
    GROUP BY slug ORDER BY slug`);
 const qAuditByDay = db.prepare(`
   SELECT CAST(ts / 86400000 AS INTEGER) AS day, COUNT(*) AS n, SUM(CAST(ROUND(${BUYER_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
-    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ?
+    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts <= ?
    GROUP BY day ORDER BY day`);
 const usdOfNano = (n) => Number(((Number(n) || 0) / NANO_PER_USD).toFixed(6));
 
@@ -1569,7 +1666,7 @@ let qAnswerDigests = null;
 export function answerDigestWindow(sinceMs, untilMs = Date.now()) {
   qAnswerDigests ||= db.prepare(`
     SELECT slug, COUNT(*) AS sales, COUNT(DISTINCT response_sha256) AS distinctAnswers, COUNT(DISTINCT payer) AS payers
-    FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND response_sha256 IS NOT NULL AND ts >= ? AND ts < ?
+    FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL} AND response_sha256 IS NOT NULL AND ts >= ? AND ts < ?
     GROUP BY slug`);
   return qAnswerDigests.all(Number(sinceMs) || 0, Number(untilMs) || Date.now());
 }
@@ -1742,12 +1839,12 @@ export const SWEEP_DISTINCT_TOOLS_PER_DAY = 30;
 const qSweepPayers = db.prepare(`
   SELECT DISTINCT payer FROM (
     SELECT payer, (ts / 86400000) AS day, COUNT(DISTINCT slug) AS n
-    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?
     GROUP BY payer, day)
   WHERE n >= ${SWEEP_DISTINCT_TOOLS_PER_DAY}`);
 const qDecideSales = db.prepare(`
   SELECT slug, internal, payer, COUNT(*) AS n, SUM(price_usd) AS usd, MAX(ts) AS last_ts
-  FROM sales WHERE slug IN ('decide', 'decide-execute') AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  FROM sales WHERE slug IN ('decide', 'decide-execute') AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?
   GROUP BY slug, internal, payer`);
 function decideWindow(since) {
   const out = {};
@@ -1809,7 +1906,7 @@ export function externalDailyRevenue({ days = 60 } = {}) {
   const rows = db.prepare(
     `SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day,
             SUM(price_usd) AS usd, COUNT(*) AS n
-     FROM sales /* net-received */ WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ?
+     FROM sales /* net-received */ WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?
      GROUP BY day ORDER BY day`
   ).all(since);
   return rows.map((r) => ({ day: r.day, revenueUsd: +Number(r.usd || 0).toFixed(6), sales: r.n }));
@@ -1908,7 +2005,32 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
       payer: r.payer, sales: r.sales, revenueUsd: +r.revenue.toFixed(4), lastAt: new Date(r.last_ts).toISOString(),
     })),
     byPath: salesByPath({ days }),
+    cardBySource: cardSalesBySource({ days }),
   };
+}
+
+// External card sales per named source (operator only): one-off reports and
+// subscription invoices, counted apart. A sale that named no source is under
+// `noSource`.
+const qCardBySource = db.prepare(`
+  SELECT source, wire, COUNT(*) AS n, COALESCE(SUM(price_usd), 0) AS usd
+  FROM sales WHERE internal = 0 AND rail = 'card' AND ts >= ?
+  GROUP BY source, wire`);
+/** { days, sources: { [name]: { sales, revenueUsd, reports, subscriptionInvoices } }, noSource: {...} } over the window. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
+export function cardSalesBySource({ days = 30 } = {}) {
+  const since = Date.now() - Math.max(0, Number(days) || 0) * 86_400_000;
+  const blank = () => ({ sales: 0, revenueUsd: 0, reports: 0, subscriptionInvoices: 0 });
+  const sources = {}, noSource = blank();
+  for (const r of qCardBySource.all(since)) {
+    const e = r.source ? (sources[r.source] || (sources[r.source] = blank())) : noSource;
+    const n = Number(r.n) || 0;
+    e.sales += n;
+    e.revenueUsd += Number(r.usd) || 0;
+    if (r.wire === "stripe-subscription") e.subscriptionInvoices += n; else e.reports += n;
+  }
+  for (const e of [noSource, ...Object.values(sources)]) e.revenueUsd = +e.revenueUsd.toFixed(2);
+  return { days, sources, noSource };
 }
 
 // External paid sales per arrival path (operator only). One row per (stored
@@ -1916,7 +2038,7 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
 // set, never added across versions or rows.
 const qExtByPathPayer = db.prepare(`
   SELECT via, payer, COUNT(*) AS n, SUM(${SALE_AMOUNT_SQL}) AS usd
-  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ?
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?
   GROUP BY via, payer`);
 /**
  * { [path]: { sales, revenueUsd, payers, versions } } over the window: path is
@@ -1972,7 +2094,7 @@ const qFunnelPage = db.prepare(`
   ${WINDOW_PAGE} AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL}
   GROUP BY d, rail, via, wire, payer`);
 const qPaidBefore = db.prepare(`
-  SELECT 1 FROM sales INDEXED BY idx_sales_payer WHERE payer = ? AND ts < ? AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL} LIMIT 1`).pluck();
+  SELECT 1 FROM sales INDEXED BY idx_sales_payer WHERE payer = ? AND ts < ? AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} LIMIT 1`).pluck();
 const dayKey = (d) => new Date(d * 86_400_000).toISOString().slice(0, 10);
 function* funnelLedgerSteps({ days = 14, weekDays = 7, now = Date.now() } = {}) {
   const n = Math.max(1, Math.min(FUNNEL_MAX_DAYS, Math.floor(Number(days)) || 14));
@@ -2066,21 +2188,21 @@ const COHORT_CACHE_MS = 60_000;
 const qCohortDayTools = db.prepare(`
   SELECT payer, MAX(n) AS n FROM (
     SELECT payer, (ts / 86400000) AS d, COUNT(DISTINCT slug) AS n
-    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?
+    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts < ?
     GROUP BY payer, d)
   GROUP BY payer HAVING MAX(n) > ?`);
 const qCohortHourCalls = db.prepare(`
   SELECT payer, MAX(n) AS n FROM (
     SELECT payer, (ts / 3600000) AS h, COUNT(*) AS n
-    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?
+    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts < ?
     GROUP BY payer, h)
   GROUP BY payer HAVING MAX(n) > ?`);
 const qCohortPayer = db.prepare(`
   SELECT COUNT(DISTINCT slug) AS tools, COUNT(*) AS calls, SUM(${SALE_AMOUNT_SQL}) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
-  FROM sales WHERE internal = 0 AND payer = ? AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?`);
+  FROM sales WHERE internal = 0 AND payer = ? AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts < ?`);
 const qCohortDaily = db.prepare(`
   SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day, payer, COUNT(*) AS n, SUM(${SALE_AMOUNT_SQL}) AS usd
-  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ? AND ts < ?
   GROUP BY day, payer`);
 let cohortCache = null; // { key, at, value }
 /**
@@ -2358,7 +2480,7 @@ export function externalTempoPayments() { return runSteps(externalTempoPaymentsS
 // revenue figures need a count and a sum, ours and external apart.
 const qGatewayBatched = db.prepare(`
   SELECT internal, COUNT(*) AS n, SUM(price_usd) AS usd FROM sales
-  WHERE rail IN ${PAYING_RAILS_SQL} AND wire = '${GATEWAY_WIRE}'
+  WHERE rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL} AND wire = '${GATEWAY_WIRE}'
   GROUP BY internal`);
 
 /** { count, usd, externalCount, externalUsd } over every Circle Gateway
@@ -2387,14 +2509,14 @@ export function gatewayBatchedPayments() {
 const qProofAgg = db.prepare(`
   SELECT COUNT(*) AS n, SUM(price_usd) AS settled, SUM(quote_usd) AS quoted,
          SUM(CASE WHEN quote_usd IS NOT NULL THEN 1 ELSE 0 END) AS quoted_n
-  FROM sales WHERE slug = ? AND internal = ? AND rail IN ${PAYING_RAILS_SQL}`);
+  FROM sales WHERE slug = ? AND internal = ? AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL}`);
 const qProofLatest = db.prepare(`
   SELECT ts, price_usd, quote_usd, network, tx, wire, rail
-  FROM sales WHERE slug = ? AND internal = ? AND rail IN ${PAYING_RAILS_SQL}
+  FROM sales WHERE slug = ? AND internal = ? AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL}
   ORDER BY ts DESC LIMIT 1`);
 const qMeteredExtWindow = db.prepare(`
   SELECT COUNT(*) AS n, COUNT(DISTINCT payer) AS buyers, SUM(price_usd) AS settled, MAX(ts) AS last_ts
-  FROM sales WHERE slug = ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?`);
+  FROM sales WHERE slug = ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?`);
 /** External metered settlements in a window: counts only, never a roster. The
  *  weekly number the distribution work is measured by (PostHog mirror:
  *  "External metered buyers per week"). */
@@ -2465,14 +2587,14 @@ const MPP_AGENT_WIRES_SQL = `(${Object.keys(MPP_AGENT_METHODS).map((w) => `'${w}
 const qAgentRowsAll = db.prepare(`
   SELECT CAST((ts - ${WEEK_EPOCH_MS}) / ${WEEK_MS} AS INTEGER) AS wk, payer, wire,
          COUNT(*) AS n, SUM(${SALE_AMOUNT_SQL}) AS usd
-  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ?
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND ts >= ?
   GROUP BY wk, payer, wire`);
 const qAgentFirstAll = db.prepare(`
   SELECT payer, MIN(ts) AS first_ts FROM sales
-  WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL GROUP BY payer`);
+  WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND payer IS NOT NULL GROUP BY payer`);
 const qAgentFirstMpp = db.prepare(`
   SELECT payer, MIN(ts) AS first_ts FROM sales
-  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND wire IN ${MPP_AGENT_WIRES_SQL} GROUP BY payer`);
+  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL} AND payer IS NOT NULL AND wire IN ${MPP_AGENT_WIRES_SQL} GROUP BY payer`);
 
 // The current week's distinct MPP agents alone (the operator's sales page):
 // mppAgentsWeekly also reads every payer's first payment across all history
@@ -2481,7 +2603,7 @@ const qAgentFirstMpp = db.prepare(`
 // the week on the (internal, ts) index.
 const qMppAgentsInWeek = db.prepare(`
   SELECT COUNT(DISTINCT payer) AS n FROM sales
-  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND wire IN ${MPP_AGENT_WIRES_SQL}
+  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL} AND wire IN ${MPP_AGENT_WIRES_SQL}
     AND payer IS NOT NULL AND payer <> '' AND ts >= ? AND ts < ?`);
 /** mppAgentsWeekly({ weeks: 1, now }).weeks[0].distinctAgents, read without the history scans. */
 export function mppAgentsThisWeek(now = Date.now()) {
@@ -2565,7 +2687,7 @@ export function mppAgentsWeekly({ weeks = 12, now = Date.now() } = {}) {
 // that carry a transaction. The sample read runs only on a page holding rows
 // of a month that still lacks its samples.
 const SCORECARD_ROWS = `FROM sales NOT INDEXED
-  WHERE id >= ? AND id < ? AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL
+  WHERE id >= ? AND id < ? AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ${ONCE_SQL} AND payer IS NOT NULL
     AND payer NOT IN (SELECT value FROM json_each(?))`;
 const qScorecardPriorPage = db.prepare(`SELECT DISTINCT payer ${SCORECARD_ROWS} AND ts < ?`).pluck();
 const qScorecardPage = db.prepare(`

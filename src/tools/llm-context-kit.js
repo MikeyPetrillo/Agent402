@@ -71,7 +71,9 @@ const FRESHNESS = new Set(["pd", "pw", "pm", "py"]);
 const FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 // search_lang is documented as a "2+ char code"; accept a plain code or a
 // region-qualified one (en, en-gb, zh-hans) and nothing else.
-const LANG_RE = /^[a-z]{2,8}(-[a-z0-9]{2,8})?$/i;
+export const LANG_RE = /^[a-z]{2,8}(-[a-z0-9]{2,8})?$/i;
+// The longest value LANG_RE takes: two parts of eight and the hyphen.
+const LANG_MAX_CHARS = 17;
 const COUNTRY_RE = /^[a-z]{2}$/i;
 
 function bad(message, statusCode = 400) {
@@ -275,10 +277,10 @@ export const LLM_CONTEXT_TOOLS = [
       input: { query: "x402 payment protocol", maxTokens: 2048 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "Search query (1-400 chars, max 50 words)" },
+          query: { type: "string", maxLength: 400, description: "Search query (1-400 chars, max 50 words)" },
           maxTokens: { type: "number", description: "Approximate token budget for the returned context, 1024-32768 (default 4096)" },
           country: { type: "string", description: "Optional 2-letter country code (upstream default us)" },
-          lang: { type: "string", description: "Optional language code for results, e.g. en or en-gb (upstream default en)" },
+          lang: { type: "string", maxLength: LANG_MAX_CHARS, description: "Optional language code for results, e.g. en or en-gb (upstream default en)" },
           safesearch: { type: "string", description: "Optional adult-content filter: off, moderate, or strict" },
           freshness: { type: "string", description: "Optional recency filter: pd, pw, pm, py, or a YYYY-MM-DDtoYYYY-MM-DD range" },
         },

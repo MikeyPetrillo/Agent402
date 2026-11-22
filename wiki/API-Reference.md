@@ -122,7 +122,7 @@ Each catalog row carries that delivery record as `responseDelivery`, the name
 the index's rows use. `ourPaidCalls` is deprecated: it carries the same value
 and stays in the answer for readers of the earlier name.
 
-It ends in plain-English flags and deliberately carries **no score** - a number
+It ends in plain-language flags and deliberately carries **no score** - a number
 reads as a verdict we did not measure. Like `seller-trust` it never fetches the
 seller: it is the assembled record, which is why it is priced above the list
 endpoints.
@@ -159,7 +159,7 @@ Outcome-priced reports on the same 402: `POST /v1/research` ($0.60; `/pro` $0.85
 
 ### OpenAI wire paths
 
-Chat, embeddings, rerank, image and video generation, and text-to-speech are also served OpenAI-compatibly under `/v1` - `POST /v1/{nano,auto,pro,premium}/chat/completions`, `POST /v1/chat/completions`, `POST /v1/grounded/chat/completions`, `POST /v1/metered/chat/completions` (the 402 quotes each request from its body), the Anthropic Messages wire at `POST /v1/{nano,auto,pro,premium}/messages` and `POST /v1/messages`, the OpenAI Responses wire at `POST /v1/{nano,auto,pro,premium}/responses` and `POST /v1/responses`, `POST /v1/embeddings`, `POST /v1/rerank`, `POST /v1/images/generations`, `POST /v1/images/fast`, `POST /v1/images/pro`, `POST /v1/videos/generations`, `POST /v1/audio/speech`, with `GET /v1/models` free. See [[LLM Gateway (OpenAI /v1)|LLM-Gateway]] for tiers, the metered tier, the model-optional auto router, streaming, and caching. `POST /api/route/execute` (and its `execute-plus`, `execute-max`, `execute-pro` rungs) runs the resolver's top pick in one paid call, and `POST /api/my-usage` returns the paying wallet's own purchase history.
+Chat, embeddings, rerank, image and video generation, and text-to-speech are also served OpenAI-compatibly under `/v1` - `POST /v1/{nano,auto,pro,premium}/chat/completions`, `POST /v1/chat/completions`, `POST /v1/grounded/chat/completions`, `POST /v1/metered/chat/completions` (the 402 quotes each request from its body), the Anthropic Messages wire at `POST /v1/{nano,auto,pro,premium}/messages` and `POST /v1/messages`, the OpenAI Responses wire at `POST /v1/{nano,auto,pro,premium}/responses` and `POST /v1/responses`, `POST /v1/embeddings`, `POST /v1/rerank`, `POST /v1/images/generations`, `POST /v1/images/fast`, `POST /v1/images/pro`, `POST /v1/videos/generations`, `POST /v1/audio/speech`, with `GET /v1/models` free. See [[LLM Gateway (OpenAI /v1)|LLM-Gateway]] for tiers, the metered tier, the model-optional auto router, streaming, and caching. `POST /api/route/execute` (and its `execute-plus`, `execute-mid`, `execute-max`, `execute-pro` rungs) runs the resolver's top pick in one paid call, and `POST /api/my-usage` returns the paying wallet's own purchase history.
 
 ### GET example
 

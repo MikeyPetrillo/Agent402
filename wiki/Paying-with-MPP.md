@@ -42,7 +42,8 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const account = privateKeyToAccount(process.env.AGENT_KEY);
 // Offer both methods; the client picks the one the 402 advertises that it can pay.
-const client = Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account })] });
+// The evm method signs for the tokens you list: USDC on Base and on Celo.
+const client = Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })] });
 
 const res = await client.fetch("https://agent402.tools/api/uuid");
 console.log(res.status, res.headers.get("payment-receipt"));
@@ -70,4 +71,4 @@ If you already speak x402, MPP can be added without touching settlement: emit an
 
 - [[Paying with x402]] - the other wire on the same 402
 - [[Paying with Compute]] - the free proof-of-work tier
-- [What is MPP](https://agent402.tools/what-is-mpp) - the longer explainer
+- [MPP on Agent402](https://agent402.tools/what-is-mpp) - how an MPP payment works here

@@ -282,8 +282,8 @@ export const ENRICH_TOOLS = [
       input: { lei: "HWUPKR0MPOU8FGXBT394" },
       inputSchema: {
         properties: {
-          lei: { type: "string", description: "20-character alphanumeric Legal Entity Identifier (exact record lookup)." },
-          name: { type: "string", description: "Company name to fulltext-search instead (ranked candidate list). Provide lei OR name." },
+          lei: { type: "string", maxLength: 20, description: "20-character alphanumeric Legal Entity Identifier (exact record lookup)." },
+          name: { type: "string", maxLength: 200, description: "Company name to fulltext-search instead (ranked candidate list). Provide lei OR name." },
         },
       },
       output: {
@@ -358,7 +358,7 @@ export const ENRICH_TOOLS = [
       inputSchema: {
         properties: {
           id: { type: "string", description: "Wikidata entity id, e.g. Q312 (exact entity lookup)." },
-          name: { type: "string", description: "Entity name to search instead (ranked candidate list). Provide id OR name." },
+          name: { type: "string", maxLength: 200, description: "Entity name to search instead (ranked candidate list). Provide id OR name." },
         },
       },
       output: {
@@ -558,8 +558,8 @@ export const ENRICH_TOOLS = [
       input: { owner: "expressjs", repo: "express" },
       inputSchema: {
         properties: {
-          owner: { type: "string", description: "Repository owner (user or org)." },
-          repo: { type: "string", description: "Repository name." },
+          owner: { type: "string", maxLength: 39, description: "Repository owner (user or org)." },
+          repo: { type: "string", maxLength: 128, description: "Repository name." },
         },
         required: ["owner", "repo"],
       },
@@ -651,7 +651,7 @@ export const ENRICH_TOOLS = [
       input: { url: "https://agent402.tools" },
       inputSchema: {
         properties: {
-          url: { type: "string", description: "Site URL or bare domain (https:// is assumed when omitted)." },
+          url: { type: "string", maxLength: 2048, description: "Site URL or bare domain (https:// is assumed when omitted)." },
         },
         required: ["url"],
       },
@@ -659,16 +659,16 @@ export const ENRICH_TOOLS = [
         example: {
           found: true,
           url: "https://agent402.tools/",
-          iconUrl: "https://agent402.tools/favicon.ico?v=3",
-          finalIconUrl: "https://agent402.tools/favicon.ico?v=3",
+          iconUrl: "https://agent402.tools/favicon.ico?v=4",
+          finalIconUrl: "https://agent402.tools/favicon.ico?v=4",
           contentType: "image/png",
           bytes: 76462,
           dataUri: "data:image/png;base64,iVBORw0KGgo…",
           declared: [
-            { href: "https://agent402.tools/favicon.svg?v=3", rel: "icon", sizes: null, type: "image/svg+xml", mask: false },
-            { href: "https://agent402.tools/favicon.ico?v=3", rel: "icon", sizes: "512x512", type: "image/png", mask: false },
-            { href: "https://agent402.tools/favicon.ico?v=3", rel: "shortcut icon", sizes: null, type: null, mask: false },
-            { href: "https://agent402.tools/logo.png?v=2", rel: "apple-touch-icon", sizes: null, type: null, mask: false },
+            { href: "https://agent402.tools/favicon.svg?v=4", rel: "icon", sizes: null, type: "image/svg+xml", mask: false },
+            { href: "https://agent402.tools/favicon.ico?v=4", rel: "icon", sizes: "512x512", type: "image/png", mask: false },
+            { href: "https://agent402.tools/favicon.ico?v=4", rel: "shortcut icon", sizes: null, type: null, mask: false },
+            { href: "https://agent402.tools/logo.png?v=3", rel: "apple-touch-icon", sizes: null, type: null, mask: false },
           ],
         },
       },

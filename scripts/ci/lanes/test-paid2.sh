@@ -33,6 +33,8 @@ t node scripts/test-inflight-burst.js
 t node scripts/test-inflight-admission.js
 # A header a handler set for its answer is not sent on a refusal: dub on Tempo pull, MPP evm and x402 (boots a paid server - offline)
 t node scripts/test-answer-headers.js
+# Price webhooks on a paid server: a registration whose settlement is refused leaves nothing stored, the registrant is the payer on Base, Tempo and Solana, its own excess is the 409, the same URL again renews in place (boots a paid server - offline)
+t node scripts/test-price-webhooks-paid.js
 # The conformance document's cells against the code: every wire paid (an error not settled, a success settled with the receipt the cell names, replay and idempotency as claimed), switches flipped change their cells, FREE_MODE offers nothing, and its refund terms are the /terms sentences (boots paid servers - offline)
 t node scripts/test-conformance.js
 # Signed receipts: the one key format and its refusals, sign and verify with tamper on every field, rotation, the header bound and the cost per call; with a key every settling wire's 200 carries a receipt that verifies and none on an error or a refused settle; without one no receipt and no cell claims it (boots paid servers - offline)
@@ -47,6 +49,8 @@ t node scripts/test-stream-empty-answer.js
 t node scripts/test-challenge-life.js
 # Golden trajectories: 56 fixed route-execute tasks through the real paid server, resolver and payer against a stub seller ecosystem, each graded step by step (candidates, order
 t node scripts/test-golden-trajectories.js
+# The returning-wallet price end to end: discounted quote and settle for the hinted wallet, another wallet refused at list with the facilitator never asked (boots paid servers, stub facilitator)
+t node scripts/test-returning-wallet-paid.js
 # One-product MCP endpoint (/mcp/sec): profile lists only the SEC tools, hides the catalog meta tools, /mcp unchanged (boots a free server)
 t node scripts/test-mcp-sec.js
 # MCP wire: a 2026-07-28 client that opens with initialize is served the negotiated revision; tools/call arguments past the element bound are InvalidParams on /mcp and on the stdio

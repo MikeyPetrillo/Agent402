@@ -27,7 +27,8 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
 import { admitCoveredRun, KEPT_AT_ONCE_MS, coverageReadsWord, coverageReadsVerdict, _ageUnreadDecisionsForTest, _ageKeptReadsForTest, coverTermsOfRequest, coveredRunStateOf, inflightCoverStatus, CHAIN_BY_CAIP2, _setBalanceReaderForTest, _resetInflightCoverForTest } from "../src/inflight-cover.js";
 import { hasPaidRecord, notePaidSettlement, setPaidRecordLedger, _setPaidRecordForTest, _resetPaidRecordForTest } from "../src/paid-record.js";
-import { readRailBalance, _setGatewayBalanceClientForTest } from "../src/rail-cover.js";
+import { readRailBalance, _setGatewayBalanceClientForTest, noteTempoMultisigSettled, withdrawTempoMultisigProof, tempoMultisigProven, MULTISIG_PROOF_MS, _resetTempoMultisigProofsForTest } from "../src/rail-cover.js";
+import { shared } from "../src/shared-limits.js";
 import { RAILS, GATED_RAILS } from "../src/rails.js";
 import { toolErrorFields, notCallersInput } from "../src/tool-error-fields.js";
 
@@ -1033,48 +1034,292 @@ for (const readMs of [600, 450]) {
   caps._resetHardCaps();
 }
 
-// ---- a Tempo pull whose sender is not verified is judged on the account it names, in a ledger of its own ----
+// ---- a read dropped unmade gives back the budget unit it took, and none when it took none ----
 {
-  fresh();
+  const caps = await import("../src/upstream-hard-caps.js");
+  const share = () => caps.hardCapShareStatus()["cover-reads"];
+  fresh(); caps._resetHardCaps();
+  process.env.INFLIGHT_COVER_READS_DAILY_MAX = "8";
+  process.env.AGENT402_BASE_RPC = "https://base-mainnet.g.alchemy.com/v2/test-key"; // Base reads reach the capped host
+  try {
+    let made = 0;
+    _setBalanceReaderForTest(async () => { made++; await sleep(400); return PRICE * 100n; });
+    _setPaidRecordForTest(() => true);
+    // Nine wallets, one run in flight each (a first run needs no read).
+    const firsts = []; for (let i = 0; i < 9; i++) firsts.push(await admit(W(0x90 + i)));
+    // Eight second runs: eight slow reads fill the read lane and spend the day's budget of eight.
+    const slow = Array.from({ length: 8 }, (_, i) => admit(W(0x90 + i), { settleWaitMs: 2000 }));
+    await sleep(20);
+    const spent = share();
+    // A ninth wallet's second run: its read is past the budget (it takes no
+    // unit), waits behind the full lane, and its admission ends before its turn.
+    const quick = await admit(W(0x98), { settleWaitMs: 100 });
+    const queued = inflightCoverStatus();
+    const slowDone = await Promise.all(slow);
+    await sleep(250);
+    const after = share(), st = inflightCoverStatus();
+    ok(spent.usedToday === 8 && spent.status === "spent" && queued.readsPastBudget === 1 && st.readsDropped === 1 && made === 8, `control: eight reads spend the budget of eight; a ninth wallet's read past it is dropped unmade when its admission has gone (used ${spent.usedToday}, past budget ${queued.readsPastBudget}, dropped ${st.readsDropped}, reads made ${made})`);
+    ok(after.usedToday === 8 && after.releasedToday === 0 && after.status === "spent", `a dropped read that took no unit gives none back: the day's count still reads the eight reads made (used ${after.usedToday}, released ${after.releasedToday}, ${after.status})`);
+    for (const x of [...firsts, quick, ...slowDone]) x.release?.();
+    // Control: a read that DID take a unit and is dropped unmade gives it back.
+    fresh(); caps._resetHardCaps();
+    made = 0;
+    _setBalanceReaderForTest(async () => { made++; await sleep(300); return PRICE * 100n; });
+    _setPaidRecordForTest(() => true);
+    process.env.INFLIGHT_COVER_READS_DAILY_MAX = "50";
+    const f2 = []; for (let i = 0; i < 9; i++) f2.push(await admit(W(0xb0 + i)));
+    const s2 = Array.from({ length: 8 }, (_, i) => admit(W(0xb0 + i), { settleWaitMs: 2000 }));
+    await sleep(20);
+    const q2 = await admit(W(0xb8), { settleWaitMs: 100 });
+    const d2 = await Promise.all(s2);
+    await sleep(250);
+    const a2 = share();
+    ok(made === 8 && inflightCoverStatus().readsDropped === 1 && a2.usedToday === 8 && a2.releasedToday === 1, `control: inside the budget, a ninth read that took a unit and was dropped unmade gives it back (reads made ${made}, used ${a2.usedToday}, released ${a2.releasedToday})`);
+    for (const x of [...f2, q2, ...d2]) x.release?.();
+  } finally {
+    delete process.env.INFLIGHT_COVER_READS_DAILY_MAX;
+    delete process.env.AGENT402_BASE_RPC;
+    caps._resetHardCaps();
+  }
+}
+
+// ---- a Tempo pull whose sender is not proven is booked on the client address it came from, on no account ----
+{
   const ACCT = W(0xd9), CUR = "0x20c000000000000000000000b9537d11c60e8b50";
-  const tempoReq = (ledger) => ({ tempoSettling: true, mppTempoPull: { sender: ACCT, currency: CUR, amountAtomic: String(PRICE), ...(ledger ? { ledger } : {}) }, header: () => undefined });
-  const admitT = async (ledger) => { const req = tempoReq(ledger); try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } };
+  const X = "198.51.100.7", Y = "203.0.113.9";
+  const RICH = (i) => "0x" + (0xe000 + i).toString(16).padStart(40, "0");
+  // `ledger`: the gate's mark on a pull whose sender it could not prove.
+  const tempoReq = ({ sender = ACCT, ledger = null, ip = X } = {}) => ({ tempoSettling: true, ip, mppTempoPull: { sender, currency: CUR, amountAtomic: String(PRICE), ...(ledger ? { ledger } : {}) }, header: () => undefined });
+  const admitT = async (o) => { const req = tempoReq(o); try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } };
+  const un = (o = {}) => admitT({ ledger: "unverified", ...o });
+  const endUnpaid = (x) => { if (x.release) { x.req.res = { statusCode: 402 }; x.release(); } };
+  const balances = new Map();
   let reads = 0;
-  _setBalanceReaderForTest(async (t) => { reads++; return t.payer === ACCT ? PRICE : 0n; });
+  const reader = async (t) => { reads++; return balances.has(t.payer) ? balances.get(t.payer) : 1_000_000n * PRICE; };
+
+  // The terms: the account is only named; the key is the client address.
+  {
+    const t = await coverTermsOfRequest(tempoReq({ ledger: "unverified" }));
+    ok(t?.unproven === `ip:${X}` && t.payer === ACCT, `a pull the gate marked unverified carries the client address it came from (${t?.unproven})`);
+    const v = await coverTermsOfRequest(tempoReq());
+    ok(v && v.unproven === undefined && v.payer === ACCT, "control: a verified pull carries none");
+    const a6 = await coverTermsOfRequest(tempoReq({ ledger: "unverified", ip: "2001:db8:1:2:3:4:5:6" })), b6 = await coverTermsOfRequest(tempoReq({ ledger: "unverified", ip: "2001:db8:1:2:aaaa::1" }));
+    ok(a6?.unproven === b6?.unproven && /\/64$/.test(a6?.unproven || ""), `an IPv6 client is keyed by its /64, as every per-address guard keys it (${a6?.unproven})`);
+    const none = await coverTermsOfRequest({ ...tempoReq({ ledger: "unverified" }), ip: undefined });
+    ok(typeof none?.unproven === "string" && none.unproven.length > 3, `a request with no readable address still has a key (one shared by all such requests), never no terms (${none?.unproven})`);
+    const anyMark = await coverTermsOfRequest(tempoReq({ ledger: `multisig:0x${"ab".repeat(32)}` })), noAcct = await coverTermsOfRequest(tempoReq({ ledger: "unverified", sender: null }));
+    ok(anyMark?.unproven === `ip:${X}` && noAcct?.unproven === `ip:${X}` && noAcct.payer === null, "any unverified mark, and a pull that names no account at all, is keyed the same way");
+  }
+
+  // 1. Nothing a caller writes opens another ledger: a new account, a new
+  //    config or a new key per request all land on the one address.
+  fresh();
+  _setBalanceReaderForTest(reader);
   _setPaidRecordForTest(() => true);
-  const v1 = await admitT(null), v2 = await admitT(null);
-  ok(v1.release && v2.err?.coverRefusal === "short", "control: the account's verified pulls, one price: one admitted, the next refused short");
-  const u1 = await admitT("unverified");
-  ok(u1.release, `a pull from an unverified sender naming the account sits in a ledger of its own: the account's own run in flight does not count against it (${u1.err?.coverRefusal || "admitted"})`);
-  const u2 = await admitT("unverified");
-  ok(u2.err?.coverRefusal === "short" && reads >= 2, `...and it is judged on the account's balance: a second one is refused short (${u2.err?.coverRefusal || "admitted"})`);
-  const m1 = await admitT(`multisig:0x${"ab".repeat(32)}`);
-  ok(m1.release && inflightCoverStatus().walletsInFlight === 3, "a multisig config's own ledger is apart from both");
-  for (const x of [v1, u1, m1]) x.release?.();
-  // Never the account's paid record: with reads down, the small allowance, not the paid one.
+  reads = 0;
+  const named = []; for (let i = 0; i < 8; i++) named.push(await un({ sender: RICH(i) }));
+  ok(named.filter((x) => x.release).length === 4 && named.slice(4).every((x) => x.err?.statusCode === 429 && x.err.coverRefusal === "unread"), `eight unproven pulls from one address, each naming a different funded account: four run, the rest are refused 429 (${named.filter((x) => x.release).length} of 8 admitted)`);
+  const configs = []; for (let i = 0; i < 8; i++) configs.push(await admitT({ sender: RICH(0), ledger: `multisig:0x${String(i).repeat(64)}` }));
+  ok(configs.every((x) => x.err?.coverRefusal === "unread"), `...and a new config per request naming one funded account opens no ledger of its own (${configs.filter((x) => x.release).length} of 8 admitted beside the four)`);
+  ok(reads === 0, `an unproven pull is judged on no balance: no read was made for any of them (${reads})`);
+  ok(named.filter((x) => x.release).every((x) => coveredRunStateOf(x.req) === "unread"), "each is admitted on the allowance (unread), never as covered by a balance");
+  {
+    const e = named[4].err;
+    ok(e?.retryAfter === 5 && e.attribution === "ours" && /You have not been charged\.$/.test(e.message) && /4 at a time/.test(e.message) && notCallersInput(e), `the refusal says what the bound is, asks for a retry in 5 s and says nothing was charged (${String(e?.message).slice(0, 90)}...)`);
+  }
+  const other = []; for (let i = 0; i < 6; i++) other.push(await un({ sender: RICH(i), ip: Y }));
+  ok(other.filter((x) => x.release).length === 4, `control: another client address has an allowance of its own (${other.filter((x) => x.release).length} of 6)`);
+  endUnpaid(named[0]);
+  const next = await un({ sender: RICH(9) });
+  ok(next.release, "control: when one of the address's runs ends, its next one is admitted");
+  for (const x of [...named, ...other, next]) endUnpaid(x);
+  ok(inflightCoverStatus().runsInFlight === 0, "nothing is left in flight");
+
+  // 2. A credential that only names an account changes nothing for that
+  //    account: not its own multisig pulls from another address, not its
+  //    verified pulls, not its balance record.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  balances.set(ACCT, PRICE);
+  const forged = []; for (let i = 0; i < 6; i++) forged.push(await un({ ip: X }));
+  ok(forged.filter((x) => x.release).length === 4, "an address sends pulls that name an account it does not hold: four are in flight");
+  const own = await un({ ip: Y });
+  ok(own.release, `the account's own multisig pull, from its own address, is admitted beside them (${own.err?.coverRefusal || "admitted"})`);
+  reads = 0;
+  const v1 = await admitT(), v2 = await admitT();
+  ok(v1.release && coveredRunStateOf(v1.req) === "covered" && v2.err?.coverRefusal === "short" && reads === 1, `the account's verified pulls are judged on its balance exactly as with nothing else in flight: one price, one admitted, the next refused short (${v2.err?.coverRefusal || "admitted"}, reads ${reads})`);
+  for (const x of [...forged, own, v1]) endUnpaid(x);
+
+  // 3. One balance backs one ledger. With the account's own runs holding all
+  //    of it, pulls that name the account are not admitted on it again.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  balances.set(ACCT, 20n * PRICE);
+  const held = []; for (let i = 0; i < 21; i++) held.push(await admitT());
+  ok(held.filter((x) => x.release).length === 20 && held[20].err?.coverRefusal === "short", "control: the account's verified pulls hold its whole balance (20 in flight, the 21st refused short)");
+  const beside = []; for (let i = 0; i < 12; i++) beside.push(await un({ ip: i < 6 ? X : Y }));
+  const covered = [...held, ...beside].filter((x) => x.release && coveredRunStateOf(x.req) === "covered").length;
+  ok(covered === 20 && beside.every((x) => !x.release || coveredRunStateOf(x.req) === "unread"), `the runs admitted as covered by the account's balance never exceed it, whatever names the account (${covered} covered, balance 20 prices)`);
+  ok(beside.filter((x) => x.release).length === 8, `...what runs beside them is the fixed allowance of each client address, not a second balance (${beside.filter((x) => x.release).length} of 12 from two addresses)`);
+  for (const x of [...held, ...beside]) endUnpaid(x);
+
+  // 4. A settlement the chain took from the named account reaches that
+  //    account's own records: its kept read is not judged on as if the
+  //    payment had not happened.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  balances.set(ACCT, 2n * PRICE);
+  const k1 = await admitT(), k2 = await admitT();
+  ok(k1.release && k2.release, "control: the account has a balance read (two prices), kept by this server");
+  endUnpaid(k1); endUnpaid(k2);
+  const paid = await un({ ip: Y });
+  balances.set(ACCT, PRICE); // the chain took one price from the account
+  paid.release?.settled();
+  reads = 0;
+  const a1 = await admitT(), a2 = await admitT();
+  ok(a1.release && a2.err?.coverRefusal === "short" && reads === 1, `after a multisig payment of the account's settles, its next calls are judged on a balance read taken after it (second call: ${a2.err?.coverRefusal || "admitted on the read from before"}, reads ${reads})`);
+  endUnpaid(a1);
+  // ...and that is all it reaches: never the account's paid record.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  const s1 = await un({ ip: Y });
+  s1.release?.settled();
+  ok(hasPaidRecord(ACCT) === false, "a settled pull from an unproven sender adds nothing to the named account's paid record");
+  const sv = await admitT();
+  sv.release.settled();
+  ok(hasPaidRecord(ACCT) === true, "control: the account's own verified settlement does");
+  // Nor does it read it: with every account holding a paid record, the
+  // allowance is still the one of a wallet with none.
   fresh();
   _setBalanceReaderForTest(async () => { throw new Error("rpc down"); });
   _setPaidRecordForTest(() => true);
-  const un = []; for (let i = 0; i < 8; i++) un.push(await admitT("unverified"));
-  ok(un.filter((x) => x.release).length === 4, `reads down, an unverified sender gets the allowance of a wallet with no paid record (${un.filter((x) => x.release).length} of 8)`);
-  for (const x of un) x.release?.();
+  const down = []; for (let i = 0; i < 8; i++) down.push(await un());
+  ok(down.filter((x) => x.release).length === 4, `an unproven sender gets the allowance of a wallet with no paid record, whatever record the account it names holds (${down.filter((x) => x.release).length} of 8)`);
+  const vd = []; for (let i = 0; i < 18; i++) vd.push(await admitT());
+  ok(vd.filter((x) => x.release).length === 16, `control: the account's own pulls, reads down, get the allowance of its paid record with those four in flight (${vd.filter((x) => x.release).length} of 18)`);
+  for (const x of [...down, ...vd]) endUnpaid(x);
+  // The status word reads balance reads, and none was due here.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  for (const x of [await un(), await un()]) endUnpaid(x);
+  ok(coverageReadsWord() === "ok", `an unproven pull does not move the balance-read status word (${coverageReadsWord()})`);
 }
 
-// ---- a Solana payment whose transfer accounts sit in a lookup table is keyed on the wallet ----
+// ---- a multisig account proven by settlement: a config the chain has taken for the account, in a payment this server settled ----
+{
+  const ACCT = W(0xda), OTHER = W(0xdb), CUR = "0x20c000000000000000000000b9537d11c60e8b50";
+  const C1 = `0x${"c1".repeat(32)}`, C2 = `0x${"c2".repeat(32)}`;
+  const X = "198.51.100.7", Y = "203.0.113.9";
+  // What the gate writes for a multisig pull: the mark, and the config's
+  // commitment when (and only when) the owner approvals verify against it.
+  const msReq = ({ sender = ACCT, commitment = C1, ip = Y } = {}) => ({ tempoSettling: true, ip, mppTempoPull: { sender, ledger: "unverified", commitment, currency: CUR, amountAtomic: String(PRICE) }, header: () => undefined });
+  const admitM = async (o) => { const req = msReq(o); try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } };
+  const endUnpaid = (x) => { if (x.release) { x.req.res = { statusCode: 402 }; x.release(); } };
+  // The shared store's flags, modeled here (they outlive this process's memory).
+  const realSet = shared.flagSet, realGet = shared.flagGet;
+  const store = new Map();
+  let storeUp = true, storeReads = 0;
+  shared.flagSet = async (n, k, until, { now = Date.now() } = {}) => { if (!storeUp) return { ok: false }; if (Number(until) > now) store.set(`${n}:${k}`, Number(until)); else store.delete(`${n}:${k}`); return { ok: true }; };
+  shared.flagGet = async (n, k, { now = Date.now() } = {}) => { storeReads++; if (!storeUp) return { ok: false }; const u = store.get(`${n}:${k}`) || 0; return { ok: true, until: u > now ? u : 0 }; };
+  const restart = () => { fresh(); _resetTempoMultisigProofsForTest(); };
+  let reads = 0;
+  const reader = async () => { reads++; return 20n * PRICE; };
+  try {
+    restart(); store.clear();
+    _setBalanceReaderForTest(reader);
+    // Before any payment of the account's has settled: unproven, on the address.
+    let t = await coverTermsOfRequest(msReq());
+    ok(t?.unproven === `ip:${Y}` && t.payer === ACCT, `a multisig account's first pull is unproven and booked on its client address (${t?.unproven})`);
+    const first = []; for (let i = 0; i < 6; i++) first.push(await admitM());
+    ok(first.filter((x) => x.release).length === 4 && first.slice(4).every((x) => x.err?.coverRefusal === "unread"), `...bounded there: four at once (${first.filter((x) => x.release).length} of 6)`);
+    // Nothing in a request proves it: not the commitment it carries, and not
+    // the coverage check's own release. Only the gate's settled path does.
+    first[0].release.settled();
+    t = await coverTermsOfRequest(msReq());
+    ok(t?.unproven === `ip:${Y}` && store.size === 0 && (await tempoMultisigProven(ACCT, C1)) === false, "a pull that names a commitment, and one the coverage check releases, records no proof by itself");
+    for (const x of first) endUnpaid(x);
+    // The gate's settled path: the chain took a pull from the account under C1.
+    ok(noteTempoMultisigSettled(ACCT, C1) === true && noteTempoMultisigSettled(ACCT, "0x12") === false && noteTempoMultisigSettled("nobody", C1) === false, "the settled path records the pair (account, commitment); a malformed pair is not recorded");
+    await sleep(5);
+    ok(store.size === 1 && [...store.keys()][0].endsWith(`${ACCT}:${C1}`), `the proof is one flag in the shared store, keyed on the account and the commitment (${[...store.keys()].join(",")})`);
+    t = await coverTermsOfRequest(msReq());
+    ok(t && t.unproven === undefined && t.payer === ACCT, "a later pull naming the account under the same commitment is the account's own");
+    reads = 0;
+    const burst = []; for (let i = 0; i < 21; i++) burst.push(await admitM());
+    ok(burst.filter((x) => x.release).length === 20 && burst[20].err?.coverRefusal === "short" && burst.slice(0, 20).every((x) => coveredRunStateOf(x.req) === "covered") && reads >= 1, `its next 20 pulls at once are admitted on its balance (20 prices), not held to four; the 21st is refused short (${burst.filter((x) => x.release).length} admitted, ${burst[20].err?.coverRefusal})`);
+    // One ledger with the account's verified pulls: the same balance, counted once.
+    const verified = await (async () => { const req = { tempoSettling: true, ip: Y, mppTempoPull: { sender: ACCT, currency: CUR, amountAtomic: String(PRICE) }, header: () => undefined }; try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } })();
+    ok(verified.err?.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `the account's verified pulls and its proven multisig pulls share one ledger and one balance (${verified.err?.coverRefusal || "admitted"}, ledgers ${inflightCoverStatus().walletsInFlight})`);
+    burst[0].release.settled();
+    ok(hasPaidRecord(ACCT) === true, "a proven multisig pull that settles is the account's paid record");
+    for (const x of burst) endUnpaid(x);
+    // Another config naming the account, the same config naming another
+    // account, and a pull whose approvals did not verify (no commitment).
+    for (const [name, o, where] of [["another config naming the account, from another address", { commitment: C2, ip: X }, X], ["the same commitment naming another account", { sender: OTHER }, Y], ["a pull whose approvals did not verify (the gate names no commitment)", { commitment: null }, Y]]) {
+      t = await coverTermsOfRequest(msReq(o));
+      ok(t?.unproven === `ip:${where}`, `${name} stays unproven on its client address (${t?.unproven})`);
+    }
+    const forged = []; for (let i = 0; i < 6; i++) forged.push(await admitM({ commitment: C2, ip: X }));
+    const own = []; for (let i = 0; i < 20; i++) own.push(await admitM());
+    ok(forged.filter((x) => x.release).length === 4 && own.every((x) => x.release && coveredRunStateOf(x.req) === "covered"), `pulls under another config naming the account are bounded on their own address (${forged.filter((x) => x.release).length} of 6) and change nothing for the account (${own.filter((x) => x.release).length} of 20 admitted)`);
+    for (const x of [...forged, ...own]) endUnpaid(x);
+    // A restart, and another container: the store answers.
+    restart();
+    _setBalanceReaderForTest(reader);
+    t = await coverTermsOfRequest(msReq());
+    ok(t && t.unproven === undefined, "after a restart (this process's memory gone) the proof is read from the shared store");
+    const again = []; for (let i = 0; i < 20; i++) again.push(await admitM());
+    ok(again.every((x) => x.release), `...and the account's 20 pulls at once are admitted on its balance (${again.filter((x) => x.release).length} of 20)`);
+    for (const x of again) endUnpaid(x);
+    // The store does not answer: what this process remembers stands in.
+    storeUp = false;
+    t = await coverTermsOfRequest(msReq());
+    ok(t && t.unproven === undefined, "a store that does not answer: the pair this process read before still stands");
+    ok((await tempoMultisigProven(ACCT, C1, Date.now() + MULTISIG_PROOF_MS + 60_000)) === false, "...only for as long as the proof itself lasts");
+    restart();
+    t = await coverTermsOfRequest(msReq());
+    ok(t?.unproven === `ip:${Y}`, "...and a process that never read it falls back to the client address (never to the account's ledger)");
+    storeUp = true;
+    // It lapses, and it is withdrawn when the chain stops taking the config.
+    ok((await tempoMultisigProven(ACCT, C1)) === true && (await tempoMultisigProven(ACCT, C1, Date.now() + MULTISIG_PROOF_MS + 60_000)) === false, "the proof lasts a fixed time past the last settled payment");
+    ok(withdrawTempoMultisigProof(ACCT, C1) === true, "withdrawn");
+    await sleep(5);
+    t = await coverTermsOfRequest(msReq());
+    ok(store.size === 0 && t?.unproven === `ip:${Y}`, "a withdrawn pair is unproven again, here and in the store");
+    // Another container withdrew it: the store's answer stands over what
+    // this process remembers.
+    noteTempoMultisigSettled(ACCT, C1);
+    await sleep(5);
+    ok((await tempoMultisigProven(ACCT, C1)) === true, "control: recorded again");
+    store.clear();
+    t = await coverTermsOfRequest(msReq());
+    ok(t?.unproven === `ip:${Y}` && (await tempoMultisigProven(ACCT, C1)) === false, "a pair another container withdrew is unproven here too, whatever this process remembered");
+    // Written through at most once a day per pair, however many payments settle.
+    store.clear(); restart();
+    let writes = 0; const set0 = shared.flagSet; shared.flagSet = async (...a) => { writes++; return set0(...a); };
+    for (let i = 0; i < 50; i++) noteTempoMultisigSettled(ACCT, C1);
+    await sleep(5);
+    ok(writes === 1, `fifty settlements of one pair write the store once (${writes})`);
+    shared.flagSet = set0;
+  } finally { shared.flagSet = realSet; shared.flagGet = realGet; _resetTempoMultisigProofsForTest(); }
+}
+
+// ---- a Solana payment is judged on the ONE token account it debits ----
 {
   const kit = await import("@solana/kit");
   const SOLNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", CB = "ComputeBudget111111111111111111111111111111";
   const u64 = (v) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(v), true); return b; };
   const buyer = await kit.generateKeyPairSigner(), fp = await kit.generateKeyPairSigner();
-  const src = (await kit.generateKeyPairSigner()).address, payTo = (await kit.generateKeyPairSigner()).address, table = (await kit.generateKeyPairSigner()).address;
+  const addr = async () => (await kit.generateKeyPairSigner()).address;
+  const src = await addr(), src2 = await addr(), lent = await addr(), payTo = await addr(), table = await addr();
   const blockhash = { blockhash: kit.blockhash("11111111111111111111111111111111"), lastValidBlockHeight: 0n };
   let seq = 0;
-  const txOf = async (inTable) => {
+  const txOf = async (inTable, source = src) => {
     const ixs = [
       { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([2, 0x20, 0x4e, 0, 0]) },
       { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([3, ...u64(++seq)]) },
       { programAddress: kit.address(TOKEN), accounts: [
-        { address: kit.address(src), role: kit.AccountRole.WRITABLE },
+        { address: kit.address(source), role: kit.AccountRole.WRITABLE },
         { address: kit.address(USDC), role: kit.AccountRole.READONLY },
         { address: kit.address(payTo), role: kit.AccountRole.WRITABLE },
         { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer },
@@ -1084,48 +1329,95 @@ for (const readMs of [600, 450]) {
     if (inTable.length) msg = kit.compressTransactionMessageUsingAddressLookupTables(msg, { [table]: inTable.map((a) => kit.address(a)) });
     return kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction([buyer.keyPair], kit.compileTransaction(msg)));
   };
-  const solReq = async (inTable) => reqFor(b64({ x402Version: 2, accepted: { scheme: "exact", network: SOLNET, asset: USDC, amount: String(PRICE), payTo, extra: { feePayer: fp.address } }, payload: { transaction: await txOf(inTable) } }));
-  const alt = await coverTermsOfRequest(await solReq([src, USDC, payTo]));
+  // `inTable`: the transfer's accounts that sit in a lookup table ([] = all static).
+  const solReq = async (inTable, source = src) => reqFor(b64({ x402Version: 2, accepted: { scheme: "exact", network: SOLNET, asset: USDC, amount: String(PRICE), payTo, extra: { feePayer: fp.address } }, payload: { transaction: await txOf(inTable, source) } }));
+  const LUT = [src, USDC, payTo];
+  const admitS = async (inTable, source) => { const req = await solReq(inTable, source); try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } };
+  const alt = await coverTermsOfRequest(await solReq(LUT));
   const stat = await coverTermsOfRequest(await solReq([]));
-  ok(alt?.rail === "svm" && alt.byOwner === true && alt.payer === buyer.address && alt.owner === buyer.address && alt.asset === USDC && alt.atomic === PRICE, `source, mint and destination in a lookup table: the payment is keyed on the wallet, the transfer's authority (${alt?.payer === buyer.address ? "the wallet" : alt?.payer})`);
-  ok(stat?.rail === "svm" && stat.byOwner === true && stat.payer === buyer.address && stat.owner === buyer.address && stat.source === src && stat.asset === USDC, `all static: keyed on the wallet too, the same ledger as its lookup-table payments, the source kept for the balance read (${stat?.payer === buyer.address ? "the wallet" : stat?.payer})`);
-  // The balance: the sum of the wallet's token accounts of the mint (the RPC stubbed, no network).
+  ok(stat?.rail === "svm" && stat.byOwner !== true && stat.payer === src && stat.source === src && stat.owner === buyer.address && stat.asset === USDC && stat.atomic === PRICE, `all static: the payment is keyed on the SOURCE token account it debits, and the wallet (the authority) owns its paid record (${stat?.payer === src ? "the source account" : stat?.payer})`);
+  ok(alt?.rail === "svm" && alt.byOwner === true && alt.payer === buyer.address && alt.owner === buyer.address && alt.asset === USDC && alt.atomic === PRICE, `source, mint and destination in a lookup table: the source is not known, so the payment is keyed on the wallet, the transfer's authority (${alt?.payer === buyer.address ? "the wallet" : alt?.payer})`);
+  // The RPC, stubbed (no network): the wallet's token accounts of the mint,
+  // and any account's own balance.
   const realFetch = globalThis.fetch;
   const asked = [];
-  let accounts = [PRICE, PRICE], srcOwned = true, delegated = 0n;
+  let owned = new Map([[src, PRICE], [src2, 9n * PRICE]]);
+  const others = new Map([[lent, 5n * PRICE]]);
   globalThis.fetch = async (url, init) => {
     const j = JSON.parse(init?.body || "{}");
     asked.push(j);
-    const result = j.method === "getTokenAccountsByOwner" ? { context: { slot: 1 }, value: accounts.map((a, i) => ({ pubkey: i === 0 && srcOwned ? src : `acct${i}`, account: { data: { parsed: { info: { mint: j.params?.[1]?.mint, owner: j.params?.[0], tokenAmount: { amount: String(a), decimals: 6 } } } } } })) }
-      : j.method === "getTokenAccountBalance" ? { context: { slot: 1 }, value: { amount: String(delegated), decimals: 6 } } : null;
+    const one = j.method === "getTokenAccountBalance" ? (owned.get(j.params?.[0]) ?? others.get(j.params?.[0])) : undefined;
+    const result = j.method === "getTokenAccountsByOwner" ? { context: { slot: 1 }, value: [...owned].map(([pubkey, a]) => ({ pubkey, account: { data: { parsed: { info: { mint: j.params?.[1]?.mint, owner: j.params?.[0], tokenAmount: { amount: String(a), decimals: 6 } } } } } })) }
+      : j.method === "getTokenAccountBalance" && one !== undefined ? { context: { slot: 1 }, value: { amount: String(one), decimals: 6 } } : null;
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200, headers: { "content-type": "application/json" } });
   };
   try {
-    ok((await readRailBalance(alt)) === 2n * PRICE && asked[0]?.method === "getTokenAccountsByOwner" && asked[0].params[0] === buyer.address && asked[0].params[1]?.mint === USDC, `its balance is the sum of the wallet's accounts of the mint, read with getTokenAccountsByOwner (${asked[0]?.method})`);
-    accounts = [];
+    // The balances: one account each, never the sum of the wallet's accounts.
+    ok((await readRailBalance(stat)) === PRICE && asked.length === 1 && asked[0].method === "getTokenAccountBalance" && asked[0].params[0] === src, `a static payment's balance is its source account's alone, one read (${asked.map((x) => x.method).join()})`);
+    asked.length = 0;
+    ok((await readRailBalance(alt)) === 9n * PRICE && asked[0]?.method === "getTokenAccountsByOwner" && asked[0].params[0] === buyer.address && asked[0].params[1]?.mint === USDC, `a lookup-table payment's balance is the LARGEST single account of the mint the wallet owns, not their sum of ten prices (${asked[0]?.method})`);
+    const kept = owned; owned = new Map();
     ok((await readRailBalance(alt)) === null, "a wallet with no account of the mint reads unknown, never zero");
-    accounts = [PRICE, PRICE];
-    // Through the admission, with the real reader: two prices cover two runs, a third is refused.
+    owned = kept;
+    const delegate = await coverTermsOfRequest(await solReq([], lent));
+    ok(delegate?.payer === lent && delegate.owner === buyer.address && (await readRailBalance(delegate)) === 5n * PRICE, "a static source the wallet does not own (a delegate's transfer) is judged on that account's balance");
+
+    // The source account holds one price; another account of the mint, which
+    // no payment here names, holds nine. One price can settle.
     fresh();
     _setPaidRecordForTest(() => true);
-    const runs = [];
-    for (let i = 0; i < 3; i++) { const req = await solReq([src, USDC, payTo]); try { runs.push({ release: await admitCoveredRun(req) }); } catch (err) { runs.push({ err }); } }
-    ok(runs[0].release && runs[1].release && runs[2].err?.statusCode === 429 && runs[2].err.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `three lookup-table payments from one wallet holding two prices: two admitted, the third refused as short (${runs.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
+    let runs = []; for (let i = 0; i < 12; i++) runs.push(await admitS([]));
+    ok(runs.filter((x) => x.release).length === 1 && runs.slice(1).every((x) => x.err?.statusCode === 429 && x.err.coverRefusal === "short"), `twelve payments at once from a source account holding one price: one is admitted, whatever the wallet's other accounts hold (${runs.filter((x) => x.release).length} of 12)`);
     for (const x of runs) x.release?.();
-    // One wallet paying in both shapes is one ledger: a static and a
-    // lookup-table payment of the wallet are judged together on its two prices.
+    // A wallet paying from several accounts at once is judged per account,
+    // and served for what each one covers.
     fresh();
     _setPaidRecordForTest(() => true);
+    owned = new Map([[src, 2n * PRICE], [src2, 3n * PRICE]]);
+    const from1 = [], from2 = [];
+    for (let i = 0; i < 4; i++) { from1.push(await admitS([], src)); from2.push(await admitS([], src2)); }
+    ok(from1.filter((x) => x.release).length === 2 && from2.filter((x) => x.release).length === 3 && inflightCoverStatus().walletsInFlight === 2, `a wallet paying at once from two accounts holding two and three prices: two run from the first and three from the second, each account backing its own (${from1.filter((x) => x.release).length} and ${from2.filter((x) => x.release).length})`);
+    // The paid record is the wallet's, whichever account pays.
+    _resetPaidRecordForTest();
+    from1[0].release.settled();
+    ok(hasPaidRecord(buyer.address) === true, "a settlement from any of its accounts is the wallet's paid record");
+    for (const x of [...from1, ...from2]) x.release?.();
+
+    // Lookup-table payments: the wallet's ledger, on its largest account.
+    fresh();
+    _setPaidRecordForTest(() => true);
+    owned = new Map([[src, 2n * PRICE], [src2, PRICE]]);
+    runs = []; for (let i = 0; i < 4; i++) runs.push(await admitS(LUT));
+    ok(runs.filter((x) => x.release).length === 2 && runs[2].err?.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `four lookup-table payments from a wallet whose accounts hold two prices and one: two admitted on the largest account (not three on the sum), the rest refused as short (${runs.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
+    for (const x of runs) x.release?.();
+    // One wallet paying in both shapes: one account may back both, so the
+    // two shapes are counted together.
+    fresh();
+    _setPaidRecordForTest(() => true);
+    owned = new Map([[src, 2n * PRICE]]);
     const mixed = [];
-    for (const inTable of [[], [src, USDC, payTo], [], [src, USDC, payTo]]) { const req = await solReq(inTable); try { mixed.push({ release: await admitCoveredRun(req) }); } catch (err) { mixed.push({ err }); } }
-    ok(mixed[0].release && mixed[1].release && mixed[2].err?.coverRefusal === "short" && mixed[3].err?.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `a mixed burst of static and lookup-table payments from one wallet holding two prices: two admitted in one ledger, the rest refused as short (${mixed.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
-    for (const x of mixed) x.release?.();
-    // A static transfer from a token account the wallet does not own (a
-    // delegate): that account's balance is added to the wallet's.
-    asked.length = 0; srcOwned = false; delegated = 5n * PRICE;
-    ok((await readRailBalance(stat)) === 7n * PRICE && asked.map((x) => x.method).join() === "getTokenAccountsByOwner,getTokenAccountBalance" && asked[1].params[0] === src, `a static source that is not among the wallet's accounts is read and added (${asked.map((x) => x.method).join()})`);
-    asked.length = 0; srcOwned = true;
-    ok((await readRailBalance(stat)) === 2n * PRICE && asked.length === 1, "control: a static source among the wallet's own accounts is counted once, with no second read");
+    for (const inTable of [[], LUT, [], LUT]) mixed.push(await admitS(inTable));
+    ok(mixed[0].release && mixed[1].release && mixed[2].err?.coverRefusal === "short" && mixed[3].err?.coverRefusal === "short", `a mixed burst of static and lookup-table payments from one account holding two prices: two admitted, the rest refused as short (${mixed.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
+    mixed[0].req.res = { statusCode: 402 }; mixed[0].release();
+    const afterLeft = await admitS(LUT);
+    ok(afterLeft.release, "...and when a static run leaves, a lookup-table payment of the wallet takes its place");
+    for (const x of [...mixed, afterLeft]) x.release?.();
+    ok(inflightCoverStatus().runsInFlight === 0, "nothing is left in flight");
+    // One price in the account: whichever shape comes first holds it.
+    owned = new Map([[src, PRICE]]);
+    for (const [first, second, name] of [[[], LUT, "a static run then a lookup-table payment"], [LUT, [], "a lookup-table run then a static payment"]]) {
+      fresh();
+      _setPaidRecordForTest(() => true);
+      const one = await admitS(first), two = await admitS(second);
+      ok(one.release && two.err?.coverRefusal === "short", `${name}, one price in the account: the second is refused as short, not admitted on its own empty ledger (${two.err?.coverRefusal || "admitted"})`);
+      one.release?.(); two.release?.();
+    }
+    fresh();
+    _setPaidRecordForTest(() => true);
+    owned = new Map([[src, 2n * PRICE]]);
+    const again = await admitS(LUT), again2 = await admitS(LUT), again3 = await admitS(LUT);
+    ok(again.release && again2.release && again3.err?.coverRefusal === "short", "control: with nothing static in flight the wallet's lookup-table payments have its largest account to themselves");
+    for (const x of [again, again2]) x.release?.();
   } finally { globalThis.fetch = realFetch; }
 }
 

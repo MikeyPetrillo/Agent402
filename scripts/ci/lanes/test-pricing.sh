@@ -14,6 +14,8 @@
 t node scripts/test-ox-tier.js
 # Macro-kit tests (FRED yield curve, Treasury debt + avg rates, ECB FX series, World Bank — live keyless APIs)
 t node scripts/test-macro-kit.js
+# FRED terms line on every FRED answer; third-party series screened by their notes (offline)
+t node scripts/test-fred-terms.js
 # MPP dual-stack shim (real mppx client buys over WWW-Authenticate/Authorization wire; single settle; x402 pass-through; HMAC tamper — offline)
 t node scripts/test-mpp-shim.js
 # MPP evm EIP-712 domain fallback (a wrong-domain credential is refused locally, its 402 carries no challenge so the client takes x402, healthy clients untouched — boots a paid
@@ -125,6 +127,8 @@ t node scripts/test-avm-buyer-legacy-network.js
 t node scripts/test-dispatch-eligibility.js
 # The router's buyer on every EVM chain SOR_EVM_CHAINS enables
 t node scripts/test-evm-buyer-chains.js
+# The unproven-seller tier on the other EVM router chains: off until listed, own ceiling, shared daily caps, label and payer (offline, one free-mode boot pair)
+t node scripts/test-evm-unproven-chains.js
 # Routes that sell personal data about individuals stay listed and are never ranked, labeled eligible or paid; worker thread agrees (in-process pool + a free boot, offline)
 t node scripts/test-router-people-data.js
 # The raw-text gate before the category patterns never skips text the normalized gate would pass (offline)

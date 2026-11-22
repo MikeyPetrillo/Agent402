@@ -305,3 +305,8 @@ names first); `WRAP_ALL=1` runs all of them.
   literals inside a `design-tokens: literal-start` region.
 - Rasterized SVG (`og-cards.js`, `aifi-card.js`, the brand mark, server.js `BRAND`) and the
   revenue chart's categorical series: `design-tokens: off-start` regions, each with a reason.
+- Every social card (home, section, per-tool, shared answer, Agentic Finance, the profile header)
+  carries the brand mark as `brandMarkTile(x, y, size, { stroke })` (`src/brand-mark.js`): the logo
+  file's own black tile, white 402 and red dot, with a `hairline` stroke so the tile reads on the
+  card's dark ground. A card never draws a mark of its own; a change of art bumps
+  `CARD_ART_VERSION` (`scripts/test-og-cards.js`).

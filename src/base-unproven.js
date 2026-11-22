@@ -68,6 +68,7 @@ import { shared, sharedLimitsEnabled, noteSharedLimitsDegraded, keyOf as sharedK
 import { getSharedRedisClient } from "./shared-limit.js";
 import { withLoopTimeout } from "./loop-deadline.js";
 import { usdFigure } from "./price-usd.js";
+import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain } from "./evm-buyer-chains.js";
 
 export const BASE_UNPROVEN_DEFAULT_USD = 0.05;
 export const BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD = 0.25;
@@ -86,6 +87,60 @@ export function baseUnprovenAllowanceUsd() {
 /** The same ceiling in USDC atomic units (6 decimals). */
 export function baseUnprovenAllowanceAtomic() {
   return BigInt(Math.round(baseUnprovenAllowanceUsd() * 1e6));
+}
+
+// THE OTHER EVM ROUTER CHAINS (src/evm-buyer-chains.js). The same lane, one
+// chain at a time: a chain is tried under it only while the operator lists it
+// in SOR_EVM_UNPROVEN_CHAINS (comma separated, chain names or CAIP-2 ids), so
+// shipping this changes nothing until a chain is listed. Their ceiling is one
+// figure of its own, SOR_EVM_UNPROVEN_MAX_USD (default $0.01; `0` or `off`
+// switches every listed chain off; a malformed value reads as the default),
+// and Base's ceiling never widens it. A buy on any of them is booked in the
+// same per-seller and lane windows as a Base one (below), so a seller's day
+// and the lane's day are one day across chains, and it still spends under
+// that chain's wallet day and the payer's unsettled ceiling
+// (src/external-spend-guard.js) like every other external buy.
+export const EVM_UNPROVEN_DEFAULT_USD = 0.01;
+
+/** The non-Base EVM buyer chains listed for the unproven lane, in list order. */
+export function evmUnprovenChains(env = process.env) {
+  const out = [];
+  for (const raw of String(env.SOR_EVM_UNPROVEN_CHAINS || "").split(",")) {
+    const k = raw.trim().toLowerCase();
+    if (!k) continue;
+    const name = isEvmBuyerChain(k) ? k : EVM_BUYER_CHAIN_BY_NETWORK[k] || null;
+    if (name && name !== "base" && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+function evmUnprovenMaxUsd(env = process.env) {
+  const raw = String(env.SOR_EVM_UNPROVEN_MAX_USD ?? "").trim().toLowerCase();
+  if (raw === "") return EVM_UNPROVEN_DEFAULT_USD;
+  if (raw === "off") return 0;
+  const usd = Number(raw);
+  if (!Number.isFinite(usd) || usd < 0) return EVM_UNPROVEN_DEFAULT_USD;
+  return usd;
+}
+
+/** The unproven ceiling in USD on one EVM buyer chain: Base's own, a listed
+ *  chain's, or 0 (not tried) for anything else. Read at call time. */
+export function unprovenAllowanceUsdFor(chain, env = process.env) {
+  if (chain === "base") return baseUnprovenAllowanceUsd();
+  if (!isEvmBuyerChain(chain) || !evmUnprovenChains(env).includes(chain)) return 0;
+  return evmUnprovenMaxUsd(env);
+}
+
+/** The same ceiling in the chain token's atomic units. */
+export function unprovenAllowanceAtomicFor(chain, env = process.env) {
+  const usd = unprovenAllowanceUsdFor(chain, env);
+  return usd > 0 ? BigInt(Math.round(usd * 10 ** EVM_BUYER_CHAINS[chain].decimals)) : 0n;
+}
+
+/** chain -> ceiling for every listed chain whose ceiling is on (never Base). */
+export function evmUnprovenAllowanceByChain(env = process.env) {
+  const usd = evmUnprovenMaxUsd(env);
+  return usd > 0 ? Object.fromEntries(evmUnprovenChains(env).map((c) => [c, usd])) : {};
 }
 
 /** The per-seller rolling 24-hour cap in USD, or null when switched off. Read at call time. */

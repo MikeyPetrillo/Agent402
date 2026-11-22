@@ -336,7 +336,7 @@ export const JUDGE_PREVIEW_TOOLS = [{
       properties: {
         images: { type: "object", description: `Your own names mapped to { format: "png" | "jpeg", data_base64 }. Up to ${PREVIEW_LIMITS.images}; each side ${PREVIEW_LIMITS.minSide} to ${PREVIEW_LIMITS.maxSide} px, ${PREVIEW_LIMITS.imageBytes / 1048576} MiB each. Images are not resized.` },
         questions: { type: "object", description: "Your own ids mapped to { type: noul | choice | score | box, instructions, criteria }. Refer to an image as `name` in backticks." },
-        state: { type: ["string", "object"], description: `Optional text context, up to ${LIMITS.stateChars} characters.` },
+        state: { type: ["string", "object"], maxLength: 8000, description: `Optional text context, up to ${LIMITS.stateChars} characters.` },
         model: { type: "string", enum: ["jev-latest", "jev-preview"], description: "jev-latest is the tested Jev version; a box question always runs on jev-preview." },
       },
     },

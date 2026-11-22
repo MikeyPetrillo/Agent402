@@ -2,8 +2,10 @@ import { RAILS_AMP, RAILS_OS, RAILS, railKey } from "./rails.js";
 import { metaTitle, metaDescription } from "./seo-meta.js";
 import { ogSectionFor } from "./og-cards.js";
 import { REPO_URL } from "./repo-link.js";
+import { GUIDE_SITE, GUIDE_SITE_NAME } from "./ask402-links.js";
 import { siteOrgLd, siteOrgId, mppOffered } from "./site-org.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { brandMarkSvg, FAVICON_VERSION } from "./brand-mark.js";
 // The path of the request a page is being rendered for. A page's canonical is
 // its SECTION (/reports for a paid report at /r/<id>), so analytics decisions
 // that depend on the URL being a bearer link read this instead (server.js runs
@@ -105,10 +107,10 @@ export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-400-latin.wof
 @font-face{font-family:'Geist Fallback';font-weight:600;src:local('Arial'),local('Roboto'),local('Helvetica Neue');size-adjust:107.3817%;ascent-override:93.5914%;descent-override:27.4721%;line-gap-override:0%}@font-face{font-family:'Geist Fallback';font-weight:700;src:local('Arial'),local('Roboto'),local('Helvetica Neue');size-adjust:107.3817%;ascent-override:93.5914%;descent-override:27.4721%;line-gap-override:0%}
 @font-face{font-family:'Geist Mono Fallback';src:local('Courier New'),local('Courier'),local('Roboto Mono');size-adjust:99.9837%;ascent-override:100.5164%;descent-override:29.5048%;line-gap-override:0%}
 </style>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=3">
-<link rel="icon" type="image/png" sizes="512x512" href="/favicon.ico?v=3">
-<link rel="shortcut icon" href="/favicon.ico?v=3">
-<link rel="apple-touch-icon" href="/logo.png?v=2">`;
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=${FAVICON_VERSION}">
+<link rel="icon" type="image/png" sizes="512x512" href="/favicon.ico?v=${FAVICON_VERSION}">
+<link rel="shortcut icon" href="/favicon.ico?v=${FAVICON_VERSION}">
+<link rel="apple-touch-icon" href="/logo.png?v=3">`;
 
 // ---------------------------------------------------------------------------
 // Design-token CSS + base reset + keyframes + shared chrome styles
@@ -762,14 +764,12 @@ const STATIC_CHAINS = RAILS.map((r) => ({ label: railKey(r), href: `/${railKey(r
 // real data exists; until then (or if it throws) nav() falls back to
 // STATIC_CHAINS so it never crashes and never blocks a page render.
 let navDataProvider = null;
-// The "402" tile from /logo.svg, drawn inline at nav/footer size (no request,
-// no font file: the page already loads Geist Mono). Gradient ids carry a
-// suffix because the nav and footer marks share one page.
-// design-tokens: off-start (the brand mark is drawn with fixed colors: it is the same tile in both themes)
-export function brandMark(size, id) {
-  return `<svg aria-hidden="true" focusable="false" width="${size}" height="${size}" viewBox="0 0 512 512" style="display:block;flex:none;"><defs><linearGradient id="bm-${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F6F7F8"/><stop offset="1" stop-color="#C9CED3"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="#0B0C0E"/><rect x="104" y="104" width="304" height="304" rx="64" fill="url(#bm-${id})"/><text x="256" y="300" font-size="150" font-weight="700" font-family="'Geist Mono',Menlo,Consolas,monospace" text-anchor="middle" letter-spacing="-9" fill="#0B0C0E">402</text></svg>`;
+// The brand mark (src/brand-mark.js, the art of /logo.svg), drawn inline at
+// nav/footer size: no request and no font. `id` is kept for callers; the
+// mark carries no ids, so two on one page never clash.
+export function brandMark(size, _id) {
+  return brandMarkSvg(size);
 }
-// design-tokens: off-end
 
 export function setNavIndexProvider(fn) { navDataProvider = fn; }
 
@@ -868,10 +868,11 @@ function docsPanelNav() {
                 <a href="/status" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">status</span><span class="mlnav-faint">uptime from outside probes</span></a>
                 <span class="mlnav-label">WHAT THIS IS</span>
                 <a href="/101" class="mlnav-row"><span style="font-weight:700;">x402 &amp; MPP 101</span><span class="mlnav-faint">walkthrough</span></a>
-                <a href="/what-is-x402" class="mlnav-row"><span style="font-weight:700;">what is x402</span><span class="mlnav-faint">HTTP 402</span></a>
-                <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">what is MPP</span><span class="mlnav-faint">Payment auth</span></a>
+                <a href="/what-is-x402" class="mlnav-row"><span style="font-weight:700;">x402 and MPP</span><span class="mlnav-faint">on Agent402</span></a>
+                <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">MPP</span><span class="mlnav-faint">on Agent402</span></a>
                 <a href="/agentic-finance" class="mlnav-row"><span style="font-weight:700;">agentic finance</span><span class="mlnav-faint">the category</span></a>
                 <a href="/glossary" class="mlnav-row"><span style="font-weight:700;">glossary</span><span class="mlnav-faint">the terms</span></a>
+                <a href="${GUIDE_SITE}" rel="noopener" class="mlnav-row"><span style="font-weight:700;">${GUIDE_SITE_NAME}</span><span class="mlnav-faint">plain-language guide</span></a>
                 </span>
                 </span>
                 <a href="/docs" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">read the docs</span><span style="opacity:.7;">→</span></a>
@@ -939,8 +940,8 @@ function navItemHtml(item, activePath, chainInfo, groupHrefs) {
   return groupTriggerHtml(item, groupHrefs[item.panel].has(activePath), PANEL_HTML[item.panel](chainInfo));
 }
 
-const mmLink = (href, label, active, extra = "") =>
-  `<a href="${esc(href)}" class="ml-mm-link${active ? " ml-mm-active" : ""}${extra}">${esc(label)}</a>`;
+const mmLink = (href, label, active, extra = "", attrs = "") =>
+  `<a href="${esc(href)}"${attrs} class="ml-mm-link${active ? " ml-mm-active" : ""}${extra}">${esc(label)}</a>`;
 
 // Mobile menu - every destination flattened into a tap list (the hover
 // dropdowns don't work on touch, so the chains, sell, marketplace, and "our
@@ -992,9 +993,10 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/docs", "docs", activePath === "/docs")}
       ${mmLink("/proof", "receipts", activePath === "/proof")}
       ${mmLink("/101", "x402 & MPP 101 · walkthrough", activePath === "/101")}
-      ${mmLink("/what-is-x402", "what is x402 / MPP", activePath === "/what-is-x402")}
+      ${mmLink("/what-is-x402", "x402 and MPP on Agent402", activePath === "/what-is-x402")}
       ${mmLink("/agentic-finance", "agentic finance", activePath === "/agentic-finance")}
       ${mmLink("/glossary", "glossary", activePath === "/glossary")}
+      ${mmLink(GUIDE_SITE, `${GUIDE_SITE_NAME} · plain-language guide`, false, "", ' rel="noopener"')}
       ${mmLink("/quickstart", "quickstart", activePath === "/quickstart")}
       ${mmLink("/how-to-pay", "how to pay · every rail", activePath === "/how-to-pay")}
       ${mmLink("/guides", "guides", activePath === "/guides")}
@@ -1087,7 +1089,7 @@ export function ledgerFooterCompact() {
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
       <span class="ml-foot-legal"><span>© 2026 <a href="https://havok.holdings" rel="noopener" style="color:var(--muted);text-decoration:underline;">Havok Holdings LLC</a></span></span>
-      <span class="ml-foot-links"><a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:none;">contact</a><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/scorecard" style="color:var(--muted);text-decoration:none;">scorecard</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/trust" style="color:var(--muted);text-decoration:none;">trust</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a><button type="button" data-analytics-choices hidden>analytics choices</button></span>
+      <span class="ml-foot-links"><a href="mailto:help@agent402.tools" style="color:var(--muted);text-decoration:none;">contact</a><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/scorecard" style="color:var(--muted);text-decoration:none;">scorecard</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/trust" style="color:var(--muted);text-decoration:none;">trust</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a><button type="button" data-analytics-choices hidden>analytics choices</button></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">
       <span style="letter-spacing:.1em;text-transform:uppercase;">for agents</span>

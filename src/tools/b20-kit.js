@@ -310,7 +310,7 @@ export const B20_TOOLS = [
     discovery: {
       bodyType: "json",
       input: { feature: "base.b20_asset" },
-      inputSchema: { properties: { feature: { type: "string", description: "feature string to hash (keccak256)" } }, required: ["feature"] },
+      inputSchema: { properties: { feature: { type: "string", maxLength: 256, description: "feature string to hash (keccak256)" } }, required: ["feature"] },
       output: { example: { feature: "base.b20_asset", featureId: "0xcdcc772f…", registry: REGISTRY, calldata: "0xba87af80cdcc…" } },
     },
     handler: async (i) => {

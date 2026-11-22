@@ -96,10 +96,13 @@ const noLeak = (r) => {
   }
   publicText(r.body);
 };
-// What reaches the public issue: fixed text, no id, age, count, time or digit.
+// What reaches the public issue: fixed text, no id, age or count.
 const publicText = (text) => {
   assert.ok(!/GHSA-/i.test(text), `no GHSA id in the public issue: ${text}`);
-  assert.ok(!/\d/.test(text), `no age, count or time in the public issue: ${text}`);
+  // The fixed text carries the run link and, on a comment, the time it was
+  // written; nothing else in it is a figure.
+  const rest = text.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g, "").replace(/Run: \S*/g, "");
+  assert.ok(!/\d/.test(rest), `no age or count in the public issue: ${text}`);
 };
 
 await check("a triage advisory older than 24 h pages with its id and age", async () => {
@@ -185,8 +188,8 @@ await check("an unreachable API is unreadable", async () => {
 const wf = yamlLoad(await readFile(path.join(ROOT, ".github/workflows/heartbeat.yml"), "utf8"));
 const steps = Object.values(wf.jobs).flatMap((j) => j.steps || []);
 const step = steps.find((s) => String(s.name || "").startsWith("Security advisory triage check"));
-const TITLE = "Security advisory waiting in triage";
-const TITLE2 = "Security advisory check cannot read";
+const TITLE = "Scheduled check needs review: security-advisory";
+const TITLE2 = "Scheduled check needs review: security-advisory-read";
 
 await check("heartbeat.yml wires the step: token from the secret, ack list from the repo variable, never fails the run", async () => {
   assert.ok(step, "heartbeat.yml has the Security advisory triage check step");
@@ -203,7 +206,7 @@ await writeFile(path.join(dir, "gh"), `#!/usr/bin/env bash
 { printf 'CALL'; for a in "$@"; do printf ' [%s]' "$a"; done; echo; } >> "${dir}/gh.log"
 prev=""; for a in "$@"; do if [ "$prev" = "--body-file" ]; then { echo "BODY<<"; cat "$a"; echo ">>"; } >> "${dir}/gh.log"; fi; prev="$a"; done
 if [ "$1 $2" = "issue list" ]; then
-  case "$*" in *"cannot read"*) cat "${dir}/open2" 2>/dev/null;; *"waiting in triage"*) cat "${dir}/open1" 2>/dev/null;; esac
+  case "$*" in *"security-advisory-read"*) cat "${dir}/open2" 2>/dev/null;; *"security-advisory"*) cat "${dir}/open1" 2>/dev/null;; esac
 fi
 exit 0
 `);

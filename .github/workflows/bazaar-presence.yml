@@ -91,11 +91,11 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
       STATE_FILE: .bazaar-presence/state.json
-      TITLE: Bazaar presence check
+      TITLE: "Scheduled check needs review: listing-presence"
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       MAX_SPEND_USD: ${{ vars.BAZAAR_PRESENCE_MAX_USD || '2' }}
       MAX_ROUTES: "10"
-      MCP_TITLE: Bazaar MCP listing presence check
+      MCP_TITLE: "Scheduled check needs review: mcp-listing-presence"
       # Whether the scheduled MCP listings pass runs (the log says so).
       BAZAAR_MCP_KEEPALIVE: ${{ vars.BAZAAR_MCP_KEEPALIVE }}
       GH_TOKEN: ${{ github.token }}
@@ -110,6 +110,15 @@ jobs:
           path: .bazaar-presence
           key: bazaar-presence-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: bazaar-presence-
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Check the listing (reads only, pays nothing)
         id: check
         timeout-minutes: 25

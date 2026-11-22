@@ -96,7 +96,7 @@ next hourly pass folds that read into the record, which then shows it under
 hours; a repeat inside that span answers the request already scheduled and
 changes nothing. Each caller may send 10 requests an hour.
 
-For anything a re-check does not settle, write to mike@agent402.tools with the
+For anything a re-check does not settle, write to help@agent402.tools with the
 seller's host and the metric in question.
 
 ## How it is computed

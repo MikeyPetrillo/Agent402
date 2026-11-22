@@ -321,7 +321,7 @@ export const IMAGE_GEN_TOOLS = [
       input: { prompt: "A single red apple on a white background" },
       inputSchema: {
         properties: {
-          prompt: { type: "string", description: "Text description of the desired image (max 1000 chars)" },
+          prompt: { type: "string", maxLength: 1000, description: "Text description of the desired image (max 1000 chars)" },
           moderation: MODERATION_PROP,
         },
         required: ["prompt"],
@@ -353,7 +353,7 @@ export const IMAGE_GEN_TOOLS = [
       input: { prompt: "A single red apple on a white background" },
       inputSchema: {
         properties: {
-          prompt: { type: "string", description: "Text description of the desired image (max 2000 chars)" },
+          prompt: { type: "string", maxLength: 2000, description: "Text description of the desired image (max 2000 chars)" },
           moderation: MODERATION_PROP,
         },
         required: ["prompt"],
@@ -385,7 +385,7 @@ export const IMAGE_GEN_TOOLS = [
       input: { prompt: "A single red apple on a white background" },
       inputSchema: {
         properties: {
-          prompt: { type: "string", description: "Text description of the desired image (max 4000 chars)" },
+          prompt: { type: "string", maxLength: 4000, description: "Text description of the desired image (max 4000 chars)" },
           moderation: MODERATION_PROP,
           orientation: { type: "string", enum: ["landscape", "portrait", "square"], description: "landscape 1536x1024 (default), portrait 1024x1536, square 1024x1024" },
         },

@@ -70,7 +70,7 @@ The same flagship set is first-class; the long tail is reachable via `catalog.se
 
 The npm server also exposes **`router.execute`** (since 0.13.11; `route_and_execute`, its name since 0.12.0, still works) `{ task, params?, maxUsd? }`: describe a task and the Smart Order Router resolves the best-matching **external** x402 seller (the MCP tool always sends `include: "external"`; for this catalog's own tools, call the tool directly), pays it from your configured wallet, and relays the result marked `untrustedContent`. Sellers are routable on proven on-chain settlement, with one exception: a seller with no settlement history yet is tried only after every proven candidate, under a small per-call cap, and flagged unproven on the receipt. See [[x402 Index and Router|x402-Index-and-Router]].
 
-`maxUsd` is the cap on the **underlying seller's** price and defaults to `0.005`. From it the server picks the cheapest routing rung that covers it, exactly as the HTTP ladder does: `maxUsd ≤ 0.005` → the $0.01 tier, `> 0.005` and `≤ 0.04` → the $0.05 tier, `> 0.04` → the $0.55 tier (underlying up to $0.50). Needs a funded wallet.
+`maxUsd` is the cap on the **underlying seller's** price and defaults to `0.005`. From it the server picks the cheapest routing rung that covers it, exactly as the HTTP ladder does: `maxUsd ≤ 0.005` → the $0.01 tier, `> 0.005` and `≤ 0.04` → the $0.05 tier, `> 0.04` and `≤ 0.10` → the $0.12 tier, `> 0.10` → the $0.55 tier (underlying up to $0.50). Needs a funded wallet.
 
 Other env knobs: `AGENT402_URL` (target service), `AGENT402_TOOLS` (override the first-class tool list), `AGENT402_NETWORKS` (e.g. `robinhood`).
 

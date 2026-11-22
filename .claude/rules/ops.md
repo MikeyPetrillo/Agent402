@@ -22,12 +22,14 @@ paths:
   - "src/solana-history-rpc.js"
   - "src/solana-activity-store.js"
   - "src/solana-leaderboard.js"
+  - "src/board-refresh-slots.js"
   - "src/upstream-budgets.js"
   - "src/upstream-hard-caps.js"
   - "src/upstream-call-days.js"
   - "services/**"
   - "scripts/*-deploy-paths.js"
   - "scripts/backup-restore.js"
+  - "scripts/adopt-issue-titles.js"
   - ".github/workflows/**"
   - "workers/**"
 ---
@@ -50,6 +52,20 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   under `largeRowTimeoutMs`: the default limit plus `STATE_DB_MS_PER_MB` (500) per megabyte past the
   first, at most `STATE_DB_LARGE_ROW_MAX_MS` (120000); after a warm-start page times out, the rows
   that page covered are read one at a time, then full pages resume.
+- **Seller board rebuilds:** `src/board-refresh-slots.js`: the Base, Solana and MPP boards each
+  rebuild at their own fixed UTC hours (`BOARD_SLOT_HOURS_UTC` in `src/refresh-cadence.js`: twice
+  a day, an hour apart from the others). A rebuild that is due waits while another board's rebuild
+  runs, an index crawl is in flight (`addBoardRefreshQuietCheck`) or the heap is above
+  `BOARD_REFRESH_HEAP_SHARE` (default 0.7 of V8's limit; `off` or 0 disables). Held back by a
+  peer or a crawl it runs anyway after `MAX_DEFER_MS` (45 minutes); held back by the heap it gives
+  the attempt up with an error line and tries again every hour (`GIVEN_UP_RETRY_MS`) until it runs.
+  A rebuild holds the gate at most `BOARD_REFRESH_RUN_MAX_MS` (default two hours): past it the gate
+  is released and the run's `signal` is aborted. `boardRefresh` on `/api/gateway-status` reads
+  `held` after a give-up and `stalled` after three in a row or a run past its bound with none
+  finished since; the heartbeat and the status Worker page on `stalled` under the `containedTurns`
+  issue, which clears only when both words read ok. A boot rebuilds a board only when
+  its snapshot is older than its last slot. `LEADERBOARD_REFRESH_MS` puts the Base board on a
+  plain interval of that length. Suite: `scripts/test-board-refresh-slots.js`.
 - **Solana history reads:** `src/solana-history-rpc.js` reads a transaction by signature from the
   public lane first (paced, cooled on a rate limit) and the keyed lane behind it. A reader nobody
   waits on passes `background` (the activity scans in `src/revenue-live.js`, the Solana board):
@@ -137,16 +153,24 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   The `brokenListings` word reads `widespread` while the distinct origins whose listings broke in a rolling
   15 minutes reach both 20 and 5% of the indexed origins (one seller's bad data never does; a code bug that
   breaks every listing does), paged the same way; both issues close only on the second ok read in a row.
+- **Issue titles a check had before:** the scheduled checks look their issue up by exact title. The
+  titles a check carried before a rename are in one list, `workers/status-probe/src/previous-issue-titles.js`
+  (the status Worker bundles it). The Worker reads it when it lists the open issues, and every workflow
+  job that looks an issue up first runs `node scripts/adopt-issue-titles.js` (`if: always()`,
+  `continue-on-error`): an open issue under a previous title, filed by the Actions bot or the
+  repository owner, is retitled to the check's current title, or closed when the current one is open.
+  A check renamed again gains its old title there; a new check gets an entry with an empty list
+  (`scripts/test-issue-title-adoption.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
   (`NODE_ENV` or the platform's environment name), and `unconfigured` while the `BACKUP_S3_*`
   bucket variables are unset in production with a state database (no backup runs at all); the
-  heartbeat and the status probe page on both under "Offsite backup is not current", closed on
+  heartbeat and the status probe page on both under "Scheduled check needs review: offsite-backup", closed on
   `ok`. Without a bucket, a FREE_MODE boot, a boot outside production and a boot with no state
   database read `off`, which never pages.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded. The heartbeat signs its paywall read with X-Heartbeat-Token,
-  so the unpaid budget never refuses it; the status Worker pages "Paywall not observed" after three
+  so the unpaid budget never refuses it; the status Worker pages "Scheduled check needs review: paywall-read" after three
   unobserved runs (the age of the newest paywall row on /api/status) and closes on its next observed
   read. Roll back the server before (or with) the status Worker, never the
   Worker alone: an older Worker reads the unpaid-quote budget's 429 as a paywall failure.
@@ -180,7 +204,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   counting, so `mppReconcile.status` reads unknown and its mismatch pagers are blind; ok and off
   close, off being `MPP_RECONCILE=off`; unknown, before a first run and from boot until the first
   check has finished, does neither; a run that never ends holds every later one, so the remedy is
-  a restart; one issue, "MPP daily reconciliation is NOT RUNNING"). `coverageReads` pages like `sharedLimits`, on its
+  a restart; one issue, "Scheduled check needs review: payment-reconciliation-run"). `coverageReads` pages like `sharedLimits`, on its
   second word only: `alert: sustained` (paid calls started or refused without a balance read made
   for them in 3 or more separate minutes of the last 10, for 3 or more accounts;
   `coverageReadsVerdict` in `src/inflight-cover.js`). `status` ok and off close; `status: degraded`
@@ -238,7 +262,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   payers, `off` in FREE_MODE. Publicly the word only; the operator view lists per alerting payer
   its short id (`shortPayer`), spend rank and failures (slug, status, time, error text), never a
   full address or a spend figure. The status Worker and `heartbeat.yml` page once on `alert`
-  ("topBuyerFailures: a top paying buyer is getting failed answers", fixed text) and close on `ok`.
+  ("Scheduled check needs review: top-buyer-failures", fixed text) and close on `ok`.
   An alarm only: nothing is refused for it (`scripts/test-top-buyer-failures.js`,
   `scripts/test-top-buyer-failures-redis.js`).
 - **Buyer scorecard:** `src/scorecard.js` serves `GET /api/scorecard` and `/scorecard` from
@@ -368,7 +392,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   keep serving and `xDataSpend` on `/api/gateway-status` reads `over`; `0` refuses every call
   (`off`). `X_DATA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never under it) is
   where a read is refused 503 and the word reads `capped`. The status Worker and `heartbeat.yml`
-  page on `over` and `capped` under one issue ("X data daily spend OVER its ceiling") and close it
+  page on `over` and `capped` under one issue ("Scheduled check needs review: post-data-spend") and close it
   on `ok` or `off` (`scripts/test-x-data-ceilings.js`). The word is built from the larger of this
   process's day and the shared day counter the refusal reads (one read of at most `STATUS_READ_MS`
   per status answer, reused 5 s; a failed read leaves this process's own figure), so a new
@@ -393,7 +417,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   second word, `alert`, that reads `sustained` once the first has held ten minutes without a break
   (`SHARED_LIMITS_ALERT_AFTER_MS`, `REPLAY_STORE_ALERT_AFTER_MS`; kept in process memory, so a
   restart starts the count again). The status Worker and `heartbeat.yml` page on `sustained`
-  ("Shared limits store DEGRADED (Redis)", "Replay store marks PENDING (Redis)") and close when
+  ("Scheduled check needs review: shared-limits-store", "Scheduled check needs review: replay-store-marks") and close when
   the first word reads healthy (`on` or `memory`; `ok`); the alert word inside its grace period
   does neither. `gatewayBalance` reads `withdraw` from the read that reaches
   `GATEWAY_WITHDRAW_ALERT_USD` until the balance is moved, and pages at once ("Gateway balance
@@ -429,6 +453,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
 - **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
 - **X posting:** `announce.yml` / `scripts/tweet.js` (workflow dispatch only) and
   `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
+- **Stripe card canary:** no workflow. A Link refresh token is single use and a CI job cannot
+  write the rotated one back, so the supervised card buy runs from the operator's machine on the
+  Link CLI's local session: `scripts/link-canary-local.sh` (flags `--probe-only`, `--route`,
+  `--spend-request-id`; needs `STRIPE_PROFILE_ID` and `POW_SECRET`, refuses under CI) runs
+  `scripts/stripe-link-canary.mjs`, which hands the CLI no token (`scripts/test-stripe-link-canary.js`).
 - **Referral settlement book:** `src/referral-book.js` keeps the referral gate's unfinished
   settlements in the `referral-settlements` state document, stored as a head row (the small
   sections) and one `records` row per open entry, booked-payment mark and dropped record
@@ -582,8 +611,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   bound and refuses a new booking past it ("NOT booked"), so before rolling back resolve entries
   until the whole book (open plus unresolved, `/__operator/refunds.json`) is under 2000. Such a
   build emits neither `lateSettlements` nor `subscriptionFeePayer.ceiling`; both read `unknown`,
-  which neither opens nor closes an issue, so close an open "Late settlements need attention" or
-  "Subscription gas sponsor CEILING reached" issue by hand after checking the log.
+  which neither opens nor closes an issue, so close an open "Scheduled check needs review: late-settlements" or
+  "Scheduled check needs review: subscription-gas-sponsor-limit" issue by hand after checking the log.
   A Gateway booking held outside its pending book is also written to the `gateway-pending-lost`
   state document (with a state database), read back by the next container; past 200 in memory the
   oldest is logged as an error naming it, the `gatewayPending` word pages for 24 hours, and it

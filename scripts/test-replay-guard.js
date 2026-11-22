@@ -19,7 +19,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import express from "express";
 import { randomBytes } from "node:crypto";
 delete process.env.REDIS_URL;
-const { paymentReplayKey, paymentValidBeforeMs, consumedHoldFor, createReplayGuard, CONSUMED_VALIDITY_MARGIN_MS, SETTLED_HOLD_MS, MAX_SETTLED_VALIDITY_HOLD_MS } = await import("../src/replay-guard.js");
+const { paymentReplayKey, paymentValidBeforeMs, consumedHoldFor, createReplayGuard, CONSUMED_VALIDITY_MARGIN_MS, SETTLED_HOLD_MS, MAX_SETTLED_VALIDITY_HOLD_MS, MAX_SETTLED_MARK_HOLD_MS, MAX_VALIDITY_HOLD_MS } = await import("../src/replay-guard.js");
 const { __setTestClient } = await import("../src/shared-limit.js");
 
 let passed = 0, failed = 0;
@@ -551,16 +551,22 @@ function memoryRedis() {
 }
 
 // ---- A4b. A SETTLED payment's consumed mark lasts while its authorization
-// stays valid (plus the margin), on both stores and on the legacy twin, and
-// no longer than MAX_SETTLED_VALIDITY_HOLD_MS from the settle. A payment
-// with the stock five-minute expiry keeps exactly the default hold, and a
-// settle sends the store the same commands whatever hold it asks for.
+// stays valid (plus the margin), on both stores, however far out its client
+// signed validBefore (the hard bound is MAX_SETTLED_MARK_HOLD_MS from the
+// settle): the cache reader takes a valid authorization the guard does not
+// hold as its payer's proof. Its twin under the earlier key name lasts the
+// same, and no longer than MAX_SETTLED_VALIDITY_HOLD_MS from the settle, so
+// a far validBefore keeps one long-lived key per paid call. A payment with
+// the stock five-minute expiry keeps exactly the default hold, and a settle
+// sends the store the same commands whatever hold it asks for.
 {
   const DAY = 24 * 3600_000;
   const signed = (validBefore) => fakeReq({ "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, accepted: { network: "eip155:8453" }, payload: { authorization: { from: "0x" + "c".repeat(40), nonce: "0x" + randomBytes(32).toString("hex"), validAfter: "0", validBefore: String(validBefore) } } })).toString("base64") });
   const t0 = Date.now();
   const sec = (ms) => Math.floor(ms / 1000);
   const week = signed(sec(t0 + 7 * DAY)), century = signed(9999999999), stock = signed(sec(t0 + 300_000)), padded = signed("0".repeat(40) + sec(t0 + 7 * DAY));
+  // Valid 31 days and a year: past the twin's bound, inside the mark's.
+  const month = signed(sec(t0 + 31 * DAY)), year = signed(sec(t0 + 365 * DAY));
   ok(consumedHoldFor(week).settled === true && consumedHoldFor(week).validBeforeMs === sec(t0 + 7 * DAY) * 1000, "consumedHoldFor: a settled grant carries its authorization's validBefore, marked settled");
   ok(consumedHoldFor(week, { settled: false }).settled === false && consumedHoldFor(week, { settled: false }).validBeforeMs === sec(t0 + 7 * DAY) * 1000, "consumedHoldFor: a grant that was not settled carries it too, not marked settled");
   ok(consumedHoldFor(padded).validBeforeMs === sec(t0 + 7 * DAY) * 1000, "consumedHoldFor: a validBefore spelled with leading zeros (a uint256 the cache reader accepts) reads the same expiry");
@@ -573,11 +579,21 @@ function memoryRedis() {
     const w = await run(week, consumedHoldFor(week));
     const wantWeek = Math.ceil((sec(t0 + 7 * DAY) * 1000 + CONSUMED_VALIDITY_MARGIN_MS - t0) / 1000);
     ok(exOf(w.k).every((ex) => ex >= wantWeek - 5 && ex <= wantWeek + 1), `redis path: a settled seven-day authorization keeps its consumed mark and its legacy twin until it expires plus the margin (EX ${exOf(w.k)} s, want about ${wantWeek})`);
+    const bound = Math.ceil(MAX_SETTLED_VALIDITY_HOLD_MS / 1000), hard = Math.ceil(MAX_SETTLED_MARK_HOLD_MS / 1000);
+    // Past the twin's bound: the mark itself lasts to the authorization's expiry, the twin for its bound.
+    for (const [label, req, life] of [["31 days", month, 31 * DAY], ["a year", year, 365 * DAY]]) {
+      const m = await run(req, consumedHoldFor(req));
+      const want = Math.ceil((sec(t0 + life) * 1000 + CONSUMED_VALIDITY_MARGIN_MS - t0) / 1000);
+      const [mark, twin] = exOf(m.k);
+      ok(mark >= want - 5 && mark <= want + 1, `redis path: a settled authorization valid ${label} keeps its consumed mark until it expires plus the margin, past the twin's bound (EX ${mark} s, want about ${want})`);
+      ok(twin <= bound && twin >= bound - 5, `redis path: and its twin under the earlier key name for that bound and no longer: one long-lived key (EX ${twin} s, bound ${bound})`);
+    }
     const c = await run(century, consumedHoldFor(century));
-    const bound = Math.ceil(MAX_SETTLED_VALIDITY_HOLD_MS / 1000);
-    ok(exOf(c.k).every((ex) => ex <= bound && ex >= bound - 5), `redis path: a settled authorization valid for centuries keeps both keys for the settled bound and no longer (EX ${exOf(c.k)} s, bound ${bound})`);
-    const u = await run(century, consumedHoldFor(century, { settled: false }));
-    ok(exOf(u.k)[0] > bound * 10, `redis path: the same authorization granted without a settle is still held to its validBefore, unbounded by the settled bound (EX ${exOf(u.k)[0]} s)`);
+    ok(exOf(c.k)[0] <= hard && exOf(c.k)[0] >= hard - 5 && exOf(c.k)[1] <= bound && exOf(c.k)[1] >= bound - 5, `redis path: a settled authorization valid for centuries keeps its mark for the hard bound and its twin for the twin's (EX ${exOf(c.k)} s, bounds ${hard} and ${bound})`);
+    // (Another payment: the twin is written only where no entry stands.)
+    const live = signed(9999999999);
+    const u = await run(live, consumedHoldFor(live, { settled: false }));
+    ok(exOf(u.k).every((ex) => ex > hard), `redis path: one as long granted without a settle is held to its validBefore plus the margin under both names (EX ${exOf(u.k)} s)`);
     const st = await run(stock, consumedHoldFor(stock));
     ok(exOf(st.k).every((ex) => ex === Math.ceil(SETTLED_HOLD_MS / 1000)), `redis path: a settled stock five-minute payment keeps exactly the default hold (EX ${exOf(st.k)} s)`);
     const plain = signed(sec(t0 + 300_000));
@@ -594,11 +610,20 @@ function memoryRedis() {
   const expiry = sec(t0 + 7 * DAY) * 1000;
   ok(await g.begin(kw, t0 + SETTLED_HOLD_MS + 1) === "consumed" && await g.begin(kw, expiry - 300_000) === "consumed" && await g.held(kw, expiry - 1) === "consumed", "local path: a settled seven-day authorization reads consumed past the default hold, five minutes before it expires, and at its last second");
   ok(await g.begin(kw, expiry + CONSUMED_VALIDITY_MARGIN_MS + 1) === "ok", "local path: past its validBefore plus the margin the key is free (the chain refuses it by then)");
+  for (const [label, req, life] of [["31 days", month, 31 * DAY], ["a year", year, 365 * DAY]]) {
+    const km = await settleAt0(req, consumedHoldFor(req));
+    const end = sec(t0 + life) * 1000;
+    ok(await g.held(km, t0 + MAX_SETTLED_VALIDITY_HOLD_MS + 1) === "consumed" && await g.held(km, end - 300_000) === "consumed" && await g.held(km, end - 1) === "consumed" && await g.begin(km, end + CONSUMED_VALIDITY_MARGIN_MS + 1) === "ok", `local path: a settled authorization valid ${label} reads consumed past the twin's bound, five minutes before it expires and at its last second, and is free past its validBefore plus the margin`);
+  }
   const kc = await settleAt0(century, consumedHoldFor(century));
-  ok(await g.begin(kc, t0 + MAX_SETTLED_VALIDITY_HOLD_MS - 1) === "consumed" && await g.begin(kc, t0 + MAX_SETTLED_VALIDITY_HOLD_MS + 1) === "ok", "local path: a settled authorization valid for centuries is held for the settled bound and let go after it");
+  ok(await g.begin(kc, t0 + MAX_SETTLED_MARK_HOLD_MS - 1) === "consumed" && await g.begin(kc, t0 + MAX_SETTLED_MARK_HOLD_MS + 1) === "ok", "local path: a settled authorization valid for centuries is held for the hard bound and let go after it");
   const ks = await settleAt0(stock, consumedHoldFor(stock));
   ok(await g.begin(ks, t0 + SETTLED_HOLD_MS - 1) === "consumed" && await g.begin(ks, t0 + SETTLED_HOLD_MS + 1) === "ok", "local path: a settled stock five-minute payment is held for exactly the default hold");
-  ok(MAX_SETTLED_VALIDITY_HOLD_MS >= 7 * DAY + CONSUMED_VALIDITY_MARGIN_MS && MAX_SETTLED_VALIDITY_HOLD_MS <= 366 * DAY, "the settled bound covers a seven-day authorization and is under a year");
+  ok(MAX_SETTLED_VALIDITY_HOLD_MS >= 7 * DAY + CONSUMED_VALIDITY_MARGIN_MS && MAX_SETTLED_VALIDITY_HOLD_MS <= 366 * DAY, "the twin's bound covers a seven-day authorization and is under a year");
+  // The mark's hard bound is the furthest a validBefore is read, and the epoch
+  // is inside it: an authorization signed valid from the epoch (the stock
+  // client's) that settled is still held when the cache reader meets it.
+  ok(MAX_SETTLED_MARK_HOLD_MS === MAX_VALIDITY_HOLD_MS && MAX_SETTLED_MARK_HOLD_MS > Date.now() + 10 * 365 * DAY, `the mark's hard bound is the furthest a validBefore is read, and longer than the time since the epoch (${Math.round(MAX_SETTLED_MARK_HOLD_MS / (365 * DAY))} years)`);
   // A long-held mark is not the first one out when the per-process store
   // fills with default-hold marks written after it, and it does not keep
   // their expired entries in the store.
@@ -617,12 +642,11 @@ function memoryRedis() {
     ok(small._state().consumed === 0, `local path: an expired long-held mark is pruned from its own map (${small._state().consumed} left)`);
     await small.release("n:later");
   }
-  // The bound is published as a fixed figure in the 2026-11-11 changelog entry,
-  // beside the derived text on /privacy and /.well-known/x402.
+  // The bounds in words, as /privacy and /.well-known/x402 print them
+  // (scripts/test-legal-claims.js and scripts/test-discovery.js read the pages).
   {
-    const { settledValidityHoldText } = await import("../src/replay-guard.js");
-    const log = (await import("node:fs")).readFileSync(new URL("../src/changelog.js", import.meta.url), "utf8");
-    ok(log.includes(`at most ${settledValidityHoldText()} after the call`), `the changelog states the settled bound the guard enforces (${settledValidityHoldText()})`);
+    const { settledValidityHoldText, settledMarkHoldText } = await import("../src/replay-guard.js");
+    ok(settledMarkHoldText() === `${MAX_SETTLED_MARK_HOLD_MS / (365 * DAY)} years` && settledValidityHoldText() === `${MAX_SETTLED_VALIDITY_HOLD_MS / DAY} days`, `the bounds read in words as the figures the guard enforces (${settledMarkHoldText()}; ${settledValidityHoldText()})`);
   }
 }
 

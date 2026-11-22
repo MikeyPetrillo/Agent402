@@ -11,8 +11,9 @@ import { readFileSync } from "node:fs";
 // input validation (400), and fixture output shapes per tool. Live coverage
 // is the examples themselves (every example answers live; see test-all).
 
-import { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache, __test , resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
+import { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache, __test , resetCgRateLimit, ECB_CHECK } from "../src/tools/crypto-markets-kit.js";
 import { COINGECKO_CREDIT } from "../src/data-attribution.js";
+import { RETIRED_TOOLS } from "../src/retired-tools.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
@@ -65,10 +66,10 @@ const reset = () => { calls.length = 0; clearCryptoMarketsCache(); };
 const EXPECTED = {
   "coin-price-by-contract": "$0.005", "coin-profile": "$0.008", "coin-history": "$0.005", "coin-ohlc": "$0.003",
   "coin-market-chart-range": "$0.008", "coin-categories": "$0.005", "global-defi": "$0.005", "exchanges": "$0.003",
-  "exchange-tickers": "$0.008", "exchange-rates": "$0.005", "coin-search": "$0.005", "coins-list": "$0.005",
+  "exchange-tickers": "$0.008", "exchange-rates": "$0.005", "coin-search": "$0.005",
   "rwa-list": "$0.003", "rwa-markets": "$0.006", "rwa-asset": "$0.006", "rwa-issuers": "$0.003", "rwa-issuer": "$0.006",
 };
-ok(CRYPTO_MARKETS_TOOLS.length === 17, `17 tools exported (got ${CRYPTO_MARKETS_TOOLS.length})`);
+ok(CRYPTO_MARKETS_TOOLS.length === 16, `16 tools exported (got ${CRYPTO_MARKETS_TOOLS.length})`);
 const slugs = new Set();
 for (const t of CRYPTO_MARKETS_TOOLS) {
   ok(EXPECTED[t.slug] === t.price, `${t.slug}: priced ${t.price}`);
@@ -122,6 +123,69 @@ await throws(h("exchange-rates")({ type: "metal" }), 400, "exchange-rates: bad t
 clearCryptoMarketsCache();
 await h("exchange-rates")({});
 ok(calls.length === 2, "cache: cleared cache fetches again");
+// exchange-rates is computed here: every rate is quoted in the caller's base
+// through the table's BTC quotes, and a fiat pair is set against the ECB
+// reference cross (one USD-based table, kept for 30 minutes).
+{
+  const table = { rates: {
+    btc: { name: "Bitcoin", unit: "BTC", value: 1, type: "crypto" }, eth: { name: "Ether", unit: "ETH", value: 32, type: "crypto" },
+    usd: { name: "US Dollar", unit: "$", value: 80000, type: "fiat" }, eur: { name: "Euro", unit: "E", value: 68000, type: "fiat" },
+    jpy: { name: "Yen", unit: "Y", value: 12000000, type: "fiat" }, aed: { name: "Dirham", unit: "AED", value: 293800, type: "fiat" },
+    xau: { name: "Gold", unit: "XAU", value: 20, type: "commodity" },
+  } };
+  const ecbRows = [{ date: "2026-11-20", base: "USD", quote: "EUR", rate: 0.8 }, { date: "2026-11-20", base: "USD", quote: "JPY", rate: 160 }];
+  let ecb = () => jsonRes(200, ecbRows);
+  const setRoutes = () => { routes = { "/api/v3/exchange_rates": jsonRes(200, table), "/v2/rates": (u) => ecb(u) }; };
+  const ecbCalls = () => calls.filter((c) => c.url.hostname === "api.frankfurter.dev");
+  const row = (a, code) => a.rates.find((x) => x.code === code);
+  reset(); setRoutes();
+  // No parameter: the answer this route gave before the computed fields, field
+  // for field (BTC as the base, each row's perBtc), with the new ones beside.
+  {
+    const d0 = await h("exchange-rates")({});
+    const OLD_TOP = ["source", "fetchedAt", "cached", "base", "count", "rates"], OLD_ROW = ["code", "name", "unit", "type", "perBtc"];
+    ok(OLD_TOP.every((k) => k in d0) && d0.source === "coingecko" && d0.base === "BTC" && d0.count === 7 && d0.rates.length === 7 && typeof d0.fetchedAt === "string" && d0.cached === false, `exchange-rates: with no base the answer keeps every old field, BTC as the base (${Object.keys(d0).join()})`);
+    ok(d0.rates.every((x) => OLD_ROW.every((k) => k in x) && Object.keys(x).slice(0, 5).join() === OLD_ROW.join()) && JSON.stringify(d0.rates.map((x) => [x.code, x.name, x.unit, x.type, x.perBtc])) === JSON.stringify(Object.entries(table.rates).map(([code, v]) => [code, v.name, v.unit, v.type, v.value])), "exchange-rates: each default row is the old row (code, name, unit, type, perBtc), in the table's order");
+    ok(d0.rates.every((x) => x.rate === x.perBtc) && row(d0, "btc").rate === 1, "exchange-rates: the default rate is the BTC cross, equal to perBtc");
+    ok(d0.check === "ecb-reference" && d0.referenceBase === "USD" && row(d0, "eur").referenceRate === 0.8 && row(d0, "eur").divergencePct === 6.25 && row(d0, "usd").referenceRate === 1 && row(d0, "eth").referenceRate === null, `exchange-rates: beside them, a fiat row's cross against USD is set against the ECB rate (${d0.referenceBase}, ${row(d0, "eur").divergencePct})`);
+    ok(JSON.stringify(await h("exchange-rates")({ base: "btc" })) === JSON.stringify({ ...d0, cached: true }), "exchange-rates: base=btc is the default answer");
+    reset(); setRoutes();
+  }
+  const x1 = await h("exchange-rates")({ base: "usd" });
+  ok(x1.base === "USD" && x1.referenceBase === "USD" && x1.count === 7 && row(x1, "usd").rate === 1 && row(x1, "eur").rate === 0.85 && row(x1, "eth").rate === 0.0004 && row(x1, "xau").rate === 0.00025 && row(x1, "btc").rate === 0.0000125, "exchange-rates: each rate is units of the code per 1 base (default usd), computed through the BTC quotes");
+  ok(row(x1, "eur").perBtc === 68000 && row(x1, "usd").perBtc === 80000, "exchange-rates: perBtc stays on every row");
+  ok(x1.check === ECB_CHECK && x1.check === "ecb-reference" && x1.referenceDate === "2026-11-20" && /European Central Bank/.test(x1.referenceSource), `exchange-rates: check names the reference, with its date and source (${x1.check})`);
+  ok(row(x1, "eur").referenceRate === 0.8 && row(x1, "eur").divergencePct === 6.25 && row(x1, "jpy").referenceRate === 160 && row(x1, "jpy").divergencePct === -6.25, `exchange-rates: a fiat row carries the ECB cross and the gap to it in percent (${row(x1, "eur").divergencePct}, ${row(x1, "jpy").divergencePct})`);
+  ok(row(x1, "usd").referenceRate === 1 && row(x1, "usd").divergencePct === 0, "exchange-rates: the base against itself is 1 with no gap");
+  ok(row(x1, "eth").referenceRate === null && row(x1, "eth").divergencePct === null && row(x1, "xau").divergencePct === null && row(x1, "aed").referenceRate === null && row(x1, "aed").rate === 3.6725, "exchange-rates: crypto, commodity and a fiat the ECB does not publish carry no reference, never a number");
+  ok(ecbCalls().length === 1 && ecbCalls()[0].url.searchParams.get("providers") === "ecb" && ecbCalls()[0].url.searchParams.get("base") === "USD" && !("x-cg-demo-api-key" in ecbCalls()[0].headers) && !("x-cg-pro-api-key" in ecbCalls()[0].headers), "exchange-rates: one ECB-scoped reference read, sent no market data key");
+  const x2 = await h("exchange-rates")({ base: "EUR", currencies: "usd,jpy,eth" });
+  ok(x2.base === "EUR" && x2.count === 3 && row(x2, "usd").rate === 1.1764706 && row(x2, "usd").referenceRate === 1.25 && row(x2, "jpy").referenceRate === 200 && row(x2, "jpy").divergencePct === -11.7647 && row(x2, "eth").referenceRate === null, `exchange-rates: another fiat base is crossed on both sides (${JSON.stringify(row(x2, "usd"))})`);
+  ok(calls.length === 2 && x2.cached === true, "exchange-rates: a second base reads neither upstream again");
+  const x3 = await h("exchange-rates")({ base: "eth" });
+  ok(x3.base === "ETH" && x3.check === "ecb-reference" && x3.referenceBase === "USD" && row(x3, "usd").rate === 2500 && row(x3, "eur").referenceRate === 0.8, "exchange-rates: a crypto base answers every cross, with the fiat rows checked against USD");
+  const x4 = await h("exchange-rates")({ base: "aed", type: "fiat" });
+  ok(x4.check === "no-reference" && row(x4, "eur").referenceRate === null, "exchange-rates: a fiat base the ECB does not publish says no-reference");
+  await throws(h("exchange-rates")({ base: "zzz" }), 400, "exchange-rates: a base outside the table", /"base" must be a unit code/);
+  await throws(h("exchange-rates")({ base: "u s" }), 400, "exchange-rates: a malformed base");
+  // No fiat row asked: no reference read at all.
+  reset(); setRoutes();
+  const x5 = await h("exchange-rates")({ currencies: "eth,xau" });
+  ok(x5.check === "no-reference" && ecbCalls().length === 0, "exchange-rates: nothing to compare reads no reference");
+  // The reference failing leaves the rates as they are, and is not retried at once.
+  reset(); setRoutes(); ecb = () => jsonRes(500, "down");
+  const x6 = await h("exchange-rates")({ base: "usd" });
+  ok(x6.check === "unavailable" && row(x6, "eur").rate === 0.85 && row(x6, "eur").referenceRate === null && row(x6, "eur").divergencePct === null && !("referenceDate" in x6), "exchange-rates: a reference that cannot be read answers the rates with check unavailable");
+  await h("exchange-rates")({ base: "eur" });
+  ok(ecbCalls().length === 1, "exchange-rates: a failed reference read is not tried again inside the back-off");
+  reset(); setRoutes(); ecb = () => jsonRes(200, []);
+  ok((await h("exchange-rates")({})).check === "unavailable", "exchange-rates: an empty reference answer is unavailable, never a comparison");
+  const def = CRYPTO_MARKETS_TOOLS.find((t) => t.slug === "exchange-rates");
+  const ex = def.discovery.output.example;
+  ok(ex.base === "BTC" && ex.referenceBase === "USD" && ex.rates.every((x) => x.rate === x.perBtc) && ex.check === "ecb-reference" && ex.rates.every((x) => "rate" in x && "referenceRate" in x && "divergencePct" in x) && ex.rates.some((x) => typeof x.divergencePct === "number"), "exchange-rates: the published example shows the computed fields");
+  ok(def.discovery.inputSchema.properties.base && /referenceRate/.test(def.description) && /European Central Bank/.test(def.description), "exchange-rates: schema lists base, description names the reference");
+  reset();
+}
 // different query params -> different key
 reset();
 routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(200, [[1787319000000, 1, 2, 0.5, 1.5], [1787320800000, 1.5, 3, 1, 2]]) };
@@ -328,9 +392,6 @@ const CASES = [
   ["coin-search", {}, /query/],
   ["coin-search", { query: "x".repeat(65) }, /64/],
   ["coin-search", { query: "usdc", limit: 51 }, /limit/],
-  ["coins-list", { perPage: 501 }, /perPage/],
-  ["coins-list", { includePlatforms: "maybe" }, /true\/false/],
-  ["coins-list", { symbol: "usd c" }, /symbol/],
 ];
 for (const [slug, input, re] of CASES) await throws(h(slug)(input), 400, `${slug} ${JSON.stringify(input).slice(0, 70)}`, re);
 ok(calls.length === 0, "validation failures make no upstream call");
@@ -538,23 +599,10 @@ routes = { "/api/v3/search": (u) => { ok(u.searchParams.get("query") === "usd co
 const srch = await h("coin-search")({ query: "  usd   coin ", limit: 2 });
 ok(srch.query === "usd coin" && srch.counts.coins === 2 && srch.coins[0].id === "usd-coin" && srch.coins[0].symbol === "USDC" && srch.coins[1].id === "other" && srch.counts.exchanges === 1 && srch.categories[0].id === "usdc-stablecoins" && srch.nfts[0].id === "n1", "coin-search: ranked coins (unranked last), per-group limit, groups shaped");
 
-reset();
-routes = {
-  "/api/v3/coins/list": (u) => jsonRes(200, u.searchParams.get("include_platform") === "true"
-    ? [{ id: "usd-coin", symbol: "usdc", name: "USDC", platforms: { ethereum: "0xa0b8", base: "0x8335", "": "" } }, { id: "bridged-usdc", symbol: "USDC", name: "Bridged", platforms: { base: "0x1" } }, { id: "bitcoin", symbol: "btc", name: "Bitcoin", platforms: {} }, { id: "sol-only", symbol: "zzz", name: "Z", platforms: { solana: "abc" } }]
-    : [{ id: "usd-coin", symbol: "usdc", name: "USDC" }, { id: "bridged-usdc", symbol: "USDC", name: "Bridged" }, { id: "bitcoin", symbol: "btc", name: "Bitcoin" }, { id: "sol-only", symbol: "zzz", name: "Z" }]),
-};
-const cl = await h("coins-list")({ perPage: 2, page: 2 });
-ok(cl.total === 4 && cl.totalPages === 2 && cl.page === 2 && cl.count === 2 && cl.coins[0].id === "bitcoin" && !("platforms" in cl.coins[0]), "coins-list: local paging, platforms omitted by default");
-ok(calls[0].url.searchParams.get("include_platform") === null, "coins-list: include_platform not sent unless asked");
-const cl2 = await h("coins-list")({ perPage: 2, page: 1 });
-ok(cl2.cached === true && calls.length === 1 && cl2.coins[0].id === "usd-coin", "coins-list: paging through the list reuses one cached upstream answer");
-const cl3 = await h("coins-list")({ symbol: "USDC", includePlatforms: "true" });
-ok(calls.length === 2 && cl3.total === 2 && cl3.coins[0].platforms.ethereum === "0xa0b8" && !("" in cl3.coins[0].platforms) && cl3.coins[1].platforms.base === "0x1" && cl3.filters.symbol === "usdc", "coins-list: symbol filter (case-insensitive) + platforms (empty key dropped)");
-const cl4 = await h("coins-list")({ platform: "base" });
-ok(calls.length === 2 && cl4.total === 2 && cl4.coins.every((c) => c.platforms.base) && cl4.filters.platform === "base", "coins-list: platform filter implies platforms, served from cache");
-const cl5 = await h("coins-list")({ platform: "solana", symbol: "zzz" });
-ok(cl5.total === 1 && cl5.coins[0].id === "sol-only", "coins-list: platform + symbol filters combine");
+// coins-list is retired (410 to coin-search, src/retired-tools.js): the kit
+// no longer serves the upstream's id list.
+ok(!CRYPTO_MARKETS_TOOLS.some((t) => t.slug === "coins-list"), "coins-list: not served by the kit");
+ok(RETIRED_TOOLS["coins-list"]?.replacement === "coin-search" && CRYPTO_MARKETS_TOOLS.some((t) => t.slug === "coin-search"), "coins-list: retired with coin-search, a live tool, as its replacement");
 
 // ----------------------------------------------------------------------------
 // Cache bound

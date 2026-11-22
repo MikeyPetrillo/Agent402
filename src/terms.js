@@ -72,7 +72,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-19.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-21.</p>
 </section>
 
 <section>
@@ -127,7 +127,7 @@ notice, including for violations of these terms or of upstream provider policies
 repeated violations are blocked permanently. We cooperate with law enforcement and will disclose
 information and preserve records in response to valid legal process, and report content where the law
 requires it. To report abuse, infringement, or illegal content involving this service, email
-<a href="mailto:mike@agent402.tools">mike@agent402.tools</a> - reports are reviewed promptly.</p>
+<a href="mailto:help@agent402.tools">help@agent402.tools</a> - reports are reviewed promptly.</p>
 
 <h2>The published index</h2>
 <p>We publish an index of services that advertise machine payments over x402 or MPP. It is built by
@@ -281,7 +281,7 @@ permitted, liability is limited to the smallest amount the law allows.</p>
 <h2>Governing law &amp; disputes</h2>
 <p>These terms are governed by the laws of the <b>State of North Carolina</b> and applicable U.S.
 federal law, without regard to conflict-of-laws rules. Before filing any claim, you agree to first
-contact <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> and attempt in good faith to
+contact <a href="mailto:help@agent402.tools">help@agent402.tools</a> and attempt in good faith to
 resolve the dispute informally for 30 days.</p>
 <p><b>Arbitration and class-action waiver.</b> Any dispute not resolved informally will be settled by
 <b>binding individual arbitration</b> administered by the American Arbitration Association under its
@@ -304,7 +304,7 @@ Sections on generated content, payments, indemnification, warranty disclaimer, l
 survive any termination of your use.</p>
 
 <h2>Operator &amp; contact</h2>
-<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>,
+<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:help@agent402.tools">help@agent402.tools</a>,
 <a href="${REPO_URL}" rel="noopener">the source repository on GitHub</a>,
 or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.</p>
 </div>

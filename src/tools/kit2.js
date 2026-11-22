@@ -145,7 +145,7 @@ const encoding = [
     route: "POST /api/base58", name: "Base58", slug: "base58", category: "encoding", price: "$0.001",
     description: "Base58 encode or decode text (Bitcoin/IPFS alphabet). mode: encode (default) or decode.",
     tags: ["base58", "encode", "decode", "crypto"],
-    discovery: { bodyType: "json", input: { text: "Hello", mode: "encode" }, inputSchema: { properties: { text: { type: "string" }, mode: { type: "string", description: "encode | decode" } }, required: ["text"] }, output: { example: { mode: "encode", result: "9Ajdvzr" } } },
+    discovery: { bodyType: "json", input: { text: "Hello", mode: "encode" }, inputSchema: { properties: { text: { type: "string", maxLength: 4096 }, mode: { type: "string", description: "encode | decode" } }, required: ["text"] }, output: { example: { mode: "encode", result: "9Ajdvzr" } } },
     handler: (i) => {
       // Base58 is a big-integer conversion, quadratic in the input length.
       const text = cap(need(i, "text"), BASE58_MAX_CHARS);
@@ -198,7 +198,7 @@ const encoding = [
     route: "POST /api/morse", name: "Morse code", slug: "morse", category: "encoding", price: "$0.001",
     description: "Encode text to Morse code or decode it back. mode: encode (default) or decode. Words separated by ' / '.",
     tags: ["morse", "encode", "decode"],
-    discovery: { bodyType: "json", input: { text: "SOS", mode: "encode" }, inputSchema: { properties: { text: { type: "string" }, mode: { type: "string", description: "encode | decode" } }, required: ["text"] }, output: { example: { mode: "encode", result: "... --- ..." } } },
+    discovery: { bodyType: "json", input: { text: "SOS", mode: "encode" }, inputSchema: { properties: { text: { type: "string", maxLength: 5000 }, mode: { type: "string", description: "encode | decode" } }, required: ["text"] }, output: { example: { mode: "encode", result: "... --- ..." } } },
     handler: (i) => {
       const text = cap(need(i, "text"), 5000);
       if (i.mode === "decode") {
@@ -233,7 +233,7 @@ const encoding = [
     route: "POST /api/jwt-verify", name: "JWT verify (HMAC)", slug: "jwt-verify", category: "encoding", price: "$0.001",
     description: "Verify an HS256/384/512 JWT signature against a secret and check expiry. Returns valid + decoded payload. (HMAC algorithms only.)",
     tags: ["jwt", "verify", "hmac", "auth"],
-    discovery: { bodyType: "json", input: { token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.NqggPBGuLX1OA7YuSlQ4S0INJfCOWnwXWT0XUIUrt3s", secret: "my-secret" }, inputSchema: { properties: { token: { type: "string" }, secret: { type: "string" } }, required: ["token", "secret"] }, output: { example: { valid: true, algorithm: "HS256", expired: false, payload: { sub: "agent402" } } } },
+    discovery: { bodyType: "json", input: { token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.NqggPBGuLX1OA7YuSlQ4S0INJfCOWnwXWT0XUIUrt3s", secret: "my-secret" }, inputSchema: { properties: { token: { type: "string", maxLength: 16384 }, secret: { type: "string" } }, required: ["token", "secret"] }, output: { example: { valid: true, algorithm: "HS256", expired: false, payload: { sub: "agent402" } } } },
     handler: (i) => {
       const token = cap(need(i, "token"), 16384, "token");
       const secret = need(i, "secret");
@@ -371,7 +371,7 @@ const text = [
     route: "POST /api/levenshtein", name: "Edit distance", slug: "levenshtein", category: "text", price: "$0.001",
     description: "Levenshtein edit distance between two strings, plus a 0-1 similarity ratio.",
     tags: ["levenshtein", "edit-distance", "similarity", "fuzzy"],
-    discovery: { bodyType: "json", input: { a: "kitten", b: "sitting" }, inputSchema: { properties: { a: { type: "string" }, b: { type: "string" } }, required: ["a", "b"] }, output: { example: { distance: 3, similarity: 0.571 } } },
+    discovery: { bodyType: "json", input: { a: "kitten", b: "sitting" }, inputSchema: { properties: { a: { type: "string", maxLength: 10000 }, b: { type: "string", maxLength: 10000 } }, required: ["a", "b"] }, output: { example: { distance: 3, similarity: 0.571 } } },
     handler: (i) => {
       const a = cap(need(i, "a"), 10_000, "a");
       const b = cap(need(i, "b"), 10_000, "b");
@@ -567,7 +567,7 @@ const conversion = [
     route: "POST /api/base-convert", name: "Base / radix convert", slug: "base-convert", category: "conversion", price: "$0.001",
     description: "Convert an integer between number bases (radix 2-36), e.g. binary↔hex↔decimal. Arbitrary size via BigInt.",
     tags: ["base", "radix", "binary", "hex", "convert"],
-    discovery: { bodyType: "json", input: { value: "ff", from: 16, to: 2 }, inputSchema: { properties: { value: { type: "string" }, from: { type: "number", description: "2-36" }, to: { type: "number", description: "2-36" } }, required: ["value", "from", "to"] }, output: { example: { result: "11111111" } } },
+    discovery: { bodyType: "json", input: { value: "ff", from: 16, to: 2 }, inputSchema: { properties: { value: { type: "string", maxLength: 4096 }, from: { type: "number", description: "2-36" }, to: { type: "number", description: "2-36" } }, required: ["value", "from", "to"] }, output: { example: { result: "11111111" } } },
     handler: (i) => {
       const value = String(need(i, "value", "any")).trim().toLowerCase();
       // BigInt parse/format is quadratic in digit count - cap it so a paid call
@@ -1070,7 +1070,7 @@ const math = [
     route: "POST /api/calc", name: "Calculator", slug: "calc", aliases: ["divide", "fraction", "divided-by", "calculate", "calculator"], category: "math", price: "$0.001",
     description: "Safely evaluate an arithmetic expression (+ - * / % ^ and parentheses). No code execution - a real parser, not eval.",
     tags: ["calc", "math", "expression", "arithmetic"],
-    discovery: { bodyType: "json", input: { expr: "2 + 3 * (4 - 1) ^ 2" }, inputSchema: { properties: { expr: { type: "string" } }, required: ["expr"] }, output: { example: { result: 29 } } },
+    discovery: { bodyType: "json", input: { expr: "2 + 3 * (4 - 1) ^ 2" }, inputSchema: { properties: { expr: { type: "string", maxLength: 1000 } }, required: ["expr"] }, output: { example: { result: 29 } } },
     handler: (i) => {
       // Accept any reasonable "expression" alias — analytics shows callers send `expression` / `formula`.
       const raw = i.expr ?? i.expression ?? i.formula;
@@ -1350,7 +1350,7 @@ const time = [
     route: "POST /api/add-time", name: "Date arithmetic", slug: "add-time", category: "time", price: "$0.001",
     description: 'Add (or subtract) a duration to a date. duration like "2d", "-3h", "1w 2d", "90m". Returns the resulting UTC ISO timestamp.',
     tags: ["date", "add", "duration", "time", "arithmetic"],
-    discovery: { bodyType: "json", input: { date: "2026-06-11T12:00:00Z", duration: "2d 3h" }, inputSchema: { properties: { date: { description: "Base date (default now)" }, duration: { type: "string", description: 'e.g. "2d", "-3h", "1w"' } }, required: ["duration"] }, output: { example: { result: "2026-06-13T15:00:00.000Z" } } },
+    discovery: { bodyType: "json", input: { date: "2026-06-11T12:00:00Z", duration: "2d 3h" }, inputSchema: { properties: { date: { description: "Base date (default now)" }, duration: { type: "string", maxLength: 100, description: 'e.g. "2d", "-3h", "1w"' } }, required: ["duration"] }, output: { example: { result: "2026-06-13T15:00:00.000Z" } } },
     handler: (i) => {
       const base = parseDate(i.date, "date");
       const dur = cap(need(i, "duration"), 100, "duration").toLowerCase();
@@ -1398,7 +1398,7 @@ const validation = [
     route: "POST /api/gtin-validate", name: "GTIN / EAN / UPC validate", slug: "gtin-validate", category: "validation", price: "$0.001",
     description: "Validate a product barcode number's GS1 check digit: GTIN-8 (EAN-8), GTIN-12 (UPC-A), GTIN-13 (EAN-13, including ISBN-13 and ISSN prefixes) or GTIN-14, with the expected check digit and the 14-digit form. Spaces and hyphens ignored. Pairs with /api/barcode-lookup.",
     tags: ["gtin", "ean", "upc", "barcode", "validate", "checksum"],
-    discovery: { bodyType: "json", input: { code: "4006381333931" }, inputSchema: { properties: { code: { type: "string", description: "8, 12, 13 or 14 digits" } }, required: ["code"] }, output: { example: { valid: true, format: "GTIN-13", alias: "EAN-13", checkDigit: 1, expectedCheckDigit: 1, gtin14: "04006381333931", prefix: null } } },
+    discovery: { bodyType: "json", input: { code: "4006381333931" }, inputSchema: { properties: { code: { type: "string", maxLength: 64, description: "8, 12, 13 or 14 digits" } }, required: ["code"] }, output: { example: { valid: true, format: "GTIN-13", alias: "EAN-13", checkDigit: 1, expectedCheckDigit: 1, gtin14: "04006381333931", prefix: null } } },
     handler: (i) => {
       const raw = cap(need(i, "code"), 64, "code").replace(/[\s-]/g, "");
       const formats = { 8: ["GTIN-8", "EAN-8"], 12: ["GTIN-12", "UPC-A"], 13: ["GTIN-13", "EAN-13"], 14: ["GTIN-14", "ITF-14"] };
@@ -1414,7 +1414,7 @@ const validation = [
     route: "POST /api/password-strength", name: "Password strength", slug: "password-strength", category: "validation", price: "$0.001",
     description: "Score a password's strength: character-set size, entropy bits, a 0–4 rating, and an estimated offline crack time. The password is never stored or logged.",
     tags: ["password", "strength", "entropy", "security"],
-    discovery: { bodyType: "json", input: { password: "Tr0ub4dour&3" }, inputSchema: { properties: { password: { type: "string" } }, required: ["password"] }, output: { example: { entropyBits: 72, score: 3, rating: "strong", crackTime: "centuries" } } },
+    discovery: { bodyType: "json", input: { password: "Tr0ub4dour&3" }, inputSchema: { properties: { password: { type: "string", maxLength: 1024 } }, required: ["password"] }, output: { example: { entropyBits: 72, score: 3, rating: "strong", crackTime: "centuries" } } },
     handler: (i) => {
       const pw = cap(need(i, "password"), 1024, "password");
       let pool = 0;

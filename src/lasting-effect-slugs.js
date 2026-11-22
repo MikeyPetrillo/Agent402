@@ -9,10 +9,12 @@ const LASTING_EFFECT_SLUGS = new Set([
   "memory-write", "memory-incr", "memory-cas", "memory-grant", "memory-revoke", "memory-remember", "memory-forget",
   "attest",
   "feedback",
-  "route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro",
+  "route-execute", "route-execute-plus", "route-execute-mid", "route-execute-max", "route-execute-pro",
   "seller-payability",
   "flight-search", "flight-status",
   "decide-execute",
+  // A registration that is kept and later delivered to (src/price-webhooks.js).
+  "price-webhook",
 ]);
 export const LASTING_EFFECT_SLUG_LIST = Object.freeze([...LASTING_EFFECT_SLUGS]);
 

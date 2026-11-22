@@ -1,6 +1,6 @@
 // heartbeat.yml finds its open alarm issue by a title search, and GitHub's
 // in:title search matches words, not the whole title: "Upstream buyer wallet
-// LOW (x402)" also finds "EVM chains upstream buyer wallet LOW (x402)". A
+// LOW (x402)" also finds "Scheduled check needs review: evm-buyer-wallets". A
 // lookup that takes the first search hit can comment on or close another
 // alarm's issue. Every lookup must keep only the issue whose title equals
 // the alarm's own.
@@ -52,19 +52,23 @@ await check("every title-search lookup binds the title and keeps only the exact 
 });
 
 await check("each lookup's own jq picks the exact title over a near-identical one", () => {
-  const T = "Upstream buyer wallet LOW (x402)";
+  const T = "Scheduled check needs review: buyer-wallet";
   const bot = { login: "github-actions[bot]" };
   for (const { line, n } of lookups) {
     const jq = jqOf(line), name = boundName(line);
     if (!jq || !name) continue; // reported by the check above
     const runJq = (issues) => {
-      const r = spawnSync("jq", ["-r", jq], { input: JSON.stringify(issues), env: { ...process.env, [name]: T, ALARM_OWNER: "o" }, encoding: "utf8" });
+      const r = spawnSync("jq", ["-r", jq], { input: JSON.stringify(issues), env: { ...process.env, [name]: T, ALARM_OWNER: "o", ISSUE_OWNER: "o" }, encoding: "utf8" });
       assert.equal(r.status, 0, `${n}: ${r.stderr}`);
       return r.stdout.trim();
     };
     assert.equal(runJq([{ number: 7, title: `EVM chains ${T}`, author: bot }]), "", `${n}: matched another alarm's title`);
     assert.equal(runJq([{ number: 7, title: `EVM chains ${T}`, author: bot }, { number: 3, title: T, author: bot }]), "3", `${n}: missed its own title`);
     assert.equal(runJq([]), "", `${n}: an empty list must read as no issue (not "null")`);
+    // Anyone can open an issue under the check's title: only the bot's or
+    // the owner's is the check's own.
+    assert.equal(runJq([{ number: 5, title: T, author: { login: "stranger" } }]), "", `${n}: took a stranger's issue under its title`);
+    assert.equal(runJq([{ number: 5, title: T, author: { login: "stranger" } }, { number: 3, title: T, author: bot }]), "3", `${n}: missed its own issue beside a stranger's`);
   }
 });
 
@@ -84,10 +88,10 @@ await chmod(path.join(dir, "curl"), 0o755);
 await chmod(path.join(dir, "gh"), 0o755);
 
 const WALLETS = [
-  ["Upstream buyer wallet check", "Upstream buyer wallet LOW (x402)", "upstreamBuyer"],
-  ["EVM chains upstream buyer wallet", "EVM chains upstream buyer wallet LOW (x402)", "upstreamBuyerEvm"],
-  ["Algorand upstream buyer wallet check", "Algorand upstream buyer wallet LOW (x402)", "upstreamBuyerAlgorand"],
-  ["Solana upstream buyer wallet check", "Solana upstream buyer wallet LOW (x402)", "upstreamBuyerSolana"],
+  ["Upstream buyer wallet check", "Scheduled check needs review: buyer-wallet", "upstreamBuyer"],
+  ["EVM chains upstream buyer wallet", "Scheduled check needs review: evm-buyer-wallets", "upstreamBuyerEvm"],
+  ["Algorand upstream buyer wallet check", "Scheduled check needs review: algorand-buyer-wallet", "upstreamBuyerAlgorand"],
+  ["Solana upstream buyer wallet check", "Scheduled check needs review: solana-buyer-wallet", "upstreamBuyerSolana"],
 ];
 const bot = { login: "github-actions[bot]" };
 
@@ -117,12 +121,12 @@ for (const [prefix, title] of WALLETS) {
 // read closes it, and "off" never pages.
 {
   const step = steps.find((s) => String(s.name || "").startsWith("EVM chains upstream buyer wallet"));
-  const UNR = "EVM chains upstream buyer wallet UNREADABLE (x402)";
+  const UNR = "Scheduled check needs review: evm-buyer-wallets-read";
   const runEvm = async (evm, issues = []) => {
     const log = path.join(dir, "gh.log");
     await writeFile(log, "");
     const r = spawnSync("bash", ["-c", step.run], {
-      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r", GS_BODY: JSON.stringify(evm === undefined ? {} : { upstreamBuyerEvm: evm }), ISSUES_JSON: JSON.stringify(issues), GH_LOG: log },
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r", GS_BODY: JSON.stringify(evm === undefined ? {} : { upstreamBuyerEvm: evm }), ISSUES_JSON: JSON.stringify(issues.map((x) => ({ author: bot, ...x }))), GH_LOG: log },
       encoding: "utf8",
     });
     assert.equal(r.status, 0, r.stderr);
@@ -146,7 +150,7 @@ for (const [prefix, title] of WALLETS) {
     const blind = await runEvm(undefined, [{ number: 9, title: UNR }]);
     assert.ok(!blind.some((c) => c[1] === "close"), JSON.stringify(blind));
   });
-  const LOW = "EVM chains upstream buyer wallet LOW (x402)";
+  const LOW = "Scheduled check needs review: evm-buyer-wallets";
   await check("EVM chains: the LOW issue closes on ok, off and unconfigured; never on unknown or a blind read", async () => {
     for (const status of ["ok", "off", "unconfigured"]) {
       const calls = await runEvm({ status }, [{ number: 7, title: LOW }]);

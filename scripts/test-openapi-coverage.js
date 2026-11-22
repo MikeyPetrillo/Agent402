@@ -52,11 +52,14 @@ try {
   const catalogPaths = catalog.map((t) => t.path);
   const specPaths = Object.keys(spec.paths);
 
-  // Within 1% of each other. The OpenAPI doc is allowed to skip a handful of
-  // non-tool routes (health checks, the well-known endpoints) but the bulk
-  // must match catalog. A 20-tool gap on a 1100-tool catalog is a regression.
-  const delta = Math.abs(catalogPaths.length - specPaths.length);
-  ok(delta <= Math.ceil(catalog.length * 0.01), `path count delta within 1% (catalog=${catalog.length}, spec=${specPaths.length}, delta=${delta})`);
+  // The spec may carry a few paths that are not catalog tools (free surfaces
+  // such as the finder, the router and their companions). They are named
+  // here and held to 2% of the catalog, so a spec that grows a second copy of
+  // the catalog, or documents routes nobody listed, fails by name. A tool the
+  // spec lacks is caught below, one slug at a time.
+  const catalogPathSet = new Set(catalogPaths);
+  const extras = specPaths.filter((p) => !catalogPathSet.has(p));
+  ok(extras.length <= Math.ceil(catalog.length * 0.02), `spec paths that are not catalog tools stay a handful (${extras.length}: ${extras.join(", ") || "none"}; catalog=${catalog.length}, spec=${specPaths.length})`);
 
   // Every catalog tool must appear in the spec. Walk all of them — a single
   // missing slug is a regression worth surfacing by name.

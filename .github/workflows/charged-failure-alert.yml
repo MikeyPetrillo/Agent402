@@ -96,22 +96,36 @@ jobs:
             { echo "detail<<EOF"; echo "$SUMMARY"; echo "EOF"; } >> "$GITHUB_OUTPUT"
           fi
           echo "cutoff=$CUTOFF" >> "$GITHUB_OUTPUT"
+      # Only the two files the next step runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
+        if: always()
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/adopt-issue-titles.js
+            workers/status-probe/src/previous-issue-titles.js
+
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Open, comment, or close the alert issue
         if: steps.check.outputs.status != 'skip'
         run: |
-          TITLE="Charged failure: a paid tool returned an error to a paying agent"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: charged-failure"
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "${{ steps.check.outputs.status }}" = "alert" ]; then
-            BODY="One or more paid tools settled USDC on-chain and then returned an error to the paying agent since ${{ steps.check.outputs.cutoff }}: **they paid and got nothing.**
-
-          **Failing (slug(httpStatus)×count):** ${{ steps.check.outputs.detail }}
-
-          This is the earnings-calendar failure class (a broken paid tool), caught for ALL ~1,400 tools (not just the self-check's curated set), from data the server already records at \`/api/stats\` -> \`chargedFailures[]\`.
-          Live: $PROD/api/stats · Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still charging-and-failing at $(date -u +%FT%TZ): ${{ steps.check.outputs.detail }}"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
             exit 1
           fi

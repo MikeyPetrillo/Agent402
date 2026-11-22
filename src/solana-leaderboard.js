@@ -48,11 +48,13 @@ import { trackStoreReady, leased, leaseStillHeld } from "./state-db.js";
 const { docs, docFor } = createDocumentCache();
 import { scanCoverage } from "./partial-answer.js";
 import { registerMemoryStore } from "./memory-stores.js";
+import { scheduleBoardRefresh, SLOT_PEER_FRESH_MS, BOARD_REFRESH_MS } from "./board-refresh-slots.js";
 
 export const SOLANA_LB_CACHE_FILE = process.env.SOLANA_LB_CACHE_FILE || "/data/solana-leaderboard.json";
-// Four hours: the board re-reads every settled payment through the keyed
-// Solana lane, its largest metered line; production already ran at this value.
-export const SOLANA_LB_DEFAULT_REFRESH_MS = 4 * 60 * 60_000;
+// Twice a day at the board's fixed slots (src/board-refresh-slots.js): the
+// board re-reads every settled payment through the keyed Solana lane, its
+// largest metered line. SOLANA_LB_REFRESH_MS overrides it with a plain interval.
+export const SOLANA_LB_DEFAULT_REFRESH_MS = BOARD_REFRESH_MS;
 const REFRESH_MS = Number(process.env.SOLANA_LB_REFRESH_MS) || SOLANA_LB_DEFAULT_REFRESH_MS;
 const CONCURRENCY = Number(process.env.SOLANA_LB_CONCURRENCY) || 1;
 const RETRY_PAUSE_MS = Number(process.env.SOLANA_LB_RETRY_PAUSE_MS) || 1500;
@@ -91,7 +93,7 @@ const STATE_VERSION = 2;
 
 let current = emptyBoard();
 let inFlight = null;
-let timer = null, kick = null, kick2 = null;
+let timer = null, kick = null, kick2 = null, slotSchedule = null;
 
 function emptyBoard() {
   return { at: 0, rows: [], scanned: 0, candidates: 0, errors: 0, windowHours: null, durationMs: 0, warm: false, rpcCalls: 0, txReads: 0, state: {} };
@@ -561,6 +563,21 @@ export function startSolanaLeaderboard({ listPayTos, rpc, creditFromTx, prime, w
   if (!solanaLeaderboardEnabled()) { console.log("[solana-leaderboard] disabled (SOLANA_LEADERBOARD=off)"); return; }
   if (loadPersistedSolanaLeaderboard()) console.log(`[solana-leaderboard] warm-started ${current.rows.length} payTos from ${SOLANA_LB_CACHE_FILE}`);
   const run = () => refreshSolanaLeaderboard({ listPayTos, rpc, creditFromTx, prime, windowHours });
+  // The slots (src/board-refresh-slots.js) unless SOLANA_LB_REFRESH_MS names
+  // an interval: fixed hours, one board at a time, and a boot rebuilds only a
+  // board with no scan since its last slot (the second pass follows such a
+  // boot rebuild, for payTos the index learned late).
+  if (!(Number(process.env.SOLANA_LB_REFRESH_MS) > 0)) {
+    if (slotSchedule) return;
+    slotSchedule = scheduleBoardRefresh({
+      board: "solana",
+      run: ({ slot }) => (slot ? refreshSolanaLeaderboard({ listPayTos, rpc, creditFromTx, prime, windowHours, peerFreshMs: SLOT_PEER_FRESH_MS }) : run()),
+      snapshotAt: () => Number(current.at) || 0,
+      bootDelayMs: delayMs,
+      secondKickMs: 12 * 60_000,
+    });
+    return;
+  }
   kick = setTimeout(run, delayMs); kick.unref?.();
   kick2 = setTimeout(run, delayMs + 12 * 60_000); kick2.unref?.();
   timer = setInterval(run, REFRESH_MS); timer.unref?.();

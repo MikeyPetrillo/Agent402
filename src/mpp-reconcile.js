@@ -58,6 +58,7 @@
 //     answer; nothing accumulates.
 //   * Leaf module: every source is injected (server.js wires the real ones),
 //     so the whole thing runs offline in scripts/test-mpp-reconcile.js.
+import { usdToBaseUnits } from "./base-units.js";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 
@@ -256,7 +257,7 @@ export function reconcileRecords({
       if (r.wire !== "mpp-stripe" || !inDay(r.ts)) continue;
       const res = r.tx ? stripeChecks.results.get(r.tx) : null;
       if (!res || res.error) { unreadable++; continue; }
-      const want = Math.round(r.priceUsd * 100);
+      const want = Number(usdToBaseUnits(Number(r.priceUsd) || 0, 2)); // the cents the charge was minted for
       if (res.status !== "succeeded" || !(Number(res.amountCents) >= want)) {
         add("stripe_mismatch", { tx: r.tx, slug: r.slug, amountUsd: round6(r.priceUsd), wire: r.wire, at: new Date(r.ts).toISOString(), explanation: `PaymentIntent ${res.status}, ${res.amountCents} cents against a booked ${want}` }, r.internal);
       } else ok++;

@@ -348,7 +348,7 @@ export const locationFields = (loc) => ({ lat: loc.lat, lon: loc.lon, ...(loc.pl
 export const LOCATION_PROPERTIES = Object.freeze({
   lat: { type: "number", description: "Latitude, -90 to 90 (with lon; wins over place)" },
   lon: { type: "number", description: "Longitude, -180 to 180 (with lat)" },
-  place: { type: "string", description: 'A city, town or region name instead of lat/lon, for example "Paris" or "Austin, TX" (not a street address); the answer echoes the place it resolved to' },
+  place: { type: "string", maxLength: PLACE_QUERY_MAX, description: 'A city, town or region name instead of lat/lon, for example "Paris" or "Austin, TX" (not a street address); the answer echoes the place it resolved to' },
 });
 
 // WMO weather interpretation codes → human-readable condition string.
@@ -769,7 +769,7 @@ export const WEATHER_TOOLS = [
       input: { q: "Pittsburgh", country: "US" },
       inputSchema: {
         properties: {
-          q: { type: "string", description: 'Place name, optionally with a qualifier after a comma: "Pittsburgh", "Austin, TX", "Paris, France"' },
+          q: { type: "string", maxLength: 100, description: 'Place name, optionally with a qualifier after a comma: "Pittsburgh", "Austin, TX", "Paris, France"' },
           count: { type: "number", description: "Results to return, 1-10 (default 5)" },
           country: { type: "string", description: "Two-letter ISO 3166-1 country code to search within, for example US" },
           language: { type: "string", description: "Two-letter language code for names (default en)" },

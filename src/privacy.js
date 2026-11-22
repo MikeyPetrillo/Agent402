@@ -22,6 +22,8 @@ import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS }
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
+import { returningWalletEnabled, returningWalletDataHandling, WALLET_HINT_HEADER } from "./returning-wallet.js";
+import { lifetimeMs as priceWebhookLifetimeMs } from "./price-webhooks.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
 import { solanaActivityStoreEnabled, solanaActivityMaxWallets, SOLANA_ACTIVITY_KEEP_DAYS } from "./solana-activity-store.js";
@@ -80,6 +82,10 @@ export function privacyPage(baseUrl) {
   const sharesOn = sharePagesMayBeLive();
   const sharesOffered = answerShareEnabled();
   const allowanceOn = firstCallAllowanceEnabled();
+  // The returning-wallet price (src/returning-wallet.js) ships behind a
+  // switch: the wallet header's clause appears only while it is on, in the
+  // words the service manifest's data handling prints.
+  const walletHint = returningWalletEnabled() ? returningWalletDataHandling() : null;
   // A facilitator that publishes the settlements it relays, on the chains
   // FACILITATOR_PUBLIC_INDEX_CHAINS lists: disclosed only while it applies,
   // and the no-sale line is then scoped to this list. While it renders, the
@@ -118,7 +124,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-20.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-21.</p>
 </section>
 
 <section>
@@ -176,6 +182,12 @@ so every claim below is verifiable in code.</p>
     made inside that time copies it (see Backups below);</li>
     <li>for a decision bought on <code>/api/decide</code>, we keep the task you describe, the plan we
     returned, the paying wallet and any feedback you report on its steps, for 30 days;</li>
+    <li>a registration on <code>/api/price-webhook</code> keeps the URL you register, the tools it watches
+    and a keyed digest of the registrant (the paying wallet or key, or the client address on a server that
+    takes no payment; never the wallet or the address itself), and nothing else about the caller in that
+    record, until the subscription ends (${Math.round(priceWebhookLifetimeMs() / 86_400_000)} days after the registration or its last renewal) or is
+    removed, an ended one being deleted the next time the server takes a registration or restarts; a delivery sends your
+    receiver the price changes and the subscription's id, never who registered it;</li>
     <li>for a paid call, the sales ledger keeps the tool's name and a SHA-256 hash of the response we
     served, so a receipt can prove what was delivered; the response itself is not kept. It also keeps
     how the call arrived: through our hosted MCP connector, from one of our client packages (its name
@@ -281,7 +293,10 @@ so every claim below is verifiable in code.</p>
   sent through a transactional email provider (ZeptoMail, with Resend as a fallback). Stripe keeps the
   email address with your payment; the report record on our server holds the session id, your input, the
   finished report and the signed receipt we issued for it at delivery (SHA-256 digests of the request and of
-  the report, the price and Stripe's payment id), not the email. The email is kept in the follow-up and monitor records described here,
+  the report, the price and Stripe's payment id), not the email. When the link that brought you here names the site it came from
+  (a <code>utm_source</code> tag), a card checkout you start carries that name: Stripe's record of the checkout and our sales ledger keep it with
+  the sale, so we can count card sales by source. It is the name of a site we list, never anything about you, and nothing is kept in your browser
+  for it: the page's links to the report and monitor storefronts carry the tag in their address. The email is kept in the follow-up and monitor records described here,
   and a failed report is counted against a SHA-256 hash of the address (never the address) for 24 hours so
   repeated failures for one buyer stop further charges. Prepaid credits ${creditsSalesEnabled() ? "are sold by card at /credits" : "are not currently sold"}; for each key
   we keep a hash of the key (never the key), its balance and the calls it paid for, and from its purchase the email, the
@@ -338,10 +353,11 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
 ` : ""}  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
   code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
-  and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the payment's nonce and network (as an
+  and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes),${walletHint ? ` the wallet address a request names in the
+  <code>${WALLET_HINT_HEADER}</code> header (${walletHint.read}; ${walletHint.kept}),` : ""} the payment's nonce and network (as an
   idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), a digest of the payment's
   network, signed payer and nonce as a replay mark (kept about ${settledHoldText()} after a settled call, or until the
-  authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later, at most ${settledValidityHoldText()} after the call; for a grant
+  authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later; for a grant
   that was not settled, a forgiven hang-up${allowanceOn ? " or a served first-call allowance" : ""}, whose authorization is still live
   on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client
   signs a long validity window), the paying wallet of a Solana payment (the transfer's authority) or its signers (stored only
@@ -405,6 +421,11 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   <li>Tools that fetch external URLs (<code>extract</code>, <code>render</code>, <code>screenshot</code>, …)
   contact those sites from our server with the URL you provided. Tools that read a third-party data
   source send it what the lookup needs (a ticker, a token or wallet address, a domain, a query).</li>
+  <li><code>asn-info</code> looks an IP address up in Team Cymru's IP-to-ASN DNS zone, so the DNS
+  query carries that IP address. When our own resolver cannot answer it, the same query goes to a
+  public resolver: 8.8.8.8 (Google Public DNS) first, then 9.9.9.9 (Quad9) and then 1.1.1.1
+  (Cloudflare), each only if the one before it does not answer. A resolver that is asked sees the
+  query and our server's address, not yours.</li>
   <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
   The <code>/api/x-*</code> tools send the handle, post id or query to the X API.
   Report products and <code>/v1</code> calls that search the web send their search queries to Exa, through OpenRouter's web search.</li>
@@ -480,7 +501,7 @@ in every alert). Where your browser reports a European time zone, the cookie wai
 elsewhere it is set until you say no, and the choice is yours to make either way. You have the right to ask for access to your data, to have it corrected or erased, to
 receive it in a portable form, to object to processing based on our legitimate interest, to withdraw
 consent, and to complain to your supervisory authority. To exercise a right, email
-<a href="mailto:mike@agent402.tools">mike@agent402.tools</a>; we answer within one month. The service is
+<a href="mailto:help@agent402.tools">help@agent402.tools</a>; we answer within one month. The service is
 operated from the United States, and the data described here is processed and stored there${directUpstreamWhere}.</p>
 
 <h2>Children</h2>
@@ -492,10 +513,10 @@ an email address or other information, write to the address below and we will de
 <p>Wallet addresses associated with <a href="/terms">terms</a> violations may be blocked and retained
 on a blocklist for as long as needed to enforce the block. We disclose information and preserve
 records in response to valid legal process, and report content where the law requires it. Requests
-and abuse reports: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>.</p>
+and abuse reports: <a href="mailto:help@agent402.tools">help@agent402.tools</a>.</p>
 
 <h2>Operator &amp; contact</h2>
-<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>,
+<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:help@agent402.tools">help@agent402.tools</a>,
 <a href="${repoUrl("issues")}" rel="noopener">GitHub issues</a>,
 or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.</p>
 </div>

@@ -170,7 +170,7 @@ export const LENDING_TOOLS = [
       inputSchema: {
         properties: {
           network: { type: "string", description: `Network: ${NETWORKS.join(", ")} (default ethereum).` },
-          asset: { type: "string", description: "Only this asset (USDC, USDT, DAI, WETH, WBTC, cbBTC, USDC.e). Omit for every asset read on the network." },
+          asset: { type: "string", maxLength: 10, description: "Only this asset (USDC, USDT, DAI, WETH, WBTC, cbBTC, USDC.e). Omit for every asset read on the network." },
         },
       },
       output: {

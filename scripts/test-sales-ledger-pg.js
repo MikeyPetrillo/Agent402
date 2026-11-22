@@ -293,6 +293,31 @@ try {
     const nullRows = (await q(`SELECT count(*)::int AS n FROM ${S}.sales WHERE via IS NULL AND internal = 0 AND rail IN ('usdc','marketplace','card','credits') AND ts >= $1`, [Date.now() - 30 * 86_400_000]))[0].n;
     ok(fresh.mcp?.sales === 1 && fresh["agent402-client"]?.sales === 1 && fresh.unknown?.sales === nullRows, `a fresh process reads the paths from the table, NULL as "unknown" (${JSON.stringify({ mcp: fresh.mcp?.sales, client: fresh["agent402-client"]?.sales, unknown: fresh.unknown?.sales, nullRows })})`);
   }
+
+  // ---- a card sale's named source: a column in the table, the mirror and the file ----
+  {
+    ok((await sl.recordSale({ slug: "dossier", priceUsd: 2, rail: "card", network: "stripe", payer: null, tx: "pi_src_pg", wire: "stripe-checkout", source: "ask402" })) === true, "a card sale with a source lands");
+    ok((await sl.recordSale({ slug: "dossier", priceUsd: 2, rail: "card", network: "stripe", payer: null, tx: "pi_badsrc_pg", wire: "stripe-checkout", source: "typed by a visitor" })) === true, "a card sale with an unlisted source lands");
+    const rows = await q(`SELECT tx, source FROM ${S}.sales WHERE tx IN ('pi_src_pg', 'pi_badsrc_pg', '0xfile2') ORDER BY tx`);
+    ok(rows.find((r) => r.tx === "pi_src_pg")?.source === "ask402" && rows.find((r) => r.tx === "pi_badsrc_pg")?.source === null && rows.find((r) => r.tx === "0xfile2")?.source === null, `Postgres stores a listed source, NULL otherwise and on imported rows (${JSON.stringify(rows)})`);
+    const by = sl.cardSalesBySource({ days: 30 });
+    ok(by.sources.ask402?.sales === 1 && by.sources.ask402.revenueUsd === 2 && Object.keys(by.sources).length === 1 && by.noSource.sales >= 1, `the mirror counts card sales by source (${JSON.stringify(by)})`);
+    {
+      const f = new Database(FILE, { readonly: true });
+      const r = f.prepare("SELECT source FROM sales WHERE tx = ?").get("pi_src_pg");
+      f.close();
+      ok(r?.source === "ask402", "write-through: the file row carries the source");
+    }
+    const src = `
+      const sl = await import(${JSON.stringify(join(ROOT, "src/sales-ledger.js"))});
+      const sdb = await import(${JSON.stringify(join(ROOT, "src/state-db.js"))});
+      await sl.salesLedgerReady();
+      console.log(JSON.stringify(sl.cardSalesBySource({ days: 30 })));
+      await sdb.closeStateDb(); process.exit(0);
+    `;
+    const fresh = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", src], { env: { ...process.env, SALES_LEDGER_DB: join(DIR, "absent3", "agent402-sales.db") }, cwd: ROOT, encoding: "utf8" }));
+    ok(fresh.sources?.ask402?.sales === 1, `a fresh process reads the source from the table (${JSON.stringify(fresh.sources)})`);
+  }
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();

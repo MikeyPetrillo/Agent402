@@ -99,6 +99,15 @@ jobs:
           path: rail-report.json
           if-no-files-found: ignore
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       # Alert on failure, clear on recovery — same one-issue pattern the
       # heartbeat uses, so repeated failures comment instead of piling up.
       - name: Alert (open issue) or clear (close issue)
@@ -111,39 +120,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ steps.sweep.outputs.result }}
         run: |
-          TITLE="Algorand rail canary FAILING"
-          FUND_TITLE="Algorand rail canary: sweep wallet needs USDC"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
-          FUND_OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FUND_TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: algorand-rail-canary"
+          FUND_TITLE="Scheduled check needs review: algorand-rail-canary-funding"
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
+          FUND_OPEN=$(ISSUE_TITLE="$FUND_TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FUND_TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           # The sweep's own wallet ran short: its own issue, and the rail issue
           # is left alone (nothing about the rail was measured either way).
           if [ "$RESULT" = "unfunded" ]; then
-            FUND_BODY="The weekly Algorand rail sweep stopped because its own wallet holds less USDC than a tool's price; nothing about the rail was measured past that point. Fund the sweep wallet (the Algorand burner) and re-run the workflow. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             if [ -n "$FUND_OPEN" ]; then
-              gh issue comment "$FUND_OPEN" --repo "$GITHUB_REPOSITORY" --body "Still unfunded at $(date -u +%FT%TZ). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              gh issue comment "$FUND_OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$FUND_TITLE" --body "$FUND_BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$FUND_TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
             exit 0
           fi
           if [ -n "$FUND_OPEN" ]; then
-            gh issue close "$FUND_OPEN" --repo "$GITHUB_REPOSITORY" --comment "The sweep paid again at $(date -u +%FT%TZ)."
+            gh issue close "$FUND_OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
           if [ "$RESULT" = "fail" ]; then
             # Only the classes this run actually failed on (the report's own
             # failedClasses), each with what it means; the full list when the
             # report could not be read.
             CLASSES=$(node scripts/algorand-canary-classes.js rail-report.json)
-            BODY="The weekly Algorand rail sweep found problems. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          ${CLASSES}
-
-          The per-tool breakdown is in the \`algorand-rail-report\` artifact on that run."
             if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the full Algorand rail sweep passed at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

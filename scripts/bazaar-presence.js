@@ -15,7 +15,7 @@
 //                         first check that finds it missing, never again
 //                         while it stays missing. Exempt kinds are never
 //                         bought (scripts/lib/keepalive-plan.js exemptKind:
-//                         quoted, model-priced, the route-execute tiers and
+//                         quoted with no fromInput, model-priced, the route-execute tiers and
 //                         every route whose effect outlives the answer), nor
 //                         is a route the twice-monthly pass above the ceiling
 //                         owns (aboveCeilingRoutes: report products and
@@ -95,9 +95,9 @@ import { mcpListingRoutes, mcpToolOfResource, mcpListingKey, mcpListingSlugOf } 
 export const DEFAULT_MAX_ROUTES = 10;
 export const DEFAULT_MAX_SPEND_USD = 2;
 export const UNREADABLE_PAGE_AFTER = 3;
-export const ISSUE_TITLE = "Bazaar presence check";
+export const ISSUE_TITLE = "Scheduled check needs review: listing-presence";
 // The MCP tool listings page under their own issue, never the route issue.
-export const MCP_ISSUE_TITLE = "Bazaar MCP listing presence check";
+export const MCP_ISSUE_TITLE = "Scheduled check needs review: mcp-listing-presence";
 // One page of the listing or the catalog waits this long; the whole reading
 // (two or three passes) this long. The workflow's step and job timeouts are
 // set above both (scripts/test-bazaar-presence.js reads them).
@@ -258,7 +258,7 @@ const NOTE = {
   bought: "a buy was sent on the check before",
   listed: "listed here before; not bought again",
   refused: "not bought: the check before refused the buy under its caps",
-  quoted: "not bought here: quoted route",
+  quoted: "not bought here: quoted route with no fromInput, which no keep-alive pass buys (its example quotes over the list price)",
   "model-priced": "not bought here: model-priced route",
   "route-execute": "not bought here: route-execute tier",
   "lasting-effect": "not bought here: its effect outlives the answer",
@@ -289,7 +289,7 @@ export function issueBody(decision, runUrl = "") {
     "",
     ...lines,
     "",
-    "A route the check may buy is bought once per absence (scripts/bazaar-presence.js, then scripts/refresh-bazaar.js MODE=missing). A route still missing after that, or one of a kind the check never buys, needs a hand pass: `gh workflow run bazaar-keepalive.yml --ref main -f slugs=<slug>` for a route at or under the ceiling, `gh workflow run bazaar-keepalive-tail.yml --ref main` for one above it. MCP tool listings page under their own issue. This issue closes on the next readable check with no route missing twice in a row.",
+    "A route the check may buy is bought once per absence (scripts/bazaar-presence.js, then scripts/refresh-bazaar.js MODE=missing). A route still missing after that, or one of a kind the check never buys, needs a hand pass: `gh workflow run bazaar-keepalive.yml --ref main -f slugs=<slug>` for a route at or under the ceiling, `gh workflow run bazaar-keepalive-tail.yml --ref main` for one above it. A quoted route is bought by these passes with its fromInput (on /api/pricing), a body quoted inside its list price; one without a fromInput is refused by every pass, since the keep-alive never pays over the list price, and returns once its tool declares a fromInput. MCP tool listings page under their own issue. This issue closes on the next readable check with no route missing twice in a row.",
   ].join("\n") + run;
 }
 

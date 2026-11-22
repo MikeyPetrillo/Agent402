@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Runnable Strands + Agent402 demo for AWS Bedrock AgentCore",
+  "description": "Runnable Strands + Agent402 demo for Amazon Bedrock AgentCore",
   "scripts": {
     "start": "node run.js",
     "test": "node run.js"

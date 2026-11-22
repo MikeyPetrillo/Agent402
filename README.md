@@ -63,7 +63,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 >
 > - **Find** - [`/api/find?q={task}`](https://agent402.tools/api/find) resolves a task description to the best-matching tools (route, price, schema, ready example).
 > - **Route** - [`POST /api/route`](https://agent402.tools/api/route) is the **neutral Smart Order Router**: rank tools across every x402 seller crawled (auto-discovered from the Coinbase CDP Bazaar), health-aware, with `include=external` to exclude us. The response returns the top N and carries `matched` for how many scored.
-> - **Leaderboard** - [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) is the **public on-chain ranking** of x402 sellers by **Base USDC settled volume** - calls served, totalUsd, unique buyers per seller. It returns the **top N, never the whole board** (25 by default, 50 the ceiling; `totalSellers` carries the full count). Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate by `payTo`. The snapshot refreshes every 4 hours.
+> - **Leaderboard** - [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) is the **public on-chain ranking** of x402 sellers by **Base USDC settled volume** - calls served, totalUsd, unique buyers per seller. It returns the **top N, never the whole board** (25 by default, 50 the ceiling; `totalSellers` carries the full count). Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate by `payTo`. The snapshot refreshes every 12 hours.
 >
 > Plus the catalog - **500+ strong: search/answer as the MCP front door, then
 > 500+ tools and curated skill packs** (multi-tool workflows callable as MCP
@@ -93,7 +93,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > card over MPP (Stripe `stripe/charge`, offered on routes priced $0.50 and up
 > when the operator configures it). The
 > [MPP marketplace](https://agent402.tools/mpp-marketplace) lists every MPP
-> seller we can verify live. Details: [What is MPP](https://agent402.tools/what-is-mpp)
+> seller we can verify live. Details: [MPP on Agent402](https://agent402.tools/what-is-mpp)
 > · [live MPP settlements](https://agent402.tools/revenue).
 
 
@@ -173,8 +173,11 @@ Every paid route answers `402` with both an x402 offer and MPP challenges, so ei
 
 ```js
 import { Mppx, tempo, evm } from "mppx/client";
-const account = (await import("viem/accounts")).privateKeyToAccount(process.env.AGENT_KEY);
-const res = await Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account })] }).fetch("https://agent402.tools/api/uuid");
+import { privateKeyToAccount } from "viem/accounts";
+const account = privateKeyToAccount(process.env.AGENT_KEY);
+// The evm method signs for the tokens you list: USDC on Base and on Celo.
+const methods = [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })];
+const res = await Mppx.create({ methods }).fetch("https://agent402.tools/api/uuid");
 ```
 
 **x402** (USDC on Base and other chains) with [`@x402/fetch`](https://www.npmjs.com/package/@x402/fetch):
@@ -209,7 +212,7 @@ More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-wi
 | **Crypto derivatives & options** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth); `options-summary`, `crypto-options-chain`, `options-ticker` (options book, IV and greeks) - $0.001 to $0.005 a call, no exchange account |
 | **DeFi, venues & stablecoins (computed answers)** | `lending-rates` (Aave v3 and Compound v3 supply and borrow rates read from the contracts), `funding-screener` (one coin's funding across every listed venue), `stablecoin-depeg-watch` (USD stablecoins off peg now, over 24 hours and 7 days), `exchange-spread` (a coin's price per venue against the median), `dex-pool-health`, `dex-volume-board`, `defi-screener`, `chain-board` - $0.005 a call |
 | **Solana token intel** | `sol-token-pairs`, `sol-token-search`, `sol-trending`, `sol-price`, `sol-swap-quote`, `sol-token-lookup` - markets, prices and routing for any mint |
-| **Crypto market coverage** | `crypto-news`, `crypto-indicators` (RSI, MACD, moving averages, computed here), `crypto-market-pulse`, `coin-profile`, `coin-history`, `coin-ohlc`, `coin-market-chart-range`, `coin-categories`, `coin-price-by-contract` (price by token ADDRESS, no coin id needed), `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search`, `coins-list` - plus tokenized real-world assets from the same CoinGecko key: `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` (tokenized stocks, ETFs and commodities with onchain market data and the issuers behind them) |
+| **Crypto market coverage** | `crypto-news`, `crypto-indicators` (RSI, MACD, moving averages, computed here), `crypto-market-pulse`, `coin-profile`, `coin-history`, `coin-ohlc`, `coin-market-chart-range`, `coin-categories`, `coin-price-by-contract` (price by token ADDRESS, no coin id needed), `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search` - plus tokenized real-world assets from the same CoinGecko key: `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` (tokenized stocks, ETFs and commodities with onchain market data and the issuers behind them) |
 | **Indexed chain data** | `asset-transfers` (filtered transfer history), `token-balances`, `token-allowance`, `tx-receipt` (decoded transfers), `block-receipts`, `token-price-history` - indexed reads across the major EVM chains, no node and no key of your own |
 | **Farcaster social** | `fc-cast-search`, `fc-channel-feed`, `fc-trending`, `fc-user-casts`, `fc-cast`, `fc-cast-replies`, `fc-channel`, `fc-user-search`, `fc-cast-metrics` - search, feeds and engagement metrics on the onchain social graph |
 | **Site crawling** | `site-map` (enumerate a site's URLs) and `site-crawl` (breadth-first crawl to clean markdown, robots-respecting, hard page/depth/time budgets) - the deterministic pair behind any "read this whole site" task |
@@ -323,7 +326,7 @@ on depth. The card price includes payment processing; an agent paying per
 call over x402 or MPP pays the lower tool price for the same report.
 
 Two companion tools close the loop: `POST /api/route/execute` ($0.01, with
-`execute-plus` $0.05, `execute-max` $0.55 and `execute-pro` $3.30 tiers for pricier tools) resolves a task description to the
+`execute-plus` $0.05, `execute-mid` $0.12, `execute-max` $0.55 and `execute-pro` $3.30 tiers for pricier tools) resolves a task description to the
 best tool and runs it in one paid call, including, with `include:"external"`,
 tools sold by **other x402 sellers** (it routes on proven on-chain settled
 volume, with one exception - a Base or Solana seller with no history yet is
@@ -409,7 +412,7 @@ refreshed hourly) and exposes them through three free surfaces - same logic as
 |---|---|
 | [`GET /api/find?q={task}`](https://agent402.tools/api/find) | Resolve a task to the best-matching tools (route, price, schema, ready example) |
 | [`POST /api/route`](https://agent402.tools/api/route) | Smart Order Router: `{ query, top, include }` → ranked tools across sellers (match score, then **health**, then price; a judgment model then moves the listing that actually does the task to the top, cheapest among equally good ones, reported in `judged`). `include=external` excludes Agent402 itself |
-| [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) | **On-chain ranking** of x402 sellers by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). **Top N only** - 25 default, 50 ceiling, `totalSellers` for the full count. Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate. The snapshot refreshes every 4 hours |
+| [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) | **On-chain ranking** of x402 sellers by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). **Top N only** - 25 default, 50 ceiling, `totalSellers` for the full count. Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate. The snapshot refreshes every 12 hours |
 | [`/marketplace`](https://agent402.tools/marketplace) | Public HTML dashboard: every seller, tool count, network, last-fetched, rolling health |
 | [`GET /api/index`](https://agent402.tools/api/index) | The seller index as JSON (totals, per-seller health/routable flags). **Paginated** - one page of 250 max, `complete: false` and a `Link` header with `rel="next"` while more remain, `sellerCount` for the total. One origin, unpaged and with its crawl history: `?seller=<host>` |
 | [`/stellar`](https://agent402.tools/stellar) · [`/algorand`](https://agent402.tools/algorand) | Per-chain marketplace pages: sellers and tools settling on that rail specifically |
@@ -509,7 +512,7 @@ If you're already on one of the stacks below - OpenAI, Anthropic, the Vercel AI 
 | Vercel AI SDK (`streamText` / `generateText`) | [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) | `Record<name, tool()>` |
 | LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` |
 | LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
-| Strands Agents (AWS Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
+| Strands Agents (Amazon Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
 | Google ADK (Agent Development Kit) | [`agent402-google-adk`](https://www.npmjs.com/package/agent402-google-adk) | `FunctionTool[]` for ADK agents |
 | OpenAI Agents SDK | [`agent402-openai-agents`](https://www.npmjs.com/package/agent402-openai-agents) | `Agent tools` for `@openai/agents` |
 | Coinbase AgentKit (CDP, Privy, ZeroDev, viem wallets) | [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit) | an `ActionProvider` for `AgentKit.from({ actionProviders })` |
@@ -680,7 +683,7 @@ working tools, so you don't have to build the catalog yourself.
 Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)
 and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar).
 
-**Works with [AWS Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** - AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 500+ tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: AWS Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
+**Works with [Amazon Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** - AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 500+ tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: Amazon Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
 
 ### Tollbooth - pay-per-crawl for **your** site (the other side of x402)
 
@@ -737,7 +740,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
   earlier under AGPL-3.0 or MIT, whose authors keep their copyright (see [NOTICE](NOTICE)).
 - The server is AGPL-3.0-or-later and every published package is MIT (details under Legal
   below). For a commercial license to the code, write to
-  [mike@agent402.tools](mailto:mike@agent402.tools) or see
+  [help@agent402.tools](mailto:help@agent402.tools) or see
   [agent402.tools/company](https://agent402.tools/company).
 - Outside contributions carry a DCO sign-off on every commit and the contributor license
   agreement in [CLA.md](CLA.md), which covers new and earlier contributions; see
@@ -762,7 +765,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 
 ## Contact
 
-- **Email:** [mike@agent402.tools](mailto:mike@agent402.tools)
+- **Email:** [help@agent402.tools](mailto:help@agent402.tools)
 - **X / Twitter:** [@Agent402Tools](https://x.com/Agent402Tools)
 - **GitHub:** [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402)
 

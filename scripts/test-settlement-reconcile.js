@@ -20,7 +20,7 @@ process.env.RECONCILE_GRACE_MS = "3600000";
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
 
-const { recordSale } = await import("../src/sales-ledger.js");
+const { recordSale, saleRepeatStats } = await import("../src/sales-ledger.js");
 const { recordTransfer } = await import("../src/revenue-ledger.js");
 const { reconcileSettlements } = await import("../src/settlement-reconcile.js");
 
@@ -147,7 +147,11 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
 // that failed), so a Solana settlement missing from it is read on chain before
 // it is counted unconfirmed. A landed signature is not enough: the transaction
 // must raise our payTo's USDC by the row's amount, and one signature pays for
-// one row. Stubbed readers: no network.
+// one row. The ledger's writer holds that last rule first (src/sale-repeats.js:
+// a Solana signature is one signed payment, so a second sale under it is not
+// written, and the pass reads the ledger and writes nothing), so the fixture
+// sends the reused signature twice and asserts one row reached the books.
+// Stubbed readers: no network.
 {
   const { createHash } = await import("node:crypto");
   const { SOLANA_CONFIRM_BATCH_MAX, isSolanaSignature } = await import("../src/settlement-reconcile.js");
@@ -196,7 +200,9 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   sale("casefold", 0.001, S.CASEFOLD);
   sale("short", 0.002, S.SHORT);
   sale("dup", 0.001, S.DUP);
-  sale("dup", 0.001, S.DUP);
+  const refusedBefore = saleRepeatStats().refusedSinceBoot;
+  sale("dup", 0.001, S.DUP); // the same settlement signature again: the writer keeps one sale for it
+  ok(saleRepeatStats().refusedSinceBoot === refusedBefore + 1, `a second sale under a Solana signature already on the books is not written (refused ${saleRepeatStats().refusedSinceBoot - refusedBefore})`);
   sale("processed", 0.001, S.PROCESSED);
   sale("malformed", 0.001, "not-a-signature");
 
@@ -215,11 +221,11 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   ok(calls.length === 1 && calls[0].length === 9 && !calls[0].includes(S.LEDGER) && new Set(calls[0]).size === 9,
     `only the rows the ledger lacks are read, each signature once, in one batch (got ${calls.map((c) => c.length)})`);
   ok(rd.notSignature === 1 && rd.readsFailed === 0, `a malformed tx is never sent, so its batch still reads (got ${JSON.stringify(rd)})`);
-  ok(sol.confirmed === 3, `the ledger row, the correct transfer and the first claim of a shared signature are confirmed (confirmed=${sol.confirmed})`);
-  ok(sol.claimed === 12 && sol.unconfirmed === 9, `every other row stays unconfirmed (unconfirmed=${sol.unconfirmed})`);
+  ok(sol.confirmed === 3, `the ledger row, the correct transfer and the one sale of the reused signature are confirmed (confirmed=${sol.confirmed})`);
+  ok(sol.claimed === 11 && sol.unconfirmed === 8, `the reused signature is one claimed row, and every other row stays unconfirmed (claimed=${sol.claimed}, unconfirmed=${sol.unconfirmed})`);
   ok(!sol.samples.some((s) => s.slug === "uuid"), "a matched row is not listed as an unconfirmed sample");
-  ok(rd.matched === 2 && rd.transferMismatch === 4 && rd.duplicate === 1,
-    `an unrelated signature, the wrong recipient, a case-folded owner and a short amount do not match; a reused signature counts once (got ${JSON.stringify(rd)})`);
+  ok(rd.matched === 2 && rd.transferMismatch === 4 && rd.duplicate === 0,
+    `an unrelated signature, the wrong recipient, a case-folded owner and a short amount do not match; a reused signature is matched once and reaches the pass as one row (got ${JSON.stringify(rd)})`);
   ok(rd.notFound === 1 && rd.failedOnChain === 1, `not found and failed on chain stay unconfirmed (got ${JSON.stringify(rd)})`);
   ok(rd.unread === 1 && !txCalls.includes(S.PROCESSED), `a processed (not yet confirmed) signature is unread and never matched (got unread=${rd.unread})`);
   ok(txCalls.length === 6 && rd.txReads === 6 && rd.landedUnverified === 0 && sol.landedUnverified === 0,
@@ -232,7 +238,7 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   txCalls.length = 0;
   r = await pass({ confirmSignatures: reader, readTransaction: async () => { throw new Error("all 2 RPCs failed"); } });
   sol = solOf(r);
-  ok(sol.confirmed === 1 && sol.unconfirmed === 11 && sol.signatureReads.landedUnverified === 6 && sol.landedUnverified === 6 && r.totals.landedUnverified === 6,
+  ok(sol.confirmed === 1 && sol.unconfirmed === 10 && sol.signatureReads.landedUnverified === 6 && sol.landedUnverified === 6 && r.totals.landedUnverified === 6,
     `a failed transaction read leaves landed rows landedUnverified, never confirmed (got ${JSON.stringify(sol.signatureReads)})`);
   r = await pass({ confirmSignatures: reader, readTransaction: async () => null });
   ok(solOf(r).confirmed === 1 && solOf(r).signatureReads.landedUnverified === 6, "a transaction not found is landedUnverified too");
@@ -249,7 +255,7 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   const down = async (sigs) => { calls.push([...sigs]); throw new Error("all 2 RPCs failed - timeout"); };
   r = await pass({ confirmSignatures: down });
   sol = solOf(r);
-  ok(sol.confirmed === 1 && sol.unconfirmed === 11,
+  ok(sol.confirmed === 1 && sol.unconfirmed === 10,
     `a failed read leaves every row as it was: neither matched nor dropped (confirmed=${sol.confirmed}, unconfirmed=${sol.unconfirmed})`);
   ok(sol.signatureReads.readsFailed === 1 && sol.signatureReads.unread === 9,
     `...and the rows it could not read are counted as unread (got ${JSON.stringify(sol.signatureReads)})`);
@@ -258,7 +264,7 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   // A malformed answer (wrong length) is a failed read too, never a verdict.
   r = await pass({ confirmSignatures: async () => [null] });
   sol = solOf(r);
-  ok(sol.confirmed === 1 && sol.unconfirmed === 11 && sol.signatureReads.readsFailed === 1,
+  ok(sol.confirmed === 1 && sol.unconfirmed === 10 && sol.signatureReads.readsFailed === 1,
     `an answer that does not cover the batch is a failed read (got ${JSON.stringify(sol.signatureReads)})`);
 
   // Batch size and the pass budget: nine signatures, batches of 2, one read allowed.
@@ -268,7 +274,7 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   ok(calls.length === 1 && calls[0].length === 2, `a pass makes at most its read budget, each at most the batch size (got ${JSON.stringify(calls.map((c) => c.length))})`);
   ok(sol.signatureReads.reads === 1 && sol.signatureReads.unread === 7,
     `rows past the budget are unread and stay as they were (got ${JSON.stringify(sol.signatureReads)})`);
-  ok(sol.confirmed + sol.unconfirmed === 12, "every judged row is still in exactly one bucket");
+  ok(sol.confirmed + sol.unconfirmed === 11, "every judged row is still in exactly one bucket");
 
   calls.length = 0;
   r = await pass({ confirmSignatures: reader, solanaBatchSize: 2, solanaMaxReads: 5 });
@@ -383,7 +389,7 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   // A budget of zero reads nothing and leaves every row as it was.
   calls.length = 0;
   r = await pass({ confirmSignatures: reader, solanaMaxReads: 0 });
-  ok(calls.length === 0 && solOf(r).unconfirmed === 11, "a zero budget makes no read and changes no row");
+  ok(calls.length === 0 && solOf(r).unconfirmed === 10, "a zero budget makes no read and changes no row");
 
   // Another chain's unmatched rows are never read by signature.
   calls.length = 0;

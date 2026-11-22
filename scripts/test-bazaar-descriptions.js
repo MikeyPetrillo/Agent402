@@ -186,7 +186,7 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   // The longest credited texts: at both cuts the text before the credit is the
   // catalog text up to one of its own sentence ends, never a clause cut short
   // with a period put after it.
-  for (const slug of ["coin-market-chart-range", "exchange-tickers", "coins-list", "coin-profile"]) {
+  for (const slug of ["coin-market-chart-range", "exchange-tickers", "exchange-rates", "coin-profile"]) {
     const t = tools.get(slug);
     const want = ATTRIBUTIONS[t?.attribution];
     const r = listingEnds(slug, t?.description || "", [want]);

@@ -22,18 +22,20 @@ And one **paid** executing surface built on the same resolver:
 |---|---|
 | `POST /api/route/execute` ($0.01) | Resolve a task description (or explicit slug) to the best-matching catalog tool and run it in the same call. Returns `{result, receipt}` - the receipt names the dispatched slug, its price (capped at $0.005 underlying), and how it was resolved. Underlying tool errors pass through with their own status codes. Wallet-only. |
 | `POST /api/route/execute-plus` ($0.05) | Same contract, mid budget: underlying tools priced up to $0.04 - the proportional rung, so a $0.02 tool costs $0.05 through the router rather than $0.55. |
+| `POST /api/route/execute-mid` ($0.12) | Same contract for the band above it: underlying tools priced up to $0.10. |
 | `POST /api/route/execute-max` ($0.55) | Same contract, top budget: underlying tools priced up to $0.50. |
 | `POST /api/route/execute-pro` ($3.30) | Same contract for the report-sized tools: underlying tools priced up to $3.00. |
 
 ### The execution tier ladder
 
-Four rungs, because one flat price cannot cover both a $0.001 utility and
+Five rungs, because one flat price cannot cover both a $0.001 utility and
 a $3 report without overcharging almost every buyer:
 
 | Route | You pay | Covers an underlying tool priced |
 |---|---|---|
 | `POST /api/route/execute` | $0.01 | ≤ $0.005 |
 | `POST /api/route/execute-plus` | $0.05 | ≤ $0.04 |
+| `POST /api/route/execute-mid` | $0.12 | ≤ $0.10 |
 | `POST /api/route/execute-max` | $0.55 | ≤ $0.50 |
 | `POST /api/route/execute-pro` | $3.30 | ≤ $3.00 |
 
@@ -103,7 +105,7 @@ payTo), settlement evidence kept per source instead of summed into one
 misleading total, the dispatch verdict per chain with its reason and any recent
 refusal or delivery failure, and what each route delivered when our router
 called it, paid calls and the unpaid non-answers it refused to resell alike.
-Plain-English flags, no score. Also offline - nothing is fetched from the seller.
+Plain-language flags, no score. Also offline - nothing is fetched from the seller.
 Each catalog row's delivery record is `responseDelivery`; the deprecated
 `ourPaidCalls` carries the same value.
 

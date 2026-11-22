@@ -27,7 +27,7 @@
       var label = btn.textContent;
       btn.innerHTML = '<span class="spin"></span>Redirecting to checkout…';
       try {
-        var r = await fetch("/api/subscribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ product: product, target: input }) });
+        var r = await fetch("/api/subscribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ product: product, target: input, source: (window.a402Source && window.a402Source()) || undefined }) });
         var j = await r.json();
         if (j && j.url) { ga("monitor_checkout_started", { product: product }); window.location = j.url; }
         else { if (errEl) errEl.textContent = (j && j.error) || "Could not start checkout."; btn.disabled = false; btn.textContent = label; }

@@ -467,7 +467,7 @@ const SCHEMA = {
   type: "object",
   required: ["mint"],
   properties: {
-    mint: { type: "string", description: "Base58 Solana SPL token mint address (32-44 chars)." },
+    mint: { type: "string", maxLength: 44, description: "Base58 Solana SPL token mint address (32-44 chars)." },
     format: { type: "string", enum: ["markdown", "json"], description: "Response shape (default markdown report plus structured evidence)." },
   },
 };

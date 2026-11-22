@@ -384,8 +384,52 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   ok(routeExecuteHint(0.003)?.tool === "route-execute", "$0.003 → route-execute tier");
   ok(routeExecuteHint(0.02)?.tool === "route-execute-plus", "$0.02 → route-execute-plus tier (the proportional middle rung)");
   ok(routeExecuteHint(0.04)?.tool === "route-execute-plus", "$0.04 → plus tier boundary inclusive");
-  ok(routeExecuteHint(0.05)?.tool === "route-execute-max", "$0.05 → max tier (just over the plus cap)");
+  // The mid tier: a tool priced just over the plus cap rode the max tier and
+  // its flat price, several times the tool's own.
+  ok(routeExecuteHint(0.05)?.tool === "route-execute-mid", "$0.05 → mid tier (just over the plus cap)");
+  ok(routeExecuteHint(0.1)?.tool === "route-execute-mid", "$0.10 → mid tier boundary inclusive");
+  {
+    const mid = EXEC_TIERS.find((t) => t.slug === "route-execute-mid");
+    ok(!!mid && routeExecuteHint(0.05)?.price === `$${mid?.execPriceUsd.toFixed(2)}`, "the mid hint quotes the mid tier's own price");
+    const i = EXEC_TIERS.indexOf(mid);
+    ok(EXEC_TIERS[i - 1]?.slug === "route-execute-plus" && EXEC_TIERS[i + 1]?.slug === "route-execute-max", "the mid tier sits between plus and max");
+    ok(EXEC_TIERS.every((t, k) => k === 0 || (t.underlyingMaxUsd > EXEC_TIERS[k - 1].underlyingMaxUsd && t.execPriceUsd > EXEC_TIERS[k - 1].execPriceUsd)),
+      "the ladder is ordered cheapest first on both the cap and the price (the hint takes the first covering tier)");
+    ok(EXEC_TIERS.every((t) => t.execPriceUsd > t.underlyingMaxUsd), "every tier's price is above its underlying cap");
+  }
+  ok(routeExecuteHint(0.11)?.tool === "route-execute-max", "$0.11 → max tier (just over the mid cap)");
   ok(routeExecuteHint(0.12)?.tool === "route-execute-max", "$0.12 → route-execute-max tier");
+  // Every hand-kept slug set that names the tiers covers each one, so a new
+  // tier cannot ship outside one of them.
+  {
+    const { hasLastingEffect } = await import("../src/lasting-effect-slugs.js");
+    const { METERED_SLUGS } = await import("../src/metered-slugs.js");
+    const { AVM_SELF_FUNDING_SLUGS } = await import("../src/payments.js");
+    const { CAPTURE_DENY } = await import("./catalog-buy-capture.js");
+    const fsm = await import("node:fs");
+    const read = (f) => fsm.readFileSync(new URL(f, import.meta.url), "utf8");
+    for (const t of EXEC_TIERS) {
+      ok(hasLastingEffect(t.slug), `${t.slug} never takes a hang-up forgiveness ticket (lasting effect)`);
+      ok(METERED_SLUGS.has(t.slug), `${t.slug} is outside the catalog sweeps (it can spend upstream)`);
+      ok(AVM_SELF_FUNDING_SLUGS.has(t.slug), `${t.slug} is in the Algorand self-funding set`);
+      ok(CAPTURE_DENY.has(t.slug), `${t.slug} answers are never captured as samples`);
+      ok(read("../src/slow-routes.js").includes(`"${t.slug}": null`), `${t.slug} is listed async-capable`);
+      ok(new RegExp(`ROUTER_SLUGS = new Set\\(\\[[^\\]]*"${t.slug}"`).test(read("../src/stats.js")), `${t.slug} is in the stats router set`);
+    }
+    // The catalog sweep runs every tier above the base one leniently (its
+    // example may route to an outside seller, refused where none is enabled).
+    const sweep = read("./test-all.js");
+    for (const t of EXEC_TIERS.filter((x) => x.slug !== "route-execute")) {
+      ok(sweep.includes(`"/api/route/${t.slug.replace("route-", "")}"`), `${t.slug} is in the catalog sweep's network list`);
+    }
+    // The published MCP package picks the cheapest covering tier from maxUsd.
+    const mcpSrc = read("../mcp/index.js");
+    const ladder = mcpSrc.match(/const slug = ROUTER_TIERS\.find\(/) && mcpSrc.match(/const ROUTER_TIERS = (\[[^;]*\]);/);
+    ok(!!ladder, "mcp/index.js keeps the router ladder as one ordered table");
+    const rows = ladder ? JSON.parse(ladder[1].replace(/(\w+):/g, '"$1":').replace(/,\s*\]/g, "]").replace(/,\s*\}/g, "}")) : [];
+    ok(JSON.stringify(rows.map((r) => [r.slug, r.underlyingMaxUsd])) === JSON.stringify(EXEC_TIERS.filter((t) => t.slug !== "route-execute-pro").map((t) => [t.slug, t.underlyingMaxUsd])),
+      `the MCP ladder matches the server's tiers below pro (${JSON.stringify(rows)})`);
+  }
   // The pro tier (2026-08-07) exists because the $0.50 ceiling excluded every
   // indexed tool priced above it: the router could only answer those with a 409
   // pointing at the seller's own direct route.

@@ -62,6 +62,7 @@ import { evmCredentialSettleableMs, evmCredentialExpiry } from "../evm-validity.
 import { noteChatAttemptBound } from "../slow-paid-calls.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
+import { admittedSpeechAdditions } from "../speech-additions.js";
 import { cacheGet, cacheSet } from "../cache.js";
 import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
 import { stripControlChars } from "../prepayment-refusal.js";
@@ -4362,6 +4363,14 @@ export const SPEECH_MODELS = [
   },
 ];
 
+/** The speech models a buyer can name beside the chain (src/speech-additions.js):
+ *  each is served and listed only while its private cost row is present and
+ *  SPEECH_MAX_CHARS on it stays inside the margin bound of the price. Read at
+ *  call time, so a row added to the table turns its model on. */
+export function speechAdditions() {
+  return admittedSpeechAdditions({ priceUsd: SPEECH_PRICE, maxChars: SPEECH_MAX_CHARS });
+}
+
 /** The provider's voice id for a requested voice on this chain link:
  *  OpenAI name → mapped; the link's own native id → itself; another link's
  *  native id (chain walked past its model) → this link's alloy; a retired
@@ -4384,21 +4393,28 @@ export function validateSpeechRequest(input) {
   // as fallbacks (same semantics as the chat tiers: a buyer's pick should
   // not turn a provider outage into their 502).
   let chain = SPEECH_MODELS;
+  const additions = speechAdditions();
   if (input.model !== undefined) {
     // The caller's own spelling is matched too: canonicalModel prefixes some
     // bare names (grok-* becomes x-ai/grok-*), which would turn a documented
     // alias such as "grok-voice-tts" into an id no entry carries.
     const raw = String(input.model).trim().toLowerCase();
     const m = canonicalModel(input.model).toLowerCase();
-    const hit = SPEECH_MODELS.find((e) => m === e.id || e.aliases.includes(m) || raw === e.id || e.aliases.includes(raw));
+    // A chain link, or a named model this server serves beside the chain; a
+    // named one goes first and the whole chain stays behind it as fallbacks.
+    const hit = [...SPEECH_MODELS, ...additions].find((e) => m === e.id || e.aliases.includes(m) || raw === e.id || e.aliases.includes(raw));
     if (!hit) {
-      throw bad(`"model" must be one of: ${SPEECH_MODELS.map((e) => e.id).join(", ")} (or omit it for the default chain)`);
+      throw bad(`"model" must be one of: ${[...SPEECH_MODELS, ...additions].map((e) => e.id).join(", ")} (or omit it for the default chain)`);
     }
     chain = [hit, ...SPEECH_MODELS.filter((e) => e !== hit)];
   }
   const voice = input.voice === undefined ? "alloy" : String(input.voice);
   if (!OPENAI_SPEECH_VOICES.includes(voice) && !SPEECH_MODELS.some((e) => e.voices.has(voice) || e.legacyVoices?.[voice])) {
-    throw bad(`"voice" must be an OpenAI voice name (${OPENAI_SPEECH_VOICES.join(", ")}) or a native voice id from GET /v1/models`);
+    // A voice only a named model has is spoken only by that model: no chain
+    // link carries it, so without the model named it would be dropped.
+    const owner = additions.find((e) => e.voices.has(voice));
+    if (!owner) throw bad(`"voice" must be an OpenAI voice name (${OPENAI_SPEECH_VOICES.join(", ")}) or a native voice id from GET /v1/models`);
+    if (chain[0] !== owner) throw bad(`"voice" ${voice} is a voice of ${owner.id}: name that model in "model" to use it`);
   }
   const format = input.response_format === undefined ? "mp3" : String(input.response_format);
   if (!SPEECH_FORMATS[format]) throw bad(`"response_format" must be one of: ${Object.keys(SPEECH_FORMATS).join(", ")}`);
@@ -5069,6 +5085,8 @@ export const LLM_GATEWAY_TOOLS = [
     price: `$${METER_MIN_SETTLE_USD}`,
     // payments.js: a `quote` makes the x402 price a per-request function of the body.
     quote: (body) => meteredQuoteUsd(body).usd,
+    // A one-token call, quoted at the list price; the keep-alive buys it.
+    fromInput: { messages: [{ role: "user", content: "hi" }], max_tokens: 1 },
     description:
       `OpenAI-compatible chat completions priced per request from the request itself. The 402 quotes the input, estimated from its tokens with headroom, plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.${METERED_DEFAULT_NOTE ? ` ${METERED_DEFAULT_NOTE}` : ""}`,
     tags: [...["llm", "ai", "inference", "chat", "gateway", "openai-compatible"], "metered", "pay-per-token"],
@@ -5211,7 +5229,7 @@ export const LLM_GATEWAY_TOOLS = [
       input: { input: "Agent402 is an open-source x402 tool server." },
       inputSchema: {
         properties: {
-          input: { type: "string", description: "Text to embed - a string or an array of up to 64 strings (16k chars total)" },
+          input: { type: "string", maxLength: 16000, description: "Text to embed - a string or an array of up to 64 strings (16k chars total)" },
           model: { type: "string", description: `Optional - ${EMBEDDINGS_DEFAULT_MODEL} (default), text-embedding-3-large, or text-embedding-ada-002` },
           dimensions: { type: "number", description: "Optional output dimensions (3-small/3-large only)" },
         },
@@ -5235,7 +5253,7 @@ export const LLM_GATEWAY_TOOLS = [
       input: { query: "What is the capital of France?", documents: ["Paris is the capital of France.", "Berlin is the capital of Germany.", "Madrid is in Spain."], top_n: 2 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "The search query (max 500 chars)" },
+          query: { type: "string", maxLength: 500, description: "The search query (max 500 chars)" },
           documents: { type: "array", items: { type: "string" }, description: "Documents to rank (1-50 strings, 1,600 chars each, 40k total)" },
           top_n: { type: "integer", description: "Optional - return only the top N results" },
           cache: { type: "boolean", description: "Optional - false disables the default-on response cache" },
@@ -5260,7 +5278,7 @@ export const LLM_GATEWAY_TOOLS = [
       input: { prompt: "A minimalist watercolor of a fox reading a newspaper in a forest clearing" },
       inputSchema: {
         properties: {
-          prompt: { type: "string", description: "Text description of the image to generate (up to 4,000 chars)" },
+          prompt: { type: "string", maxLength: 4000, description: "Text description of the image to generate (up to 4,000 chars)" },
           zdr: { type: "boolean", description: "Optional - true routes only to zero-data-retention providers" },
         },
         required: ["prompt"],
@@ -5286,7 +5304,7 @@ export const LLM_GATEWAY_TOOLS = [
       input: { input: "Agent402 serves 500+ tools, paid per call.", voice: "alloy" },
       inputSchema: {
         properties: {
-          input: { type: "string", description: "Text to speak (up to 2,000 chars)" },
+          input: { type: "string", maxLength: 2000, description: "Text to speak (up to 2,000 chars)" },
           voice: { type: "string", description: "OpenAI voice name - alloy (default), ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse - or a native voice id from GET /v1/models (e.g. en_paul_cheerful)" },
           response_format: { type: "string", description: '"mp3" (default) or "pcm"' },
           model: { type: "string", description: "Optional - pin a chain model (e.g. mistralai/voxtral-mini-tts-2603); the rest stay as fallbacks" },
@@ -5432,7 +5450,9 @@ export function modelsList() {
   // The speech route is registered only under OPENROUTER_TTS_ENABLED=true
   // (server.js GATEWAY_TOOLS_ENABLED); a boot without it advertised the five
   // TTS models at an endpoint that answered 404 (cross-surface test, 2026-09-06).
-  for (const m of process.env.OPENROUTER_TTS_ENABLED === "true" ? SPEECH_MODELS : []) {
+  // The chain's links, then the named models this server serves beside it
+  // (speechAdditions: none while its cost row is absent).
+  for (const m of process.env.OPENROUTER_TTS_ENABLED === "true" ? [...SPEECH_MODELS, ...speechAdditions()] : []) {
     data.push({
       id: m.id,
       object: "model",

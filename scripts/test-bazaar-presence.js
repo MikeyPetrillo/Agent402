@@ -87,6 +87,20 @@ const slugsOf = (list) => list.map((r) => r.slug).sort();
   ok(slugsOf(atCeiling.buy).join() === "at-ceiling", "a route at the ceiling is bought here");
 }
 
+// --- a quoted route with a fromInput is bought; the issue says what happens ----
+{
+  const withFloor = { endpoints: [...PRICING.endpoints, row("quoted-floor", "$0.018", { quoted: true, fromInput: { sites: [{ lat: 1, lon: 2 }] } })] };
+  const paths = withFloor.endpoints.map((r) => r.path).filter((p) => p !== "/api/quoted-floor" && p !== "/api/quoted-one");
+  const d = decide({ reading: reading([paths, paths], withFloor), prev: null });
+  ok(slugsOf(d.buy).join() === "quoted-floor", "a missing quoted route with a fromInput is bought (with that body, inside its list price)");
+  ok(Object.fromEntries(d.exempt.map((e) => [e.slug, e.why]))["quoted-one"] === "quoted", "a missing quoted route with no fromInput is still not bought");
+  const again = decide({ reading: reading([paths, paths], withFloor), prev: d.state });
+  const body = issueBody(again);
+  ok(/- `POST \/api\/quoted-one`: not bought here: quoted route with no fromInput, which no keep-alive pass buys/.test(body), "the issue says no pass buys a quoted route with no fromInput");
+  ok(/A quoted route is bought by these passes with its fromInput/.test(body) && /never pays over the list price/.test(body) && !/needs a hand pass[^.]*quoted/.test(body), "the issue names what happens to a quoted route, and never sends it to a pass that refuses it");
+  ok(!DOLLAR_FIGURE.test(body), "the issue still carries no figure");
+}
+
 // --- the caps ------------------------------------------------------------------
 {
   const many = { endpoints: Array.from({ length: 12 }, (_, i) => row(`r${i}`, "$0.001")).concat([row("keep", "$0.001")]) };
@@ -128,7 +142,7 @@ const slugsOf = (list) => list.map((r) => r.slug).sort();
   ok(body.includes("`POST /api/cheap-a`") && body.includes("observed to leave"), "the issue names the route path and says it was observed to leave");
   ok(!/\b\d+\s+routes?\b/.test(body) && !DOLLAR_FIGURE.test(body), "the issue carries no count and no figure");
   ok(!/30 days|cull|removes? (?:a |any )?resource/i.test(body), "the issue states no rule of the listing's");
-  ok(ISSUE_TITLE === "Bazaar presence check", "the title is fixed");
+  ok(ISSUE_TITLE === "Scheduled check needs review: listing-presence", "the title is fixed");
 }
 
 // --- an unreadable listing ---------------------------------------------------------

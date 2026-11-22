@@ -29,6 +29,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { load as yamlLoad } from "js-yaml";
+import { OPEN_BODY_RE, OPEN_BODY } from "./lib/monitor-issue-text.js";
 
 let pass = 0, fail = 0;
 async function check(name, fn) {
@@ -142,30 +143,30 @@ const MIN = 60_000;
 
 // ---- the status Worker ----------------------------------------------------------
 const { judge, ALARMS, syncAlarms, withClearingMark } = await import("../workers/status-probe/src/index.js");
-const GB = "Gateway balance READY to withdraw";
-const SLT = "Shared limits store DEGRADED (Redis)";
-const RS = "Replay store marks PENDING (Redis)";
-const RSW = "Router spend per minute OVER its ceiling";
-const TBF = "topBuyerFailures: a top paying buyer is getting failed answers";
-const OSB = "onchainSqlBusy: a top paying buyer was told the query service is busy";
+const GB = "Scheduled check needs review: gateway-balance";
+const SLT = "Scheduled check needs review: shared-limits-store";
+const RS = "Scheduled check needs review: replay-store-marks";
+const RSW = "Scheduled check needs review: router-spend";
+const TBF = "Scheduled check needs review: top-buyer-failures";
+const OSB = "Scheduled check needs review: query-service";
 // Balance reads behind the in-flight coverage check (src/inflight-cover.js).
-const CRT = "Coverage balance reads DEGRADED (calls in flight)";
+const CRT = "Scheduled check needs review: coverage-balance-reads";
 // The six words wired in batch 2026-11-12b and the two of 2026-11-12c: [title, field, alert words, healthy words, words that do neither].
 const NEW_WORDS = [
-  ["Route judgment token ceiling CAPPED for the day", "jevSpend", ["capped"], ["ok"], ["unknown"]],
-  ["External spend global ceiling REFUSING", "externalSpendGlobal", ["refusing"], ["ok", "off"], ["near", "unknown"]],
-  ["Solana history reads FAILING on every lane", "solanaHistory", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
-  ["EVM log reads FAILING on every lane", "evmLogs", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
-  ["Speech upstream breaker COOLING (backup voices serving)", "speechUpstream", ["cooling"], ["ok", "probing"], ["unknown"]],
-  ["First-call allowance UNAVAILABLE (shared store)", "firstCallAllowance", ["unavailable"], ["on", "spent"], ["off", "unknown"]],
+  ["Scheduled check needs review: route-judgment-budget", "jevSpend", ["capped"], ["ok"], ["unknown"]],
+  ["Scheduled check needs review: external-spend", "externalSpendGlobal", ["refusing"], ["ok", "off"], ["near", "unknown"]],
+  ["Scheduled check needs review: history-reads", "solanaHistory", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
+  ["Scheduled check needs review: log-reads", "evmLogs", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
+  ["Scheduled check needs review: speech-upstream", "speechUpstream", ["cooling"], ["ok", "probing"], ["unknown"]],
+  ["Scheduled check needs review: first-call-allowance", "firstCallAllowance", ["unavailable"], ["on", "spent"], ["off", "unknown"]],
   // Batch 2026-11-12c: x-search-recent's expanded-author reads, and the MPP
   // subscription engine that did not build at boot.
-  ["X search author reads OVER the daily alert", "xSearchAuthors", ["alert"], ["ok"], ["unknown"]],
-  ["MPP subscription engine FAILED to start", "mppSubscriptions", ["failed"], ["on", "off"], ["unknown"]],
+  ["Scheduled check needs review: post-author-reads", "xSearchAuthors", ["alert"], ["ok"], ["unknown"]],
+  ["Scheduled check needs review: subscription-engine", "mppSubscriptions", ["failed"], ["on", "off"], ["unknown"]],
   // The referral gate's settlements (present only while the gate is mounted).
-  ["referralSettlement: referral settlements need attention", "referralSettlement", ["attention"], ["ok"], ["unknown"]],
+  ["Scheduled check needs review: referral-settlement", "referralSettlement", ["attention"], ["ok"], ["unknown"]],
   // The weather kit's keyed Open-Meteo reads (src/tools/weather-kit.js).
-  ["Open-Meteo keyed reads REFUSED", "openMeteo", ["refused"], ["ok", "off"], ["unknown"]],
+  ["Scheduled check needs review: weather-keyed-reads", "openMeteo", ["refused"], ["ok", "off"], ["unknown"]],
 ];
 const j = (gateway) => judge({ gateway });
 
@@ -416,14 +417,14 @@ for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
     assert.ok(step, `heartbeat.yml has a step named "${prefix}..."`);
     assert.ok(step.run.includes(`TITLE="${T}"`), "same title");
     assert.ok(step.run.includes(`.${field}.status`), "reads the word");
-    assert.ok(step.run.includes(ALARMS.find((x) => x.title === T).body({})), "same body");
+    assert.ok(step.run.includes(OPEN_BODY), "same body");
   });
   if (!step) continue;
   await check(`heartbeat: "${T}" opens once on the alert and never on a healthy, flickering or blind read`, async () => {
     const calls = await runStep(step, { [field]: alertRow });
     assert.equal(calls.length, 1, JSON.stringify(calls));
     assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title")], ["issue", "create", T]);
-    assert.equal(argOf(calls[0], "--body"), ALARMS.find((x) => x.title === T).body({}), "the body gh receives is the Worker's, unexpanded");
+    assert.match(argOf(calls[0], "--body"), OPEN_BODY_RE, "the body gh receives is the Worker's, unexpanded");
     assert.deepEqual(await runStep(step, { [field]: alertRow }, [{ number: 9, title: T }]), [], "an open issue is not duplicated or commented on");
     for (const row of [...quietRows, ...goodRows]) assert.deepEqual(await runStep(step, { [field]: row }), [], JSON.stringify(row));
     assert.deepEqual(await runStep(step, {}), [], "a build without the word");
@@ -456,7 +457,7 @@ for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
 // the router's per-minute holds; its body is the Worker's, word for word.
 const SPEND = [
   // [step name, title, field, the body is the Worker's]
-  ["X data daily spend over its ceiling", "X data daily spend OVER its ceiling", "xDataSpend"],
+  ["X data daily spend over its ceiling", "Scheduled check needs review: post-data-spend", "xDataSpend"],
   ["Router spend per minute over its ceiling", RSW, "routerSpendWindow", true],
 ];
 for (const [name, T, field, sameBody] of SPEND) {
@@ -465,7 +466,7 @@ for (const [name, T, field, sameBody] of SPEND) {
     assert.ok(step, `heartbeat.yml has a step named "${name}"`);
     assert.ok(step.run.includes(`TITLE="${T}"`), "the title");
     assert.ok(step.run.includes(`.${field}.status`), "reads the word");
-    if (sameBody) assert.ok(step.run.includes(ALARMS.find((x) => x.title === T).body({})), "the Worker's body");
+    if (sameBody) assert.ok(step.run.includes(OPEN_BODY), "the Worker's body");
   });
   if (!step) continue;
   await check(`heartbeat: "${T}" opens once on over and on capped, never on ok, off or a blind read`, async () => {
@@ -474,7 +475,7 @@ for (const [name, T, field, sameBody] of SPEND) {
       assert.equal(calls.length, 1, `${word}: ${JSON.stringify(calls)}`);
       assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title")], ["issue", "create", T], word);
       assert.doesNotMatch(argOf(calls[0], "--body"), /\$[0-9]|[0-9]+\.[0-9]/, `${word}: the public body carries no figure`);
-      if (sameBody) assert.equal(argOf(calls[0], "--body"), ALARMS.find((x) => x.title === T).body({}), `${word}: the body gh receives is the Worker's, unexpanded`);
+      if (sameBody) assert.match(argOf(calls[0], "--body"), OPEN_BODY_RE, `${word}: the body gh receives is the Worker's, unexpanded`);
       assert.deepEqual(await runStep(step, { [field]: { status: word } }, [{ number: 9, title: T }]), [], `${word}: an open issue is not duplicated or commented on`);
     }
     for (const word of ["ok", "off", "unknown", "something-new"]) assert.deepEqual(await runStep(step, { [field]: { status: word } }), [], word);
@@ -502,8 +503,8 @@ for (const [name, T, field, sameBody] of SPEND) {
 // pages once, and recovery closes it.
 {
   const { createToolFailureMonitor } = await import("../src/tool-failure-monitor.js");
-  const UH = "upstreamHealth: an upstream is timing out or failing";
-  const FG = "facilitatorFunds: a facilitator's settlement gas is running low";
+  const UH = "Scheduled check needs review: upstream-health";
+  const FG = "Scheduled check needs review: facilitator-funds (b)";
   const step = steps.find((s) => String(s.name || "").startsWith("Tool, upstream and facilitator failure checks"));
   let t = Date.parse("2026-11-10T12:00:00Z");
   const m = createToolFailureMonitor({ now: () => t, env: {} });
@@ -568,7 +569,7 @@ for (const [name, T, field, sameBody] of SPEND) {
   // when the word reads ok, low or unknown (the new titles take over those
   // states, so it never stays open beside them), and neither ever opens it,
   // on any word.
-  const OLD = "facilitatorFunds: a facilitator's settlement gas is running low or could not be read";
+  const OLD = "Scheduled check needs review: facilitator-funds (d)";
   await check("facilitatorFunds: the issue under the old title closes on ok, low or unknown and is never opened", async () => {
     for (const w of ["ok", "low", "unknown"]) {
       const g = { facilitatorFunds: { status: w } };
@@ -611,7 +612,7 @@ for (const [name, T, field, sameBody] of SPEND) {
   // hours (nothing pages), then alert sustained, which pages once under its
   // own title in both pagers; the balance read again (ok) closes it.
   {
-    const UR = "facilitatorFunds: a settlement signer's balance could not be read for hours";
+    const UR = "Scheduled check needs review: facilitator-funds (c)";
     let tu = Date.parse("2026-11-10T00:00:00Z");
     const mu = createToolFailureMonitor({ now: () => tu, env: {} });
     const unreadRow = () => ({ network: NET, facilitator: "listed", signer: "0x" + "3".repeat(40), status: "unread", failures: 3, runway: null, at: tu });
@@ -664,8 +665,8 @@ for (const [name, T, field, sameBody] of SPEND) {
 // deadline on every upstream at once, page nothing.
 {
   const { createToolFailureMonitor } = await import("../src/tool-failure-monitor.js");
-  const UN = "upstreamHealth: an upstream did not answer within our limit";
-  const UH = "upstreamHealth: an upstream is timing out or failing";
+  const UN = "Scheduled check needs review: upstream-health (b)";
+  const UH = "Scheduled check needs review: upstream-health";
   const step = steps.find((s) => String(s.name || "").startsWith("Tool, upstream and facilitator failure checks"));
   const start = Date.parse("2026-11-10T15:00:00Z");
   const created = (calls, T) => calls.filter((c) => c[1] === "create" && argOf(c, "--title") === T);
@@ -697,7 +698,7 @@ for (const [name, T, field, sameBody] of SPEND) {
     const calls = await runStep(step, gw);
     assert.equal(created(calls, UN).length, 1, JSON.stringify(calls));
     assert.equal(created(calls, UH).length, 0);
-    assert.equal(argOf(created(calls, UN)[0], "--body"), worker.body({ gateway: gw }), "the heartbeat's body is the Worker's");
+    assert.match(argOf(created(calls, UN)[0], "--body"), OPEN_BODY_RE, "the heartbeat's body is the Worker's");
     assert.equal(created(await runStep(step, gw, [{ number: 11, title: UN }]), UN).length, 0, "an open issue is not duplicated");
     const full = await m.status({ full: true, fresh: true, t });
     assert.equal(full.upstreamHealth.upstreams[0].unanswered, "databento did not answer within our 25 s limit on 6 of 6 calls from 5 callers in 15 min", "the operator detail");
@@ -731,16 +732,17 @@ for (const [name, T, field, sameBody] of SPEND) {
 // ---- the rail check: a dropped Circle Gateway batched option ---------------------
 // /api/rails carries gatewayBatched.dropped (each network with its reason word)
 // while the option is switched on; the heartbeat's rail check counts it beside
-// degraded rails, opens one "Settlement rail DEGRADED" issue naming it, and
+// degraded rails, opens one "Scheduled check needs review: rail-offers" issue naming it, and
 // closes it once nothing is dropped.
 {
-  const RT = "Settlement rail DEGRADED";
+  const RT = "Scheduled check needs review: rail-offers";
   const step = steps.find((s) => String(s.name || "").startsWith("Rail check"));
   const rails = (dropped, degraded = 0) => ({ configured: 2, offered: 2 - degraded, degraded, rails: [{ network: "base", caip2: "eip155:8453", offered: true, reason: null }, ...(degraded ? [{ network: "celo", caip2: "eip155:42220", offered: false, reason: "not offered - x (probe-timeout)", reasonWord: "probe-timeout" }] : [])], ...(dropped === undefined ? {} : { gatewayBatched: { networks: [], status: dropped.length ? "dropped" : "offered", dropped } }) });
   const runRail = async (body, issues = []) => {
     const calls = await runStep(step, body, issues);
-    let file = "";
-    try { file = await readFile("/tmp/rail-body.md", "utf8"); } catch { /* not written */ }
+    // The body the step posts: the fixed text, with no rail or reason in it.
+    const made = calls.find((c) => c[1] === "create");
+    const file = made ? argOf(made, "--body") : "";
     return { calls, file };
   };
   await check("rail check: a batched option dropped on probe-timeout opens one issue naming it; the plain rails all offered", async () => {
@@ -748,7 +750,8 @@ for (const [name, T, field, sameBody] of SPEND) {
     const { calls, file } = await runRail(rails([{ network: "eip155:8453", reason: "probe-timeout" }]));
     assert.equal(calls.length, 1, JSON.stringify(calls));
     assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title")], ["issue", "create", RT]);
-    assert.match(file, /Circle Gateway batched option on eip155:8453\*\* - not offered \(probe-timeout\)/);
+    assert.match(file, OPEN_BODY_RE);
+    assert.doesNotMatch(file, /eip155|batched|not offered|probe-|celo/);
     assert.deepEqual((await runRail(rails([{ network: "eip155:8453", reason: "probe-timeout" }]), [{ number: 3, title: RT }])).calls, [], "an open issue is not duplicated");
   });
   await check("rail check: nothing dropped closes the issue; no batched field and an unreadable read do nothing", async () => {
@@ -766,14 +769,15 @@ for (const [name, T, field, sameBody] of SPEND) {
     for (const reason of ["probe-timeout", "read-failed", "not-advertised"]) {
       const { calls, file } = await runRail(rails([{ network: "arc", reason: "not-in-offer" }, { network: "eip155:8453", reason }]));
       assert.equal(calls.filter((c) => c[1] === "create").length, 1, `${reason} beside not-in-offer pages once`);
-      assert.match(file, new RegExp(`batched option on eip155:8453\\*\\* - not offered \\(${reason}\\)`));
-      assert.doesNotMatch(file, /not-in-offer/, `${reason}: the body lists only the failure`);
+      assert.match(file, OPEN_BODY_RE);
+      assert.doesNotMatch(file, /eip155|batched|not offered|probe-|celo/);
     }
   });
   await check("rail check: a degraded plain rail still pages as before", async () => {
     const { calls, file } = await runRail(rails(undefined, 1));
     assert.equal(calls.filter((c) => c[1] === "create").length, 1);
-    assert.match(file, /\*\*celo\*\* - not offered - x \(probe-timeout\)/);
+    assert.match(file, OPEN_BODY_RE);
+    assert.doesNotMatch(file, /eip155|batched|not offered|probe-|celo/);
   });
 }
 
@@ -782,20 +786,21 @@ for (const [name, T, field, sameBody] of SPEND) {
 // unknown, which pages nothing, so its second word (run) says stale once a
 // reconciler that has run before is past its gap; both observers page on it.
 {
-  const T = "MPP daily reconciliation is NOT RUNNING";
+  const T = "Scheduled check needs review: payment-reconciliation-run";
   const worker = ALARMS.find((a) => a.title === T);
   const step = steps.find((s) => String(s.name || "").startsWith("MPP reconciliation run check"));
   const rec = (run) => ({ mppReconcile: { status: run === "ok" ? "ok" : "unknown", stale: run !== "ok", run } });
   await check(`heartbeat: "${T}" has a step with the Worker's title and body`, () => {
     assert.ok(worker, "the Worker has the alarm");
     assert.ok(step, "heartbeat.yml has the step");
-    assert.ok(step.run.includes(`TITLE="${T}"`) && step.run.includes(".mppReconcile.run") && step.run.includes(worker.body({})), "same title, word and body");
+    assert.ok(step.run.includes(`TITLE="${T}"`) && step.run.includes(".mppReconcile.run") && step.run.includes(OPEN_BODY), "same title, word and body");
   });
   if (step && worker) {
     await check(`heartbeat: "${T}" opens once on stale and never on ok, off, unknown or a blind read`, async () => {
       const calls = await runStep(step, rec("stale"));
       assert.equal(calls.length, 1, JSON.stringify(calls));
-      assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title"), argOf(calls[0], "--body")], ["issue", "create", T, worker.body({})]);
+      assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title")], ["issue", "create", T]);
+      assert.match(argOf(calls[0], "--body"), OPEN_BODY_RE);
       assert.deepEqual(await runStep(step, rec("stale"), [{ number: 9, title: T }]), [], "an open issue is not duplicated");
       for (const w of ["ok", "off", "unknown"]) assert.deepEqual(await runStep(step, rec(w)), [], w);
       assert.deepEqual(await runStep(step, { mppReconcile: { status: "unknown", stale: true } }), [], "a build without the word");
@@ -819,7 +824,7 @@ for (const [name, T, field, sameBody] of SPEND) {
 // server without the two words gets the combined text it always had. The
 // Worker's body follows the same words.
 {
-  const T = "Refunds owed to a buyer are waiting";
+  const T = "Scheduled check needs review: refunds";
   const step = steps.find((s) => String(s.name || "").startsWith("Refunds owed check"));
   const worker = ALARMS.find((a) => a.title === T);
   const DASH = /refund it in the Stripe dashboard|Refund each of the others in the Stripe dashboard/;
@@ -835,21 +840,24 @@ for (const [name, T, field, sameBody] of SPEND) {
     };
     const pending = await body({ status: "owed", ledger: "ok", card: "pending" });
     const wPending = worker.body({ gateway: { refundsOwed: { status: "owed", ledger: "ok", card: "pending" } } });
-    for (const [who, b] of [["heartbeat", pending], ["Worker", wPending]]) {
+    for (const b of [pending]) assert.match(b, OPEN_BODY_RE);
+    for (const [who, b] of [["Worker", wPending]]) {
       assert.match(b, NOTHING, `${who}: a pending card refund needs nothing`);
       assert.doesNotMatch(b, DASH, `${who}: no dashboard refund for a pending card refund`);
       assert.doesNotMatch(b, WORKFLOW, `${who}: a ledger that owes nothing is not sent to the refund workflow`);
     }
     const refused = await body({ status: "owed", ledger: "owed", card: "refused" });
     const wRefused = worker.body({ gateway: { refundsOwed: { status: "owed", ledger: "owed", card: "refused" } } });
-    for (const [who, b] of [["heartbeat", refused], ["Worker", wRefused]]) {
+    assert.match(refused, OPEN_BODY_RE);
+    for (const [who, b] of [["Worker", wRefused]]) {
       assert.match(b, DASH, `${who}: a refused card refund is refunded in the dashboard`);
       assert.match(b, WORKFLOW, `${who}: a ledger debt is sent to the refund workflow`);
       assert.doesNotMatch(b, NOTHING, `${who}: refused is never "nothing is needed"`);
     }
     const old = await body({ status: "owed" });
     const wOld = worker.body({ gateway: { refundsOwed: { status: "owed" } } });
-    for (const [who, b] of [["heartbeat", old], ["Worker", wOld]]) {
+    assert.match(old, OPEN_BODY_RE);
+    for (const [who, b] of [["Worker", wOld]]) {
       assert.match(b, WORKFLOW, `${who}: a server without the words keeps the combined text`);
       assert.match(b, /refund it in the Stripe dashboard/, `${who}: combined text`);
     }
@@ -867,7 +875,7 @@ for (const [name, T, field, sameBody] of SPEND) {
 // the next readable run (exit 0 or 1) closes it and starts the streak again;
 // a validation step that did not finish leaves the streak as it was.
 {
-  const T = "Bazaar listing validator unreadable";
+  const T = "Scheduled check needs review: listing-validation-read";
   const step = steps.find((s) => String(s.name || "").startsWith("Bazaar validator unreadable streak"));
   const validate = steps.find((s) => s.id === "bazaar_validate");
   const stateFile = path.join(dir, "validate-streak", "state.json");
@@ -875,7 +883,7 @@ for (const [name, T, field, sameBody] of SPEND) {
     const log = path.join(dir, "gh.log");
     await writeFile(log, "");
     const r = spawnSync("bash", ["-c", step.run], {
-      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", CODE: code, STREAK_FILE: stateFile, ISSUES_JSON: JSON.stringify(issues), GH_LOG: log },
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", CODE: code, STREAK_FILE: stateFile, ISSUES_JSON: JSON.stringify(issues.map((x) => ({ author: { login: "github-actions[bot]" }, ...x }))), GH_LOG: log },
       encoding: "utf8",
     });
     assert.equal(r.status, 0, r.stderr);

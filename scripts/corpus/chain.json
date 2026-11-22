@@ -213,7 +213,10 @@
     "equals": {
      "count": 3,
      "vsCurrency": "gbp",
-     "prices[0].id": "bitcoin"
+     "check": "usd-only",
+     "prices[0].id": "bitcoin",
+     "prices[0].stale": false,
+     "prices[0].divergencePct": null
     },
     "gt": {
      "prices[0].price": 1000
@@ -273,7 +276,11 @@
      "unknown": [
       "not-a-coin-zzq"
      ],
-     "prices[1].price": null
+     "prices[1].price": null,
+     "prices[1].stale": null
+    },
+    "matches": {
+     "check": "^(hyperliquid-oracle|unavailable)$"
     },
     "gt": {
      "prices[0].price": 1000

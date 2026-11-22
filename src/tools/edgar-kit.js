@@ -191,7 +191,7 @@ export const EDGAR_TOOLS = [
     discovery: {
       input: { ticker: "AAPL" },
       inputSchema: {
-        properties: { ticker: { type: "string", description: "US stock ticker, e.g. AAPL" } },
+        properties: { ticker: { type: "string", maxLength: 10, description: "US stock ticker, e.g. AAPL" } },
         required: ["ticker"],
       },
       output: { example: { ticker: "AAPL", cik: "0000320193", cikInt: 320193, name: "Apple Inc.", source: "SEC company_tickers.json" } },
@@ -306,8 +306,8 @@ export const EDGAR_TOOLS = [
         properties: {
           ticker: { type: "string", description: "US stock ticker (alternative to cik)" },
           cik: { type: "string", description: "SEC CIK number (alternative to ticker)" },
-          taxonomy: { type: "string", description: 'XBRL taxonomy, default "us-gaap" (also: ifrs-full, dei, srt)' },
-          tag: { type: "string", description: 'XBRL concept tag, e.g. "Revenues", "Assets", "NetIncomeLoss", "EarningsPerShareBasic"' },
+          taxonomy: { type: "string", maxLength: 81, description: 'XBRL taxonomy, default "us-gaap" (also: ifrs-full, dei, srt)' },
+          tag: { type: "string", maxLength: 121, description: 'XBRL concept tag, e.g. "Revenues", "Assets", "NetIncomeLoss", "EarningsPerShareBasic"' },
         },
         required: ["tag"],
       },
@@ -453,9 +453,9 @@ export const EDGAR_TOOLS = [
       input: { taxonomy: "us-gaap", tag: "Revenues", unit: "USD", period: "CY2023Q1" },
       inputSchema: {
         properties: {
-          taxonomy: { type: "string", description: 'XBRL taxonomy, default "us-gaap"' },
-          tag: { type: "string", description: 'XBRL concept tag, e.g. "Revenues", "Assets"' },
-          unit: { type: "string", description: 'Unit of measure, e.g. "USD", "shares", "USD/shares"' },
+          taxonomy: { type: "string", maxLength: 81, description: 'XBRL taxonomy, default "us-gaap"' },
+          tag: { type: "string", maxLength: 121, description: 'XBRL concept tag, e.g. "Revenues", "Assets"' },
+          unit: { type: "string", maxLength: 41, description: 'Unit of measure, e.g. "USD", "shares", "USD/shares"' },
           period: { type: "string", description: 'CY{YYYY} (annual), CY{YYYY}Q{1-4} (quarterly), or CY{YYYY}Q{1-4}I (instantaneous balance-sheet)' },
           limit: { type: "number", description: "Max companies to return, 1-2000 (default 200)" },
         },
@@ -1057,7 +1057,7 @@ EDGAR_TOOLS.push(
       inputSchema: {
         properties: {
           days: { type: "number", description: "Lookback window in days, 1-365 (default 30)" },
-          form: { type: "string", description: 'Form type. "S-1" = initial registration (default). "424B4" = final prospectus (actual priced IPOs). "S-1/A" = amended registration.' },
+          form: { type: "string", maxLength: 15, description: 'Form type. "S-1" = initial registration (default). "424B4" = final prospectus (actual priced IPOs). "S-1/A" = amended registration.' },
           limit: { type: "number", description: "Max filings, 1-200 (default 25)" },
         },
       },
@@ -1122,7 +1122,7 @@ EDGAR_TOOLS.push(
       input: { q: "going concern", forms: "10-Q", days: 90, limit: 5 },
       inputSchema: {
         properties: {
-          q: { type: "string", description: 'Search phrase (quote-wrap for exact match, e.g. "material weakness")' },
+          q: { type: "string", maxLength: 200, description: 'Search phrase (quote-wrap for exact match, e.g. "material weakness")' },
           forms: { type: "string", description: 'Comma-separated form filter, e.g. "10-K,10-Q" or "8-K"' },
           ticker: { type: "string", description: "Restrict to a single company by ticker" },
           cik: { type: "string", description: "Restrict to a single company by CIK" },

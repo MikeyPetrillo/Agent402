@@ -361,7 +361,7 @@ export const SEARCH_TOOLS = [
           count: 2,
           results: [
             { title: "x402: An open standard for internet-native payments", url: "https://www.x402.org/", description: "HTTP 402 brought to life…", age: "July 15, 2026", publishedAt: "2026-07-15T00:00:00.000Z" },
-            { title: "What is x402?", url: "https://agent402.tools/what-is-x402", description: "How a 402 carries a price an agent pays…", age: "October 4, 2026", publishedAt: "2026-10-04T00:00:00.000Z" },
+            { title: "x402 and MPP on Agent402", url: "https://agent402.tools/what-is-x402", description: "How a 402 carries a price an agent pays…", age: "October 4, 2026", publishedAt: "2026-10-04T00:00:00.000Z" },
           ],
           untrustedContent: true,
         },

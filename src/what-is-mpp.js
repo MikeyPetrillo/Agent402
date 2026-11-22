@@ -9,6 +9,7 @@
 // both protocols; this page is the dedicated landing page for MPP-specific
 // search intent, and the two cross-link rather than duplicate scope.
 import { siteOrgLd } from "./site-org.js";
+import { GUIDE_SITE_NAME, GUIDE_EXPLAINERS, guideLink } from "./ask402-links.js";
 import { ledgerShell, ledgerFooterCompact, codeBlock, esc } from "./ledger-chrome.js";
 
 import { mppFlagshipRows, mppFlagshipSnippet, mppFlagshipOffersPhrase, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
@@ -71,9 +72,12 @@ export function whatIsMppPage(baseUrl, catalog = null) {
   // challenge is sent.
   const offerGate = mppOfferGateSentenceIfOffered({ code: (x) => x });
   const faqs = FAQS.map((f) => (f.gated && offerGate ? { ...f, a: `${f.a} ${offerGate}` } : f));
-  const title = "What is MPP? The Machine Payments Protocol, explained";
+  // Titled for how MPP runs here: the general question ("what is MPP")
+  // belongs to the plain-language guide this page links in its opening
+  // (src/ask402-links.js).
+  const title = "MPP on Agent402: how a Machine Payments Protocol payment works";
   const description =
-    "MPP (Machine Payments Protocol) is an open protocol, published as an IETF Internet-Draft, that carries pay-per-request payments through HTTP's native authentication headers: a 402 response challenges with WWW-Authenticate: Payment, the client pays via Authorization: Payment, and a signed Payment-Receipt confirms settlement. What it is, how a payment works, how it compares to x402, and where it is live today.";
+    "How MPP, the Machine Payments Protocol, runs on Agent402: the Payment challenge, the credential and the signed receipt, how it compares to x402, and where it is live.";
 
   const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -112,7 +116,7 @@ table{border-collapse:collapse;width:100%}
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">What is <span style="color:var(--accent);">MPP</span>?</h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is an open protocol, published as an IETF Internet-Draft,</strong> that lets software pay for web services per request through HTTP's native authentication headers. A paid endpoint answers with <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> and a <span style="font-family:var(--font-mono);font-size:var(--fs-base);">WWW-Authenticate: Payment</span> challenge; the client answers with a signed stablecoin payment; the server verifies, settles on chain, and returns a signed receipt.</p>
-        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No accounts, no API keys, no subscriptions. For the broader story of why machine payments exist and how x402 fits alongside MPP, see <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">What is x402?</a> MPP is one of the two wires underneath <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>; the vocabulary (challenge, credential, receipt, facilitator, settlement) is defined in the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No accounts, no API keys, no subscriptions. For the broader story of why machine payments exist and how x402 fits alongside MPP, see <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402 and MPP on Agent402</a>. MPP is one of the two wires underneath <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>; the vocabulary (challenge, credential, receipt, facilitator, settlement) is defined in the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>. For MPP in plain language, read ${guideLink(GUIDE_EXPLAINERS.mpp, "What is MPP?")} on ${GUIDE_SITE_NAME}.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
         <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">ON THIS PAGE</div>

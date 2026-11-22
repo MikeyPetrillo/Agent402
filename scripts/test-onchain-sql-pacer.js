@@ -239,6 +239,25 @@ try {
     const own = await m.ownSqlQuery({ sql }).catch((x) => x);
     await buyer;
     ok(own?.statusCode === 429 && sent.length === 3 && clock.slots.map((s) => s - T0).join() === "1250", `an own read behind a waiting buyer is refused unsent (${own?.statusCode}, ${sent.length} sent)`);
+    // The revenue page's reads (cdpSql, src/revenue-live.js) are this server's
+    // own too: behind a waiting buyer one is refused unsent and takes no slot,
+    // so it never moves a buyer's query later; with the line free it is sent.
+    clock = clockOf(); _setSqlPacerClockForTest(clock); _resetSqlPacerForTest(625, 2);
+    sent.length = 0;
+    await run(); await run();
+    const buyer2 = run();
+    const revenue = await m.cdpSql("SELECT 1 FROM base.events", { cacheSeconds: 300, retryWaitMs: 0 }).catch((x) => x);
+    await buyer2;
+    ok(revenue?.statusCode === 429 && sent.length === 3 && clock.slots.map((s) => s - T0).join() === "1250", `a revenue read behind a waiting buyer is refused unsent and takes no slot (${revenue?.statusCode ?? "sent"}, ${sent.length} sent, slots +${clock.slots.map((s) => s - T0).join(", +")})`);
+    clock = clockOf(); _setSqlPacerClockForTest(clock); _resetSqlPacerForTest(625, 2);
+    sent.length = 0;
+    const rows = await m.cdpSql("SELECT 1 FROM base.events", { cacheSeconds: 300, retryWaitMs: 0 }).catch((x) => x);
+    ok(Array.isArray(rows) && sent.length === 1, `with no query waiting the revenue read is sent (${Array.isArray(rows) ? rows.length + " row(s)" : rows?.statusCode})`);
+    // A pair of revenue reads (the page sends two at once) both go: the second is one gap off, never further.
+    clock = clockOf(); _setSqlPacerClockForTest(clock); _resetSqlPacerForTest(625, 1);
+    sent.length = 0;
+    const pair = await Promise.all([m.cdpSql("SELECT 1 FROM base.events", { retryWaitMs: 0 }).catch((x) => x), m.cdpSql("SELECT 2 FROM base.events", { retryWaitMs: 0 }).catch((x) => x)]);
+    ok(pair.every(Array.isArray) && sent.length === 2, `the page's pair of reads both send, the second one gap later (${pair.map((p) => (Array.isArray(p) ? "sent" : p?.statusCode)).join(", ")})`);
     _setSqlPacerClockForTest(null);
     _resetSqlPacerForTest(0);
   }

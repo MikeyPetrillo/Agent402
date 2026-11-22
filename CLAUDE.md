@@ -49,6 +49,36 @@ LLC: credit the entity, never a personal name.
   repaid only after on-chain proof (`src/payment-verify.js`).
 - `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
   store API; leases, store readiness and large rows in `.claude/rules/ops.md`.
+- `src/price-webhooks.js` (a signed POST when a watched list price changes: a registrant holds at
+  most `PRICE_WEBHOOK_MAX_PER_PAYER`, a subscription lasts `PRICE_WEBHOOK_LIFETIME_DAYS` and is
+  kept only when its call settles; `.claude/rules/cdn.md`),
+  `src/router-benchmarks.js` (`/api/router-benchmarks`, aggregates over the reputation records),
+  `src/speech-additions.js` (named speech and transcription models, each gated on its cost row),
+  `src/feature-flags.js` (runtime switches: a flag provider, then the variable, then the default).
+- `src/returning-wallet.js` (a lower x402 EVM `exact` quote for the wallet a request names in
+  `X-Agent402-Wallet` and proves in `X-Agent402-Wallet-Proof`, off unless `RETURNING_WALLET_PRICE=on`;
+  an unproven hint is never read; the price is decided again from the payment's signer;
+  `.claude/rules/payments.md`).
+- `src/sale-repeats.js` (one sale per Solana settlement signature: the rule the ledger's writer
+  and readers share), `src/sale-source.js` (the listed `utm_source` a card sale keeps; no public
+  reader selects it).
+- `src/caller-turns.js` (fair turns across callers on serial engines, the OCR engines),
+  `src/caller-places.js` (a full queue's two bounds, shared with the audio decode pool: at the
+  first a caller that already holds a place is the one answered busy and a caller holding nothing
+  is queued over it; only at the hard bound, sized by memory, does a place change hands;
+  `.claude/rules/media.md`), `src/board-refresh-slots.js` (the seller boards rebuild at fixed UTC
+  slots, each waiting while another runs; a rebuild held back by the heap retries hourly, and
+  `boardRefresh` on `/api/gateway-status` reads ok, held or stalled; `.claude/rules/ops.md`),
+  `src/judge-timing.js` (per-backend and per-walk judgment times on
+  `/__operator/judge-timing.json`; `.claude/rules/gateway.md`).
+- `src/brand-mark.js` (the vector brand mark: `/logo.svg`, the favicons, the nav mark, the social
+  cards' tile), `src/ask402-links.js` (the guide site's addresses, so a page never types one),
+  `src/platform-integrations.js` + `src/agentcore-page.js` (platform pages under
+  `/integrations/<slug>`: one list feeds the integrations index, the sitemap and `/llms.txt`).
+- `src/tools/dns-name-filter.js` (`canonicalDnsName`, `assertQueryableName`: a caller-chosen name
+  is judged and queried in one canonical form), `src/tools/mailbox-provider.js` (email-validate's
+  `mailboxProvider`, from the MX hosts already read), `src/tools/price-webhook-kit.js` (the
+  `price-webhook` catalog entry).
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/solana-history-rpc.js` (Solana transaction reads: public lane first, keyed lane behind it),
   `src/solana-activity-store.js` (the activity scans' state across restarts),
@@ -224,6 +254,16 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   (`scripts/test-deploy-release-order.js` pins the step).
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
+- An issue a scheduled check opens is public, so it carries fixed neutral text: the title
+  `Scheduled check needs review: <check name>` and a body that links the run
+  (`scripts/lib/monitor-issue-text.js`). Which reading, route, model or upstream it was stays in
+  the run log, or the status Worker's own log. `scripts/test-monitor-issue-wording.js` holds every
+  workflow and the Worker to it and lists the exceptions (a check whose issue body is its saved
+  state, a buyer's own report), so a new check's issue uses the same text. A check's earlier
+  titles are in one list, `workers/status-probe/src/previous-issue-titles.js`: the Worker reads it,
+  and every job that looks an issue up first runs `scripts/adopt-issue-titles.js`, which gives an
+  open issue under an earlier title the current one (`scripts/test-issue-title-adoption.js`); a
+  renamed check adds its old title there.
 - Keep-alive knobs (repo variables): `BAZAAR_PRICE_CHANGE_MAX_USD` caps the deploy job's one buy
   of each route whose fixed price changed (default 5), and
   `BAZAAR_PRICE_CHANGE_MAX_ROUTES` its route count (default 25; raised for one repricing
@@ -256,12 +296,12 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   variable `ADVISORY_TRIAGE_MAX_HOURS` (default 24), and on a read it cannot make
   (`scripts/advisory-triage-check.js`): it reads with the Actions secret `ADVISORY_READ_TOKEN`
   (fine-grained, this repo, Security advisories read); a GHSA id in the repo variable
-  `ADVISORY_TRIAGE_ACK` (comma list) does not page. The issue is fixed text pointing to the
-  Security tab (no id, age or count), never commented on while open; ids and ages go to the job log.
+  `ADVISORY_TRIAGE_ACK` (comma list) does not page. The issue is the fixed neutral
+  text (no id, age or count), never commented on while open; ids and ages go to the job log.
 - `model-drift.yml` runs the live-catalog guard (`scripts/test-gateway-model-ids.js`) every 6 hours,
   never on a push, and keeps one issue open while it fails (a cost row under its dearest live
   endpoint, or more than 15% above it for every servable model the row owns); its output is
-  redacted before log or issue (`scripts/test-model-drift-redaction.js`).
+  redacted before the log and never reaches the issue (`scripts/test-model-drift-redaction.js`).
 - `bazaar-rank.yml` checks weekly that our own routes answer our main discovery queries
   (`scripts/bazaar-rank-monitor.js`) and keeps one issue open naming each absent query; a query
   text in the repo variable `BAZAAR_RANK_ACK` (comma list, unset by default) does not page, and a
@@ -314,6 +354,10 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   suite that reaches `src/` gets a stats store of its own from its first import (the offline pin,
   or `scripts/lib/own-stats.js` in a suite that runs on a real store); `scripts/test-stats-store-hygiene.js`
   fails a suite without one.
+- A suite that edits a module in a copy of the tree makes the copy with `copyModuleTree`
+  (`scripts/lib/tree-copy.js`): its `MODULE_TREE` lists every top-level path a `src/` module reads
+  by a relative URL. `scripts/test-module-tree-copy.js` fails a path read from `src/` that is not
+  on the list and a suite that copies `src/` on its own.
 
 ## x402 settlement ordering (CRITICAL)
 The installed `@x402/express` **runs the handler FIRST, then settles**, and only settles a

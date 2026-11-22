@@ -11,6 +11,7 @@ const G = await import("../src/tools/llm-gateway-kit.js");
 const I = await import("../src/tools/llm-images-fast-kit.js");
 const K = await import("../src/tools/llm-kit.js");
 const S = await import("../src/tools/stt-kit.js");
+const { ADDITION_COST_KEYS } = await import("../src/speech-additions.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -61,7 +62,7 @@ ok(U.upstreamCostsStatus() === "partial", "a table missing required keys reads p
   // A model gap names an id, which may carry a dotted version (gpt-6.1-terra).
   ok(g.every((x) => !/[0-9]\.[0-9]/.test(x.replace(/^models\[[^\]]*\]$/, "models[]").replace(/^openai\.gpt-[a-z0-9.-]+$/, "openai.id"))), "gaps carry names, never a value");
 }
-const FULL = { ...FAKE, models: [...FAKE.models.slice(0, 2), ...U.REQUIRED_MODEL_ROWS.map((p) => [p, { prompt: 1, completion: 2 }])], speech: { ...FAKE.speech, "mistralai/voxtral-mini-tts-3-0": 0.5 }, openai: { ...FAKE.openai, "gpt-image-2": { completion: 9, prompt: 1 }, "gpt-image-2.6-flare": { completion: 9, prompt: 1 }, "gpt-image-2.6-sunburst": { completion: 9, prompt: 1 } }, media: { ...FAKE.media, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 0.5, listedMaxUsd: 0.5 } }, fees: { ...FAKE.fees, rerankPerUnit: 5, settlementPerCall: 0.5 }, meter: { markup: 1.25 }, vendor: { x: { postRead: 0.5, userRead: 0.5, countsRequest: 0.5, trendsRequest: 0.5 }, decisions: { luna: 0.5, decisionOne: 0.5, gemini: 0.5, jev: 0.5, maxShare: 0.5 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } } };
+const FULL = { ...FAKE, models: [...FAKE.models.slice(0, 2), ...U.REQUIRED_MODEL_ROWS.map((p) => [p, { prompt: 1, completion: 2 }])], speech: { ...FAKE.speech, "mistralai/voxtral-mini-tts-3-0": 0.5, ...Object.fromEntries(ADDITION_COST_KEYS.filter(([sec]) => sec === "speech").map(([, k]) => [k, 0.5])) }, sttPerMinute: { ...FAKE.sttPerMinute, ...Object.fromEntries(ADDITION_COST_KEYS.filter(([sec]) => sec === "sttPerMinute").map(([, k]) => [k, 0.5])) }, openai: { ...FAKE.openai, "gpt-image-2": { completion: 9, prompt: 1 }, "gpt-image-2.6-flare": { completion: 9, prompt: 1 }, "gpt-image-2.6-sunburst": { completion: 9, prompt: 1 } }, media: { ...FAKE.media, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 0.5, listedMaxUsd: 0.5 } }, fees: { ...FAKE.fees, rerankPerUnit: 5, settlementPerCall: 0.5 }, meter: { markup: 1.25 }, vendor: { x: { postRead: 0.5, userRead: 0.5, countsRequest: 0.5, trendsRequest: 0.5 }, decisions: { luna: 0.5, decisionOne: 0.5, gemini: 0.5, jev: 0.5, maxShare: 0.5 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } } };
 U.setUpstreamCostsForTest(FULL);
 ok(U.upstreamCostsStatus() === "ok" && U.upstreamCostsGaps().length === 0, "a complete table reads ok");
 {

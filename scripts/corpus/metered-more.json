@@ -29,6 +29,22 @@
       }
     },
     {
+      "slug": "route-execute-mid",
+      "name": "a local slug through the mid tier",
+      "input": {
+        "slug": "hash",
+        "params": {
+          "text": "corpus",
+          "algo": "sha256"
+        }
+      },
+      "expect": {
+        "equals": {
+          "result.hex": "6b17b8fcc411a533c822a5117e33cf73fa6766739d7d36ac86dc4bea883af4fe"
+        }
+      }
+    },
+    {
       "slug": "route-execute-max",
       "name": "a local slug through the max tier",
       "input": {

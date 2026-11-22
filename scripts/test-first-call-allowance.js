@@ -348,6 +348,7 @@ try {
   const failedSettle = Bt.log.filter((l) => /SETTLE failed|settle REJECTED|CHARGED-BUT-NOT-SERVED/.test(l) && !/nonce already used/.test(l));
   ok(failedSettle.length === 0, `no settle failure or charged-but-not-served line (${failedSettle.slice(0, 2).join(" | ")})`);
   ok(Bt.log.some((l) => l.includes("[allowance] first-call grant served on hash")), "the server logs each grant without naming the wallet");
+  ok(Bt.log.filter((l) => l.includes("[allowance] first-call grant served on")).every((l) => /\) payer=[0-9a-f]{12} list=\$[0-9.]+;/.test(l)), "each grant line carries a payer hash and the list price");
   ok(!Bt.log.some((l) => l.includes("[allowance]") && /0x[0-9a-f]{40}/i.test(l)), "no allowance log line names a wallet");
   // The grant keys are on the shared store.
   const wkey = await redis.get(`sl:${PREFIX}:fca-w:${wA}`);

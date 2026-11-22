@@ -59,7 +59,9 @@ const stub = join(dir, "stub.mjs");
 writeFileSync(stub, `
 const real = globalThis.fetch;
 globalThis.fetch = async (url, init) => {
-  if (String(url).startsWith("https://openrouter.ai/api/v1/chat/completions")) {
+  // The parsed host and path, compared whole (never a substring of the URL string).
+  const at = (() => { try { return new URL(String(url)); } catch { return null; } })();
+  if (at && at.hostname === "openrouter.ai" && at.pathname === "/api/v1/chat/completions") {
     const b = JSON.parse(init?.body || "{}");
     if (b.messages?.[0]?.content === "boom") return new Response("upstream down", { status: 500 });
     return new Response(JSON.stringify({ error: { message: ${JSON.stringify(REFUSAL)}, code: 404 } }), { status: 404, headers: { "content-type": "application/json" } });

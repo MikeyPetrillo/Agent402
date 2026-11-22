@@ -254,7 +254,7 @@ await check("payments.js builds the order with the state-database store", () => 
 });
 
 // --- paging: the heartbeat step run as written (stub curl and gh), and the Worker ---
-const TITLE = "robinhoodSettler: our own relayer has been settling Robinhood sales for hours";
+const TITLE = "Scheduled check needs review: robinhood-settler";
 const wf = yamlLoad(readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"));
 const step = Object.values(wf.jobs).flatMap((j) => j.steps || []).find((s) => String(s.name || "").startsWith("Tool, upstream and facilitator failure checks"));
 const dir = mkdtempSync(join(tmpdir(), "hb-rhsettler-"));
@@ -283,8 +283,8 @@ await check("heartbeat: relayer opens one issue (word and operator endpoint only
   assert.equal(made.length, 1, JSON.stringify(calls));
   assert.equal(made[0][made[0].indexOf("--title") + 1], TITLE);
   const body = made[0][made[0].indexOf("--body") + 1];
-  assert.match(body, /robinhoodSettler\.status=relayer\./);
-  assert.match(body, /\/__operator\/tool-failures\.json/);
+  assert.match(body, /^A scheduled check reported a result that needs review\. Run: /);
+  assert.doesNotMatch(body, /robinhoodSettler|relayer|__operator/);
   assert.doesNotMatch(body, /facilitator\.example|0x[0-9a-f]{6}/i);
   calls = hb({ ...OK, robinhoodSettler: { status: "relayer" } }, TITLE);
   assert.equal(calls.filter((c) => c[1] === "create").length, 0);

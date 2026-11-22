@@ -40,8 +40,35 @@ if (!isShallow() && stored) {
   ok(toolSources["crypto-price"] === "src/tools/crypto-kit.js", `crypto-price (named by attest and feedback) maps to its kit (${toolSources["crypto-price"]})`);
 }
 
+// --- a tool and a skill pack that share a name are two pages, each with its date --
+// market-brief is a tool (src/tools/research-deep-kit.js, served under /v1) and
+// a skill pack (src/skills.js). The tool's page is dated by its kit and the
+// pack's page by the pack module; neither makes the other undated.
+{
+  const { toolSources, packSources, ambiguous } = scanToolSources();
+  ok(toolSources["market-brief"] === "src/tools/research-deep-kit.js", `the tool market-brief maps to its kit (${toolSources["market-brief"]})`);
+  ok(packSources && packSources["market-brief"] === "src/skills.js", `the pack market-brief maps to the pack module (${packSources?.["market-brief"]})`);
+  ok(!ambiguous.some((a) => a.startsWith("market-brief ")), "a pack of the same name does not make the tool's slug ambiguous");
+  ok(Object.values(toolSources).every((f) => f.startsWith("src/tools/")), "every tool slug maps to a kit under src/tools/, never to the pack module");
+  ok(packSources && Object.keys(packSources).length >= 50 && Object.values(packSources).every((f) => f === "src/skills.js"), `pack slugs map to the pack module (${Object.keys(packSources || {}).length})`);
+  const shared = Object.keys(packSources || {}).filter((s) => s in toolSources);
+  ok(shared.includes("market-brief") && shared.every((s) => toolSources[s] !== packSources[s]), `every name a tool and a pack share keeps both sources (${shared.join(", ")})`);
+  ok(ISO.test(pageLastmod("/tools/market-brief") || "") && pageLastmod("/tools/market-brief") === filesLastmod(["src/tools/research-deep-kit.js"]), `/tools/market-brief is dated by its kit (${pageLastmod("/tools/market-brief")})`);
+  ok(ISO.test(pageLastmod("/skills/market-brief") || "") && pageLastmod("/skills/market-brief") === filesLastmod(["src/skills.js"]), `/skills/market-brief is dated by the pack module (${pageLastmod("/skills/market-brief")})`);
+  // The lookup reads the two maps apart: one name, two dates.
+  _setPageDatesTable({
+    files: { "src/tools/k.js": "2026-02-01", "src/packs.js": "2026-05-01", "src/skills.js": "2026-06-01" },
+    toolSources: { same: "src/tools/k.js" },
+    packSources: { same: "src/packs.js" },
+  });
+  ok(pageLastmod("/tools/same") === "2026-02-01" && pageLastmod("/skills/same") === "2026-05-01", `seam: one name, the tool page dated by its kit and the pack page by its module (${pageLastmod("/tools/same")}, ${pageLastmod("/skills/same")})`);
+  ok(pageLastmod("/skills/unlisted") === "2026-06-01", "seam: a pack page the table does not list is dated by the module that renders every pack page");
+  ok(pageLastmod("/tools/unlisted") === null, "seam: a pack's name alone never dates a tool page");
+  _setPageDatesTable(null);
+}
+
 // --- the lookup the sitemap uses -------------------------------------------------
-ok(ISO.test(pageLastmod("/") || ""), `/ is dated from ${PAGE_SOURCES["/"].join(",")} (${pageLastmod("/")})`);
+ok(ISO.test(pageLastmod("/") || ""),`/ is dated from ${PAGE_SOURCES["/"].join(",")} (${pageLastmod("/")})`);
 ok(pageLastmod("/") === filesLastmod(PAGE_SOURCES["/"]), "a static page's lastmod is its module's date");
 ok(pageLastmod("/base") === filesLastmod(["src/market-page.js"]), "a chain page is dated by the market page module");
 ok(pageLastmod("/guides/agent-hosts") === filesLastmod(["src/guides.js"]), "a guide is dated by the guides module");

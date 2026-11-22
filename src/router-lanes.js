@@ -89,7 +89,7 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, unprovenSel
   else if (tiered.length) reason = null;
   else if (proven.eligible || provenAny.length) reason = "this seller clears the Base settlement floor, so the router pays it as a proven seller; the Base unproven lane serves sellers below that floor";
   else if (!paid.length) reason = "no paid resource is indexed for this origin";
-  else if (!onBase.length) reason = "the unproven lane is Base only, and this seller has no Base route the router can pay";
+  else if (!onBase.length) reason = "this lane summary reads Base, and this seller has no Base route the router can pay";
   else if (floorOnly.length) reason = `every Base route held back only by the floor is priced above the ${usdFigure(ceiling)} unproven ceiling (cheapest ${usdFigure(cheapest(floorOnly))})`;
   else reason = `every Base route is held back by something other than the settlement floor: ${[...new Set(onBase.map((t) => reasonLine(t.base.reason, t.base.detail)))].join("; ")}`;
   const sellerDaily = Number(unprovenSellerDailyMaxUsd) > 0 ? Number(unprovenSellerDailyMaxUsd) : null;

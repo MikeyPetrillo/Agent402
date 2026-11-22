@@ -296,7 +296,7 @@ const SCHEMA = {
   type: "object",
   required: ["query"],
   properties: {
-    query: { type: "string", description: "The research question to investigate (<= 2000 chars)." },
+    query: { type: "string", maxLength: 2000, description: "The research question to investigate (<= 2000 chars)." },
     focus: { type: "array", items: { type: "string" }, description: "Optional aspects to emphasize (<= 8)." },
     recency: { type: "string", enum: ["week", "month", "year", "any"], description: "Prefer sources from this window (default any)." },
     format: { type: "string", enum: ["markdown", "json"], description: "Response shape (default markdown report)." },

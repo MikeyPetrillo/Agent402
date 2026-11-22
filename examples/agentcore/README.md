@@ -1,8 +1,8 @@
-# Strands + Agent402 on AWS Bedrock AgentCore - runnable demo
+# Strands + Agent402 on Amazon Bedrock AgentCore - runnable demo
 
 A 30-second proof that the [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) adapter does what the [wiki](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore) claims: a [Strands Agent](https://strandsagents.com) calls Agent402 tools and the adapter handles payment underneath (proof-of-work for free tools, x402+USDC for wallet-only).
 
-This example runs **locally** with a stubbed `@strands-agents/sdk` so you can verify the wiring without an AWS account. The same code runs **unchanged on AWS Bedrock AgentCore** - only the import is swapped for the real SDK and Identity supplies the CDP credentials. See "Deploying on AgentCore" below.
+This example runs **locally** with a stubbed `@strands-agents/sdk` so you can verify the wiring without an AWS account. The same code runs **unchanged on Amazon Bedrock AgentCore** - only the import is swapped for the real SDK and Identity supplies the CDP credentials. See "Deploying on AgentCore" below.
 
 ## Run it
 
@@ -38,7 +38,7 @@ PASS: Strands → Agent402 round trip works end-to-end.
 
 ## Deploying on AgentCore
 
-To run the same agent on AWS Bedrock AgentCore, swap two things:
+To run the same agent on Amazon Bedrock AgentCore, swap two things:
 
 1. **Remove the SDK stub** at the top of `run.js`. Install the real Strands SDK with `npm install @strands-agents/sdk` (the adapter already declares it).
 2. **For wallet-only tools** (paid in USDC, not free via PoW), set `freeOnly: false` in `agent402Tools({...})` and pass the `fetch` AgentCore Payments hands you - it signs with the CDP key in Identity:
@@ -66,6 +66,6 @@ That's the whole port. AgentCore handles the CDP credentials, CloudWatch observa
 
 ## See also
 
-- [Wiki: AWS Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore) - the 5-minute integration recipe
+- [Wiki: Amazon Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore) - the 5-minute integration recipe
 - [Adapter source](../../adapters/strands) - the npm package this demo uses
 - [`examples/agentcore-tollbooth/`](../agentcore-tollbooth) - reverse-flow demo: a Strands agent **paying** a tollbooth-gated endpoint over x402 (agents paying agents)

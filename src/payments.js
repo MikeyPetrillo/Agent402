@@ -1,3 +1,4 @@
+import { usdToBaseUnits } from "./base-units.js";
 import { handlerInputOf } from "./handler-input.js";
 import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
 import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/express";
@@ -43,6 +44,7 @@ import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, t
 import { lateSettleHolder, OWED_ELSEWHERE, ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, releasingClaimsOnRefusal, settledRefundOwedResult, txServedElsewhere } from "./settlement-claims.js";
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
+import { returningWalletEnabled, returningWalletRouteRefusal, returningWalletQuote, proveReturningWallet, returningWalletSettleDecision, noteReturningWalletAccept, RETURNING_WALLET_MISMATCH } from "./returning-wallet.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, settleSentWhileConnected, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -553,11 +555,11 @@ export const isIdentityBoundRoute = (def) =>
 // EXEC_TIERS so the next tier cannot repeat that).
 // Router tiers only - the subset whose Algorand revenue is chain-matched to
 // the AVM spending wallet (see avmPayToFor).
-export const AVM_SELF_FUNDING_SLUGS = new Set(["route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro"]);
+export const AVM_SELF_FUNDING_SLUGS = new Set(["route-execute", "route-execute-plus", "route-execute-mid", "route-execute-max", "route-execute-pro"]);
 const AVM_UPSTREAM_BUYER_ADDRESS = (process.env.ALGORAND_UPSTREAM_BUYER_ADDRESS || "").trim();
 
 export const SELF_FUNDING_SLUGS = new Set([
-  "route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro",
+  "route-execute", "route-execute-plus", "route-execute-mid", "route-execute-max", "route-execute-pro",
 ]);
 const UPSTREAM_BUYER_ADDRESS = (process.env.X402_UPSTREAM_BUYER_ADDRESS || "").trim();
 
@@ -587,7 +589,7 @@ export function parseNetworkPremiums(raw = process.env.NETWORK_PRICE_PREMIUMS ||
       console.warn(`[payments] NETWORK_PRICE_PREMIUMS entry ignored (malformed or negative): "${pair}"`);
       continue;
     }
-    out.set(net, Math.round(usd * 1e6)); // micro-dollars
+    out.set(net, Number(usdToBaseUnits(usd, 6))); // micro-dollars, scaled as a minted amount is
   }
   return out;
 }
@@ -640,7 +642,7 @@ export function priceWithPremium(price, network, premiums = NETWORK_PREMIUMS) {
   if (!extra) return price;
   const m = /^\$(\d+(?:\.\d+)?)$/.exec(String(price));
   if (!m) return price;
-  const micro = Math.round(Number(m[1]) * 1e6) + extra;
+  const micro = Number(usdToBaseUnits(m[1], 6)) + extra;
   return "$" + (micro / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
@@ -707,8 +709,32 @@ export function acceptsForItem(item, rails) {
   // names another flat tier's model at that tier's price (price by model), and
   // the handler serves that tier only when the stash covers it.
   const quoteFn = typeof item.quote === "function" ? item.quote : typeof item.tierQuote === "function" ? item.tierQuote : null;
-  const priceOf = (caip2) => {
-    if (!quoteFn) return priceForNetwork(item.price, caip2);
+  // THE RETURNING-WALLET PRICE (src/returning-wallet.js; off unless its
+  // switch is on). On an eligible flat route the x402 EVM `exact` accept is
+  // priced per request: list, or the discount when the request's wallet hint
+  // names a qualifying wallet the request proves it holds (its
+  // X-Agent402-Wallet-Proof) and, on the paid request, the payment is signed
+  // from that wallet. Decided once per request; every other accept stays a
+  // fixed list price, and with the switch off every accept does.
+  const loyal = !quoteFn && returningWalletEnabled() && returningWalletRouteRefusal(item) === null;
+  const priceOf = (caip2, { exactEvm = false } = {}) => {
+    if (!quoteFn && !(loyal && exactEvm)) return priceForNetwork(item.price, caip2);
+    if (!quoteFn) return async (ctx) => {
+      const listQuote = priceForNetwork(item.price, caip2);
+      try {
+        const req = ctx?.adapter?.req;
+        // The hint is read only once the request proves that wallet.
+        await proveReturningWallet(req, item);
+        const q = returningWalletQuote(req, item);
+        if (q?.applied !== true || typeof q.price !== "string") return listQuote;
+        // The chain's premium and floor apply to the discounted price as to
+        // any other; a chain at its floor quotes the list amount, and the 402
+        // says which chains did (returningWalletPrice.atListOn).
+        const quote = priceForNetwork(q.price, caip2);
+        noteReturningWalletAccept(req, caip2, quote !== listQuote);
+        return quote;
+      } catch { return listQuote; }
+    };
     return async (ctx) => {
       let usd = null;
       try {
@@ -736,7 +762,7 @@ export function acceptsForItem(item, rails) {
   // A tool may name the only networks it can serve (`onlyNetworks`): offering
   // a rail its handler cannot use would take a payment it then has to refuse.
   const allowed = Array.isArray(item.onlyNetworks) && item.onlyNetworks.length ? new Set(item.onlyNetworks) : null;
-  const evm = evmCaip2.filter((caip2) => !allowed || allowed.has(caip2)).map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 }));
+  const evm = evmCaip2.filter((caip2) => !allowed || allowed.has(caip2)).map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2, { exactEvm: true }), network: caip2 }));
   // `upto` rides ALONGSIDE `exact` on the gated networks, at the identical
   // price and payTo. The scheme is chosen per payment-option, not per
   // registration, so dual-advertising means emitting a second option - which is
@@ -2674,6 +2700,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       count: (network, reason, held) => toolFailureMonitor().noteFundingRefusal({ network, reason, held }),
     });
   }
+  // A discounted request (src/returning-wallet.js) settles only for the
+  // wallet the discount was given to: checked with the other hooks that can
+  // abort a settle, before the authorization claim.
+  registerReturningWalletSettleHook(server);
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
@@ -3323,6 +3353,21 @@ export function registerWalletBlocklistPayerEnrichment(server) {
   });
 }
 
+/** The returning-wallet settle check (src/returning-wallet.js): a discounted
+ *  request settles only for the wallet it was quoted for. A throw refuses the
+ *  settle too (the buyer is not charged). */
+export function registerReturningWalletSettleHook(server) {
+  server.onBeforeSettle(refusingHook(HOOK_NAMES.returningWallet, (ctx) => {
+    const d = returningWalletSettleDecision(ctx);
+    if (!d) return;
+    console.warn(`[payments] returning-wallet price refused before settlement: the payer is not the wallet it was quoted for (${ctx?.requirements?.network})`);
+    return { abort: true, reason: d.reason, message: "This payment was signed for a returning-wallet price by a wallet other than the one it was quoted for, so it was not settled. Nothing was charged; request the resource again for the list price." };
+  }, {
+    reason: RETURNING_WALLET_MISMATCH,
+    message: "The returning-wallet check could not run for this payment, so it was not settled. Nothing was charged; retry shortly.",
+  }));
+}
+
 // A throw refuses the settlement (the buyer is not charged): a payer the
 // blocklist could not be read for is never settled.
 export function registerWalletBlocklistHook(server) {
@@ -3334,7 +3379,7 @@ export function registerWalletBlocklistHook(server) {
     return {
       abort: true,
       reason: "wallet_blocked",
-      message: "This wallet is blocked for terms-of-service violations (see https://agent402.tools/terms). Contact mike@agent402.tools.",
+      message: "This wallet is blocked for terms-of-service violations (see https://agent402.tools/terms). Contact help@agent402.tools.",
     };
   }, {
     reason: WALLET_CHECK_FAILED,
@@ -3886,6 +3931,23 @@ export async function noteSvmRequote(ctx, split = activeSvmSplit) {
   } catch { return null; }
 }
 
+/**
+ * A Solana settle refused because the transaction's recent blockhash is no
+ * longer valid (the call ran past its life): the buyer's 402 names the class
+ * and says to build on a fresh blockhash (src/verify-hint.js). Reads a thrown
+ * failure (`ctx.error`) and a graceful failed receipt (`ctx.result`). True
+ * when a hint was left. Never throws.
+ */
+export async function noteSvmStaleBlockhash(ctx) {
+  try {
+    const network = ctx?.requirements?.network;
+    const said = [ctx?.error?.errorReason, ctx?.error?.errorMessage, ctx?.error?.message, ctx?.result?.errorReason, ctx?.result?.errorMessage].filter((v) => typeof v === "string").join(" ");
+    const { isSvmStaleBlockhash, svmStaleBlockhashHint, rememberHint } = await import("./verify-hint.js");
+    if (!ctx?.paymentPayload || !isSvmStaleBlockhash(network, said)) return false;
+    return Boolean(rememberHint(ctx.paymentPayload, svmStaleBlockhashHint()));
+  } catch { return false; }
+}
+
 /** The facilitator a settle or verify on `network` went to, as logs and
  *  telemetry name it: the error's own label, the Solana split's listed
  *  facilitator for a request routed there, else the network's first-tried
@@ -4096,11 +4158,12 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   // without this hook the server log says NOTHING (the 2026-07-16 Robinhood
   // rejection left zero trace). afterSettle runs on graceful failures too, so
   // it closes the gap.
-  server.onAfterSettle((ctx) => {
+  server.onAfterSettle(async (ctx) => {
     const result = ctx?.result;
     if (!result || result.success !== false) return;
     const via = settleFacilitatorOf(ctx);
     noteSettleFacilitator(ctx, via);
+    await noteSvmStaleBlockhash(ctx); // before the 402 is written, so it carries the hint
     console.warn(
       `[payments] facilitator settle REJECTED by ${via} on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${result.errorReason || result.errorMessage || "no reason given"}`
@@ -4122,6 +4185,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     noteSettleFacilitator(ctx, via);
     // A Solana settle refused before broadcast (no transaction named): the
     // next quote for this request avoids that facilitator (the split).
+    await noteSvmStaleBlockhash(ctx);
     if (isPreBroadcastSettleRejection(ctx?.error)) await noteSvmRequote(ctx);
     // A Circle Gateway batched payment never reaches the chain recovery, the
     // settle fallback, the outage read or our relayer: a GatewayWalletBatched

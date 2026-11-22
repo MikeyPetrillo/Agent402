@@ -529,7 +529,7 @@ const DERIVATIVES_TOOLS_RAW = [
       input: { coin: "BTC", limit: 24 },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Perp ticker, e.g. BTC, ETH, SOL (case-insensitive)." },
+          coin: { type: "string", maxLength: 32, description: "Perp ticker, e.g. BTC, ETH, SOL (case-insensitive)." },
           limit: { type: "number", description: "Hourly history points to return (default 24, max 500)." },
         },
         required: ["coin"],
@@ -664,7 +664,7 @@ const DERIVATIVES_TOOLS_RAW = [
       input: { limit: 10 },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Optional perp ticker for a single market (e.g. BTC)." },
+          coin: { type: "string", maxLength: 32, description: "Optional perp ticker for a single market (e.g. BTC)." },
           limit: { type: "number", description: "Rows when ranking (default 20, max 500)." },
         },
         required: [],
@@ -718,7 +718,7 @@ const DERIVATIVES_TOOLS_RAW = [
       input: { coin: "ETH", interval: "1h", limit: 24 },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Perp ticker, e.g. BTC, ETH, SOL." },
+          coin: { type: "string", maxLength: 32, description: "Perp ticker, e.g. BTC, ETH, SOL." },
           interval: { type: "string", description: "Candle interval (default 1h): 1m 3m 5m 15m 30m 1h 2h 4h 8h 12h 1d 3d 1w 1M." },
           limit: { type: "number", description: "Candles to return (default 100, max 500)." },
         },
@@ -782,7 +782,7 @@ const DERIVATIVES_TOOLS_RAW = [
       input: { coin: "BTC", depth: 5 },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Perp ticker, e.g. BTC, ETH, SOL." },
+          coin: { type: "string", maxLength: 32, description: "Perp ticker, e.g. BTC, ETH, SOL." },
           depth: { type: "number", description: "Levels per side to return (default 10, max 20)." },
         },
         required: ["coin"],
@@ -851,7 +851,7 @@ const DERIVATIVES_TOOLS_RAW = [
       input: { coin: "BTC" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Perp ticker, e.g. BTC, ETH, SOL." },
+          coin: { type: "string", maxLength: 32, description: "Perp ticker, e.g. BTC, ETH, SOL." },
         },
         required: ["coin"],
       },
@@ -966,7 +966,7 @@ const DERIVATIVES_TOOLS_RAW = [
       input: { dex: "xyz", limit: 5 },
       inputSchema: {
         properties: {
-          dex: { type: "string", description: "HIP-3 dex name, e.g. xyz (list them with perp-dexs)." },
+          dex: { type: "string", maxLength: 12, description: "HIP-3 dex name, e.g. xyz (list them with perp-dexs)." },
           limit: { type: "number", description: "Rows to return (default 50, max 500)." },
           sort: { type: "string", description: "volume (default), openInterest, funding, change, or coin." },
         },
@@ -1032,7 +1032,7 @@ const DERIVATIVES_TOOLS_RAW = [
       input: { dex: "xyz", limit: 5 },
       inputSchema: {
         properties: {
-          dex: { type: "string", description: "HIP-3 dex name, e.g. xyz (list them with perp-dexs)." },
+          dex: { type: "string", maxLength: 12, description: "HIP-3 dex name, e.g. xyz (list them with perp-dexs)." },
           limit: { type: "number", description: "Per-coin cap rows to return, largest first (default 50, max 500)." },
         },
         required: ["dex"],
@@ -1097,7 +1097,7 @@ const DERIVATIVES_TOOLS_RAW = [
       input: { currency: "BTC" },
       inputSchema: {
         properties: {
-          currency: { type: "string", description: "BTC (default), ETH, or another Deribit currency code." },
+          currency: { type: "string", maxLength: 8, description: "BTC (default), ETH, or another Deribit currency code." },
         },
         required: [],
       },
@@ -1182,7 +1182,7 @@ const DERIVATIVES_TOOLS_RAW = [
       input: { currency: "BTC", limit: 20 },
       inputSchema: {
         properties: {
-          currency: { type: "string", description: "BTC (default) or ETH." },
+          currency: { type: "string", maxLength: 8, description: "BTC (default) or ETH." },
           expiry: { type: "string", description: "Deribit expiry label like 26DEC26; omit for the nearest expiry." },
           type: { type: "string", description: "Optional: call or put." },
           limit: { type: "number", description: "Rows to return (default 100, max 500)." },
@@ -1255,7 +1255,7 @@ const DERIVATIVES_TOOLS_RAW = [
       inputSchema: {
         properties: {
           instrument: { type: "string", description: "Deribit instrument name, e.g. BTC-PERPETUAL or ETH-27MAR26-3000-P." },
-          currency: { type: "string", description: "Alternative to instrument: BTC or ETH picks the nearest-expiry at-the-money option." },
+          currency: { type: "string", maxLength: 8, description: "Alternative to instrument: BTC or ETH picks the nearest-expiry at-the-money option." },
           type: { type: "string", description: "With currency: call (default) or put." },
         },
         required: [],

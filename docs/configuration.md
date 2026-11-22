@@ -12,11 +12,11 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1077 variables in 110 groups.
+1095 variables in 113 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -150,7 +150,7 @@ may still clamp it, and the read site is the reference.
 | `BASE_NOTIFICATIONS_API_KEY` | Base notifications API key (a credential, set on the host); /health reports only whether it is set. |  | `src/server.js` |
 | `BASE_RPCS` | Base RPC endpoints. |  | `src/leaderboard.js` |
 | `BASE_SEPOLIA_DENIM_ACTIVATION_TIMESTAMP` | Base sepolia denim activation timestamp. |  | `src/chain-block-time.js` |
-| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/server.js` and 2 more |
+| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/price-webhooks.js` and 3 more |
 
 ## BAZAAR
 
@@ -211,6 +211,8 @@ may still clamp it, and the read site is the reference.
 | `CDP_API_KEY_ID` | Coinbase Developer Platform key id: settlement through its facilitator and Bazaar discovery. |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_API_KEY_SECRET` | Coinbase Developer Platform key secret (a credential, set on the host). |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_FACILITATOR_URL` | Cdp facilitator URL. |  | `src/payments.js` |
+| `CDP_SQL_API_KEY_ID` | Coinbase Developer Platform key id for the onchain SQL reads only (query run and schema); with it or its secret unset, those reads sign with CDP_API_KEY_ID. Settlement always uses the main key. |  | `src/tools/cdp-kit.js` |
+| `CDP_SQL_API_KEY_SECRET` | Secret of the onchain SQL key (a credential, set on the host); used only together with CDP_SQL_API_KEY_ID. |  | `src/tools/cdp-kit.js` |
 | `CDP_SQL_SEND_GAP_MS` | Spacing between queries one replica sends to the onchain query service, in milliseconds (at least 100; multiplied by RATE_LIMIT_REPLICAS, and the result is held at 2500; a send waits for its slot up to 3 seconds or four of these gaps, whichever is longer). |  | `src/tools/cdp-kit.js` |
 
 ## CELO
@@ -577,7 +579,7 @@ may still clamp it, and the read site is the reference.
 | `INFLIGHT_COVER_READS_DAILY_MAX` | Reads a day that reach the capped on-chain data host (unset: a fifth of HARDCAP_ALCHEMY_CALLS; never over half of it). |  | `src/upstream-hard-caps.js` |
 | `INFLIGHT_COVER_READ_GAP_MS` | A wallet's reads are at least this far apart; inside it its last read is judged as it is (1000 to 10000). |  | `src/inflight-cover.js` |
 | `INFLIGHT_COVER_SHARED_WINDOW_MS` | Inflight cover shared window, in milliseconds. |  | `src/inflight-cover.js` |
-| `INFLIGHT_COVER_UNREAD_MAX` | Inflight cover unread maximum. |  | `src/inflight-cover.js` |
+| `INFLIGHT_COVER_UNREAD_MAX` | Inflight cover unread maximum. |  | `src/changelog.js`, `src/inflight-cover.js` |
 | `INFLIGHT_COVER_UNREAD_PAID_MAX` | Inflight cover unread paid maximum. |  | `src/inflight-cover.js` |
 
 ## JUDGE
@@ -623,7 +625,7 @@ may still clamp it, and the read site is the reference.
 | `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Leaderboard log cache maximum rows. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_REORG_BLOCKS` | Leaderboard log cache reorg blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_SEGMENT_BLOCKS` | Leaderboard log cache segment blocks. |  | `src/leaderboard-log-cache.js` |
-| `LEADERBOARD_REFRESH_MS` | Leaderboard refresh, in milliseconds. |  | `src/refresh-cadence.js` |
+| `LEADERBOARD_REFRESH_MS` | Leaderboard refresh, in milliseconds. |  | `src/leaderboard.js`, `src/refresh-cadence.js` |
 | `LEADERBOARD_SNAPSHOT_FILE` | Leaderboard snapshot file path. | `/data/leaderboard-snapshot.json` | `src/leaderboard.js` |
 | `LEADERBOARD_WINDOW_SECONDS` | Leaderboard window, in seconds. |  | `src/leaderboard.js` |
 
@@ -725,6 +727,15 @@ may still clamp it, and the read site is the reference.
 | `NETWORK_PRICE_FLOORS` | Network price floors. |  | `src/network-floors.js` |
 | `NETWORK_PRICE_PREMIUMS` | Network price premiums. |  | `src/payments.js` |
 
+## OCR
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `OCR_INIT_TIMEOUT_MS` | OCR init timeout, in milliseconds. |  | `src/tools/ocr-kit.js` |
+| `OCR_RUN_MAX_MS` | Longest one image may hold an OCR engine, in milliseconds. | `120000` | `src/tools/ocr-kit.js` |
+| `OCR_TESSDATA_DIR` | OCR tessdata directory. |  | `src/tools/ocr-kit.js` |
+| `OCR_TURN_MS` | Time an image keeps its OCR engine once another caller's image waits for it, in milliseconds. | `30000` | `src/tools/ocr-kit.js` |
+
 ## ONCHAIN
 
 | Variable | Purpose | Default | Read in |
@@ -743,7 +754,7 @@ may still clamp it, and the read site is the reference.
 | `OPENROUTER_LOW_KEY_LIMIT_FRACTION` | Openrouter low key limit fraction. |  | `src/tools/llm-gateway-kit.js` |
 | `OPENROUTER_MANAGEMENT_KEY` | Model aggregator management key, read only for the credits low-water alarm. |  | `src/tools/llm-gateway-kit.js` |
 | `OPENROUTER_PROVIDER_SORT` | Openrouter provider sort. | `on` | `src/tools/llm-gateway-kit.js` |
-| `OPENROUTER_TTS_ENABLED` | Openrouter speech enabled (switch). |  | `src/server.js`, `src/tools/llm-gateway-kit.js` |
+| `OPENROUTER_TTS_ENABLED` | Openrouter speech enabled (switch). |  | `src/changelog.js`, `src/server.js`, `src/tools/llm-gateway-kit.js` |
 
 ## OUR
 
@@ -831,8 +842,21 @@ may still clamp it, and the read site is the reference.
 | `POW_DB_PATH` | Proof-of-work database path. |  | `src/pow.js` |
 | `POW_DIFFICULTY` | Proof-of-work difficulty in leading zero bits (8 to 28). |  | `src/pow.js` |
 | `POW_PG_REFRESH_MS` | Proof-of-work Postgres refresh, in milliseconds. |  | `src/pow.js` |
-| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/discovery-refusals.js`, `src/hangup-forgiveness.js`, `src/payments.js` and 8 more |
+| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/changelog.js`, `src/discovery-refusals.js`, `src/first-call-allowance.js` and 11 more |
 | `POW_TTL_SECONDS` | Proof-of-work lifetime, in seconds. |  | `src/pow.js` |
+
+## PRICE
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `PRICE_MATCH_MAX_USD` | Price match maximum, in USD. | `25` | `src/leaderboard.js` |
+| `PRICE_WEBHOOKS_FILE` | File for price webhook registrations, the kept list prices and queued deliveries. | `/data/price-webhooks.json` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_DELIVERIES` | Runtime switch for outbound price webhook deliveries (on; off: registrations and removals keep working and queued deliveries wait). |  | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_DELIVERY_INTERVAL_MS` | How often due price webhook deliveries are sent, in milliseconds. | `60000` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_LIFETIME_DAYS` | How long a price webhook registration lasts, in days; registering the same URL again from the same payer renews it. | `90` | `src/changelog.js`, `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_MAX` | Number of price webhook registrations from which a new one first removes those whose deliveries fail; twice this number is the most the server keeps. | `5000` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_MAX_PER_PAYER` | Most price webhook registrations one registrant (the payer; in FREE_MODE the client address) may hold. | `25` | `src/changelog.js`, `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_SIGNING_KEY` | Key the price webhook secrets and registrant digests are derived from (unset: POW_SECRET; neither set: a registration answers 503 and nothing is stored or sent). Never change it, or POW_SECRET while it is the fallback, once subscriptions exist: every secret and digest changes with it. |  | `src/changelog.js`, `src/price-webhooks.js` |
 
 ## PROGRAMMATIC
 
@@ -902,7 +926,7 @@ may still clamp it, and the read site is the reference.
 | `REFERRAL_MERCHANT_ID` | This merchant's id on that contract (a number): a payment counts only when routed to it. |  | `src/referral-gate.js` |
 | `REFERRAL_MIN_NET_BPS` | Default:<bps>,<slug>:<bps>: the least share of the price a sale must bring; under it counts toward the slug's stop (unset: 7000 for a model-backed tool, half the expected net for any other). |  | `src/referral-gate.js` |
 | `REFERRAL_OVERSIZE_ALERT` | Answers over REFERRAL_MAX_ANSWER_BYTES (413, each an unpaid tool run) from one client address in the unsettled-run window before the status word reads attention; an alarm only, nobody is refused for it. |  | `src/referral-gate.js` |
-| `REFERRAL_OWN_FAULT_COOLDOWN_MS` | For this long, answered 503 before the handler; then one call at a time probes. |  | `src/referral-gate.js` |
+| `REFERRAL_OWN_FAULT_COOLDOWN_MS` | For this long, answered 503 before the handler; then one call at a time probes, and the hold ends when no refusal has followed for this long plus the time one probe can take. |  | `src/referral-gate.js` |
 | `REFERRAL_OWN_FAULT_MAX` | Refusals of this server's own request in a row before calls are held... |  | `src/referral-gate.js` |
 | `REFERRAL_PARITY_GRANDFATHERED` | Comma list of slugs served although the public route gives them for less (default: none; each is named in a warning at every boot). |  | `src/referral-gate.js` |
 | `REFERRAL_PAYER_INFLIGHT_MAX` | One payer's paid calls in flight before a 429. |  | `src/referral-gate.js` |
@@ -918,7 +942,7 @@ may still clamp it, and the read site is the reference.
 | `REFERRAL_SETUP_URL` | The network's setup document (https), echoed in the 402. |  | `src/referral-gate.js` |
 | `REFERRAL_SHORT_NET_MAX` | Sales on one slug under that floor before new calls on it answer 503; a model-backed tool stops at one (0: never). |  | `src/referral-gate.js` |
 | `REFERRAL_SIGNER_KEY` | Dedicated key that signs referral facilitator requests and holds no funds (a credential, set on the host). |  | `src/referral-gate.js`, `src/router-pool.js` |
-| `REFERRAL_SLUGS` | Comma list of catalog slugs also served under /ref/<slug> (one of the eight settings the referral gate requires). |  | `src/referral-gate.js` |
+| `REFERRAL_SLUGS` | Comma list of catalog slugs also served under /ref/<slug> (one of the eight settings the referral gate requires). |  | `src/referral-gate.js`, `src/returning-wallet.js` |
 | `REFERRAL_STORE_COOLDOWN_MS` | A store hold lasts this long (doubling to 10 minutes while failures stay in the window), then a probe write must stand. |  | `src/referral-gate.js` |
 | `REFERRAL_STORE_WINDOW_MS` | The window of intent-write failures (refused, or late): two in it hold paid calls before the handler. |  | `src/referral-gate.js` |
 | `REFERRAL_STORE_WRITE_MS` | An intent write to the settlement store that has not answered by then is given up (503, nothing settled). |  | `src/referral-gate.js` |
@@ -964,6 +988,15 @@ may still clamp it, and the read site is the reference.
 | `RERANK_CANDIDATES` | Rerank candidates. | `5` | `src/discovery-rerank.js` |
 | `RERANK_CONSIDER_CONFIDENCE` | Rerank consider confidence. | `0.6` | `src/discovery-rerank.js` |
 | `RERANK_MAX_ROWS` | Rerank maximum rows. | `40` | `src/discovery-rerank.js` |
+
+## RETURNING
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `RETURNING_WALLET_DISCOUNT_BPS` | Returning-wallet discount in basis points (default 1000; at most 5000). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_MIN_PAID_DAYS` | Distinct paid days a wallet needs inside the window for the returning-wallet price (default 3). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_PRICE` | Set to on to quote a qualifying wallet named in the X-Agent402-Wallet header, and proven in X-Agent402-Wallet-Proof, a lower price on eligible routes' x402 EVM exact accepts (off by default; a proof names the host name of BASE_URL). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_WINDOW_DAYS` | Window, in days, the returning-wallet price counts paid days over (default 30). |  | `src/returning-wallet.js` |
 
 ## REVENUE
 
@@ -1179,6 +1212,8 @@ may still clamp it, and the read site is the reference.
 | `SOR_CHAIN_REFUSAL_OURS_MIN` | Router chain refusal ours minimum. |  | `src/x402-buyer.js` |
 | `SOR_CHAIN_REFUSAL_WINDOW_MS` | Router chain refusal window, in milliseconds. |  | `src/x402-buyer.js` |
 | `SOR_EVM_CHAINS` | Router EVM chains. |  | `src/evm-buyer-chains.js` |
+| `SOR_EVM_UNPROVEN_CHAINS` | EVM chains other than Base on which the router tries a seller below the settlement floor under the unproven ceiling (comma separated names or CAIP-2 ids; unset = Base only). |  | `src/base-unproven.js`, `src/changelog.js` |
+| `SOR_EVM_UNPROVEN_MAX_USD` | Router unproven ceiling per call on the chains SOR_EVM_UNPROVEN_CHAINS lists, in USD (default 0.01; 0 or off switches them off). |  | `src/base-unproven.js`, `src/changelog.js` |
 | `SOR_EXTERNAL_DEADLINE_MS` | Router external deadline, in milliseconds. |  | `src/tools/route-execute.js` |
 | `SOR_EXTERNAL_ENABLED` | Router external enabled (switch). |  | `src/server.js` |
 | `SOR_MAX_CANDIDATES` | Router maximum candidates. | `3` | `src/tools/route-execute.js` |
@@ -1362,7 +1397,7 @@ may still clamp it, and the read site is the reference.
 | --- | --- | --- | --- |
 | `TRAFFIC_CRAWLER_PATHS` | Traffic crawler paths. | `25` | `src/traffic-classifier.js` |
 | `TRAFFIC_DIR` | Traffic directory. |  | `src/traffic-classifier.js` |
-| `TRAFFIC_HASH_SALT` | Traffic hash salt. |  | `src/traffic-classifier.js` |
+| `TRAFFIC_HASH_SALT` | Traffic hash salt. |  | `src/first-call-allowance.js`, `src/traffic-classifier.js` |
 | `TRAFFIC_PERSIST_MS` | Traffic persist, in milliseconds. | `60` | `src/traffic-classifier.js` |
 | `TRAFFIC_RETENTION_DAYS` | Traffic retention, in days. |  | `src/traffic-classifier.js` |
 | `TRAFFIC_WINDOW_MS` | Traffic window, in milliseconds. | `10` | `src/traffic-classifier.js` |
@@ -1577,13 +1612,12 @@ may still clamp it, and the read site is the reference.
 | `MONITOR_SCHEDULER` | off stops the scheduler that runs recurring monitors. |  | `src/server.js` |
 | `MPPSCAN_API_URL` | Mppscan API URL. | `https://www.mppscan.com/api/trpc/servers.list` | `src/mpp-index.js` |
 | `MPPSCAN_DISCOVERY_URL` | Mppscan discovery URL. | `https://www.mppscan.com/` | `src/mpp-index.js` |
+| `NAMED_AUDIO_MODELS` | Comma list of the named speech and transcription model ids to serve beside the default chains, or all (unset: none). Each also needs its cost row, inside the route's margin bound. |  | `src/changelog.js`, `src/speech-additions.js` |
 | `NETWORKS_VERIFY_AGE_MS` | Networks verify age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `NEW_CATALOG_QUOTE_BURST` | New catalog quote burst. | `60` | `src/x402-index.js` |
 | `NEYNAR_API_KEY` | Neynar API key (a credential, set on the host). |  | `src/tools/farcaster-social-kit.js`, `src/tools/onchain-identity-kit.js` |
 | `NODE_ENV` | Runtime mode; production turns on production-only behavior such as the index crawlers and the tweet queue. |  | `src/mcp-loopback.js`, `src/model-catalog.js`, `src/posthog.js` and 13 more |
 | `NVD_API_KEY` | Nvd API key (a credential, set on the host). |  | `src/tools/cve-kit.js` |
-| `OCR_INIT_TIMEOUT_MS` | OCR init timeout, in milliseconds. |  | `src/tools/ocr-kit.js` |
-| `OCR_TESSDATA_DIR` | OCR tessdata directory. |  | `src/tools/ocr-kit.js` |
 | `OFFICE_QUEUE_MAX` | Office queue maximum. |  | `src/tools/office-pool.js` |
 | `OFFICE_WORKERS_MAX` | Office workers maximum. |  | `src/tools/office-pool.js` |
 | `OPENAI_API_KEY` | Openai API key (a credential, set on the host). |  | `src/tools/embed-kit.js`, `src/tools/image-gen-kit.js`, `src/tools/judge-kit.js` and 4 more |
@@ -1599,7 +1633,6 @@ may still clamp it, and the read site is the reference.
 | `PDF_QUEUE_MAX` | PDF queue maximum. |  | `src/tools/pdf-offthread.js` |
 | `PDF_WORKERS_MAX` | PDF workers maximum. |  | `src/tools/pdf-offthread.js` |
 | `PORT` | TCP port the server listens on (0 asks the kernel for a free one; the bound port is printed in the listening line). | `3000` | `src/server.js` |
-| `PRICE_MATCH_MAX_USD` | Price match maximum, in USD. | `25` | `src/leaderboard.js` |
 | `QUOTE_DRIFT_FACTOR` | Quote drift factor. |  | `src/x402-index.js` |
 | `QUOTE_MAX_AGE_MS` | Quote maximum age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `RAILS_TEST_GRADUATE` | Rails test graduate. |  | `src/rails.js` |

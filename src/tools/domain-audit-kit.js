@@ -166,7 +166,8 @@ export function dnsHostFor(nameservers) {
   };
 }
 export async function probeDnsPosture(domain) {
-  assertQueryableName(domain);
+  // The name the filter judged (its canonical form) is the name asked for.
+  domain = assertQueryableName(domain);
   // The NS lookup runs beside the other lookups: none of them reads it.
   const [nsR, caaR, sts, rpt, bimi, sec] = await Promise.all([
     (async () => { try { const r = await Promise.race([dnsPromises.resolveNs(domain), new Promise((_, rj) => setTimeout(() => rj(new Error("DNS timeout")), DNS_TIMEOUT_MS))]); return { ok: true, records: r }; } catch (e) { return { ok: false, error: String(e?.code || e?.message || e) }; } })(),

@@ -15,7 +15,8 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 // --- resolver stubs (installed before the kits load) ------------------------------
 const queried = [];
-const answer = async (name) => { queried.push(String(name)); const e = new Error("stub"); e.code = "ENOTFOUND"; throw e; };
+const canned = new Map(); // name -> the records the stub answers with
+const answer = async (name) => { queried.push(String(name)); if (canned.has(String(name))) return canned.get(String(name)); const e = new Error("stub"); e.code = "ENOTFOUND"; throw e; };
 dns.promises.resolve = answer; dns.promises.lookup = answer; dns.promises.resolveTxt = answer;
 dns.promises.resolveMx = answer; dns.promises.resolveNs = answer; dns.promises.resolveCaa = answer;
 dnsP.Resolver.prototype.resolve = answer;
@@ -23,7 +24,7 @@ dnsP.Resolver.prototype.resolve4 = answer; dnsP.Resolver.prototype.resolve6 = an
 dnsP.lookup = answer; dnsP.resolveMx = answer;
 syncBuiltinESMExports();
 
-const { internalNameReason, assertQueryableName } = await import("../src/tools/dns-name-filter.js");
+const { internalNameReason, assertQueryableName, canonicalDnsName } = await import("../src/tools/dns-name-filter.js");
 const { dnsLookup } = await import("../src/tools/dns.js");
 const { NETWORK_TOOLS } = await import("../src/tools/network-kit.js");
 const { NETWORK_TOOLS2 } = await import("../src/tools/network-kit2.js");
@@ -47,6 +48,29 @@ let threw = null;
 try { assertQueryableName("x.internal"); } catch (e) { threw = e; }
 ok(threw?.statusCode === 400, "assertQueryableName throws a 400");
 
+// --- one name: every spelling a resolver reads as an internal name is judged as that name ---
+// (What a resolver puts on the wire for each was read from a local stub
+// server: a trailing dot is the root, case is ignored, a name written outside
+// ASCII is mapped to ASCII first, and a backslash is an escape.)
+const spellings = [
+  "db.internal..", "db.internal...", "redis..", "redis...", ".redis", "..redis", "DB.INTERNAL", "Printer.Local.", " db.internal ", "\tdb.internal.\n",
+  "db..internal", ".db.internal", "x.home..arpa", "1.0.0.10..in-addr.arpa", "1.0.0.10.IN-ADDR.ARPA..",
+  "db.intern\\097l", "db\\.internal", "redis\\.", // a resolver's escapes
+  "\uff44\uff42.internal", "db\u3002internal", "x.db\u3002internal", "db.internal\u3002", "db.\u24d8nternal", "db.internal\u200b", "db.inter\u00adnal", "x.\uff2c\uff2f\uff23\uff21\uff2c", // mapped to ASCII by the resolver
+  "evil.example@\uff44\uff42.internal", "b\u00fccher.example/x.internal", "", " ", "...",
+];
+for (const n of spellings) ok(internalNameReason(n) !== null, `refused in every spelling: ${JSON.stringify(n)}`);
+const canon = [["example.com.", "example.com"], ["Example.COM..", "example.com"], [" example.com ", "example.com"], ["b\u00fccher.example", "xn--bcher-kva.example"], ["xn--bcher-kva.example", "xn--bcher-kva.example"], ["_dmarc.Example.com", "_dmarc.example.com"]];
+for (const [n, want] of canon) {
+  let got = null; try { got = assertQueryableName(n); } catch (e) { got = `threw ${e.message}`; }
+  ok(got === want && canonicalDnsName(got) === got && internalNameReason(got) === null, `(control) ${JSON.stringify(n)} is allowed and queried as ${want} (${got})`);
+}
+{
+  const t0 = Date.now();
+  internalNameReason(`${".".repeat(200_000)}x`); internalNameReason(`x${".".repeat(200_000)}`); internalNameReason("a.".repeat(100_000));
+  ok(Date.now() - t0 < 500, `a long run of dots is judged in bounded time (${Date.now() - t0} ms)`);
+}
+
 // --- every caller refuses before the query ---------------------------------------------
 const tool = (list, slug) => list.find((t) => t.slug === slug);
 async function refusesBeforeQuery(label, fn) {
@@ -64,6 +88,29 @@ async function queries(label, fn) {
 await refusesBeforeQuery("dns (GET /api/dns)", () => dnsLookup("db.internal.", "A"));
 await refusesBeforeQuery("dns, single label", () => dnsLookup("intranet", "A"));
 await queries("dns", () => dnsLookup("example.com", "A"));
+// The name asked for is the name judged, whatever the spelling.
+/** Runs fn, then: it queried exactly `want` (and nothing else). */
+async function queriesExactly(label, want, fn) {
+  const before = queried.length;
+  try { await fn(); } catch { /* the stub answers NXDOMAIN */ }
+  const got = queried.slice(before);
+  ok(got.length > 0 && got.every((q) => want.includes(q)), `${label}: (control) asks the resolver for ${want.join(" / ")} (${JSON.stringify([...new Set(got)])})`);
+}
+const dnsRoute = tool(NETWORK_TOOLS, "dns");
+for (const n of ["db.internal..", "db.internal...", "redis..", "redis.", ".redis", "DB.Internal..", " db.internal.. ", "db..internal"]) {
+  await refusesBeforeQuery(`dns refuses ${JSON.stringify(n)}`, () => dnsLookup(n, "A"));
+  await refusesBeforeQuery(`the dns route refuses ${JSON.stringify(n)}`, () => dnsRoute.handler({ name: n }));
+}
+for (const n of ["db.intern\\097l", "\uff44\uff42.internal", "x.db\u3002internal"]) await refusesBeforeQuery(`dns refuses ${JSON.stringify(n)}`, () => dnsLookup(n, "A"));
+await queriesExactly("dns, one trailing dot", ["example.com"], () => dnsLookup("example.com.", "A"));
+await queriesExactly("the dns route, one trailing dot", ["example.com"], () => dnsRoute.handler({ name: "example.com." }));
+await queriesExactly("dns, mixed case", ["example.com"], () => dnsLookup("Example.COM", "TXT"));
+{
+  canned.set("example.com", ["93.184.215.14"]);
+  const r = await dnsLookup("example.com.", "A");
+  canned.delete("example.com");
+  ok(r.name === "example.com" && r.records.length === 1, `(control) a public name with one trailing dot still resolves, under the name that was asked (${JSON.stringify(r)})`);
+}
 
 const dnsTool = tool(NETWORK_TOOLS, "dns-lookup");
 await refusesBeforeQuery("dns-lookup, trailing dot", () => dnsTool.handler({ host: "db.internal." }));
@@ -73,6 +120,34 @@ for (const slug of ["dns-propagation", "spf-check", "dmarc-check", "email-delive
   await refusesBeforeQuery(slug, () => tool(NETWORK_TOOLS, slug).handler({ domain: "corp.internal" }));
 }
 await refusesBeforeQuery("dkim-lookup", () => tool(NETWORK_TOOLS, "dkim-lookup").handler({ domain: "corp.internal", selector: "s1" }));
+// A selector that makes no DNS name with the domain is the caller's 400 naming
+// the field, with no query sent: an empty label, a label past 63 characters,
+// a whole name past 253. The longest selector that fits is still looked up.
+{
+  const dkim = tool(NETWORK_TOOLS, "dkim-lookup");
+  const answerOf = async (selector, domain = "example.com") => {
+    const before = queried.length;
+    try { await dkim.handler({ domain, selector }); return { status: 200, asked: queried.slice(before) }; }
+    catch (e) { return { status: e.statusCode, message: String(e.message), asked: queried.slice(before) }; }
+  };
+  const fits = (n) => { let v = ""; while (v.length < n) v += (v ? "." : "") + "a".repeat(Math.min(63, n - v.length - (v ? 1 : 0))); return v; };
+  const most = 253 - "._domainkey.example.com".length; // the longest selector example.com leaves room for
+  const cases = [
+    ["a label of 64 characters", "a".repeat(64)],
+    ["a long run of letters", "a".repeat(5000)],
+    ["a doubled dot", "a..b"], ["a leading dot", ".a"], ["a trailing dot", "a."], ["dots alone", ".."],
+    ["a name one character past 253", fits(most + 1)],
+  ];
+  for (const [label, selector] of cases) {
+    const r = await answerOf(selector);
+    ok(r.status === 400 && /"selector"/.test(r.message) && r.asked.length === 0, `dkim-lookup answers ${label} with a 400 that names the field, and asks no resolver (${r.status}, ${r.asked.length} asked, "${String(r.message).slice(0, 60)}")`);
+  }
+  ok(fits(most).length === most && fits(most + 1).length === most + 1 && fits(most + 1).split(".").every((l) => l.length >= 1 && l.length <= 63), "(control) the long selectors are made of labels a DNS name allows");
+  for (const [label, selector] of [["a label of 63 characters", "a".repeat(63)], ["the longest name that fits", fits(most)], ["an underscore and a hyphen", "_s-1"]]) {
+    const r = await answerOf(selector);
+    ok(r.status === 200 && r.asked.length === 1 && r.asked[0] === `${selector}._domainkey.example.com`, `dkim-lookup looks up ${label} (${r.status}, asked ${r.asked.length})`);
+  }
+}
 
 const asn = tool(NETWORK_TOOLS2, "asn-info");
 await refusesBeforeQuery("asn-info (host)", () => asn.handler({ host: "db.internal" }));
@@ -110,6 +185,50 @@ await refusesBeforeQuery("tls-cert", () => tls.handler({ host: "db.internal" }))
 
 await refusesBeforeQuery("domain-audit normDomain", () => normDomain({ domain: "corp.home.arpa" }));
 await refusesBeforeQuery("domain-audit DNS posture", () => probeDnsPosture("corp.internal"));
+
+// --- every caller asks for the name it judged, in every spelling ---------------------------
+for (const h of ["db.internal..", "DB.Internal..", "redis..", ".redis"]) {
+  await refusesBeforeQuery(`dns-lookup refuses ${JSON.stringify(h)}`, () => dnsTool.handler({ host: h }));
+  await refusesBeforeQuery(`dns-propagation refuses ${JSON.stringify(h)}`, () => tool(NETWORK_TOOLS, "dns-propagation").handler({ domain: h }));
+  await refusesBeforeQuery(`spf-check refuses ${JSON.stringify(h)}`, () => tool(NETWORK_TOOLS, "spf-check").handler({ domain: h }));
+  await refusesBeforeQuery(`asn-info refuses ${JSON.stringify(h)}`, () => asn.handler({ host: h }));
+  await refusesBeforeQuery(`tls-cert refuses ${JSON.stringify(h)}`, () => tls.handler({ host: h }));
+}
+await refusesBeforeQuery("dns-lookup refuses a URL whose host is an internal name written outside ASCII", () => dnsTool.handler({ url: "https://\uff44\uff42.internal../x" }));
+for (const e of ["a@db.internal..", "a@DB.Internal.", "a@x.db\u3002internal", "a@db.internal\u3002", "a@db.inter\u00adnal"]) await refusesBeforeQuery(`email-validate refuses ${JSON.stringify(e)}`, () => emailVerify.handler({ email: e }));
+{
+  // A domain with no canonical form (a resolver's escape) is asked of no
+  // resolver, and the answer is still the tool's own: not deliverable.
+  const before = queried.length;
+  let r = null, err = null;
+  try { r = await emailVerify.handler({ email: "a@db.intern\\097l" }); } catch (e) { err = e; }
+  ok(!err && r?.deliverableDomain === false && queried.length === before, `email-validate asks no resolver for a domain written with an escape (${err?.message || JSON.stringify(r)}, queries ${queried.length - before})`);
+}
+await queriesExactly("email-validate, one trailing dot", ["example.com"], () => emailVerify.handler({ email: "someone@Example.com." }));
+await queriesExactly("tls-cert, one trailing dot", ["example.com"], () => tls.handler({ host: "Example.com." }));
+await refusesBeforeQuery("domain-audit DNS posture, two trailing dots", () => probeDnsPosture("corp.internal.."));
+await queriesExactly("domain-audit DNS posture, one trailing dot", ["example.com", "_mta-sts.example.com", "_smtp._tls.example.com", "default._bimi.example.com"], async () => { const f = globalThis.fetch; globalThis.fetch = async () => { throw new Error("stub: no network"); }; try { await probeDnsPosture("Example.com."); } finally { globalThis.fetch = f; } });
+{
+  // A name inside a record someone else published (an SPF include) is judged
+  // and asked for the same way.
+  const spf = tool(NETWORK_TOOLS, "spf-check");
+  canned.set("spf-a.example", [["v=spf1 include:db.internal.. ~all"]]);
+  canned.set("spf-b.example", [["v=spf1 include:db.intern\\097l include:_spf.Example.com. ~all"]]);
+  let before = queried.length, err = null, r = null;
+  try { await spf.handler({ domain: "spf-a.example" }); } catch (e) { err = e; }
+  ok(err?.statusCode === 400 && queried.slice(before).every((q) => q === "spf-a.example"), `spf-check: an include target that is an internal name with two trailing dots is refused before its query (status ${err?.statusCode}, asked ${JSON.stringify(queried.slice(before))})`);
+  before = queried.length; err = null;
+  try { r = await spf.handler({ domain: "spf-b.example" }); } catch (e) { err = e; }
+  const asked = queried.slice(before);
+  ok(!err && r?.hasRecord === true && asked.some((q) => q === "_spf.example.com") && asked.every((q) => q === "spf-b.example" || q === "_spf.example.com"), `spf-check: an include target written with an escape is asked of no resolver, and the check still answers (${err?.message || "answered"}, asked ${JSON.stringify(asked)})`);
+  canned.clear();
+}
+// The whole run: nothing reached the resolver stub that the filter would not
+// allow exactly as it was asked.
+{
+  const stray = [...new Set(queried)].filter((q) => canonicalDnsName(q) !== q || internalNameReason(q) !== null);
+  ok(queried.length > 10 && stray.length === 0, `every name the resolver was asked for is a canonical name the filter allows (${queried.length} queries, stray: ${JSON.stringify(stray)})`);
+}
 
 // --- assertPublicUrl: one message for unresolvable and private ----------------------------
 const msgOf = async (u) => { try { await assertPublicUrl(u); return null; } catch (e) { return e.message; } };

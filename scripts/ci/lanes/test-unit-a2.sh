@@ -169,6 +169,8 @@ t node scripts/test-scan-state-version-pg.js
 t node scripts/test-revenue-ledger-pg.js
 t node scripts/test-revenue-ledger-enable-pg.js
 t node scripts/test-refund-ledger-pg.js
+# A resend's void lands now or not at all: a debt whose buyer never retries stays owed after a store outage (real Postgres behind a relay)
+t node scripts/test-resend-void-pg.js
 t node scripts/test-sales-ledger-pg.js
 # A receipt check on one container finds a sale another just recorded.
 t node scripts/test-sale-lookup-crosscontainer-pg.js
@@ -176,6 +178,8 @@ t node scripts/test-sale-lookup-crosscontainer-pg.js
 t node scripts/test-attest-crosscontainer-pg.js
 # A lookup made while its sale's write is queued waits for the write.
 t node scripts/test-attest-queued-sale-pg.js
+# One settlement, one sale in the database writer, the mirror and the operator script (REAL postgres).
+t node scripts/test-sale-repeats-pg.js
 # Buy, then attest the receipt's transaction at once, on a paid boot.
 t node scripts/test-attest-after-buy-pg.js
 # The gateway response cache is shared across replicas (needs this lane's Redis).
@@ -198,6 +202,8 @@ t node scripts/test-hangup-forgiveness-redis.js
 t node scripts/test-first-call-allowance.js
 # The allowance's settle skip is keyed by the payment (network, payer, nonce), never by finding the request: a moved adapter path still skips a granted 200 (REAL redis, in-process).
 t node scripts/test-first-call-allowance-hook.js
+# First-call allowance log lines: a salted payer hash and the list price on a grant, refusal counts per day (offline)
+t node scripts/test-first-call-allowance-log.js
 # The grant's record on Postgres keeps the claim time, so a paid call booked while a slow free call ran reads as a return (REAL redis + postgres, in-process).
 t node scripts/test-first-call-allowance-record-pg.js
 t node scripts/test-external-spend-guard-pg.js

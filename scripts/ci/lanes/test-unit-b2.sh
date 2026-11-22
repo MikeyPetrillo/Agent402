@@ -59,6 +59,8 @@ t node scripts/test-replay-topology.js
 t node scripts/test-replay-store-outage.js
 # "agent402-client pays over MPP (real mppx fetch as the SDK's fetch; real server + stub facilitator — offline)"
 t node scripts/test-client-mpp.js
+# The MPP snippets the docs publish are run as written against a local paid server (offline)
+t node scripts/test-doc-mpp-snippets.js
 # "Facilitator diagnostics (an HTML error page must name itself: block vs rate limit vs origin failure, and never touch the response — offline)"
 t node scripts/test-facilitator-diagnostics.js
 # Facilitator access policy (open-mainnet startup warning, constant-time bearer compare; offline)

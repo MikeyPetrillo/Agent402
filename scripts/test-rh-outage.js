@@ -421,6 +421,42 @@ await check("a graceful buyer verdict (signature in words, or a code) -> no chai
   }
 });
 
+// The lookback block is proven, not estimated: the block the log search
+// starts from carries a timestamp at or before the time asked for, on a chain
+// whose block times are uneven (a fast stretch after a slow one makes the
+// head's average pace overstate how far back a time is in blocks).
+await check("the lookback block is at or before the time asked for on uneven block times", async () => {
+  const { blockNear } = await import("../src/robinhood-outage.js");
+  const HEAD = 500_000, NOW_S = 1_800_000_000;
+  // Seconds behind the head, per block: the newest 900 blocks 0.25 s apart, the 100 before them 10 s apart, the rest 0.25 s.
+  const behind = (n) => { const back = HEAD - n; return back <= 900 ? back * 0.25 : back <= 1000 ? 225 + (back - 900) * 10 : 1225 + (back - 1000) * 0.25; };
+  const tsOf = (n) => Math.floor(NOW_S - behind(n));
+  let reads = 0;
+  const call = async (method, params) => {
+    reads++;
+    if (method === "eth_blockNumber") return toHex(HEAD);
+    if (method === "eth_getBlockByNumber") return { number: params[0], timestamp: toHex(tsOf(Number(BigInt(params[0])))) };
+    throw new Error(method);
+  };
+  for (const agoS of [300, 60, 1100, 5000, 0]) {
+    reads = 0;
+    const t = NOW_S - agoS;
+    const { head, from } = await blockNear(call, t * 1000);
+    assert.equal(head, HEAD);
+    assert.ok(tsOf(from) <= t, `${agoS} s back: block ${from} (${NOW_S - tsOf(from)} s back) is at or before the time asked for`);
+    assert.ok(from >= 0 && from <= HEAD && reads <= 16, `${agoS} s back: a bounded number of reads (${reads})`);
+  }
+  // The even chain the estimate was right for: no further back than before, and one read to prove it.
+  reads = 0;
+  const even = async (method, params) => { reads++; return method === "eth_blockNumber" ? toHex(HEAD) : { timestamp: toHex(NOW_S - (HEAD - Number(BigInt(params[0])))) }; };
+  const r = await blockNear(even, (NOW_S - 600) * 1000);
+  assert.equal(r.from, HEAD - 610, "an even chain keeps the estimate and its margin");
+  assert.equal(reads, 4, "head number, head block, probe block, and the block that proves the estimate");
+  // A chain younger than the time asked for starts at its first block.
+  const young = async (method, params) => (method === "eth_blockNumber" ? toHex(50) : { timestamp: toHex(NOW_S - (50 - Number(BigInt(params[0])))) });
+  assert.equal((await blockNear(young, (NOW_S - 10_000) * 1000)).from, 0);
+});
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`test-rh-outage: ${failures ? `FAILED (${failures})` : "all passed"}`);
 process.exit(failures ? 1 : 0);

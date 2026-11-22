@@ -14,6 +14,7 @@ import { routingProofSentence } from "./routing-proof.js";
 import { resolveRailCountTokens } from "./rails.js";
 import { powCostPhrase } from "./pow.js";
 import { LEARN_BY_GLOSSARY_ID, learnBySlug } from "./learn.js";
+import { CARD_ART_VERSION } from "./brand-mark.js";
 
 // { id, name, alt?: [names], def, see: [[href, label]] } - keep `def` a single
 // plain-text paragraph: it is rendered verbatim AND emitted as the DefinedTerm
@@ -24,13 +25,13 @@ export const GLOSSARY = [
     see: [["/agentic-finance", "the category page"]] },
   { id: "agentic-payments", name: "Agentic payments", alt: ["machine payments", "machine-to-machine payments"],
     def: "The plumbing that lets one program pay another per request without an account: an HTTP 402 response names a price, the client answers with a signed stablecoin payment, and the server verifies, settles and delivers. x402 and MPP are the two open, HTTP-native standards for it. Distinct from agentic commerce (agents buying goods for humans through checkout flows).",
-    see: [["/what-is-x402", "What is x402?"], ["/what-is-mpp", "What is MPP?"]] },
+    see: [["/what-is-x402", "x402 and MPP on Agent402"], ["/what-is-mpp", "MPP on Agent402"]] },
   { id: "x402", name: "x402", alt: ["x402 protocol", "HTTP 402 payments"],
     def: "An open protocol, originally from Coinbase, that turns HTTP 402 Payment Required into a working payment flow: the server sends machine-readable payment requirements (price, asset, chain, recipient) in a PAYMENT-REQUIRED header, the client retries with a signed authorization in a PAYMENT-SIGNATURE (formerly X-PAYMENT) header, a facilitator verifies and settles it in USDC, and the response carries a PAYMENT-RESPONSE receipt.",
-    see: [["/what-is-x402", "What is x402?"], ["/marketplace", "the x402 index"]] },
+    see: [["/what-is-x402", "x402 and MPP on Agent402"], ["/marketplace", "the x402 index"]] },
   { id: "mpp", name: "MPP (Machine Payments Protocol)", alt: ["Machine Payments Protocol", "Payment HTTP authentication scheme"],
     def: "An open protocol, published as an IETF Internet-Draft, that carries pay-per-request payments through HTTP's standard authentication headers: a 402 response challenges with WWW-Authenticate: Payment, the client pays with an Authorization: Payment credential, and the settled response returns a signed Payment-Receipt. Its evm method settles like x402 (EIP-3009 via a facilitator); its tempo method settles natively on Tempo.",
-    see: [["/what-is-mpp", "What is MPP?"], ["/mpp-marketplace", "the MPP index"]] },
+    see: [["/what-is-mpp", "MPP on Agent402"], ["/mpp-marketplace", "the MPP index"]] },
   { id: "http-402", name: "HTTP 402 Payment Required", alt: ["402"],
     def: "The HTTP status code reserved since 1997 for exactly this and left unused for decades: the server is saying the resource exists but costs money. Both x402 and MPP use it as the price quote; the payment rides on the retry. Agent402 answers 402 on every paid route and 200 once a payment settles.",
     see: [["/what-is-x402#how", "how one payment works"]] },
@@ -94,7 +95,7 @@ export function glossaryPage(baseUrl) {
   const canonical = `${baseUrl}/glossary`;
   const title = "Agentic Finance (AIFI) glossary: x402, MPP, facilitators and receipts";
   const description =
-    "Plain-English definitions of the vocabulary of Agentic Finance (AIFI): x402, MPP, HTTP 402, payment requirements and challenges, facilitators, EIP-3009, receipts, settlement, wallets as identity, rails, dual-stack, the proof-of-work free tier, the Smart Order Router, the tollbooth, and more. Each term links to the page that goes deep.";
+    "Plain-language definitions of the vocabulary of Agentic Finance (AIFI): x402, MPP, HTTP 402, payment requirements and challenges, facilitators, EIP-3009, receipts, settlement, wallets as identity, rails, dual-stack, the proof-of-work free tier, the Smart Order Router, the tollbooth, and more. Each term links to the page that goes deep.";
 
   const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -177,7 +178,7 @@ ${ledgerFooterCompact()}`;
 
   return ledgerShell({
     title, description, canonical, baseUrl, activePath: "/agentic-finance", extraCss,
-    ogImage: `${baseUrl}/og/agentic-finance.png`,
+    ogImage: `${baseUrl}/og/agentic-finance.png?v=${CARD_ART_VERSION}`,
     jsonLd: [orgLd, breadcrumbLd, setLd, pageLd],
     body,
   });

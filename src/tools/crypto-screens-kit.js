@@ -311,7 +311,7 @@ const fundingScreener = {
     input: { coin: "ETH" },
     inputSchema: {
       properties: {
-        coin: { type: "string", description: "Underlying ticker (BTC, ETH, SOL). Omit for the board of coins." },
+        coin: { type: "string", maxLength: 20, description: "Underlying ticker (BTC, ETH, SOL). Omit for the board of coins." },
         minOpenInterestUsd: { type: "number", description: `Leave out venues holding less open interest than this in USD (default 1000000, minimum ${FUNDING_MIN_OI_USD}).` },
         limit: { type: "number", description: "Coin mode: venues per side, 1-25 (default 5). Board mode: coins, 1-50 (default 10)." },
         sort: { type: "string", description: "Board mode: open_interest (default), dispersion or funding." },
@@ -542,8 +542,8 @@ const exchangeSpread = {
     input: { coin: "ethereum" },
     inputSchema: {
       properties: {
-        coin: { type: "string", description: "Coin id (bitcoin, ethereum, solana). Use coin-search for ids." },
-        quote: { type: "string", description: "Only compare markets quoted in this currency (USDT, USD, USDC). Omit for every quote, converted to USD." },
+        coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, solana). Use coin-search for ids." },
+        quote: { type: "string", maxLength: 20, description: "Only compare markets quoted in this currency (USDT, USD, USDC). Omit for every quote, converted to USD." },
         limit: { type: "number", description: "Venues returned, widest deviation first, 1-50 (default 20)." },
       },
       required: ["coin"],
@@ -855,7 +855,7 @@ const dexVolumeBoard = {
     input: { network: "base" },
     inputSchema: {
       properties: {
-        network: { type: "string", description: "On-chain network id: eth, base, solana, arbitrum, bsc, polygon_pos, optimism, avax, ..." },
+        network: { type: "string", maxLength: 100, description: "On-chain network id: eth, base, solana, arbitrum, bsc, polygon_pos, optimism, avax, ..." },
         pools: { type: "number", description: "How many of the network's top pools by 24h volume to add up: 20, 40, 60, 80 or 100 (default 60)." },
         limit: { type: "number", description: "DEXes returned, 1-50 (default 15)." },
       },
@@ -948,8 +948,8 @@ const dexPoolHealth = {
     input: { network: "eth", pool: "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640" },
     inputSchema: {
       properties: {
-        network: { type: "string", description: "On-chain network id: eth, base, solana, arbitrum, bsc, polygon_pos, ..." },
-        pool: { type: "string", description: "Pool address on that network." },
+        network: { type: "string", maxLength: 100, description: "On-chain network id: eth, base, solana, arbitrum, bsc, polygon_pos, ..." },
+        pool: { type: "string", maxLength: 100, description: "Pool address on that network." },
       },
       required: ["network", "pool"],
     },

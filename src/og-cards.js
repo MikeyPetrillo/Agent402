@@ -22,6 +22,7 @@ import { creditsSalesEnabled } from "./credits-sales.js";
 import { sellablePacks } from "./credits.js";
 import { SKILL_PACKS } from "./skills.js";
 import { kalshiToolsEnabled } from "./kalshi-switch.js";
+import { brandMarkTile } from "./brand-mark.js";
 // Evergreen floor (a multiple of ten at or under the live count), never an exact
 // number. A function, not a constant: skills.js reaches this module through an
 // import cycle, so SKILL_PACKS is not initialized while this file first runs.
@@ -146,7 +147,7 @@ export function sectionCardSvg(id, ctx, width = 1200, height = 630) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="${width}" height="${height}" fill="${BRAND.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
-  <rect x="72" y="64" width="44" height="44" rx="12" fill="url(#milled)"/>
+  ${brandMarkTile(72, 64, 44, { stroke: BRAND.hairline })}
   <text x="132" y="96" font-size="30" font-weight="600" font-family=${display} letter-spacing="-0.5" fill="${BRAND.ink}">Agent402</text>
   <text x="1128" y="95" font-size="20" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">agent402.tools</text>
   <text x="72" y="238" font-size="${hsize}" font-weight="600" font-family=${display} letter-spacing="-3" fill="${BRAND.ink}">${esc(copy.h1)}</text>
@@ -158,4 +159,16 @@ export function sectionCardSvg(id, ctx, width = 1200, height = 630) {
   <text x="1100" y="506" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${esc(copy.badge[1])}</text>
   </g>
 </svg>`;
+}
+
+/** The per-tool card (/tools/<slug>/card.png), 1200 by 630: the brand mark,
+ *  the tool's category, name and description, its price and route.
+ *  `tool`: { name, description, price, method, path, categoryLabel, free }. */
+export function toolCardSvg(tool, { BRAND, BRAND_DEFS = "", BRAND_FONT_STYLE = "" }) {
+  const mono = JSON.stringify(BRAND.mono), display = JSON.stringify(BRAND.display);
+  const name = String(tool.name), desc = String(tool.description);
+  const nameT = name.length > 36 ? name.slice(0, 34) + "\u2026" : name;
+  const descT = desc.length > 74 ? desc.slice(0, 72) + "\u2026" : desc;
+  const free = tool.free ? "FREE w/ PoW \u00b7 " : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="1200" height="630" fill="${BRAND.paper}"/><g><rect x="36" y="36" width="1128" height="558" rx="20" fill="${BRAND.card}" stroke="${BRAND.hairline}" stroke-width="2"/>${brandMarkTile(84, 88, 56, { stroke: BRAND.hairline })}<text x="162" y="118" font-size="26" font-weight="600" font-family=${display} fill="${BRAND.ink}">Agent402</text><text x="162" y="146" font-size="20" font-family=${mono} fill="${BRAND.muted}">${esc(tool.categoryLabel)}</text><line x1="84" y1="172" x2="1116" y2="172" stroke="${BRAND.hairline}" stroke-width="2"/><text x="84" y="308" font-size="58" font-weight="600" font-family=${display} letter-spacing="-2" fill="${BRAND.ink}">${esc(nameT)}</text><text x="84" y="372" font-size="22" font-family=${mono} fill="${BRAND.muted}">${esc(descT)}</text><line x1="84" y1="440" x2="1116" y2="440" stroke="${BRAND.hairline}" stroke-width="2"/><text x="84" y="496" font-size="29" font-weight="700" font-family=${mono} fill="${BRAND.accent}">${esc(free)}${esc(tool.price)} per call \u00b7 ${esc(tool.method)} ${esc(tool.path)}</text><text x="84" y="550" font-size="23" font-family=${mono} fill="${BRAND.muted}">Pay in USDC on Base via x402 - no API key, no signup</text></g></svg>`;
 }

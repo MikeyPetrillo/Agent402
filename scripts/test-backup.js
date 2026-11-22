@@ -376,7 +376,7 @@ ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size =
   const leg = hb.slice(hb.indexOf("Offsite backup check"), hb.indexOf("Offsite backup check") + 3000);
   ok(/\.backup\.status/.test(leg), "the heartbeat reads backup.status");
   ok(/held\|failed\|stale\|unencrypted\|unconfigured\) sleep 30; WORD=\$\(read_bk\)/.test(leg), "...re-reads once before paging");
-  ok(/unconfigured: the BACKUP_S3_\* bucket variables are unset in production/.test(leg), "...the issue body explains unconfigured");
+  ok(/TITLE="Scheduled check needs review: offsite-backup"/.test(leg) && !/BACKUP_S3_/.test(leg), "...the issue is the neutral title and names no bucket variable");
   ok(/held\|failed\|stale\|unencrypted\|unconfigured\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(leg) && /ok\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(leg), "...opens an issue on held/failed/stale/unencrypted and closes it on ok");
 }
 

@@ -266,7 +266,7 @@ export const WEATHER_CALC_TOOLS = [
           lat: { type: "number", description: "Latitude, -90 to 90" },
           lon: { type: "number", description: "Longitude, -180 to 180" },
           date: { type: "string", description: "Date, YYYY-MM-DD (default today, UTC). Events are those around the point's solar noon on that date" },
-          time: { type: "string", description: "Optional ISO 8601 time at which to give the sun's elevation and azimuth, for example 2026-06-21T16:00:00Z" },
+          time: { type: "string", maxLength: 40, description: "Optional ISO 8601 time at which to give the sun's elevation and azimuth, for example 2026-06-21T16:00:00Z" },
         },
         required: ["lat", "lon"],
       },

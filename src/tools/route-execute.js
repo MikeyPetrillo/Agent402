@@ -49,12 +49,10 @@ import { notChargedOn } from "../not-charged.js";
 // still lands inside it. SOR_SVM_BUDGET_MS overrides it.
 export const SVM_BUDGET_MS_DEFAULT = 40_000;
 
-// Two execution tiers, both from buildRouteExecuteTool. The tier a buyer needs
-// is quoted by /api/route (routeExecuteHint below), so there's no guessing:
-//   route-execute      $0.01  — internal + external tools ≤ $0.005 (the cheap
-//                               path; unchanged for existing callers).
-//   route-execute-max  $0.55  — internal + external tools ≤ $0.50, the tier
-//                               that reaches the valuable external catalog.
+// The execution tiers, all from buildRouteExecuteTool, cheapest first. The
+// tier a buyer needs is quoted by /api/route (routeExecuteHint below), so
+// there's no guessing: each row is a flat price covering internal and external
+// tools up to its underlying cap.
 // External dispatch is the marketable half: run the task on OUR tool if we have
 // one, else pay the best EXTERNAL seller over x402 and relay — one call either
 // way. Spend is bounded (external only when we lack the tool) and gated on
@@ -65,6 +63,10 @@ export const EXEC_TIERS = [
   // so a mid-priced external tool could only ride the max tier. This tier
   // keeps the fee proportional and unlocks mid-priced external inventory.
   { slug: "route-execute-plus", execPriceUsd: 0.05, underlyingMaxUsd: 0.04 },
+  // The band between plus and max: a tool priced just over the plus cap rode
+  // the max tier at several times its own price. Below max, so the per-payer
+  // debt ceiling (sized against the top tier) is unchanged.
+  { slug: "route-execute-mid", execPriceUsd: 0.12, underlyingMaxUsd: 0.1, externalExample: true },
   { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5, externalExample: true },
   // 2026-08-07: the $0.50 underlying ceiling excluded every indexed tool priced
   // above it, so the router could only answer those with a 409 pointing at the
@@ -503,7 +505,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           receipt: { slug: "weather", route: "POST https://seller.example/weather", underlyingPriceUsd: 0.002, paidUsd: EXEC_PRICE_USD, routingFeeUsd: Number((EXEC_PRICE_USD - 0.002).toFixed(6)), seller: "https://seller.example", external: true, settleTx: "0x…", settleNetwork: "eip155:8453", wire: "x402", resolvedBy: "task-external", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
           result: { forecast: ["…"], untrustedContent: true },
         } : {
-          receipt: { "slug": "dns", route: "GET /api/dns", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: 0.009, seller: "internal", resolvedBy: "task", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
+          receipt: { "slug": "dns", route: "GET /api/dns", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: Number((EXEC_PRICE_USD - 0.001).toFixed(6)), seller: "internal", resolvedBy: "task", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
           result: { name: "example.com", type: "A", records: ["…"] },
         },
       },

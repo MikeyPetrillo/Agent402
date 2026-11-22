@@ -13,7 +13,7 @@ If your agent isn't an MCP client, there's an npm package that turns the Agent40
 | LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
 | elizaOS | [`elizaos-plugin-agent402`](https://www.npmjs.com/package/elizaos-plugin-agent402) | a `Plugin` with `AGENT402_FIND` / `AGENT402_CALL` / `AGENT402_ABOUT` actions and an `AGENT402` provider |
 | Coinbase AgentKit (CDP, Privy, ZeroDev, viem wallets) | [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit) | an `ActionProvider` for `AgentKit.from({ actionProviders })` |
-| Strands Agents (AWS Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
+| Strands Agents (Amazon Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
 | Google ADK (Agent Development Kit) | [`agent402-google-adk`](https://www.npmjs.com/package/agent402-google-adk) | `FunctionTool[]` (four meta tools) |
 | OpenAI Agents SDK | [`agent402-openai-agents`](https://www.npmjs.com/package/agent402-openai-agents) | `tool()` instances for `new Agent({ tools })` (four meta tools) |
 
@@ -185,7 +185,7 @@ const agentKit = await AgentKit.from({ walletProvider, actionProviders: [await a
 
 Three actions: `agent402_find` (free discovery), `agent402_call` (pays: proof-of-work for the free tier, x402 USDC on Base signed by the wallet provider for wallet-only tools), `agent402_about`. The signer is derived from the wallet provider the way AgentKit's own x402 provider does it, so CDP, Privy, ZeroDev and viem-backed wallets all pay; live-proven against production with a `ViemWalletProvider` ([tx](https://basescan.org/tx/0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59)). Package: [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit).
 
-## Strands Agents (AWS Bedrock AgentCore)
+## Strands Agents (Amazon Bedrock AgentCore)
 
 ```js
 import { Agent } from "@strands-agents/sdk";
@@ -196,7 +196,7 @@ const agent = new Agent({ tools });
 const res = await agent.invoke("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
 ```
 
-For an agent on [AWS Bedrock AgentCore](AWS-Bedrock-AgentCore), this adapter embeds a chosen subset of tools in a Strands agent; the hosted `/mcp` connector as a Gateway target is the other way in. Wallet-only tools are paid through the x402-wrapped `fetch` you pass, as in [Pay with a wallet](#pay-with-a-wallet).
+For an agent on [Amazon Bedrock AgentCore](AWS-Bedrock-AgentCore), this adapter embeds a chosen subset of tools in a Strands agent; the hosted `/mcp` connector as a Gateway target is the other way in. Wallet-only tools are paid through the x402-wrapped `fetch` you pass, as in [Pay with a wallet](#pay-with-a-wallet).
 
 ## Free tier (no wallet)
 

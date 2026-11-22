@@ -563,6 +563,21 @@ export function sellerReputation(origin, { now = Date.now() } = {}) {
     recheck: state.meta?.rechecks?.[origin] ? { requestedAt: state.meta.rechecks[origin].at } : null,
   });
 }
+/** This process's loaded records, for a reader that aggregates over every
+ *  seller (src/router-benchmarks.js): the two maps as they are held (read
+ *  only; never mutate them), the confirmed our-side days, and the state word
+ *  a lookup would give. */
+export function reputationSnapshot() {
+  return {
+    state: !enabled && !state.loaded ? "not-measured-here" : state.loaded ? "ready" : "loading",
+    version: state.version,
+    sellers: state.body?.sellers || {},
+    delivery: state.delivery?.o || {},
+    ourSideDays: confirmedOurSideDays(state.meta),
+    since: state.body?.since || null,
+    updatedAt: state.body?.updatedAt || null,
+  };
+}
 /** The delivery routes recorded for one seller (for per-tool rows). */
 export function sellerDeliveryRoutes(origin) {
   return state.delivery?.o?.[origin]?.r || null;

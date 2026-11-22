@@ -229,6 +229,24 @@ export function chainNameOf(network) {
   return rail ? rail.name : net.slice(0, 80);
 }
 
+// A Solana transaction names a recent blockhash and lands only while the
+// cluster still holds it (about 60 to 90 seconds). Checked or settled after
+// that, the cluster refuses it in these words; a new signature over the same
+// message cannot help, a transaction built on a fresh blockhash can.
+const SVM_STALE_BLOCKHASH = /blockhash[ _-]?not[ _-]?found|block[ _-]?height[ _-]?exceeded|blockhash (?:has |is )?(?:expired|no longer valid)/i;
+/** True when `text` is a Solana cluster (or its facilitator) saying the transaction's recent blockhash is no longer valid. Pure. */
+export function isSvmStaleBlockhash(network, text) {
+  return /^solana:/.test(typeof network === "string" ? network : "") && SVM_STALE_BLOCKHASH.test(String(text ?? "").slice(0, 2000));
+}
+/** The hint for it: the class, the retry and the sentence. Pure. */
+export function svmStaleBlockhashHint() {
+  return {
+    reason: "blockhash-expired",
+    retry: "fresh-authorization",
+    hint: "The transaction's recent blockhash was no longer valid on Solana when the payment was checked or settled (a Solana transaction lands only for about 60 to 90 seconds after its blockhash). Nothing was charged. Ask the route for a fresh 402, build the transaction on a fresh blockhash, sign it and send the request again; re-sending this one will keep failing.",
+  };
+}
+
 /** The plain-language hint. Pure; exported for tests. */
 export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway = false, detail = "", svmPayer = null, payTo = null }) {
   const r = typeof reason === "string" ? reason : "";
@@ -249,6 +267,7 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway 
   // (src/svm-funding-refusal.js): a new signature cannot fix that, funding can.
   const svmFunding = classifySvmFundingRefusal({ network: net, reason: `${r} ${typeof detail === "string" ? detail : ""}` });
   if (svmFunding) return { ...fundingHint({ kind: svmFunding, payer: svmPayer, priceUsd }), svmFunding };
+  if (isSvmStaleBlockhash(net, `${r} ${typeof detail === "string" ? detail : ""}`)) return svmStaleBlockhashHint();
   // A Circle Gateway batched payment resent while Gateway is still settling
   // it (src/gateway-nanopayments.js): the same payment, later; never a new
   // signature. Read before every other word.

@@ -53,7 +53,7 @@ import { assertNotOwnPayout } from "./own-wallets.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { spendWindowCeilings, noteSpendWindowOver, noteSpendWindowRefused } from "./router-spend-window.js";
-import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend } from "./base-unproven.js";
+import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend, unprovenAllowanceAtomicFor } from "./base-unproven.js";
 import { usdFigure } from "./price-usd.js";
 import { EVM_BUYER_CHAINS, isEvmBuyerChain, evmBuyerChainEnabled, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
 import { markNotSellerBody } from "./response-observation.js";
@@ -62,9 +62,10 @@ import { noteSellerDeliveryOutcome } from "./seller-reputation.js";
 
 /** The buyer-visible 409 when a Base unproven daily cap refuses: every figure
  *  through usdFigure, as the lane's other sentences print them. */
-export function unprovenCapMessage(payTo, capped) {
+const capChainName = (chain) => String(chain || "base").replace(/^./, (c) => c.toUpperCase());
+export function unprovenCapMessage(payTo, capped, chain = "base") {
   const which = capped.code === "unproven_lane_daily_cap" ? "daily cap across all sellers" : "daily cap per seller";
-  return `Seller ${String(payTo).slice(0, 10)}… is below the Base settlement floor and has reached the unproven lane's ${which} (${usdFigure(capped.spentUsd)} of ${usdFigure(capped.capUsd)} in 24 h) - not paid`;
+  return `Seller ${String(payTo).slice(0, 10)}… is below the ${capChainName(chain)} settlement floor and has reached the unproven lane's ${which} (${usdFigure(capped.spentUsd)} of ${usdFigure(capped.capUsd)} in 24 h) - not paid`;
 }
 
 function bad(message, statusCode = 400) {
@@ -1144,7 +1145,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // operator's SOR_EVM_CHAINS list is not paid at all, whoever calls this.
   const isEvm = isEvmBuyerChain(chain);
   if (isEvm && !evmBuyerChainEnabled(chain)) throw bad(`Paying sellers on ${chain} is not enabled on this host. Nothing was signed.`, 409);
-  const chainLabel = chain === "base" ? "Base" : chain;
+  const chainTitle = chain === "base" ? "Base" : chain;
   if (buyerAddressGuard) {
     // SSRF: paying an arbitrary URL with a real wallet is the same egress-abuse
     // risk as any fetch — resolve + pin to a public address before spending.
@@ -1266,10 +1267,10 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // payment_method_unsupported already).
       if (memoizeDelivery && domain.verdict === "wrong_domain") noteSellerRefusal(url, chain, 402, { kind: "offer" });
       const e = bad(domain.verdict === "payment_method_unsupported"
-        ? `Seller's ${chainLabel} accept asks for paymentMethod ${JSON.stringify(domain.paymentMethod)} (a transfer proved afterwards), which this stock x402 signer does not make. Nothing was signed.`
+        ? `Seller's ${chainTitle} accept asks for paymentMethod ${JSON.stringify(domain.paymentMethod)} (a transfer proved afterwards), which this stock x402 signer does not make. Nothing was signed.`
         : domain.verdict === "gateway_batched"
-        ? `Seller's ${chainLabel} accept stands on Circle's Gateway rail (extra.name ${JSON.stringify(domain.advertisedName)}${domain.verifyingContract ? `, verifyingContract ${domain.verifyingContract}` : ""}): it is signed under the GatewayWallet domain and settled by a batch facilitator, which this stock x402 signer does not speak. Nothing was signed, and nothing on the seller's side is wrong.`
-        : `Seller's ${chainLabel} ${chainCfg.symbol || "USDC"} accept advertises EIP-712 name ${JSON.stringify(domain.advertisedName)} but the token signs under ${JSON.stringify(domain.expectedName)} - no stock x402 signature can verify against it. Nothing was signed.`, 502);
+        ? `Seller's ${chainTitle} accept stands on Circle's Gateway rail (extra.name ${JSON.stringify(domain.advertisedName)}${domain.verifyingContract ? `, verifyingContract ${domain.verifyingContract}` : ""}): it is signed under the GatewayWallet domain and settled by a batch facilitator, which this stock x402 signer does not speak. Nothing was signed, and nothing on the seller's side is wrong.`
+        : `Seller's ${chainTitle} ${chainCfg.symbol || "USDC"} accept advertises EIP-712 name ${JSON.stringify(domain.advertisedName)} but the token signs under ${JSON.stringify(domain.expectedName)} - no stock x402 signature can verify against it. Nothing was signed.`, 502);
       e.refused = true;
       throw e;
     }
@@ -1412,28 +1413,29 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       ? { allowUnprovenUpToAtomic: svmUnprovenAllowanceAtomic(), quotedAtomic }
       : {});
   }
-  // BASE UNPROVEN TIER (src/base-unproven.js): the resolver admitted this
-  // seller below the settlement floor. The ceiling that admitted it is
+  // UNPROVEN TIER (src/base-unproven.js): the resolver admitted this seller
+  // below the settlement floor. The ceiling that admitted it is the paying
+  // chain's own (Base's, or a listed chain's; 0 on every other chain) and is
   // checked against the quote actually being SIGNED, so a seller quoting the
   // probe inside the ceiling and the payment above it is refused here.
   let unprovenHold = null;
-  // The unproven tier is a Base lane only; no other chain is paid under it.
-  if (allowUnproven && isEvm && chain !== "base") {
-    const e = new Error(`The unproven lane is Base only; a ${chain} seller below the settlement floor is not paid`);
-    e.statusCode = 409;
-    throw e;
-  }
-  if (chain === "base" && allowUnproven) {
-    const { baseUnprovenAllowanceAtomic } = await import("./base-unproven.js");
-    const ceiling = baseUnprovenAllowanceAtomic();
-    let quote = null;
-    try { quote = quotedAtomic != null ? BigInt(String(quotedAtomic)) : null; } catch { quote = null; }
-    if (!(ceiling > 0n) || quote == null || !(quote > 0n) || quote > ceiling) {
-      const e = new Error(`Seller ${String(payable.payTo).slice(0, 10)}… is below the Base settlement floor and quotes ${quote ?? "an unreadable amount"} atomic, above the unproven ceiling ${ceiling} - not paid`);
+  const unprovenLane = allowUnproven && isEvm;
+  if (unprovenLane) {
+    const ceiling = unprovenAllowanceAtomicFor(chain);
+    // A chain the operator has not listed is never paid under the lane.
+    if (chain !== "base" && !(ceiling > 0n)) {
+      const e = new Error(`The unproven lane is not on for ${chain}; a seller below the settlement floor there is not paid`);
       e.statusCode = 409;
       throw e;
     }
-    console.log(`[x402-buyer] paying UNPROVEN Base seller ${String(payable.payTo).slice(0, 10)}… - quote ${quote} atomic is within the unproven ceiling ${ceiling}`);
+    let quote = null;
+    try { quote = quotedAtomic != null ? BigInt(String(quotedAtomic)) : null; } catch { quote = null; }
+    if (!(ceiling > 0n) || quote == null || !(quote > 0n) || quote > ceiling) {
+      const e = new Error(`Seller ${String(payable.payTo).slice(0, 10)}… is below the ${capChainName(chain)} settlement floor and quotes ${quote ?? "an unreadable amount"} atomic, above the unproven ceiling ${ceiling} - not paid`);
+      e.statusCode = 409;
+      throw e;
+    }
+    console.log(`[x402-buyer] paying UNPROVEN ${chain} seller ${String(payable.payTo).slice(0, 10)}… - quote ${quote} atomic is within the unproven ceiling ${ceiling}`);
   }
   const spendToken = await reserveSpend(quotedAtomic); // before signing (throws 429 only at the hard stop; past the alarm it serves)
   let committed = false;
@@ -1443,7 +1445,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // Takes back this call's own-purchase record (set when the payment is signed).
   let retractOwnPurchase = null;
   try {
-    // BASE UNPROVEN DAILY CAPS (src/base-unproven.js): the seller's and the
+    // UNPROVEN DAILY CAPS (src/base-unproven.js), one day across every chain
+    // the lane pays on: the seller's and the
     // whole lane's, checked and the signed amount reserved in one step, keyed
     // on this accept's payTo and the seller's origin, before anything is
     // signed. A path-scoped seller is keyed on the index's seller key
@@ -1451,10 +1454,10 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // shares with other sellers (the delivery memo below takes the same key). A refusal here is pre-commit (the finally gives the budget hold
     // back); the reservation is given back by the same finally only when
     // nothing could have moved.
-    if (chain === "base" && allowUnproven) {
+    if (unprovenLane) {
       const capped = await reserveUnprovenSellerSpend({ payTo: payable.payTo, origin: url, sellerKey, atomic: quotedAtomic });
       if (!capped.ok) {
-        const e = new Error(unprovenCapMessage(payable.payTo, capped));
+        const e = new Error(unprovenCapMessage(payable.payTo, capped, chain));
         e.statusCode = 409;
         throw e;
       }

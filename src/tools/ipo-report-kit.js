@@ -172,7 +172,7 @@ const SCHEMA = {
   type: "object",
   properties: {
     days: { type: "number", description: "Lookback window in days, 1-90 (default 7)." },
-    keyword: { type: "string", description: "Optional filter on the filer's name (case-insensitive). Omit or \"all\" for every filing." },
+    keyword: { type: "string", maxLength: 60, description: "Optional filter on the filer's name (case-insensitive). Omit or \"all\" for every filing." },
   },
 };
 const OUT_EXAMPLE = {

@@ -12,7 +12,7 @@
 //   const agent = new Agent({ tools });
 //   const out = await agent.invoke("Hash 'hello world' with sha256");
 //
-// Built for AWS Bedrock AgentCore: Strands is the framework AgentCore Payments
+// Built for Amazon Bedrock AgentCore: Strands is the framework AgentCore Payments
 // surfaces as its preferred SDK, and AgentCore Payments orchestrates x402,
 // which is exactly what Agent402 speaks. The two halves snap together with
 // zero glue beyond this adapter.

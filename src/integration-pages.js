@@ -347,15 +347,15 @@ const result = await run(agent, "${SEARCH_THEN_ANSWER}");`,
   },
   {
     slug: "strands",
-    meta: "Agent402 tools as Strands Agents tool instances, including on AWS Bedrock AgentCore. Free tier by proof-of-work; paid tools over x402.",
+    meta: "Agent402 tools as Strands Agents tool instances, including on Amazon Bedrock AgentCore. Free tier by proof-of-work; paid tools over x402.",
     name: "Strands Agents",
     short: "Strands",
     pkg: "agent402-strands",
     dir: "adapters/strands",
     docsSlug: "strands",
     shape: "per-slug",
-    worksWith: ["@strands-agents/sdk", "AWS Bedrock AgentCore", "Any Strands-compatible model"],
-    what: "Strands `tool({...})` instances for TypeScript agents, including Strands agents running on AWS Bedrock AgentCore. Pull a curated subset of the catalog into the agent; when it calls a tool, the adapter solves a proof-of-work or signs an x402 payment and returns the structured result.",
+    worksWith: ["@strands-agents/sdk", "Amazon Bedrock AgentCore", "Any Strands-compatible model"],
+    what: "Strands `tool({...})` instances for TypeScript agents, including Strands agents running on Amazon Bedrock AgentCore. Pull a curated subset of the catalog into the agent; when it calls a tool, the adapter solves a proof-of-work or signs an x402 payment and returns the structured result.",
     install: "npm install agent402-strands @strands-agents/sdk zod @x402/fetch @x402/core @x402/evm viem",
     lang: "ts",
     example: `import { Agent } from "@strands-agents/sdk";
@@ -546,7 +546,8 @@ import { Fetch, evm, tempo } from "mppx/client";
 import { privateKeyToAccount } from "viem/accounts";
 
 const account = privateKeyToAccount(process.env.AGENT_KEY);
-const mppFetch = Fetch.from({ methods: [tempo.charge({ account }), evm.charge({ account })] });
+// The evm method signs for the tokens you list: USDC on Base and on Celo.
+const mppFetch = Fetch.from({ methods: [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })] });
 
 const a = new Agent402({ fetch: mppFetch, maxPerCallUsd: 0.05 });
 const verdict = await a.call("sql-guard", { sql: "UPDATE users SET plan = 'pro' WHERE id = 42" });`,

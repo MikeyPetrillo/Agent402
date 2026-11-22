@@ -5,12 +5,13 @@
 // (via bad()) for invalid input.
 import { createHash, createHmac, randomBytes, randomUUID, randomInt } from "node:crypto";
 import { resolveMx, Resolver } from "node:dns/promises";
+import { mailboxProviderOf } from "./mailbox-provider.js";
 import { markEndsAtCeiling, capByCeiling, atCeiling, ceilingPassed, ceilingCutError, assertBeforeCeiling } from "../run-ceiling.js";
 import { isIP } from "node:net";
 import { FETCH_UA } from "../user-agents.js";
 import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
 import tls from "node:tls";
-import { assertQueryableName } from "./dns-name-filter.js";
+import { assertQueryableName, canonicalDnsName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
 import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
@@ -338,7 +339,7 @@ const encodingTools = [
       bodyType: "json",
       input: { token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" },
       inputSchema: {
-        properties: { token: { type: "string", description: "The JWT string" } },
+        properties: { token: { type: "string", maxLength: 16384, description: "The JWT string" } },
         required: ["token"],
       },
       output: { example: { header: { alg: "HS256" }, payload: { sub: "agent402", exp: 9999999999 }, expired: false } },
@@ -1034,7 +1035,7 @@ const textTools = [
       input: { text: "Héllo, Wörld! 2024" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Text to slugify" },
+          text: { type: "string", maxLength: 10000, description: "Text to slugify" },
           separator: { type: "string", description: "Default -" },
         },
         required: ["text"],
@@ -1075,7 +1076,7 @@ const textTools = [
       input: { text: "hello world example", to: "camel" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Input text" },
+          text: { type: "string", maxLength: 50000, description: "Input text" },
           to: { type: "string", description: "camel | pascal | snake | kebab | constant | title | lower | upper" },
         },
         required: ["text", "to"],
@@ -1232,9 +1233,9 @@ const textTools = [
       input: { pattern: "\\b(\\w+)@(\\w+\\.\\w+)\\b", flags: "g", text: "mail me at a@b.com" },
       inputSchema: {
         properties: {
-          pattern: { type: "string", description: "Regex pattern (JS syntax, max 200 chars)" },
+          pattern: { type: "string", maxLength: 200, description: "Regex pattern (JS syntax, max 200 chars)" },
           flags: { type: "string", description: "Regex flags, e.g. gi (default g)" },
-          text: { type: "string", description: "Text to search (max 10KB)" },
+          text: { type: "string", maxLength: 10000, description: "Text to search (max 10KB)" },
         },
         required: ["pattern", "text"],
       },
@@ -1643,6 +1644,11 @@ function compareSemver(a, b) {
   return a.prerelease < b.prerelease ? -1 : 1;
 }
 
+// email-validate's MX lookup, replaceable in a test (no network there).
+let mxLookup = resolveMx;
+/** Test seam: `fn(domain)` answers the MX rows; no argument restores DNS. */
+export function _setMxLookupForTest(fn) { mxLookup = typeof fn === "function" ? fn : resolveMx; }
+
 const validationTools = [
   {
     route: "POST /api/email-validate",
@@ -1650,8 +1656,8 @@ const validationTools = [
     slug: "email-validate",
     category: "validation",
     price: "$0.001",
-    description: "Validate an email address: syntax check plus live MX record lookup on the domain (deliverability signal, not a guarantee).",
-    tags: ["email", "validate", "mx", "deliverability"],
+    description: "Validate an email address: syntax check plus live MX record lookup on the domain (deliverability signal, not a guarantee). mailboxProvider names who hosts the domain's mail, read from those MX records: {id, name, type}, with type hosted (Google Workspace / Gmail, Microsoft 365 / Outlook, Zoho and other known hosts), gateway, forwarding, disposable, self-hosted or unknown; null when the domain has no MX.",
+    tags: ["email", "validate", "mx", "deliverability", "mailbox-provider", "disposable"],
     discovery: {
       bodyType: "json",
       input: { email: "someone@gmail.com" },
@@ -1662,25 +1668,28 @@ const validationTools = [
       // example.com publishes a null MX (RFC 7505: accepts no mail), so its
       // honest answer is deliverableDomain:false with no records; the
       // documented example must show a domain that does receive mail.
-      output: { example: { email: "someone@gmail.com", syntaxValid: true, domain: "gmail.com", mxRecords: ["gmail-smtp-in.l.google.com", "alt1.gmail-smtp-in.l.google.com"], deliverableDomain: true } },
+      output: { example: { email: "someone@gmail.com", syntaxValid: true, domain: "gmail.com", mxRecords: ["gmail-smtp-in.l.google.com", "alt1.gmail-smtp-in.l.google.com"], deliverableDomain: true, mailboxProvider: { id: "google", name: "Google Workspace / Gmail", type: "hosted" } } },
     },
     handler: async (input) => {
       const email = need(input, "email").trim();
       const syntaxValid = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) && email.length <= 254;
       const domain = syntaxValid ? email.split("@")[1].toLowerCase() : null;
       let mxRecords = [];
-      if (domain) assertQueryableName(domain);
-      if (domain) {
+      // The name the filter judged (its canonical form) is the name asked
+      // for; a domain that has none is asked of no resolver.
+      const asked = domain && canonicalDnsName(domain) ? assertQueryableName(domain) : null;
+      if (asked) {
         try {
           // RFC 7505 null MX ("0 .") declares the domain accepts NO mail; Node
           // hands it back as exchange "" or "." and it used to count as a
           // record, so example.com read deliverable (corpus, 2026-09-06).
-          mxRecords = (await resolveMx(domain)).sort((a, b) => a.priority - b.priority).map((r) => r.exchange).filter((x) => x && x !== ".");
+          mxRecords = (await mxLookup(asked)).sort((a, b) => a.priority - b.priority).map((r) => r.exchange).filter((x) => x && x !== ".");
         } catch {
           mxRecords = [];
         }
       }
-      return { email, syntaxValid, domain, mxRecords: mxRecords.slice(0, 10), deliverableDomain: mxRecords.length > 0 };
+      // Who hosts the mail, from the MX hosts just read (no further lookup).
+      return { email, syntaxValid, domain, mxRecords: mxRecords.slice(0, 10), deliverableDomain: mxRecords.length > 0, mailboxProvider: mailboxProviderOf(mxRecords, domain) };
     },
   },
   {
@@ -1786,7 +1795,7 @@ const validationTools = [
       bodyType: "json",
       input: { ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36" },
       inputSchema: {
-        properties: { ua: { type: "string", description: "User-Agent header value" } },
+        properties: { ua: { type: "string", maxLength: 2000, description: "User-Agent header value" } },
         required: ["ua"],
       },
       output: { example: { browser: "Chrome", version: "125.0", os: "Windows", device: "desktop", bot: false } },
@@ -2252,9 +2261,10 @@ const networkTools = [
       // cannot point the socket at an internal address after the check passes.
       let ip = host;
       if (!isIP(host)) {
-        assertQueryableName(host);
+        // The name the filter judged (its canonical form) is the name asked for.
+        const asked = assertQueryableName(host);
         // The address guard's own bounded resolver (c-ares, off the thread pool).
-        const resolved = await resolveHostAddress(host).catch((e) => {
+        const resolved = await resolveHostAddress(asked).catch((e) => {
           // A resolver that cannot answer is ours to retry, not the caller's input.
           if (isTransientLookupError(e)) throw lookupUnavailable(e);
           throw bad(UNRESOLVED_OR_PRIVATE);
@@ -2504,7 +2514,7 @@ const networkTools = [
       input: { text: "https://agent402.tools", size: "256" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Content to encode (max 2KB)" },
+          text: { type: "string", maxLength: 2048, description: "Content to encode (max 2KB)" },
           size: { type: "string", description: "Image width px (128-1024, default 256)" },
         },
         required: ["text"],

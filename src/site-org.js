@@ -38,7 +38,7 @@ export function siteOrgLd(baseUrl, { mpp = mppOffered() } = {}) {
     disambiguatingDescription: `The payment server, tool catalog and MCP server for AI agents at ${host}, operated by ${COMPANY_NAME}.`,
     knowsAbout: ["Agentic Finance", "AIFI", "x402", ...(mpp ? ["Machine Payments Protocol (MPP)"] : []), "agentic payments", "AI agents"],
     logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` },
-    email: "mike@agent402.tools",
+    email: "help@agent402.tools",
     parentOrganization: { "@type": "Organization", "@id": companyOrgId(baseUrl), name: COMPANY_NAME, url: COMPANY_URL },
     sameAs: [...ORG_SAME_AS],
   };

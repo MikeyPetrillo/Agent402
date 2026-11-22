@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      TITLE: Bazaar listing check
+      TITLE: "Scheduled check needs review: listing-rank"
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       BAZAAR_RANK_ACK: ${{ vars.BAZAAR_RANK_ACK }}
     steps:
@@ -46,6 +46,15 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Check and update the one issue
         run: |
           # Only an open issue with exactly this title, opened by the workflow

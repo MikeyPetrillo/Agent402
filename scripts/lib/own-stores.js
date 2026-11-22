@@ -38,6 +38,8 @@ export function ownStoreEnv(label = "server") {
     SELLER_DELIVERY_FILE: join(dir, "seller-delivery-outcomes.json"),
     SELLER_REPUTATION_META_FILE: join(dir, "seller-reputation-meta.json"),
     DISCOVERY_REFUSALS_FILE: join(dir, "discovery-refusals.json"),
+    // Price webhook registrations, kept prices and queued deliveries (src/price-webhooks.js).
+    PRICE_WEBHOOKS_FILE: join(dir, "price-webhooks.json"),
     // The Solana activity scans' state and the per-caller call days
     // (src/solana-activity-store.js, src/upstream-call-days.js).
     SOLANA_ACTIVITY_FILE: join(dir, "solana-activity.json"),

@@ -649,7 +649,7 @@ export const GOV_TOOLS = [
       input: { vin: "1HGCM82633A004352" },
       inputSchema: {
         properties: {
-          vin: { type: "string", description: "17-char VIN (or a partial VIN with * wildcards)" },
+          vin: { type: "string", maxLength: 17, description: "17-char VIN (or a partial VIN with * wildcards)" },
           modelYear: { type: "number", description: "Model year - helps decode a partial VIN" },
         },
         required: ["vin"],
@@ -796,7 +796,7 @@ export const GOV_TOOLS = [
       input: { name: "lipitor", limit: 1 },
       inputSchema: {
         properties: {
-          name: { type: "string", description: "Brand or generic drug name (e.g. lipitor, atorvastatin)" },
+          name: { type: "string", maxLength: 100, description: "Brand or generic drug name (e.g. lipitor, atorvastatin)" },
           ndc: { type: "string", description: "Product or package NDC, hyphenated (e.g. 58151-155 or 58151-155-77); used instead of name" },
           limit: { type: "number", description: "Labels to return, 1-5 (default 1)" },
           maxChars: { type: "number", description: "Characters per section, 200-6000 (default 1500)" },
@@ -848,7 +848,7 @@ export const GOV_TOOLS = [
       inputSchema: {
         properties: {
           ndc: { type: "string", description: "Product NDC (e.g. 58151-155) or package NDC (e.g. 58151-155-77), hyphenated" },
-          name: { type: "string", description: "Brand or generic name, used when no ndc is given (e.g. lipitor)" },
+          name: { type: "string", maxLength: 100, description: "Brand or generic name, used when no ndc is given (e.g. lipitor)" },
           limit: { type: "number", description: "Products to return, 1-20 (default 5)" },
         },
         required: [],
@@ -892,10 +892,10 @@ export const GOV_TOOLS = [
       input: { applicant: "medtronic", limit: 5 },
       inputSchema: {
         properties: {
-          applicant: { type: "string", description: "Applicant (company) name, e.g. medtronic" },
-          productCode: { type: "string", description: "Three-letter FDA product code, e.g. LZG" },
+          applicant: { type: "string", maxLength: 100, description: "Applicant (company) name, e.g. medtronic" },
+          productCode: { type: "string", maxLength: 3, description: "Three-letter FDA product code, e.g. LZG" },
           kNumber: { type: "string", description: "510(k) number, e.g. K233210" },
-          deviceName: { type: "string", description: "Device name as submitted, e.g. insulin pump" },
+          deviceName: { type: "string", maxLength: 100, description: "Device name as submitted, e.g. insulin pump" },
           limit: { type: "number", description: "Clearances to return, 1-20 (default 5)" },
         },
         required: [],
@@ -945,10 +945,10 @@ export const GOV_TOOLS = [
       input: { device: "insulin pump", limit: 3 },
       inputSchema: {
         properties: {
-          device: { type: "string", description: "Generic device name as reported, e.g. insulin pump" },
-          brand: { type: "string", description: "Brand name as reported" },
-          productCode: { type: "string", description: "Three-letter FDA product code, e.g. LZG" },
-          manufacturer: { type: "string", description: "Device manufacturer name as reported" },
+          device: { type: "string", maxLength: 100, description: "Generic device name as reported, e.g. insulin pump" },
+          brand: { type: "string", maxLength: 100, description: "Brand name as reported" },
+          productCode: { type: "string", maxLength: 3, description: "Three-letter FDA product code, e.g. LZG" },
+          manufacturer: { type: "string", maxLength: 100, description: "Device manufacturer name as reported" },
           since: { type: "string", description: "Only reports received on or after this date (YYYY-MM-DD)" },
           limit: { type: "number", description: "Newest reports to list, 0-10 (default 5)" },
           problems: { type: "number", description: "Top device problems to rank, 1-25 (default 10)" },
@@ -1018,8 +1018,8 @@ export const GOV_TOOLS = [
       input: { name: "lidocaine", status: "current", limit: 5 },
       inputSchema: {
         properties: {
-          name: { type: "string", description: "Generic or brand drug name, e.g. lidocaine" },
-          category: { type: "string", description: "Therapeutic category as FDA lists it, e.g. Oncology or Anesthesia" },
+          name: { type: "string", maxLength: 100, description: "Generic or brand drug name, e.g. lidocaine" },
+          category: { type: "string", maxLength: 100, description: "Therapeutic category as FDA lists it, e.g. Oncology or Anesthesia" },
           status: { type: "string", description: "current, resolved or to be discontinued (default: any)" },
           limit: { type: "number", description: "Listings to return, 1-20 (default 5)" },
         },
@@ -1068,7 +1068,7 @@ export const GOV_TOOLS = [
       input: { name: "ozempic", limit: 3 },
       inputSchema: {
         properties: {
-          name: { type: "string", description: "Brand name or active ingredient, e.g. ozempic or semaglutide" },
+          name: { type: "string", maxLength: 100, description: "Brand name or active ingredient, e.g. ozempic or semaglutide" },
           applicationNumber: { type: "string", description: "NDA or ANDA number, six digits with an optional N or A prefix, e.g. N213051" },
           limit: { type: "number", description: "Products to return, 1-20 (default 5)" },
         },

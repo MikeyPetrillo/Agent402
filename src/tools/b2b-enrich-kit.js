@@ -406,9 +406,9 @@ export const B2B_ENRICH_TOOLS = [
       inputSchema: {
         properties: {
           domain: { type: "string", description: "Company domain, e.g. stripe.com." },
-          first_name: { type: "string", description: "First name (with last_name)." },
-          last_name: { type: "string", description: "Last name (with first_name)." },
-          full_name: { type: "string", description: "Alternative to first_name + last_name." },
+          first_name: { type: "string", maxLength: 80, description: "First name (with last_name)." },
+          last_name: { type: "string", maxLength: 80, description: "Last name (with first_name)." },
+          full_name: { type: "string", maxLength: 80, description: "Alternative to first_name + last_name." },
         },
         required: ["domain"],
       },
@@ -576,7 +576,7 @@ export const B2B_ENRICH_TOOLS = [
           titles: { type: "array", items: { type: "string" }, description: "Job titles to match (0-25), e.g. [\"cto\", \"vp engineering\"]." },
           seniorities: { type: "array", items: { type: "string" }, description: "Seniorities: owner, founder, c_suite, partner, vp, head, director, manager, senior, entry, intern." },
           locations: { type: "array", items: { type: "string" }, description: "Person locations, e.g. [\"california, us\"]." },
-          keywords: { type: "string", description: "Free-text keywords (max 200 chars)." },
+          keywords: { type: "string", maxLength: 200, description: "Free-text keywords (max 200 chars)." },
           page: { type: "number", description: "Page number, 1-500 (default 1)." },
           per_page: { type: "number", description: "Results per page, 1-25 (default 10)." },
         },
@@ -692,8 +692,8 @@ export const B2B_ENRICH_TOOLS = [
       inputSchema: {
         properties: {
           email: { type: "string", description: "Work email to match (alternative to name + domain)." },
-          first_name: { type: "string", description: "First name (with last_name and domain)." },
-          last_name: { type: "string", description: "Last name (with first_name and domain)." },
+          first_name: { type: "string", maxLength: 80, description: "First name (with last_name and domain)." },
+          last_name: { type: "string", maxLength: 80, description: "Last name (with first_name and domain)." },
           domain: { type: "string", description: "Company domain (with first_name + last_name)." },
           organization_name: { type: "string", description: "Optional company name hint." },
         },

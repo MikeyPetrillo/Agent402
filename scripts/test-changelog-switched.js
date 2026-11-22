@@ -61,6 +61,82 @@ for (const s of SWITCHED) {
   }
 }
 
+const render = () => `${changelogPage("https://example.test")}\n${changelogRss("https://example.test")}`;
+const mdItemAt = (needle) => {
+  const at = md.indexOf(needle);
+  return at >= 0 ? md.slice(md.lastIndexOf("\n- ", at), md.indexOf("\n- ", at + 1)).replace(/\s+/g, " ") : "";
+};
+
+// The returning-wallet price (RETURNING_WALLET_PRICE=on, src/returning-wallet.js):
+// its entry reads the switch, every item that names the header or a setting
+// of it sits in that entry, and neither surface names the header with the
+// switch unset or set to anything but "on".
+{
+  const { returningWalletEnabled, WALLET_HINT_HEADER } = await import("../src/returning-wallet.js");
+  const title = "A lower price for a returning wallet";
+  const e = CHANGELOG_ENTRIES.find((x) => x.title === title);
+  ok(e && e.shownWhen === returningWalletEnabled, `the "${title}" entry is shown only while RETURNING_WALLET_PRICE is on (shownWhen)`);
+  const naming = CHANGELOG_ENTRIES.filter((x) => x.items.some((i) => i.includes(WALLET_HINT_HEADER) || i.includes("RETURNING_WALLET_") || i.includes("returningWalletPrice")));
+  ok(naming.length > 0 && naming.every((x) => x.shownWhen === returningWalletEnabled), "every item that names the wallet header or a returning-wallet setting sits in an entry that reads the switch");
+  ok(e?.items[0].includes("RETURNING_WALLET_PRICE=on") && mdItemAt(WALLET_HINT_HEADER).includes("RETURNING_WALLET_PRICE=on"), "the item names RETURNING_WALLET_PRICE=on on the page and in CHANGELOG.md");
+  for (const v of [undefined, "", "off", "yes"]) {
+    if (v === undefined) delete process.env.RETURNING_WALLET_PRICE; else process.env.RETURNING_WALLET_PRICE = v;
+    const out = render();
+    ok(!out.includes(WALLET_HINT_HEADER) && !out.includes(title), `RETURNING_WALLET_PRICE=${v === undefined ? "(unset)" : JSON.stringify(v)}: /changelog and /changelog.xml do not name ${WALLET_HINT_HEADER}`);
+  }
+  process.env.RETURNING_WALLET_PRICE = "on";
+  ok(changelogPage("https://example.test").includes(WALLET_HINT_HEADER) && changelogRss("https://example.test").includes(WALLET_HINT_HEADER), `RETURNING_WALLET_PRICE=on: /changelog and /changelog.xml name ${WALLET_HINT_HEADER}`);
+  delete process.env.RETURNING_WALLET_PRICE;
+}
+
+// The named speech and transcription models (NAMED_AUDIO_MODELS,
+// src/speech-additions.js): each entry is shown only while this server serves
+// such a model on the routes it is about, which takes the switch AND the
+// model's admission. The cost rows installed here are derived from each
+// route's own price and cap (no rate is typed).
+{
+  const U = await import("../src/upstream-costs.js");
+  const A = await import("../src/speech-additions.js");
+  const G = await import("../src/tools/llm-gateway-kit.js");
+  const S = await import("../src/tools/stt-kit.js");
+  const { namedSpeechShown, namedTranscriptionShown } = await import("../src/changelog.js");
+  const EXAMPLE = JSON.parse(readFileSync(new URL("../docs/example-upstream-costs.json", import.meta.url), "utf8"));
+  const speechPrice = Number(G.LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-audio-speech").price.replace("$", ""));
+  const speechRows = Object.fromEntries(A.SPEECH_ADDITIONS.map((m) => [m.id, 0.5 * A.ADDITION_MARGIN * speechPrice / G.SPEECH_MAX_CHARS]));
+  const sttRows = Object.fromEntries(A.STT_ADDITIONS.map((m) => [m.id, 0.5 * A.ADDITION_MARGIN * S.STT_TIERS.transcribe.priceUsd / S.STT_TIERS.transcribe.maxMinutes]));
+  const install = ({ speech = {}, stt = {} } = {}) => U.setUpstreamCostsForTest({ ...EXAMPLE, speech: { "your/speech-model": EXAMPLE.speech["your/speech-model"], ...speech }, sttPerMinute: { "gpt-transcribe": EXAMPLE.sttPerMinute["gpt-transcribe"], ...stt } });
+  const SPEECH = "Named speech models", STT = "Named transcription models";
+  const speech = CHANGELOG_ENTRIES.find((x) => x.title === SPEECH), stt = CHANGELOG_ENTRIES.find((x) => x.title === STT);
+  ok(speech && speech.shownWhen === namedSpeechShown && stt && stt.shownWhen === namedTranscriptionShown, "the named speech and transcription entries each read whether this server serves such a model (shownWhen)");
+  const naming = CHANGELOG_ENTRIES.filter((x) => x.items.some((i) => i.includes("NAMED_AUDIO_MODELS")));
+  ok(naming.length === 2 && naming.every((x) => x === speech || x === stt), "every item that names NAMED_AUDIO_MODELS sits in one of those two entries");
+  ok(mdItemAt("`POST /v1/audio/speech`, each").includes("NAMED_AUDIO_MODELS") && mdItemAt("URL transcribe").includes("NAMED_AUDIO_MODELS"), "both CHANGELOG.md items are scoped to a server that lists the models in NAMED_AUDIO_MODELS");
+  const shown = () => { const out = render(); return { speech: out.includes(SPEECH), stt: out.includes(STT) }; };
+  const state = (want, m) => { const got = shown(); ok(got.speech === want.speech && got.stt === want.stt, `${m}: speech entry ${want.speech ? "shown" : "hidden"}, transcription entry ${want.stt ? "shown" : "hidden"} (got ${JSON.stringify(got)})`); };
+
+  process.env.OPENROUTER_TTS_ENABLED = "true";
+  delete process.env.NAMED_AUDIO_MODELS;
+  install({ speech: speechRows, stt: sttRows });
+  state({ speech: false, stt: false }, "switch unset, rows present");
+  process.env.NAMED_AUDIO_MODELS = "off";
+  state({ speech: false, stt: false }, "switch off, rows present");
+  process.env.NAMED_AUDIO_MODELS = "all";
+  install();
+  state({ speech: false, stt: false }, "switch on, no row");
+  install({ speech: speechRows });
+  state({ speech: true, stt: false }, "switch on, speech rows only");
+  install({ stt: sttRows });
+  state({ speech: false, stt: true }, "switch on, transcription rows only");
+  install({ speech: speechRows, stt: sttRows });
+  state({ speech: true, stt: true }, "switch on, every row");
+  process.env.NAMED_AUDIO_MODELS = A.STT_ADDITIONS[0].id;
+  state({ speech: false, stt: true }, "switch names one transcription model");
+  process.env.NAMED_AUDIO_MODELS = "all";
+  delete process.env.OPENROUTER_TTS_ENABLED;
+  state({ speech: false, stt: true }, "the speech route not served");
+  delete process.env.NAMED_AUDIO_MODELS;
+}
+
 // Control: an entry with no switch is always shown.
 ok(CHANGELOG_ENTRIES.some((e) => !e.shownWhen) && changelogPage("https://example.test").includes(CHANGELOG_ENTRIES.find((e) => !e.shownWhen).title.replace(/&/g, "&amp;").replace(/'/g, "&#39;").slice(0, 20)), "control: an entry without a switch renders");
 

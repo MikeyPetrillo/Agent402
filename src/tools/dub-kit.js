@@ -218,6 +218,8 @@ export const DUB_TOOLS = [
     // Priced by tier: the standard sum, or the hd sum when the body says tier "hd".
     quote: (body) => dubPriceUsd(body && String(body.tier ?? "").trim().toLowerCase() === "hd" ? "hd" : "standard"),
     quoteMaxUsd: dubPriceUsd("hd"),
+    // A standard-tier body, quoted at the list price; the keep-alive buys it.
+    fromInput: { text: "Hello from Agent402!", targetLanguage: "es", voice: "nova", format: "mp3", json: true },
     modelBacked: true,
     binaryTypes: [...new Set(Object.values(FORMAT_CONTENT_TYPES))],
     // Raw audio by default, but the published example asks for json: true,
@@ -231,7 +233,7 @@ export const DUB_TOOLS = [
       input: { text: "Hello from Agent402! Every tool is paid per call.", targetLanguage: "es", voice: "nova", format: "mp3", json: true },
       inputSchema: {
         properties: {
-          text: { type: "string", description: `Text to translate and speak (max ${standardCap} chars; the cap also applies to the translation)` },
+          text: { type: "string", maxLength: 2000, description: `Text to translate and speak (max ${standardCap} chars; the cap also applies to the translation)` },
           targetLanguage: { type: "string", description: "Target language: a BCP-47 tag (es, pt-BR, zh-Hans, ja) or an English name (Spanish, Brazilian Portuguese)" },
           sourceLanguage: { type: "string", description: "Optional source language, same forms; detected when omitted" },
           voice: { type: "string", description: `Voice: ${[...VOICES].join(", ")} (default: alloy), or a named voice (${[...ELEVENLABS_VOICES].join(", ")})` },

@@ -8,8 +8,15 @@
 //   - a single-label name (resolved through the search domains, if any);
 //   - a reverse name (in-addr.arpa / ip6.arpa) that lies wholly inside a
 //     private, loopback, link-local or shared range.
-// A trailing dot is stripped first, so "x.internal." is the same name as
-// "x.internal". Pure: no I/O.
+//
+// ONE NAME. A resolver does not ask for the text it is handed: it reads a
+// trailing dot as the root, ignores case, maps a name written outside ASCII
+// to its ASCII form (full-width letters, the other dot characters, characters
+// it drops) and reads a backslash as an escape. So the name is put in its
+// canonical form once (canonicalDnsName), THAT form is judged, and that form
+// is the only thing a caller may hand a resolver (assertQueryableName returns
+// it). A caller never judges one spelling and asks for another. Pure: no I/O.
+import { domainToASCII } from "node:url";
 
 const INTERNAL_ZONES = /(^|\.)(internal|local|localhost|localdomain|home\.arpa)$/i;
 
@@ -44,18 +51,39 @@ function v6Private(nibbles) {
   return false;
 }
 
-/** The name with one trailing dot removed and lowercased (no other change). */
+/**
+ * The canonical form of a name: the spelling a resolver would put on the
+ * wire. Trimmed, mapped to ASCII when it is written outside it (the mapping
+ * the resolver itself applies), every trailing dot removed, lowercased. ""
+ * when the name has none: a backslash (a resolver's escape, which can spell
+ * any character), or text outside ASCII that is not a host name. Idempotent.
+ */
 export function canonicalDnsName(name) {
-  return String(name ?? "").trim().replace(/\.$/, "").toLowerCase();
+  let s = String(name ?? "").trim();
+  if (s.includes("\\")) return "";
+  if (/[^\x00-\x7f]/.test(s)) {
+    // domainToASCII reads its argument as a URL host, so the characters that
+    // end or split one are refused first rather than cut off.
+    if (/[\s/?#@:%[\]]/.test(s)) return "";
+    s = domainToASCII(s);
+  }
+  // Every trailing dot, by position (a pattern anchored at the end rescans a
+  // long run of dots from each of them).
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 46) end--;
+  return s.slice(0, end).toLowerCase();
 }
 
 /**
- * Why a caller-chosen DNS name is refused, or null when it may be queried.
+ * Why a caller-chosen DNS name is refused, or null when its canonical form
+ * (canonicalDnsName) may be queried.
  * @param {string} name
  * @returns {string|null}
  */
 export function internalNameReason(name) {
-  const s = canonicalDnsName(name);
+  // Judged by its labels: an empty one (".redis", "db..internal") is refused
+  // by a resolver and never makes a name public.
+  const s = canonicalDnsName(name).split(".").filter(Boolean).join(".");
   if (!s) return "Invalid domain name";
   if (INTERNAL_ZONES.test(s)) return "Private or link-local zones are not resolvable here";
   if (!s.includes(".")) return "Single-label names are not resolvable here; send a fully qualified domain name";
@@ -76,7 +104,8 @@ export function internalNameReason(name) {
   return null;
 }
 
-/** Throws a 400 when the name is refused; returns the canonical name otherwise. */
+/** Throws a 400 when the name is refused; returns the canonical name
+ *  otherwise: the name that was judged, and the one to query. */
 export function assertQueryableName(name) {
   const why = internalNameReason(name);
   if (why) throw Object.assign(new Error(why), { statusCode: 400 });

@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 let passed = 0;
 const ok = (c, m) => { assert.ok(c, m); passed++; };
 
-const TITLE = "MPP reconciliation 7-day window MISMATCH";
+const TITLE = "Scheduled check needs review: payment-reconciliation-window";
 const yml = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
 const at = yml.indexOf("- name: MPP reconciliation 7-day window check");
 ok(at > 0, "heartbeat.yml has the 7-day window step");
@@ -71,12 +71,12 @@ const WIN_OK = gs({ status: "ok", day: "2026-10-22", window7d: "ok", chargedFail
   ok(r.status === 0, `confirmed window mismatch: exits 0 (${r.stderr})`);
   ok(r.slept, "confirmed window mismatch: re-reads before paging");
   ok(r.created && r.gh.includes(TITLE), "confirmed window mismatch while the day reads ok: opens the issue");
-  ok(/latest day \(2026-10-19\) reads ok/.test(r.gh), "the body names the latest day");
-  ok(/need the operator token/.test(r.gh), "without the operator token the body says what it could not read");
+  ok(/A scheduled check reported a result that needs review\./.test(r.gh) && !/2026-10-19/.test(r.gh), "the body is the fixed text and names no day");
+  ok(!/operator token/.test(r.gh), "the body says nothing about what it could read");
 }
 {
   const r = runStep({ reads: [WIN_BAD, WIN_BAD], opToken: "t" });
-  ok(r.created && /- 2026-10-14 paid_unrecorded: 1/.test(r.gh), "with the operator token the body lists each item's day and category");
+  ok(r.created && !/paid_unrecorded|2026-10-14/.test(r.gh), "with the operator token the body still lists no item, day or category");
   ok(!/charged_failed/.test(r.gh), "charged_failed (the refund ledger's own alarm) is not listed as a mismatch");
 }
 {
@@ -106,7 +106,7 @@ const WIN_OK = gs({ status: "ok", day: "2026-10-22", window7d: "ok", chargedFail
 {
   const bad = gs({ status: "ok", day: "<b>x</b>", window7d: "mismatch" });
   const r = runStep({ reads: [bad, bad] });
-  ok(r.created && /latest day \(the latest day\)/.test(r.gh) && !r.gh.includes("<b>"), "a day not in its own shape is never echoed");
+  ok(r.created && !r.gh.includes("<b>"), "a day not in its own shape is never echoed");
 }
 
 rmSync(dir, { recursive: true, force: true });

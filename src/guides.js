@@ -1,7 +1,9 @@
 // Server-rendered technical guides — the prose layer for organic search.
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
+import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgRef } from "./site-org.js";
+import { GUIDE_SITE_NAME, GUIDE_EXPLAINERS } from "./ask402-links.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 // The renderer and its heading ids (GitHub-style slugs, so the dev shortlinks
@@ -98,7 +100,7 @@ function resolveGuideTokens(text, catalog) {
   };
   return resolveRailCountTokens(String(text))
     .replace(/\{\{price:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? def(slug).price : "(price on /api/pricing)"))
-    .replace(/\{\{amount:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? String(Math.round(priceUsd(def(slug).price) * 1e6)) : "<amount>"))
+    .replace(/\{\{amount:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? String(usdToBaseUnits(priceUsd(def(slug).price), 6)) : "<amount>"))
     // {{jobs:<slug>[,<slug>]}}: whether a route runs as a job, read from the
     // async profile the catalog carries (src/slow-routes.js) and the slow-sync
     // window (SLOW_SYNC_WINDOW_SECONDS): "yes, required" when a paid call
@@ -184,7 +186,7 @@ Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
 authorization from its own wallet and retries, and the server settles only when
 the response succeeds, so a failed x402 call is not charged (a payment that lands late is repaid after on-chain proof).
 The headers, step
-by step: [how x402 works](/learn/x402).
+by step: [how x402 works](/learn/x402). In plain language: [What is x402?](${GUIDE_EXPLAINERS.x402}) on ${GUIDE_SITE_NAME}.
 
 ## See a quote (free)
 
@@ -365,6 +367,7 @@ before any payment is taken, and the last column says how long to wait.
 | Unpaid requests with a body over ${Math.round(UNPAID_BODY_MAX_BYTES / 1024)} KB to a route that reads its price from the body | ${LARGE_BODY_UNPAID_PER_MIN} a minute and ${LARGE_BODY_UNPAID_PER_HOUR.toLocaleString("en-US")} an hour per client address, the same once that address has paid | 429, \`Retry-After: 60\` |
 | A wallet's paid calls in flight, on every paid route that is not free through proof-of-work, other than the report and media routes | the wallet's balance of the paying token covers every call it has in flight plus the new one, however many: the coverage check sets no other limit on calls at once, and a route's own limit still applies (the code-run tools: ${CODE_RUN_PER_PAYER_MAX} runs at once per EVM payer, credits key or Tempo sender; any other paid call counts only itself, and a call with no payment ${CODE_RUN_PER_IP_MAX} per client address). The balance is read inside about a second, and a call refused while another call from the wallet is settling answers within about a second (either takes up to about ${COVER_SETTLED_READ_SECONDS} seconds when a settlement lands during the read). While it cannot be read, the call is started if the last balance this server read for that wallet in the past ${COVER_GOOD_READ_MINUTES} minutes, less what the wallet's payments have taken and its calls in progress hold since, covers it; otherwise, and for a wallet with no read that recent, the wallet runs up to ${COVER_UNREAD_MAX} calls at once (${COVER_UNREAD_PAID_MAX} with a payment on record) | 429: \`Retry-After: 30\` when the balance read does not cover the call (the seconds left until the wallet is read again, at most ${COVER_READ_GAP_SECONDS}, when it was judged on an earlier call's read); \`Retry-After: 5\` when another call from the wallet is still settling and cover cannot be confirmed yet, and when the balance cannot be read and the kept read or the calls-at-once figure does not admit the call |
 | A wallet's paid calls in flight on the report and media routes | the wallet's balance covers every call in flight plus the new one, with the balance read given a few seconds; while it cannot be read, ${COVER_UNREAD_MAX} calls at once per wallet | 429, \`Retry-After: 30\` |
+| Calls paid with a Tempo pull credential in a multisig envelope, before a payment from that account under the same multisig config has settled here (after one has, the account's balance is the only limit, as for any wallet) | ${COVER_UNREAD_MAX} at once per client address, whichever account each names | 429, \`Retry-After: 5\` (\`Retry-After: 30\` on the report and media routes) |
 | Jobs per client address | ${ASYNC_JOBS_PER_CLIENT} running at once | 429, \`Retry-After: 30\` |
 
 An IPv6 /64 is one address. A request carrying a payment, a credits key or a

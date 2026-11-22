@@ -62,6 +62,26 @@ jobs:
           echo "month=$MONTH total=$TOTAL daysWithData=$DAYS_WITH_DATA/$DAYS_IN_MONTH byCaller=[$BYCALLER]"
           { echo "month=$MONTH"; echo "total=$TOTAL"; echo "bycaller=$BYCALLER";
             echo "dayswithdata=$DAYS_WITH_DATA"; echo "daysinmonth=$DAYS_IN_MONTH"; } >> "$GITHUB_OUTPUT"
+      # Only the two files the next step runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
+        if: always()
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/adopt-issue-titles.js
+            workers/status-probe/src/previous-issue-titles.js
+
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: File the reconciliation issue
         # Values are our own server's numeric/day/caller-slug data, not
         # attacker-facing free text, but routed through env: anyway (not
@@ -74,22 +94,7 @@ jobs:
           DAYS_WITH_DATA: ${{ steps.series.outputs.dayswithdata }}
           DAYS_IN_MONTH: ${{ steps.series.outputs.daysinmonth }}
         run: |
-          TITLE="Brave reconciliation: $MONTH"
-          EXISTS=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: search-call-reconciliation ($MONTH)"
+          EXISTS=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ -n "$EXISTS" ]; then echo "issue for $MONTH already filed (#$EXISTS) - not duplicating"; exit 0; fi
-          NOTE=""
-          if [ "$DAYS_WITH_DATA" = "0" ]; then
-            NOTE="**No days recorded for $MONTH.** Either the meter shipped after this month (persistent recording began 2026-07-29) or something is wrong with the series - distinguish the two before trusting a zero."
-          elif [ "$DAYS_WITH_DATA" != "$DAYS_IN_MONTH" ]; then
-            NOTE="Note: only $DAYS_WITH_DATA of $DAYS_IN_MONTH days have rows. Days with zero outbound calls record nothing, so a short count here is normal on quiet days - but if recording began mid-month, compare only the covered range."
-          fi
-          BODY="Our outbound Brave call count for **$MONTH**, from the deploy-proof meter (stats DB \`daily_upstream_calls\`, counted where the request leaves the process):
-
-          **Total: $TOTAL** (by caller: $BYCALLER)
-          Days with data: $DAYS_WITH_DATA/$DAYS_IN_MONTH. $NOTE
-
-          To reconcile: compare against the Brave dashboard's Search-plan usage for the same date range (their daily CSV). CI spend is guarded off (test-brave-leak.js), so the dashboard number should match this count - the July 2026 gap (5,106 billed vs ~600 accountable) must not recur. Answers and Autosuggest reconciled exactly last cycle and are metered under their own callers here.
-
-          Close this issue once the two numbers are compared. If they disagree materially, the per-day series is on \`/__operator/stats\` -> \`upstreamCalls.brave.daily\`.
-          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."

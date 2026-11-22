@@ -19,6 +19,7 @@ import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, stateDbSchema, stateQuery } from "./state-db.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
+import { cleanSaleSource } from "./sale-source.js";
 import { appendPeriodReceipt } from "./receipt-signing.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
@@ -378,7 +379,10 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   }
 
   // Create a subscription Checkout Session for a monitor product + target.
-  async function createCheckout(productKey, targetValue) {
+  // `source`: the named source the visit arrived from (src/sale-source.js);
+  // anything not on its list is dropped here, before the session is made.
+  async function createCheckout(productKey, targetValue, { source = null } = {}) {
+    const from = cleanSaleSource(source);
     const p = Object.hasOwn(MONITOR_PRODUCTS, String(productKey)) ? MONITOR_PRODUCTS[productKey] : null;
     if (!p) { const e = new Error("Unknown monitor product"); e.statusCode = 400; throw e; }
     let target = String(targetValue ?? "").trim();
@@ -410,8 +414,8 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       }],
       // metadata rides on BOTH the session and the subscription, so either the
       // success page or the webhook can recover product + target.
-      metadata: { product: productKey, target: target.slice(0, 180) },
-      subscription_data: { metadata: { product: productKey, target: target.slice(0, 180) } },
+      metadata: { product: productKey, target: target.slice(0, 180), ...(from ? { source: from } : {}) },
+      subscription_data: { metadata: { product: productKey, target: target.slice(0, 180), ...(from ? { source: from } : {}) } },
       success_url: `${baseUrl}/monitors/thanks?session={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/monitors?canceled=1`,
       allow_promotion_codes: true,
@@ -615,7 +619,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
           // The claim could not be read: not acknowledged, so Stripe delivers
           // the event again and the claim decides then.
           if (first === null) { stored = false; break; }
-          if (first) { try { onInvoicePaid({ invoiceId: inv.id, subId, product: (subId && store.get(subId)?.product) || null, amountUsd: inv.amount_paid / 100, customer: inv.customer }); } catch { /* accounting never breaks the webhook */ } }
+          if (first) { try { onInvoicePaid({ invoiceId: inv.id, subId, product: (subId && store.get(subId)?.product) || null, amountUsd: inv.amount_paid / 100, customer: inv.customer, source: cleanSaleSource((inv.parent?.subscription_details?.metadata || inv.subscription_details?.metadata || {}).source) }); } catch { /* accounting never breaks the webhook */ } }
         }
         break;
       }

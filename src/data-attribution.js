@@ -35,6 +35,12 @@
 // shortest cut (300 characters, src/payments.js) keeps the run whole; its
 // answers carry each full credit.
 export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
+// The same terms ask an application others use to link the Terms of Use and
+// to tell its users they are bound by them: every answer that carries FRED
+// data says so in its `terms` field (termsAnswers below; the macro kit marks
+// each tool whose attribution is "fred").
+export const FRED_TERMS_URL = "https://fred.stlouisfed.org/docs/api/terms_of_use.html";
+export const FRED_TERMS = `Users of this data are bound by the FRED API Terms of Use: ${FRED_TERMS_URL}`;
 // CoinGecko's API terms ask for the credit with a link to its API page,
 // shown next to the data: the description sentence carries the link, and
 // every CoinGecko-backed answer carries the same sentence as `credit`
@@ -165,6 +171,29 @@ export function creditAnswers(tool, credit) {
   const inner = tool.handler;
   if (typeof inner === "function") {
     tool.handler = async function credited(...args) { return withCredit(await inner.apply(this, args), credit); };
+  }
+  return tool;
+}
+
+/** Mark `tool` as one whose answers carry `terms` (a source's terms-of-use
+ *  line with its link): set `tool.terms`, add the field to the published
+ *  example, and wrap the handler so every plain-object answer carries it.
+ *  Additive, and idempotent per tool. */
+export function termsAnswers(tool, terms) {
+  if (typeof terms !== "string" || !terms) throw new Error("termsAnswers: terms must be a sentence");
+  if (tool.terms === terms) return tool;
+  tool.terms = terms;
+  const ex = tool.discovery?.output?.example;
+  if (isPlainAnswer(ex) && !Object.hasOwn(ex, "terms")) tool.discovery.output.example = { ...ex, terms };
+  const inner = tool.handler;
+  if (typeof inner === "function") {
+    tool.handler = async function withTerms(...args) {
+      const answer = await inner.apply(this, args);
+      return isPlainAnswer(answer) && !Object.hasOwn(answer, "terms") ? { ...answer, terms } : answer;
+    };
+    // The guards that read a handler's source for the hosts and helpers it
+    // names (scripts/test-bazaar-descriptions.js) read the tool's own code.
+    Object.defineProperty(tool.handler, "toString", { value: () => String(inner) });
   }
   return tool;
 }

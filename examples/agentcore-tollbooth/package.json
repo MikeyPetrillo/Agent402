@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Reverse-flow: a Strands agent (AWS Bedrock AgentCore) paying a tollbooth-gated endpoint over x402",
+  "description": "Reverse-flow: a Strands agent (Amazon Bedrock AgentCore) paying a tollbooth-gated endpoint over x402",
   "scripts": {
     "start": "node run.js",
     "test": "node run.js"

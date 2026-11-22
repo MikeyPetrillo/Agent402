@@ -3,8 +3,16 @@
 // still says the old one. No imports: page modules read it without loading
 // the scanners.
 
-/** Base seller leaderboard (src/leaderboard.js). LEADERBOARD_REFRESH_MS overrides. */
-export const LEADERBOARD_DEFAULT_REFRESH_MS = 4 * 60 * 60_000;
+/** The seller boards (Base, Solana, MPP on Tempo) rebuild twice a day, each
+ *  at its own fixed UTC hours, an hour apart from the others
+ *  (src/board-refresh-slots.js): 3, 4 and 5 in the morning and afternoon, US
+ *  Eastern standard time, the quiet hours of the day's traffic. */
+export const BOARD_REFRESH_MS = 12 * 60 * 60_000;
+export const BOARD_SLOT_HOURS_UTC = Object.freeze({ base: Object.freeze([8, 20]), solana: Object.freeze([9, 21]), mpp: Object.freeze([10, 22]) });
+
+/** Base seller leaderboard (src/leaderboard.js). LEADERBOARD_REFRESH_MS overrides
+ *  (the board then runs on a plain interval of that length). */
+export const LEADERBOARD_DEFAULT_REFRESH_MS = BOARD_REFRESH_MS;
 export const LEADERBOARD_REFRESH_MS = Number(process.env.LEADERBOARD_REFRESH_MS) || LEADERBOARD_DEFAULT_REFRESH_MS;
 
 /** Live rail scan behind /revenue (src/revenue-live.js). REVENUE_SNAPSHOT_TTL_MS overrides. */

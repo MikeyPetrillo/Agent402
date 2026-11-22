@@ -505,7 +505,7 @@ export const ALCHEMY_DATA_TOOLS = [
           maxCount: { type: "number", description: "Rows per call, 1-100 (default 25)." },
           order: { type: "string", description: "desc (newest first, default) or asc." },
           includeZeroValue: { type: "boolean", description: "Include zero-value transfers (plain contract calls). Default false." },
-          pageKey: { type: "string", description: "Cursor from a previous response to fetch the next page." },
+          pageKey: { type: "string", maxLength: 200, description: "Cursor from a previous response to fetch the next page." },
           network: NETWORK_PROP,
         },
       },
@@ -901,7 +901,7 @@ export const ALCHEMY_DATA_TOOLS = [
       input: { contract: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", network: "ethereum", interval: "1d", days: 7 },
       inputSchema: {
         properties: {
-          symbol: { type: "string", description: "Ticker symbol (e.g. ETH, BTC). Use this OR contract+network." },
+          symbol: { type: "string", maxLength: 20, description: "Ticker symbol (e.g. ETH, BTC). Use this OR contract+network." },
           contract: { type: "string", description: "0x-prefixed 40-char ERC-20 contract address (with `network`)." },
           network: NETWORK_PROP,
           interval: { type: "string", description: "5m, 1h, or 1d (default 1d)." },
@@ -982,7 +982,7 @@ export const ALCHEMY_DATA_TOOLS = [
           maxCount: { type: "number", description: "Rows per call, 1-100 (default 25)." },
           order: { type: "string", description: "desc (newest first, default) or asc." },
           includeZeroValue: { type: "boolean", description: "Include zero-value transfers. Default false." },
-          pageKey: { type: "string", description: "Cursor from a previous response to fetch the next page." },
+          pageKey: { type: "string", maxLength: 500, description: "Cursor from a previous response to fetch the next page." },
         },
         required: ["address"],
       },

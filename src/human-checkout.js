@@ -83,6 +83,7 @@ import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 import { priceUsdFor as agentPriceUsdFor } from "./report-tiers.js";
 import { randomBytes } from "node:crypto";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
+import { cleanSaleSource } from "./sale-source.js";
 import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
 
 // ---- Public reports -------------------------------------------------------
@@ -722,7 +723,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   const negGet = (id) => { const n = negative.get(id); if (n && n.until > now()) return { status: n.status }; if (n) negative.delete(id); return null; };
   const negSet = (id, status) => { if (negative.size > 5000) negative.clear(); negative.set(id, { status, until: now() + (NEG_TTL[status] || 10_000) }); return { status }; };
 
-  async function createSession(productKey, inputValue) {
+  // `source`: the named source the visit arrived from (src/sale-source.js);
+  // anything not on its list is dropped here, before the session is made.
+  async function createSession(productKey, inputValue, { source = null } = {}) {
+    const from = cleanSaleSource(source);
     const p = Object.hasOwn(HUMAN_PRODUCTS, String(productKey)) ? HUMAN_PRODUCTS[productKey] : null;
     if (!p) { const e = new Error("Unknown product"); e.statusCode = 400; throw e; }
     const input = String(inputValue ?? "").trim();
@@ -745,7 +749,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       // The report input rides in metadata - we NEVER trust the client for it on
       // fulfillment; it comes back from Stripe with the paid session. Stripe caps
       // a metadata VALUE at 500 chars, so a long input is chunked across keys.
-      metadata: { product: productKey, ...chunkInput(input) },
+      metadata: { product: productKey, ...chunkInput(input), ...(from ? { source: from } : {}) },
       success_url: `${baseUrl}/r/{CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/reports?canceled=1`,
       // No customer account created; a one-off charge.
@@ -1074,7 +1078,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input }); } catch { /* follow-ups never break delivery */ } }
     // Book what Stripe actually collected (a promotion code lowers it), never the list price.
     const paidUsd = Number.isFinite(Number(session.amount_total)) ? Number(session.amount_total) / 100 : p.price / 100;
-    try { onSale?.({ sessionId, product: p.slug, priceUsd: paidUsd, listPriceUsd: p.price / 100, paymentIntent: typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null }); } catch { /* accounting never breaks delivery */ }
+    try { onSale?.({ sessionId, product: p.slug, priceUsd: paidUsd, listPriceUsd: p.price / 100, paymentIntent: typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null, source: cleanSaleSource(session.metadata?.source) }); } catch { /* accounting never breaks delivery */ }
   }
   // The same, for a record a replay booked: the session (the address, what
   // was paid) is read again from Stripe, never kept in the journal.

@@ -20,11 +20,12 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { childJson } from "./lib/child-json.js";
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ownStoreEnv } from "./lib/own-stores.js";
+import { copyModuleTree } from "./lib/tree-copy.js";
 
 const ROOT = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
 let pass = 0, fail = 0;
@@ -150,12 +151,7 @@ try {
 // The same seller through the module itself, from a copy of src: intact, it
 // is cut; with the cap removed from the funnel it is not. The working tree is
 // never edited.
-const copy = join(dir, "copy");
-mkdirSync(copy);
-cpSync(join(ROOT, "src"), join(copy, "src"), { recursive: true });
-cpSync(join(ROOT, "scripts"), join(copy, "scripts"), { recursive: true }); // the index imports revenue readers from there
-cpSync(join(ROOT, "package.json"), join(copy, "package.json"));
-symlinkSync(realpathSync(join(ROOT, "node_modules")), join(copy, "node_modules"));
+const copy = copyModuleTree(ROOT, join(dir, "copy")); // every path a src/ module reads when imported (scripts/lib/tree-copy.js)
 const INDEX_COPY = join(copy, "src", "x402-index.js");
 const FUNNEL = "v = cleanSellerEntry(capSellerEntry(v));";
 const CONTROL = join(dir, "control.mjs");

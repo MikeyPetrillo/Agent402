@@ -5,11 +5,10 @@
 // set keyed on the leaderboard rows array.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -34,17 +33,13 @@ ok(/settledHostsMemo\.get\(rows\)/.test(idx) && /settledHostsOf\(getLeaderboardS
 }
 
 // --- booted
-const port = await getFreePort();
+// Port 0, read back from the listening line (scripts/lib/boot-server.js); its own stores.
 const dir = mkdtempSync(join(tmpdir(), "a402-memo-"));
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: TOKEN, STATUS_DB_PATH: join(dir, "status.db") },
-  stdio: ["ignore", "ignore", "inherit"],
-});
-const base = `http://127.0.0.1:${port}`;
+const srv = await bootServer({ stores: "surface-memo", env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: TOKEN, STATUS_DB_PATH: join(dir, "status.db") } });
+const proc = srv.child;
+const base = srv.url;
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted");
+  ok(true, "server booted");
   const j = async (p) => (await fetch(`${base}${p}`)).json();
   const d1 = await j("/api/revenue/daily"), d2 = await j("/api/revenue/daily");
   ok(d1.asOf && d1.asOf === d2.asOf, `a repeat /api/revenue/daily inside the window is the memoized body (asOf ${d1.asOf})`);

@@ -10,6 +10,7 @@
 // state numbers - this one states none). Fonts embedded, no network.
 import { readFileSync } from "node:fs";
 import { RAILS } from "./rails.js";
+import { brandMarkTile } from "./brand-mark.js";
 
 const fontB64 = (f) => readFileSync(new URL(`../assets/fonts/${f}`, import.meta.url)).toString("base64");
 let fontStyle = null;
@@ -50,8 +51,7 @@ export function aifiCardSvg(width = 1200, height = 630) {
   <rect width="${width}" height="${height}" fill="${B.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
   <rect x="36" y="36" width="1128" height="558" rx="20" fill="${B.card}" stroke="${B.hairline}" stroke-width="2"/>
-  <rect x="84" y="88" width="56" height="56" rx="14" fill="#E3E6E9"/>
-  <text x="112" y="128" font-size="24" font-weight="700" font-family=${mono} text-anchor="middle" letter-spacing="-1" fill="${B.paper}">402</text>
+  ${brandMarkTile(84, 88, 56, { stroke: B.hairline })}
   <text x="162" y="127" font-size="32" font-weight="600" font-family=${display} letter-spacing="-0.5" fill="${B.ink}">Agent402</text>
   <text x="1116" y="127" font-size="22" font-weight="700" font-family=${mono} text-anchor="end" fill="${B.accent}">agent402.tools/agentic-finance</text>
   <line x1="84" y1="172" x2="1116" y2="172" stroke="${B.hairline}" stroke-width="2"/>

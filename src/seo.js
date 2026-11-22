@@ -1,5 +1,6 @@
 import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_COMMENT } from "./receipt-signing.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
+import { GUIDE_SITE, GUIDE_SITE_NAME } from "./ask402-links.js";
 import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
 import { TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_WINDOW_HOURS, TOOL_RELIABILITY_MIN_SAMPLE, toolReliabilityEnabled } from "./tool-reliability.js";
 import { smallHeaderLimitText } from "./payment-required-compact.js";
@@ -14,6 +15,7 @@ import { guideSlugs } from "./guides.js";
 import { skillSlugs, SKILL_PACKS, PACK_PRICES, PACK_PRICE_RANGE, skillPackOfToolSlug } from "./skills.js";
 import { BLOG_POSTS } from "./blog.js";
 import { integrationSlugs } from "./integration-pages.js";
+import { PLATFORM_INTEGRATIONS } from "./platform-integrations.js";
 import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS, RAILS_OR, countWord } from "./rails.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
@@ -37,6 +39,7 @@ import { listPublicReports } from "./human-checkout.js";
 import { pageLastmod, dayOf } from "./page-dates.js";
 
 import { REPO_URL } from "./repo-link.js";
+import { returningWalletSentence } from "./returning-wallet.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { fromPriceLabel } from "./quoted-from.js";
@@ -438,6 +441,7 @@ export function learnIntegrationUrls(baseUrl) {
     { loc: `${baseUrl}/learn`, priority: "0.8" },
     ...learnSlugs().map((s) => ({ loc: `${baseUrl}/learn/${s}`, priority: "0.8" })),
     ...integrationSlugs().map((s) => ({ loc: `${baseUrl}/integrations/${s}`, priority: "0.7" })),
+    ...PLATFORM_INTEGRATIONS.map((p) => ({ loc: `${baseUrl}/integrations/${p.slug}`, priority: "0.7" })),
   ];
 }
 export function sitemapLearn(baseUrl) {
@@ -633,7 +637,7 @@ Determine it from the response you already hold, without asking us:
 
 ${PAYMENT_RETRY_VERBS_NOTE}
 
-Every x402 authorization is single-use, so a retry needs a fresh signature unless the refusal's retry is same-payment, watch-transaction or check-wallet. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again. A request re-sent with the same signed EVM payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer too, marked \`X-Replayed-Answer: 1\`, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted). **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails; agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key${creditsKeyQualifier()} also skips the per-call signature.
+Every x402 authorization is single-use, so a retry needs a fresh signature unless the refusal's retry is same-payment, watch-transaction or check-wallet. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again.${returningWalletSentence() ? ` ${returningWalletSentence()}` : ""} A request re-sent with the same signed EVM payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer too, marked \`X-Replayed-Answer: 1\`, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted). **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails; agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key${creditsKeyQualifier()} also skips the per-call signature.
 
 The settlement rule: on x402 a response of 400 or above is not settled, and each response shows whether anything settled, so you can check it yourself.
 
@@ -686,6 +690,7 @@ ${flatTiersLine()}
   - ${connectorPayShort()}
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
 - [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.14.1\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.14.1\`
+${PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
 
 ## Framework adapters (zero-dependency npm)
 - [agent402-openai-tools](https://www.npmjs.com/package/agent402-openai-tools): OpenAI function-calling (chat.completions / Assistants / Responses)
@@ -722,14 +727,15 @@ ${toolReliabilityEnabled() ? `- [Per-tool reliability](${baseUrl}${TOOL_RELIABIL
 - [Test your x402 client](${baseUrl}/x402-test): point any client at a real paid route and read why it was refused - which field differs from what was advertised, which schemes and networks are offered, whether the amount or the validity window is wrong. Refusals are free (an error status cancels settlement); every reason this server emits is listed there
 - [x402 & MPP 101](${baseUrl}/101): the ten-minute walkthrough for people new to the space - plain language, speaker notes, and a live demo (402 quote decoded, pay with a puzzle, real receipts)
 - [Glossary](${baseUrl}/glossary): x402, MPP, HTTP 402, facilitator, EIP-3009, receipts, settlement, rails, dual-stack, PoW tier, SOR, tollbooth - every term defined once, with anchors
-- [What is x402?](${baseUrl}/what-is-x402) / [What is MPP?](${baseUrl}/what-is-mpp): the two payment wires explained
+- [x402 and MPP on Agent402](${baseUrl}/what-is-x402) / [MPP on Agent402](${baseUrl}/what-is-mpp): how each payment wire runs on this server
+- [${GUIDE_SITE_NAME}](${GUIDE_SITE}): x402 and MPP explained in plain language, for people
 - [How to pay](${baseUrl}/how-to-pay): from nothing to a paid call on every rail (x402 on each listed chain, MPP over Tempo, EVM or card, proof-of-work): what you need, the 402 flow, a snippet, the receipt, and what happens to the money when a call fails
 - [Speech](${baseUrl}/speech): the model-backed speech tools (text-to-speech tiers, transcription with speaker labels, the OpenAI-shaped wires) with voices, formats, caps and the fallback chain read from the tools themselves
 - [Learn](${baseUrl}/learn): explainers with real headers - [x402](${baseUrl}/learn/x402), [HTTP 402](${baseUrl}/learn/http-402), [MPP](${baseUrl}/learn/mpp), [agent payments](${baseUrl}/learn/agent-payments), [pay-per-call APIs](${baseUrl}/learn/pay-per-call-api), [payments over MCP](${baseUrl}/learn/mcp-payments)
 - [Integrations](${baseUrl}/integrations): one page per published package (framework adapters, MCP server, buyer SDK, tollbooth, OpenClaw provider) with install line, example and payment modes
 - [llms-full.txt](${baseUrl}/llms-full.txt): this file plus every catalog route (slug, method, route, price, one-line description) and the learn summaries
-- [Maintainer](${REPO_URL}): Havok Holdings LLC, mike@agent402.tools
-- [Ownership and licensing](${REPO_URL}#ownership-and-licensing): Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright; server AGPL-3.0-or-later, published packages MIT; a commercial license to the code at mike@agent402.tools; outside contributions carry a DCO sign-off and the contributor license agreement (CLA.md), which covers new and earlier contributions
+- [Maintainer](${REPO_URL}): Havok Holdings LLC, help@agent402.tools
+- [Ownership and licensing](${REPO_URL}#ownership-and-licensing): Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright; server AGPL-3.0-or-later, published packages MIT; a commercial license to the code at help@agent402.tools; outside contributions carry a DCO sign-off and the contributor license agreement (CLA.md), which covers new and earlier contributions
 `;
 }
 
@@ -833,7 +839,7 @@ ${summary}
 
 Base URL: ${baseUrl}
 
-The full text, with every skill pack and every tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing.
+The full text, with every skill pack and every tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP in plain language, for people: ${GUIDE_SITE}.
 
 ${[
     frontDoorMarkdown(catalog, baseUrl),
@@ -872,7 +878,8 @@ export function llmsFullTxt(baseUrl, catalog) {
 - Rail rules: ${baseUrl}${CONFORMANCE_PATH}, the row whose \`id\` names the rail and network paid on: \`receipt\`, \`settleAfterAnswer\`, \`idempotencyKey\`, \`replayGuard\` and \`refundOnChargedFailure\`. ${receiptsServed() ? `Where \`signedReceipt\` reads true, the answer also carries \`${RECEIPT_HEADER}\`, a compact JWS (EdDSA) this server signs over the route, the request digest, the answer's sha256, the price, the rail, the payer and the settlement, after settlement; a streamed answer ends with a \`: ${RECEIPT_SSE_COMMENT} <receipt>\` server-sent comment line (event-stream parsers skip it) over every byte streamed before it (an \`${RECEIPT_HEADER}\` trailer too with \`TE: trailers\`), a credits call's receipt names the key's id and its debit, a card-bought report's receipt is on its page and in its email, a monitor subscription gets one per paid period (the first and every renewal) with its period statement on its confirmation page or status link and in its monitor emails, and a paid MCP result carries it in \`_meta["tools.agent402/receipt"]\`; keys at ${baseUrl}${RECEIPT_KEYS_PATH}, free check at \`POST ${RECEIPT_VERIFY_PATH}\`.` : "\`signedReceipt\` reads false on every paid rail: the receipt is the settlement's own record."}
 - Audit report: \`POST /api/audit-report\`, paid from the wallet it covers, returns that wallet's paid calls over a window of up to a year (time, tool, route, amount, rail, network, settlement, request and response digests${receiptsServed() ? ", and each call's signed receipt" : ""}) with totals by tool and by day, as JSON or CSV${receiptsServed() ? `, plus a summary receipt over the report that \`POST ${RECEIPT_VERIFY_PATH}\` checks` : ""}.
 - Outside sellers: ${baseUrl}/api/index?seller=<host> gives a seller's crawl history, the live probe of its paywall and the router's verdict on paying it.
-- Seller reputation: ${baseUrl}/api/reputation?seller=<host> gives one outside seller's reputation as this server measured it over 30 days: manifest and 402 uptime, responsiveness, the live 402 price against the listed price, delivery (measured from purchases Agent402's router made for buyers), and age; each metric with its method, sample size and last measurement, scored only past its minimum sample (else \`not-enough-data\`). It counts no payments or buyers. A day on which our own crawl cycle failed broadly on our side is left out of the crawl and paywall metrics and named under \`measurementIssue\` ("measurement issue on our side"). A seller asks for a fresh measurement with \`POST /api/reputation/recheck?seller=<host>\` (free; one accepted request per seller every 6 hours, a repeat answers the one scheduled; 202 with \`crawlBy\` and \`recordBy\`); the record shows \`lastRecheckedAt\`. Corrections: mike@agent402.tools.
+- Seller reputation: ${baseUrl}/api/reputation?seller=<host> gives one outside seller's reputation as this server measured it over 30 days: manifest and 402 uptime, responsiveness, the live 402 price against the listed price, delivery (measured from purchases Agent402's router made for buyers), and age; each metric with its method, sample size and last measurement, scored only past its minimum sample (else \`not-enough-data\`). It counts no payments or buyers. A day on which our own crawl cycle failed broadly on our side is left out of the crawl and paywall metrics and named under \`measurementIssue\` ("measurement issue on our side"). A seller asks for a fresh measurement with \`POST /api/reputation/recheck?seller=<host>\` (free; one accepted request per seller every 6 hours, a repeat answers the one scheduled; 202 with \`crawlBy\` and \`recordBy\`); the record shows \`lastRecheckedAt\`. Corrections: help@agent402.tools.
+- Router benchmarks: ${baseUrl}/api/router-benchmarks gives the same 30-day measurements in aggregate: the share of the router's recorded purchases a seller answered 200 after payment, and the uptime, responsiveness and price-match scores of the sellers the router bought from beside the indexed sellers it did not buy from. No seller is named, and a statistic is published only when at least five sellers are scored on it.
 - Walkthrough: ${baseUrl}/trust#verify
 
 ## Learn (summaries)

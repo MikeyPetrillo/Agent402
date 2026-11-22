@@ -16,6 +16,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { GLOSSARY, glossaryPage } from "../src/glossary.js";
 import { resolveRailCountTokens } from "../src/rails.js";
 import { agenticFinancePage } from "../src/agentic-finance.js";
+import { CARD_ART_VERSION } from "../src/brand-mark.js";
 import { whatIsX402Page } from "../src/what-is-x402.js";
 import { whatIsMppPage } from "../src/what-is-mpp.js";
 import { BLOG_POSTS, blogPost } from "../src/blog.js";
@@ -104,7 +105,7 @@ ok(!/\b1,?000 tools\b/.test(post?.body || "") && /500\+/.test(post?.body || ""),
   const svg = aifiCardSvg();
   ok(/Agentic Finance/.test(svg) && /x402 · MPP/.test(svg) && /agent402\.tools\/glossary/.test(svg) && !/\b\d{3,4} tools\b/.test(svg), "AIFI card names the category, both wires and the glossary; counts evergreen");
   for (const [name, page] of [["/agentic-finance", aifi], ["/glossary", html]]) {
-    ok(page.includes(`<meta property="og:image" content="${BASE}/og/agentic-finance.png">`) && page.includes(`<meta name="twitter:image" content="${BASE}/og/agentic-finance.png">`), `${name} og:image + twitter:image point at /og/agentic-finance.png`);
+    ok(page.includes(`<meta property="og:image" content="${BASE}/og/agentic-finance.png?v=${CARD_ART_VERSION}">`) && page.includes(`<meta name="twitter:image" content="${BASE}/og/agentic-finance.png?v=${CARD_ART_VERSION}">`), `${name} og:image + twitter:image point at /og/agentic-finance.png under the card art version`);
   }
 }
 

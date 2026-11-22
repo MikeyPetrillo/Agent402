@@ -67,6 +67,10 @@ t node scripts/test-badge-contrast.js
 t node scripts/test-ga-snippet.js
 # GA key events: buy clicks and checkout starts reach GA with the product only (stub DOM, offline)
 t node scripts/test-ga-key-events.js
+# Prefilled storefront link (/reports?product=&input=): the page's own script selects the card and fills the field in a DOM, never submits, unknown product is the plain page, the server never writes the value into the HTML
+t node scripts/test-reports-prefill.js
+# The plain-language guide site: named in the menu, /learn, /how-to-pay and llms.txt as plain links; this site's explainer pages link its explainers, keep their own canonical and stay indexable
+t node scripts/test-guide-site-links.js
 # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
 t node scripts/test-analytics-privacy.js
 # Age, self-hosted fonts, analytics off-switches, recurring-mail stop links, renewal terms after purchase, the copyright agent
@@ -118,6 +122,12 @@ t node scripts/test-ssrf-redirect-hops.js
 # Guard lookups run on c-ares, not the thread pool: a full pool and unanswered names never delay a healthy one
 t node scripts/test-dns-pool-starvation.js
 t node scripts/test-dns-name-filter.js
+# A string input the handler caps by length declares maxLength in its published schema (offline, measured)
+t node scripts/test-input-schema-caps.js
+# Contact surfaces name the role addresses; the personal mailbox only where another record fixes it
+t node scripts/test-role-addresses.js
+# email-validate names the mailbox provider from the MX lookup it already makes (offline)
+t node scripts/test-mailbox-provider.js
 t node scripts/test-undici-dispatcher.js
 # Discovery & trust surfaces (/.well-known/x402, /api/reliability)
 t node scripts/test-discovery.js
@@ -220,6 +230,8 @@ t node scripts/test-sync-count-floor.js
 t node scripts/test-invariants.js
 # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
 t node scripts/test-cdp-kit.js
+# onchain SQL reads sign with their own CDP key pair, the main pair when it is unset (offline)
+t node scripts/test-cdp-sql-key.js
 # onchain-sql busy answer spread, in-flight place wait (first come first served), pairs back to back, monotonic pacer clock (offline)
 t node scripts/test-onchain-sql-pacer.js
 # onchain-sql query-count histogram: queries per call by how the response ended, stored as counts only, 35 days kept (offline)
@@ -301,12 +313,16 @@ t node scripts/test-code-run-caps.js
 t node scripts/test-safe-regex.js
 # Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
 t node scripts/test-sales-ledger.js
+# One settlement, one sale: the writer does not write a second sale for a Solana signature, every counting reader reads a file with repeat rows as the file without them, the operator script's dry run changes nothing (offline)
+t node scripts/test-sale-repeats.js
 # Referral sales in the sales figures: once, outside, under the slug, at the gross (never the net, never named); the on-chain buyer behind the split contract; the operator reconciliation against a seeded book
 t node scripts/test-referral-counting.js
 # Weekly outside MPP agents: counts only, internal excluded, new vs returning over all history, operator-only route
 t node scripts/test-mpp-agents-weekly.js
 # Arrival path per sale (mcp, client package, http) on the operator surfaces; sweep/burst cohorts; the Gateway test buyer is ours
 t node scripts/test-sale-path.js
+# Named source of a card sale: utm_source from the page address through the checkout request, the session metadata and the sale hook to the ledger; unlisted values dropped; counted on /__operator/sales.json only (booted, Stripe answered by a local stub)
+t node scripts/test-sale-source.js
 # Paid-call funnel per day and arrival path (probes, 402s served, attempts, settlements, refusal classes, callers that never came back), the ledger half and weekly figures, a 400k-row cost bound, operator-only /__operator/funnel.json (paid boot, stub facilitator)
 t node scripts/test-funnel.js
 # Funnel sources: User-Agent family, Referer class, the discovery document a caller read last (keyed hash, window, cap), no-payment reasons, next-step and timeout counts on a real traffic store
@@ -321,6 +337,8 @@ t node scripts/test-scoreboard.js
 t node scripts/test-mcp-x402-routes.js
 # First-call allowance returning payers (operator view): granted wallets with a later outside paid sale, and within 7 days; one batched ledger read, cached (offline, temp SQLite ledger)
 t node scripts/test-first-call-allowance-returned.js
+# The seller boards rebuild at fixed slots, one at a time, never beside a crawl or under a high heap; a boot rebuilds only a missed slot (offline, simulated clock)
+t node scripts/test-board-refresh-slots.js
 t node scripts/test-attest-kit.js
 # One mirror pull in flight; a fresh lookup during a running pull waits and pulls again (offline)
 t node scripts/test-single-flight.js
@@ -376,7 +394,7 @@ t node scripts/test-supply-chain-guards.js
 t node scripts/test-wallet-e2e.js
 # MCP Registry find-latest-version helper (used by the publish job to auto-deprecate a superseded version — offline)
 t node scripts/test-mcp-find-latest-version.js
-# Stripe Link canary reads every CLI answer shape and says why it stops (offline)
+# Stripe Link canary (run by hand from the operator's machine on the Link CLI's local session, scripts/link-canary-local.sh): reads every CLI answer shape, says why it stops, never hands a token to the CLI, and the wrapper's flags and refusals (offline)
 t node scripts/test-stripe-link-canary.js
 # FFmpeg video-decode lockout (R-06: every ffmpeg and ffprobe call passes an audio-only -codec_whitelist before -i, so the MagicYUV video decoder never opens; offline)
 t node scripts/test-ffmpeg-novideo.js
@@ -493,6 +511,10 @@ t node scripts/test-loop-gate.js
 # Judgment backends: order, the private-table bound on Luna, one answer shape per route, /v1/decisions wire (offline, stubbed)
 t node scripts/test-judge-luna.js
 t node scripts/test-judge-preview.js
+# Judge timing: p50 and p95 per backend read and per walk, outcomes and fallbacks, on the operator view and an hourly log line (offline)
+t node scripts/test-judge-timing.js
+# The returning-wallet price: settings, routes never discounted, price math, the payment signer decides (never the hint), settle check, bounded ledger read (offline)
+t node scripts/test-returning-wallet.js
 # Decision-1: the shared client, the internal fallback at every Jev call site, the third paid backend and its private-table bound (offline, stubbed)
 t node scripts/test-decision-one.js
 # Wish-board input hygiene (a client bug is not market demand)

@@ -3,6 +3,8 @@ paths:
   - "src/tools/pdf*.js"
   - "src/tools/office-*.js"
   - "src/tools/ocr-kit.js"
+  - "src/caller-turns.js"
+  - "src/caller-places.js"
   - "src/tools/media-kit.js"
   - "src/tools/render.js"
   - "src/tools/render-static.js"
@@ -21,15 +23,37 @@ Loaded when a media, document or worker-pool tool file is read.
 - **Media and documents:** the OCR language data is baked into the image at build
   (`scripts/fetch-tessdata.js`, pinned and hash-checked; `OCR_TESSDATA_DIR` overrides the
   directory), so `image-ocr` never fetches a model at request time; an engine that does not
-  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. **OCR admission:** one image
-  over `OCR_LARGE_PIXELS` (16 MP) is in the engine at a time, at most `OCR_LARGE_QUEUE_MAX` (2)
-  wait up to `OCR_LARGE_WAIT_MS` (15 s) and the next is a 503 with Retry-After (no upstream call);
-  admission is per caller (signed payer, credits key, Tempo sender, else the client address,
-  `ocrCallerOf` in `src/tools/ocr-kit.js`): a caller holding nothing is never refused while a
-  queued place belongs to a caller that holds another, which loses that place with a 503. A
-  caller is its strongest key, for admission as for eviction, so buyers who share an address are
-  separate callers; a request that names none (unsigned, behind a CDN edge with no proof of its
-  client) is always a newcomer (`ANONYMOUS_CALLER`, `src/dispatch-caller.js`). On the
+  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. **OCR turns:** one image
+  over `OCR_LARGE_PIXELS` (16 MP) is in an engine at a time, in an engine of its own that is
+  terminated when the image is done; smaller images run one at a time on their language's worker;
+  at most `OCR_WORKER_MAX` (3) engines run at once. Turns are fair across callers
+  (`src/caller-turns.js`; a caller is `ocrCallerOf`: signed payer, credits key, Tempo sender, else
+  the client address, every key counted): images are read in arrival order, a caller's later
+  images standing where its earlier one left the engine, so one caller's run of images (from one
+  wallet, several wallets behind one address, or one wallet from several addresses) waits behind
+  what other callers sent meanwhile. An image holds its engine `OCR_RUN_MAX_MS` (120 s) at most
+  and never past the time its call can be answered and settled (the CDN window, the payment
+  authorization's life; 422 `image-too-slow`), `OCR_TURN_MS` (30 s) once
+  another caller's image waits for that engine when its own caller has used an engine in the last
+  `OCR_FRESH_WINDOW_MS` (ten minutes, every key, answered or not; it gives way with a retryable
+  503; a caller's first image in that window is never asked to give way), and only while its
+  caller's connection is open (499). Engine time that ends without an answer counts
+  `OCR_UNPAID_WEIGHT` (4) times against that caller's place in line. A call waits in line
+  `OCR_LARGE_WAIT_MS` (one whole run and the engine's retirement, 135 s, never past its own
+  call's time), then a 503 with Retry-After,
+  and keeps its place for the retry (a ticket, two minutes, renewed by each retry); no call that
+  arrives later is read ahead of it. The line holds `OCR_QUEUE_MAX` (64) images, `OCR_LARGE_QUEUE_MAX` (8) of them
+  large, and `OCR_QUEUE_MAX_BYTES` (96 MB). At that bound a caller that already holds a place is
+  the one refused (a 503 that says its own images wait), and a caller holding nothing is admitted
+  over it, nobody giving way, up to the hard bound: `OCR_QUEUE_HARD_MAX` (128) images,
+  `OCR_LARGE_QUEUE_HARD_MAX` (16) large, `OCR_QUEUE_HARD_MAX_BYTES` (144 MB, the most the waiting
+  images hold in memory). Only at the hard bound does a caller holding nothing take a place: the
+  newest of the party holding the most (the caller whose own key holds the most, then the address
+  holding the most, while one holds several; never from a caller holding one place while another
+  party holds several), then whatever stands behind its kept place; with one place each nobody
+  gives way and the caller arriving is refused (`src/caller-places.js` `admit`). A buyer is never
+  answered busy for sharing an address with other buyers short of the hard bound. A request that names no caller (unsigned, behind a CDN edge with no
+  proof of its client: `ANONYMOUS_CALLER`, `src/dispatch-caller.js`) shares one key. On the
   free tier the caller is the client address. Suite: `scripts/test-ocr-crash.js`. PDF transforms
   (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
   `pdf-worker.js`) with a heap limit, a decoded-stream cap and a deadline that terminates it
@@ -112,7 +136,12 @@ Loaded when a media, document or worker-pool tool file is read.
   file's headers declare and the length its audio measures. `measureAudio` (`src/tools/media-kit.js`) decodes the first
   audio stream to nowhere with ffmpeg (audio-only whitelist) and answers `{ seconds }`, `{ undecodable }` or
   `{ unavailable }`. Its pool holds one decode per CPU the process may use (`os.availableParallelism()`, held to 2..8;
-  `AUDIO_DECODE_SLOTS`, 1 to 64, overrides it). A transcription call passes `deadlineAt` (`decodeDeadlineAt` in
+  `AUDIO_DECODE_SLOTS`, 1 to 64, overrides it). Its queue follows the OCR line's two-bound rule (`src/caller-places.js`):
+  `MEASURE_QUEUE_PER_SLOT` (4) waiters a slot holding at most 200 MB, where a caller that already holds a slot or a place
+  is the one answered busy and a caller holding nothing is queued over the bound; the hard bound is
+  `MEASURE_QUEUE_HARD_PER_SLOT` (8) a slot and one and a half times the bytes (300 MB at most), and only there does the
+  newest place of the party holding the most go to a newcomer (`scripts/test-media-input-args.js`).
+  A transcription call passes `deadlineAt` (`decodeDeadlineAt` in
   `src/tools/stt-kit.js`: the route's payment-window budget, the CDN answer window and the payment authorization,
   whichever ends first, less the upstream's whole cap, 60 s or 120 s diarized): it waits for a slot while that still
   leaves a 10 s decode, and its decode may run to it (at most 60 s). A caller without one waits 5 s and decodes for 10 s.

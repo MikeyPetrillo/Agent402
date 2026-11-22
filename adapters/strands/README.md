@@ -9,7 +9,7 @@ Chain, or a stock `mppx` fetch) for wallet-only tools.
 
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; wallet-only tools take any payment-wrapped fetch (`@x402/fetch`, or a stock `mppx` fetch).
 
-Works in a Strands agent anywhere it runs, including on AWS Bedrock AgentCore.
+Works in a Strands agent anywhere it runs, including on Amazon Bedrock AgentCore.
 
 ## Install
 
@@ -76,7 +76,7 @@ const { tools, execute } = await agent402Tools({
 
 `agent402Execute` takes the same options.
 
-## On AWS Bedrock AgentCore
+## On Amazon Bedrock AgentCore
 
 Two ways in:
 
@@ -85,7 +85,7 @@ Two ways in:
 2. Or use this adapter to pull a *curated subset* of tools and embed them
    directly in a Strands agent running on AgentCore.
 
-See the [AWS Bedrock AgentCore integration guide](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore)
+See the [Amazon Bedrock AgentCore integration guide](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore)
 for the end-to-end recipe.
 
 ## API

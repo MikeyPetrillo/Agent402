@@ -56,17 +56,17 @@ const recorded = ({ m, e }, { source, usd, tier, model, priceUsd }, label) => {
 const SPEECH_FRONT = SPEECH_MODELS[0].id;
 const T = {
   models: [["acme/", { completion: 2, prompt: 1 }], ...(U.REQUIRED_MODEL_ROWS || []).map((id) => [id, { completion: 2, prompt: 1 }])],
-  speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "x-ai/grok-voice-tts-1.0": 0.125, [SPEECH_FRONT]: 0.0625, "mistralai/voxtral-mini-tts-3-0": 0.03125 },
+  speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "x-ai/grok-voice-tts-1.0": 0.125, [SPEECH_FRONT]: 0.0625, "mistralai/voxtral-mini-tts-3-0": 0.03125, "elevenlabs/eleven-v3-conversational": 0.015625 },
   embeddings: { "text-embedding-3-small": 8, "text-embedding-3-large": 16 },
   openai: { "gpt-image-2.6-flare": { completion: 40, prompt: 5 }, "gpt-image-2.6-sunburst": { completion: 41, prompt: 6 }, "gpt-4o": { completion: 90, prompt: 10 } },
-  sttPerMinute: { "gpt-transcribe": 0.6, "elevenlabs/scribe-v2": 1.2 },
+  sttPerMinute: { "gpt-transcribe": 0.6, "elevenlabs/scribe-v2": 1.2, "mistralai/voxtral-mini-transcribe-3-0": 2.4, "mistralai/voxtral-small-transcribe-3-0": 4.8, "microsoft/mai-transcribe-2": 9.6 },
   media: { "fake/image-model": { worstCaseUsd: 1, listedMaxUsd: 1 }, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 1, listedMaxUsd: 1 } },
   fees: { webSearchPerUse: 0.25, groundedPerCall: 0.125, rerankPerUnit: 5, settlementPerCall: 0.5 },
   meter: { markup: 1.25 },
-  vendor: { x: { postRead: 0.5, userRead: 0.25, countsRequest: 0.5, trendsRequest: 0.5 }, decisions: { luna: 1, decisionOne: 1, gemini: 1, jev: 1, maxShare: 0.9 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } },
+  vendor: { x: { postRead: 0.5, userRead: 0.25, countsRequest: 0.125, trendsRequest: 0.0625 }, decisions: { luna: 1, decisionOne: 1, gemini: 1, jev: 1, maxShare: 0.9 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } },
 };
 U.setUpstreamCostsForTest(T);
-ok(U.upstreamCostsStatus() === "ok", "the fake table is complete (every key a serving path reads)");
+ok(U.upstreamCostsStatus() === "ok", `the fake table is complete (every key a serving path reads)${U.upstreamCostsGaps().length ? `: missing ${U.upstreamCostsGaps().join(", ")}` : ""}`);
 
 const realFetch = globalThis.fetch;
 const hostOf = (u) => { try { return new URL(String(u)).host; } catch { return ""; } };

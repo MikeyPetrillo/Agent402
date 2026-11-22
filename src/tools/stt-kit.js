@@ -67,6 +67,7 @@ import { assertUpstreamBody } from "./llm-gateway-kit.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { mediaMeterEnabled, setMeterSentinel } from "../gateway-meter.js";
 import { audioProviderPolicy } from "../openrouter-audio-policy.js";
+import { admittedSttAdditions } from "../speech-additions.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
 import { attributed, ATTRIBUTION, KIND, secondsOf, isDnsFailure, currentBudget, handlerBudgetMs, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
@@ -117,14 +118,47 @@ export function sttLongEnabled(env = process.env) { return String(env.TRANSCRIBE
 export const TRANSCRIBE_LONG_RUN_SECONDS = 230;
 const TIERS = STT_TIERS;
 
-function validateInput(input, req = null) {
+/** The transcription models a buyer can name on a tier beside its own
+ *  (src/speech-additions.js): each is served and listed only while its
+ *  private per-minute row is present and the tier's cap on it stays inside the
+ *  margin bound of the tier's price. Read at call time. */
+export function sttAdditions(tierSlug) {
+  const t = TIERS[tierSlug];
+  return t ? admittedSttAdditions({ priceUsd: t.priceUsd, maxMinutes: t.maxMinutes }) : [];
+}
+/** The named model a request asks for, or null for the tier's own. A name
+ *  this tier does not serve is a 400 before any fetch or spend, and so is a
+ *  name beside diarize (speaker labels come from one model). */
+export function sttModelOf(input, tierSlug, req = null, diarize = false) {
+  const raw = input?.model;
+  if (raw === undefined || raw === null || raw === "") return null;
+  const name = String(raw).trim().toLowerCase();
+  const tier = TIERS[tierSlug];
+  if (name === tier.model || name === `openai/${tier.model}`) return null;
+  const served = sttAdditions(tierSlug);
+  const hit = served.find((m) => m.id === name || m.aliases.includes(name));
+  if (!hit) {
+    throw bad(`"model" ${served.length ? `must be one of: ${[tier.model, ...served.map((m) => m.id)].join(", ")}` : `is not a choice on this route, which serves ${tier.model}`} (or omit it).${notChargedOn(req)}`);
+  }
+  if (diarize) throw bad(`"model" and diarize:true cannot be combined: speaker labels come from the ${tier.diarizeModel.split("/").pop()} model. Send one or the other.${notChargedOn(req)}`);
+  return hit.id;
+}
+/** The `model` input property of a tier's schema: present only while the tier serves a named model. */
+export function sttModelProperty(tierSlug) {
+  const served = sttAdditions(tierSlug);
+  if (!served.length) return {};
+  return { model: { type: "string", description: `Optional: a model to transcribe with in place of ${TIERS[tierSlug].model}, one of ${served.map((m) => m.id).join(", ")} (model-backed; same price and cap; not with diarize). The answer names the model that served it.` } };
+}
+
+function validateInput(input, req = null, tierSlug = null) {
   const url = typeof input.url === "string" ? input.url.trim() : "";
   if (!url) throw bad('"url" is required - a URL pointing to an audio file (mp3, wav, m4a, etc.)');
   if (!/^https?:\/\//i.test(url)) throw bad('"url" must be an HTTP(S) URL');
 
   const language = typeof input.language === "string" ? input.language.trim().toLowerCase() : undefined;
   refuseUnservedFields(input, req);
-  return { url, language, diarize: diarizeFlag(input.diarize) };
+  const diarize = diarizeFlag(input.diarize);
+  return { url, language, diarize, model: tierSlug ? sttModelOf(input, tierSlug, req, diarize) : null };
 }
 
 /** `keyterms` and `entities` are not honored by the models this kit sends
@@ -601,15 +635,18 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
  *  timestamps. Same answer fields as the default path plus `words` and
  *  `speakers`; a failure is a 4xx/5xx that cancels settlement, never a quiet
  *  fall back to a transcript without the speakers the buyer asked for. */
-async function callScribe(audioBuffer, filename, model, language, probedDuration = null, timeoutMs = UPSTREAM_CAP_MS.diarize) {
+async function callScribe(audioBuffer, filename, model, language, probedDuration = null, timeoutMs = UPSTREAM_CAP_MS.diarize, { diarize = true } = {}) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503);
   const form = new FormData();
   form.append("file", new Blob([audioBuffer]), filename);
   form.append("model", model);
-  form.append("response_format", "verbose_json");
-  form.append("diarize", "true");
-  form.append("timestamp_granularities[]", "word");
+  // A named model (src/speech-additions.js) is asked for the transcript alone.
+  form.append("response_format", diarize ? "verbose_json" : "json");
+  if (diarize) {
+    form.append("diarize", "true");
+    form.append("timestamp_granularities[]", "word");
+  }
   if (language) form.append("language", language);
   // Our data policy, set on the request (multipart takes it as a JSON string).
   form.append("provider", JSON.stringify(audioProviderPolicy(model)));
@@ -635,6 +672,15 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
   assertUpstreamBody(data);
   // Silent audio is an empty transcript; a body with no transcript field is not an answer.
   if (typeof data.text !== "string") throw bad("Transcription upstream returned no transcript - retry", 502);
+  if (!diarize) {
+    return {
+      model,
+      provider: "openrouter",
+      text: data.text,
+      language: answerLanguage(data.language, language, data.text),
+      duration: Number.isFinite(data.duration) ? data.duration : (Number.isFinite(probedDuration) ? Math.round(probedDuration * 100) / 100 : null),
+    };
+  }
   const words = (Array.isArray(data.words) ? data.words : []).map((w) => ({
     word: String(w.word ?? ""),
     start: Number.isFinite(w.start) ? w.start : null,
@@ -697,7 +743,7 @@ function retryLeftMs(startedAt, capMs, req) {
  *  adds that exception to this exact sentence (server.js withPushException). */
 /** finalFailure, for tests of the charge sentence on and off a route call. */
 export function __sttFinalFailureForTest(err, opts) { return finalFailure(err, opts); }
-function finalFailure(err, { attempts, diarize, req }) {
+function finalFailure(err, { attempts, diarize, req, named = null }) {
   if (err?.ourBillingLimit && typeof err.message === "string" && !err.message.includes(NOT_CHARGED)) {
     err.message = `${err.message}${notChargedOn(req)} Retry later.`;
     return err;
@@ -705,7 +751,9 @@ function finalFailure(err, { attempts, diarize, req }) {
   if (!err || !(err.statusCode >= 500) || err.hardCap || err.noRetry || typeof err.message !== "string" || err.message.includes(NOT_CHARGED)) return err;
   const tried = attempts > 1 ? ` (${attempts} attempts)` : "";
   // The other path is named only while this server can serve it.
-  const other = diarize
+  const other = named
+    ? ', or send the call without "model" (the route\'s own model serves it at the same price)'
+    : diarize
     ? (OPENAI_KEY() ? ", or send the call without diarize for a transcript without speaker labels (a different model serves it)" : "")
     : (OPENROUTER_KEY() ? ", or send diarize:true (a different model serves that at the same price)" : "");
   const what = err.message.replace(/\s+-\s+retry(?: shortly)?\s*$/i, "").replace(/[.\s]+$/, "");
@@ -732,30 +780,32 @@ function finalFailure(err, { attempts, diarize, req }) {
  *     as spend, and the price does not change.
  * A served second attempt says so in `agent402_retried`.
  */
-async function transcribeWithRetry(buf, filename, tierSlug, language, diarize, probedDuration, req) {
+async function transcribeWithRetry(buf, filename, tierSlug, language, diarize, probedDuration, req, named = null) {
   const tier = TIERS[tierSlug];
-  const model = diarize ? tier.diarizeModel : tier.model;
-  const capMs = retryKnobs.capMs ?? sttUpstreamCapMs(tierSlug, diarize);
-  const attempt = (timeoutMs) => (diarize
-    ? callScribe(buf, filename, model, language, probedDuration, timeoutMs)
+  const model = named || (diarize ? tier.diarizeModel : tier.model);
+  // A named model goes over the same wire, and keeps the same cap, as the speaker-label path.
+  const wire = diarize || Boolean(named);
+  const capMs = retryKnobs.capMs ?? sttUpstreamCapMs(tierSlug, wire);
+  const attempt = (timeoutMs) => (wire
+    ? callScribe(buf, filename, model, language, probedDuration, timeoutMs, { diarize })
     : callOpenAI(buf, filename, model, language, probedDuration, timeoutMs));
   const startedAt = Date.now();
   let first;
   try { return await attempt(capMs); } catch (e) { first = e; }
   const cls = first?.sttRetry;
-  if (!cls || (cls === "maybe-billed" && !twoBilledAttemptsWithinMargin(tierSlug, model, probedDuration))) throw finalFailure(first, { attempts: 1, diarize, req });
+  if (!cls || (cls === "maybe-billed" && !twoBilledAttemptsWithinMargin(tierSlug, model, probedDuration))) throw finalFailure(first, { attempts: 1, diarize, req, named });
   const pause = Number.isFinite(first.sttWaitMs) ? first.sttWaitMs : retryKnobs.pauseMs();
-  if (retryLeftMs(startedAt, capMs, req) - pause < retryKnobs.minLeftMs) throw finalFailure(first, { attempts: 1, diarize, req });
+  if (retryLeftMs(startedAt, capMs, req) - pause < retryKnobs.minLeftMs) throw finalFailure(first, { attempts: 1, diarize, req, named });
   console.warn(`[stt] ${tierSlug} attempt 1 failed (${first.sttCause}); one more attempt`);
   await retryKnobs.sleep(pause);
   let out;
-  try { out = await attempt(Math.max(1, Math.floor(retryLeftMs(startedAt, capMs, req)))); } catch (e) { throw finalFailure(e, { attempts: 2, diarize, req }); }
+  try { out = await attempt(Math.max(1, Math.floor(retryLeftMs(startedAt, capMs, req)))); } catch (e) { throw finalFailure(e, { attempts: 2, diarize, req, named }); }
   out.agent402_retried = { attempts: 2, reason: `the first upstream attempt failed (${first.sttCause}); a second attempt on the same model served this transcript` };
   return out;
 }
 
-async function transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration, req) {
-  const out = await transcribeWithRetry(buf, filename, tierSlug, language, diarize, probedDuration, req);
+async function transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration, req, named = null) {
+  const out = await transcribeWithRetry(buf, filename, tierSlug, language, diarize, probedDuration, req, named);
   const upstreamUsd = recordSttSpend(tierSlug, out, probedDuration);
   // The work meter (METERED_MEDIA). A transcript served on a second attempt
   // was billed twice upstream and is not metered: it settles the price.
@@ -765,17 +815,18 @@ async function transcribeBuffer(buf, filename, tierSlug, language, diarize, prob
 
 /** Sends what prepareAudioWithinCap bounded (its durationSec is the margin
  *  math's and the answer's duration); a cut file's answer says so. */
-async function transcribePrepared(prep, tierSlug, language, diarize, req) {
-  const out = await transcribeBuffer(prep.buf, prep.filename, tierSlug, language, diarize, prep.durationSec, req);
+async function transcribePrepared(prep, tierSlug, language, diarize, req, named = null) {
+  const out = await transcribeBuffer(prep.buf, prep.filename, tierSlug, language, diarize, prep.durationSec, req, named);
   if (prep.trimmedToCapSeconds) Object.assign(out, { trimmedToCapSeconds: prep.trimmedToCapSeconds, durationUnconfirmed: true });
   return out;
 }
 
 function makeHandler(tierSlug) {
   return async (input, req) => {
-    const { url, language, diarize } = validateInput(input, req);
+    const { url, language, diarize, model } = validateInput(input, req, tierSlug);
     const { buf, filename } = await fetchAudio(url);
-    return transcribePrepared(await prepareAudioWithinCap(buf, filename, tierSlug, req, { diarize }), tierSlug, language, diarize, req);
+    // A named model's upstream call keeps the speaker-label path's cap, so the decode leaves it that time.
+    return transcribePrepared(await prepareAudioWithinCap(buf, filename, tierSlug, req, { diarize: diarize || Boolean(model) }), tierSlug, language, diarize, req, model);
   };
 }
 
@@ -835,6 +886,7 @@ export const STT_TOOLS_BASE = [
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
           language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
           diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`) and `language_confidence` (0 to 1, the model's confidence in the detected language). Same price and cap. Default false" },
+          ...sttModelProperty("transcribe"),
         },
         required: ["url"],
       },
@@ -868,6 +920,7 @@ export const STT_TOOLS_BASE = [
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
           language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
           diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`) and `language_confidence` (0 to 1, the model's confidence in the detected language). Same price and cap. Default false" },
+          ...sttModelProperty("transcribe-pro"),
         },
         required: ["url"],
       },
@@ -939,6 +992,7 @@ export const STT_LONG_TOOL = {
         url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm), up to 30 minutes and 25 MB" },
         language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
         diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`) and `language_confidence` (0 to 1, the model's confidence in the detected language). Same price and cap. Default false" },
+        ...sttModelProperty("transcribe-long"),
       },
       required: ["url"],
     },

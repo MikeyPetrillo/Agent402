@@ -19,8 +19,6 @@
     "test-solana-intel-kit.js": 9,
     "test-task-store-isolation.js": 1,
     "test-tempo-router.js": 1,
-    "test-tweet-queue.js": 1,
-    "test-upstream-refusal.js": 1,
     "test-x402-payer-screen.js": 1
   }
 }
