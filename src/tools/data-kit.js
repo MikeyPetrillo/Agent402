@@ -19,7 +19,7 @@ import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { ratesUrl, latestShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 import { attribute } from "../data-attribution.js";
-import { publicHolidaysCompat, parseCountry, parseYear, parseSubdivision, parseTypes, appliesIn, hasAnyType } from "./holiday-source.js";
+import { publicHolidaysCompat, HOLIDAY_HOSTS, parseCountry, parseYear, parseSubdivision, parseTypes, appliesIn, hasAnyType } from "./holiday-source.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
 // Regenerate with scripts/build-countries-data.js. Loaded once at module load;
@@ -246,7 +246,7 @@ export const DATA_TOOLS = [
     },
   },
   {
-    route: "GET /api/public-holidays", name: "Public holidays", slug: "public-holidays", category: "time", price: "$0.001",
+    route: "GET /api/public-holidays", name: "Public holidays", slug: "public-holidays", upstreamHosts: HOLIDAY_HOSTS, category: "time", price: "$0.001",
     description:
       "Public holidays for a country and year from an open public-holiday dataset (keyless, 100+ countries): observed date and calendar date, local and English name, nationwide flag, the ISO 3166-2 regions each applies to, and holiday types (Public, Bank, School, Authorities, Optional, Observance). Optional filters: one region, holiday types. Pairs with /api/country-business-days and /api/country-info. ?country=US&year=2026.",
     tags: ["holidays", "public-holidays", "calendar", "country", "time"],
