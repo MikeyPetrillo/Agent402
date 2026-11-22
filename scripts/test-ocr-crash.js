@@ -535,6 +535,32 @@ async function call(input) {
       const unpaid = await run(true), paid = await run(false);
       ok(unpaid === "c,a2", `a caller whose image left the engine unanswered stands behind a caller that arrives after it (${unpaid})`);
       ok(paid === "a2,c", `control: after an answered image the same caller keeps its arrival order (${paid})`);
+      // The weight is the caller's own: another payer behind the same
+      // address keeps its arrival order, and so does the same wallet's
+      // address for an unsigned caller there; the wallet itself, from a new
+      // address, still stands behind.
+      const nextOf = async (first, next) => {
+        L.reset();
+        const a = await L.acquire(50, first);
+        await sleep(60);
+        a({ unpaid: true });
+        const z = await L.acquire(50, "ip:203.0.113.99");
+        const order = [];
+        const n2 = L.acquire(5_000, next).then((rel) => { order.push("next"); return rel; });
+        await sleep(40);
+        const c = L.acquire(5_000, C).then((rel) => { order.push("c"); return rel; });
+        await sleep(10);
+        z();
+        await drain([n2, c]);
+        return order.join();
+      };
+      const Y = "198.51.100.120";
+      const neighbor = await nextOf(payer(10, Y), payer(11, Y));
+      ok(neighbor === "next,c", `another payer behind the address of a wallet whose image left the engine unanswered keeps its arrival order (${neighbor})`);
+      const unsigned = await nextOf(payer(12, Y), [`ip:${Y}`]);
+      ok(unsigned === "next,c", `so does an unsigned caller at that address (${unsigned})`);
+      const moved = await nextOf(payer(13, Y), payer(13, "198.51.100.121"));
+      ok(moved === "c,next", `control: the wallet itself, from another address, still stands behind (${moved})`);
     }
     // A call that waited out its time keeps its place in line for its retry.
     {
@@ -883,7 +909,24 @@ async function call(input) {
     const bTurn = await b;
     ok(room.state("x").holder === "ip:2", "the other caller's call is next, ahead of the run's own second");
     const c = room.acquire("x", ["payer:a", "ip:9"], { waitMs: 60_000 });
-    ok(bTurn.yieldAt(300) === 1_002_000 + 300, `a waiting call whose caller's unanswered time puts it later does not end the run before that time and a turn (${bTurn.yieldAt(300) - 1_000_000})`);
+    // The weighted time is payer:a's own: another wallet on its address
+    // (`own`, payer:a2 on ip:1) waits on the address's plain time only, so the
+    // holder gives way to it a turn after its own start.
+    ok(bTurn.yieldAt(300) === 1_000_500 + 300, `another wallet on the address of a run left unanswered is not held to that run's weighted time: the holder gives way to it in a turn (${bTurn.yieldAt(300) - 1_000_000})`);
+    {
+      // With only the wallet itself waiting, the run gives way at its weighted time and a turn.
+      let t2 = 2_000_000;
+      const r2 = createCallerTurns({ maxRunning: 1, unpaidWeight: 4, freshWindowMs: 600_000, now: () => t2 });
+      (await r2.acquire("x", "ip:2", { waitMs: 50 })).release();
+      const a2 = await r2.acquire("x", ["payer:a", "ip:1"], { waitMs: 50 });
+      t2 += 500;
+      a2.release({ unpaid: true });
+      const b2 = await r2.acquire("x", "ip:2", { waitMs: 50 });
+      const c2 = r2.acquire("x", ["payer:a", "ip:9"], { waitMs: 60_000 });
+      ok(b2.yieldAt(300) === 2_002_000 + 300, `a waiting call whose caller's unanswered time puts it later does not end the run before that time and a turn (${b2.yieldAt(300) - 2_000_000})`);
+      b2.release();
+      (await c2).release();
+    }
     // At most `maxRunning` lanes run: a third lane's call waits, and counts
     // against the runs that hold the engines.
     const y = await room.acquire("y", "ip:3", { waitMs: 50 });
@@ -900,7 +943,10 @@ async function call(input) {
     const all = [inTurn("own", own), inTurn("c", c), inTurn("arrives now", room.acquire("x", "ip:5", { waitMs: 60_000 }))];
     bTurn.release();
     await Promise.all(all);
-    ok(served.join() === "arrives now,own,c", `a call arriving at the instant another caller's earlier time ends is read first (${served.join()})`);
+    // `own` (another wallet on ip:1) stands at the address's plain time, ahead
+    // of both; `c` (payer:a itself) at its weighted time, behind the call
+    // that arrives at that instant.
+    ok(served.join() === "own,arrives now,c", `a call arriving at the instant another caller's earlier time ends is read first, and a wallet sharing that caller's address is not held to its weighted time (${served.join()})`);
     ok(room.state("x").running === 0 && room.state("x").callers === 0, "the room empties");
     // Tickets: a call with no time to wait is refused and keeps its place;
     // past ticketMs the place is gone; past ticketsMax the ticket that

@@ -21,8 +21,15 @@
 //   - engine time that ended without an answer (`release({ unpaid: true })`:
 //     a failed decode, a deadline, a turn given up, a caller that left)
 //     counts `unpaidWeight` times, so that caller's next call stands behind
-//     the calls other callers send in the meantime. Nobody is refused for
-//     it: with no one else waiting, the call runs at once.
+//     the calls other callers send in the meantime. The weighted time is
+//     written under the caller's OWN key only (its first: the wallet, credits
+//     key or Tempo sender it paid with; the address only for a caller that
+//     names nothing else) and read only by calls whose own key it is; every
+//     other key it carries, the shared client address included, takes the
+//     plain engine time. So a wallet still cannot gain turns by changing
+//     address, and another payer behind the same address never stands behind
+//     what someone else left unanswered. Nobody is refused for it: with no
+//     one else waiting, the call runs at once.
 // A call never loses its place to one that arrives later, so no stream of
 // new callers can keep it waiting: what is ahead of it is what was there
 // when it came.
@@ -110,7 +117,9 @@ export function createCallerTurns({
   const running = new Map(); // lane -> turn
   const waiters = []; // in arrival order
   const places = createCallerPlaces();
-  // key -> { until: the time its last call held an engine until (weighted),
+  // key -> { until: the time its last call held an engine until,
+  //          own: the same, weighted for engine time left unanswered by a
+  //               caller whose own key this is (read only by such calls),
   //          usedAt: when a call under it last started or ended }, least recently used first
   const record = new Map();
   let overflowAt = -Infinity; // when a key still inside the window last left the record
@@ -118,27 +127,40 @@ export function createCallerTurns({
   let seq = 0;
   let queuedBytes = 0;
 
-  const untilOf = (keys) => { let m = 0; for (const k of keys) { const v = record.get(k)?.until; if (v !== undefined && v > m) m = v; } return m; };
+  /** The time a call with `keys` (its own key `own`) stands behind: the
+   *  plain time under every key, and the weighted time under its own. */
+  const untilOf = (keys, own = null) => {
+    let m = 0;
+    for (const k of keys) {
+      const r = record.get(k);
+      if (!r) continue;
+      if (r.until > m) m = r.until;
+      if (k === own && r.own > m) m = r.own;
+    }
+    return m;
+  };
   /** True when any of the keys used an engine inside the window (or the record cannot say). */
   const usedLately = (keys, t) => t - overflowAt < freshWindowMs || keys.some((k) => { const r = record.get(k); return !!r && t - r.usedAt < freshWindowMs; });
-  /** Write a use of the engine under every key: now, and (at a release) the time it stands until. */
-  function note(keys, t, until = 0) {
+  /** Write a use of the engine under every key: now, and (at a release) the
+   *  time it stands until; `ownUntil` (the weighted time) under `own` alone. */
+  function note(keys, t, until = 0, own = null, ownUntil = 0) {
     for (const k of keys) {
       const was = record.get(k);
       record.delete(k);
-      record.set(k, { until: Math.max(until, was?.until ?? 0), usedAt: t });
+      const mine = k === own ? ownUntil : 0;
+      record.set(k, { until: Math.max(until, was?.until ?? 0), own: Math.max(mine, was?.own ?? 0), usedAt: t });
     }
     while (record.size > keysMax) {
       const [k, r] = record.entries().next().value;
       record.delete(k);
-      if (t - r.usedAt < freshWindowMs || r.until > t) overflowAt = t;
+      if (t - r.usedAt < freshWindowMs || r.until > t || r.own > t) overflowAt = t;
     }
   }
   /** Where a waiting call stands in line: the later of its arrival and its
    *  caller's earlier time; at the same instant a call standing at its own
    *  arrival comes before one standing at its caller's earlier time, then
    *  the earlier arrival. */
-  const placeOf = (w) => { const held = untilOf(w.keys); return { at: Math.max(w.since, held), pushed: held >= w.since ? 1 : 0, seq: w.seq }; };
+  const placeOf = (w) => { const held = untilOf(w.keys, w.own); return { at: Math.max(w.since, held), pushed: held >= w.since ? 1 : 0, seq: w.seq }; };
   const before = (a, b) => a.at - b.at || a.pushed - b.pushed || a.seq - b.seq;
   const laneCount = (lane) => { let n = 0; for (const w of waiters) if (w.lane === lane) n++; return n; };
   const canStart = (lane) => !running.has(lane) && running.size < maxRunning;
@@ -212,7 +234,7 @@ export function createCallerTurns({
         for (const o of waiters) {
           if (o.lane !== turn.lane && !(capped && !running.has(o.lane))) continue;
           if (o.keys.some((k) => turn.keys.includes(k))) continue;
-          at = Math.min(at, Math.max(turn.startedAt, o.at, untilOf(o.keys)) + turnMs);
+          at = Math.min(at, Math.max(turn.startedAt, o.at, untilOf(o.keys, o.own)) + turnMs);
         }
         return at;
       },
@@ -222,7 +244,11 @@ export function createCallerTurns({
         if (turn.done) return;
         turn.done = true;
         const t = now();
-        note(turn.keys, t, turn.startedAt + Math.max(0, t - turn.startedAt) * (unpaid ? unpaidWeight : 1));
+        const held = Math.max(0, t - turn.startedAt);
+        // The weighted time goes under the caller's own key alone, and never
+        // under a key every request-less or anonymous call shares.
+        const own = unpaid && !SHARED_KEYS.has(turn.own) ? turn.own : null;
+        note(turn.keys, t, turn.startedAt + held, own, own ? turn.startedAt + held * unpaidWeight : 0);
         places.free(turn.keys);
         if (running.get(turn.lane) === turn) running.delete(turn.lane);
         grant();

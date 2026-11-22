@@ -94,6 +94,10 @@ Tools:
   that waits out its time in line answers 503 with a Retry-After and keeps
   its place for its retry; and an image that cannot be read in time answers
   422 with a note to downscale it.
+- A caller whose `image-ocr` call ended without an answer stands further
+  back for its next one; that weight is kept on the wallet it paid with (or
+  its address when it names none), so other payers behind the same address
+  keep their place.
 - A freed audio decode slot goes to the waiting caller that holds the fewest
   places, first come among equals, and wallets paying from one address take
   their turn as one caller.
