@@ -6,6 +6,5 @@
 //   STATE_DATABASE_URL=postgres://... node scripts/test-evm-boot-resume-pg.js
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { requireTestPg } from "./lib/test-pg.js";
-requireTestPg({ label: "test-evm-boot-resume-pg" });
-globalThis.__evmBootResumePg = true;
+globalThis.__evmBootResumePg = requireTestPg({ label: "test-evm-boot-resume-pg" });
 await import("./test-evm-boot-resume.js");

@@ -14,13 +14,14 @@
 //
 // File stores by default; scripts/test-evm-boot-resume-pg.js runs the same
 // against a real state database. Prints both boots' calls by caller.
-import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootPaidServer } from "./lib/paid-boot.js";
 
-const PG = globalThis.__evmBootResumePg === true;
+// The -pg suite names its database here (the pin above clears the variable).
+const PG = globalThis.__evmBootResumePg || null;
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const guard = setTimeout(() => { console.error("FAIL - the suite did not finish in time"); process.exit(1); }, 300_000);
@@ -50,7 +51,7 @@ async function boot(n) {
     env: {
       EVM_STUB_LOG: log, EVM_STUB_T0: T0, EVM_STUB_STEP: "50000",
       ALCHEMY_API_KEY: "stubkey",
-      ...(PG ? { STATE_DATABASE_URL: process.env.STATE_DATABASE_URL, STATE_DB_SCHEMA: process.env.STATE_DB_SCHEMA } : {}),
+      ...(PG ? { STATE_DATABASE_URL: PG.url, STATE_DB_SCHEMA: PG.schema } : {}),
       REVENUE_WARMUP: "", REVENUE_LEDGER: "true", X402_INDEX_CRAWL: "", MPP_INDEX_CRAWL: "off",
       LEADERBOARD_FIRST_REFRESH_DELAY_MS: "1000", LEADERBOARD_REFRESH_MS: "",
       SOLANA_WALLET_ADDRESS: "", STELLAR_WALLET_ADDRESS: "", ALGORAND_WALLET_ADDRESS: "",
