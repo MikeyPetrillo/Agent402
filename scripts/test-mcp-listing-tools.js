@@ -131,6 +131,10 @@ const offerFor = (toolName, micros, over = {}) => ({
   bad({ extensions: offerFor("web.news", 10000).extensions }, /toolName is "web\.news"/, "another tool's extension is refused");
   bad({ extensions: bazaar.declareDiscoveryExtension({ method: "GET", input: { q: "x" } }) }, /type is/, "an HTTP discovery extension is refused");
   bad({ extensions: {} }, /no bazaar discovery extension/, "an offer with no discovery extension is refused");
+  // The Bazaar indexes an MCP tool by calling it with the example as its arguments: none, or an empty one, is not indexed.
+  const exampleOf = (example) => bazaar.declareDiscoveryExtension({ toolName: "web.search", transport: "streamable-http", inputSchema: { type: "object", properties: { q: { type: "string" } } }, ...(example !== undefined ? { example } : {}) });
+  bad({ extensions: exampleOf({}) }, /example holds no argument/, "an offer whose example holds no argument is refused (a buy would not list it)");
+  bad({ extensions: exampleOf(undefined) }, /example is not an object/, "an offer with no example is refused");
   bad({ accepts: [{ ...good.accepts[0], amount: "10001" }] }, /list price/, "a Base accept asking another amount is refused");
   bad({ accepts: [{ ...good.accepts[0], network: "eip155:10" }] }, /no exact accept on eip155:8453/, "an offer with no Base accept is refused");
   bad({ x402Version: 1 }, /x402Version/, "a v1 offer is refused");

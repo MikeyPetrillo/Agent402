@@ -172,7 +172,10 @@ export function mcpOfferProblems(pr, { toolName, origin, micros = null, payTo = 
     if (input.transport !== MCP_LISTING_TRANSPORT) out.push(`extension transport is ${JSON.stringify(input.transport ?? null)}, not ${MCP_LISTING_TRANSPORT}`);
     if (!input.inputSchema || typeof input.inputSchema !== "object" || Array.isArray(input.inputSchema)) out.push("extension inputSchema is not an object");
     else if (input.inputSchema.type !== "object") out.push("extension inputSchema is not of type object");
-    if (input.example !== undefined && (!input.example || typeof input.example !== "object" || Array.isArray(input.example))) out.push("extension example is not an object");
+    // The Bazaar indexes an MCP tool by calling it with this example as the
+    // arguments; a missing or empty one is not indexed, so a buy would be spent.
+    if (!input.example || typeof input.example !== "object" || Array.isArray(input.example)) out.push("extension example is not an object");
+    else if (!Object.keys(input.example).length) out.push("extension example holds no argument");
     if (!ext.schema || typeof ext.schema !== "object") out.push("the bazaar extension has no schema");
   }
   const own = mcpListingAccepts(pr);
