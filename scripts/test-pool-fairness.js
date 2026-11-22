@@ -28,7 +28,7 @@ async function until(cond, ms = 5000) {
 
 // One pool, driven the same way: `submit(data)` runs one job carrying `data`
 // for the caller in scope; `waiting()` reads the pool's queue length.
-async function scenario(name, { setWorker, submit, waiting, workers, soft, hard }) {
+async function scenario(name, { setWorker, submit, waiting, callers, workers, soft, hard }) {
   setWorker(STUB);
   const gate = new SharedArrayBuffer(4 * SLOTS), started = new SharedArrayBuffer(4 * SLOTS);
   const g = new Int32Array(gate), st = new Int32Array(started);
@@ -74,7 +74,7 @@ async function scenario(name, { setWorker, submit, waiting, workers, soft, hard 
     // Everything else runs to its answer.
     for (let i = 0; i < next; i++) open(i);
     const all = await Promise.all([...outcomes.values()]);
-    ok(all.filter((x) => x.ok).length === next - 2 && waiting() === 0, `${name}: every other job is answered (${all.filter((x) => x.ok).length} of ${next})`);
+    ok(all.filter((x) => x.ok).length === next - 2 && waiting() === 0 && callers() === 0, `${name}: every other job is answered and every place released (${all.filter((x) => x.ok).length} of ${next}, ${callers()} callers still counted)`);
   } finally {
     for (let i = 0; i < SLOTS; i++) open(i);
     await Promise.allSettled([...outcomes.values()]);
@@ -84,19 +84,19 @@ async function scenario(name, { setWorker, submit, waiting, workers, soft, hard 
 
 await scenario("office", {
   setWorker: office.__setOfficeWorkerForTest, workers: office.OFFICE_POOL_MAX, soft: office.OFFICE_QUEUE_MAX, hard: office.OFFICE_QUEUE_HARD_MAX,
-  submit: (d) => office.runOfficeOp("xlsx", d), waiting: () => office.officePoolState().waiting,
+  submit: (d) => office.runOfficeOp("xlsx", d), waiting: () => office.officePoolState().waiting, callers: () => office.officePoolState().callers,
 });
 await scenario("image", {
   setWorker: image.__setImageWorkerForTest, workers: 2, soft: 32, hard: 48,
-  submit: (d) => image.runImageOffThread({ op: "resize", buffer: Buffer.from("stand-in"), params: d, timeoutMs: 20_000 }), waiting: () => image.imagePoolState().waiting,
+  submit: (d) => image.runImageOffThread({ op: "resize", buffer: Buffer.from("stand-in"), params: d, timeoutMs: 20_000 }), waiting: () => image.imagePoolState().waiting, callers: () => image.imagePoolState().callers,
 });
 await scenario("html", {
   setWorker: html.__setHtmlWorkerForTest, workers: 2, soft: 32, hard: 48,
-  submit: (d) => html.runHtml("tool", d, 10), waiting: () => html.htmlPoolState().queued,
+  submit: (d) => html.runHtml("tool", d, 10), waiting: () => html.htmlPoolState().queued, callers: () => html.htmlPoolState().callers,
 });
 await scenario("pdf", {
   setWorker: pdf.__setPdfWorkerForTest, workers: pdf.PDF_WORKERS_MAX, soft: pdf.PDF_QUEUE_MAX, hard: pdf.PDF_QUEUE_HARD_MAX,
-  submit: (d) => pdf.runPdfOp("info", [Buffer.from("stand-in")], [d]), waiting: () => pdf.pdfPoolState().waiting,
+  submit: (d) => pdf.runPdfOp("info", [Buffer.from("stand-in")], [d]), waiting: () => pdf.pdfPoolState().waiting, callers: () => pdf.pdfPoolState().callers,
 });
 ok(office.OFFICE_QUEUE_HARD_MAX === 24 && pdf.PDF_QUEUE_HARD_MAX === 24 && pdf.PDF_QUEUE_HARD_BYTES === 320 * 1024 * 1024, "the hard bounds: office 24, pdf 24 calls and 320 MB, image and html 48");
 

@@ -1187,6 +1187,8 @@ export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlM
   verify.waitsGivenUp = () => waitsGivenUp;
   /** Waiting places handed to a newcomer from another address. */
   verify.placesGivenUp = () => placesGivenUp;
+  /** Addresses holding a read or a place now (0 when the queue is idle). */
+  verify.callersHolding = () => places.callers();
   return verify;
 }
 const verifyTempoKeychainSenderDefault = createKeychainSenderVerifier();

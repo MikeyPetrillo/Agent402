@@ -426,7 +426,7 @@ const activeRec = (key, extra = {}) => ({ signatureType: 0, keyId: key, expiry: 
     // Drain everything.
     for (let i = 0; i < 400 && (q.readsInFlight() || q.readsQueued()); i++) { while (gates.length) gates.shift()(); await sleep(1); }
     await Promise.all([...flood, ...others, late]);
-    ok(q.readsInFlight() === 0 && q.readsQueued() === 0, "B: every place is released once the reads end");
+    ok(q.readsInFlight() === 0 && q.readsQueued() === 0 && q.callersHolding() === 0, `B: every read and place is released once the reads end (${q.callersHolding()} addresses still counted)`);
   }
   let throws = 0;
   const throwing = createKeychainSenderVerifier({ check: async () => { throws++; throw new Error("rpc down"); } });
