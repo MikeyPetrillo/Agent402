@@ -21,6 +21,8 @@ paths:
   - "src/x-oauth.js"
   - "src/solana-history-rpc.js"
   - "src/solana-activity-store.js"
+  - "src/evm-activity-store.js"
+  - "src/scan-state-store.js"
   - "src/solana-leaderboard.js"
   - "src/board-refresh-slots.js"
   - "src/upstream-budgets.js"
@@ -95,6 +97,19 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `SOLANA_ACTIVITY_STORE=off` is the rollback (state in memory only); an older build ignores the
   rows. Operator view: `solanaHistory.activity`, `.activityStore`, `.backgroundShare` on
   `/api/gateway-status` (`scripts/test-solana-activity-resume.js`, `-restart.js`, `-store-pg.js`).
+- **EVM scan state across restarts:** the chain pages' 30-day activity charts (`evmActivity`)
+  keep their scan state in `src/evm-activity-store.js` (collection `evm-activity`, id
+  `<chain>:<wallet>`, the file `EVM_ACTIVITY_FILE` without a database), on the same store as the
+  Solana scans (`src/scan-state-store.js`: read on a wallet's first view, written by a timer under
+  the lease `evm-activity-store-flush`, 500 states, 35 days, at most `EVM_ACTIVITY_STORE_MAX_ROWS`
+  rows a state, row ids kept only four resume overlaps below the newest block); a first view after
+  a restart is the resumed scan's answer. The live revenue view's window scans (`recentInbound`,
+  a rail the revenue ledger holds no rows for) keep each rail's head, covered range and up to 32
+  transfers in the `revenue-window-scan` document (`REVENUE_WINDOW_SCAN_FILE`) and re-read
+  `WINDOW_REORG_SECONDS` (600) of blocks below the stored head. A state that does not fit is a full
+  read, logged once. `EVM_ACTIVITY_STORE=off` is the rollback. Operator view: `evmLogs.activityStore`
+  and `.windowScan` on `/api/gateway-status`. What a restart reads, by caller:
+  `scripts/test-evm-boot-resume.js` (and `-pg.js`) on the stub `scripts/lib/evm-rpc-stub-preload.mjs`.
 - **Upstream budgets' day:** `upstreamBudgets` is built from the UTC day's count across deploys
   and replicas: each process adds its new calls to a shared daily counter per budget every
   `UPSTREAM_BUDGET_SYNC_MS` (default 15000) and reads the total back, and a budget whose host has

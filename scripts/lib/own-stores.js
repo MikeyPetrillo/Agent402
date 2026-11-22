@@ -43,6 +43,10 @@ export function ownStoreEnv(label = "server") {
     // The Solana activity scans' state and the per-caller call days
     // (src/solana-activity-store.js, src/upstream-call-days.js).
     SOLANA_ACTIVITY_FILE: join(dir, "solana-activity.json"),
+    // The EVM activity scans' state and the revenue view's window scans
+    // (src/evm-activity-store.js, src/revenue-live.js).
+    EVM_ACTIVITY_FILE: join(dir, "evm-activity.json"),
+    REVENUE_WINDOW_SCAN_FILE: join(dir, "revenue-window-scan.json"),
     UPSTREAM_CALL_DAYS_FILE: join(dir, "upstream-call-days.json"),
     // The referral gate's open-settlement book (src/referral-book.js).
     REFERRAL_BOOK_FILE: join(dir, "referral-settlements.json"),

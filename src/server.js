@@ -837,7 +837,7 @@ import { ledgerHomePage, socialCardText } from "./ledger-home.js";
 import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, solanaActivityView, solanaActivityStatus, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, solanaActivityView, solanaActivityStatus, robinhoodActivity, baseActivityViaSql, evmActivityStatus, recentWindowStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
@@ -863,6 +863,7 @@ import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport, noteSqlBusy } from "./sql-query-stats.js";
 import { loadSolanaActivityState, noteSolanaActivityState, flushSolanaActivityStore, solanaActivityStoreStatus } from "./solana-activity-store.js";
+import { loadEvmActivityState, noteEvmActivityState, flushEvmActivityStore, evmActivityStoreStatus } from "./evm-activity-store.js";
 import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x-search-stats.js";
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
@@ -4543,7 +4544,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // EVM log reads: which lane serves the revenue ledger's recent getLogs,
     // how the Base board read its window, and the activity scans. One word
     // publicly; per-caller counts for the operator.
-    evmLogs: (() => { try { return evmLogsStatus({ full, extra: full ? { leaderboardLogCache: leaderboardLogCacheStatus(), activityScan: evmActivityStatus() } : null }); } catch { return { status: "unknown" }; } })(),
+    evmLogs: (() => { try { return evmLogsStatus({ full, extra: full ? { leaderboardLogCache: leaderboardLogCacheStatus(), activityScan: evmActivityStatus(), activityStore: evmActivityStoreStatus(), windowScan: recentWindowStatus() } : null }); } catch { return { status: "unknown" }; } })(),
     stellarFacilitator, databases, operatorAuth: operatorAuthStatus(full),
     // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
     // payout screen: one word publicly, counts and the last error for the operator.
@@ -9222,6 +9223,19 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
       } catch { /* a wallet the store cannot answer for is a cold wallet */ } finally { clearTimeout(timer); }
     })();
   }
+  // An EVM wallet this process has not seen: its stored scan state
+  // (src/evm-activity-store.js, the same bounded read) seeds the first scan,
+  // which reads only the blocks after it, so a restart does not read the
+  // wallet's window again; the first view is that resumed scan's answer.
+  if (chainKey !== "solana" && chainKey !== "robinhood" && !entry.storeRead) {
+    entry.storeRead = (async () => {
+      let timer;
+      try {
+        const st = await Promise.race([loadEvmActivityState(chainKey, wallet), new Promise((r) => { timer = setTimeout(() => r(null), SOLANA_ACTIVITY_STORE_READ_MS); timer.unref?.(); })]);
+        if (st && !entry.scanState) entry.scanState = st;
+      } catch { /* a wallet the store cannot answer for is a cold wallet */ } finally { clearTimeout(timer); }
+    })();
+  }
   if (entry.storeRead && entry.storeRead !== true) { await entry.storeRead; entry.storeRead = true; }
   const stale = Date.now() - entry.at >= CHAIN_ACTIVITY_TTL_MS;
   if (stale && !entry.inFlight) {
@@ -9242,6 +9256,7 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
             entry.scanState = a.__scanState;
             // Written by the store's own timer, never on this path.
             if (chainKey === "solana") noteSolanaActivityState(wallet, a.__scanState);
+            else noteEvmActivityState(chainKey, wallet, a.__scanState);
           }
         }
         // else: keep the prior good value (stale-serve) or stay null
@@ -14635,7 +14650,7 @@ let drainDeadlineMs = DRAIN_DEADLINE_MS;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushEvmActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
