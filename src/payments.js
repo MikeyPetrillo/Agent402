@@ -3032,6 +3032,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     };
   }
 
+  // Every HTTP resource server over the core server above is built here, and
+  // each carries the settle-once echo: the core's verified-payment stash lets
+  // a run settle before its upstream work (src/settle-first.js), so the
+  // settlement each server's middleware calls after the handler must answer
+  // that settle, not settle the same payment again. Installed before the
+  // vendor middleware is built, since it calls processSettlement per request.
+  // (scripts/test-settle-once-servers.js fails a server built any other way.)
+  const httpServerOverCore = (routeConfigs) => installSettleOnceEcho(new x402HTTPResourceServer(server, routeConfigs));
+
   // The hosted connector's x402 twins (src/mcp-x402-routes.js): keyed by the
   // HTTP route they stand beside, quoting that route's own accepts builder
   // (the same price on every chain, rebuilt with it when a rail is restored)
@@ -3059,7 +3068,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       extensions: ext,
     };
   }
-  const mcpHttpServer = Object.keys(mcpRouteConfigs).length ? new x402HTTPResourceServer(server, mcpRouteConfigs) : null;
+  const mcpHttpServer = Object.keys(mcpRouteConfigs).length ? httpServerOverCore(mcpRouteConfigs) : null;
   const mcpVendorMw = mcpHttpServer ? withBazaarHidden(mcpRouteConfigs, () => paymentMiddlewareFromHTTPServer(mcpHttpServer, undefined, undefined, false)) : null;
   // A flagged request this server does not price runs the HTTP route's own
   // paywall: never passed on unpaid.
@@ -3096,9 +3105,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   //
   // The vendor's per-route bazaar check (an Ajv compile per route, one
   // synchronous loop) is moved off the boot path: see src/bazaar-route-check.js.
-  const httpServer = new x402HTTPResourceServer(server, routes);
-  // Before the vendor middleware is built: it calls httpServer.processSettlement
-  // per request, so the settle-first echo below is what it reaches.
+  const httpServer = httpServerOverCore(routes);
   installSettleFirst(httpServer);
   const vendorMw = withBazaarHidden(routes, () => paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false));
   scheduleBazaarRouteCheck(routes);
@@ -3349,17 +3356,34 @@ export async function settleVerifiedPaymentFirst(req) {
   if (!settleFirstImpl) return { settled: false, response: null };
   return settleFirstImpl(req);
 }
-function installSettleFirst(httpServer) {
+const SETTLE_ONCE_ECHO = Symbol("agent402.settleOnceEcho");
+/** Whether an HTTP resource server answers a settled-first payment's
+ *  after-handler settlement from its settle point (installSettleOnceEcho). */
+export function hasSettleOnceEcho(httpServer) {
+  return !!httpServer && httpServer[SETTLE_ONCE_ECHO] === true;
+}
+/**
+ * The after-handler settlement of a payment this request already settled at
+ * its settle point answers that settlement (the vendor's own shape for a
+ * completed before-handler settlement) and never calls the facilitator again.
+ * Returns the server.
+ */
+export function installSettleOnceEcho(httpServer) {
+  if (hasSettleOnceEcho(httpServer)) return httpServer;
   const settleNow = httpServer.processSettlement.bind(httpServer);
   httpServer.processSettlement = async function settleOnceProcessSettlement(paymentPayload, requirements, declaredExtensions, transportContext, settlementOverrides, beforeHandlerSettlement, phase) {
     const early = phase === "before-handler" ? null : settledFirstOf(transportContext?.request?.adapter?.req);
-    // The same payment object this request settled at its settle point: the
-    // vendor's own shape for a completed before-handler settlement.
     if (early && early.paymentPayload === paymentPayload && early.result?.success === true) {
       return { ...early.result, success: true, headers: httpServer.createSettlementHeaders(early.result), requirements: early.requirements };
     }
     return settleNow(paymentPayload, requirements, declaredExtensions, transportContext, settlementOverrides, beforeHandlerSettlement, phase);
   };
+  Object.defineProperty(httpServer, SETTLE_ONCE_ECHO, { value: true });
+  return httpServer;
+}
+function installSettleFirst(httpServer) {
+  // The settle point itself calls the facilitator: the unwrapped settlement.
+  const settleNow = Object.getPrototypeOf(httpServer).processSettlement.bind(httpServer);
   exactOfferImpl = async (req, { errorCode, body }) => {
     const v = verifiedPaymentOf(req);
     const ctx = v?.request;

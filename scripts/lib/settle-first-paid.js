@@ -95,7 +95,12 @@ export async function run({ ok, parts, setRig }) {
   let offShapes = null;   // boot B: what a new wallet reads, compared with boot D under its budget
   let restartPaid = null, restartOwedOnly = null;
   if (parts.includes("2")) {
-    await boot("settle-first-a", { GATEWAY_SETTLE_FIRST: "always" });
+    await boot("settle-first-a", {
+      GATEWAY_SETTLE_FIRST: "always",
+      // The connector's x402 twins (web.search, web.news, web.answer) on a stub search upstream.
+      BRAVE_API_KEY: "stub-brave-key", BRAVE_ANSWERS_API_KEY: "stub-brave-key", UPSTREAM_STUB_HOSTS: "api.search.brave.com",
+      AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
+    });
     try {
       // ---- every x402 exact wire ---------------------------------------------
       for (const wire of X402_WIRES) {
@@ -367,8 +372,9 @@ export async function run({ ok, parts, setRig }) {
         const c5 = rig.st.completions;
         const pair = await Promise.all([rig.send(CHAT, cred5), rig.send(CHAT, cred5)]);
         llm(null);
-        await ok(pair.filter((r) => r.status === 200).length === 1 && pair.some((r) => r.status === 409) && rig.st.completions - c5 === 1 && rig.outcomesOf(w5).attempts === 1,
-          `the same payment sent twice at once after a failed run: one is run, the other told to wait (${pair.map((r) => r.status).join(", ")}; one model call)`);
+        const wait5 = pair.find((r) => r.status === 409);
+        await ok(pair.filter((r) => r.status === 200).length === 1 && !!wait5 && wait5.json?.charged === true && /nothing more is charged/i.test(wait5.json?.hint || "") && rig.st.completions - c5 === 1 && rig.outcomesOf(w5).attempts === 1,
+          `the same payment sent twice at once after a failed run: one is run, the other told to wait, its body saying the payment was charged and nothing more is (${pair.map((r) => r.status).join(", ")}; ${JSON.stringify(wait5?.json)}; one model call)`);
       }
 
       // ---- a wallet with history whose settlements fail on OUR side -------------
@@ -480,6 +486,67 @@ export async function run({ ok, parts, setRig }) {
           const good = await mcp.callTool("catalog.call", args, { "x402/payment": payment("0x" + randomBytes(32).toString("hex")) });
           await ok(good?.isError !== true && orderOf(w, from2) === "settle-first" && rig.outcomesOf(w).settled === 2, `through the connector, the wallet's next call (still no sale on the books) settles first and is served (${orderOf(w, from2)})`);
         } finally { await mcp.close(); }
+      }
+
+      // ---- the connector's x402 twins: one settle per payment -------------------
+      // web.search, web.news and web.answer are served by the twins' own HTTP
+      // resource server over the same core server: a new wallet's payment
+      // settles before the search upstream, and the twin's after-handler
+      // settlement answers that settle. A facilitator that refuses a second
+      // settle of the same payment (as a used EVM nonce or a processed Solana
+      // transaction is) is never asked one.
+      {
+        const { connectMcp } = await import("./mcp-x402-client.js");
+        const { randomBytes } = await import("node:crypto");
+        rig.st.upHook = async ({ host, path, res }) => {
+          if (host !== "api.search.brave.com") return false;
+          if (path.startsWith("/res/v1/web/search")) { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ web: { results: [{ title: "x402", url: "https://www.x402.org/", description: "An open payment standard" }] } })); return true; }
+          if (path.startsWith("/res/v1/news/search")) { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ results: [{ title: "x402 news", url: "https://www.x402.org/news", description: "A stub article", age: "1 day ago", page_age: "2026-11-21T00:00:00Z", meta_url: { hostname: "www.x402.org" } }] })); return true; }
+          if (path.startsWith("/res/v1/chat/completions")) { res.writeHead(200, { "content-type": "text/event-stream" }); res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "x402 is an open payment standard." } }] })}\n\ndata: [DONE]\n\n`); return true; }
+          return false;
+        };
+        const TWINS = [
+          { tool: "web.search", route: { method: "GET", path: "/api/search?q=x402" }, args: { q: "x402" }, served: (j) => Array.isArray(j?.results) && j.results.length > 0 },
+          { tool: "web.news", route: { method: "GET", path: "/api/search-news?q=x402" }, args: { q: "x402" }, served: (j) => Array.isArray(j?.results) && j.results.length > 0 },
+          { tool: "web.answer", route: { method: "GET", path: "/api/answer?q=what%20is%20x402" }, args: { q: "what is x402" }, served: (j) => typeof j?.answer === "string" && j.answer.length > 0 },
+        ];
+        const mcp = await connectMcp(rig.url, { timeoutMs: 60_000 });
+        try {
+          for (const twin of TWINS) {
+            const ask = await mcp.callTool(twin.tool, twin.args);
+            let offer = null;
+            try { offer = JSON.parse(ask?.content?.[0]?.text || "null"); } catch { offer = null; }
+            for (const wire of ["evm", "svm"]) {
+              for (const refuseResettle of [false, true]) {
+                const { w, price } = await fresh(wire, 10, twin.route);
+                const funded = rig.accounts.get(w.id).balance;
+                let payment = null;
+                if (wire === "evm") {
+                  const accept = (offer?.accepts || []).find((a) => a.scheme === "exact" && a.network === "eip155:8453");
+                  payment = accept ? { x402Version: 2, resource: offer.resource, accepted: accept, payload: { signature: "0x" + "11".repeat(65), authorization: { from: w.address, to: accept.payTo, value: accept.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + randomBytes(32).toString("hex") } } } : null;
+                } else {
+                  const p = JSON.parse(Buffer.from((await rig.credentialFor(w, twin.route))["payment-signature"], "base64").toString("utf8"));
+                  const accept = (offer?.accepts || []).find((a) => a.scheme === "exact" && a.network === p.accepted.network);
+                  payment = accept ? { ...p, resource: offer.resource, accepted: accept } : null;
+                }
+                let seen = 0;
+                rig.st.settleAnswer = refuseResettle ? ({ id, payer, network }) => (id === w.id && ++seen > 1 ? { status: 200, body: { success: false, errorReason: wire === "evm" ? "invalid_exact_evm_payload_authorization_nonce_already_used" : "transaction_already_processed", transaction: "", network, payer } } : null) : null;
+                const from = mark();
+                const r = payment ? await mcp.callTool(twin.tool, twin.args, { "x402/payment": payment }) : null;
+                await sleep(300);
+                rig.st.settleAnswer = null;
+                const settles = rig.st.events.slice(from).filter((e) => e.t === "settle" && e.id === w.id).length;
+                let json = null;
+                try { json = JSON.parse(r?.content?.[0]?.text || "null"); } catch { json = null; }
+                const receipt = r?._meta?.["x402/payment-response"];
+                const taken = funded - rig.accounts.get(w.id).balance;
+                const rows = (await refunds()).filter((x) => String(x.payer).toLowerCase() === String(w.address).toLowerCase());
+                await ok(!!payment && r?.isError !== true && twin.served(json) && receipt?.success === true && settles === 1 && orderOf(w, from) === "settle-first" && taken === price && rows.length === 0,
+                  `${twin.tool} through the connector on ${wire}${refuseResettle ? ", a facilitator that refuses a second settle of the payment" : ""}: one settle call, before the search upstream (${orderOf(w, from)}, ${settles} settle calls), the answer served with its receipt, the price taken once (${taken} of ${price}) and nothing owed (${rows.length} refund rows)`);
+              }
+            }
+          }
+        } finally { rig.st.upHook = null; rig.st.settleAnswer = null; await mcp.close(); }
       }
 
       // ---- left as they were -----------------------------------------------------

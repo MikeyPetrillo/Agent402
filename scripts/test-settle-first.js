@@ -430,6 +430,50 @@ if (ONLY.includes("1")) {
       `a debt held for its payment's resend whose run never ended is owed again under its class after the hold's age; one whose sale is on the books is noted served; a young hold and another class are left (${JSON.stringify({ reopened, renoted })})`);
   }
 
+  // ---- every HTTP resource server over the core server settles a payment once --
+  // The core server's verified-payment stash lets any request it verified
+  // settle at its settle point, so every x402 HTTP server built over that core
+  // (the HTTP routes and the connector's twins) must answer the after-handler
+  // settlement from that settle, not call the facilitator a second time.
+  {
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { installSettleOnceEcho, hasSettleOnceEcho } = await import("../src/payments.js");
+    const { armSettleFirst, markSettledFirst } = await import("../src/settle-first.js");
+    const src = join(import.meta.dirname, "..", "src");
+    const files = [];
+    const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const f = join(d, e.name); if (e.isDirectory()) walk(f); else if (e.name.endsWith(".js")) files.push(f); } };
+    walk(src);
+    const builds = [];
+    for (const f of files) {
+      const text = readFileSync(f, "utf8");
+      const lines = text.split("\n");
+      lines.forEach((l, i) => { if (/\bx402HTTPResourceServer\s*\(/.test(l) && !/^\s*(\/\/|\*)/.test(l)) builds.push({ file: f.slice(src.length + 1), line: i + 1, text: l.trim(), stash: /registerVerifiedPaymentStash\s*\(/.test(text) }); });
+    }
+    const overStash = builds.filter((b) => b.stash);
+    const unechoed = overStash.filter((b) => !/installSettleOnceEcho\(\s*new x402HTTPResourceServer\(\s*server\s*,/.test(b.text));
+    const pay = readFileSync(join(src, "payments.js"), "utf8");
+    const viaHelper = (name) => new RegExp(`const ${name} = [^\\n]*httpServerOverCore\\(`).test(pay);
+    await ok(overStash.length === 1 && unechoed.length === 0 && viaHelper("httpServer") && viaHelper("mcpHttpServer"),
+      `every x402 HTTP server built over the core server that stashes verified payments is built by the one helper that installs the settle-once echo, the HTTP routes and the connector's twins both (${JSON.stringify(builds.map((b) => `${b.file}:${b.line}${b.stash ? " (stash)" : ""}`))})`);
+    // What the echo does: a payment settled at its settle point is answered
+    // from that settlement; anything else reaches the facilitator.
+    let calls = 0;
+    const fake = { processSettlement: async () => { calls++; return { success: true, transaction: "0xsecond", headers: {} }; }, createSettlementHeaders: (r) => ({ "PAYMENT-RESPONSE": r.transaction }) };
+    installSettleOnceEcho(fake);
+    installSettleOnceEcho(fake);
+    const payment = { x402Version: 2 };
+    const req = {};
+    armSettleFirst(req, { run: async () => {} });
+    markSettledFirst(req, { result: { success: true, transaction: "0xfirst", network: "eip155:8453" }, requirements: { network: "eip155:8453" }, paymentPayload: payment, at: Date.now() });
+    const ctx = { request: { adapter: { req } } };
+    const echoed = await fake.processSettlement(payment, { network: "eip155:8453" }, undefined, ctx);
+    const other = await fake.processSettlement({ x402Version: 2 }, { network: "eip155:8453" }, undefined, ctx);
+    const before = await fake.processSettlement(payment, { network: "eip155:8453" }, undefined, ctx, undefined, undefined, "before-handler");
+    await ok(hasSettleOnceEcho(fake) && echoed.success === true && echoed.transaction === "0xfirst" && echoed.headers["PAYMENT-RESPONSE"] === "0xfirst" && other.transaction === "0xsecond" && before.transaction === "0xsecond" && calls === 2,
+      `the echo answers the settled-first payment's after-handler settlement from its settle point with no facilitator call; another payment and the settle point itself still settle; installing twice wraps once (${calls} facilitator calls)`);
+  }
+
   // ---- which payments can settle first (src/payments.js) -----------------------
   {
     const { settleFirstNetworkFor, SETTLE_FIRST_NAMESPACES, settleFirstPaymentKindFor } = await import("../src/payments.js");
