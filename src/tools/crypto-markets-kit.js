@@ -123,6 +123,7 @@ function headers() {
 // one key, one minute budget, whichever kit spends it.
 import { cgTake, cgRefusal, resetCgRateLimit, cgReserveUnconfirmed, cgScopeAll, cgNoteUnknownId, cgUnknownToday, cgForgetUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
+import { markResaleBarred, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { ratesUrl, latestShape } from "./frankfurter.js";
 export { resetCgRateLimit };
@@ -1458,6 +1459,10 @@ CRYPTO_MARKETS_TOOLS.push(...RWA_TOOLS);
 // COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
 // `credit` field of every answer.
 for (const t of CRYPTO_MARKETS_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
+// Resale terms (src/resale-terms.js): each answers the source's data as it
+// came (a summary beside a series does not change that), so none is resold
+// through a third party.
+markResaleBarred(CRYPTO_MARKETS_TOOLS, ["coin-price-by-contract", "coin-profile", "coin-history", "coin-ohlc", "coin-market-chart-range", "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer"], MARKET_DATA_RESALE_REASON);
 
 export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS, takeRwaType, shapeRwaMarket, historyMissSize: () => historyMisses.size, clearHistoryMisses: () => historyMisses.clear() };
 

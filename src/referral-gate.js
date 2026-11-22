@@ -99,6 +99,7 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { DEFAULT_KEY_BUDGET_USD, DEFAULT_GLOBAL_BUDGET_USD } from "./hangup-forgiveness.js";
 import { SWEEP_CHAIN_BUDGET_MS, SWEEP_UNCONFIRMED_BUDGET_SHARE } from "./referral-book.js";
 import { cdnSyncLeftMs } from "./cdn-sync-window.js";
+import { resaleBarredReason } from "./resale-terms.js";
 
 export const REFERRAL_NETWORK = "eip155:8453";
 export const REFERRAL_CHAIN_ID = 8453;
@@ -731,6 +732,10 @@ export function namesOwnHost(def, hosts = []) {
 export function referralIneligibility(def, { identityBound = false, lastingEffect = false, paysThirdParty = false, longRunning = false, compute = false, clamped = false, ownTimeoutMs = null, deadlineMs = REFERRAL_DEFAULTS.deadlineMs, priceForNetwork = (p) => p, ownHosts = [], cheaperDirect = null, parityGrandfathered = REFERRAL_PARITY_GRANDFATHERED, maxAnswerBytes = REFERRAL_DELIVERABLE_BYTES } = {}) {
   if (!def || typeof def !== "object") return "not in the catalog";
   if (typeof def.handler !== "function") return "in the catalog but has no handler";
+  // A raw pass-through of a source whose terms bar resale through a third
+  // party is never sold here (src/resale-terms.js).
+  const resaleBarred = resaleBarredReason(def);
+  if (resaleBarred) return resaleBarred;
   if (identityBound) return "identity-bound route";
   if (lastingEffect) return "its effect outlives the answer";
   if (paysThirdParty) return "pays an outside seller";

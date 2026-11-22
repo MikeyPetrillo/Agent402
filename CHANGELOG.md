@@ -36,8 +36,8 @@ Tools:
 ### 2026-11-22 (price webhook notices, the seller manifest and a retirement)
 Tools:
 - Price webhooks now announce a watched tool that is retired or no longer
-  served, once, with `to: null` and a status, and a new registration is
-  always accepted.
+  served, once, with `to: null` and a status, and a working subscription is
+  never removed to make room for a new one.
 - New: vat-validate checks an EU VAT number's format and check digits
   offline for all 27 member states plus XI (Northern Ireland), free with
   proof of work.

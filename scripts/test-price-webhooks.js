@@ -31,7 +31,7 @@ import { createJsonDocument } from "../src/json-document.js";
 import {
   createPriceWebhooks, parseTarget, parseSlugs, priceChanges, removalChanges, changesOf, REMOVAL_GUARD_MIN, REMOVAL_GUARD_SHARE, secretFor, ownerDigest, signatureFor, verifySignature, isDocumentationHost,
   RETRY_DELAYS_MS, MAX_SLUGS, MAX_URL_CHARS, SIGNATURE_HEADER, EVENT_HEADER, DELIVERY_HEADER, EVENT_PRICE_CHANGED, UNSUBSCRIBE_PATH, PRICE_WEBHOOK_SLUG,
-  DELIVERY_TIMEOUT_MS, DELIVERY_LANES, HOST_TURN_MS, TURN_BUDGET_MS, PENDING_MS, MAX_CHANGE_SETS, lifetimeMs, maxPerRegistrant, maxSubscriptions, hardMaxSubscriptions,
+  DELIVERY_TIMEOUT_MS, DELIVERY_LANES, HOST_TURN_MS, TURN_BUDGET_MS, PENDING_MS, MAX_CHANGE_SETS, lifetimeMs, maxPerRegistrant, maxSubscriptions, hardMaxSubscriptions, FULL_RETRY_AFTER_SECONDS,
 } from "../src/price-webhooks.js";
 import { hasLastingEffect } from "../src/lasting-effect-slugs.js";
 import { PRICE_WEBHOOK_TOOLS, registrantOf, makePriceWebhookHandler } from "../src/tools/price-webhook-kit.js";
@@ -146,7 +146,7 @@ try {
   }
   {
     // Who is bounded: the registrant, never the host a URL names.
-    ok(maxPerRegistrant({}) === 25 && maxSubscriptions({}) === 5000 && hardMaxSubscriptions({}) === 10000 && lifetimeMs({}) === 90 * DAY, "defaults: 25 subscriptions a registrant, room made from 5,000 on, 10,000 at most, 90 days each");
+    ok(maxPerRegistrant({}) === 25 && maxSubscriptions({}) === 6000 && hardMaxSubscriptions({}) === 12000 && lifetimeMs({}) === 90 * DAY, "defaults: 25 subscriptions a registrant, room made from 6,000 on, 12,000 at most, 90 days each");
     const r = rig({ env: { PRICE_WEBHOOK_SIGNING_KEY: KEY, PRICE_WEBHOOK_MAX_PER_PAYER: "2", PRICE_WEBHOOK_MAX_PER_HOST: "2" } });
     const A = "payer:0x00000000000000000000000000000000000000aa", B = "payer:0x00000000000000000000000000000000000000bb", C = "svm:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
     // Many buyers point at one shared receiver host: none is refused for it.
@@ -195,10 +195,10 @@ try {
     ok((await ex.pw.status()).sinceBoot.expired === 0 && (await ex.change("search")) && (await ex.pw.status()).sinceBoot.expired === 1 && Object.keys(ex.stored().subs).length === 0 && ex.stored().queue.length === 0, "and the next store write removes it with its delivery");
   }
   {
-    // The store's own bound: failing subscriptions make room; at twice the
-    // bound a new registrant is still admitted, and the subscription whose
-    // receiver last answered 2xx longest ago (registration time when never
-    // delivered to) is the one removed.
+    // The store's own bound: failing subscriptions make room; a working one is
+    // never removed for room. At twice the bound, the hard bound, with nothing
+    // failing left, a new registration is refused 503 with Retry-After,
+    // uncharged, and nothing is removed or stored for it.
     let flaky = true; // h2 fails its first attempt once, then answers
     const r = rig({ env: { PRICE_WEBHOOK_SIGNING_KEY: KEY, PRICE_WEBHOOK_MAX: "3", PRICE_WEBHOOK_MAX_PER_PAYER: "1" }, responder: (url) => {
       if (url.includes("dead")) return { status: 500 };
@@ -215,31 +215,35 @@ try {
     const fourth = await reg(4);
     const after = r.stored();
     ok(fourth.registered === true && !after.subs[dead.id] && live.every((x) => after.subs[x.id]) && Object.keys(after.subs).length === 3, "at the bound a new registrant is admitted and the subscription whose deliveries fail is the one removed");
-    // With nothing failing, new registrants are admitted past the bound and nothing is removed.
+    // With nothing failing, new registrants are admitted past the bound up to the hard bound and nothing is removed.
     const more = [await reg(5), await reg(6), await reg(7)];
     ok(more.every((x) => x.registered) && Object.keys(r.stored().subs).length === 6 && live.every((x) => r.stored().subs[x.id]), "with nothing failing a new registrant is admitted past the bound, and nothing a receiver answers is removed for room");
-    // One delivery to all six: h2 answers its retry a minute after the rest,
-    // so h2 (the oldest registration) holds the newest 2xx.
+    // Every receiver answers 2xx (h2 on its retry): all six are working.
     flaky = true;
     await r.change("search");
     await r.pw.deliverDue();
     r.clock.t += RETRY_DELAYS_MS[0];
     await r.pw.deliverDue();
-    const okAt = (x) => r.stored().subs[x.id].ok;
-    ok(okAt(live[0]) > okAt(live[1]) && [fourth, ...more].every((x) => okAt(x) === okAt(live[1])) && r.stored().queue.length === 0, "setup: every receiver answered 2xx, h2 the latest");
-    const eighth = await reg(8);
-    const s8 = r.stored();
-    ok(eighth.registered === true && Object.keys(s8.subs).length === 6 && !s8.subs[live[1].id] && s8.subs[live[0].id], "at twice the bound, the hard bound, a new registrant is admitted and the subscription answered 2xx longest ago is removed, not the oldest registration");
-    const ninth = await reg(9);
-    const s9 = r.stored();
-    ok(ninth.registered === true && Object.keys(s9.subs).length === 6 && s9.subs[eighth.id] && !s9.subs[fourth.id], "the next one removes the next longest since a 2xx; the previous registrant, never delivered to, counts from its registration and stays");
+    ok([...live, fourth, ...more].every((x) => r.stored().subs[x.id].ok > 0 && !r.stored().subs[x.id].miss && !r.stored().subs[x.id].fails) && r.stored().queue.length === 0, "setup: every receiver answered 2xx, so the store at its hard bound holds only working subscriptions");
+    const before = JSON.stringify(r.stored().subs);
+    let full = null;
+    try { await reg(8); } catch (e) { full = e; }
+    ok(full && full.statusCode === 503 && full.retryAfter === FULL_RETRY_AFTER_SECONDS && full.charged === false && /nothing was charged/.test(full.message) && /retry later/.test(full.message), `at the hard bound with every subscription working, a new registration is refused 503 with Retry-After and charged: false (${full ? `${full.statusCode} ${full.message}` : "admitted"})`);
+    ok(JSON.stringify(r.stored().subs) === before, "and no working subscription is removed, and nothing is stored for the refused one");
+    // A registration through the deferred path (a paid or routed call) is refused the same way, with no pending mark stored.
+    let fullPending = null;
+    try { await r.pw.registerPending({ url: "https://h9.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x0000000000000000000000000000000000000009" }); } catch (e) { fullPending = e; }
+    ok(fullPending?.statusCode === 503 && JSON.stringify(r.stored().subs) === before && !Object.values(r.stored().subs).some((x) => x.pending), "a pending registration at the full store is refused before anything is stored: no pending mark");
+    // A renewal takes no new place, so it is still accepted at the full store.
+    const renewed = await r.pw.register({ url: `https://h3.buyer.test/h` }, { known: KNOWN, registrant: `payer:0x${String(3).padStart(40, "0")}` });
+    ok(renewed.renewed === true && renewed.id === live[1].id, "a renewal of a held URL is still accepted at the full store");
     const st = await r.pw.status();
-    eq([st.subscriptions, st.bound, st.hardBound, st.sinceBoot.removedForRoom, st.sinceBoot.removedOldest, st.failing], [6, 3, 6, 1, 2, 0], "the status counts what was removed for room, failing and healthy apart");
-    ok(!("refusedFull" in st.sinceBoot), "no registration is refused for room, so nothing counts one");
+    eq([st.subscriptions, st.bound, st.hardBound, st.sinceBoot.removedForRoom, st.sinceBoot.refusedFull, st.failing], [6, 3, 6, 1, 2, 0], "the status counts what was removed for room and what was refused for a full store");
+    ok(!("removedOldest" in st.sinceBoot), "no working subscription is ever removed for room, so nothing counts one");
   }
   {
-    // At the hard bound a failing subscription goes before a healthy one, and
-    // a registration whose call has not settled goes last.
+    // At the hard bound a failing subscription goes, the most failures first;
+    // a pending registration and a working subscription never go.
     const r = rig({ env: { PRICE_WEBHOOK_SIGNING_KEY: KEY, PRICE_WEBHOOK_MAX: "1", PRICE_WEBHOOK_MAX_PER_PAYER: "1" }, responder: (url) => ({ status: url.includes("miss") ? 500 : 200 }) });
     const pend = await r.pw.registerPending({ url: "https://pending.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x00000000000000000000000000000000000000a1" });
     r.clock.t += 60_000;
@@ -252,9 +256,10 @@ try {
     const s = r.stored();
     ok(fresh.registered === true && !s.subs[missing.id] && s.subs[pend.answer.id] && s.subs[fresh.id] && Object.keys(s.subs).length === 2, "the failing subscription is removed before the pending one, and the new one is admitted");
     r.clock.t += 60_000;
-    const next = await r.pw.register({ url: "https://next.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x00000000000000000000000000000000000000d4" });
+    let refused = null;
+    try { await r.pw.register({ url: "https://next.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x00000000000000000000000000000000000000d4" }); } catch (e) { refused = e; }
     const s2 = r.stored();
-    ok(next.registered === true && s2.subs[pend.answer.id] && !s2.subs[fresh.id] && s2.subs[next.id], "a registration whose call has not settled goes last: the settled one goes first");
+    ok(refused?.statusCode === 503 && s2.subs[pend.answer.id] && s2.subs[fresh.id] && Object.keys(s2.subs).length === 2, "with only a pending registration and a working subscription left, the next one is refused and neither is removed");
   }
   {
     // A registration is kept only when its call settles.

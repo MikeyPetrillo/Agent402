@@ -23,6 +23,7 @@ const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll, cgNoteUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
+import { markResaleBarred, markResaleComputed, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.js";
 import { hlSharedInfo } from "./hyperliquid-shared.js";
@@ -767,6 +768,11 @@ export const CRYPTO_TOOLS = [
 // COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
 // `credit` field of every answer.
 for (const t of CRYPTO_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
+// Resale terms (src/resale-terms.js): these answer the source's data as it
+// came, so they are not resold through a third party; stablecoin-peg answers
+// a deviation and a band computed here.
+markResaleBarred(CRYPTO_TOOLS, ["crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global"], MARKET_DATA_RESALE_REASON);
+markResaleComputed(CRYPTO_TOOLS, ["stablecoin-peg"]);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 // A call that ends in an error counts its CoinGecko reads on the unsettled

@@ -58,7 +58,7 @@ const ENTRIES = [
     date: "2026-11-22",
     title: "Price webhook notices, the seller manifest and a retirement",
     items: [
-      "Tools: Price webhooks now announce a watched tool that is retired or no longer served, once, with `to: null` and a status, and a new registration is always accepted.",
+      "Tools: Price webhooks now announce a watched tool that is retired or no longer served, once, with `to: null` and a status, and a working subscription is never removed to make room for a new one.",
       "Tools: New: vat-validate checks an EU VAT number's format and check digits offline for all 27 member states plus XI (Northern Ireland), free with proof of work.",
       "Tools: market (GET /api/market/tick) joins the routes that are retired and answer 410; market names crypto-price as the replacement.",
       "Surfaces: /sell documents the manifest shape the index reads and the same-origin rule.",
