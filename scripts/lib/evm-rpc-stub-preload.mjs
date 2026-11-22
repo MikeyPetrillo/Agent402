@@ -24,26 +24,29 @@ const T0 = Number(process.env.EVM_STUB_T0) || Date.now();
 const SELLERS = Number(process.env.EVM_STUB_SELLERS) || 300;
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
-// [chain, host tokens, block ms, head at T0]
+// [chain, host labels, block ms, head at T0]: a host belongs to the first
+// chain one of whose labels is a whole label of the host name (split at dots
+// and dashes), never a substring match.
 const CHAINS = [
-  ["base-sepolia", ["base-sepolia", "sepolia.base"], 2000, 30_000_000],
+  ["base-sepolia", ["sepolia"], 2000, 30_000_000],
   ["base", ["base"], 200, 40_000_000],
-  ["arbitrum", ["arb"], 250, 300_000_000],
+  ["arbitrum", ["arb", "arb1", "arbitrum"], 250, 300_000_000],
   ["polygon", ["polygon"], 2100, 70_000_000],
   ["monad", ["monad"], 300, 40_000_000],
   ["celo", ["celo", "forno"], 1000, 40_000_000],
   ["avalanche", ["avax", "avalanche"], 1140, 60_000_000],
   ["sei", ["sei"], 450, 160_000_000],
-  ["optimism", ["opt-", "optimism"], 2000, 140_000_000],
-  ["arc", ["arc-mainnet", "arc.io"], 500, 30_000_000],
-  ["ink", ["ink"], 1000, 62_000_000],
+  ["optimism", ["opt", "optimism"], 2000, 140_000_000],
+  ["arc", ["arc"], 500, 30_000_000],
+  ["ink", ["ink", "inkonchain"], 1000, 62_000_000],
   ["robinhood", ["robinhood"], 150, 50_000_000],
-  ["ethereum", ["eth-mainnet", "ethereum", "eth.drpc", "cloudflare-eth"], 12000, 23_000_000],
+  ["ethereum", ["eth", "ethereum"], 12000, 23_000_000],
 ];
 const STEP = 4000; // one transfer every STEP blocks
 
 function chainOf(host) {
-  for (const [name, tokens, ms, head0] of CHAINS) if (tokens.some((t) => host.includes(t))) return { name, ms, head0 };
+  const labels = new Set(String(host).toLowerCase().split(/[.-]/));
+  for (const [name, tokens, ms, head0] of CHAINS) if (tokens.some((t) => labels.has(t))) return { name, ms, head0 };
   return null;
 }
 // In-process tests steer the chains through globalThis.__evmStub:
