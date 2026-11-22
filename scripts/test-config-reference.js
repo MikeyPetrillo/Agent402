@@ -192,5 +192,20 @@ try {
   }
 }
 
+// The same for .claude/rules/payments.md: the per-day floor of the
+// returning-wallet bar and the three Tempo gas sponsorship caps.
+{
+  const pay = readFileSync(new URL("../.claude/rules/payments.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  for (const [name, dflt, file, inSrc] of [
+    ["RETURNING_WALLET_MIN_DAY_SPEND_USD", "0.05", "src/returning-wallet.js", /minDaySpendUsd: 0\.05\b/],
+    ["TEMPO_GAS_SPONSOR_DAILY_MAX_USD", "5", "src/tempo-charge-sponsor.js", /dailyMaxUsd: 5\b/],
+    ["TEMPO_GAS_SPONSOR_PAYER_DAILY_MAX_USD", "1", "src/tempo-charge-sponsor.js", /payerDailyMaxUsd: 1\b/],
+    ["TEMPO_GAS_SPONSOR_MAX_FEE_USD", "0.01", "src/tempo-charge-sponsor.js", /maxFeeUsd: 0\.01\b/],
+  ]) {
+    ok(inSrc.test(read(file)) && new RegExp(`\`${name}\`[^.;]{0,60}default \`?${dflt.replace(/[./]/g, (c) => `\\${c}`)}`).test(pay), `.claude/rules/payments.md names ${name} with the default ${file} holds (${dflt})`);
+  }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -787,6 +787,7 @@ const SOLANA_INTEL_TOOLS = solanaIntelToolsEnabled();
 const TOKEN_BRIEF_TOOLS = rugcheckEnabled() ? TOKEN_BRIEF_TOOLS_ALL : [];
 import { SANCTIONS_TOOLS, startSanctionsRefresh, startSanctionsPayoutStore, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
+import { SETTLE_FIRST_CATALOG_TOOLS, settleFirstSlugs } from "./settle-first-tools.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";
 import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled } from "./tools/farcaster-social-kit.js";
 // Listed only when a Neynar/Warpcast key is present (same rule as the X data kit).
@@ -13737,8 +13738,9 @@ async function admitPaidRun(req, res, def) {
 // (tts-kit), transcription (stt-kit), judgment (judge-kit) and code runs
 // (code-run-kit). Their unsettled runs count toward the wallet's settle-first
 // count and the budget meter like a /v1 run's (setSettleFirstRouteReader).
-const SETTLE_FIRST_CATALOG_SLUGS = new Set([...SEARCH_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...JUDGE_TOOLS, ...CODE_RUN_TOOLS].map((t) => t.slug));
-const SETTLE_FIRST_SLUGS = new Set([...[...GATEWAY_TOOLS_ENABLED, ...IMAGES_FAST_TOOLS.filter((t) => t.slug !== "v1-videos"), ...DUB_TOOLS].map((t) => t.slug), ...SETTLE_FIRST_CATALOG_SLUGS]);
+// The lists live in src/settle-first-tools.js, which the copy guard reads too.
+const SETTLE_FIRST_CATALOG_SLUGS = new Set(SETTLE_FIRST_CATALOG_TOOLS.map((t) => t.slug));
+const SETTLE_FIRST_SLUGS = settleFirstSlugs(GATEWAY_TOOLS_ENABLED);
 setSettleFirstRouteReader((req) => SETTLE_FIRST_CATALOG_SLUGS.has(CATALOG[`${req.method} ${req.path}`]?.slug));
 /**
  * Arm this run to settle its payment before its upstream work, or null (it

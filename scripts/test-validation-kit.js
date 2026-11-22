@@ -122,6 +122,17 @@ for (const [input, field] of [[{}, "vat"], [{ vat: "" }, "vat"], [{ vat: " .- " 
 }
 
 
+// The description scopes the check-digit rule to numbers that carry one: a
+// Northern Ireland GD/HA number and a Czech birth number before 1954 have
+// none and answer checksumValid: null, valid: true.
+{
+  const desc = String(tool("vat-validate").description);
+  const noDigit = ["XIGD100", "XIHA500", "CZ530101123"].map((v) => vat({ vat: v }));
+  ok(noDigit.every((r) => r.checksumValid === null && r.valid === true) && /the published check-digit rule where the number carries one/.test(desc),
+    `vat-validate's description scopes the check-digit rule to numbers that carry one (${JSON.stringify(noDigit.map((r) => r.checksumValid))})`);
+}
+
+
 console.log(`\nvalidation-kit: ${pass}/${pass + fail} PASS`);
 if (fail) { console.error(`${fail} assertion(s) FAILED`); process.exit(1); }
 

@@ -1115,8 +1115,11 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 // not this claim.
 {
   const fam = await import("../src/settle-first-copy.js");
-  const GENERAL = /\bfailed x402 (?:call|run|request)s? (?:is|are) not charged|\b(?:response|answer)s? of 400 or above (?:is|are) not (?:settled|charged)|\bfailed run is not charged|\berror status cancels\b|\b4xx\b[^.;|]{0,20}\b5xx\b[^.;|]{0,40}\b(?:cancels settlement|not charged|never settled)|\bonly (?:for a response )?under 400 \| not charged|\bany status of 400 or above is not charged|\ba 4xx or 5xx\b[^.;]{0,80}?\b(?:cancels settlement|is not charged|is never charged)|\ban? (?:error|failed) (?:answer|call|response)s? (?:is|are) not (?:charged|settled)|\b(?:calls?|requests?) (?:that|which) fails? (?:is|are) not charged|\bsettles? only after\b[^.;]{0,80}\bsuccess|\bnot settled and you are not charged|\bnever pays? for a failed\b|\bfailed calls? (?:is|are) (?:never|not) charged|\berrors? (?:is|are) (?:never|not) charged/gi;
-  const EXTRA = new Set(["src/settlement-footnote.js", "src/refund-terms.js", "src/refund-terms-doc.js", "src/conformance.js", "src/mcp-http.js", "mcp/index.js", "src/agentcore-page.js"]);
+  const GENERAL = /\bfailed x402 (?:call|run|request)s? (?:is|are) not charged|\b(?:response|answer)s? of 400 or above (?:is|are) not (?:settled|charged)|\bfailed run is not charged|\berror status cancels\b|\b4xx\b[^.;|]{0,20}\b5xx\b[^.;|]{0,120}\b(?:cancels settlement|not charged|never settled)|\bonly (?:for a response )?under 400 \| not charged|\bany status of 400 or above is not charged|\ba 4xx or 5xx\b[^.;]{0,200}?\b(?:cancels settlement|is not charged|is never charged)|\ban? (?:error|failed) (?:answer|call|response)s? (?:is|are) not (?:charged|settled)|\b(?:calls?|requests?) (?:that|which) fails? (?:is|are) not charged|\bsettles? only after\b[^.;]{0,80}\bsuccess|\bnot settled and you are not charged|\bnever pays? for a failed\b|\bfailed calls? (?:is|are) (?:never|not) charged|\berrors? (?:is|are) (?:never|not) charged|\b(?:fail\w*|errors?|upstream|outage|5\d\d|timed[- ]out|cut off)\b[^.\n]{0,300}?\bnot charged on x402\b|\bfailed (?:call|run)s?\b[^.;]{0,200}?\b(?:is|are) not charged|\ba call the tool fails is not charged|\bfailure case costs nothing|\ban? error cancels settlement|\bnot charged for a failure|\b(?:answer|response)s? with an error status (?:is|are) not (?:settled|charged)|\bnot charged: the (?:error|same settlement path|credential)|\bsettles only (?:on a delivered result|when the result is ready)/gi;
+  // Served copy outside COPY_SURFACES' names: the /tools ledger, the discovery
+  // manifest, the 202 job message, the MCP task notices and /what-is-mpp.
+  const EXTRA = new Set(["src/settlement-footnote.js", "src/refund-terms.js", "src/refund-terms-doc.js", "src/conformance.js", "src/mcp-http.js", "mcp/index.js", "src/agentcore-page.js",
+    "src/ledger-catalog.js", "src/discovery.js", "src/async-jobs.js", "src/mcp-tasks.js", "src/what-is-mpp.js"]);
   const carries = (near) => near.includes(fam.SETTLE_FIRST_MARK) || /\$\{(?:SETTLE_FIRST_|FAILED_CALL_SENTENCE)/.test(near);
   const scanned = files.filter((f) => (COPY_SURFACES.test(f) || EXTRA.has(f)) && /\.(?:md|js)$/.test(f) && !/^(?:scripts|tollbooth|adapters|openclaw|workers|services|facilitator|\.github|\.claude|examples)\//.test(f) && !/CHANGELOG/.test(f) && f !== "src/changelog.js" && f !== "CLAUDE.md");
   let claims = 0;
@@ -1129,32 +1132,43 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
       if (/\b[Rr]efusals? (?:are|is) free\b/.test(text.slice(Math.max(0, m.index - 120), m.index))) continue;
       claims++;
-      if (!carries(text.slice(Math.max(0, m.index - 800), m.index + 1500))) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
+      // A claim in a table row is carried by the sentence right under that
+      // table (a markdown table, or a page module's row([...]) list).
+      let end = m.index + 1500;
+      const lineAt = (i) => text.slice(text.lastIndexOf("\n", i - 1) + 1, (text.indexOf("\n", i) + 1 || text.length + 1) - 1);
+      const isRow = (l) => /^\s*\|/.test(l) || /^\s*(?:\.\.\.\(.*)?\brow\(\[/.test(l) || /^\s*\$\{table\(\[/.test(l);
+      if (isRow(lineAt(m.index))) {
+        let pos = text.indexOf("\n", m.index);
+        while (pos !== -1 && isRow(lineAt(pos + 1))) pos = text.indexOf("\n", pos + 1);
+        end = Math.max(end, (pos === -1 ? text.length : pos) + 600);
+      }
+      if (!carries(text.slice(Math.max(0, m.index - 800), end))) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
     }
     // Word for word: every copy of the family's words is one of its sentences.
     if (rel !== "src/settle-first-copy.js") {
       const flat = text.replace(/\s*\n\s*/g, " ");
       for (const m of flat.matchAll(new RegExp(fam.SETTLE_FIRST_MARK, "g"))) {
         const around = flat.slice(Math.max(0, m.index - 40), m.index + 400);
-        if (![fam.SETTLE_FIRST_SENTENCE, fam.FAILED_CALL_SENTENCE].some((x) => around.includes(x.slice(x.indexOf(fam.SETTLE_FIRST_MARK))))) drift.push(rel);
+        if (![fam.SETTLE_FIRST_TEXT, fam.FAILED_CALL_TEXT].some((x) => around.includes(x.slice(x.indexOf(fam.SETTLE_FIRST_MARK))))) drift.push(rel);
       }
     }
   }
-  ok(fam.FAILED_CALL_SENTENCE === "Some calls are paid before they run. If one fails, send the same payment again to retry it free, or it is refunded."
-    && fam.SETTLE_FIRST_SENTENCE === "Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded."
-    && fam.FAILED_CALL_SENTENCE.includes(fam.SETTLE_FIRST_MARK) && fam.SETTLE_FIRST_SENTENCE.includes(fam.SETTLE_FIRST_MARK)
-    && ![fam.FAILED_CALL_SENTENCE, fam.SETTLE_FIRST_SENTENCE].some((x) => /not charged|automatic/i.test(x)),
+  ok(fam.FAILED_CALL_TEXT === "Some calls are paid before they run. If one fails, send the same payment again to retry it free, or it is refunded."
+    && fam.SETTLE_FIRST_TEXT === "Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded."
+    && fam.FAILED_CALL_TEXT.includes(fam.SETTLE_FIRST_MARK) && fam.SETTLE_FIRST_TEXT.includes(fam.SETTLE_FIRST_MARK)
+    && ![fam.FAILED_CALL_TEXT, fam.SETTLE_FIRST_TEXT].some((x) => /not charged|automatic/i.test(x)),
     "the shared sentences are the approved wording: which calls are paid first, and what a failure gets (the same payment again, or a refund), with no restated promise and no 'automatically'");
-  // The tools that settle first (server.js SETTLE_FIRST_CATALOG_SLUGS): a
-  // description that says a failure is not charged carries the sentence too.
+  // The tools that settle first (src/settle-first-tools.js, the lists
+  // server.js arms from): a description that says a failure is not charged
+  // carries the sentence too.
   {
-    const fams = await Promise.all([
-      import("../src/tools/search.js").then((m) => m.SEARCH_TOOLS), import("../src/tools/image-gen-kit.js").then((m) => m.IMAGE_GEN_TOOLS),
-      import("../src/tools/tts-kit.js").then((m) => m.TTS_TOOLS), import("../src/tools/stt-kit.js").then((m) => m.STT_TOOLS),
-      import("../src/tools/judge-kit.js").then((m) => m.JUDGE_TOOLS), import("../src/tools/code-run-kit.js").then((m) => m.CODE_RUN_TOOLS),
-    ]);
-    const tools = fams.flat();
-    const claimers = tools.filter((t) => /\bnot charged\b/i.test(String(t.description || "")));
+    const sft = await import("../src/settle-first-tools.js");
+    const tools = [...sft.SETTLE_FIRST_GATEWAY_TOOLS, ...sft.SETTLE_FIRST_SHARED_TOOLS, ...sft.SETTLE_FIRST_CATALOG_TOOLS];
+    const srv = readFileSync(join(root, "src/server.js"), "utf8");
+    ok(/const SETTLE_FIRST_SLUGS = settleFirstSlugs\(GATEWAY_TOOLS_ENABLED\);/.test(srv) && /new Set\(SETTLE_FIRST_CATALOG_TOOLS\.map/.test(srv)
+      && ["v1-images-edit", "dub"].every((slug) => tools.some((t) => t.slug === slug)),
+      "the description check reads the lists server.js arms settle-first from (images edit and dub included)");
+    const claimers = tools.filter((t) => /\b(?:fail\w*|errors?)\b[^.]{0,160}\bnot charged\b/i.test(String(t.description || "")));
     const bareTools = claimers.filter((t) => !String(t.description).includes(fam.SETTLE_FIRST_MARK)).map((t) => t.slug);
     ok(tools.length >= 6 && claimers.length >= 2 && bareTools.length === 0, `every settle-first tool description that says a failure is not charged carries the settle-first sentence (${claimers.length} of ${tools.length}${bareTools.length ? `; bare: ${bareTools.join(", ")}` : ""})`);
   }
@@ -1162,7 +1176,57 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
   ok(drift.length === 0, `every copy of the settle-first words is one of the shared sentences, word for word${drift.length ? ` (drifted: ${[...new Set(drift)].join(", ")})` : ""}`);
   ok([..."A failed x402 call is not charged.".matchAll(GENERAL)].length === 1 && !carries("A failed x402 call is not charged. Retry later."),
-    "control: the bare claim is matched and is not taken as carrying the sentence");
+    "control: the bare claim is matched and is not taken as carrying the sentence");  ok(["so on x402 a 4xx or 5xx (a text over the cap, a format the tier does not serve, an upstream that could not answer) is not charged.",
+    "| 502 | a source answered with a failure | retry later; not charged on x402 |", "On x402 a call the tool fails is not charged: settlement runs after the tool.",
+    "the ordinary failure case costs nothing and needs no refund.", "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.",
+    "Any `4xx`/`5xx` (a bad input, a capacity `503`, an upstream `502`) **cancels settlement**, so the x402 buyer is not charged for a failure.",
+    "only a successful answer is settled on x402: an answer with an error status is not settled.", "Not charged: the error cancels settlement before any facilitator call.",
+    "A failed call (an error, a timeout, an upstream outage) is not charged on x402", "You were not charged: payment settles only on a delivered result."]
+    .every((x) => [...x.matchAll(GENERAL)].length >= 1),
+    "control: the long-parenthetical, table-cell, manifest and job-notice phrasings are matched");
+
+  // The scope of a failed call's evidence: "no receipt, or success:false"
+  // describes the run that settles after it answers; a run paid before it
+  // ran answers charged: true, and the sentence says so beside the claim.
+  {
+    const RECEIPT = /\b(?:answered with )?no (?:payment )?receipt(?: header)?, or (?:with )?(?:an? )?(?:x402 )?receipt (?:marked|that reads)/g;
+    const sites = [...scanned, "README.md", "wiki/Why-Pay-Here.md"].filter((f, i, a) => a.indexOf(f) === i);
+    let n = 0; const missing = [];
+    for (const rel of sites) {
+      const text = read(rel);
+      if (!text) continue;
+      for (const m of text.matchAll(RECEIPT)) {
+        n++;
+        if (!/A call paid before it ran answers [`]?(?:\$\{C\("charged: true"\)\}|charged: true)/.test(text.slice(m.index, m.index + 1200))) missing.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
+      }
+    }
+    ok(n >= 4 && missing.length === 0, `every "no receipt, or success:false" claim says a call paid before it ran answers charged: true (${n} places${missing.length ? `; missing: ${missing.join(", ")}` : ""})`);
+  }
+
+  // Served surfaces print the sentence only while runs can settle first: no
+  // module under src/ types the words (each interpolates the switch-reading
+  // constant), and with GATEWAY_SETTLE_FIRST=off the constants and a rendered
+  // surface carry none of them.
+  {
+    const typed = tracked.filter((f) => /^src\/.*\.js$/.test(f) && f !== "src/settle-first-copy.js" && f !== "src/changelog.js")
+      .filter((f) => (read(f) || "").includes(fam.SETTLE_FIRST_MARK));
+    ok(typed.length === 0, `no served module types the settle-first words; each interpolates the switch-reading sentence${typed.length ? ` (typed: ${typed.join(", ")})` : ""}`);
+    const probe = `
+      const f = await import(${JSON.stringify(join(root, "src/settle-first-copy.js"))});
+      const { failedCallFootnote } = await import(${JSON.stringify(join(root, "src/settlement-footnote.js"))});
+      const { WHY_POINTS } = await import(${JSON.stringify(join(root, "src/why.js"))});
+      const { SETTLE_FIRST_CATALOG_TOOLS } = await import(${JSON.stringify(join(root, "src/settle-first-tools.js"))});
+      const seen = [f.FAILED_CALL_SENTENCE, f.SETTLE_FIRST_SENTENCE, failedCallFootnote(["x402"]), JSON.stringify(WHY_POINTS), SETTLE_FIRST_CATALOG_TOOLS.map((t) => t.description).join(" ")].join(" ");
+      console.log(JSON.stringify({ on: f.settleFirstCopyOn(), mark: seen.includes(f.SETTLE_FIRST_MARK) }));`;
+    const run = (v) => { try { return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { env: { ...process.env, GATEWAY_SETTLE_FIRST: v, REDIS_URL: "", STATE_DATABASE_URL: "" }, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n").pop()); } catch { return null; } };
+    const off = run("off"), on = run("auto");
+    ok(off?.on === false && off.mark === false && on?.on === true && on.mark === true,
+      `GATEWAY_SETTLE_FIRST=off prints no settle-first sentence on a served surface, and the default prints it (off: ${JSON.stringify(off)}, on: ${JSON.stringify(on)})`);
+    const { settleFirstEnabled } = await import("../src/gateway-settle-breaker.js");
+    const { settleFirstCopyOn } = fam;
+    ok(typeof settleFirstCopyOn === "function" && ["off", " OFF ", "", "auto", "always", "on"].every((v) => settleFirstCopyOn({ GATEWAY_SETTLE_FIRST: v }) === settleFirstEnabled({ GATEWAY_SETTLE_FIRST: v })),
+      "the copy reads the same switch the settle-first path reads");
+  }
 }
 
 // The retry verbs a refused payment names (src/tool-error-fields.js

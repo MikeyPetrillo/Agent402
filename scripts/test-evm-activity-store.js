@@ -125,6 +125,12 @@ if (store) {
   const text = (html) => pageText(html).replace(/\s+/g, " ");
   const on = text(privacyPage("https://agent402.tools"));
   ok(on.includes("EVM wallet activity") && on.includes(`up to ${store.evmActivityMaxWallets()} wallets across those chains`) && on.includes("sending wallet address of each payment") && on.includes(`for ${store.EVM_ACTIVITY_KEEP_DAYS} days`) && store.EVM_ACTIVITY_KEEP_DAYS === 35 && store.evmActivityMaxWallets() === 500, "/privacy names the EVM activity store: the sending wallet, 500 wallets, 35 days");
+  // Every field a stored row holds is named: the block, the flag for our own
+  // wallets, the transaction id kept at the scan's edges, and the file the
+  // store writes when there is no state database.
+  ok(on.includes("the block number, time, amount and sending wallet address of each payment") && on.includes("whether that sending wallet is one of ours")
+    && on.includes("the transaction id of payments in the newest and oldest blocks read") && on.includes("or in a file on the server when it runs without one"),
+    "/privacy names every stored field (block, our-wallet flag, edge transaction ids) and the file fallback");
   process.env.EVM_ACTIVITY_STORE_MAX_WALLETS = "120";
   ok(text(privacyPage("https://agent402.tools")).includes("up to 120 wallets across those chains"), "/privacy prints the configured bound");
   delete process.env.EVM_ACTIVITY_STORE_MAX_WALLETS;
