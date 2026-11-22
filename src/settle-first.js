@@ -131,3 +131,48 @@ export function settleFirstRefusalOf(req) {
   const e = stateOf(req)?.refusal;
   return isSettleFirstRefusal(e) ? e : null;
 }
+
+// ---- a payment that cannot settle first (option A) ----------------------------
+// An `upto` payment (its amount is named after the handler) or a Circle Gateway
+// batched payment (settled off chain by its own client) cannot be settled
+// before the run. While settle first applies to the wallet that sent one, on
+// a route that settles first, the run is not started: the answer is the
+// route's own 402 with the exact accepts listed first (server.js), nothing is
+// charged, and the breaker counts nothing for it.
+const EXACT_REQUIRED = Symbol("a402.exactRequired");
+/** Mark this request as answered with a request for an exact payment. */
+export function markExactRequired(req, kind) {
+  try { if (req && typeof req === "object") Object.defineProperty(req, EXACT_REQUIRED, { value: String(kind || "other"), enumerable: false, configurable: true }); } catch { /* unmarked: counted as before */ }
+}
+/** The kind ("upto", "gateway") of payment this request was asked to replace, or null. */
+export function exactRequiredOf(req) {
+  return req && typeof req === "object" && Object.hasOwn(req, EXACT_REQUIRED) ? req[EXACT_REQUIRED] : null;
+}
+
+// ---- the same payment sent again after a failed settle-first run --------------
+// A payment settled at its run's settle point whose run then failed is owed
+// back (the refund ledger, class SETTLE_FIRST_FAILED). The SAME payment sent
+// again to the same route with the same body is a paid call: it is run once
+// more without asking for any settlement (the payment is already taken), and
+// when it is served the debt is voided, so the buyer is served once and never
+// both served and refunded (src/idempotency.js keeps the credit, server.js
+// runs it). The request of such a resend carries this mark (own,
+// non-enumerable): { tx, network, wire, held, note }.
+const RESEND = Symbol("a402.settledFirstResend");
+/** Mark a request as the resend of a payment already settled first. */
+export function markSettledFirstResend(req, info) {
+  if (!req || typeof req !== "object" || !info || typeof info !== "object") return false;
+  try { Object.defineProperty(req, RESEND, { value: Object.freeze({ ...info }), enumerable: false, configurable: true }); return true; } catch { return false; }
+}
+/** The resend mark of this request, or null. Own state only. */
+export function settledFirstResendOf(req) {
+  return req && typeof req === "object" && Object.hasOwn(req, RESEND) ? req[RESEND] : null;
+}
+/** The note a debt's hold carries while the same payment's resend runs
+ *  (after the row's own note and before the attempt mark). */
+export const SETTLE_FIRST_RESEND_HOLD = "resend of the same payment: running";
+/** A void row held by such a resend: the row's note before the hold, or null. */
+export function settleFirstResendHeldFrom(row) {
+  const m = typeof row?.note === "string" ? /^(.*); resend of the same payment: running \[attempt [0-9a-f]{8}\]$/.exec(row.note) : null;
+  return m && row.status === "void" && isSettleFirstFailedRefund({ note: m[1] }) ? m[1] : null;
+}

@@ -18,6 +18,12 @@ const X402_WIRES = ["evm", "mpp-evm", "svm", "avm", "stellar"];
 const CLASS = "settle-first-failed";
 const decode = (h) => { try { return JSON.parse(Buffer.from(String(h), "base64").toString("utf8")); } catch { return null; } };
 
+// What a buyer reads, with what differs call to call masked (ids, times,
+// transaction hashes, request ids): the status, the header names, the body.
+const VOLATILE_HEADERS = new Set(["date", "etag", "x-request-id", "x-response-time", "server-timing", "content-length", "payment-response", "x-agent402-receipt", "x-agent402-receipt-key", "x-agent402-receipt-sig"]);
+const maskBody = (j) => JSON.parse(JSON.stringify(j ?? null, (k, v) => (["id", "created", "transaction", "requestId", "receipt", "nonce"].includes(k) ? "<masked>" : v)));
+const shapeOf = (r) => ({ status: r.status, headers: [...r.headers.keys()].filter((h) => !VOLATILE_HEADERS.has(h)).sort().join(","), body: maskBody(r.json), receipt: decode(r.headers.get("payment-response"))?.errorReason || decode(r.headers.get("payment-response"))?.success || null });
+
 export async function run({ ok, parts, setRig }) {
   const ledgerDir = mkdtempSync(join(tmpdir(), "a402-settle-first-ledger-"));
   const SHARED_ENV = {
@@ -60,13 +66,36 @@ export async function run({ ok, parts, setRig }) {
   const owedShape = (row, { slug = "v1-chat", status: st, payer, usd, tx }) => !!row && String(row.note || "").startsWith(CLASS) && row.status === "owed" && row.slug === slug && row.httpStatus === st
     && (payer == null || row.payer === payer) && (usd == null || Math.abs(row.priceUsd - usd) < 1e-9) && (tx == null || String(row.evidence).toLowerCase() === String(tx).toLowerCase());
 
+  /** What a new wallet reads in normal operation: the 402 offer, a served
+   *  call, a call whose payment does not settle, and an upto payment. */
+  async function normalShapes() {
+    const offer = (await rig.offerOf(CHAT)).offer;
+    const { w } = await fresh("evm");
+    const from = mark();
+    const served = await rig.pay(w, CHAT);
+    const servedOrder = orderOf(w, from);
+    const poor = await rig.wallet("evm");
+    rig.fund(poor, 0n);
+    const from2 = mark();
+    const unpaid = await rig.pay(poor, CHAT);
+    const unpaidOrder = orderOf(poor, from2);
+    const { w: u } = await fresh("evm");
+    const from3 = mark();
+    const upto = await rig.send(CHAT, await rig.credentialFor(u, CHAT, { scheme: "upto" }));
+    const uptoOrder = orderOf(u, from3);
+    // (Each boot's stubs make their own Solana, Stellar and Algorand payTo and fee payer.)
+    const offerMasked = JSON.stringify(offer, (k, v) => (k === "payTo" || k === "feePayer" ? "<per-boot>" : v));
+    return { offer: offerMasked, served: JSON.stringify(shapeOf(served)), servedOrder, unpaid: JSON.stringify(shapeOf(unpaid)), unpaidOrder, upto: JSON.stringify(shapeOf(upto)), uptoOrder };
+  }
+
   // ===========================================================================
   // boot A: settle first
   // ===========================================================================
   const failed502 = {};   // per wire, the body of a payment that did not settle (compared with boot B)
+  let offShapes = null;   // boot B: what a new wallet reads, compared with boot D under its budget
   let restartPaid = null, restartOwedOnly = null;
   if (parts.includes("2")) {
-    await boot("settle-first-a");
+    await boot("settle-first-a", { GATEWAY_SETTLE_FIRST: "always" });
     try {
       // ---- every x402 exact wire ---------------------------------------------
       for (const wire of X402_WIRES) {
@@ -292,17 +321,54 @@ export async function run({ ok, parts, setRig }) {
         const both = await Promise.all([rig.send(CHAT, cred2), rig.send(CHAT, cred2)]);
         const o = rig.outcomesOf(w2);
         await ok(o.attempts === 1 && o.settled === 1 && both.filter((r) => r.status === 200).length >= 1, `one payment sent twice at once is settled once (${both.map((r) => r.status).join(", ")}; ${JSON.stringify(o)})`);
-        // ... and a payment whose run failed after the settlement cannot buy a second run or a second charge.
+        // ... and a payment whose run failed after the settlement, sent again
+        // (retry: same-payment), is run once more at no further charge and
+        // its debt is voided: served once, never both served and refunded.
         const { w: w3 } = await fresh("evm");
         const cred3 = await rig.credentialFor(w3, CHAT);
         rig.st.llmStatus = 500;
         const failedRun = await rig.send(CHAT, cred3);
         rig.st.llmStatus = 0;
-        const from3 = mark();
+        const owed3 = await refundOf((x) => x.payer === w3.address.toLowerCase());
+        const from3 = mark(), c3 = rig.st.completions;
         const retry = await rig.send(CHAT, cred3);
+        await sleep(150);
         const o3 = rig.outcomesOf(w3);
-        await ok(failedRun.status === 502 && retry.status !== 200 && o3.settled === 1 && upstreamSince(from3) === 0 && (await refunds()).filter((x) => x.payer === w3.address.toLowerCase()).length === 1,
-          `a payment whose run failed after the settlement, sent again: not charged again, no model call, still one owed row (${retry.status}; ${JSON.stringify(o3)})`);
+        const row3 = (await refunds()).find((x) => x.id === owed3?.id);
+        await ok(failedRun.status === 502 && failedRun.json?.charged === true && failedRun.json?.retry === "same-payment" && /^0x[0-9a-f]{64}$/.test(failedRun.json?.transaction || "") && failedRun.json?.refundStatusUrl?.endsWith(`?tx=${failedRun.json.transaction.toLowerCase()}`)
+          && retry.status === 200 && retry.json?.choices?.[0]?.message?.content === "stub answer" && o3.attempts === 1 && o3.settled === 1 && rig.st.completions - c3 === 1 && orderOf(w3, from3) === "upstream-only"
+          && row3?.status === "void" && /served on the resend of the same payment/.test(row3?.note || "") && (await refunds()).filter((x) => x.payer === w3.address.toLowerCase()).length === 1,
+          `a payment whose run failed after the settlement (502: charged, the transaction, retry ${failedRun.json?.retry}), sent again: run once more with no settle call (${retry.status}; ${JSON.stringify(o3)}), and its one owed row is void (${row3?.status}: ${row3?.note})`);
+        const from3b = mark(), c3b = rig.st.completions;
+        const third = await rig.send(CHAT, cred3);
+        await ok(third.status === 200 && rig.st.completions - c3b === 0 && upstreamSince(from3b) === 0 && rig.outcomesOf(w3).attempts === 1, `sent a third time, that payment is answered from what it already bought: no model call, no settle call (${third.status})`);
+        // A resend that fails again leaves the debt owed under its class; the next one is served.
+        const { w: w4 } = await fresh("evm");
+        const cred4 = await rig.credentialFor(w4, CHAT);
+        rig.st.llmStatus = 500;
+        await rig.send(CHAT, cred4);
+        const again4 = await rig.send(CHAT, cred4);
+        rig.st.llmStatus = 0;
+        await sleep(150);
+        const owed4 = await refundOf((x) => x.payer === w4.address.toLowerCase());
+        const ok4 = await rig.send(CHAT, cred4);
+        await sleep(150);
+        const row4 = (await refunds()).find((x) => x.id === owed4?.id);
+        await ok(again4.status === 502 && again4.json?.retry === "same-payment" && owed4?.status === "owed" && String(owed4?.note).startsWith(CLASS) && ok4.status === 200 && row4?.status === "void" && rig.outcomesOf(w4).attempts === 1,
+          `a resend that fails again is still owed under its class (${again4.status}, row ${owed4?.status}: ${owed4?.note}); the one after it is served and the row is void (${ok4.status}, ${row4?.status}); one settle call in all`);
+        // Two resends at once: one run.
+        const { w: w5 } = await fresh("evm");
+        const cred5 = await rig.credentialFor(w5, CHAT);
+        rig.st.llmStatus = 500;
+        await rig.send(CHAT, cred5);
+        rig.st.llmStatus = 0;
+        await refundOf((x) => x.payer === w5.address.toLowerCase());
+        llm(async () => { await sleep(400); return false; });
+        const c5 = rig.st.completions;
+        const pair = await Promise.all([rig.send(CHAT, cred5), rig.send(CHAT, cred5)]);
+        llm(null);
+        await ok(pair.filter((r) => r.status === 200).length === 1 && pair.some((r) => r.status === 409) && rig.st.completions - c5 === 1 && rig.outcomesOf(w5).attempts === 1,
+          `the same payment sent twice at once after a failed run: one is run, the other told to wait (${pair.map((r) => r.status).join(", ")}; one model call)`);
       }
 
       // ---- a wallet with history whose settlements fail on OUR side -------------
@@ -489,8 +555,9 @@ export async function run({ ok, parts, setRig }) {
   // boot B: the switch off: the same calls, as they were served before
   // ===========================================================================
   if (parts.includes("3")) {
-    await boot("settle-first-b", { GATEWAY_SETTLE_FIRST: "off" });
+    await boot("settle-first-b", { GATEWAY_SETTLE_FIRST: "off", X402_UPTO_NETWORKS: "eip155:8453" });
     try {
+      offShapes = await normalShapes();
       const { w } = await fresh("evm");
       let from = mark();
       let r = await rig.pay(w, CHAT);
@@ -534,7 +601,7 @@ export async function run({ ok, parts, setRig }) {
     // boot C: a restart, on boot A's sales ledger
     // =========================================================================
     if (parts.includes("2") && restartPaid && restartOwedOnly) {
-      await boot("settle-first-c");
+      await boot("settle-first-c", { GATEWAY_SETTLE_FIRST: "always" });
       try {
         rig.fund(restartPaid, 10n ** 9n); rig.fund(restartOwedOnly, 10n ** 9n);
         let from = mark();
@@ -547,5 +614,106 @@ export async function run({ ok, parts, setRig }) {
         await ok(offerC.offer.accepts.every((a) => !a.extra || a.extra.paymentFlow === undefined), "on, too, the 402 names no payment flow");
       } finally { await rig.stop(); }
     }
+  }
+
+  // ===========================================================================
+  // boot D: the default, the budget mode (GATEWAY_SETTLE_FIRST unset), with a
+  // small budget so a few unpaid runs cross it. Every model answer reports
+  // an upstream charge of COST.
+  // ===========================================================================
+  if (parts.includes("4")) {
+    const BUDGET = 0.2, COST = 0.03;
+    await boot("settle-first-d", { GATEWAY_SETTLE_FIRST_BUDGET_USD: String(BUDGET), X402_UPTO_NETWORKS: "eip155:8453" });
+    try {
+      rig.st.llmCost = COST;
+      const meterOf = async () => (await status())?.settleFailures?.settleFirst?.meter;
+      // ---- normal operation, under the budget: as the switch off serves -------
+      const shapes = await normalShapes();
+      await ok(shapes.servedOrder === "upstream-first" && shapes.unpaidOrder === "upstream-first" && shapes.uptoOrder === "upstream-first",
+        `under the budget, a new wallet is served first, as on main: its paid call, its unsettled call and its upto payment all run the model before any settle call (${shapes.servedOrder}, ${shapes.unpaidOrder}, ${shapes.uptoOrder})`);
+      if (offShapes) {
+        await ok(shapes.offer === offShapes.offer, "under the budget, the 402 offer is byte for byte the one served with settle first switched off (each boot's own stub wallets aside)");
+        await ok(shapes.served === offShapes.served && shapes.unpaid === offShapes.unpaid && shapes.upto === offShapes.upto,
+          `under the budget, what a new wallet reads (status, header names, body) is the same as with settle first switched off: a served call, an unsettled call (${JSON.parse(shapes.unpaid).status}) and an upto payment (${JSON.parse(shapes.upto).status})`);
+      }
+      // ---- the per-wallet rule applies under the budget too (#1936) ------------
+      {
+        const w = await withHistory();
+        rig.st.settleAnswer = ({ id }) => (id === w.id ? { status: 500, body: { error: "facilitator unavailable" } } : null);
+        const seen = [];
+        for (let i = 0; i < 4; i++) { const from = mark(); const r = await rig.pay(w, CHAT); seen.push(`${r.status}:${orderOf(w, from)}`); }
+        rig.st.settleAnswer = null;
+        await ok(seen.slice(0, 2).every((x) => x.endsWith(":upstream-first")) && seen.slice(2).every((x) => x.endsWith(":settle-only")) && !seen.some((x) => x.startsWith("429")),
+          `under the budget, a wallet with history whose settlements fail on our side: two runs are served, the rest settle first and run nothing, none refused (${seen.join(" ")})`);
+        // ... and its upto payment is asked for an exact one (option A).
+        const from = mark();
+        const r = await rig.send(CHAT, await rig.credentialFor(w, CHAT, { scheme: "upto" }));
+        const pr = decode(r.headers.get("payment-required"));
+        await ok(r.status === 402 && pr?.accepts?.[0]?.scheme === "exact" && pr?.error === "exact_payment_required" && r.json?.reason === "exact_payment_required" && r.json?.retry === "exact-payment" && orderOf(w, from) === "nothing",
+          `that wallet's upto payment is answered 402 asking for an exact payment, exact listed first, with no settle call and no model call (${r.status}, first accept ${pr?.accepts?.[0]?.scheme}, ${orderOf(w, from)}, ${JSON.stringify(r.json).slice(0, 300)})`);
+      }
+      const m0 = await meterOf();
+      await ok(m0?.budgetMode === "off" && m0.unsettledUsd24h > 0 && m0.unsettledUsd24h < BUDGET, `the meter reads the unsettled runs so far, under the budget (${JSON.stringify(m0)})`);
+      // ---- calls in flight together cross the budget -----------------------------
+      {
+        const { w } = await fresh("evm", 12);
+        llm(async () => { await sleep(1000); return false; });
+        const cFrom = rig.st.completions;
+        const p = rig.burst(w, CHAT, 12);
+        await sleep(600);
+        rig.accounts.get(w.id).balance = 0n; // moved out while the model calls run
+        const rs = await p;
+        llm(null);
+        const o = rig.outcomesOf(w);
+        const unpaid = rig.st.completions - cFrom - o.settled;
+        await ok(rig.st.completions - cFrom === 12 && o.settled > 0 && unpaid >= 1 && unpaid <= Math.ceil((BUDGET - m0.unsettledUsd24h) / 0.02) && !tallyOf(rs)[429],
+          `a new wallet's twelve calls at once, its balance moved out while they run: ${unpaid} were served first unpaid (their price at risk crossed the budget), ${o.settled} had settled first and are paid; none refused (${JSON.stringify(tallyOf(rs))})`);
+      }
+      await sleep(200);
+      const m1 = await meterOf();
+      await ok(m1?.budgetMode === "on" && m1.why === "budget", `the budget is crossed: the mode is on (${m1?.why})`);
+      // ---- rotation after the crossing: nothing runs unpaid ------------------------
+      {
+        const cFrom = rig.st.completions;
+        let refusedFirst = 0;
+        for (let i = 0; i < 6; i++) {
+          const w = await rig.wallet("evm");
+          rig.fund(w, 0n);
+          const r = await rig.pay(w, CHAT);
+          if (r.status === 429) refusedFirst++;
+        }
+        await ok(rig.st.completions - cFrom === 0 && refusedFirst === 0, `once the mode is on, six new wallets whose payments never settle run ${rig.st.completions - cFrom} model calls, and none is refused its first call`);
+        const { w } = await fresh("evm");
+        const from = mark();
+        const r = await rig.pay(w, CHAT);
+        await ok(r.status === 200 && orderOf(w, from) === "settle-first", `a new wallet that pays is settled first and served (${orderOf(w, from)})`);
+      }
+      // ---- option A: an upto payment from a new wallet while the mode is on -------
+      {
+        const { w } = await fresh("evm");
+        const from = mark();
+        const r = await rig.send(CHAT, await rig.credentialFor(w, CHAT, { scheme: "upto" }));
+        const pr = decode(r.headers.get("payment-required"));
+        const plain = (await rig.offerOf(CHAT)).offer;
+        const sortKey = (a) => JSON.stringify(a);
+        const sameSet = JSON.stringify((pr?.accepts || []).map(sortKey).sort()) === JSON.stringify((plain?.accepts || []).map(sortKey).sort());
+        const firstNonExact = (pr?.accepts || []).findIndex((a) => a.scheme !== "exact");
+        const lastExact = (pr?.accepts || []).map((a) => a.scheme).lastIndexOf("exact");
+        await ok(r.status === 402 && pr?.error === "exact_payment_required" && sameSet && firstNonExact > lastExact && r.json?.charged === false && /exact/.test(r.json?.hint || "") && orderOf(w, from) === "nothing" && rig.outcomesOf(w).attempts === 0,
+          `option A: a new wallet's upto payment while the mode is on is answered 402 with the same accepts, every exact one first (${(pr?.accepts || []).map((a) => a.scheme).join(",")}), charged false, no settle call, no model call`);
+        const again = await rig.pay(w, CHAT);
+        await ok(again.status === 200, `the same wallet's exact payment is then served (${again.status})`);
+        const op = (await status())?.settleFailures?.settleFirst;
+        await ok(op?.exactRequired >= 2, `the operator view counts the payments asked for an exact one (${op?.exactRequired})`);
+      }
+      // ---- nothing new in public -------------------------------------------------------
+      {
+        const pub = await rig.gatewayStatus();
+        const txt = JSON.stringify(pub);
+        await ok(!/budgetMode|unsettledUsd24h|atRiskUsd|budgetUsd/.test(txt), "the public status carries none of the meter's figures or its word");
+        const lines = rig.log().split("\n").filter((l) => l.includes("budget mode"));
+        await ok(lines.length >= 1 && lines.every((l) => !/\$|\d+\.\d+/.test(l)), `the log says when the mode turns on or off, with no figure (${lines[0]})`);
+      }
+    } finally { await rig.stop(); }
   }
 }

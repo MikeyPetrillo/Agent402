@@ -211,9 +211,11 @@ export function owedEscalateMs(env = process.env) {
 /** The ledger read the walk uses: rows created in [from, to), at most
  *  `limit`, each the full row (note, resolvedAt) for a void Tempo one. */
 export function ledgerHeldPage(ledger) {
-  return ({ from, to, limit }) => ledger.refundsCreatedBetween(from, to, { limit }).map((r) => (r?.status === "void" && r.network === "tempo" ? (ledger.refundByEvidence(r.evidence) || r) : r));
+  return ({ from, to, limit }) => ledger.refundsCreatedBetween(from, to, { limit }).map((r) => (r?.status === "void" ? (ledger.refundByEvidence(r.evidence) || r) : r));
 }
 
+// The served note a settle-first resend's hold becomes (idempotency.js RESEND_SERVED_NOTE).
+const SETTLE_FIRST_RESEND_SERVED = "served on the resend of the same payment";
 export function createHeldClaimSweep({ listVoid = null, listPage = null, oldestCreatedAt = null, reopenHeld, renoteVoid, saleFor = async () => null, journalWaiting = () => 0, now = () => Date.now(), maxAgeMs = pushHeldMaxMs(), log = console.warn, alarm = console.error, pageSize = PUSH_HELD_SWEEP_PAGE, rowsPerTick = PUSH_HELD_SWEEP_ROWS_PER_TICK, owedAgeMs = owedEscalateMs(), escalateEveryMs = 24 * 3600_000 } = {}) {
   const heldFrom = new Map(PUSH_CLAIMABLE_NOTES.map((from) => [`${from}; ${PUSH_CLAIMED_NOTE}`, from]));
   // The walk's cursor (createdAt) and window width, kept across ticks.
@@ -222,6 +224,24 @@ export function createHeldClaimSweep({ listVoid = null, listPage = null, oldestC
   let aged = { n: 0, oldest: null };
   let lastEscalationAt = -Infinity;
   const handle = async (row, cutoff, out) => {
+    // A settle-first debt held for the resend of its payment (server.js
+    // settledFirstResend) whose run never finished: the same rule, any rail.
+    const sfFrom = settleFirstResendHeldFrom(row);
+    if (sfFrom && typeof row.evidence === "string") {
+      const at = Number(row.resolvedAt ?? row.resolved_at);
+      if (!Number.isFinite(at) || at > cutoff) return;
+      let sale = null;
+      try { sale = await saleFor(row.evidence); } catch { return; }
+      if (sale) {
+        if ((await renoteVoid(row.evidence, row.note, `${sfFrom}; ${SETTLE_FIRST_RESEND_SERVED}`)) === true) out.served++;
+        return;
+      }
+      if ((await reopenHeld(row.evidence, { held: row.note, httpStatus: 500, note: sfFrom })) === true) {
+        out.reopened++;
+        log(`[settle-first] a debt held for the resend of its payment whose run never finished is owed again (${String(row.evidence).slice(0, 12)})`);
+      }
+      return;
+    }
     const from = heldFrom.get(row?.note);
     if (!from || row.network !== "tempo" || typeof row.evidence !== "string") return;
     const at = Number(row.resolvedAt ?? row.resolved_at);

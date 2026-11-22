@@ -42,7 +42,7 @@ import { bootPaidWires, sleep } from "./lib/paid-wires-rig.js";
 let pass = 0, rig = null;
 const fail = async (m) => { console.error(`FAIL - ${m}`); for (const l of (rig?.log() || "").split("\n").filter(Boolean).slice(-25)) console.error("  server:", l.slice(0, 300)); await rig?.stop().catch(() => {}); process.exit(1); };
 const ok = async (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else await fail(m); };
-const ONLY = (process.env.SETTLE_FIRST_PARTS || "1,2,3").split(",");
+const ONLY = (process.env.SETTLE_FIRST_PARTS || "1,2,3,4").split(",");
 
 // =============================================================================
 // PART 1: the breaker's own rules, offline
@@ -80,61 +80,171 @@ if (ONLY.includes("1")) {
   const quiet = () => { console.warn = () => {}; };
   const loud = () => { console.warn = warn; console.log = log; };
 
-  await ok(b.SETTLE_FIRST_UNSETTLED_MAX === 2 && b.settleFirstEnabled() && !b.settleFirstEnabled({ GATEWAY_SETTLE_FIRST: "off" }) && b.settleFirstEnabled({ GATEWAY_SETTLE_FIRST: "anything" }),
-    `defaults: settle-first is on, GATEWAY_SETTLE_FIRST=off is the only value that turns it off, and a key may hold ${b.SETTLE_FIRST_UNSETTLED_MAX} unsettled runs`);
+  const meter = await import("../src/settle-first-meter.js");
+  await ok(b.SETTLE_FIRST_UNSETTLED_MAX === 2 && b.settleFirstEnabled() && !b.settleFirstEnabled({ GATEWAY_SETTLE_FIRST: "off" }) && b.settleFirstEnabled({ GATEWAY_SETTLE_FIRST: "anything" })
+    && meter.settleFirstSwitch({}) === "auto" && meter.settleFirstSwitch({ GATEWAY_SETTLE_FIRST: "always" }) === "always" && meter.settleFirstSwitch({ GATEWAY_SETTLE_FIRST: "off" }) === "off"
+    && meter.settleFirstBudgetUsd({}) === 5 && meter.settleFirstBudgetUsd({ GATEWAY_SETTLE_FIRST_BUDGET_USD: "2.5" }) === 2.5 && meter.settleFirstBudgetUsd({ GATEWAY_SETTLE_FIRST_BUDGET_USD: "-1" }) === 5 && meter.settleFirstBudgetUsd({ GATEWAY_SETTLE_FIRST_BUDGET_USD: "$5" }) === 5,
+    `defaults: settle first is armed (only GATEWAY_SETTLE_FIRST=off disarms it), the budget mode is automatic at $${meter.settleFirstBudgetUsd({})} (a malformed or non-positive budget reads the default), and a key may hold ${b.SETTLE_FIRST_UNSETTLED_MAX} unsettled runs`);
+
+  // ---- the server's part, as server.js does it ---------------------------------
+  // A run the plan names as due settles first (here: its payment does not
+  // settle, so nothing runs and nothing is metered). A run that is not due is
+  // served first; a never-settled wallet's run puts its price at risk until
+  // it ends, and when it ends unsettled its upstream cost is metered (the
+  // listener server.js registers, priced here at COST).
+  const PRICE = 0.02, COST = 0.02;
+  let clock = Date.parse("2026-11-01T00:00:00Z");
+  const settleFirstRefused = new WeakSet();
+  b.setUnsettledRunListener((req) => { if (!settleFirstRefused.has(req)) meter.noteUnsettledRunCost(req.__cost ?? COST, clock); });
+  const resetAll = async () => { await b._gatewaySettleBreakerReset(); meter._resetSettleFirstMeterForTest(); };
+  /** Admit one run: its plan, and for a never-settled wallet served first, its reservation. */
+  async function admit(r) {
+    const plan = await b.gatewaySettleFirstPlan(r, { now: clock });
+    let due = plan.due;
+    if (!due && plan.neverSettled) {
+      const a = meter.admitServedFirst(PRICE, { now: clock });
+      if (!a.on) return { due: null, release: a.release };
+      due = { reason: "never-settled", mode: a.why };
+    }
+    if (due) { settleFirstRefused.add(r); return { due, release: () => {} }; }
+    return { due: null, release: () => {} };
+  }
 
   // ---- wallet rotation --------------------------------------------------------
-  // One call of the model: the handler's consult (which may refuse the key),
-  // then the run. A run that is due settles first: this caller's payments do
-  // not settle, so it ends as the settle-failure 402 and the handler's
-  // upstream work never runs. A run that is not due is served, and then fails
-  // to settle: served and not paid.
+  // Each new wallet calls until its key is refused; none of its payments
+  // settle. Served first, each run is upstream spend with nothing paid.
   async function rotation(W) {
-    await b._gatewaySettleBreakerReset();
+    await resetAll();
     let servedUnpaid = 0, settledFirst = 0, refusedOnFirstCall = 0;
     for (let i = 1; i <= W; i++) {
       for (let k = 0; k < 50; k++) {
         const r = reqOf(wallet(i));
         if (!(await consult(r))) { if (k === 0) refusedOnFirstCall++; break; }
-        if (await b.gatewaySettleFirstDue(r)) settledFirst++; else servedUnpaid++;
+        const a = await admit(r);
+        if (a.due) settledFirst++; else servedUnpaid++;
+        a.release();
         failed(r);
       }
     }
     return { servedUnpaid, settledFirst, refusedOnFirstCall };
   }
-  quiet();
+  quiet(); console.log = () => {};
   process.env.GATEWAY_SETTLE_FIRST = "off";
   const before = await rotation(500);
   delete process.env.GATEWAY_SETTLE_FIRST;
   const after = await rotation(500);
+  process.env.GATEWAY_SETTLE_FIRST = "always";
+  const always = await rotation(500);
+  delete process.env.GATEWAY_SETTLE_FIRST;
   loud();
+  const crossing = Math.round(meter.settleFirstBudgetUsd() / COST);
   await ok(before.servedUnpaid === 522 && before.settledFirst === 0 && before.refusedOnFirstCall === 0,
-    `rotation, every run settled after its handler (the switch off): 500 new wallets are served ${before.servedUnpaid} runs that are never paid, and no new wallet is refused its first call, so the total grows with the wallet count`);
-  await ok(after.servedUnpaid === 0 && after.settledFirst > 0 && after.refusedOnFirstCall === 0,
-    `rotation, settle first: the same 500 wallets are served ${after.servedUnpaid} unpaid runs (${after.settledFirst} payments were asked to settle first and did not), and no new wallet is refused its first call`);
+    `rotation, every run served first (the switch off, as main serves): 500 new wallets are served ${before.servedUnpaid} runs that are never paid, and the total grows with the wallet count`);
+  await ok(after.servedUnpaid === crossing && after.settledFirst > 0 && after.refusedOnFirstCall === 0,
+    `rotation, the budget mode: the same 500 wallets are served ${after.servedUnpaid} unpaid runs, exactly the runs that crossed the $${meter.settleFirstBudgetUsd()} budget at $${COST} each; after that ${after.settledFirst} payments were asked to settle first and none ran unpaid; no new wallet is refused its first call`);
+  await ok(always.servedUnpaid === 0 && always.refusedOnFirstCall === 0, `rotation, GATEWAY_SETTLE_FIRST=always: no run is served unpaid (${always.servedUnpaid})`);
 
   // ---- one new wallet, calls in flight together -------------------------------
+  // All admitted before any of them ends: the meter sees them only through
+  // what is at risk in flight.
   async function together(cover, C = 300) {
-    await b._gatewaySettleBreakerReset();
+    await resetAll();
     const admitted = [];
     let due = 0;
     for (let k = 0; k < C; k++) {
       const r = reqOf(wallet(9001), { cover });
       if (!(await consult(r))) continue;
-      if (await b.gatewaySettleFirstDue(r)) due++;
-      admitted.push(r);
+      const a = await admit(r);
+      if (a.due) due++;
+      admitted.push([r, a]);
     }
-    for (const r of admitted) failed(r);
+    for (const [r, a] of admitted) { a.release(); failed(r); }
     return { admitted: admitted.length, servedUnpaid: admitted.length - due };
   }
-  quiet();
+  quiet(); console.log = () => {};
   process.env.GATEWAY_SETTLE_FIRST = "off";
   const coveredOff = await together("covered"), unreadOff = await together("unread");
   delete process.env.GATEWAY_SETTLE_FIRST;
   const coveredOn = await together("covered"), unreadOn = await together("unread");
   loud();
+  const atRiskCrossing = Math.round(meter.settleFirstBudgetUsd() / PRICE);
   await ok(coveredOff.servedUnpaid === 300 && unreadOff.servedUnpaid > 0, `calls in flight together, the switch off: one new wallet admitted as covered is served ${coveredOff.servedUnpaid} of 300 unpaid (${unreadOff.servedUnpaid} when its balance was not read)`);
-  await ok(coveredOn.servedUnpaid === 0 && unreadOn.servedUnpaid === 0 && coveredOn.admitted === 300, `calls in flight together, settle first: the same wallet is served ${coveredOn.servedUnpaid} unpaid runs, covered or not, and all ${coveredOn.admitted} covered calls were admitted (none refused)`);
+  await ok(coveredOn.servedUnpaid === atRiskCrossing && unreadOn.servedUnpaid === Math.min(unreadOff.servedUnpaid, atRiskCrossing) && coveredOn.admitted === 300,
+    `calls in flight together, the budget mode: the same wallet is served ${coveredOn.servedUnpaid} unpaid runs, the ones whose price at risk crossed the budget; the other ${300 - coveredOn.servedUnpaid} settle first, and all ${coveredOn.admitted} covered calls were admitted (none refused)`);
+
+  // ---- a paced attacker: under any per-minute threshold ------------------------
+  // One new wallet every 7 minutes for three days, each run never paid.
+  // Rolling 24 hours: the unpaid dollars inside any 24 hours stay within the
+  // budget and one run; the mode turns on, and back off as the window rolls.
+  {
+    await resetAll();
+    quiet(); console.log = () => {};
+    const unpaidAt = [];
+    let onSeen = false, offAgain = false;
+    const start = clock;
+    for (let i = 0; clock < start + 72 * 3600_000; i++, clock += 7 * 60_000) {
+      const r = reqOf(wallet(20000 + i));
+      r.__cost = 0.05;
+      if (!(await consult(r))) continue;
+      const a = await admit(r);
+      if (a.due) onSeen = true; else { unpaidAt.push(clock); if (onSeen) offAgain = true; }
+      a.release();
+      failed(r);
+    }
+    loud();
+    let worst = 0;
+    for (const t of unpaidAt) worst = Math.max(worst, unpaidAt.filter((u) => u > t - 24 * 3600_000 && u <= t).length * 0.05);
+    await ok(onSeen && offAgain && worst <= meter.settleFirstBudgetUsd() + 0.05 + 1e-9 && unpaidAt.length <= 3 * Math.ceil(meter.settleFirstBudgetUsd() / 0.05) + 3,
+      `a paced attacker (one new wallet every 7 minutes for 72 hours): ${unpaidAt.length} runs served unpaid in all, at most $${worst.toFixed(2)} inside any 24 hours (budget $${meter.settleFirstBudgetUsd()}); the mode turned on and, as the window rolled, off again`);
+    clock = Date.parse("2026-11-01T00:00:00Z");
+  }
+
+  // ---- the meter itself ---------------------------------------------------------
+  {
+    await resetAll();
+    const t0 = clock;
+    const m0 = meter.settleFirstBudgetMode({ now: t0 });
+    meter.noteUnsettledRunCost(4.99, t0);
+    const m1 = meter.settleFirstBudgetMode({ now: t0 });
+    const rel = meter.reserveAtRisk(0.02, t0);
+    const m2 = meter.settleFirstBudgetMode({ now: t0 });
+    rel(); rel();
+    const m3 = meter.settleFirstBudgetMode({ now: t0 });
+    meter.noteUnsettledRunCost(0.01, t0 + 60_000);
+    const m4 = meter.settleFirstBudgetMode({ now: t0 + 60_000 });
+    const m5 = meter.settleFirstBudgetMode({ now: t0 + 24 * 3600_000 + 30_000 });
+    const m6 = meter.settleFirstBudgetMode({ now: t0 + 24 * 3600_000 + 120_000 });
+    await ok(!m0.on && m0.why === "under-budget" && !m1.on && m2.on && m2.why === "budget" && !m3.on && m4.on && !m5.on && !m6.on,
+      `the meter: off at $0, off at $4.99 unsettled, on with $0.02 more at risk, off when that run ends, on at $5.00 unsettled, off once the window rolls past the older cost (${[m0, m1, m2, m3, m4, m5, m6].map((m) => (m.on ? "on" : "off")).join(" ")})`);
+    meter._resetSettleFirstMeterForTest();
+    meter.noteUnsettledRunCost(5, t0);
+    meter.noteUnsettledRunCost(-3, t0); meter.noteUnsettledRunCost(Number.NaN, t0); meter.noteUnsettledRunCost("9", t0);
+    const st = meter.settleFirstMeterStatus({ now: t0 + 61_000 });
+    await ok(st.unsettledUsd24h === 5 && st.atRiskUsd === 0 && st.budgetMode === "on" && st.shared === false, `a negative, NaN or text amount adds nothing; the operator view carries the figures (${JSON.stringify(st)})`);
+    process.env.GATEWAY_SETTLE_FIRST = "always";
+    await resetAll();
+    const forced = meter.settleFirstBudgetMode({ now: t0 });
+    process.env.GATEWAY_SETTLE_FIRST = "off";
+    meter.noteUnsettledRunCost(50, t0);
+    const off = meter.settleFirstBudgetMode({ now: t0 });
+    delete process.env.GATEWAY_SETTLE_FIRST;
+    await ok(forced.on && forced.why === "always" && !off.on, "GATEWAY_SETTLE_FIRST=always turns the mode on whatever the meter; off keeps it off whatever the meter");
+    // The run's own upstream cost, noted inside its request scope and read after.
+    const { requestTimingMiddleware } = await import("../src/request-timing.js");
+    const fakeRes = new EventEmitter(); fakeRes.statusCode = 200; fakeRes.locals = {};
+    const fakeReq = { method: "POST", path: "/v1/chat" };
+    await new Promise((done) => requestTimingMiddleware(() => "x")(fakeReq, fakeRes, () => { meter.bindRunScope(fakeReq); meter.noteRunUpstreamUsd(0.004); meter.noteRunUpstreamUsd(0.001); meter.noteRunUpstreamUsd(-1); done(); }));
+    await ok(Math.abs(meter.runUpstreamUsdOf(fakeReq) - 0.005) < 1e-12 && meter.runUpstreamUsdOf({}) === 0 && meter.runUpstreamUsdOf(null) === 0, `a run's upstream cost is the sum noted in its own scope (${meter.runUpstreamUsdOf(fakeReq)}); a request with no scope reads 0`);
+    await resetAll();
+  }
+
+  // ---- normal operation, under the budget: a new wallet is served first --------
+  {
+    await resetAll();
+    const NEWW = "0x" + "ce".repeat(20);
+    const p = await b.gatewaySettleFirstPlan(reqOf(NEWW), { now: clock });
+    await ok(p.due === null && p.neverSettled === true, "under the budget a wallet that has never settled is not due: it is served first, as on main (its price is only put at risk)");
+  }
 
   // ---- a wallet WITH history whose runs do not settle, whatever the cause ----
   const PAYER = "0x" + "ab".repeat(20), NONCE = "0x" + "11".repeat(32);
@@ -197,6 +307,8 @@ if (ONLY.includes("1")) {
   await ok((await b.gatewaySettleFirstDue(reqOf(PAYER))) === null, "a failure recorded by the catalog consult alone (not a /v1 run) is not counted toward settle first");
 
   // ---- where "never settled" comes from ---------------------------------------
+  // (Read with the mode forced on: under the budget no never-settled run is due.)
+  process.env.GATEWAY_SETTLE_FIRST = "always";
   await b._gatewaySettleBreakerReset();
   const NEW = "0x" + "cd".repeat(20);
   await ok((await b.gatewaySettleFirstDue(reqOf(NEW)))?.reason === "never-settled" && (await b.gatewaySettleFirstDue(reqOf(PAYER))) === null, "a wallet with no paid sale on the books settles first (never-settled); one with a paid sale does not");
@@ -221,9 +333,11 @@ if (ONLY.includes("1")) {
   await ok((await b.gatewaySettleFirstDue(ipOnly)) === null && (await b.gatewaySettleFirstDue(Object.assign(reqOf(NEW), { creditsKeyId: "ck_1", header: () => undefined }))) === null,
     "a key that names no wallet (a client address, a credits key) never settles first");
   const lane = reqOf(NEW); b.settleBreakerOtherLane(lane);
+  const forcedReason = (await b.gatewaySettleFirstDue(reqOf(NEW)))?.mode;
   process.env.GATEWAY_SETTLE_FIRST = "off";
   const off = await b.gatewaySettleFirstDue(reqOf(NEW));
   delete process.env.GATEWAY_SETTLE_FIRST;
+  await ok(forcedReason === "always", `a never-settled run due in the budget mode names why the mode is on (${forcedReason})`);
   await ok((await b.gatewaySettleFirstDue(lane)) === null && off === null, "a run another gate settles is never due, and GATEWAY_SETTLE_FIRST=off reads no run as due");
 
   // ---- counted for the operator, never per wallet ------------------------------
@@ -312,7 +426,7 @@ if (ONLY.includes("1")) {
   }
 }
 
-if (ONLY.includes("2") || ONLY.includes("3")) await import("./lib/settle-first-paid.js").then((m) => m.run({ ok, fail, parts: ONLY, setRig: (r) => { rig = r; } }));
+if (ONLY.includes("2") || ONLY.includes("3") || ONLY.includes("4")) await import("./lib/settle-first-paid.js").then((m) => m.run({ ok, fail, parts: ONLY, setRig: (r) => { rig = r; } }));
 
 console.log(`\n${pass} checks passed`);
 process.exit(0);

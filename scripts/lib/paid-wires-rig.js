@@ -94,6 +94,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   const paymentOf = (fam, j) => {
     const inner = j?.paymentPayload?.payload || {};
     if (inner.authorization) return { id: `evm:${String(inner.authorization.from).toLowerCase()}`, amount: BigInt(inner.authorization.value) };
+    // An upto (Permit2) payment draws what the settle names, at most what was permitted.
+    if (inner.permit2Authorization) return { id: `evm:${String(inner.permit2Authorization.from).toLowerCase()}`, amount: BigInt(j?.paymentRequirements?.amount || inner.permit2Authorization.permitted?.amount || 0) };
     const blob = inner.transaction || (Array.isArray(inner.paymentGroup) ? inner.paymentGroup[0] : null);
     return payments.get(blob) || null;
   };
@@ -192,7 +194,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
           return res.end();
         }
         const content = typeof st.llmContent === "function" ? st.llmContent(j) : "stub answer";
-        return reply(200, { id: "gen-" + st.completions, object: "chat.completion", created: Math.floor(Date.now() / 1000), model: j.model || "x", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cost: 0.000001 } });
+        // st.llmCost: the upstream charge the answer reports (usage.cost).
+        return reply(200, { id: "gen-" + st.completions, object: "chat.completion", created: Math.floor(Date.now() / 1000), model: j.model || "x", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cost: Number.isFinite(st.llmCost) ? st.llmCost : 0.000001 } });
       }
       if (req.method === "GET" && path.endsWith("/endpoints") && path.includes("/images/models/")) return reply(200, { data: { endpoints: [] } });
       // st.imageB64 (when set): the image the stub answers, e.g. a large one.
@@ -205,7 +208,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     if (!m) return reply(404, {});
     const [, fam, kind] = m;
     if (kind === "supported") {
-      if (fam === "evm") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: BASE }, { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: feePayer.address } }], extensions: [], signers: {} });
+      // With X402_UPTO_NETWORKS set for the server, the Base facilitator advertises upto too.
+      if (fam === "evm") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: BASE }, ...(env.X402_UPTO_NETWORKS ? [{ x402Version: 2, scheme: "upto", network: BASE }] : []), { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: feePayer.address } }], extensions: [], signers: {} });
       if (fam === "stellar") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: "stellar:pubnet", extra: { areFeesSponsored: true } }], extensions: [], signers: {} });
       return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: ALGORAND_MAINNET_CAIP2 }], extensions: [], signers: {} });
     }
@@ -309,9 +313,15 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     return BigInt(acceptOn(o, (n) => n.startsWith("stellar:")).amount);
   }
   /** The request headers of one new, distinct payment from `w` for `route`. */
-  async function credentialFor(w, route, { ttlMs = null, validForSeconds = null } = {}) {
+  async function credentialFor(w, route, { ttlMs = null, validForSeconds = null, scheme = "exact" } = {}) {
     const o = await offerOf(route);
     const x402 = (accept, payload) => ({ "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, resource: o.offer.resource, accepted: accept, payload })).toString("base64") });
+    // An upto (Permit2) payment from an EVM wallet, on the Base upto accept.
+    if (w.wire === "evm" && scheme === "upto") {
+      const a = (o.offer?.accepts || []).find((x) => x.scheme === "upto" && x.network === BASE);
+      if (!a) throw new Error("rig: the route offers no upto accept on Base");
+      return x402(a, { signature: "0x" + "11".repeat(65), permit2Authorization: { from: w.address, permitted: { token: a.asset, amount: a.amount }, spender: "0x" + "22".repeat(20), nonce: BigInt("0x" + randomBytes(16).toString("hex")).toString(), deadline: "9999999999", witness: { to: a.payTo, validAfter: "0", extra: "0x" } } });
+    }
     if (w.wire === "evm") {
       const a = acceptOn(o, (n) => n === BASE);
       return x402(a, { signature: "0x" + "11".repeat(65), authorization: { from: w.address, to: a.payTo, value: a.amount, validAfter: "0", validBefore: validForSeconds == null ? "9999999999" : String(Math.floor(Date.now() / 1000) + validForSeconds), nonce: "0x" + randomBytes(32).toString("hex") } });

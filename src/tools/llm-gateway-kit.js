@@ -68,6 +68,7 @@ import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithCo
 import { stripControlChars } from "../prepayment-refusal.js";
 import { notChargedOn } from "../not-charged.js";
 import { settleBeforeUpstream } from "../settle-first.js";
+import { noteRunUpstreamUsd } from "../settle-first-meter.js";
 import { envPositive } from "../env-num.js";
 import { routeHint, inReferralRun } from "../referral-run.js";
 
@@ -3090,6 +3091,9 @@ export function stripBilling(usage) {
   if (!usage || typeof usage !== "object") return null;
   const upstreamUsd = typeof usage.cost === "number" ? usage.cost : null;
   for (const k of BILLING_USAGE_FIELDS) delete usage[k];
+  // The run's own upstream cost, for the settle-first budget meter
+  // (src/settle-first-meter.js): read only if the run ends unsettled.
+  if (upstreamUsd !== null) noteRunUpstreamUsd(upstreamUsd);
   return upstreamUsd;
 }
 
@@ -4820,7 +4824,7 @@ function makeHandler(routeTier) {
     // What the call's discarded answers (an empty refusal or an empty-for-length
     // answer, on any link) cost: the recovery run is weighed against it too.
     let discardedUsd = 0;
-    const discard = (d) => { const c = d?.usage?.cost; discardedUsd += typeof c === "number" && Number.isFinite(c) && c >= 0 ? c : NaN; };
+    const discard = (d) => { const c = d?.usage?.cost; discardedUsd += typeof c === "number" && Number.isFinite(c) && c >= 0 ? c : NaN; if (typeof c === "number") noteRunUpstreamUsd(c); };
     for (const { model, flex, direct } of attempts) {
       // A model that refused on flex will refuse on default too - don't pay twice.
       if (model === refusedModel) continue;

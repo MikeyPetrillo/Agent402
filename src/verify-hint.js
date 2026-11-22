@@ -22,6 +22,7 @@
 // and plant a misleading hint on a real buyer's next 402 (review
 // 2026-08-28). Only the exact retried header sees its own hint; telemetry
 // gets a BUCKET, never an address.
+import { exactRequiredOf } from "./settle-first.js";
 import { createHash } from "node:crypto";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { classifyPaymentRejection, classifySettlementRefusal, settledRefundOwedRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint, notCheckedRefusal, RETRY_SAME_PAYMENT } from "./payment-reject.js";
@@ -448,6 +449,10 @@ export function verifyHintMiddleware({ origin = process.env.BASE_URL || null } =
     if (!header) return next();
     const origJson = res.json.bind(res);
     res.json = function hintedJson(body) {
+      // A payment that verified and was asked for an exact one instead (settle
+      // first, option A: src/settle-first.js) is not a rejection: its own
+      // body says what to send.
+      if (exactRequiredOf(req)) return origJson(body);
       if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body)) {
         // SETTLEMENT refused on OUR billing quota: the payment verified, the
         // call ran, and the facilitator would not settle it. The buyer's

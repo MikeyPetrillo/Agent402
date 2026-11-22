@@ -9,7 +9,9 @@
 // settle-first-failed). So once such a settlement succeeded the server
 // installs this wrapper on the response, and a JSON body of 400 or above goes
 // out with that sentence restated and the fields a client reads set:
-// `charged: true`, `refundOwed: true`, `payment` (the note), the settlement
+// `charged: true`, `refundOwed: true`, `retry: "same-payment"` (the same
+// request sent again with the same payment runs at no further charge and
+// voids the debt: src/idempotency.js), `payment` (the note), the settlement
 // `transaction` and, for an EVM transaction, `refundStatusUrl` (the free
 // refund lookup).
 //
@@ -18,9 +20,9 @@
 // failure sends the original body.
 import { rewriteNotCharged } from "./push-refusal-body.js";
 import { OWED_REPAID } from "./tempo-push-debts.js";
-import { refundStatusUrlOf } from "./payment-reject.js";
+import { refundStatusUrlOf, RETRY_SAME_PAYMENT } from "./payment-reject.js";
 
-const NOTE_BODY = "This payment was settled before the call ran, so this failure is recorded as a refund owed to the paying wallet; a retry is a new payment";
+const NOTE_BODY = "This payment was settled before the call ran, so this failure is recorded as a refund owed to the paying wallet; send the same request with the same payment again to have it run at no further charge, or the amount is refunded after on-chain proof";
 /** The sentence a buyer reads in place of "not charged". */
 export const SETTLED_FIRST_FAILURE_NOTE = `${NOTE_BODY}.`;
 const WORDS = Object.freeze({
@@ -50,7 +52,7 @@ export function settledFirstFailureBody(bodyText, { transaction = null, origin =
     for (const v of Object.values(body)) if (isPlainObject(v)) rewrite(v);
     const tx = typeof transaction === "string" && transaction ? transaction : null;
     const refundStatusUrl = tx ? refundStatusUrlOf(origin, tx) : null;
-    return JSON.stringify({ ...body, charged: true, refundOwed: true, payment: SETTLED_FIRST_FAILURE_NOTE, ...(tx ? { transaction: tx } : {}), ...(refundStatusUrl ? { refundStatusUrl } : {}) });
+    return JSON.stringify({ ...body, charged: true, refundOwed: true, retry: RETRY_SAME_PAYMENT, payment: SETTLED_FIRST_FAILURE_NOTE, ...(tx ? { transaction: tx } : {}), ...(refundStatusUrl ? { refundStatusUrl } : {}) });
   } catch {
     return null;
   }

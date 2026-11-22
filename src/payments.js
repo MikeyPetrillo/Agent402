@@ -1,6 +1,7 @@
 import { usdToBaseUnits } from "./base-units.js";
 import { handlerInputOf } from "./handler-input.js";
 import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
+import { encodePaymentRequiredHeader, decodePaymentRequiredHeader } from "@x402/core/http";
 import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/express";
 import { registerPhaseTimingHooks } from "./paid-phase-timing.js";
 import { createGuardedInit, withGuardedInit } from "./x402-boot-init.js";
@@ -3285,6 +3286,35 @@ export function settleFirstNetworkFor(v) {
   const network = String(v.requirements.network || "");
   return SETTLE_FIRST_NAMESPACES.includes(network.split(":")[0]) ? network : null;
 }
+/**
+ * What kind of verified payment this request carries, for settle first:
+ * "exact" (it can settle first: settleFirstNetworkOf), "upto" or "gateway"
+ * (it cannot: option A asks such a wallet for an exact payment while settle
+ * first applies to it), or null (nothing verified here, or another kind,
+ * which is left as it was).
+ */
+export function settleFirstPaymentKindOf(req) {
+  if (!settleFirstImpl) return null;
+  const v = verifiedPaymentOf(req);
+  if (!v || !v.requirements) return null;
+  if (isGatewayBatchedPayment(v.paymentPayload) || isGatewayBatchedPayment(v.requirements)) return "gateway";
+  const scheme = String(v.requirements.scheme || "").toLowerCase();
+  if (scheme === "upto") return "upto";
+  return settleFirstNetworkFor(v) ? "exact" : null;
+}
+let exactOfferImpl = null;
+/**
+ * The route's own 402, as an unpaid request for it is answered (the vendor
+ * builds it: the same accepts, extensions and Bazaar metadata), with every
+ * plain `exact` accept moved to the front, `error` set to `errorCode`, and
+ * the body `body`. For a request whose wallet must pay its run with an exact
+ * payment (option A). Resolves { status, headers, body } or null when it
+ * cannot be built (then the caller lets the run go on as before).
+ */
+export async function exactPaymentRequiredAnswer(req, { errorCode = "exact_payment_required", body = null } = {}) {
+  if (!exactOfferImpl) return null;
+  try { return await exactOfferImpl(req, { errorCode, body }); } catch { return null; }
+}
 let settleFirstImpl = null;
 /**
  * Settle this request's verified payment now, before its handler's upstream
@@ -3307,6 +3337,29 @@ function installSettleFirst(httpServer) {
       return { ...early.result, success: true, headers: httpServer.createSettlementHeaders(early.result), requirements: early.requirements };
     }
     return settleNow(paymentPayload, requirements, declaredExtensions, transportContext, settlementOverrides, beforeHandlerSettlement, phase);
+  };
+  exactOfferImpl = async (req, { errorCode, body }) => {
+    const v = verifiedPaymentOf(req);
+    const ctx = v?.request;
+    if (!ctx || !ctx.adapter) return null;
+    // The request as an unpaid one: no payment header, read as an API caller.
+    const adapter = Object.create(ctx.adapter);
+    adapter.getHeader = (name) => {
+      const n = String(name || "").toLowerCase();
+      return n === "payment-signature" || n === "x-payment" ? undefined : ctx.adapter.getHeader(name);
+    };
+    adapter.getAcceptHeader = () => "application/json";
+    const out = await httpServer.processHTTPRequest({ ...ctx, adapter });
+    const r = out?.type === "payment-error" ? out.response : null;
+    const name = r?.headers ? Object.keys(r.headers).find((k) => k.toLowerCase() === "payment-required") : null;
+    if (!r || !name) return null;
+    const offer = decodePaymentRequiredHeader(r.headers[name]);
+    const accepts = Array.isArray(offer?.accepts) ? offer.accepts : [];
+    const plainExact = (a) => String(a?.scheme || "").toLowerCase() === "exact" && !isGatewayBatchedPayment(a);
+    if (!accepts.some(plainExact)) return null;
+    const ordered = [...accepts.filter(plainExact), ...accepts.filter((a) => !plainExact(a))];
+    const headers = { ...r.headers, [name]: encodePaymentRequiredHeader({ ...offer, error: errorCode, accepts: ordered }) };
+    return { status: 402, headers, body: body && typeof body === "object" ? body : { error: errorCode } };
   };
   settleFirstImpl = async (req) => {
     const v = verifiedPaymentOf(req);
