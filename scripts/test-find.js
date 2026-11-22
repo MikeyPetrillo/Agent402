@@ -448,6 +448,21 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   ok(r2.rarestTermCovered === true, `"generate uuids" reads as served (rarest ${r2.rarestTerm})`);
 }
 {
+  // A plural whose singular the query also writes is not read a second time
+  // as that name: "URLs and PDFs ... PDF pages" scored the pdf tool once for
+  // "pdf" and again for "pdfs", which carried it over pdf-extract-pages.
+  const P = {
+    "POST /api/pdf": { name: "PDF to text", slug: "pdf", category: "web", price: "$0.001", description: "Fetch a PDF and extract its text (up to 20MB PDFs).", tags: ["pdf", "documents"], discovery: { example: {} } },
+    "POST /api/pdf-extract-pages": { name: "Extract PDF pages", slug: "pdf-extract-pages", category: "web", price: "$0.003", description: "Pull a subset of pages into a new PDF.", tags: ["pdf", "pages", "extract"], discovery: { example: {} } },
+    "POST /api/pdf-merge": { name: "Merge PDF files", slug: "pdf-merge", category: "web", price: "$0.003", description: "Merge PDF files.", tags: ["pdf"], discovery: { example: {} } },
+  };
+  for (const [i, w] of ["alpha", "beta", "gamma", "delta", "omega", "sigma"].entries()) P[`GET /api/p${i}`] = { name: w, slug: w, category: "misc", price: "$0.001", description: `The ${w} tool.`, tags: [w], discovery: { example: {} } };
+  const pt = (q) => findTools(P, q, {}).results?.[0]?.slug;
+  ok(pt("turn PDFs into text: PDF pages") === "pdf-extract-pages", `a plural beside its written singular counts once (got ${pt("turn PDFs into text: PDF pages")})`);
+  // The plural alone still reads as the name.
+  ok(pt("pdfs") === "pdf", `"pdfs" alone -> pdf (got ${pt("pdfs")})`);
+}
+{
   // The singular is not read where it would mislead: a verb's -s form the
   // catalog also writes as a verb, and a word the catalog writes more often
   // than its singular ("https" against "http").

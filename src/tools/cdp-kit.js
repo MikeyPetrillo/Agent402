@@ -514,7 +514,10 @@ export const SQL_SEND_LIMIT_BYTES = 500_000;
 // spent the recovery answers the uncharged narrow-query 422. The health
 // probe (queryServiceHealth) is not counted: it runs at most once per table
 // every HEALTH_TTL_MS (HEALTH_UNKNOWN_TTL_MS for an unknown verdict) across
-// every call, under its own memo and timeout.
+// every call, under its own memo and timeout. One path widens it: a plain
+// row select whose whole range ran past the service's window is read one day
+// at a time (dayWindowAnswer), one query a day for at most
+// SQL_WINDOW_MAX_DAYS plus one days, each still taking a send slot.
 export const SQL_QUERY_BUDGET = 3;
 // The budget also carries how the call's sends are paced: `own` (this
 // server's own read) and `callerGone` (the buyer's connection closed before
@@ -824,7 +827,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // (408 timed_out): the buyer's to narrow, answered once.
     if (buyerQuery && res.status === 408) {
       logFailed(res.status, tookMs);
-      throw unchargedFields(timedOutQueryError(tookMs, body?.sql), queries);
+      throw Object.assign(unchargedFields(timedOutQueryError(tookMs, body?.sql), queries), { pastTimeWindow: true });
     }
     if (buyerQuery && res.status >= 500) {
       if ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs) {
@@ -833,7 +836,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
         // service answers with a 5xx makes this an outage; answered, or not
         // known (our check timed out), a query at the gateway's time limit
         // is the common cause and is the buyer's to narrow.
-        if (await queryServiceHealth(body?.sql) !== "failing") throw unchargedFields(narrowQueryError(res.status, tookMs, body?.sql, 422), queries);
+        if (await queryServiceHealth(body?.sql) !== "failing") throw Object.assign(unchargedFields(narrowQueryError(res.status, tookMs, body?.sql, 422), queries), { pastTimeWindow: true });
         throw bad(`CDP's query service is failing (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, and a known-good query failed too); retry later. Nothing was charged.`, 502);
       }
       // An instant 500 is the result too large to send: never resent as is
@@ -961,6 +964,15 @@ function timeBoundMs(expr, now) {
  *  comparisons only (an INTERVAL elsewhere, a subquery on another table or a
  *  value in a comment is not a range), or null when it cannot be read. */
 export function blockTimeRangeDays(sql, now = Date.now()) {
+  const b = blockTimeBounds(sql, now);
+  if (!b) return null;
+  const days = ((b.hi === null ? now : b.hi) - b.lo) / RANGE_DAY_MS;
+  return days >= 0 ? days : null; // reversed bounds: no readable range
+}
+/** The block_time bounds a query states, as ms: `{ lo, hi }` (hi null when
+ *  the range runs to now), or null when no lower bound can be read. Read the
+ *  same way as blockTimeRangeDays (which is built on it). */
+export function blockTimeBounds(sql, now = Date.now()) {
   const q = sqlNoComments(sql).replace(/[`"]/g, "");
   if (!/\bblock_time\b/i.test(q)) return null;
   // Any OR in the query: a bound may not narrow it, so no range is read.
@@ -980,8 +992,7 @@ export function blockTimeRangeDays(sql, now = Date.now()) {
   for (const m of q.matchAll(new RegExp(OPERAND + String.raw`\s*(>=|<=|>|<)\s*block_time\b`, "gi"))) take(m[2].startsWith(">") ? "hi" : "lo", timeBoundMs(m[1], now));
   for (const m of q.matchAll(new RegExp(String.raw`\bblock_time\s+between\s+` + OPERAND + String.raw`\s+and\s+` + OPERAND, "gi"))) { take("lo", timeBoundMs(m[1], now)); take("hi", timeBoundMs(m[2], now)); }
   if (lo === null) return null;
-  const days = ((hi === null ? now : hi) - lo) / RANGE_DAY_MS;
-  return days >= 0 ? days : null; // reversed bounds: no readable range
+  return { lo, hi };
 }
 
 /** Whether a query orders its own result: an ORDER BY outside every
@@ -1111,6 +1122,158 @@ export function cappedSql(sql, { wrap = null } = {}) {
   if (!lim && outerClause(masked, /(?:offset\s*(?:\d|\()|fetch\s+(?:first|next)\b)/iy)) return asWritten;
   const limitTo = (n) => (lim ? s.slice(0, lim.numStart) + String(Math.min(lim.value, n)) + s.slice(lim.numEnd) : `${s}\nLIMIT ${n}`);
   return { sql: limitTo(SQL_MAX_ROWS + 1), capped: true, inner: s, limitTo, lineOffset: 0 };
+}
+
+// DAY WINDOWS. The query service ends a query at about 10 s (a slow 502 or
+// its 408) and has no asynchronous mode, so a plain row select over a long
+// block_time range of solana.instructions (pruned by block_time only) that
+// runs past that window is read again one UTC day at a time: each day is its
+// own query, sent in order (oldest first, or newest first under ORDER BY
+// block_time DESC), and the rows are merged until the row cap or the
+// buyer's own LIMIT is reached. Only a query the whole-range send could not
+// answer is split, so a query that answers today is sent and charged as
+// before. The base tables are read by block_number and an address filter,
+// not pruned by time, so they are not split.
+//
+// Split only when the rows of the whole query are exactly the rows of its
+// days, in order: one table (solana.instructions), no subquery, join, union,
+// WITH, SETTINGS or FORMAT; no aggregate, GROUP BY, DISTINCT, HAVING, LIMIT
+// BY, window function, SAMPLE, FINAL, PREWHERE, OFFSET or LIMIT m, n; an
+// ORDER BY only when its first key is block_time; a lower block_time bound
+// the range reader can read, over more than a day and at most
+// SQL_WINDOW_MAX_DAYS. Every other query (an aggregate above all) is
+// answered as before. The buyer's WHERE is kept whole and each day's bound is
+// ANDed to it; the first and the last day are open at their outer end, so
+// the buyer's own bounds (read on the service's clock) decide the edges.
+export const SQL_WINDOW_MAX_DAYS = 31;
+// A day's query is not started with less than this left in the call's budget:
+// a day answers in seconds (measured 2026-11-03), and one that runs into the
+// service's window takes about 10 s and ends the run.
+export const SQL_WINDOW_MIN_LEFT_MS = 4_000;
+const AGGREGATE_CALL = /\b(?:count\w*|sum\w*|avg\w*|min|max|(?:min|max)\w+|any\w*|arg(?:min|max)\w*|uniq\w*|group\w*|quantile\w*|median\w*|top_?k\w*|stddev\w*|var(?:pop|samp)\w*|covar\w*|corr\w*|skew\w*|kurt\w*|entropy\w*|simplelinearregression\w*|stochastic\w*|histogram\w*|sequence\w*|windowfunnel\w*|retention\w*|deltasum\w*|boundingratio\w*|\w+test\w*|rankcorr\w*|exponentialmovingaverage\w*|intervallengthsum\w*|sparkbar\w*|first_value|last_value|nth_value|row_number|rank|dense_rank|percent_rank|cume_dist|ntile|lag\w*|lead\w*)\s*\(/i;
+const NOT_SPLIT = /\b(?:group\s+by|having|distinct|join|union|intersect|except|over|window|qualify|sample|final|prewhere|offset|fetch|settings|format|into|array\s+join)\b/i;
+const utcText = (ms) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+/** Positions of the outer clauses a plain select may carry, on the clause mask. */
+function outerKeyword(masked, re) {
+  let depth = 0;
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /[a-z]/i.test(c) && (i === 0 || /[^\w"`.]/.test(masked[i - 1]))) { re.lastIndex = i; const m = re.exec(masked); if (m) return { at: i, end: i + m[0].length }; }
+  }
+  return null;
+}
+/** How a query is read one day at a time, or null when it is not split. */
+export function dayWindowPlan(sql, now = Date.now()) {
+  const raw = String(sql || "").trim();
+  const tail = /;[\s;]*$/.exec(sqlCode(raw));
+  const s = (tail ? raw.slice(0, tail.index) : raw).trim();
+  const norm = sqlNorm(s);
+  const masked = sqlClauses(s);
+  if (!/^select\b/i.test(norm) || subqueryDepth(s) > 0) return null;
+  if (NOT_SPLIT.test(norm) || AGGREGATE_CALL.test(norm)) return null;
+  const froms = norm.match(/\bfrom\b/gi) || [];
+  if (froms.length !== 1) return null;
+  const from = /\bfrom\s+solana\s*\.\s*instructions\b/i.exec(norm);
+  if (!from) return null;
+  const where = outerKeyword(masked, /where\b/iy);
+  if (!where || where.at < from.index) return null;
+  // Between the table and WHERE only an alias: a comma would be a second table.
+  if (/[,(]/.test(masked.slice(from.index + from[0].length, where.at))) return null;
+  const order = outerKeyword(masked, /order\s+by\b/iy);
+  const limitAt = outerKeyword(masked, /limit\b/iy);
+  let direction = "asc";
+  if (order) {
+    const key = /^\s*block_time\b(?:\s+(asc|desc)\b)?\s*(?:,|$|limit\b)/i.exec(norm.slice(order.end));
+    if (!key) return null;
+    if (key[1] && key[1].toLowerCase() === "desc") direction = "desc";
+  }
+  let limit = null;
+  if (limitAt) {
+    const m = /^limit\s+(\d+)\s*$/i.exec(masked.slice(limitAt.at).trim());
+    if (!m) return null; // LIMIT m, n, an expression or anything after it
+    limit = Number(m[1]);
+    if (!(limit > 0)) return null;
+  }
+  const clauseEnds = [order?.at, limitAt?.at].filter((v) => Number.isInteger(v) && v > where.at);
+  const whereEnd = clauseEnds.length ? Math.min(...clauseEnds) : s.length;
+  const bounds = blockTimeBounds(s, now);
+  if (!bounds) return null;
+  const hi = bounds.hi === null ? now : bounds.hi;
+  const days = (hi - bounds.lo) / RANGE_DAY_MS;
+  if (!(days > 1) || days > SQL_WINDOW_MAX_DAYS) return null;
+  // UTC midnights strictly inside the range split it into days.
+  const cuts = [];
+  for (let t = Math.floor(bounds.lo / RANGE_DAY_MS) * RANGE_DAY_MS + RANGE_DAY_MS; t < hi; t += RANGE_DAY_MS) cuts.push(t);
+  if (!cuts.length) return null;
+  const spans = [];
+  for (let i = 0; i <= cuts.length; i++) spans.push({ from: i === 0 ? null : cuts[i - 1], to: i === cuts.length ? null : cuts[i] });
+  if (direction === "desc") spans.reverse();
+  const head = s.slice(0, where.end), cond = s.slice(where.end, whereEnd), rest = s.slice(whereEnd);
+  const windowSql = (span) => {
+    const parts = [];
+    if (span.from !== null) parts.push(`block_time >= toDateTime('${utcText(span.from)}', 'UTC')`);
+    if (span.to !== null) parts.push(`block_time < toDateTime('${utcText(span.to)}', 'UTC')`);
+    return `${head} (\n${cond.trim()}\n) AND ${parts.join(" AND ")}\n${rest}`.trim();
+  };
+  return { spans, direction, limit, lo: bounds.lo, hi, windowSql };
+}
+
+/** Reads a query one day at a time after its whole-range send ran past the
+ *  service's window (`whole` is that uncharged error). Answers the merged
+ *  rows with what was read in fields, or throws `whole` when no row came. */
+async function dayWindowAnswer(plan, body, queries, whole) {
+  const target = plan.limit !== null && plan.limit <= SQL_MAX_ROWS ? plan.limit : SQL_MAX_ROWS + 1;
+  // Each day is one more query: the call's query budget grows by the days.
+  queries.max = queries.sent + plan.spans.length;
+  const rows = [];
+  let read = 0, stopped = null;
+  for (const span of plan.spans) {
+    if (rows.length >= target) break;
+    // A buyer who left gets nothing delivered: no more days are sent.
+    if (queries.callerGone?.()) throw clientGoneError("The connection closed while the query was read one day at a time; nothing more was sent and nothing was charged.");
+    const budget = currentBudget();
+    if (budget && budget.remaining() < SQL_WINDOW_MIN_LEFT_MS) { stopped = "time"; break; }
+    const sql = cappedSql(plan.windowSql(span), { wrap: true }).limitTo(target - rows.length);
+    let res;
+    try { res = await cdpFetch("POST", SQL_QUERY_PATH, { ...body, sql }, { idempotent: true, buyerQuery: true, attempts: 1, rewritten: true, queries }); }
+    catch (e) {
+      if (e?.clientGone || e?.statusCode === 499) throw e;
+      stopped = e?.pastTimeWindow ? "day-past-window" : "day-failed";
+      break;
+    }
+    const got = res?.result ?? res?.rows ?? res?.data ?? res;
+    if (!Array.isArray(got)) { stopped = "day-failed"; break; }
+    read++;
+    for (const r of got) { if (rows.length >= target) break; rows.push(r); }
+  }
+  if (!rows.length && read < plan.spans.length) throw whole;
+  const allRead = read === plan.spans.length;
+  const reachedCap = rows.length >= target;
+  const list = rows.length > SQL_MAX_ROWS ? rows.slice(0, SQL_MAX_ROWS) : rows;
+  const cut = rows.length > list.length;
+  // Complete: every day was read, or the rows the query asks for were all found.
+  const complete = !cut && (allRead || reachedCap);
+  const iso = (ms) => new Date(ms).toISOString();
+  // The part of the range the days read cover (oldest first: from its start;
+  // newest first: up to its end).
+  const last = read ? plan.spans[read - 1] : null;
+  const covered = !last ? null : plan.direction === "asc"
+    ? { from: iso(plan.lo), to: iso(last.to ?? plan.hi) }
+    : { from: iso(last.from ?? plan.lo), to: iso(plan.hi) };
+  const why = stopped === "time" ? "the call's time ran out" : stopped === "day-past-window" ? "one day of it also ran past the service's window" : stopped ? "the query service did not answer one day of it" : null;
+  const note = cut
+    ? `The whole range ran past the query service's window of about 10 s, so it was read one day at a time (${read} of ${plan.spans.length} days, ${plan.direction === "desc" ? "newest" : "oldest"} first); more than ${SQL_MAX_ROWS} rows matched and the first ${SQL_MAX_ROWS} are returned.`
+    : complete
+      ? `The whole range ran past the query service's window of about 10 s, so it was read one day at a time (${read} of ${plan.spans.length} days, ${plan.direction === "desc" ? "newest" : "oldest"} first) and the rows merged in order.`
+      : `The whole range ran past the query service's window of about 10 s, so it was read one day at a time, ${plan.direction === "desc" ? "newest" : "oldest"} first, and ${why} after ${read} of ${plan.spans.length} days: these rows cover ${covered.from} to ${covered.to}. Send the query again with block_time from ${plan.direction === "desc" ? iso(plan.lo) : covered.to} to ${plan.direction === "desc" ? covered.from : iso(plan.hi)} for the rest.`;
+  return {
+    rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS,
+    ...(complete ? partialFields(list.length, list.length) : { ...partialFields(list.length + 1, list.length), matchedIsLowerBound: true }),
+    windowed: { by: "day", days: plan.spans.length, daysRead: read, order: plan.direction, from: iso(plan.lo), to: iso(plan.hi), ...(covered && !complete ? { coveredFrom: covered.from, coveredTo: covered.to } : {}), ...(why && !complete ? { stoppedBy: stopped } : {}) },
+    note,
+  };
 }
 
 const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -1357,7 +1520,7 @@ export const CDP_TOOLS = [
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated. A result the query service cannot send is served in part and says so: rows over its ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB per-row limit are omitted and counted (recovered "row-size", rowsOmitted, omittedReason, rowLimitBytes, maxRowBytes, note), and a result too large as a whole is re-run with LIMIT ${SQL_RECOVER_ROWS} (recovered "result-size", rowBytes, a note with the LIMIT that fits).` },
+          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated. A plain row select on solana.instructions over more than a day whose whole range runs past the query service's time window is read one UTC day at a time and merged in order (windowed names the days read; a walk that ends early is served partial and marked so). A result the query service cannot send is served in part and says so: rows over its ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB per-row limit are omitted and counted (recovered "row-size", rowsOmitted, omittedReason, rowLimitBytes, maxRowBytes, note), and a result too large as a whole is re-run with LIMIT ${SQL_RECOVER_ROWS} (recovered "result-size", rowBytes, a note with the LIMIT that fits).` },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],
@@ -1400,6 +1563,13 @@ export const CDP_TOOLS = [
           }
         }
         catch (e) {
+          // The whole range ran past the service's window: a plain row
+          // select over a solana.instructions range is read one day at a
+          // time (dayWindowPlan); anything else answers as before.
+          if (e?.pastTimeWindow && !call.own) {
+            const plan = dayWindowPlan(sql);
+            if (plan) return await dayWindowAnswer(plan, body, queries, e);
+          }
           if (!(e?.resultTooLarge && capped.capped)) throw e;
           // A row over the service's per-row limit is the usual cause: the
           // rows that fit are served with the rest counted. A query at the

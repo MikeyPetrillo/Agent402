@@ -471,6 +471,11 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
   const ix = plurals.length ? pluralIndex(all) : null;
   for (const term of plurals) {
     if (ix.names.has(term)) continue;
+    // A singular the query also writes ("PDFs ... PDF pages") already names
+    // its tool through that word: read again through the plural, it scored
+    // the same name twice and lifted that tool over one the query named more.
+    // A singular a synonym added stands in for the plural; it is not written.
+    if (singularCandidates(term).some((c) => terms.includes(c) && !synFrom.has(c))) continue;
     const one = singularCandidates(term).find((c) => ix.names.has(c));
     if (one && !verbForms(one, ix.written) && (ix.written.get(term) || 0) < (ix.written.get(one) || 0)) nameForm.set(term, one);
   }
