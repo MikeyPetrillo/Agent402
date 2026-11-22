@@ -254,11 +254,15 @@ async function reloads(store, latest, wallets = W) {
   ok(r3.mode === "full" && consistent(store) === "ok", "a cursor older than the window resets, and the meta matches the store");
   ok([...store.docs.keys()].filter((k) => k !== "meta").every((k) => k in metaOf(store).segs), "no segment from before the reset is left in the store");
 
-  // The row cap: reset, nothing named, everything deleted.
+  // The row cap: the oldest segments go, the meta names only what is kept.
   const capStore = memStore();
-  const capped = newSmall(capStore, { maxRows: 50 });
+  const capped = newSmall(capStore, { maxRows: 250 });
   await smallScan(capped, 1_000); await capped.persist();
-  ok(capped.stats().overCap === 1 && Object.keys(metaOf(capStore).segs).length === 0 && capStore.docs.size === 1, "over the row cap: the meta names no segment and none is stored");
+  const cm = metaOf(capStore);
+  const keptKeys = Object.keys(cm.segs).map(Number);
+  ok(capped.stats().overCap === 1 && capped.stats().rows <= 250 && keptKeys.length > 0 && cm.v === 2 && keptKeys.every((k) => k >= cm.heldFrom) && consistent(capStore) === "ok" && capStore.docs.size === keptKeys.length + 1, `over the row cap: the newest ${keptKeys.length} segment(s) kept from block ${cm.heldFrom}, the meta matches the store`);
+  const capRe = await reloads(capStore, 1_010);
+  ok(capRe.same && capRe.mode === "incremental" && capRe.resets === 0, "a fresh process reads the kept segments and folds a full read's transfers");
 
   // A scan while a save is in flight: the segment changed after it was
   // serialized, so it stays dirty and the next persist saves it again.

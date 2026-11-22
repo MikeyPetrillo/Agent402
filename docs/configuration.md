@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1104 variables in 113 groups.
+1110 variables in 113 groups.
 
 ## Contents
 
@@ -406,6 +406,11 @@ may still clamp it, and the read site is the reference.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `EVM_ACTIVITY_FAR_PAGES` | EVM activity far pages. |  | `src/revenue-live.js` |
+| `EVM_ACTIVITY_FILE` | File holding the EVM activity scans' state without a state database (default /data/evm-activity.json, the temp directory without a volume). |  | `src/evm-activity-store.js` |
+| `EVM_ACTIVITY_STORE` | off keeps the EVM activity scans' state in memory only (a restart reads each viewed wallet's window again). Unset = stored. |  | `src/evm-activity-store.js` |
+| `EVM_ACTIVITY_STORE_FLUSH_MS` | How often waiting EVM activity scan states are written to the store, a bounded number a tick, in milliseconds. Unset = 60000. |  | `src/evm-activity-store.js` |
+| `EVM_ACTIVITY_STORE_MAX_ROWS` | Rows one stored EVM activity scan state may hold; a busier wallet's state is not kept and that wallet reads its window again after a restart. Unset = 20000, at most 60000. |  | `src/evm-activity-store.js` |
+| `EVM_ACTIVITY_STORE_MAX_WALLETS` | Chain and wallet pairs whose EVM activity scan state is kept; the least recently written are dropped first. Unset = 500, at most 5000. |  | `src/evm-activity-store.js` |
 | `EVM_LOGS_ALCHEMY_FIRST` | EVM logs alchemy first. |  | `src/evm-logs-rpc.js` |
 | `EVM_RPC_8453` | EVM RPC endpoint 8453. |  | `src/referral-chain.js` |
 | `EVM_VALIDITY_FLOOR` | EVM validity floor. |  | `src/evm-validity.js` |
@@ -638,7 +643,7 @@ may still clamp it, and the read site is the reference.
 | `LEADERBOARD_HISTORY_FILE` | Leaderboard history file path. | `/data/leaderboard-history.json` | `src/leaderboard.js` |
 | `LEADERBOARD_LOG_CACHE` | Leaderboard log cache. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_DIR` | Leaderboard log cache directory. |  | `src/leaderboard.js` |
-| `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Leaderboard log cache maximum rows. |  | `src/leaderboard-log-cache.js` |
+| `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Rows the Base board's log cache keeps (default 2000000); past it the oldest segments are dropped and each scan reads the window's unkept oldest blocks from the chain, never a full re-read. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_REORG_BLOCKS` | Leaderboard log cache reorg blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_SEGMENT_BLOCKS` | Leaderboard log cache segment blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_REFRESH_MS` | Leaderboard refresh, in milliseconds. |  | `src/leaderboard.js`, `src/refresh-cadence.js` |
@@ -1020,6 +1025,7 @@ may still clamp it, and the read site is the reference.
 | `REVENUE_SNAPSHOT_TTL_MS` | Revenue snapshot lifetime, in milliseconds. |  | `src/refresh-cadence.js` |
 | `REVENUE_TEST_GATED_EVM` | Revenue test gated EVM. |  | `src/revenue-live.js` |
 | `REVENUE_WARMUP` | Revenue warmup. |  | `src/revenue-live.js` |
+| `REVENUE_WINDOW_SCAN_FILE` | File holding the live revenue view's window scan state (each rail's scanned head and the transfers it holds) without a state database (default /data/revenue-window-scan.json, the temp directory without a volume). |  | `src/revenue-live.js` |
 
 ## ROBINHOOD
 
