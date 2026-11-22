@@ -201,20 +201,20 @@ export const LEARN = [
     summary: "HTTP 402 Payment Required is the status code a server returns when a resource exists but costs money. Long reserved for future use, it is now the price quote in x402 and MPP: the 402 carries the payment terms in its headers, and the payment rides on the retry.",
     sections: [
       ["A status code that waited", [
-        P(`HTTP defines ${C("402 Payment Required")} and, in the current specification (RFC 9110), says only that it is reserved for future use. For most of the web's history no one used it: payment happened on a separate checkout page.`),
-        P(`Pay-per-request protocols give it a job. A 402 now means "this resource is here, and this is what it costs". The response says how to pay, and the client pays by repeating the request with a payment attached. Two protocols define the details: x402, which puts the offer in a ${C("PAYMENT-REQUIRED")} header, and MPP, which uses the standard ${C("WWW-Authenticate")} header with a scheme named ${C("Payment")}.`),
+        P(`HTTP defines ${C("402 Payment Required")} and, in the current specification (RFC 9110), says only that it is reserved for future use.`),
+        P(`Pay-per-request protocols give it a job. A 402 now means "this resource is here, and this is what it costs". Two protocols define the details: x402, which puts the offer in a ${C("PAYMENT-REQUIRED")} header, and MPP, which uses the standard ${C("WWW-Authenticate")} header with a scheme named ${C("Payment")}.`),
       ]],
       ["What a 402 from this server contains", [
         P(`Every paid route answers an unpaid request with a 402 that carries both offers at once, plus a free path where one exists:`),
         { code: RAW_402 },
-        `<ul><li>${C("PAYMENT-REQUIRED")}: the x402 offer, base64 JSON with one entry per accepted chain.</li><li>${C("WWW-Authenticate: Payment")}: the MPP challenges for the same price, one per method and currency (Tempo first, then Base and Celo), each bound to this server by a signed id and an expiry.</li><li>${C("X-Pow-Challenge")}: on tools that accept proof-of-work, where to get a puzzle instead of paying money.</li></ul>`,
+        `<ul><li>${C("PAYMENT-REQUIRED")}: the x402 offer, base64 JSON with one entry per accepted chain.</li><li>${C("WWW-Authenticate: Payment")}: the MPP challenges for the same price, one per method and currency (Tempo first, then Base and Celo).</li><li>${C("X-Pow-Challenge")}: on tools that accept proof-of-work, where to get a puzzle instead of paying money.</li></ul>`,
         P(`A client that speaks only one of the two protocols should look for the header it understands. An unfamiliar ${C("WWW-Authenticate")} scheme does not mean there is no way to pay.`),
         // Read at render time: which clients get the x402 offer alone
         // (src/mpp-offer-gate.js), when MPP is offered at all.
         () => { const s = mppOfferGateSentenceIfOffered({ code: C }); return s ? P(s) : ""; },
       ]],
       ["A 402 costs nothing", [
-        P(`Reading a 402 is free. It is a quote, not a charge, and no payment is taken until a request arrives carrying a signed payment that matches one of the offers. So an agent can learn the price of any route before it buys.`),
+        P(`Reading a 402 is free. It is a quote, not a charge, and no payment is taken until a request arrives carrying a signed payment that matches one of the offers.`),
       ]],
       ["Was I charged?", [
         P(`On this server settlement runs after the tool, and only for a successful response. So for a wallet payment the answer you hold tells you: a 200 with a ${C("PAYMENT-RESPONSE")} header (x402) or a ${C("Payment-Receipt")} header (MPP) was paid; a failed call is answered with no receipt header, or with an x402 receipt that reads ${C("success: false")}, and is not charged. ${SETTLE_FIRST_SENTENCE ? `A call paid before it ran answers ${C("charged: true")}.` : ""} ${SETTLE_FIRST_SENTENCE} ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION} A Tempo push payment is sent before the call runs, so one that is not served is recorded as a refund owed and the 402 says so (${C("refundOwed")}). A payment that is refused comes back as another 402, and when the refusal is about the credential the body says why in plain words.`),
