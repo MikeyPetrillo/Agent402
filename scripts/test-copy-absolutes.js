@@ -31,6 +31,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { RAILS } from "../src/rails.js";
 import { failedCallFootnote } from "../src/settlement-footnote.js";
 import { execFileSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -1226,7 +1227,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       const { SETTLE_FIRST_CATALOG_TOOLS } = await import(${JSON.stringify(join(root, "src/settle-first-tools.js"))});
       const seen = [f.FAILED_CALL_SENTENCE, f.SETTLE_FIRST_SENTENCE, failedCallFootnote(["x402"]), JSON.stringify(WHY_POINTS), SETTLE_FIRST_CATALOG_TOOLS.map((t) => t.description).join(" ")].join(" ");
       console.log(JSON.stringify({ on: f.settleFirstCopyOn(), mark: seen.includes(f.SETTLE_FIRST_MARK) }));`;
-    const run = (v) => { try { return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { env: { ...process.env, GATEWAY_SETTLE_FIRST: v, REDIS_URL: "", STATE_DATABASE_URL: "" }, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n").pop()); } catch { return null; } };
+    const run = (v) => { try { return childJson(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { env: { ...process.env, GATEWAY_SETTLE_FIRST: v, REDIS_URL: "", STATE_DATABASE_URL: "" }, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })); } catch { return null; } };
     const off = run("off"), on = run("auto");
     ok(off?.on === false && off.mark === false && on?.on === true && on.mark === true,
       `GATEWAY_SETTLE_FIRST=off prints no settle-first sentence on a served surface, and the default prints it (off: ${JSON.stringify(off)}, on: ${JSON.stringify(on)})`);
