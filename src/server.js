@@ -12094,6 +12094,19 @@ if (!FREE_MODE) {
     app.use(stripeGate);
     markGateMounted("stripe");
     console.log("Stripe MPP settlement enabled (stripe/charge cards via Shared Payment Tokens)");
+    // Each unconfirmed capture's PaymentIntent is read back from Stripe and
+    // its row closed when Stripe settles it (src/stripe-unconfirmed-readback.js:
+    // leased, bounded, read-only on Stripe).
+    void (async () => {
+      const [{ createUnconfirmedCardReadback, startUnconfirmedCardReadback }, refunds, sales] = await Promise.all([import("./stripe-unconfirmed-readback.js"), import("./refund-ledger.js"), import("./sales-ledger.js")]);
+      startUnconfirmedCardReadback(createUnconfirmedCardReadback({
+        client: newStripeClient(process.env.STRIPE_SECRET_KEY),
+        listOwed: () => refunds.listRefunds({ status: "owed", limit: 1000 }),
+        voidRow: (row, note) => refunds.markRefundVoid(row.id, note),
+        renoteRow: (row, from, to) => renoteOwedRefund(row.evidence, from, to),
+        saleStands: async (pi) => !!(await sales.saleByTxFresh(pi)),
+      }));
+    })().catch((e) => console.warn(`[mpp-stripe] unconfirmed capture read-back did not start: ${String(e?.message || e).slice(0, 120)}`));
   }
   // Prepaid credits gate: `Authorization: Bearer a402_…` on a priced catalog
   // route authorizes against the key's balance BEFORE the handler and debits

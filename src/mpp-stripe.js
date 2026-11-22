@@ -102,7 +102,8 @@ function tracedClient(real) {
     paymentIntents: {
       create: async (params, options) => {
         const t = captureTrace.getStore();
-        const opts = { ...options, maxNetworkRetries: 0 };
+        // Its own bound, not the SDK's 80 s (see STRIPE_CAPTURE_TIMEOUT_MS).
+        const opts = { ...options, maxNetworkRetries: 0, timeout: t?.timeoutMs ?? STRIPE_CAPTURE_TIMEOUT_MS };
         if (t) { t.sent = true; t.client = real; t.params = params; t.options = opts; }
         try {
           const r = await real.paymentIntents.create(params, opts);
@@ -276,7 +277,27 @@ const stripeStatusOf = (e) => { const n = Number(e?.statusCode); return Number.i
 const refusedByStripe = (e) => { const sc = stripeStatusOf(e); return sc >= 400 && sc < 500 && sc !== 409 && sc !== 408; };
 const receiptFor = (pi) => ({ method: "stripe", status: "success", timestamp: new Date().toISOString(), reference: pi.id });
 const intentRef = (pi) => (typeof pi?.id === "string" && /^pi_[A-Za-z0-9_]{1,200}$/.test(pi.id) ? pi.id : null);
-export const STRIPE_RESEND_TIMEOUT_MS = 15_000;
+/** How long the capture's first send waits for Stripe's answer, and how long
+ *  its one second send waits (each one HTTP attempt). The buyer's answer is
+ *  held while they run, after the handler has already taken its share of the
+ *  CDN's 100 s no-byte window (src/cdn-sync-window.js): the SDK's own 80 s
+ *  plus a 15 s second send could hold it 95 s, past that window whatever the
+ *  handler took. 20 s and 10 s hold it at most 30 s, so a route inside its
+ *  card run budget (STRIPE_DEFAULT_RUN_SECONDS, 20 s) answers by about 50 s
+ *  with room to spare, while a PaymentIntent create, which Stripe normally
+ *  answers in a few seconds, still has several times that to land. A send
+ *  that runs out is not a refusal: it is read back under the same key. */
+export const STRIPE_CAPTURE_TIMEOUT_MS = 20_000;
+export const STRIPE_RESEND_TIMEOUT_MS = 10_000;
+
+// Stripe's error text can carry the idempotency key (a 409 names it), and the
+// key carries the payment token (mppx: mpp_<challenge id>_<token>). The
+// operator log keeps the rest of the text and none of either.
+export function scrubStripeErrorText(text) {
+  return String(text ?? "")
+    .replace(/\bmpp_[A-Za-z0-9_-]+/g, "[idempotency key]")
+    .replace(/\bspt_[A-Za-z0-9_-]+/g, "[payment token]");
+}
 
 /** Terminal — settles the card via a Stripe PaymentIntent (mppx stripe method's
  *  broadcast -> createPaymentIntent with the SPT). Call ONLY after a <400
@@ -292,15 +313,19 @@ export const STRIPE_RESEND_TIMEOUT_MS = 15_000;
  *      answers a repeated key from the first request's record, so the second
  *      send reads the first one's outcome when it reached Stripe and makes the
  *      charge once when it did not; a PaymentIntent it returns as succeeded is
- *      this capture's own and is reported as captured.
+ *      this capture's own and is reported as captured. A FIRST send Stripe
+ *      answers from its record (an earlier request with this credential made
+ *      the PaymentIntent) is unconfirmed too, with `replayed: true`, unless
+ *      that PaymentIntent took no money.
  *  `reference` is the PaymentIntent id when Stripe named one. */
-export async function settleStripeCredential(authorizationHeader, { client = null, resendTimeoutMs = STRIPE_RESEND_TIMEOUT_MS } = {}) {
-  const trace = { sent: false };
+export async function settleStripeCredential(authorizationHeader, { client = null, captureTimeoutMs = STRIPE_CAPTURE_TIMEOUT_MS, resendTimeoutMs = STRIPE_RESEND_TIMEOUT_MS } = {}) {
+  const trace = { sent: false, timeoutMs: captureTimeoutMs };
   // 900, not 300: Stripe's permission errors put the fix ("Enabling X
   // permissions on this key would allow this request") past char 300, and
   // the first live buy's log cut it off. Operator log only - the buyer sees
   // `reason`, never Stripe's words.
-  const words = (e) => String(e?.message || e).slice(0, 900);
+  // Scrubbed of the idempotency key and the payment token (scrubStripeErrorText).
+  const words = (e) => scrubStripeErrorText(String(e?.message || e)).slice(0, 900);
   const refused = (e, reason = "Stripe declined the charge") => ({ ok: false, error: words(e), reason });
   let thrown;
   try {
@@ -315,9 +340,19 @@ export async function settleStripeCredential(authorizationHeader, { client = nul
   // Stripe returned a PaymentIntent and mppx refused it.
   if (trace.result) {
     const pi = trace.result;
-    // The first send answered from Stripe's idempotency record: this
-    // credential was captured by an earlier request, not by this one.
-    if (pi.lastResponse?.headers?.["idempotent-replayed"] === "true") return refused(thrown, "this credential's charge was already processed by an earlier request");
+    // The first send answered from Stripe's idempotency record: an earlier
+    // request with this credential made the PaymentIntent. Nothing new is
+    // charged by this one, but what the earlier one took is not known here:
+    // if it charged and that request was never served, the buyer is charged
+    // and unserved. So unless the PaymentIntent took no money, this is not
+    // confirmed, and the row it books (keyed on that PaymentIntent, the same
+    // key the earlier request's own row would have) is read back
+    // (src/stripe-unconfirmed-readback.js): voided when the earlier request
+    // was served and booked as a sale under it, kept owed when it was not.
+    if (pi.lastResponse?.headers?.["idempotent-replayed"] === "true") {
+      if (UNCHARGED_INTENT_STATES.has(pi.status)) return refused(thrown, "this credential was already processed by an earlier request, and its charge took no money");
+      return { ...unconfirmed(thrown, pi), replayed: true };
+    }
     if (pi.status === "succeeded" && intentRef(pi)) return { ok: true, receipt: receiptFor(pi), recovered: true };
     if (UNCHARGED_INTENT_STATES.has(pi.status)) return refused(thrown, "Stripe did not complete the charge");
     return unconfirmed(thrown, pi);
@@ -552,7 +587,7 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
         // charged; the credential stays spent; and once that answer is
         // written the possible charge is booked as owed (onUnconfirmed), so
         // it is refunded if Stripe shows it and voided if not.
-        console.error(`[mpp-stripe] CAPTURE-UNCONFIRMED after a successful handler (${req.method} ${req.path} pi=${b.reference || "?"}) - buyer answered 402, booked for review: ${b.error}`);
+        console.error(`[mpp-stripe] CAPTURE-UNCONFIRMED after a successful handler (${req.method} ${req.path} pi=${b.reference || "?"}${b.replayed ? ", answered from an earlier request's record" : ""}) - buyer answered 402, booked for review: ${scrubStripeErrorText(b.error)}`);
         bufferedCalls = [];
         restore();
         req.stripeUnconfirmed = true;
@@ -565,7 +600,7 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
         return;
       }
       if (!b.ok) {
-        console.warn(`[mpp-stripe] settle failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged: ${b.error}`);
+        console.warn(`[mpp-stripe] settle failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged: ${scrubStripeErrorText(b.error)}`);
         bufferedCalls = [];
         restore();
         sendMppProblem(res, mppProblem("verification-failed", `Payment verification failed: Stripe did not capture the charge (${String(b.reason || "no detail").slice(0, 160)}). Nothing was charged; request the resource again for a fresh challenge.`));
@@ -589,7 +624,7 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
         try { if (!res.writableEnded) { if (!res.headersSent) res.status(500); res.end(); } } catch { /* nothing left */ }
       }
     }).catch((err) => {
-      console.warn(`[mpp-stripe] gate threw: ${String(err?.message || err).slice(0, 300)}`);
+      console.warn(`[mpp-stripe] gate threw: ${scrubStripeErrorText(String(err?.message || err)).slice(0, 300)}`);
       if (req.stripeSettled || res.headersSent) { try { if (!res.writableEnded) res.end(); } catch { /* ignore */ } return; }
       next();
     });

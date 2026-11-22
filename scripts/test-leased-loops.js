@@ -46,6 +46,7 @@ try {
     "src/backup.js": "backup-nightly", "src/monitor-scheduler.js": "monitor-scheduler",
     "src/mpp-subscriptions.js": "mpp-subscription-ended-sweep",
     "src/human-checkout.js": "human-checkout-refund-readback",
+    "src/stripe-unconfirmed-readback.js": "stripe-unconfirmed-readback",
   };
   for (const [file, name] of Object.entries(expect)) {
     const src = readFileSync(new URL("../" + file, import.meta.url), "utf8");

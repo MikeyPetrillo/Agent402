@@ -418,7 +418,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   succeeded PaymentIntent is served as paid; an outcome still unknown answers 402 with
   `STRIPE_UNCONFIRMED_TEXT` and is booked in the refund ledger after the answer is written
   (`unconfirmedCaptureDebt`, wire `mpp-stripe`). The credential stays spent either way. A new
-  failure shape is unconfirmed unless it is proven to take no money.
+  failure shape is unconfirmed unless it is proven to take no money; so is a FIRST send Stripe
+  answers from an earlier request's idempotency record (`replayed`), booked under that
+  PaymentIntent. The first send waits `STRIPE_CAPTURE_TIMEOUT_MS` (20 s), the second
+  `STRIPE_RESEND_TIMEOUT_MS` (10 s), inside the CDN's 100 s window; Stripe's error text is logged
+  through `scrubStripeErrorText` (no idempotency key, no payment token). The leased pass
+  `stripe-unconfirmed-readback` (`src/stripe-unconfirmed-readback.js`, read-only on Stripe) reads
+  each unconfirmed row's PaymentIntent back: canceled or failed voids it, succeeded with a sale
+  booked under it voids it, succeeded without one keeps it owed noted "confirmed charged".
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. Every command the guard
