@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1111 variables in 113 groups.
+1112 variables in 113 groups.
 
 ## Contents
 
@@ -644,7 +644,7 @@ holds it.
 | `LEADERBOARD_HISTORY_FILE` | Leaderboard history file path. | `/data/leaderboard-history.json` | `src/leaderboard.js` |
 | `LEADERBOARD_LOG_CACHE` | Leaderboard log cache. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_DIR` | Leaderboard log cache directory. |  | `src/leaderboard.js` |
-| `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Rows the Base board's log cache keeps (default 2000000); past it the oldest segments are dropped and each scan reads the window's unkept oldest blocks from the chain, never a full re-read. |  | `src/leaderboard-log-cache.js` |
+| `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Rows the Base board's log cache keeps in the heap between scans (default 1500000, about 75 MB at 45 to 50 bytes a row); past it the oldest segments are dropped and each scan reads the window's unkept oldest blocks from the chain, never a full re-read. A higher cap reads fewer blocks a scan and holds more heap. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_REORG_BLOCKS` | Leaderboard log cache reorg blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_SEGMENT_BLOCKS` | Leaderboard log cache segment blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_REFRESH_MS` | Leaderboard refresh, in milliseconds. |  | `src/leaderboard.js`, `src/refresh-cadence.js` |
@@ -1136,6 +1136,7 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `SETTLE_CHAIN_CHECK_MAX_PER_NETWORK` | Chain reads the settle deadlines' chain check runs at once on one network (default 4, at most 64; src/settle-deadlines.js). The head is read once a check interval for every settle watching a network, and each settle's checks back off after a miss up to 8 s; a settle with no free slot is decided by its facilitator's answer or the cap. |  | `src/settle-deadlines.js` |
 | `SETTLE_CLAIM_DEADLINE_MS` | Settle claim deadline, in milliseconds. |  | `src/settlement-claims.js` |
 | `SETTLE_DEADLINES` | Per-network settle deadlines for x402 EIP-3009 exact payments (src/settle-deadlines.js). Unset: the default table, sized from each chain's block time (chain check from max(2 s, 2 blocks), every max(1 s, 1 block); slow over max(6 s, 4 blocks); cap max(60 s, 10 blocks), Celo max(20 s, 10 blocks); the slow-primary switch on Celo only). off: no deadlines (the library's own request timeout only). Otherwise a JSON object keyed by network name or CAIP-2 whose value is off or an object overriding checkAfterMs, checkEveryMs, slowMs, capMs (milliseconds) and switch (true or false). |  | `src/settle-deadlines.js` |
 | `SETTLE_DEMOTE_AFTER` | Settle demote after. |  | `src/settle-demotion.js` |

@@ -4,6 +4,8 @@
 //
 // Offline, no RPC, no store but an in-memory double that keeps each document
 // as JSON text (what a real store hands back is a parsed copy):
+//   0. The default row cap times the live heap a kept row costs stays well
+//      under the board's heap budget (the rows are kept between scans).
 //   1. A synthetic cache at the row cap's scale and a scan with a few new logs:
 //      the transfers are the same, in the same order, as a full read of the
 //      window (and as a fingerprint recorded from the implementation that
@@ -90,6 +92,37 @@ async function reloads(store, latest, wallets = W) {
   return { same: seqOf(r.transfers) === fullRead(latest - SPAN + 1, latest, wallets), mode: r.mode, resets: st.resets, reason: st.lastReason };
 }
 
+// ---- 0. the default row cap bounds the heap the kept rows hold -----------
+// Past the cap the cache keeps its newest rows between scans (one replica
+// holds them for the whole process), so the default cap times the live heap
+// a kept row costs stays well under the board's share of the heap: measured
+// here on a cache of a few hundred thousand rows, read after a full GC with
+// the cache and then without it.
+{
+  const NW = 1500, SEG = 18_000, SPAN0 = 60_000, START0 = 50_000_000;
+  const wallets0 = Array.from({ length: NW }, (_, i) => "0x" + (i + 1).toString(16).padStart(40, "0"));
+  const payers0 = Array.from({ length: 4000 }, (_, i) => "0x" + "e" + (i + 1).toString(16).padStart(39, "0"));
+  const readLogs = async (a, b, list) => {
+    const s = new Set(list); const out = [];
+    for (let k = a; k <= b; k++) for (let li = 0; li < 6; li++) { const w = wallets0[(k * 7 + li * 13) % NW]; if (s.has(w)) out.push({ wallet: w, payer: payers0[(k + li * 31) % 4000], micro: [1000, 10000, 2500000][li % 3], block: k, logIndex: li }); }
+    return out;
+  };
+  const none = { async read() { return { ok: true, body: null }; }, async save() { return true; }, async del() { return true; } };
+  const heapNow = () => { globalThis.gc(); globalThis.gc(); return process.memoryUsage().heapUsed; };
+  const cache = C.createLogWindowCache({ store: none, token: "0xusdc", segmentBlocks: SEG, reorgMarginBlocks: 0, maxRows: 10_000_000 });
+  // In a function of its own: the scan's answer is not reachable when the heap is read.
+  const fill = async () => { await cache.scan({ wallets: wallets0, start: START0, latest: START0 + SPAN0 - 1, chunkBlocks: 2_000, walletChunk: NW, pad: (w) => w, readLogs }); };
+  await fill();
+  const rows = cache.stats().rows;
+  const withRows = heapNow();
+  cache._forget();
+  const without = heapNow();
+  const perRow = (withRows - without) / rows;
+  const atCap = perRow * C.LOG_CACHE_DEFAULTS.maxRows;
+  console.log(`  ${rows} kept rows: ${perRow.toFixed(1)} bytes of live heap a row; the default cap of ${C.LOG_CACHE_DEFAULTS.maxRows} rows holds about ${MB(atCap)} MB`);
+  ok(perRow > 0 && atCap < 75 * 1048576, `the default row cap holds at most half of a 150 MB heap budget (${MB(atCap)} MB at ${C.LOG_CACHE_DEFAULTS.maxRows} rows; bound 75 MB)`);
+}
+
 // ---- 1. scale: a cache at the row cap and a scan with a few new logs -------
 {
   const SEG = 18_000, WIN = 302_400, START = 30_000_000, NW = 1500;
@@ -105,13 +138,15 @@ async function reloads(store, latest, wallets = W) {
   const fingerprint = (iter) => { const h = createHash("sha256"); let n = 0; for (const t of iter) { const f = C.transferForFold(t); h.update(`${f.wallet}|${f.payer}|${f.usd}|${f.pos};`); n++; } return { digest: h.digest("hex").slice(0, 16), n }; };
   const reference = (start, latest, list) => fingerprint((function* () { const s = new Set(list); for (let k = start; k <= latest; k++) for (const t of rowsAt(k)) if (s.has(t.wallet)) yield t; })());
   const store = memStore();
-  const cache = C.createLogWindowCache({ store, token: "0xusdc", segmentBlocks: SEG, reorgMarginBlocks: 300 });
+  // A cap over the synthetic window, so the whole window is kept at this scale.
+  const SCALE_CAP = 2_100_000;
+  const cache = C.createLogWindowCache({ store, token: "0xusdc", segmentBlocks: SEG, reorgMarginBlocks: 300, maxRows: SCALE_CAP });
   const base = { chunkBlocks: 2_000, walletChunk: NW, pad: (w) => w, readLogs };
   let latest = START + WIN - 1;
   await cache.scan({ ...base, wallets, start: START, latest });
   await cache.persist();
   const kept = cache.stats().rows;
-  ok(kept > 1_500_000 && kept <= C.LOG_CACHE_DEFAULTS.maxRows, `the synthetic cache holds ${kept} rows in ${cache.stats().segments} segments (cap ${C.LOG_CACHE_DEFAULTS.maxRows})`);
+  ok(kept > 1_500_000 && kept <= SCALE_CAP, `the synthetic cache holds ${kept} rows in ${cache.stats().segments} segments (cap ${SCALE_CAP})`);
 
   globalThis.gc(); globalThis.gc();
   const before = used();
