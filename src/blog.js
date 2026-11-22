@@ -96,14 +96,14 @@ export const BLOG_POSTS = [
     excerpt: "Agentic payments are the wire. Agentic Finance is what forms on top of it: agents discovering services, paying per request from their own wallets over x402 or MPP, receiving receipts, and earning per request in return. What the term means, what one purchase looks like, and where Agent402 sits.",
     body: `<p><strong>Agentic Finance (AIFI)</strong> is software agents transacting on their own: discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet over an open protocol, receiving a verifiable receipt, and, on the other side, earning per request for what they serve. The payment is the identity and every settlement is on a public ledger.</p>
 
-<p>We use the term deliberately, and this post is the long form of the <a href="/agentic-finance">category page</a>: what it means, why it is different from the two phrases it gets confused with, what a single purchase actually looks like on the wire, and where Agent402 sits in it.</p>
+<p>We use the term deliberately, and this post is the long form of the <a href="/agentic-finance">category page</a>: what it means, how it relates to the two phrases it sits beside, what a single purchase actually looks like on the wire, and where Agent402 sits in it.</p>
 
 <h2>Three phrases that are not the same thing</h2>
 
 <ul>
   <li><strong>Agentic payments</strong> is the plumbing: a wire format that lets one program pay another per request. HTTP 402 names a price, the client answers with a signed stablecoin payment, the server verifies, settles and delivers. <a href="/what-is-x402">x402</a> and <a href="/what-is-mpp">MPP</a> are the two open, HTTP-native standards for it.</li>
-  <li><strong>Agentic commerce</strong> usually means agents buying goods for humans through checkout flows: a shopping assistant completing a purchase a person asked for, with a card on file and a human ultimately approving.</li>
-  <li><strong>Agentic finance</strong> is the machine-to-machine economy that forms on top of the plumbing once thousands of agents and sellers transact: price discovery, routing between competing sellers, reliability signals, spend controls, receipts, and transparent revenue - operated by and for autonomous software.</li>
+  <li><strong>Agentic commerce</strong> is the whole market of agents paying for what they use: goods, services, tools and data. It runs from a shopping assistant completing a checkout a person asked for to an agent paying per call, over x402 or MPP, for one tool run or one piece of data. Agent402 serves the per-call part: tools and data an agent pays for one request at a time.</li>
+  <li><strong>Agentic finance</strong> is the applied finance layer of agentic commerce: the machine-to-machine economy that forms on top of the plumbing once thousands of agents and sellers transact: price discovery, routing between competing sellers, reliability signals, spend controls, receipts, and transparent revenue - operated by and for autonomous software.</li>
 </ul>
 
 <p>The practical test, borrowed from <a href="/what-is-x402#agentic">the x402 explainer</a>: could the software complete the purchase with no human awake? If a human has to approve, register, or paste a key, it is not agentic. Agentic finance is the same test applied to a whole market rather than to one payment.</p>

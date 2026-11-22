@@ -316,7 +316,7 @@ try {
   {
     const lede = ledeOf(await (await fetch(`${rig.url}/`)).text());
     const summary = (llms.match(/^> (.*)$/m) || [])[1] || "";
-    await ok(lede.startsWith("Agent402 is the payment and trust layer for agent commerce") && !/signed receipt/.test(lede + summary.slice(0, 300)), `no key: the home lede and the llms summary drop the signed receipt clause ("${lede}")`);
+    await ok(lede.startsWith("Agent402 is the payment and trust layer for agentic commerce") && !/signed receipt/.test(lede + summary.slice(0, 300)), `no key: the home lede and the llms summary drop the signed receipt clause ("${lede}")`);
   }
   const w = await rig.wallet("evm");
   rig.fund(w, 10n ** 12n);

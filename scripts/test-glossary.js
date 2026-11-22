@@ -51,7 +51,7 @@ ok(GLOSSARY.every((t) => !/[<>]/.test(t.def) && !/[<>]/.test(t.name)), "definiti
 ok(GLOSSARY.every((t) => Array.isArray(t.see) && t.see.length > 0 && t.see.every(([href]) => href.startsWith("/"))), "every term links to at least one deep page, all internal");
 const allText = GLOSSARY.map((t) => [t.name, t.def, ...(t.see || []).map((s) => s[1])].join(" ")).join("\n");
 ok(!/\b\d{3,4} tools\b/.test(allText) && /500\+/.test(allText), "counts stay evergreen (500+), no exact tool counts");
-for (const must of ["agentic-finance", "x402", "mpp", "http-402", "facilitator", "eip-3009", "payment-receipt", "settlement", "dual-stack", "proof-of-work-tier", "smart-order-router", "tollbooth"]) {
+for (const must of ["agentic-finance", "agentic-commerce", "x402", "mpp", "http-402", "facilitator", "eip-3009", "payment-receipt", "settlement", "dual-stack", "proof-of-work-tier", "smart-order-router", "tollbooth"]) {
   ok(ids.includes(must), `core term present: #${must}`);
 }
 

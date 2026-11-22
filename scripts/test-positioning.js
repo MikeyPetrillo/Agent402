@@ -29,13 +29,13 @@ const mdText = (s) => String(s).replace(/\[([^\]\n]*)\]\([^)\s]*\)/g, "$1").repl
 // The owner's line, word for word, restored once every paid path is signed
 // (src/receipt-signing.js): the payment and trust layer leads, and the
 // catalog's size is the supporting line, never the lead.
-const APPROVED = "Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one.";
+const APPROVED = "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one.";
 ok(LEAD_SENTENCE === APPROVED, "the published lead sentence is the approved line, word for word");
 ok(!/\d/.test(LEAD_SENTENCE.replace(/x402|Agent402/g, "")) && !/tools|catalog/i.test(LEAD_SENTENCE), "the lead sentence carries no catalog size and no tool count");
 ok(SUPPORT_LINE === "500+ ready tools on the same rails.", "the catalog is the supporting line, evergreen 500+");
 ok(!/—/.test(LEAD_SENTENCE + CATEGORY_LINE + SUPPORT_LINE), "no em dash in the lead, the category line or the supporting line");
 ok(leadSentence({ mpp: false }).includes("every paid call to Agent402, across x402, with a signed receipt for each one.") && !/MPP/.test(leadSentence({ mpp: false })), "with MPP off the sentence offers x402 alone");
-ok(leadSentence({ receipts: false }) === "Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls to Agent402 across x402 and MPP." && !/every paid call/.test(leadSentence({ receipts: false })), "with no signing key the sentence drops the signed-receipt clause and claims no receipt for every call");
+ok(leadSentence({ receipts: false }) === "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402 across x402 and MPP." && !/every paid call/.test(leadSentence({ receipts: false })), "with no signing key the sentence drops the signed-receipt clause and claims no receipt for every call");
 ok(!/signed receipt/.test(leadSentence({ mpp: false, receipts: false })) && /across x402\.$/.test(leadSentence({ mpp: false, receipts: false })), "MPP off and receipts off: x402 alone, no receipt clause");
 ok(receiptsServed() === false, "control: this offline process loads no signing key, so the served surfaces below render the key-off line");
 ok(/^[A-Z][^.]*\.$/.test(CATEGORY_LINE) && !/Agentic Finance|AIFI/.test(CATEGORY_LINE), "the category line is one plain sentence, not the category acronym");
@@ -116,12 +116,12 @@ for (const file of ["CHANGELOG.md", "src/changelog.js"]) {
   const text = read(file).replace(/\s+/g, " ");
   const entry = (text.match(/One lead sentence describes Agent402 on (.*?)\.(?=\s|"|$)/i) || [])[1] || "";
   ok(entry.includes("package READMEs in the repository") && !/package pages/.test(entry), `${file}: the lead-sentence entry names the repository READMEs, not the package pages ("${entry}")`);
-  ok(/payment and trust layer for agent commerce/.test(text), `${file}: an entry records the payment and trust layer lead`);
+  ok(/payment and trust layer for agent(?:ic)? commerce/.test(text), `${file}: an entry records the payment and trust layer lead`);
 }
 // The registry entry and package descriptions lead with the layer, not the count.
 {
   const reg = JSON.parse(read("mcp/server.json")).description;
-  ok(/^Payment and trust layer for agent commerce/.test(reg) && reg.length <= 100 && !/\d+\+? (agent |ready )?tools/.test(reg), `mcp/server.json description leads with the layer, no tool count, 100 characters at most (${reg.length})`);
+  ok(/^Payment and trust layer for agentic commerce/.test(reg) && reg.length <= 100 && !/\d+\+? (agent |ready )?tools/.test(reg), `mcp/server.json description leads with the layer, no tool count, 100 characters at most (${reg.length})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

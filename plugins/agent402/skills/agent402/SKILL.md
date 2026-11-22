@@ -1,11 +1,11 @@
 ---
 name: agent402
-description: "Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. This skill covers the Agent402 MCP server in a coding agent: when a task needs live data or a capability the agent does not have (web search, page rendering, PDFs and OCR, SEC filings, market and crypto data, conversions and utilities), find the matching tool with catalog.find and call it with catalog.call, reading its price before the call."
+description: "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. This skill covers the Agent402 MCP server in a coding agent: when a task needs live data or a capability the agent does not have (web search, page rendering, PDFs and OCR, SEC filings, market and crypto data, conversions and utilities), find the matching tool with catalog.find and call it with catalog.call, reading its price before the call."
 ---
 
 # Agent402 in a coding agent
 
-Agent402 is the payment and trust layer for agent commerce: agents find, pay
+Agent402 is the payment and trust layer for agentic commerce: agents find, pay
 for and verify every paid call to Agent402, across x402 and MPP, with a signed
 receipt for each one. 500+ ready tools on the same rails.
 

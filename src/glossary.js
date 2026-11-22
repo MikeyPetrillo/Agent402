@@ -25,8 +25,11 @@ export const GLOSSARY = [
     def: "Software agents transacting on their own: discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet over an open protocol such as x402 or MPP, receiving a verifiable receipt, and, on the other side, earning per request for what they serve. Agentic payments are the wire; agentic finance is the economy that forms on top of it - discovery, routing, pricing, reliability, receipts and transparency. Agent402 is its applied layer.",
     see: [["/agentic-finance", "the category page"]] },
   { id: "agentic-payments", name: "Agentic payments", alt: ["machine payments", "machine-to-machine payments"],
-    def: "The plumbing that lets one program pay another per request without an account: an HTTP 402 response names a price, the client answers with a signed stablecoin payment, and the server verifies, settles and delivers. x402 and MPP are the two open, HTTP-native standards for it. Distinct from agentic commerce (agents buying goods for humans through checkout flows).",
+    def: "The plumbing that lets one program pay another per request without an account: an HTTP 402 response names a price, the client answers with a signed stablecoin payment, and the server verifies, settles and delivers. x402 and MPP are the two open, HTTP-native standards for it. It is the wire under agentic commerce, the wider market of agents paying for goods, services, tools and data.",
     see: [["/what-is-x402", "x402 and MPP on Agent402"], ["/what-is-mpp", "MPP on Agent402"]] },
+  { id: "agentic-commerce", name: "Agentic commerce", alt: ["agent commerce"],
+    def: "Agents paying for what they use: goods, services, tools and data, from a checkout a person asked for to a single tool call paid per request. Agentic payments are its wire, and Agentic Finance (AIFI) is its applied finance layer, where agents pay and get paid per request over x402 or MPP. Agent402 serves the per-call part: tools and data paid for one request at a time.",
+    see: [["/blog/what-is-agentic-finance-aifi", "agentic commerce, payments and finance"], ["/agentic-finance", "the category page"]] },
   { id: "x402", name: "x402", alt: ["x402 protocol", "HTTP 402 payments"],
     def: "An open protocol, originally from Coinbase, that turns HTTP 402 Payment Required into a working payment flow: the server sends machine-readable payment requirements (price, asset, chain, recipient) in a PAYMENT-REQUIRED header, the client retries with a signed authorization in a PAYMENT-SIGNATURE (formerly X-PAYMENT) header, a facilitator verifies and settles it in USDC, and the response carries a PAYMENT-RESPONSE receipt.",
     see: [["/what-is-x402", "x402 and MPP on Agent402"], ["/marketplace", "the x402 index"]] },
@@ -96,7 +99,7 @@ export function glossaryPage(baseUrl) {
   const canonical = `${baseUrl}/glossary`;
   const title = "Agentic Finance (AIFI) glossary: x402, MPP, facilitators and receipts";
   const description =
-    "Plain-language definitions of the vocabulary of Agentic Finance (AIFI): x402, MPP, HTTP 402, payment requirements and challenges, facilitators, EIP-3009, receipts, settlement, wallets as identity, rails, dual-stack, the proof-of-work free tier, the Smart Order Router, the tollbooth, and more. Each term links to the page that goes deep.";
+    "Plain-language definitions of the vocabulary of agentic commerce and Agentic Finance (AIFI): x402, MPP, HTTP 402, payment requirements and challenges, facilitators, EIP-3009, receipts, settlement, wallets as identity, rails, dual-stack, the proof-of-work free tier, the Smart Order Router, the tollbooth, and more. Each term links to the page that goes deep.";
 
   const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
