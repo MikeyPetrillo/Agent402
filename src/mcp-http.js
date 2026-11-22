@@ -419,7 +419,7 @@ export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402",
   };
 }
 
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX }) {
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX, quietMiss = () => false }) {
   // The wires this mount takes in the call. `payWires` is the boot's own
   // account (src/connector-pay.js connectorWires, the source the pages read):
   // a wire it denies has no loopback here, so the capability advertisement,
@@ -708,7 +708,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     } catch { return false; }
   }
 
-  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false } = {}) {
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false } = {}) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -1595,9 +1595,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           if (plan) {
             for (const st of plan.steps) {
               if (st.match === "strong") continue;
-              try { recordWish({ need: st.task, source: "find-miss", ip }); } catch { /* best-effort */ }
+              // An operator's own search (a valid X-Operator-Token) is not demand.
+              if (!quiet) try { recordWish({ need: st.task, source: "find-miss", ip }); } catch { /* best-effort */ }
             }
-          } else if (weak && taskStr.trim() && !relatedSellers) {
+          } else if (weak && taskStr.trim() && !relatedSellers && !quiet) {
             try { recordWish({ need: taskStr.trim(), source: "find-miss", ip }); } catch { /* best-effort */ }
           }
           if (plan && !results.length && !r.packs?.length) {
@@ -2276,7 +2277,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     let run = null;
     try {
       const heartbeatToken = typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null;
-      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall };
+      // A search the operator runs (a valid X-Operator-Token, read by the
+      // host's quietMiss) records no find-miss; the answer is keyed on that
+      // header, and the operator's is private, no-store.
+      res.vary("X-Operator-Token");
+      const quiet = req.headers["x-operator-token"] !== undefined && Boolean(quietMiss(req));
+      if (quiet) res.set("Cache-Control", "private, no-store");
+      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet };
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport?.close(); } catch { /* already closing */ } });

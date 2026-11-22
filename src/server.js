@@ -7015,7 +7015,9 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
 app.get("/__operator/wishes.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
-  const agg = getWishesAggregate({ limit: req.query?.limit, detailed: true });
+  // ?staleDays=N widens the window (1 to the retention days) and ?offset=N
+  // pages through it, so clusters older than the default window can be read.
+  const agg = getWishesAggregate({ limit: req.query?.limit, detailed: true, staleDays: req.query?.staleDays, offset: req.query?.offset });
   await annotateServedAsync(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
   res.json(await withRerank(req, await withIntent(req, agg)));
 });
@@ -8327,7 +8329,7 @@ const planSketchFor = (q) => {
     });
   } catch { return null; } // a sketch is an extra; find and route answer regardless
 };
-const computeFind = async (q, k, meter = null, ip = null) => {
+const computeFind = async (q, k, meter = null, ip = null, { quiet = false } = {}) => {
   const result = findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS });
   // The seller bridge: a query that looks like an indexed seller's NAME gets
   // pointed at that seller - /api/find is catalog-only, and a cluster of
@@ -8368,7 +8370,7 @@ const computeFind = async (q, k, meter = null, ip = null) => {
     // miss; a step with no strong match is recorded as its own need.
     for (const st of plan.steps) {
       if (st.match === "strong") continue;
-      try { recordWish({ need: st.task, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort */ }
+      if (!quiet) try { recordWish({ need: st.task, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort */ }
     }
     return result;
   }
@@ -8397,7 +8399,8 @@ const computeFind = async (q, k, meter = null, ip = null) => {
         ? "none of these results does this task; POST /api/wish with what you needed"
         : "POST /api/wish with what you needed";
       const qStr = String(q ?? "").trim();
-      if (qStr) {
+      // An operator's own search (a valid X-Operator-Token) is not demand.
+      if (qStr && !quiet) {
         try { recordWish({ need: qStr, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort; never break /api/find */ }
       }
     }
@@ -8744,6 +8747,10 @@ const withRouteAnswerNote = (req, res, source) => {
   const orig = res.json.bind(res);
   res.json = (body) => { try { if (res.statusCode === 200) noteRouteAnswer(clientIp(req), body, Date.now(), { source, synthetic: isSyntheticRequest(req) }); } catch { /* telemetry never breaks a search */ } return orig(body); };
 };
+// The operator's own searches (a valid X-Operator-Token, the header only on
+// this public surface) record no find-miss: re-running the demand board's
+// queries must not add to it. The answer body is unchanged; operatorView keys
+// every answer on the header and makes the operator's private, no-store.
 app.get("/api/find", (req, res) => {
   withRouteAnswerNote(req, res, "find");
   const q = readableAsText(req.query.q ?? req.query.task ?? req.query.query);
@@ -8752,13 +8759,15 @@ app.get("/api/find", (req, res) => {
   // default and told `count: 5`. Same defect as the index listing taking only
   // `limit` while a consumer guessed `perPage` (2026-09-22).
   const k = req.query.k ?? req.query.top;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip), "_find", req, res);
+  const quiet = operatorView(req, res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip, { quiet }), "_find", req, res);
 });
 app.post("/api/find", (req, res) => {
   withRouteAnswerNote(req, res, "find");
   const q = readableAsText(req.body?.q ?? req.body?.task ?? req.body?.query);
   const k = req.body?.k ?? req.body?.top;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip), "_find", req, res);
+  const quiet = operatorView(req, res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip, { quiet }), "_find", req, res);
 });
 
 // Agent wish loop: free, pre-paywall, like /api/find. When an agent needs a
@@ -11205,6 +11214,8 @@ app.get("/analytics", async (req, res) => {
 let loopbackPort = PORT;
 const mcpMountOpts = {
   baseUrl: BASE_URL,
+  // The operator's own find_tool searches (X-Operator-Token) record no find-miss.
+  quietMiss: (req) => operatorElevated(req),
   isComputePayable,
   // Native MPP on /mcp (2026-08-19): paid tools are payable on the connector
   // with an MPP credential in _meta; the call is replayed to our own paid

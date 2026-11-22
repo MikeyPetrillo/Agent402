@@ -98,6 +98,15 @@ const TOP1 = [
   ["contact sheet",                 "html-frames"],
   ["motion design frame check",     "html-frames"],
   ["freeze frames of my animation", "html-frames"],
+  // A plural or a spelled-out version (2026-11-22): "uuids" matched no slug,
+  // tag or alias word of uuid, so "generate" carried captcha-generate to the
+  // top. A plural reads as the singular the catalog names, and "version 7"
+  // reads as "v7". The demand board's shapes live in find-misses.json.
+  ["make some version 7 uuids",     "uuid"],
+  ["generate uuids",                "uuid"],
+  ["uuid v7",                       "uuid"],
+  ["uuid version 7",                "uuid"],
+  ["time ordered ids",              "uuid"],
 ];
 
 const TOPN = [

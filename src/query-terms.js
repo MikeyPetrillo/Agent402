@@ -160,3 +160,37 @@ export function termMatcher(term) {
   if (term.length >= 3 || isCjkTerm(term)) return (str) => str.includes(term);
   return (str) => splitTokens(str).includes(term);
 }
+
+// PLURALS. A buyer writes "uuids", "ids", "hashes"; the catalog names the
+// thing once, as a slug word, tag or alias ("uuid", "id", "hash"). A plural
+// query word matched only incidental description text, so a shared verb
+// ("generate") decided the ranking (2026-11-22: "generate version 7 uuids"
+// ranked captcha-generate first). The candidates are the regular English
+// singulars; the caller keeps the word as written unless the catalog uses a
+// candidate and not the word itself, so "news" or "series" never change.
+/** Regular singular forms of a Latin word, most specific first; [] when the
+ *  word does not read as a plural ("address", "status", "analysis"). */
+export function singularCandidates(term) {
+  const t = String(term || "");
+  if (t.length < 3 || t.length > 40 || !/^[a-z]+s$/.test(t)) return [];
+  if (/(?:ss|us|is)$/.test(t)) return [];
+  const out = [];
+  if (/ies$/.test(t) && t.length > 4) out.push(t.slice(0, -3) + "y");
+  if (/(?:ch|sh|x|z|ss)es$/.test(t)) out.push(t.slice(0, -2));
+  out.push(t.slice(0, -1));
+  return out;
+}
+
+// SPELLED-OUT VERSIONS. "version 7", "ver. 4" and "v 6" are the words a tool
+// names as "v7", "v4", "v6" (an alias such as uuid-v7); the lone digit is a
+// one-character token every scorer drops. Returns the short forms, in order.
+const VERSION_RE = /(?<![\p{L}\p{N}])(?:version|ver|v)\.?\s*(\d{1,3})(?![\p{L}\p{N}])/giu;
+export function versionTerms(q) {
+  const s = String(q || "").slice(0, 1000);
+  const out = [];
+  for (const m of s.matchAll(VERSION_RE)) {
+    const v = `v${Number(m[1])}`;
+    if (!out.includes(v)) out.push(v);
+  }
+  return out;
+}
