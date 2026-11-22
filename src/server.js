@@ -13609,7 +13609,9 @@ async function admitPaidRun(req, res, def) {
 // that reads its settle call before its upstream call
 // (scripts/test-settle-first.js). Not the video route: its job is parked and
 // resumed across calls.
-const SETTLE_FIRST_SLUGS = new Set([...GATEWAY_TOOLS_ENABLED, ...IMAGES_FAST_TOOLS.filter((t) => t.slug !== "v1-videos")].map((t) => t.slug));
+// Also dub (translate-and-speak): its first paid upstream call is the chat
+// gateway's translation, behind the same settle point, after dub's own checks.
+const SETTLE_FIRST_SLUGS = new Set([...GATEWAY_TOOLS_ENABLED, ...IMAGES_FAST_TOOLS.filter((t) => t.slug !== "v1-videos"), ...DUB_TOOLS].map((t) => t.slug));
 /**
  * Arm this run to settle its payment before its upstream work, or null (it
  * settles after the handler, as every run does in normal operation). Armed

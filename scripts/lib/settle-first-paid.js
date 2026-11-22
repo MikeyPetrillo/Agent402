@@ -438,6 +438,20 @@ export async function run({ ok, parts, setRig }) {
         await ok(served.length >= 28 && served.filter((s) => s.endsWith(":200")).length >= 22 && served.some((s) => s.startsWith("v1-images-fast:")), `${served.length} of ${tools.length} routes were read settling first and then calling their upstream, ${served.filter((s) => s.endsWith(":200")).length} to a 200 (a collapsed count must fail)${notReached.length ? `; not read: ${notReached.join(", ")}` : ""}`);
       }
 
+      // ---- dub: its translation is the chat gateway's call, behind the same point --
+      {
+        const DUB = { method: "POST", path: "/api/dub", body: { text: "Good morning", targetLanguage: "es", json: true } };
+        const { w } = await fresh("evm", 3, DUB);
+        const from = mark();
+        const r = await rig.pay(w, DUB);
+        await ok(orderOf(w, from) === "settle-first" && rig.outcomesOf(w).attempts === 1, `dub: a new wallet's payment settles before the translation's model call (${orderOf(w, from)}, ${r.status})`);
+        const bad = await rig.wallet("evm");
+        rig.fund(bad, 10n ** 9n);
+        const from2 = mark();
+        const r2 = await rig.send({ ...DUB, body: { text: "", targetLanguage: "es", json: true } }, await rig.credentialFor(bad, DUB));
+        await ok(r2.status >= 400 && r2.status < 500 && orderOf(bad, from2) === "nothing", `dub: its own input refusal answers before any settle call (${r2.status})`);
+      }
+
       // ---- through the hosted connector (/mcp), paid over x402 --------------------
       // (The connector replays the payment to the route; its line about the
       // charge is read from the route's answer.)
