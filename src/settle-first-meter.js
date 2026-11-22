@@ -132,6 +132,9 @@ export function noteUnsettledRunCost(usd, now = Date.now()) {
   const m = micro(usd);
   if (!m) return;
   const min = minuteOf(now);
+  // A new minute drops the minutes past the window, so the map stays within
+  // the window's minutes whether or not the figures are ever read.
+  if (!ownCost.has(min)) pruneOwn(now);
   ownCost.set(min, (ownCost.get(min) || 0) + m);
   // This process's share of the shared view is fresh at once.
   view.costMicro += m;
@@ -261,6 +264,9 @@ export function settleFirstMeterStatus({ now = Date.now(), env = process.env } =
     shared: sharedLimitsEnabled(), lastReadAgoMs: view.readAt ? now - view.readAt : null, flips,
   };
 }
+
+/** Test seam: the minutes this process's unsettled cost is kept under. */
+export function _ownCostMinutesForTest() { return ownCost.size; }
 
 /** Test seam. */
 export function _resetSettleFirstMeterForTest() {

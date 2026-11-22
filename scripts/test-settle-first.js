@@ -49,6 +49,14 @@ const ONLY = (process.env.SETTLE_FIRST_PARTS || "1,2,3,4").split(",");
 // =============================================================================
 if (ONLY.includes("1")) {
   delete process.env.GATEWAY_SETTLE_FIRST;
+  // The meter's per-minute figures stay within its 24-hour window even when
+  // nothing ever reads them (each new minute drops the minutes past it).
+  {
+    const meter = await import("../src/settle-first-meter.js?own-minutes");
+    const T = Date.UTC(2026, 0, 1);
+    for (let h = 0; h < 72; h++) for (let q = 0; q < 60; q += 15) meter.noteUnsettledRunCost(0.001, T + h * 3_600_000 + q * 60_000);
+    await ok(meter._ownCostMinutesForTest() <= 24 * 4 + 1, `the meter keeps only its window's minutes when never read (${meter._ownCostMinutesForTest()} minutes after 72 hours of writes)`);
+  }
   const b = await import("../src/gateway-settle-breaker.js");
   const { settleReceiptHeaderGuard } = await import("../src/facilitator-diagnostics.js");
   const { COVER_STATE } = await import("../src/inflight-cover-state.js");

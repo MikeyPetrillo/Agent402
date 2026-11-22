@@ -139,5 +139,35 @@ if (store) {
   delete process.env.EVM_ACTIVITY_STORE;
 }
 
+// A flush compacts and writes one key's state per turn of the event loop: a
+// flush of many large states (the drain's flush of up to 100) never holds
+// the loop for all of them at once. A compact that takes COMPACT_MS a key,
+// KEYS keys: the longest turn stays near one key's, where compacting the
+// whole batch before the first write held the loop for all of them.
+{
+  const { createScanStateStore } = await import("../src/scan-state-store.js");
+  const COMPACT_MS = 25, KEYS = 12;
+  process.env.SCAN_TURNS_FILE = join(dir, "scan-turns.json");
+  const busy = (ms) => { const end = performance.now() + ms; while (performance.now() < end) { /* a large state's compaction */ } };
+  const s = createScanStateStore({
+    name: "scan-turns", collection: "scan-turns",
+    env: { file: "SCAN_TURNS_FILE", enabled: "SCAN_TURNS_STORE", maxWallets: "SCAN_TURNS_MAX", flushMs: "SCAN_TURNS_FLUSH_MS" },
+    keyOk: (k) => typeof k === "string" && k.length > 0,
+    compact: (st) => { busy(COMPACT_MS); return { at: Date.now(), n: st.n }; },
+    expand: (b) => (b && typeof b === "object" && Number.isInteger(b.n) ? { n: b.n } : null),
+  });
+  for (let i = 0; i < KEYS; i++) s.note(`k${i}`, { n: i });
+  let longest = 0, last = performance.now();
+  const mon = setInterval(() => { const t = performance.now(); longest = Math.max(longest, t - last); last = t; }, 1);
+  await new Promise((r) => setTimeout(r, 20));
+  longest = 0; last = performance.now();
+  const r = await s.flush({ max: 100 });
+  await new Promise((r2) => setTimeout(r2, 20));
+  clearInterval(mon);
+  ok(r.written === KEYS && (await s.load("k7"))?.n === 7, `the flush writes every waiting key (${r.written} of ${KEYS})`);
+  ok(longest < 3 * COMPACT_MS, `the longest event-loop turn of the flush is about one key's compaction (${Math.round(longest)} ms; ${KEYS} keys x ${COMPACT_MS} ms each)`);
+  s.reset();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

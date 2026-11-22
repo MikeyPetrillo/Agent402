@@ -18,7 +18,15 @@
 //      claim, no recorded sale, the transaction's claim) and served as
 //      settled before the facilitator answers. While that claim is being
 //      taken nothing else decides the settle, so a transfer this request
-//      claimed is always the one it serves.
+//      claimed is always the one it serves. The reads are bounded per
+//      network, whatever the number of settles hung on it: the head is read
+//      once per `checkEveryMs` for every settle watching that network (one
+//      read in flight, shared), at most SETTLE_CHAIN_CHECK_MAX_PER_NETWORK
+//      (default 4) log reads run at once on a network (a settle with no slot
+//      waits for its next turn), a settle's checks back off after each miss
+//      (`checkEveryMs`, then twice that, up to 8 s), and a head that cannot be
+//      read skips the log read. Nothing here decides a buyer's answer: the
+//      facilitator's answer and the cap do whenever the chain is not read.
 //   2. Slow-primary switch. Each facilitator's own /settle time is measured
 //      per network, from the call to its answer. A settle is SLOW when it
 //      takes longer than `slowMs`, or has not answered by the cap. After
@@ -211,7 +219,7 @@ export function slowPrimaryList(now = Date.now()) {
 }
 
 /** Test seam. */
-export function _resetSettleDeadlines() { slow.clear(); parsed = { raw: undefined, off: false, rows: {} }; }
+export function _resetSettleDeadlines() { slow.clear(); heads.clear(); checking.clear(); parsed = { raw: undefined, off: false, rows: {} }; }
 
 // ---- the stop the settle-failure hook answers as unconfirmed ---------------------
 const STOPS = new WeakMap(); // error -> { kind: "cap" | "fallback", via }
@@ -250,12 +258,42 @@ export function noteSettleContext(ctx) {
   if (p && typeof p === "object") contexts.set(p, ctx);
 }
 
-// Bounded by the cap; a settle in flight keeps the process up as any request does.
-const sleep = (ms) => new Promise((r) => { setTimeout(r, Math.max(0, ms)); });
+// ---- the chain check's reads, per network ----------------------------------------
+/** The longest a settle's chain check waits between two reads after misses. */
+export const CHAIN_CHECK_BACKOFF_MAX_MS = 8000;
+/** SETTLE_CHAIN_CHECK_MAX_PER_NETWORK: log reads at once on one network (default 4, at most 64). */
+export function chainCheckMaxPerNetwork(env = process.env) {
+  const n = Number(String(env?.SETTLE_CHAIN_CHECK_MAX_PER_NETWORK ?? "").trim() || NaN);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 64) : 4;
+}
+/** The wait before a settle's next chain read after `misses` reads that did not prove it. */
+export function chainCheckDelayMs(row, misses) {
+  const every = Math.max(1, Number(row?.checkEveryMs) || 1000);
+  return Math.min(Math.max(every, CHAIN_CHECK_BACKOFF_MAX_MS), every * 2 ** Math.min(16, Math.max(0, misses - 1)));
+}
+// network -> { at, head, promise }: the head every watching settle reads.
+const heads = new Map();
+// network -> log reads in flight.
+const checking = new Map();
+function sharedHead(network, everyMs, readHead, now) {
+  const h = heads.get(network);
+  if (h && (h.promise || now() - h.at < everyMs)) return h.promise || Promise.resolve(h.head);
+  const entry = { at: now(), head: null, promise: null };
+  entry.promise = Promise.resolve()
+    .then(() => readHead(network))
+    .then((v) => (Number.isSafeInteger(v) && v >= 0 ? v : null), () => null)
+    .then((v) => { entry.head = v; entry.at = now(); entry.promise = null; return v; });
+  heads.set(network, entry);
+  return entry.promise;
+}
 
 async function defaultProve(args) {
   const { proveAuthorizationSettled } = await import("./settle-onchain-proof.js");
   return proveAuthorizationSettled(args);
+}
+async function defaultReadHead(network, rpcFor) {
+  const { readChainHead } = await import("./settle-onchain-proof.js");
+  return readChainHead({ network, rpcFor });
 }
 async function defaultRecover(ctx, opts) {
   const { recoverAlreadyOnChain } = await import("./settle-onchain-proof.js");
@@ -268,12 +306,12 @@ async function defaultRecover(ctx, opts) {
  * network's settle-fallback candidates ([{ name, client, own? }]), read only
  * while the primary is marked slow on a network that switches;
  * `isPreBroadcast(err)` is the fallback chain's own classifier; `exclude`
- * leaves a payment out (a batched one). `prove`, `recover` and `now` are
- * test seams.
+ * leaves a payment out (a batched one). `prove`, `recover`, `readHead` and
+ * `now` are test seams.
  */
 export function withSettleDeadline(client, {
   labelOf = () => "primary", alternatesFor = () => [], isPreBroadcast = () => false, exclude = () => false,
-  prove = defaultProve, recover = defaultRecover, rpcFor = evmRpcFor, noteAsked = () => {},
+  prove = defaultProve, recover = defaultRecover, rpcFor = evmRpcFor, readHead = (network) => defaultReadHead(network, rpcFor), noteAsked = () => {},
   now = () => Date.now(), log = console.warn, env = process.env,
 } = {}) {
   if (!client || typeof client.settle !== "function" || client.settle.__a402Deadline) return client;
@@ -326,6 +364,10 @@ export function withSettleDeadline(client, {
 
     const outcome = await new Promise((resolve) => {
       let decided = false, claiming = false, held = null;
+      // The chain check's wait, ended at once when the settle is decided, so
+      // nothing holds this request after it answers.
+      let waiting = null;
+      const wait = (ms) => new Promise((r) => { waiting = { r, timer: setTimeout(() => { waiting = null; r(); }, Math.max(0, ms)) }; });
       const decide = (o) => {
         if (decided) return;
         // A transfer being claimed for this request decides first: once it
@@ -333,24 +375,38 @@ export function withSettleDeadline(client, {
         if (claiming && o.kind !== "chain") { held ||= o; return; }
         decided = true;
         clearTimeout(capTimer);
+        if (waiting) { clearTimeout(waiting.timer); const w = waiting.r; waiting = null; w(); }
         resolve(o);
       };
       facilitatorSide().then((r) => decide({ kind: "answer", r }), (e) => decide({ kind: "error", e }));
       const capTimer = setTimeout(() => decide({ kind: "cap" }), Math.max(0, row.capMs - (now() - t0)));
       const ctx = contexts.get(payload);
       if (!ctx) return;
+      const maxChecks = chainCheckMaxPerNetwork(env);
       void (async () => {
-        await sleep(row.checkAfterMs - (now() - t0));
+        await wait(row.checkAfterMs - (now() - t0));
+        let misses = 0;
         while (!decided) {
           const left = row.capMs - (now() - t0);
           if (left <= 0) return;
-          let proof = null;
-          try {
-            proof = await prove({
-              paymentPayload: payload, requirements, rpcFor, notBeforeMs: seenAtOf(ctx),
-              pollDelaysMs: [0], deadlineMs: Math.max(500, Math.min(4000, left)), callTimeoutMs: Math.max(500, Math.min(2000, left)),
-            });
-          } catch { proof = { proven: false, unread: true }; }
+          let proof = { proven: false, unread: true };
+          const head = await sharedHead(network, row.checkEveryMs, readHead, now);
+          if (decided) return;
+          // No head (the RPC is not answering) or no free slot on this
+          // network: no log read this turn.
+          if (head !== null && (checking.get(network) || 0) < maxChecks) {
+            checking.set(network, (checking.get(network) || 0) + 1);
+            try {
+              proof = await prove({
+                paymentPayload: payload, requirements, rpcFor, notBeforeMs: seenAtOf(ctx), head,
+                pollDelaysMs: [0], deadlineMs: Math.max(500, Math.min(4000, left)), callTimeoutMs: Math.max(500, Math.min(2000, left)),
+              });
+            } catch { proof = { proven: false, unread: true }; }
+            finally {
+              const n = (checking.get(network) || 1) - 1;
+              if (n > 0) checking.set(network, n); else checking.delete(network);
+            }
+          }
           if (decided) return;
           if (proof?.proven === true) {
             claiming = true;
@@ -365,7 +421,8 @@ export function withSettleDeadline(client, {
           // (reverted, short, sent elsewhere, mined before this request):
           // reading again cannot change it.
           if (proof?.unread !== true) return;
-          await sleep(row.checkEveryMs);
+          misses++;
+          await wait(chainCheckDelayMs(row, misses));
         }
       })().catch(() => {});
     });
