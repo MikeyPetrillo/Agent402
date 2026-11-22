@@ -27,6 +27,8 @@ Payments:
 Tools:
 - When the access-key check, Office, image, HTML or PDF queues are full of
   one caller's work, a call from someone else still gets a place.
+- feed-parse and xml-to-json parse in an isolated worker, so a large feed or
+  XML document no longer holds other requests.
 
 ### 2026-11-22 (price webhook notices, the seller manifest and a retirement)
 Tools:

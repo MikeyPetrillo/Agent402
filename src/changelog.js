@@ -50,6 +50,7 @@ const ENTRIES = [
       "Payments: A card payment whose capture Stripe answers from an earlier request's record is reported as not confirmed and reviewed, never as uncharged.",
       "Payments: Card captures that Stripe has not confirmed are read back automatically and closed once Stripe settles them.",
       "Tools: When the access-key check, Office, image, HTML or PDF queues are full of one caller's work, a call from someone else still gets a place.",
+      "Tools: feed-parse and xml-to-json parse in an isolated worker, so a large feed or XML document no longer holds other requests.",
     ],
   },
   {
