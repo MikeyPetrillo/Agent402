@@ -22,14 +22,15 @@
 //     a failed decode, a deadline, a turn given up, a caller that left)
 //     counts `unpaidWeight` times, so that caller's next call stands behind
 //     the calls other callers send in the meantime. The weighted time is
-//     written under the caller's OWN key only (its first: the wallet, credits
-//     key or Tempo sender it paid with; the address only for a caller that
-//     names nothing else) and read only by calls whose own key it is; every
+//     written only under an identity that belongs to that caller alone (its
+//     first key when that is the signed payer, a credits key or a Tempo
+//     sender: OWN_IDENTITY) and read only by calls whose own key it is; every
 //     other key it carries, the shared client address included, takes the
-//     plain engine time. So a wallet still cannot gain turns by changing
-//     address, and another payer behind the same address never stands behind
-//     what someone else left unanswered. Nobody is refused for it: with no
-//     one else waiting, the call runs at once.
+//     plain engine time. A caller that names none of those (its first key is
+//     its address) gets the plain time alone, under every key. So a wallet
+//     still cannot gain turns by changing address, and no caller behind an
+//     address ever stands behind what someone else left unanswered. Nobody
+//     is refused for it: with no one else waiting, the call runs at once.
 // A call never loses its place to one that arrives later, so no stream of
 // new callers can keep it waiting: what is ahead of it is what was there
 // when it came.
@@ -90,6 +91,10 @@ import { createCallerPlaces, placeKeysOf } from "./caller-places.js";
 import { IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "./dispatch-caller.js";
 
 const SHARED_KEYS = new Set([IN_PROCESS_CALLER, ANONYMOUS_CALLER]);
+/** The keys src/dispatch-caller.js gives an identity of one caller's own (the
+ *  signed payer, a credits key, a Tempo sender); an `ip:` key is shared by
+ *  everyone behind that address. */
+const OWN_IDENTITY = /^(?:payer|credits|tempo):/;
 
 /** Why a call got no turn: "own" (the room is full and its caller already
  *  holds a place), "full" (the room is at its hard bound and nobody gives
@@ -245,9 +250,10 @@ export function createCallerTurns({
         turn.done = true;
         const t = now();
         const held = Math.max(0, t - turn.startedAt);
-        // The weighted time goes under the caller's own key alone, and never
-        // under a key every request-less or anonymous call shares.
-        const own = unpaid && !SHARED_KEYS.has(turn.own) ? turn.own : null;
+        // The weighted time goes under the caller's own identity alone, and
+        // never under a key others share (an address, the request-less or
+        // anonymous key).
+        const own = unpaid && OWN_IDENTITY.test(turn.own) ? turn.own : null;
         note(turn.keys, t, turn.startedAt + held, own, own ? turn.startedAt + held * unpaidWeight : 0);
         places.free(turn.keys);
         if (running.get(turn.lane) === turn) running.delete(turn.lane);

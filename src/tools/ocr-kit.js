@@ -479,7 +479,10 @@ export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OU
 // Every one of those answers is uncharged, so the engine time such an image
 // held (and a body that did not decode) counts OCR_UNPAID_WEIGHT times
 // against its caller's place in line: a caller whose images fail, run out of
-// time or are abandoned stands behind what other callers send meanwhile.
+// time or are abandoned stands behind what other callers send meanwhile. That
+// weight is kept only on an identity of the caller's own (the signed payer, a
+// credits key, a Tempo sender); a caller that names none takes its plain
+// engine time, so nobody behind a shared address waits for another's image.
 //
 // So an image waits, for each caller that stood ahead of it when it arrived,
 // at most OCR_TURN_MS plus the engine's retirement when that caller has used

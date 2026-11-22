@@ -561,6 +561,16 @@ async function call(input) {
       ok(unsigned === "next,c", `so does an unsigned caller at that address (${unsigned})`);
       const moved = await nextOf(payer(13, Y), payer(13, "198.51.100.121"));
       ok(moved === "c,next", `control: the wallet itself, from another address, still stands behind (${moved})`);
+      // A caller that names no wallet has nothing of its own to weigh: its
+      // address is shared, so another unsigned caller and a signed caller
+      // there keep their arrival order after its image is left unanswered.
+      const Z = "198.51.100.130";
+      const unsignedNext = await nextOf([`ip:${Z}`], [`ip:${Z}`]);
+      ok(unsignedNext === "next,c", `another unsigned caller behind the address of an unsigned caller whose image left the engine unanswered keeps its arrival order (${unsignedNext})`);
+      const signedNext = await nextOf([`ip:${Z}`], payer(14, Z));
+      ok(signedNext === "next,c", `so does a signed caller at that address (${signedNext})`);
+      const selfNext = await nextOf(payer(15, Z), payer(15, Z));
+      ok(selfNext === "c,next", `control: a signed caller whose image left the engine unanswered still stands behind, from the same address (${selfNext})`);
     }
     // A call that waited out its time keeps its place in line for its retry.
     {
@@ -1201,9 +1211,9 @@ async function call(input) {
     const restore = L.limits({ turnMs: 150, waitMs: 2_000, runMaxMs: 5_000, retireMs: 200 });
     const big = pngHead(4100, 4100).toString("base64");
     /** A request whose connection can be closed before any answer. */
-    const live = (ip) => {
+    const live = (ip, extra = {}) => {
       const res = Object.assign(new EventEmitter(), { headersSent: false, destroyed: false, writableEnded: false });
-      const req = { headers: {}, ip, res, socket: { destroyed: false } };
+      const req = { headers: {}, ip, res, socket: { destroyed: false }, ...extra };
       return { req, close: () => { res.destroyed = true; req.socket.destroyed = true; res.emit("close"); } };
     };
     // A waiting call whose caller leaves gives up its place at once.
@@ -1221,10 +1231,12 @@ async function call(input) {
     // engine terminated, the turn passed on.
     let terminated = 0;
     __ocrTest.inject("tur", { recognize: () => new Promise(() => {}), terminate: async () => { terminated++; } });
-    const runner = live("203.0.113.42");
+    // The caller names a key of its own (a credits key here), since only an
+    // identity of its own carries the weight below.
+    const runner = live("203.0.113.42", { creditsKeyId: "k42" });
     const ran = ocr.handler({ image: big, lang: "tur" }, runner.req).then(() => null, (e) => e);
     await sleep(60);
-    ok(L.state().busy && L.state().holder === "ip:203.0.113.42", "an image is in the engine");
+    ok(L.state().busy && L.state().holder === "credits:k42", "an image is in the engine");
     const t0 = Date.now();
     runner.close();
     const ranErr = await settledWithin(ran, 500);
@@ -1235,30 +1247,30 @@ async function call(input) {
       const z = await L.acquire(50, "ip:203.0.113.43");
       const order = [];
       __ocrTest.inject("tur", { recognize: async () => { order.push(L.state().holder); return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
-      const again = ocr.handler({ image: big, lang: "tur" }, { headers: {}, ip: "203.0.113.42" }).catch(() => {});
+      const again = ocr.handler({ image: big, lang: "tur" }, { headers: {}, ip: "203.0.113.42", creditsKeyId: "k42" }).catch(() => {});
       await sleep(20);
       const other = ocr.handler({ image: big, lang: "tur" }, { headers: {}, ip: "203.0.113.44" }).catch(() => {});
       await sleep(10);
       z();
       await Promise.all([again, other]);
-      ok(order.join() === "ip:203.0.113.44,ip:203.0.113.42", `the caller that abandoned an image stands behind a caller that arrives after it (${order.join()})`);
+      ok(order.join() === "ip:203.0.113.44,credits:k42", `the caller that abandoned an image stands behind a caller that arrives after it (${order.join()})`);
     }
     // A body that does not decode frees its turn the same way and counts the same.
     {
       L.reset();
       __ocrTest.inject("tur", { recognize: () => new Promise((_, reject) => setTimeout(() => reject("Error: Error attempting to read image."), 60)), terminate: async () => {} });
-      const failed = await ocr.handler({ image: big, lang: "tur" }, { headers: {}, ip: "203.0.113.45" }).then(() => null, (e) => e);
+      const failed = await ocr.handler({ image: big, lang: "tur" }, { headers: {}, ip: "203.0.113.45", creditsKeyId: "k45" }).then(() => null, (e) => e);
       ok(failed?.statusCode === 422 && failed.hint === "image-decode-failed" && !L.state().busy && L.state().callers === 0, `a body that does not decode is a 422 and frees its turn (${failed?.statusCode})`);
       const z = await L.acquire(50, "ip:203.0.113.46");
       const order = [];
       __ocrTest.inject("tur", { recognize: async () => { order.push(L.state().holder); return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
-      const again = ocr.handler({ image: big, lang: "tur" }, { headers: {}, ip: "203.0.113.45" }).catch(() => {});
+      const again = ocr.handler({ image: big, lang: "tur" }, { headers: {}, ip: "203.0.113.45", creditsKeyId: "k45" }).catch(() => {});
       await sleep(20);
       const other = ocr.handler({ image: big, lang: "tur" }, { headers: {}, ip: "203.0.113.47" }).catch(() => {});
       await sleep(10);
       z();
       await Promise.all([again, other]);
-      ok(order.join() === "ip:203.0.113.47,ip:203.0.113.45", `the caller whose body did not decode stands behind a caller that arrives after it (${order.join()})`);
+      ok(order.join() === "ip:203.0.113.47,credits:k45", `the caller whose body did not decode stands behind a caller that arrives after it (${order.join()})`);
     }
     restore();
     ok(!L.state().busy && L.state().callers === 0, "every place is released after the abandoned and failing cases");

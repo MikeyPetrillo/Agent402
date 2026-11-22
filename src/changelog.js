@@ -67,7 +67,7 @@ const ENTRIES = [
     title: "image-ocr turns, replay marks and Solana sales",
     items: [
       "Tools: `image-ocr` reads images in turn across callers, each within a set time. A caller's first image is read to the end even while others wait; a call that waits out its time in line answers 503 with a Retry-After and keeps its place for its retry; and an image that cannot be read in time answers 422 with a note to downscale it.",
-      "Tools: A caller whose `image-ocr` call ended without an answer stands further back for its next one; that weight is kept on the wallet it paid with (or its address when it names none), so other payers behind the same address keep their place.",
+      "Tools: A caller whose `image-ocr` call ended without an answer stands further back for its next one; that weight is kept on the wallet it paid with (a caller that names no wallet takes no extra weight), so other callers behind the same address keep their place.",
       "Tools: A freed audio decode slot goes to the waiting caller that holds the fewest places, first come among equals, and wallets paying from one address take their turn as one caller.",
       "Tools: When the `image-ocr` line or the audio decode queue is full, the caller that already has a call running or waiting there is the one answered busy, and a caller with none is still queued, up to a larger bound set by the memory the waiting calls may hold.",
       "Payments: A settled payment's replay mark is kept about an hour after the call, or until the authorization's own validBefore plus 10 minutes when that is later, however far out that is (it was at most 30 days after the call). /privacy and the dataHandling list on /.well-known/x402 state the hold.",
