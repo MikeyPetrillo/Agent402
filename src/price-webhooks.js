@@ -54,13 +54,19 @@
 // never delivered to in between. From PRICE_WEBHOOK_MAX on, a new registration first removes the
 // subscriptions whose last delivery was dropped after every attempt (the most
 // failures first, then the oldest) and is admitted all the same. At twice that
-// number, the hard bound, a new registration is still admitted: room is made
-// by removing, in order, the subscriptions with the most dropped deliveries,
-// then those whose current delivery is failing, then the one whose last
-// delivery a receiver answered 2xx longest ago (one never delivered to counts
-// from its registration); a registration whose call has not settled goes
-// last. A new registration is never refused for room, and never removed to
-// make room for the one after it before anything older.
+// number, the hard bound, room is made only from failing subscriptions: the
+// most dropped deliveries first, then those whose current delivery is failing.
+// A working subscription (its last attempt answered 2xx, or none failed yet)
+// and a registration whose call has not settled are never removed for room.
+// When nothing failing is left to remove, the new registration is refused
+// with 503 and Retry-After, inside the handler (so before any settlement:
+// not charged on x402, MPP evm, card or credits; a Tempo push transfer is
+// final before the call and is booked as owed) and before anything is stored
+// for it. The default
+// (6,000, so 12,000 kept at most) is sized to memory: a subscription at the
+// largest a registration allows (a 2,048-character URL, 50 slugs) holds about
+// 2.7 KB in memory, so the hard bound holds about 32 MB at worst, and a
+// typical one (a short URL, every tool) about 0.3 KB, about 4 MB in all.
 //
 // OUTBOUND RULES. Every delivery goes through the fetch guard
 // (src/tools/fetch-guard.js probePublicUrl): the host is resolved and refused
@@ -147,7 +153,9 @@ const PROVEN_REGISTRANT_RE = /^(?:payer|credits|tempo|svm|avm|stellar):./;
 
 const envInt = (name, dflt, env = process.env) => { const n = Number(env[name]); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : dflt; };
 /** Where room is first made (failing subscriptions go); the hard bound is twice this. */
-export const maxSubscriptions = (env = process.env) => envInt("PRICE_WEBHOOK_MAX", 5000, env);
+export const maxSubscriptions = (env = process.env) => envInt("PRICE_WEBHOOK_MAX", 6000, env);
+/** What a registration refused at the hard bound tells the caller to wait, in seconds. */
+export const FULL_RETRY_AFTER_SECONDS = 3600;
 export const hardMaxSubscriptions = (env = process.env) => 2 * maxSubscriptions(env);
 export const maxPerRegistrant = (env = process.env) => envInt("PRICE_WEBHOOK_MAX_PER_PAYER", 25, env);
 export const lifetimeMs = (env = process.env) => envInt("PRICE_WEBHOOK_LIFETIME_DAYS", 90, env) * DAY_MS;
@@ -307,8 +315,8 @@ export function createPriceWebhooks({
   if (!doc) throw new Error("createPriceWebhooks needs a document");
   let processKey = null; // only for a documentation host's answer when no signing key is set
   let turning = false; // a delivery turn is under way in this process
-  let saidFullAt = -Infinity; // when the hard bound was last logged (one line an hour)
-  const counts = { delivered: 0, retried: 0, dropped: 0, removedOn410: 0, expired: 0, unsettled: 0, removedForRoom: 0, removedOldest: 0, refusedOwn: 0, removalsHeld: 0 };
+  let saidFullAt = -Infinity; // when a refusal at the hard bound was last logged (one line an hour)
+  const counts = { delivered: 0, retried: 0, dropped: 0, removedOn410: 0, expired: 0, unsettled: 0, removedForRoom: 0, refusedOwn: 0, refusedFull: 0, removalsHeld: 0 };
 
   const describe = (id, sub, key) => ({
     id,
@@ -378,28 +386,23 @@ export function createPriceWebhooks({
     return gone;
   }
 
-  /** Make room at the hard bound, so a new registration is never refused: the
-   *  most dropped deliveries first, then a delivery failing now, then the
-   *  longest since a receiver last answered 2xx (registration time when it
-   *  never has); a registration whose call has not settled goes last. Removed
-   *  healthy subscriptions are counted apart from failing ones. */
-  function removeOldest(body, want, tally) {
+  /** Make room at the hard bound from failing subscriptions only: the most
+   *  dropped deliveries first, then the most attempts failing now, then the
+   *  oldest. A working subscription and a registration whose call has not
+   *  settled are never removed. Returns how many went. */
+  function removeFailingAtBound(body, want, tally) {
     if (want <= 0) return 0;
-    const lastGood = (s) => Number(s.ok) || Number(s.at) || 0;
-    const ranked = Object.entries(body.subs).sort(([, a], [, b]) =>
-      ((a.pending ? 1 : 0) - (b.pending ? 1 : 0))
-      || ((Number(b.fails) || 0) - (Number(a.fails) || 0))
-      || ((Number(b.miss) || 0) - (Number(a.miss) || 0))
-      || (lastGood(a) - lastGood(b)));
+    const failing = Object.entries(body.subs).filter(([, s]) => !s.pending && (Number(s.fails) >= 1 || Number(s.miss) >= 1))
+      .sort(([, a], [, b]) => ((Number(b.fails) || 0) - (Number(a.fails) || 0))
+        || ((Number(b.miss) || 0) - (Number(a.miss) || 0))
+        || ((Number(a.at) || 0) - (Number(b.at) || 0)));
     let gone = 0;
-    for (const [id, sub] of ranked) {
+    for (const [id] of failing) {
       if (gone >= want) break;
-      const failing = Number(sub.fails) >= 1 || Number(sub.miss) >= 1;
       delete body.subs[id];
       gone++;
-      if (failing) tally.removedForRoom++; else tally.removedOldest++;
     }
-    if (gone) body.queue = body.queue.filter((q) => body.subs[q.sub]);
+    if (gone) { body.queue = body.queue.filter((q) => body.subs[q.sub]); tally.removedForRoom += gone; }
     return gone;
   }
 
@@ -437,11 +440,11 @@ export function createPriceWebhooks({
     const renewable = who !== null && PROVEN_REGISTRANT_RE.test(who);
     const cap = maxPerRegistrant(env), soft = maxSubscriptions(env), hard = hardMaxSubscriptions(env), life = lifetimeMs(env);
     let refusal = null, placed = null;
-    const tally = { expired: 0, unsettled: 0, removedForRoom: 0, removedOldest: 0 };
+    const tally = { expired: 0, unsettled: 0, removedForRoom: 0 };
     const r = await doc.update((b) => {
       const body = bodyOf(b);
       refusal = null; placed = null;
-      tally.expired = tally.unsettled = tally.removedForRoom = tally.removedOldest = 0;
+      tally.expired = tally.unsettled = tally.removedForRoom = 0;
       const t = now();
       const swept = sweep(body, t, tally);
       const mine = owner ? Object.entries(body.subs).filter(([, s]) => s.owner === owner) : [];
@@ -460,19 +463,29 @@ export function createPriceWebhooks({
       }
       let n = Object.keys(body.subs).length;
       if (n >= soft) n -= removeFailing(body, n - soft + 1, tally);
-      if (n >= hard) n -= removeOldest(body, n - hard + 1, tally);
+      if (n >= hard) n -= removeFailingAtBound(body, n - hard + 1, tally);
+      if (n >= hard) {
+        // Nothing failing is left to remove, and a working subscription never
+        // is: this registration is refused (thrown inside the handler, so its
+        // call is never settled) and nothing is stored for it.
+        refusal = bad(`This server holds ${hard} price webhooks, the most it keeps, and none of them is failing, so this one was not registered and nothing was charged. Room opens as subscriptions expire or are removed; retry later.`, 503, { full: true, retryAfter: FULL_RETRY_AFTER_SECONDS, charged: false, shed: true });
+        return (swept || tally.removedForRoom) ? body : SKIP_UPDATE;
+      }
       const id = `pw_${randomBytes(16).toString("hex")}`;
       body.subs[id] = { url: target.url, host: target.host, slugs, at: t, exp: t + life, ...(owner ? { owner } : {}), ...(deferred ? { pending: t + PENDING_MS } : {}) };
       placed = { id, exp: t + life, renewed: false };
       return body;
     }, { fallback: emptyBody() });
     if (r?.ok) for (const k of Object.keys(tally)) counts[k] += tally[k];
-    if (r?.ok && tally.removedOldest && now() - saidFullAt >= 3_600_000) { saidFullAt = now(); log(`[price-webhooks] the store is at its hard bound (${hard} subscriptions): a registration removed the subscription delivered to longest ago; PRICE_WEBHOOK_MAX raises the bound`); }
     if (refusal) {
       if (refusal.own) counts.refusedOwn++;
+      if (refusal.full) {
+        counts.refusedFull++;
+        if (now() - saidFullAt >= 3_600_000) { saidFullAt = now(); log(`[price-webhooks] the store is at its hard bound (${hard} subscriptions) with none failing: a registration was refused before settlement; PRICE_WEBHOOK_MAX raises the bound`); }
+      }
       throw refusal;
     }
-    if (!r?.ok || !placed) throw bad("The registration could not be stored; nothing was registered.", 503, { retryAfterSeconds: 30 });
+    if (!r?.ok || !placed) throw bad("The registration could not be stored; nothing was registered.", 503, { retryAfter: 30 });
     const { id, exp, renewed } = placed;
     const answer = { ...describe(id, { url: target.url, slugs, exp }, key), registered: true, delivers: true, ...(renewed ? { renewed: true } : {}) };
     return { answer, settle: deferred ? (ok) => settleStored(id, renewed, ok === true) : async () => true };

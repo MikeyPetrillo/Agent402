@@ -16,7 +16,9 @@
 //   - a payer's own registrations past its cap are refused 409 with nothing
 //     settled, another payer registers an endpoint on the same host, and the
 //     same URL again from the same payer renews the subscription in place
-//     (and a renewal whose settlement is refused changes nothing).
+//     (and a renewal whose settlement is refused changes nothing);
+//   - at a full store with every subscription working, a registration (direct
+//     or routed) is a 503 with Retry-After, nothing settled and nothing stored.
 // Deliveries are switched off and the server may contact no host that is not
 // loopback (the rig fails the run if it tries), so nothing is ever sent.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
@@ -104,5 +106,39 @@ try {
     await ok(await eventually(() => subsFor(urlB).length === 0), `routed: a registration whose route-execute call did not settle leaves nothing stored (${JSON.stringify(subsFor(urlB))})`);
   }
   await ok(!/0x[0-9a-fA-F]{40}|payer:|svm:|tempo:/.test(JSON.stringify(Object.values(stored().subs).map((s) => s.owner))) && Object.values(stored().subs).every((s) => /^o_[0-9a-f]{32}$/.test(s.owner)), "every stored subscription names its registrant by a digest, never by its wallet");
+} finally { await rig.stop(); }
+// A full store (hard bound 2, every subscription working): a new registration
+// is refused 503 with Retry-After before any settlement, so nothing is
+// charged, nothing working is removed, and a routed registration leaves no
+// pending mark.
+const fullFile = join(dir, "price-webhooks-full.json");
+rig = await bootPaidWires({ label: "price-webhooks-paid-full", env: { PRICE_WEBHOOK_SIGNING_KEY: "a-signing-key-for-the-paid-test", PRICE_WEBHOOKS_FILE: fullFile, PRICE_WEBHOOK_DELIVERIES: "off", PRICE_WEBHOOK_MAX: "1" } });
+try {
+  const subsOf = () => { try { return JSON.parse(readFileSync(fullFile, "utf8")).subs || {}; } catch { return {}; } };
+  const held = [];
+  for (let i = 0; i < 2; i++) {
+    const w = await rig.wallet("evm");
+    const r = await rig.pay(w, route(target("9.9.9.9")));
+    await ok(r.status === 200 && rig.outcomesOf(w).settled === 1, `full store setup: registration ${i + 1} of 2 settles (${r.status})`);
+    held.push(r.json.id);
+  }
+  await ok(await eventually(() => held.every((id) => subsOf()[id] && subsOf()[id].pending === undefined)), "full store setup: both are kept, confirmed");
+  const before = JSON.stringify(subsOf());
+  const w = await rig.wallet("evm");
+  const refused = await rig.pay(w, route(target("9.9.9.9")));
+  await ok(refused.status === 503 && refused.headers.get("retry-after") === "3600" && refused.json?.charged === false && /nothing was charged/.test(refused.json?.error || "") && !/a402whsec_/.test(refused.text), `a registration at the full store is a 503 with Retry-After and charged: false (${refused.status}, Retry-After ${refused.headers.get("retry-after")}, ${refused.text.slice(0, 200)})`);
+  await ok(rig.outcomesOf(w).settled === 0, `and nothing is settled for it (${JSON.stringify(rig.outcomesOf(w))})`);
+  await sleep(150);
+  await ok(JSON.stringify(subsOf()) === before, "and no working subscription is removed and nothing is stored for it");
+  // Routed through route-execute-plus: the step is refused before anything is stored.
+  const rw = await rig.wallet("evm");
+  const urlR = target("9.9.9.9");
+  const call = rig.pay(rw, { method: "POST", path: "/api/route/execute-plus", body: { slug: "price-webhook", params: { url: urlR } } });
+  let sawPending = false;
+  const watch = (async () => { for (const t0 = Date.now(); Date.now() - t0 < 3_000;) { if (Object.values(subsOf()).some((x) => x.url === urlR)) { sawPending = true; return; } await sleep(10); } })();
+  const routed = await call;
+  await watch;
+  await ok(!sawPending && JSON.stringify(subsOf()) === before, `routed at the full store: no pending mark is ever stored for it (${routed.status}, ${routed.text.slice(0, 160)})`);
+  await ok(routed.status >= 400 && rig.outcomesOf(rw).settled === 0, `routed at the full store: the call fails and nothing is settled (${routed.status}, settle ${JSON.stringify(rig.outcomesOf(rw))})`);
 } finally { await rig.stop(); rmSync(dir, { recursive: true, force: true }); }
 console.log(`\n${pass} checks passed`);
