@@ -22,6 +22,7 @@ paths:
   - "src/solana-history-rpc.js"
   - "src/solana-activity-store.js"
   - "src/evm-activity-store.js"
+  - "src/feature-flags-railway.js"
   - "src/scan-state-store.js"
   - "src/solana-leaderboard.js"
   - "src/board-refresh-slots.js"
@@ -101,7 +102,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   keep their scan state in `src/evm-activity-store.js` (collection `evm-activity`, id
   `<chain>:<wallet>`, the file `EVM_ACTIVITY_FILE` without a database), on the same store as the
   Solana scans (`src/scan-state-store.js`: read on a wallet's first view, written by a timer under
-  the lease `evm-activity-store-flush`, 500 states, 35 days, at most `EVM_ACTIVITY_STORE_MAX_ROWS`
+  the lease `evm-activity-store-flush` every `EVM_ACTIVITY_STORE_FLUSH_MS` (default 60000, at least
+  1000), `EVM_ACTIVITY_STORE_MAX_WALLETS` states (default 500, at most 5000; the least recently
+  written dropped first), 35 days, at most `EVM_ACTIVITY_STORE_MAX_ROWS`
   rows a state, row ids kept only four resume overlaps below the newest block); a first view after
   a restart is the resumed scan's answer. The live revenue view's window scans (`recentInbound`,
   a rail the revenue ledger holds no rows for) keep each rail's head, covered range and up to 32
@@ -120,6 +123,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   such a row would stay void and its buyer never be repaid. Everything else the batch keeps
   (the log cache's version 2 meta, the settle-first meter and breaker keys in Redis, idempotency
   credits, the `revenue-window-scan` document) is discarded or expires unread by an older build.
+- **Runtime switches from Railway flags:** `FEATURE_FLAGS_RAILWAY_TOKEN` (unset by default; a
+  Railway project token, a credential set on the host) makes
+  `src/feature-flags-railway.js` sync the project's boolean flags at boot (5 s limit) and register
+  them as the provider `src/feature-flags.js` reads first; a declared switch is the flag of the same
+  name in lower case with hyphens. A flag that is missing, not boolean, unsynced or stale falls
+  through to the variable, then the default. Unset, nothing is loaded and every switch reads as
+  before. A dedicated variable, so a shell holding a Railway token for other work never turns it on.
 - **Upstream budgets' day:** `upstreamBudgets` is built from the UTC day's count across deploys
   and replicas: each process adds its new calls to a shared daily counter per budget every
   `UPSTREAM_BUDGET_SYNC_MS` (default 15000) and reads the total back, and a budget whose host has

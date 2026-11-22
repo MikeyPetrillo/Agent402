@@ -65,4 +65,5 @@ Loaded when an edge, job or fetch-guard file is read.
   nothing is stored. The slug is in the lasting-effect list; removal is the free
   `POST /api/price-webhook/unsubscribe`. `PRICE_WEBHOOK_DELIVERIES` is a runtime switch
   (`src/feature-flags.js`: a flag provider when one is registered, else the variable, else the declared
-  default). Suite: `scripts/test-price-webhooks.js`.
+  default; the provider is Railway's flags while `FEATURE_FLAGS_RAILWAY_TOKEN` is set, unset by default,
+  `.claude/rules/ops.md`). Suite: `scripts/test-price-webhooks.js`.
