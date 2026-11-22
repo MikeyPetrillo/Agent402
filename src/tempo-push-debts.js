@@ -17,6 +17,8 @@
 //     a 402. Our own synthetic traffic is booked (flagged) but not counted.
 // Every write is keyed on the transaction hash, so a repeat books nothing new.
 
+import { settleFirstResendHeldFrom } from "./settle-first.js";
+
 /** The clause a "refused before any payment was taken" line carries where a
  *  Tempo push credential can reach the route: its transfer is final before
  *  the call, so such a refusal books the transfer as owed instead. Read by

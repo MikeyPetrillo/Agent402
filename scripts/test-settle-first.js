@@ -409,6 +409,27 @@ if (ONLY.includes("1")) {
     await ok(job.includes(body.SETTLED_FIRST_FAILURE_NOTE) && !/Tempo/.test(job) && !/Nothing was charged/.test(job) && pushJob.includes(PUSH_FAILURE_NOTE) && /Nothing was charged\./.test(plain),
       `a failed job's summary says the payment settled before the run is owed back; a Tempo push failure and an uncharged failure keep their words (${job})`);
   }
+  // ---- a resend's hold whose run never ended is owed again (the held sweep) ----
+  {
+    const { createHeldClaimSweep } = await import("../src/tempo-push-debts.js");
+    const { settleFirstResendHeldFrom } = await import("../src/settle-first.js");
+    const NOW = Date.parse("2026-11-21T12:00:00Z");
+    const note = "settle-first-failed: answer http 502";
+    const held = (ev, mins, n = note) => ({ evidence: ev, network: "eip155:8453", status: "void", note: `${n}; resend of the same payment: running [attempt 0a1b2c3d]`, resolvedAt: NOW - mins * 60_000 });
+    const rows = [held("0xold", 45), held("0xyoung", 5), held("0xserved", 45), held("0xother", 45, "held for review")];
+    const reopened = [], renoted = [];
+    const sweep = createHeldClaimSweep({
+      listVoid: async () => rows, now: () => NOW, maxAgeMs: 30 * 60_000, log: () => {},
+      saleFor: async (tx) => (tx === "0xserved" ? { tx } : null),
+      reopenHeld: async (ev, o) => { reopened.push([ev, o.note, o.held]); return true; },
+      renoteVoid: async (ev, from, to) => { renoted.push([ev, to]); return true; },
+    });
+    const out = await sweep.sweep();
+    await ok(settleFirstResendHeldFrom(rows[0]) === note && settleFirstResendHeldFrom(rows[3]) === null && settleFirstResendHeldFrom({ ...rows[0], status: "owed" }) === null
+      && reopened.length === 1 && reopened[0][0] === "0xold" && reopened[0][1] === note && renoted.length === 1 && renoted[0][0] === "0xserved" && /served on the resend/.test(renoted[0][1]) && out.reopened === 1 && out.served === 1,
+      `a debt held for its payment's resend whose run never ended is owed again under its class after the hold's age; one whose sale is on the books is noted served; a young hold and another class are left (${JSON.stringify({ reopened, renoted })})`);
+  }
+
   // ---- the scheduled refund repays this class only (scripts/refund-run.js) ----
   {
     const rr = await import("./refund-run.js");

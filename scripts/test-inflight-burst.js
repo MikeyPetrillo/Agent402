@@ -525,13 +525,9 @@ try {
     const c0 = rig.st.completions;
     const rs = await rig.burst(w, CHAT, 40);
     const o = rig.outcomesOf(w);
-    // The allowance admits four. On an x402 exact wire a wallet with no paid
-    // sale on the books then has each payment settled before the model is
-    // called (src/settle-first.js): the one the wallet can pay for reaches
-    // the model, the other three are answered 402 with no model call. A
-    // Tempo pull is settled after its handler, so all four reach the model.
-    const reached = rig.st.completions - c0;
-    await ok(reached === (wire === "tempo" ? UNREAD_MAX : 1) && o.settled === 1 && tallyOf(rs)[429] === 40 - UNREAD_MAX, `${wire}: a wallet that has never settled, holding one price, balance unreadable: of 40 chat calls at once the allowance admits ${UNREAD_MAX}, ${reached} reached the model, one settled, the rest refused before the handler (${JSON.stringify(tallyOf(rs))})`);
+    // Under the settle-first budget every run is served first, as before
+    // (src/settle-first-meter.js): all four admitted runs reach the model.
+    await ok(rig.st.completions - c0 === UNREAD_MAX && o.settled === 1 && tallyOf(rs)[429] === 40 - UNREAD_MAX, `${wire}: a wallet that has never settled, holding one price, balance unreadable: 40 chat calls at once reached the model ${rig.st.completions - c0} times (the allowance of ${UNREAD_MAX}), one settled, the rest refused before the handler (${JSON.stringify(tallyOf(rs))})`);
   }
   for (const wire of ["evm", "stellar"]) {
     // A paid record, ONE price left, unreadable: the paid allowance, not an open door.

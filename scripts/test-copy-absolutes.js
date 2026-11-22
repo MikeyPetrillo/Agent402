@@ -1142,7 +1142,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       }
     }
   }
-  ok(fam.FAILED_CALL_SENTENCE.startsWith("A paid call that fails is not charged, except when this server is protecting itself from unpaid runs") && /sending the same payment again runs it at no further charge/.test(fam.SETTLE_FIRST_SENTENCE) && /or the amount is refunded/.test(fam.SETTLE_FIRST_SENTENCE) && fam.SETTLE_FIRST_SENTENCE.includes(fam.SETTLE_FIRST_MARK),
+  ok(fam.FAILED_CALL_SENTENCE.startsWith("A paid call over x402 that fails is not charged, except when this server is protecting itself from unpaid runs") && /sending the same payment again runs it at no further charge/.test(fam.SETTLE_FIRST_SENTENCE) && /or the amount is refunded/.test(fam.SETTLE_FIRST_SENTENCE) && fam.SETTLE_FIRST_SENTENCE.includes(fam.SETTLE_FIRST_MARK),
     "the shared sentence says when, whose call, that it may be settled before it runs, and what a failure gets: the same payment again, or a refund");
   ok(claims >= 40, `the failed-call not-charged claim is found where it is made (${claims} places)`);
   ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
