@@ -1122,7 +1122,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "src/ledger-catalog.js", "src/discovery.js", "src/async-jobs.js", "src/mcp-tasks.js", "src/what-is-mpp.js"]);
   const carries = (near) => near.includes(fam.SETTLE_FIRST_MARK) || /\$\{(?:SETTLE_FIRST_|FAILED_CALL_SENTENCE)/.test(near);
   const scanned = files.filter((f) => (COPY_SURFACES.test(f) || EXTRA.has(f)) && /\.(?:md|js)$/.test(f) && !/^(?:scripts|tollbooth|adapters|openclaw|workers|services|facilitator|\.github|\.claude|examples)\//.test(f) && !/CHANGELOG/.test(f) && f !== "src/changelog.js" && f !== "CLAUDE.md");
-  let claims = 0;
+  let claims = 0, homeCard = false;
   const bare = [], drift = [];
   for (const rel of scanned) {
     const text = read(rel);
@@ -1131,6 +1131,9 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
       if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
       if (/\b[Rr]efusals? (?:are|is) free\b/.test(text.slice(Math.max(0, m.index - 120), m.index))) continue;
+      // A home card (16 words at most, test-static-pages) links to its /docs#why
+      // point, which carries the sentence (checked below).
+      if (rel === "src/why.js" && /link: \["\/docs#why-never-charged"/.test(text.slice(m.index, text.indexOf("\n", m.index)))) { homeCard = true; continue; }
       claims++;
       // A claim in a table row is carried by the sentence right under that
       // table (a markdown table, or a page module's row([...]) list).
@@ -1171,6 +1174,11 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     const claimers = tools.filter((t) => /\b(?:fail\w*|errors?)\b[^.]{0,160}\bnot charged\b/i.test(String(t.description || "")));
     const bareTools = claimers.filter((t) => !String(t.description).includes(fam.SETTLE_FIRST_MARK)).map((t) => t.slug);
     ok(tools.length >= 6 && claimers.length >= 2 && bareTools.length === 0, `every settle-first tool description that says a failure is not charged carries the settle-first sentence (${claimers.length} of ${tools.length}${bareTools.length ? `; bare: ${bareTools.join(", ")}` : ""})`);
+  }
+  {
+    const { WHY_POINTS } = await import("../src/why.js");
+    ok(homeCard && String(WHY_POINTS.find((w) => w.id === "never-charged")?.p || "").includes(fam.SETTLE_FIRST_TEXT),
+      "the never-charged home card links to its /docs#why point, which carries the settle-first sentence");
   }
   ok(claims >= 40, `the failed-call not-charged claim is found where it is made (${claims} places)`);
   ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);

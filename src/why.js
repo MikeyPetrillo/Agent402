@@ -195,7 +195,7 @@ export function whyDocsSectionHtml() {
  * from the same sources as the full rows, each linking its proof. */
 export function whyHomeClaims() {
   return [
-    { id: "never-charged", t: WHY_POINTS.find((w) => w.id === "never-charged").t, s: `An error cancels settlement; a Tempo payment sent first is recorded as a refund owed. ${SETTLE_FIRST_SENTENCE}`.trim(), link: ["/docs#why-never-charged", "how it settles"] },
+    { id: "never-charged", t: WHY_POINTS.find((w) => w.id === "never-charged").t, s: "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.", link: ["/docs#why-never-charged", "how it settles"] },
     { id: "one-key", t: "One wallet pays for all of it.", s: "500+ tools, model tiers, media and reports, each paid per call from the same wallet.", link: ["/docs#why-one-key", "what it covers"] },
     { id: "chains", t: `Pay on ${RAILS.length} chains or over MPP.`, s: "Every settled x402 call returns a receipt naming its chain transaction, or its batch transfer id.", link: ["/proof", "receipts"] },
   ];
