@@ -195,8 +195,10 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   and the Bazaar metadata are untouched outside option A. **After the settlement** a 4xx/5xx is
   booked owed (note class `settle-first-failed`) and its body restated (`src/settle-first-body.js`:
   `charged`, `refundOwed`, `retry: "same-payment"`, `transaction`, `refundStatusUrl`). **The same
-  payment sent again** (`src/idempotency.js` credit, keyed on the payment's identity, route and
-  body, bound to the payer's signature, 24 hours): the server holds the debt void
+  payment sent again** (`src/idempotency.js` credit, keyed on the payment's identity and route,
+  the body's digest kept in the record and compared only when a credit is stored, so a large body
+  with no credit is never hashed before the paywall; bound to the payer's signature, 24 hours;
+  an unspent credit is never replaced by another body's): the server holds the debt void
   (`voidOwedForServe`, note `resend of the same payment: running [attempt <8 hex>]`), marks the
   request (`settledFirstResendOf`: the paywall, the cover admission and the hang-up ticket skip it),
   runs it, and keeps the row void with the served note on a final 200 or reopens it under its class
@@ -848,7 +850,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   window; Celo's cap max(20 s, 10 blocks) and `switch` on Celo only. `SETTLE_DEADLINES` (off, or JSON per network) overrides. The chain check
   (`proveAuthorizationSettled`, then `recoverAlreadyOnChain` with that proof) serves a transfer
   proven to be this payment's before the facilitator answers; while it is claiming, no other outcome
-  decides, so a claimed transfer is always the one served. The slow record is per (network,
+  decides, so a claimed transfer is always the one served. Its reads are bounded per network
+  whatever the number of hung settles: one shared head read per check interval (handed to each
+  log read), at most `SETTLE_CHAIN_CHECK_MAX_PER_NETWORK` (default 4) log reads at once, each
+  settle backing off after a miss (checkEveryMs, doubling to 8 s), no log read while the head
+  cannot be read, and the wait cleared when the settle answers. The slow record is per (network,
   facilitator label), per process: `SETTLE_SLOW_AFTER` (default 2) slow settles in a row (over
   slowMs, or cut) mark it slow for `SETTLE_SLOW_COOLDOWN_MS` (default 600000); on a switching row
   with `PAYMENT_SETTLE_FALLBACK` on, the next settle asks that network's fallback candidates first

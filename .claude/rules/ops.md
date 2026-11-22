@@ -107,9 +107,19 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   a rail the revenue ledger holds no rows for) keep each rail's head, covered range and up to 32
   transfers in the `revenue-window-scan` document (`REVENUE_WINDOW_SCAN_FILE`) and re-read
   `WINDOW_REORG_SECONDS` (600) of blocks below the stored head. A state that does not fit is a full
-  read, logged once. `EVM_ACTIVITY_STORE=off` is the rollback. Operator view: `evmLogs.activityStore`
+  read, logged once. `EVM_ACTIVITY_STORE=off` is the rollback. A flush compacts and writes one key's
+  state per event-loop turn (the drain's flush of 100 included; `scripts/test-evm-activity-store.js`
+  bounds the longest turn). Operator view: `evmLogs.activityStore`
   and `.windowScan` on `/api/gateway-status`. What a restart reads, by caller:
   `scripts/test-evm-boot-resume.js` (and `-pg.js`) on the stub `scripts/lib/evm-rpc-stub-preload.mjs`.
+- **Rolling back past batch 2026-11-22 (batch 4):** two operator steps first, on the state
+  database. (a) `DELETE FROM records WHERE collection = 'evm-activity'`: an older build never prunes
+  those rows (up to about 420 MB at 500 wallets) and its /privacy does not name them. (b) Reopen, as
+  owed, every void refund row whose note ends `resend of the same payment: running [attempt <8 hex>]`
+  (a settle-first resend in flight): an older build's held-claim sweep reopens Tempo holds only, so
+  such a row would stay void and its buyer never be repaid. Everything else the batch keeps
+  (the log cache's version 2 meta, the settle-first meter and breaker keys in Redis, idempotency
+  credits, the `revenue-window-scan` document) is discarded or expires unread by an older build.
 - **Upstream budgets' day:** `upstreamBudgets` is built from the UTC day's count across deploys
   and replicas: each process adds its new calls to a shared daily counter per budget every
   `UPSTREAM_BUDGET_SYNC_MS` (default 15000) and reads the total back, and a budget whose host has
