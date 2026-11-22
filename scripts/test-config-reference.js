@@ -70,7 +70,7 @@ ok(dollars.length === 0, `no purpose line carries a dollar figure or an em dash$
   const surfaces = [...walkMd(join(ROOT_DIR, "wiki")), ...walkMd(join(ROOT_DIR, "docs")), join(ROOT_DIR, "CHANGELOG.md"), join(ROOT_DIR, "src", "changelog.js")];
   // The figure as a number token within 240 characters after a mention of the name.
   const figureNear = (body, n, v) => {
-    const num = new RegExp(String.raw`(?<![\d.])${v.replace(/\./g, "\\.")}(?![\d])`);
+    const num = new RegExp(String.raw`(?<![\d.])${v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\d])`);
     let i = body.indexOf(n);
     while (i !== -1) { if (num.test(body.slice(i, i + n.length + 240))) return true; i = body.indexOf(n, i + 1); }
     return false;
