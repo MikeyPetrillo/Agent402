@@ -786,6 +786,34 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   ones, and the retry-verbs note (src/tool-error-fields.js, on the 402 description, /llms-full.txt and
   /agents.md), the client README and the wiki name the reason. Late-book keys fold case only on an
   EVM chain (`latePayerKey`, `txKeyOf`): a base58 or base32 address or id is kept exactly.
+- **Per-network settle deadlines** (`src/settle-deadlines.js`, wrapped around every routing
+  facilitator client after the settle demotion, so outermost): only an EIP-3009 `exact` payment on a
+  network in its table (Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Monad, Sei; never
+  Robinhood, Ink, Arc, non-EVM, Permit2 or Gateway batched) with an RPC the late book reads, and
+  only the first settle call for a payload (the fallback chain's own calls pass through). Rows come
+  from the chain's block time (`src/chain-block-time.js`): chain check from max(2 s, 2 blocks),
+  every max(1 s, 1 block); slow over max(6 s, 4 blocks); cap max(20 s, 10 blocks); `switch` on
+  Celo only. `SETTLE_DEADLINES` (off, or JSON per network) overrides. The chain check
+  (`proveAuthorizationSettled`, then `recoverAlreadyOnChain` with that proof) serves a transfer
+  proven to be this payment's before the facilitator answers; while it is claiming, no other outcome
+  decides, so a claimed transfer is always the one served. The slow record is per (network,
+  facilitator label), per process: `SETTLE_SLOW_AFTER` (default 2) slow settles in a row (over
+  slowMs, or cut) mark it slow for `SETTLE_SLOW_COOLDOWN_MS` (default 600000); on a switching row
+  with `PAYMENT_SETTLE_FALLBACK` on, the next settle asks that network's fallback candidates first
+  (noted with `noteSettleAsked`, so neither the demotion nor the failure chain asks one twice);
+  a pre-broadcast refusal hands on, anything else from a fallback ends the settle unconfirmed. One
+  settle at or under slowMs clears the mark. The cap throws a 504 SettleError (errorReason
+  `timeout`) tagged for `settleDeadlineStopOf`; the settle-failure hook answers any such stop with
+  `markUnconfirmedStop` before every other branch (no fallback chain: the transfer may land), so
+  the authorization is booked and owed once if it lands. The request keeps the cut payment
+  (`noteCappedRequest`), and the idempotency store keeps the route's 200 answer beside the
+  unconfirmed 402 when the route replays implicitly and it fits; the same payment for the same call
+  (route, query and body digest) sent again is asked of `cappedResendVerdict` (server.js
+  `onCappedResend`): landed and proven (mined after first seen), the transaction is claimed under the
+  payment's own holder (`settle-cap:...`) and the answer served with its receipt and a sale; held by
+  the late book, its debt row is voided first (`chargedReplayVerdict` over `voidOwedOnResend`; no row
+  yet keeps the 402; a debt being repaid refuses as refunded). Anything else keeps the 402
+  (`scripts/test-settle-deadlines.js`).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client

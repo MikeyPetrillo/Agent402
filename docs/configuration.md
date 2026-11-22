@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1095 variables in 113 groups.
+1098 variables in 113 groups.
 
 ## Contents
 
@@ -1121,8 +1121,11 @@ may still clamp it, and the read site is the reference.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `SETTLE_CLAIM_DEADLINE_MS` | Settle claim deadline, in milliseconds. |  | `src/settlement-claims.js` |
+| `SETTLE_DEADLINES` | Per-network settle deadlines for x402 EIP-3009 exact payments (src/settle-deadlines.js). Unset: the default table, sized from each chain's block time (chain check from max(2 s, 2 blocks), every max(1 s, 1 block); slow over max(6 s, 4 blocks); cap max(20 s, 10 blocks); the slow-primary switch on Celo only). off: no deadlines (the library's own request timeout only). Otherwise a JSON object keyed by network name or CAIP-2 whose value is off or an object overriding checkAfterMs, checkEveryMs, slowMs, capMs (milliseconds) and switch (true or false). |  | `src/settle-deadlines.js` |
 | `SETTLE_DEMOTE_AFTER` | Settle demote after. |  | `src/settle-demotion.js` |
 | `SETTLE_DEMOTE_COOLDOWN_MS` | Settle demote cooldown, in milliseconds. |  | `src/settle-demotion.js` |
+| `SETTLE_SLOW_AFTER` | Slow settles in a row (each over its network's slowMs, or cut at the cap) that mark a facilitator slow on that network. Default 2. |  | `src/settle-deadlines.js` |
+| `SETTLE_SLOW_COOLDOWN_MS` | How long a facilitator marked slow on a network is asked after its fallbacks there (where the network's row switches), in milliseconds. Default 600000 (10 minutes); after it, one settle at or under slowMs clears the mark. |  | `src/settle-deadlines.js` |
 
 ## SHARED
 

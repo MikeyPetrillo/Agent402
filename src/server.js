@@ -1056,7 +1056,7 @@ import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedOnResend, noteResendAnswerSent, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
-import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, CAIP2_NAMES, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 import { publicIndexBootWarnings } from "./facilitator-public-index.js";
@@ -12204,6 +12204,30 @@ app.use(createIdempotency({
       hint: "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
       refund: { status: ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
     } };
+  },
+  // The same payment sent again after its settle was cut at the network's
+  // deadline (src/settle-deadlines.js cappedResendVerdict): served the kept
+  // answer once the chain proves its transfer landed, its debt voided first.
+  onCappedResend: async (req, { payment }) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    if (!def) return null;
+    const [{ cappedResendVerdict }, { proveAuthorizationSettled }, claims] = await Promise.all([
+      import("./settle-deadlines.js"), import("./settle-onchain-proof.js"), import("./settlement-claims.js"),
+    ]);
+    const v = await cappedResendVerdict(payment, {
+      prove: proveAuthorizationSettled,
+      claimTx: (network, tx, holder) => claims.claimSettlementKey(claims.txClaimKey(network, tx), holder),
+      isLateHolder: claims.isLateSettleHolder,
+      rowOf: (tx) => refundByEvidenceFresh(tx),
+      replayVerdict: (tx) => chargedReplayVerdict(tx, { voidOnClaim: (t) => voidOwedOnResend(t, RESEND_SERVED_NOTE), rowOf: (t) => refundByEvidenceFresh(t) }),
+      recordSale: ({ tx, network, payer, priceUsd }) => recordSale({
+        slug: def.slug, priceUsd, rail: "usdc", payer, tx, wire: "x402",
+        network: CAIP2_NAMES[network] || network,
+      }),
+      refundLookup: (tx) => `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(tx)}`,
+    });
+    if (v?.serve === true) console.log(`[settle-deadlines] the same payment sent again after a cut: its transfer landed (tx=${v.tx}); served the kept answer (${req.method} ${req.path})`);
+    return v;
   },
 }));
 markGateMounted("idempotency");
