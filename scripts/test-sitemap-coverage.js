@@ -121,6 +121,13 @@ try {
     ok(mono.get(`${BASE}/tools/hash`) === dates.files[dates.toolSources.hash], `/tools/hash carries its kit's date (${mono.get(`${BASE}/tools/hash`)})`);
     ok(mono.has(`${BASE}/api/pricing`) && mono.get(`${BASE}/api/pricing`) === null, "a live data surface carries no lastmod");
     ok([...mono].filter(([u]) => /\/tools\/category\//.test(u)).every(([, d]) => d === null), "category pages carry no lastmod");
+    // Every tool page carries the date of the file that defines it, whether a
+    // kit, a template in a kit, or an entry inline in the server module.
+    {
+      const toolPages = [...mono].filter(([u]) => u.startsWith(`${BASE}/tools/`) && !u.startsWith(`${BASE}/tools/category/`));
+      const undated = toolPages.filter(([, d]) => !d).map(([u]) => u.slice(`${BASE}/tools/`.length));
+      ok(toolPages.length >= 400 && undated.length === 0, `every /tools/ page carries a lastmod (${toolPages.length} pages${undated.length ? `; ${undated.length} undated: ${undated.join(", ")}` : ""})`);
+    }
     for (const sub of ["sitemap-pages.xml", "sitemap-tools.xml", "sitemap-guides.xml", "sitemap-skills.xml", "sitemap-learn.xml", "sitemap-reports.xml", "sitemap-categories.xml"]) {
       const child = entriesOf(await (await fetch(`${BASE}/${sub}`)).text());
       const off = [...child].filter(([u, d]) => !mono.has(u) || mono.get(u) !== d);

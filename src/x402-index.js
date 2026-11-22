@@ -3769,7 +3769,10 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   // sat in the index at $0.002 across two re-registrations. Rows merge by
   // route, and a price already taken from an earlier catalogue wins, so this
   // can only FILL a gap and never overwrite what the canonical array declared.
-  const catalogues = ["tools", "resources", "endpoints", "services", "resourceCatalog"]
+  // `items` is the discovery-listing shape ({ x402Version, items: [{ resource,
+  // accepts }] }), which a seller may serve as their own manifest; its rows
+  // are read the same way as any other catalogue's.
+  const catalogues = ["tools", "resources", "endpoints", "services", "items", "resourceCatalog"]
     .map((k) => manifest[k])
     .filter((v) => Array.isArray(v) && v.length);
   const pathsCatalogue = manifestPathsCatalogue(manifest);

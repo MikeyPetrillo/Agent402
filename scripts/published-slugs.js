@@ -52,6 +52,15 @@ export function segmentsOf(paths) {
 /** Routes of the kits that are listed only when their key is present. A keyless
  *  boot does not serve them, so they count as live here, not as retired. */
 export async function envGatedSegments() {
+  const gated = segmentsOf((await envGatedTools()).map((t) => t.route));
+  // The packs whose answer is the stock data are listed under the same switch.
+  const { STOCK_CORE_PACK_SLUGS } = await import("../src/skills.js");
+  for (const p of STOCK_CORE_PACK_SLUGS) gated.packs.add(p);
+  return gated;
+}
+
+/** The tool entries of the kits listed only when their key or switch is set. */
+export async function envGatedTools() {
   const kits = await Promise.all([
     import("../src/tools/llm-gateway-kit.js").then((m) => m.LLM_GATEWAY_TOOLS),
     import("../src/tools/farcaster-social-kit.js").then((m) => m.FARCASTER_SOCIAL_TOOLS),
@@ -74,11 +83,7 @@ export async function envGatedSegments() {
       pay: async () => { throw new Error("route listing only"); },
     })),
   ]);
-  const gated = segmentsOf(kits.flat().map((t) => t.route));
-  // The packs whose answer is the stock data are listed under the same switch.
-  const { STOCK_CORE_PACK_SLUGS } = await import("../src/skills.js");
-  for (const p of STOCK_CORE_PACK_SLUGS) gated.packs.add(p);
-  return gated;
+  return kits.flat();
 }
 
 export function loadSnapshot() {

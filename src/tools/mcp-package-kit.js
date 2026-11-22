@@ -425,7 +425,7 @@ export const MCP_PACKAGE_TOOLS = [
       input: { package: "@modelcontextprotocol/server-filesystem" },
       inputSchema: {
         properties: {
-          package: { type: "string", maxLength: 512, description: "npm package name, name@version, or an npx / npm exec command line (\"npx -y agent402-mcp@0.14.1\")." },
+          package: { type: "string", maxLength: 512, description: "npm package name, name@version, or an npx / npm exec command line (\"npx -y agent402-mcp@0.15.0\")." },
           version: { type: "string", maxLength: 64, description: "Exact version or dist-tag to check (default latest). Must agree with any version in `package`." },
         },
         required: ["package"],

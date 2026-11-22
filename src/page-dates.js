@@ -7,7 +7,9 @@
 // only when the page's source moved:
 //
 //   static pages      the newest commit touching the module that renders them
-//   tool pages        the newest commit touching the kit that defines the tool
+//   tool pages        the newest commit touching the file that defines the
+//                     tool (its kit, the kit whose template builds its slug,
+//                     or src/server.js for an entry written there)
 //   skill pack pages  the newest commit touching the module that defines the
 //                     pack (a pack and a tool may share a name: /skills/<slug>
 //                     and /tools/<slug> are two pages with two sources)
@@ -113,14 +115,14 @@ function loadTable() {
   try {
     const j = JSON.parse(readFileSync(new URL("./generated/page-dates.json", import.meta.url), "utf8"));
     const map = (m) => (m && typeof m === "object" ? m : {});
-    table = { files: map(j.files), toolSources: map(j.toolSources), packSources: map(j.packSources) };
+    table = { files: map(j.files), toolSources: map(j.toolSources), toolPatterns: map(j.toolPatterns), packSources: map(j.packSources) };
   } catch {
-    table = { files: {}, toolSources: {}, packSources: {} };
+    table = { files: {}, toolSources: {}, toolPatterns: {}, packSources: {} };
   }
   return table;
 }
 /** Test seam: replace the table (a test proves the lookup, not the file). */
-export function _setPageDatesTable(t) { table = t ? { files: t.files || {}, toolSources: t.toolSources || {}, packSources: t.packSources || {} } : null; }
+export function _setPageDatesTable(t) { table = t ? { files: t.files || {}, toolSources: t.toolSources || {}, toolPatterns: t.toolPatterns || {}, packSources: t.packSources || {} } : null; }
 
 const validDay = (d) => (typeof d === "string" && ISO_DAY.test(d) ? d : null);
 
@@ -149,11 +151,27 @@ export function legalLastmod(path) {
   return legalDates[path] || null;
 }
 
-/** lastmod for a /tools/<slug> page: the kit that defines the slug. */
+/** The file that builds a slug from a template ("*-gemini"): the one
+ *  pattern the slug matches with a non-empty middle, or null when none or
+ *  several do. */
+function patternSource(key) {
+  const { toolPatterns } = loadTable();
+  const hits = [];
+  for (const [pattern, file] of Object.entries(toolPatterns)) {
+    const star = pattern.indexOf("*");
+    if (star < 0) continue;
+    const pre = pattern.slice(0, star), post = pattern.slice(star + 1);
+    if (key.length > pre.length + post.length && key.startsWith(pre) && key.endsWith(post)) hits.push(file);
+  }
+  return new Set(hits).size === 1 ? hits[0] : null;
+}
+
+/** lastmod for a /tools/<slug> page: the file that defines the slug (a kit,
+ *  the server module for an inline entry, or the kit whose template builds it). */
 export function toolLastmod(slug) {
   const { toolSources } = loadTable();
   const key = String(slug || "");
-  const file = Object.hasOwn(toolSources, key) ? toolSources[key] : null;
+  const file = Object.hasOwn(toolSources, key) ? toolSources[key] : patternSource(key);
   return file ? filesLastmod([file]) : null;
 }
 
