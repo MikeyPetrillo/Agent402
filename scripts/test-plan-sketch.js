@@ -1,8 +1,9 @@
 // Free multi-step plan sketch (src/plan-sketch.js). Offline.
 //
 // What is pinned:
-//  - only explicit sequence words split a task; a bare "and" never does, so a
-//    single-tool query never turns into a plan;
+//  - only explicit sequence words split a task, and an "and" only between two
+//    verb-led steps that each carry an object, so a single-tool query never
+//    turns into a plan;
 //  - each step is ranked by the ranker handed in, with a strong/weak verdict,
 //    fallbacks and a price total that counts free steps as zero;
 //  - the sketch never reaches the network: the module imports nothing, and a
@@ -33,7 +34,10 @@ const split = [
   ["convert 5 miles to km, then format as json, finally hash it", 3],
 ];
 for (const [q, n] of split) ok(splitSteps(q).length === n, `"${q}" splits into ${n} steps (got ${JSON.stringify(splitSteps(q))})`);
-for (const q of ["search the web for x402 adoption", "bitcoin and ethereum price", "what happened then", "a then b", "", "hash and encode"]) {
+// Two task verbs, each with its object, joined by "and" are two steps
+// (2026-11-22, demand board shape); any other "and" is one step.
+for (const [q, n] of [["validate the json and generate an md5 hash", 2], ["parse the csv, and count the rows", 2], ["decode the token and verify the signature and compare the claims", 3]]) ok(splitSteps(q).length === n, `"${q}" splits into ${n} steps (got ${JSON.stringify(splitSteps(q))})`);
+for (const q of ["search the web for x402 adoption", "bitcoin and ethereum price", "what happened then", "a then b", "", "hash and encode", "count rows and columns", "hash and encode the text", "the price of gold and silver"]) {
   ok(splitSteps(q).length === 0, `"${q}" stays a single step`);
 }
 

@@ -14,9 +14,11 @@
 export const PLAN_MAX_STEPS = 5;
 const MIN_STEP_CHARS = 3;
 
-// Sequence markers only. A bare "and" is never a split point: "bitcoin and
-// ethereum price" is one step, and guessing otherwise would turn ordinary
-// single-tool queries into plans.
+// Sequence markers, plus one narrow "and": "bitcoin and ethereum price" is
+// one step, and guessing otherwise would turn ordinary single-tool queries
+// into plans. An "and" splits only when BOTH sides open with a task verb and
+// carry an object ("validate the json and generate an md5 hash"): two verbs
+// with their own objects are two tasks (splitOnAnd).
 //
 // A step boundary is a marker with the whitespace around it; a word marker
 // also takes one comma before it. MARKER_RE names the marker alone, and
@@ -56,6 +58,33 @@ function trimTail(p) {
 const NUMBERED_RE = /(?:^|\s)(?:\(?\d{1,2}[.)]|step\s+\d{1,2}:?)\s+/gi;
 const LEAD_RE = /^(?:and|first|firstly|also|please|,)\s+/i;
 
+// The verbs that open a task step. A side that opens with anything else
+// ("bitcoin and ethereum price", "rows and columns") is not a step.
+const TASK_VERBS = new Set([
+  "add", "analyze", "build", "calculate", "check", "compare", "compute", "convert", "count", "create",
+  "decode", "detect", "diff", "encode", "encrypt", "extract", "fetch", "find", "format", "generate",
+  "get", "hash", "list", "locate", "look", "lookup", "make", "map", "merge", "normalize", "parse", "read",
+  "render", "resolve", "scan", "search", "sign", "sort", "split", "summarize", "test", "transcribe",
+  "translate", "validate", "verify",
+]);
+// Split at an "and" whose next word is a task verb; any other "and" stays
+// inside its step ("count its rows and columns").
+const AND_RE = /\s*,?\s+and\s+(\S+)/gi;
+function splitOnAnd(q) {
+  const parts = [];
+  let from = 0;
+  for (const m of q.matchAll(AND_RE)) {
+    if (!TASK_VERBS.has(m[1].toLowerCase())) continue;
+    parts.push(q.slice(from, m.index));
+    from = m.index + m[0].length - m[1].length;
+    if (parts.length > PLAN_MAX_STEPS) return [];
+  }
+  parts.push(q.slice(from));
+  const steps = parts.map((p) => trimTail(p).trim()).filter(Boolean);
+  if (steps.length < 2) return [];
+  return steps.every((p) => { const w = p.split(/\s+/); return w.length >= 2 && TASK_VERBS.has(w[0].toLowerCase()); }) ? steps : [];
+}
+
 /** Split a task into ordered steps, or [] when it reads as a single step. */
 export function splitSteps(query) {
   let q = String(query ?? "").slice(0, 500).trim();
@@ -66,7 +95,8 @@ export function splitSteps(query) {
   const parts = splitOnMarkers(q)
     .map((p) => trimTail(p.replace(LEAD_RE, "")).trim())
     .filter((p) => p.length >= MIN_STEP_CHARS && /[a-z]/i.test(p));
-  return parts.length >= 2 ? parts : [];
+  if (parts.length >= 2) return parts;
+  return splitOnAnd(q);
 }
 
 const weakMatch = (r, floor) => !r || r.count === 0 || (r.results?.[0]?.score ?? 0) < floor || r.rarestTermCovered === false;
