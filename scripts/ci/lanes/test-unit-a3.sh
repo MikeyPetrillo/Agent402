@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (7 scripts, one process each)
+# @step 1: Offline suites (8 scripts, one process each)
 # /api/route neutral cross-seller router envelope (per-row shape, include filter, missing-query)
 t node scripts/test-route-envelope.js
 # Tool correctness regressions (20 wrong-answer bugs from the review; boots free-mode, TZ=UTC)
@@ -13,6 +13,8 @@ t node scripts/test-correctness-fixes.js
 t node scripts/test-find-ranking.js
 # /api/find and a stated conversion direction
 t node scripts/test-find-direction.js
+# /api/find: past find-misses a catalog tool answers rank it first and read as served (scripts/fixtures/find-misses.json)
+t node scripts/test-find-misses-corpus.js
 # /openapi.json coverage (every CATALOG tool has a path + operationId + x-price)
 t node scripts/test-openapi-coverage.js
 # /openapi.json schemas: every operation's request and answer schema present, compiling under 2020-12, examples valid, GET tools declare every input (boots free-mode)
