@@ -84,6 +84,7 @@ const ENTRIES = [
       "Tools: Five new tools, free through proof of work: number-words, encoding-detect, log-timestamps, csv-aggregate and json-lint.",
       "Tools: time-convert takes a `zones` list and returns one instant in up to 50 time zones in one answer.",
       "Tools: csv-to-json takes delimiter names (semicolon, tab, pipe) or any single character.",
+      "Tools: json-lint lists a duplicate key up to 200 characters and its path up to 300 (`keyTruncated`, `keyLength` and `pathTruncated` say when one was cut).",
     ],
   },
   {
@@ -99,6 +100,7 @@ const ENTRIES = [
     items: [
       "Tools: onchain-sql: a long-range plain row select on `solana.instructions` that runs past the query service's time window is now read one day at a time, with partial answers marked in fields.",
       `Tools: onchain-sql: a call read one day at a time sends at most ${SQL_WINDOW_MAX_QUERIES} queries in all, the whole-range send included; a range with more days answers the first ones, and its fields name the limit and where to continue.`,
+      "Tools: onchain-sql: only a query whose ORDER BY starts with block_time (quoted or not) is read one day at a time; any other first key is answered as before.",
     ],
   },
   {

@@ -39,6 +39,8 @@ Tools:
   zones in one answer.
 - csv-to-json takes delimiter names (semicolon, tab, pipe) or any single
   character.
+- json-lint lists a duplicate key up to 200 characters and its path up to
+  300 (`keyTruncated`, `keyLength` and `pathTruncated` say when one was cut).
 
 ### 2026-11-22 (domain availability)
 Tools:
@@ -53,6 +55,8 @@ Tools:
 - onchain-sql: a call read one day at a time sends at most 3 queries in
   all, the whole-range send included; a range with more days answers the
   first ones, and its fields name the limit and where to continue.
+- onchain-sql: only a query whose ORDER BY starts with block_time (quoted or
+  not) is read one day at a time; any other first key is answered as before.
 
 ### 2026-11-22 (seller-trust wallets)
 Router:
