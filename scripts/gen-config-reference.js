@@ -25,6 +25,35 @@ export const DOC_PATH = join(ROOT, "docs", "configuration.md");
 
 const LIT = String.raw`(-?\d[\d_]*(?:\.\d+)?|"[^"\n]{0,60}"|'[^'\n]{0,60}'|true|false)`;
 
+const NUM = String.raw`\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?`;
+const num = (x) => Number(x.replace(/_/g, ""));
+
+// A numeric literal followed by arithmetic binds tighter than the `||`, `??`
+// or argument it sits in, so `X || 24 * 3600_000` falls back to 86400000, not
+// 24. The tail is evaluated when every operand is a number literal (* and /
+// before + and -); a tail that names a constant or opens a call has no plain
+// value here, so null (docs/configuration.json `defaults` gives it).
+export function arithmeticTail(first, rest) {
+  if (!/^\s*[*/%+-]/.test(rest)) return /^\s*[eE.]/.test(rest) ? null : first;
+  const m = new RegExp(String.raw`^(?:\s*[*/%+-]\s*${NUM})+`).exec(rest);
+  if (!m) return null;
+  const after = rest.slice(m[0].length);
+  if (/^\s*(?:[*/%+-]|\.|\(|\[|\*\*|[A-Za-z_$])/.test(after)) return null;
+  const toks = [num(first)];
+  for (const t of m[0].matchAll(new RegExp(String.raw`([*/%+-])\s*(${NUM})`, "g"))) toks.push(t[1], num(t[2]));
+  const terms = [toks[0]];
+  for (let i = 1; i < toks.length; i += 2) {
+    const op = toks[i], v = toks[i + 1];
+    if (op === "*") terms[terms.length - 1] *= v;
+    else if (op === "/") terms[terms.length - 1] /= v;
+    else if (op === "%") terms[terms.length - 1] %= v;
+    else terms.push(op, v);
+  }
+  let v = terms[0];
+  for (let i = 1; i < terms.length; i += 2) v = terms[i] === "+" ? v + terms[i + 1] : v - terms[i + 1];
+  return Number.isFinite(v) ? v : null;
+}
+
 /** The first plain-literal fallback for `name` in the source texts, or null. */
 export function defaultOf(name, texts) {
   const res = [
@@ -35,7 +64,12 @@ export function defaultOf(name, texts) {
     for (const re of res) {
       const m = re.exec(t);
       if (!m) continue;
-      const v = m[1].replace(/^["']|["']$/g, "").replace(/(\d)_(?=\d)/g, "$1");
+      const raw = m[1];
+      if (/^-?\d/.test(raw)) {
+        const v = arithmeticTail(raw.replace(/_/g, ""), t.slice(m.index + m[0].length));
+        return v === null ? null : String(v);
+      }
+      const v = raw.replace(/^["']|["']$/g, "");
       if (v === "") continue;
       return v;
     }
