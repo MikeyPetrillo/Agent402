@@ -362,7 +362,7 @@ const SKILL_PACKS_ALL = [
     slug: "macro-economics",
     title: "Macro economics",
     tagline:
-      "Pull the canonical US macro dataset - yield curve, CPI, unemployment, fed funds, Sahm rule - without an API key.",
+      "Pull the canonical US macro dataset - the Treasury yield curve and its spreads, CPI, unemployment, fed funds, Sahm rule - without an API key, each figure with its as-of date.",
     useCase:
       "Producing a weekly macro note, charting a macro indicator dashboard, or feeding a model with the latest FRED/Treasury data.",
     promptArgs: [],
@@ -629,7 +629,7 @@ const SKILL_PACKS_ALL = [
     slug: "trend-analysis",
     title: "Trend analysis",
     tagline:
-      "Take any numeric time series - a stock's daily close, an economic indicator, a treasury yield history - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+      "Take any numeric time series - a stock's daily close, a US economic indicator, a treasury yield history - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase:
       "You have a question like \"is AAPL trending up over the last year - and what does the next quarter look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
     promptArgs: [
@@ -2686,7 +2686,7 @@ const WITHOUT_STOCK_COPY = {
     claudePrompt: "Check insider activity for AAPL using Agent402's insider-alert skill pack. Get (1) 30-day insider trades, (2) last 3 SEC filings. Flag any cluster buying or selling and correlate with recent filings.",
   },
   "trend-analysis": {
-    tagline: "Take any numeric time series - an economic indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+    tagline: "Take any numeric time series - a US economic indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase: "You have a question like \"is unemployment trending up - and what does the next year look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data read (macro) is paid.",
     workflow: [
       "Fetch the series: call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",

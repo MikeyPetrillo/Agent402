@@ -265,7 +265,7 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
   const pointers = due.filter(([, e]) => e.replacement).length;
   ok(items.length >= 2 && problems.length === 0, `each changelog retirement sentence matches the registry (${problems.join("; ") || `${items.length} items`})`);
   ok(unsaid.length === 0, `every route retired since ${SINCE} is announced in a changelog retirement sentence (missing: ${unsaid.join(", ") || "none"})`);
-  ok(due.length === 23 && pointers === 5 && due.length - pointers === 18, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
+  ok(due.length === 53 && pointers === 8 && due.length - pointers === 45, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
   // Controls: each way a sentence can part from the registry is reported.
   const REG = { geocode: { replacement: "place-lookup" }, "reverse-geocode": { replacement: null }, "place-search": { replacement: null }, "exa-search": { replacement: "search" }, "exa-answer": { replacement: "answer" } };
   const good = "geocode, reverse-geocode and place-search are retired and answer 410: geocode names place-lookup as the replacement, and reverse-geocode and place-search name none. exa-search and exa-answer are retired and answer 410 naming search and answer.";
@@ -304,7 +304,10 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
 }
 const snapshot = loadSnapshot();
 ok(snapshot.tools.size >= 500 && snapshot.packs.size >= 100, `the snapshot is populated (${snapshot.tools.size} tools, ${snapshot.packs.size} packs)`);
-for (const slug of [...Object.keys(RETIRED_TOOLS)]) ok(snapshot.tools.has(slug), `retired tool ${slug} is in the snapshot`);
+// A retired route outside /api (its own `route`, the /v1 judge previews) is
+// not an /api segment, so the snapshot does not carry it.
+for (const slug of Object.keys(RETIRED_TOOLS).filter((s) => !RETIRED_TOOLS[s].route)) ok(snapshot.tools.has(slug), `retired tool ${slug} is in the snapshot`);
+ok(Object.keys(RETIRED_TOOLS).filter((s) => RETIRED_TOOLS[s].route).every((s) => !snapshot.tools.has(s) && /^\/v1\//.test(RETIRED_TOOLS[s].route)), "a retired /v1 route is outside the /api snapshot");
 for (const slug of [...Object.keys(RETIRED_PACKS)]) ok(snapshot.packs.has(slug), `retired pack ${slug} is in the snapshot`);
 const gated = await envGatedSegments();
 

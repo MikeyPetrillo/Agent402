@@ -8,24 +8,23 @@ carries its own version on npm.
 
 ### 2026-11-23 (thirty retired tools)
 Tools:
-- Thirty tools are retired and answer 410 Gone with a Sunset date:
-  solana-rpc, onchain-sql-week, onchain-sql-range, x-post-counts, x-trends,
-  fc-cast-search, fc-cast-metrics, fc-channel-feed, fc-trending,
-  fc-user-casts, fc-cast, fc-cast-replies, fc-channel, fc-user-search,
-  farcaster-profile, farcaster-by-address, options-summary,
-  crypto-options-chain, options-ticker, sol-swap-quote, sol-token-lookup,
-  POST /v1/judge/vision, POST /v1/judge/locate, POST /v1/judge/long,
-  fred-search, fred-series-info, fred-release-calendar,
-  fred-release-observations, crypto-news and gravatar-check.
-  onchain-sql-week and onchain-sql-range name onchain-sql,
-  fred-release-observations names fred-series, the 410 for /v1/judge/long
-  points to /v1/judge, and the rest name none; options-chain, retired
-  earlier, now names none too. A partial onchain-sql walk no longer lists
-  longer routes.
+- onchain-sql-week, onchain-sql-range and fred-release-observations are
+  retired and answer 410 naming onchain-sql, onchain-sql and fred-series. A
+  partial onchain-sql walk no longer lists longer routes.
+- solana-rpc, x-post-counts, x-trends, fc-cast-search, fc-cast-metrics,
+  fc-channel-feed, fc-trending, fc-user-casts, fc-cast, fc-cast-replies,
+  fc-channel, fc-user-search, farcaster-profile, farcaster-by-address,
+  options-summary, crypto-options-chain, options-ticker, sol-swap-quote,
+  sol-token-lookup, judge-vision, judge-locate, judge-long, fred-search,
+  fred-series-info, fred-release-calendar, crypto-news and gravatar-check are
+  retired and answer 410 and name none. The three judge previews answered at
+  POST /v1/judge/vision, /v1/judge/locate and /v1/judge/long, and the 410 for
+  the last points to /v1/judge; options-chain names none now that its pointer
+  is retired.
 - sol-price reads each mint's price, 24-hour change and liquidity from the
   deepest DEX pair that trades it, and its decimals with the slot they were
-  read at from the mint account on chain. Its route and answer fields are
-  unchanged, and `priceFrom` says whether a price came from a pair holding
+  read at from the mint account on chain. Its route and answer fields stay,
+  and a new `priceFrom` field says whether a price came from a pair holding
   the mint as its base or its quote token.
 Skill packs:
 - macro-economics, macro-dashboard and macro-context read the same series
