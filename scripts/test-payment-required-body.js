@@ -372,6 +372,7 @@ try {
   // the check says what is missing (and still fails under CI, where it must run).
   const costTable = !!(process.env.UPSTREAM_COSTS_JSON || process.env.UPSTREAM_COSTS_FILE);
   if (!costTable && !process.env.CI) console.log("skip - B4 needs the private cost table (UPSTREAM_COSTS_FILE or UPSTREAM_COSTS_JSON) to price a metered quote");
+  else if (!costTable) ok(false, "B4 needs the private cost table (UPSTREAM_COSTS_FILE or UPSTREAM_COSTS_JSON) to price a metered quote; it is not set under CI");
   else {
     const METERED = "/v1/metered/chat/completions";
     const floor = await fetch(`${B}${METERED}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });

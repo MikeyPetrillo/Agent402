@@ -11,6 +11,11 @@
 // validation instead of the global 100 KB parser's 413 - while a flat tier
 // keeps the 100 KB limit (its price does not grow with the body).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+// Its quotes and caps read the private upstream-cost table: without it they
+// fall to the floor and the checks fail for that reason, so a missing table is
+// named (a failure under CI, a skip locally) instead.
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-messages-sdk-alias");
 import { createServer } from "node:http";
 import { bootServer } from "./lib/boot-server.js";
 
