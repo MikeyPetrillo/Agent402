@@ -15,10 +15,14 @@
 // timeout, over the size cap, a host the address guard refuses) leaves the
 // URL allowed and the tool's own fetch gives the answer it always gave.
 //
-// What is kept: per origin, in this process, the rules of the groups that can
-// apply to our tokens (those naming us and the `*` groups), an hour (an
-// unreadable file ten minutes); a set of rules over ROBOTS_CACHE_ENTRY_CHARS
-// is used for its call and not kept. No page content passes through here.
+// What is kept: per origin, in this process, copies of the rules of the
+// groups that can apply to our tokens (those naming us and the `*` groups), an
+// hour (an unreadable file ten minutes). The copies are fresh strings, never
+// slices of the fetched file (a slice would keep the whole file alive). A set
+// of rules over ROBOTS_CACHE_ENTRY_CHARS is used for its call and not kept,
+// and the kept rules of every origin together stay under
+// ROBOTS_CACHE_TOTAL_CHARS (the oldest origin leaves first). No page content
+// passes through here.
 // Covered by scripts/test-robots-gate.js.
 //
 // The parser is kit.js's, imported when first needed: kit.js imports this
@@ -34,6 +38,7 @@ export const ROBOTS_MAX_BYTES = 500 * 1024;
 export const ROBOTS_TIMEOUT_MS = 4000;
 export const ROBOTS_CACHE_MAX_ORIGINS = 2000;
 export const ROBOTS_CACHE_ENTRY_CHARS = 32 * 1024;
+export const ROBOTS_CACHE_TOTAL_CHARS = 4 * 1024 * 1024;
 /** The reason code a refusal carries (src/tool-error-fields.js). */
 export const ROBOTS_DISALLOWED = "robots_disallowed";
 const RULE_MAX_CHARS = 200;
@@ -79,13 +84,25 @@ function ourGroups(groups) {
 }
 const sizeOf = (groups) => groups.reduce((n, g) => n + g.agents.join("").length + g.rules.reduce((m, r) => m + r.path.length + 1, 0), 0);
 
-function remember(origin, groups, now) {
-  if (groups && sizeOf(groups) > ROBOTS_CACHE_ENTRY_CHARS) return;
-  if (cache.size >= ROBOTS_CACHE_MAX_ORIGINS && !cache.has(origin)) {
-    // Oldest first (Map keeps insertion order).
-    cache.delete(cache.keys().next().value);
-  }
+// A copy made through JSON is built from new strings: no kept agent or rule
+// is a slice of the fetched text.
+const ownCopy = (groups) => JSON.parse(JSON.stringify(groups.map((g) => ({ agents: g.agents, rules: g.rules.map((r) => ({ allow: r.allow, path: r.path })) }))));
+let keptChars = 0;
+function forget(origin) {
+  const e = cache.get(origin);
+  if (!e) return;
+  if (e.groups) keptChars -= sizeOf(e.groups);
   cache.delete(origin);
+}
+
+function remember(origin, groups, now) {
+  const size = groups ? sizeOf(groups) : 0;
+  if (size > ROBOTS_CACHE_ENTRY_CHARS) return;
+  forget(origin);
+  // Oldest first (Map keeps insertion order).
+  while (cache.size && (cache.size >= ROBOTS_CACHE_MAX_ORIGINS || keptChars + size > ROBOTS_CACHE_TOTAL_CHARS)) forget(cache.keys().next().value);
+  if (groups) groups = ownCopy(groups);
+  keptChars += size;
   cache.set(origin, { groups, expires: now + (groups ? ROBOTS_CACHE_MS : ROBOTS_UNREADABLE_CACHE_MS) });
 }
 
@@ -178,7 +195,8 @@ export function isRobotsRefusal(err) {
 
 export const __test = {
   setFetchRobots(fn) { fetchRobots = typeof fn === "function" ? fn : defaultFetchRobots; },
-  clear() { cache.clear(); inflight.clear(); },
+  clear() { cache.clear(); inflight.clear(); keptChars = 0; },
+  keptChars: () => keptChars,
   cacheSize: () => cache.size,
   cacheEntry: (origin) => cache.get(origin) || null,
 };

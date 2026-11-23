@@ -129,6 +129,37 @@ ok((await verdict("User-agent: *\nDisallow: /\n", "ftp://a.example/x")).allowed 
   ok(g && g.groups.every((grp) => grp.agents.some((a) => a === "*" || /^agent402/.test(a))), "only the groups that can apply to our tokens are kept");
 }
 
+// Memory: what is kept is copies of the kept rules, never slices that hold
+// the fetched file alive, and the kept rules are capped per origin and in
+// total. 2000 origins, each serving about 490 KB whose `*` group has 40 rules
+// (the rest another agent's group and a comment), stay well under 50 MB.
+{
+  const { setFlagsFromString } = await import("node:v8");
+  const { runInNewContext } = await import("node:vm");
+  setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc");
+  const { ROBOTS_CACHE_TOTAL_CHARS } = gate;
+  ok(Number.isFinite(ROBOTS_CACHE_TOTAL_CHARS) && ROBOTS_CACHE_TOTAL_CHARS > 0 && ROBOTS_CACHE_TOTAL_CHARS < ROBOTS_CACHE_MAX_ORIGINS * ROBOTS_CACHE_ENTRY_CHARS, `the kept rules are capped in total (${ROBOTS_CACHE_TOTAL_CHARS} chars)`);
+  __test.clear();
+  gc(); gc();
+  const before = process.memoryUsage().heapUsed;
+  const pad = "z".repeat(490 * 1024);
+  __test.setFetchRobots(async (url) => {
+    const h = new URL(url).hostname;
+    const rules = Array.from({ length: 40 }, (_, i) => `Disallow: /private-area-${i}-${h}/`).join("\n");
+    return `User-agent: *\n${rules}\nUser-agent: Otherbot\nDisallow: /other-${h}\n# ${h}${pad}\n`;
+  });
+  let refused = 0;
+  for (let i = 0; i < 2000; i++) await assertRobotsAllow(`https://pad${i}.example/private-area-3-pad${i}.example/x`).catch((e) => { if (e.statusCode === 403) refused++; });
+  gc(); gc();
+  const heldMb = (process.memoryUsage().heapUsed - before) / 1e6;
+  ok(refused === 2000 && __test.cacheSize() > 0, `the padded files still decide their calls (${refused} refused)`);
+  ok(heldMb < 50, `2000 origins with padded robots.txt files hold under 50 MB (${heldMb.toFixed(1)} MB)`);
+  ok(__test.keptChars() <= ROBOTS_CACHE_TOTAL_CHARS, `the kept rules stay inside the total cap (${__test.keptChars()} chars)`);
+  __test.clear();
+  ok(__test.keptChars() === 0, "clearing the cache clears its tally");
+}
+
 // The browser string
 ok(BROWSER_FETCH_UA.startsWith("Mozilla/5.0 (Macintosh;") && /Chrome\/\d+/.test(BROWSER_FETCH_UA) && BROWSER_FETCH_UA.includes(`${FETCH_TOKEN}/1.0 (+https://agent402.tools/crawler)`), "the browser string keeps the desktop browser's and carries the fetch token");
 ok(BROWSER_FETCH_MOBILE_UA.includes("Mobile Safari") && BROWSER_FETCH_MOBILE_UA.includes(FETCH_TOKEN), "the mobile browser string carries the fetch token");
