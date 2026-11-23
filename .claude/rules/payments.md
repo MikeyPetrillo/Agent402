@@ -129,10 +129,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   and one whose every payment is gone stays disabled with nothing owed. Disputes are kept per payment
   (`rec.disputes`, one per payment intent): the key stays frozen while any dispute on it is open, each
   close settles its own payment only, and the review is owed only once none is open. Statuses `won`,
-  `warning_closed` and `prevented` lift; `lost` takes; any other closed status lifts the hold and lists
-  the dispute in `disputesToReview` (`/__operator/credits.json`; `creditsRefunds` reads owed, refunds
-  wait) until `POST /__operator/credits/dispute-reviewed` records won or lost. A close that arrives
-  before its create is applied then and the create (same dispute id) freezes nothing. A warning on a payment with no
+  `warning_closed` and `prevented` lift; `lost` takes; any other closed status keeps the key frozen
+  and lists the dispute in `disputesToReview` (`/__operator/credits.json`; `creditsRefunds` reads owed,
+  refunds wait) until `POST /__operator/credits/dispute-reviewed` records won or lost; only then does
+  the key thaw (the won or lost rule above). A close that arrives before its create is applied then and
+  the create (same dispute id) freezes nothing more: a won or lost one leaves the key usable, any other
+  status freezes it at the close until a person resolves it. A warning on a payment with no
   key yet is remembered in the store (`_warned`); a later claim or top-up on it is refused
   (`refused-review`) and refunded in full. `fraudReviews` is on `/__operator/credits.json`. Stripe
   event ids are deduplicated in the shared store as well, and forgotten again when handling throws,
