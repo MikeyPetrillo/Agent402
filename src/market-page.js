@@ -78,6 +78,7 @@ import { crawlIntervalLabel, discoveryIntervalLabel } from "./crawl-cadence.js";
 
 import { repoUrl } from "./repo-link.js";
 import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
+import { BASE_NO_GAS_SENTENCE } from "./base-no-gas.js";
 export const CHAIN_PAGES = {
   base: {
     chainName: "Base",
@@ -98,6 +99,8 @@ export const CHAIN_PAGES = {
     // can't be fooled by a testnet accept.
     isNetwork: (n) => n === "eip155:8453",
     honestyNetworkPhrase: "the Base network",
+    // Said of Base alone (src/base-no-gas.js says why it is true there).
+    buyGasSentence: BASE_NO_GAS_SENTENCE,
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
   solana: {
@@ -1132,6 +1135,7 @@ function* marketPageChainSteps(chainKey, baseUrl, opts = {}) {
   <section>
     <h2 style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 10px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Buy tools with ${esc(C.asset)} on ${esc(C.chainName)}</h2>
     <p style="font-size:var(--fs-base);color:var(--muted);margin:0 0 10px;">${payableSentence(payable, C)}, from ${usdExact(low)} to ${usdExact(high)} a call${premiumNote}${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}.</p>
+    ${C.buyGasSentence ? `<p class="ml-measure" style="font-size:var(--fs-base);color:var(--muted);margin:0 0 10px;">${esc(C.buyGasSentence)}</p>` : ""}
     <p style="font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card-zebra);padding:10px 14px;margin:0;">agents: <code>GET ${esc(baseUrl)}/api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</code></p>
   </section>
 

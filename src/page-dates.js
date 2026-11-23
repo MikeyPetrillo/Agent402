@@ -60,6 +60,7 @@ export const PAGE_SOURCES = {
   "/what-is-x402": ["src/what-is-x402.js"],
   "/what-is-mpp": ["src/what-is-mpp.js"],
   "/how-to-pay": ["src/how-to-pay.js"],
+  "/start": ["src/start-page.js", "src/base-no-gas.js"],
   "/speech": ["src/speech-page.js"],
   "/agentic-finance": ["src/agentic-finance.js"],
   "/x402-test": ["src/x402-test-page.js"],

@@ -188,6 +188,8 @@ const client = new x402Client(); registerExactEvmScheme(client, { signer: (await
 const res = await wrapFetchWithPayment(fetch, client)("https://agent402.tools/api/uuid");
 ```
 
+On Base, an x402 exact payment is a signature (EIP-3009): the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.
+
 More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-MPP) · [Paying with x402](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-x402).
 
 ## What's in the catalog (500+ tools)

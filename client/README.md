@@ -81,6 +81,8 @@ const a = new Agent402({ fetch: payFetch });
 const article = await a.call("extract", { url: "https://agent402.tools/guides/x402-in-5-minutes" });
 ```
 
+On Base, an x402 exact payment is a signature (EIP-3009): the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.
+
 ## Paying with a credits key
 
 A prepaid credits key (`a402_...`; agent402.tools/credits says whether packs are on
