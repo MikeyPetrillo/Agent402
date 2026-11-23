@@ -20,7 +20,7 @@ export function makeGuardsTable() {
     flagged: { outcomeTypes: [tag("type"), tag("type")], riskLevels: [tag("risk")] },
     efw: { warningRefundDayMaxUsd: n(20, 80) },
     badKey: { failedMax: n(5, 25), windowMs: n(5, 20) * minute },
-    mcpOAuth: { emailCodeTries: n(3, 5), sendsPerEmail: n(30, 40), sendsPerIp: n(40, 60), failsPerEmail: n(4, 7), lockoutMs: n(30, 90) * minute, tokenPerIp: n(25, 40), authorizePerIp: n(40, 60), registerPerIp: n(6, 10), windowMs: n(30, 90) * minute, badTokenMax: n(5, 10), pendingMax: n(200, 400), documentMaxBytes: n(4, 8) * 1024 * 1024 },
+    mcpOAuth: { emailCodeTries: n(3, 5), sendsPerEmail: n(30, 40), sendsPerIp: n(40, 60), failsPerEmail: n(4, 7), lockoutMs: n(30, 90) * minute, tokenPerIp: n(25, 40), authorizePerIp: n(40, 60), registerPerIp: n(6, 10), windowMs: n(30, 90) * minute, badTokenMax: n(5, 10), pendingMax: n(200, 400), documentMaxBytes: n(4, 8) * 1024 * 1024, pendingPerAddress: n(3, 8), pendingPerClient: n(10, 20), sendsGlobalPerHour: n(500, 2000), sendsPerEmailDay: n(50, 90), unusedClientIdleMs: n(2, 6) * 60 * minute },
   };
 }
 

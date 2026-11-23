@@ -1887,6 +1887,19 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
           if (busy) { res.setHeader("X-Credits-Error", "rate_limited"); return res.status(429).json(BAD_KEY_BUSY); }
         }
         res.setHeader("X-Credits-Error", a.reason);
+        // Under a connector grant the app is never told the balance (the
+        // consent page promises it cannot read it), and the person was never
+        // shown a key, so the refusal names neither.
+        if (grantOf?.(req)) {
+          const told = a.reason === "insufficient" ? `The balance is too low for this call ($${item.priceUsd}). Add credits on your balance page.`
+            : a.reason === "daily_cap" ? `This connection's daily spending cap is reached: $${a.spentTodayUsd} of $${a.capUsd} spent today (UTC). Raise the cap on your balance page, or wait for the next day.`
+            : a.reason === "frozen" ? "This credits balance is on hold while a payment that loaded it is reviewed, so it cannot pay for calls right now."
+            : a.reason === "disabled" ? "This credits balance is disabled."
+            : a.reason === "over_call_limit" ? `This call costs $${item.priceUsd}, above the $${a.limitUsd} per-call limit set on this balance. Change it from the balance page.`
+            : a.reason === "over_daily_limit" ? `This call would pass the $${a.limitUsd} daily limit set on this balance. It resets at 00:00 UTC; change it from the balance page.`
+            : "This credits balance cannot pay for calls right now.";
+          return res.status(402).json({ error: told, reason: a.reason, priceUsd: item.priceUsd, ...(a.limitUsd != null ? { limitUsd: a.limitUsd } : {}), ...(a.reason === "daily_cap" ? { capUsd: a.capUsd, spentTodayUsd: a.spentTodayUsd } : {}), ...creditsTopupFields(baseUrl) });
+        }
         const said = a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.`
           : a.reason === "daily_cap" ? `This connection's daily spending cap is reached: $${a.spentTodayUsd} of $${a.capUsd} spent today (UTC). Raise the cap on your balance page, or wait for the next day.`
           : a.reason === "frozen" ? "This credits balance is on hold while a payment that loaded it is reviewed, so it cannot pay for calls right now."

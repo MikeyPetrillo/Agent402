@@ -12,7 +12,9 @@
 //     badKey:   { failedMax, windowMs },
 //     mcpOAuth: { emailCodeTries, sendsPerEmail, sendsPerIp, failsPerEmail,
 //                 lockoutMs, tokenPerIp, authorizePerIp, registerPerIp, windowMs,
-//                 badTokenMax, pendingMax, documentMaxBytes } }
+//                 badTokenMax, pendingMax, documentMaxBytes, pendingPerAddress,
+//                 pendingPerClient, sendsGlobalPerHour, sendsPerEmailDay,
+//                 unusedClientIdleMs } }
 //
 // There are no defaults in code. Without a complete table credit sales and
 // the connector sign-in stay off (creditsSalesEnabled in src/credits-sales.js
@@ -24,7 +26,7 @@ const COUNTS = {
   purchase: ["buyerPerHour", "buyerPerDay", "sourcePerHour", "sourcePerDay", "failedMax", "failedWindowMs", "failedHoldMs"],
   efw: ["warningRefundDayMaxUsd"],
   badKey: ["failedMax", "windowMs"],
-  mcpOAuth: ["emailCodeTries", "sendsPerEmail", "sendsPerIp", "failsPerEmail", "lockoutMs", "tokenPerIp", "authorizePerIp", "registerPerIp", "windowMs", "badTokenMax", "pendingMax", "documentMaxBytes"],
+  mcpOAuth: ["emailCodeTries", "sendsPerEmail", "sendsPerIp", "failsPerEmail", "lockoutMs", "tokenPerIp", "authorizePerIp", "registerPerIp", "windowMs", "badTokenMax", "pendingMax", "documentMaxBytes", "pendingPerAddress", "pendingPerClient", "sendsGlobalPerHour", "sendsPerEmailDay", "unusedClientIdleMs"],
 };
 const LISTS = { flagged: ["outcomeTypes", "riskLevels"] };
 /** Every key the table must hold, as "section.key" (for docs and tests). */

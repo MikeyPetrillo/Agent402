@@ -108,6 +108,24 @@ process.on("exit", () => rmSync(TMP, { recursive: true, force: true }));
   const dz = await cr.authorizeGrant(K2.keyId, 0.001, g);
   ok(!dz.ok && dz.reason === "frozen", "a key frozen by a dispute refuses a grant's call (reason frozen)");
   ok((await cr.authorizeGrant("000000000000", 0.001, g)).reason === "unknown", "a grant naming no key is refused");
+  // A grant's refusal never tells the app the balance, and says nothing about a key.
+  {
+    const K3 = await cr.claim("cs_capthree");
+    const { default: express } = await import("express");
+    const app = express();
+    app.use(cr.gate(() => ({ priceUsd: 100000, slug: "pricey" }), { grantOf: (req) => (req.headers["x-test-grant"] ? { id: "g-low", keyId: K3.keyId, capUsd: 1_000_000 } : null) }));
+    app.use((req, res) => res.json({ served: true }));
+    const server = await new Promise((r) => { const x = app.listen(0, "127.0.0.1", () => r(x)); });
+    const U = `http://127.0.0.1:${server.address().port}`;
+    try {
+      const gr = await fetch(`${U}/api/pricey`, { method: "POST", headers: { "x-test-grant": "1" } });
+      const gj = await gr.json();
+      ok(gr.status === 402 && gj.reason === "insufficient" && !("balanceUsd" in gj) && !/\bkey\b/i.test(gj.error) && /too low/.test(gj.error) && !String(gj.error).includes(String(cr.balance(K3.key).balanceUsd)), `a grant's refusal for a low balance names no balance and no key (${gj.error})`);
+      const kr = await fetch(`${U}/api/pricey`, { method: "POST", headers: { authorization: `Bearer ${K3.key}` } });
+      const kj = await kr.json();
+      ok(kr.status === 402 && kj.reason === "insufficient" && typeof kj.balanceUsd === "number", "the key's own refusal still carries its balance");
+    } finally { server.close(); }
+  }
   delete process.env.CREDITS_DIR;
 }
 
@@ -136,46 +154,233 @@ process.on("exit", () => rmSync(TMP, { recursive: true, force: true }));
   for (const u of [`/mcp?token=${at}`, `/oauth/token?refresh_token=${rt}`, `/x?t=${encodeURIComponent(at).replace(/_/g, "%5F")}`]) ok(urlCarriesCreditsKey(u), `a URL carrying a connector token is caught (${u.slice(0, 22)}...)`);
 }
 
-// ---- offline: per-address limits fold IPv6 by /64; pending requests and the document are capped ----
-{
-  process.env.CREDITS_SALES = "on"; process.env.MCP_OAUTH = "on";
-  const base = guardsTable();
-  const { createMcpOAuth } = await import("../src/mcp-oauth.js");
-  const { SKIP_UPDATE } = await import("../src/json-document.js");
-  const { default: express } = await import("express");
-  let body = {};
-  const store = {
-    read: async () => ({ ok: true, body: structuredClone(body) }),
-    update: async (fn) => { const r = fn(structuredClone(body)); if (r !== SKIP_UPDATE) body = r; return { ok: true }; },
+// ---- offline: the sign-in's own limits, each on a harness of its own --------------------------
+// A harness: the module mounted on a bare app with its own limits, a clock,
+// stores that count their reads (and may answer slowly, as a database does),
+// and a mail sink that keeps every code it sends.
+process.env.CREDITS_SALES = "on"; process.env.MCP_OAUTH = "on";
+const BASE_TABLE = guardsTable();
+const { createMcpOAuth } = await import("../src/mcp-oauth.js");
+const { SKIP_UPDATE } = await import("../src/json-document.js");
+const { createMemoryLimits } = await import("../src/shared-limits.js");
+const { default: express } = await import("express");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function memStore({ latencyMs = 0 } = {}) {
+  const s = { body: {}, reads: 0, writes: 0 };
+  s.read = async () => { s.reads++; if (latencyMs) await sleep(latencyMs); return { ok: true, body: structuredClone(s.body) }; };
+  // A compare-and-swap like the state database's: a writer that read an older body runs again.
+  s.update = async (fn) => {
+    for (;;) {
+      s.reads++;
+      const seen = s.body;
+      if (latencyMs) await sleep(latencyMs);
+      const r = fn(structuredClone(seen));
+      if (r === SKIP_UPDATE) return { ok: true };
+      if (s.body !== seen) continue;
+      s.body = r; s.writes++;
+      return { ok: true };
+    }
   };
-  const credits = { balancesForEmail: async () => [], grantSpentToday: async () => 0 };
-  const oa = createMcpOAuth({ credits, store, secret: "s".repeat(32), baseUrl: "https://agent402.tools", sendEmail: async () => true, log: () => {} });
+  return s;
+}
+async function harness({ table = {}, latencyMs = 0, balances = [] } = {}) {
+  useGuardsTable({ ...BASE_TABLE, mcpOAuth: { ...BASE_TABLE.mcpOAuth, ...table } });
+  const stores = { grants: memStore({ latencyMs }), clients: memStore({ latencyMs }), reqs: memStore({ latencyMs }) };
+  const clock = { t: Date.now() };
+  const sent = [];
+  const credits = { balancesForEmail: async () => balances, grantSpentToday: async () => 0 };
+  const oa = createMcpOAuth({ credits, store: stores.grants, clientStore: stores.clients, requestStore: stores.reqs, secret: "s".repeat(32), baseUrl: "https://agent402.tools", limits: createMemoryLimits(), now: () => clock.t, sendEmail: async (m) => { sent.push({ to: m.to, code: (/\b(\d{6})\b/.exec(m.text) || [])[1] }); return true; }, log: () => {} });
   const app = express();
   oa.mount(app, { express, clientIp: (r) => String(r.headers["x-test-ip"] || "127.0.0.1") });
+  app.use((req, res) => res.status(404).json({ fellThrough: true }));
   const server = await new Promise((r) => { const x = app.listen(0, "127.0.0.1", () => r(x)); });
   const U = `http://127.0.0.1:${server.address().port}`;
-  const regFrom = (ip) => fetch(`${U}/oauth/register`, { method: "POST", headers: { "content-type": "application/json", "x-test-ip": ip }, body: JSON.stringify({ redirect_uris: ["https://claude.ai/cb"] }) });
-  try {
-    const n = base.mcpOAuth.registerPerIp;
-    const codes = [];
-    for (let i = 0; i <= n; i++) codes.push((await regFrom(`2001:db8:5:6:${(i + 1).toString(16)}::${i + 1}`)).status);
-    ok(codes.slice(0, n).every((c) => c === 201) && codes[n] === 429, `addresses in one IPv6 /64 share one registration count (${codes.join(",")})`);
-    ok((await regFrom("2001:db8:5:7::1")).status === 201, "another /64 has its own count");
-    // Pending sign-ins: past the cap no new one starts.
-    const client = Object.keys(body.clients)[0];
-    useGuardsTable({ ...base, mcpOAuth: { ...base.mcpOAuth, pendingMax: Object.keys(body.reqs || {}).length + 1 } });
-    const auth = (ip) => fetch(`${U}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: client, redirect_uri: "https://claude.ai/cb", state: "s", code_challenge_method: "S256", code_challenge: "A".repeat(43) })}`, { redirect: "manual", headers: { "x-test-ip": ip } });
-    const a1 = await auth("198.51.100.1"), a2 = await auth("198.51.100.2");
-    ok(a1.status === 303 && a2.status === 503 && !a2.headers.get("location"), `past the pending cap a new sign-in answers 503 (${a1.status}, ${a2.status})`);
-    // The document's size: a registration that would pass it answers 503.
-    useGuardsTable({ ...base, mcpOAuth: { ...base.mcpOAuth, documentMaxBytes: Buffer.byteLength(JSON.stringify(body)) + 10 } });
-    ok((await regFrom("192.0.2.200")).status === 503, "a registration that would pass the document's size cap answers 503");
-  } finally {
-    server.close();
-    useGuardsTable(base);
-    delete process.env.CREDITS_SALES; delete process.env.MCP_OAUTH;
-  }
+  const h = { oa, stores, clock, sent, U, close: () => server.close() };
+  h.register = (ip, uris = ["https://claude.ai/cb"]) => fetch(`${U}/oauth/register`, { method: "POST", headers: { "content-type": "application/json", "x-test-ip": ip }, body: JSON.stringify({ redirect_uris: uris }) });
+  h.client = async (ip) => (await (await h.register(ip)).json()).client_id;
+  h.authorize = (ip, client) => fetch(`${U}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: client, redirect_uri: "https://claude.ai/cb", state: "s", code_challenge_method: "S256", code_challenge: "A".repeat(43) })}`, { redirect: "manual", headers: { "x-test-ip": ip } });
+  // A started sign-in from `ip`: its rid, cookie and CSRF token (null when refused).
+  h.start = async (ip, client) => {
+    const a = await h.authorize(ip, client);
+    if (a.status !== 303) return { status: a.status };
+    const rid = new URL(a.headers.get("location"), U).searchParams.get("rid");
+    const cookie = (a.headers.get("set-cookie") || "").split(";")[0];
+    const pg = await fetch(`${U}/oauth/consent?rid=${rid}`, { headers: { cookie, "x-test-ip": ip } });
+    const html = await pg.text();
+    return { status: a.status, rid, cookie, ip, pageStatus: pg.status, csrf: (/name="csrf" value="([^"]+)"/.exec(html) || [])[1] };
+  };
+  h.post = (s, fields) => fetch(`${U}/oauth/consent`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: s.cookie, "x-test-ip": s.ip, "sec-fetch-site": "same-origin" }, body: new URLSearchParams({ rid: s.rid, csrf: s.csrf, ...fields }).toString() });
+  h.page = (s) => fetch(`${U}/oauth/consent?rid=${s.rid}`, { headers: { cookie: s.cookie, "x-test-ip": s.ip } });
+  return h;
 }
+const signedIn = (html) => /name="keyId"|No open balance/.test(html);
+
+// Per-address limits fold IPv6 by /64.
+{
+  const h = await harness();
+  try {
+    const n = BASE_TABLE.mcpOAuth.registerPerIp;
+    const codes = [];
+    for (let i = 0; i <= n; i++) codes.push((await h.register(`2001:db8:5:6:${(i + 1).toString(16)}::${i + 1}`)).status);
+    ok(codes.slice(0, n).every((c) => c === 201) && codes[n] === 429, `addresses in one IPv6 /64 share one registration count (${codes.join(",")})`);
+    ok((await h.register("2001:db8:5:7::1")).status === 201, "another /64 has its own count");
+  } finally { h.close(); }
+}
+
+// G1: wrong codes are counted before any is compared, across parallel requests.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const h = await harness({ latencyMs: 8 });
+  try {
+    const client = await h.client("198.18.0.1");
+    const email = "victim@example.com";
+    const open = [];
+    // One request more than the bound, each from its own address (the per-address limits never bind).
+    for (let i = 0; i < L.failsPerEmail + 2; i++) {
+      const s = await h.start(`198.18.1.${i + 1}`, client);
+      await (await h.post(s, { action: "email", email })).text();
+      s.code = h.sent.at(-1)?.code;
+      open.push(s);
+    }
+    ok(open.every((s) => s.code) && h.sent.length === open.length, `setup: ${open.length} sign-ins for one email, each with its own code`);
+    const keep = open.pop();
+    const wrong = (s, i) => { const c = String((Number(s.code) + 1 + i) % 1_000_000).padStart(6, "0"); return c; };
+    let compared = 0, refused = 0, other = 0;
+    await Promise.all(open.flatMap((s) => Array.from({ length: L.emailCodeTries }, async (_, i) => {
+      const r = await h.post(s, { action: "code", code: wrong(s, i) });
+      const t = await r.text();
+      if (r.status === 429) refused++; else if (/did not match|no longer works/.test(t)) compared++; else other++;
+    })));
+    ok(compared <= L.failsPerEmail && refused > 0, `parallel wrong codes: at most the bound are compared (${compared} compared, ${refused} refused, ${other} other; the bound is the table's)`);
+    const right = await h.post(keep, { action: "code", code: keep.code });
+    ok(right.status === 429 && !signedIn(await right.text()), `after the lockout the right code is refused too (${right.status})`);
+  } finally { h.close(); }
+}
+
+// G1 also bounds a correct sign-in's own count: right codes never lock an email out.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const h = await harness();
+  try {
+    const client = await h.client("198.18.2.1");
+    let ins = 0;
+    for (let i = 0; i < L.failsPerEmail + 2; i++) {
+      const s = await h.start(`198.18.3.${i + 1}`, client);
+      await h.post(s, { action: "email", email: "often@example.com" });
+      if (signedIn(await (await h.post(s, { action: "code", code: h.sent.at(-1).code })).text())) ins++;
+    }
+    ok(ins === L.failsPerEmail + 2, `right codes signed in ${ins} times in a row, past the wrong-code bound`);
+  } finally { h.close(); }
+}
+
+// G2: pending sign-ins are capped per address and per app, each evicting its own oldest.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const A = 3;
+  const h = await harness({ table: { pendingMax: A * L.pendingPerAddress + 1 } });
+  try {
+    const firsts = [], lasts = [];
+    for (let a = 0; a < A; a++) {
+      const ip = `198.18.10.${a + 1}`;
+      const client = await h.client(ip);
+      const mine = [];
+      for (let i = 0; i < L.pendingPerAddress + 2; i++) mine.push(await h.start(ip, client));
+      ok(mine.every((s) => s.status === 303), `address ${a + 1}: every sign-in it starts is answered (its own oldest gives way)`);
+      firsts.push(mine[0]); lasts.push(mine.at(-1));
+    }
+    ok((await h.page(firsts[0])).status === 400 && (await h.page(lasts[0])).status === 200, "an address past its cap loses its own oldest pending sign-in, never its newest");
+    const fresh = await h.start("198.18.11.1", await h.client("198.18.11.1"));
+    ok(fresh.status === 303 && fresh.pageStatus === 200, `${A} addresses cannot fill the pending cap for anyone else (${fresh.status})`);
+    useGuardsTable({ ...guardsTable(), mcpOAuth: { ...guardsTable().mcpOAuth, pendingMax: BASE_TABLE.mcpOAuth.pendingMax } });
+    const shared = await h.client("198.18.12.1");
+    for (let i = 0; i < L.pendingPerClient + 2; i++) await h.start(`198.18.13.${i + 1}`, shared);
+    const held = Object.values(h.stores.reqs.body.reqs || {}).filter((r) => r.clientId === shared).length;
+    ok(held === L.pendingPerClient, `one app's pending sign-ins stay at its cap (${held})`);
+  } finally { h.close(); }
+}
+// The global cap stays as the last resort.
+{
+  const h = await harness({ table: { pendingMax: 1 } });
+  try {
+    const c1 = await h.client("198.18.20.1"), c2 = await h.client("198.18.20.2");
+    const a1 = await h.authorize("198.18.20.1", c1), a2 = await h.authorize("198.18.20.2", c2);
+    ok(a1.status === 303 && a2.status === 503 && !a2.headers.get("location"), `past the global pending cap a new sign-in answers 503 (${a1.status}, ${a2.status})`);
+  } finally { h.close(); }
+}
+
+// G3: registrations from many addresses cannot close sign-in to a new user.
+{
+  const h = await harness();
+  try {
+    const one = await h.client("198.18.30.1");
+    const per = Buffer.byteLength(JSON.stringify(h.stores.clients.body));
+    useGuardsTable({ ...guardsTable(), mcpOAuth: { ...guardsTable().mcpOAuth, documentMaxBytes: per * 8 } });
+    const codes = [];
+    for (let i = 0; i < 40; i++) codes.push((await h.register(`198.18.31.${i + 1}`)).status);
+    ok(codes.every((c) => c === 201), `registrations past the store's size give way to one another (${[...new Set(codes)].join(",")})`);
+    ok(Buffer.byteLength(JSON.stringify(h.stores.clients.body)) <= per * 8, "and the registrations' store stays inside its size");
+    const s = await h.start("198.18.32.1", await h.client("198.18.32.1"));
+    ok(s.status === 303 && s.pageStatus === 200, `a new user registers and starts a sign-in after the flood (${s.status})`);
+    ok((await h.authorize("198.18.30.1", one)).status === 400, "the oldest app that never signed anyone in was the one let go");
+    useGuardsTable({ ...guardsTable(), mcpOAuth: { ...guardsTable().mcpOAuth, documentMaxBytes: 10 } });
+    ok((await h.register("198.18.33.1")).status === 503, "a registration that cannot fit at all answers 503");
+  } finally { h.close(); }
+}
+// G3: an app that never completed a sign-in is let go after a short idle; one that did stays.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const h = await harness({ balances: [{ keyId: "abcdef123456", balanceUsd: 5, disabled: false }] });
+  try {
+    const idle = await h.client("198.18.40.1");
+    const used = await h.client("198.18.40.2");
+    const s = await h.start("198.18.40.2", used);
+    await h.post(s, { action: "email", email: "user@example.com" });
+    const html = await (await h.post(s, { action: "code", code: h.sent.at(-1).code })).text();
+    const a = await h.post({ ...s, csrf: (/name="csrf" value="([^"]+)"/.exec(html) || [])[1] }, { action: "approve", keyId: "abcdef123456", capUsd: "1" });
+    ok(a.status === 303 && new URL(a.headers.get("location")).searchParams.get("code"), "setup: one app completes a sign-in");
+    h.clock.t += Math.max(L.unusedClientIdleMs, 3_600_000) + 60_000;
+    await h.register("198.18.40.3");
+    ok((await h.authorize("198.18.40.1", idle)).status === 400, "an app that never signed anyone in is gone after the idle period");
+    ok((await h.authorize("198.18.40.2", used)).status === 303, "an app that signed someone in is kept");
+  } finally { h.close(); }
+}
+
+// G3: a token that fails the cheap check never reads the store, and a token found bad is not read twice.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const h = await harness();
+  try {
+    const mcpPost = (token) => fetch(`${h.U}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "x-test-ip": "198.18.50.1" }, body: "{}" });
+    const before = h.stores.grants.reads;
+    let last;
+    for (let i = 0; i < L.badTokenMax + 5; i++) last = await mcpPost("a402m_" + randomBytes(32).toString("base64url"));
+    ok(h.stores.grants.reads === before, `${L.badTokenMax + 5} made-up tokens read the store ${h.stores.grants.reads - before} times`);
+    ok(last.status === 429, `and past the bound they are answered 429 (${last.status})`);
+    const minted = h.oa._mintAccessForTest();
+    const r0 = h.stores.grants.reads;
+    const m1 = await fetch(`${h.U}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${minted}`, "x-test-ip": "198.18.50.2" }, body: "{}" });
+    await mcpPost(minted);
+    ok([401, 429].includes(m1.status) && h.stores.grants.reads - r0 === 1, `a well-formed token that is not on file is read once, then held as bad for a while (${h.stores.grants.reads - r0} reads)`);
+  } finally { h.close(); }
+}
+
+// Code sends: a service-wide hourly budget and a per-address daily total, refused with the same answer.
+{
+  const h = await harness({ table: { sendsGlobalPerHour: 2, sendsPerEmailDay: 1 } });
+  try {
+    const client = await h.client("198.18.60.1");
+    const send = async (ip, email) => { const s = await h.start(ip, client); const r = await h.post(s, { action: "email", email }); return { status: r.status, html: await r.text() }; };
+    const a = await send("198.18.61.1", "one@example.com");
+    const b = await send("198.18.61.2", "one@example.com");
+    ok(a.status === 200 && b.status === 429 && /Too many requests/.test(b.html) && h.sent.length === 1, `a second code to one address in a day is refused (${a.status}, ${b.status})`);
+    await send("198.18.61.3", "two@example.com");
+    const c = await send("198.18.61.4", "three@example.com");
+    ok(c.status === 429 && /Too many requests/.test(c.html) && h.sent.length === 2, `past the service-wide hourly budget a send is refused with the same answer (${c.status}, ${h.sent.length} sent)`);
+  } finally { h.close(); }
+}
+useGuardsTable(BASE_TABLE);
+delete process.env.CREDITS_SALES; delete process.env.MCP_OAUTH;
+
 
 // ---- stubs: Stripe and mail ------------------------------------------------------------
 const sessions = new Map();
