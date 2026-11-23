@@ -1,6 +1,6 @@
 // The credits purchase checks, the card review signals a purchase is refused
 // on, the automatic fraud-warning refund total, the failed-key bound and the
-// connector sign-in's limits are private. They are read from CREDITS_GUARDS_JSON (raw JSON or
+// sign-in limits (the connector's and the balance page's) are private. They are read from CREDITS_GUARDS_JSON (raw JSON or
 // base64; a host variable in production) or from the file named by
 // CREDITS_GUARDS_FILE, and are never committed, printed or logged.
 //
@@ -13,8 +13,9 @@
 //     mcpOAuth: { emailCodeTries, sendsPerEmail, sendsPerIp, failsPerEmail,
 //                 lockoutMs, tokenPerIp, authorizePerIp, registerPerIp, windowMs,
 //                 badTokenMax, pendingMax, documentMaxBytes, pendingPerAddress,
-//                 pendingPerClient, sendsGlobalPerHour, sendsPerEmailDay,
-//                 unusedClientIdleMs } }
+//                 pendingPerClient, pendingPerNetwork, sendsGlobalPerHour,
+//                 sendsPerEmailDay, unusedClientIdleMs },
+//     account:  { sendsGlobalPerHour, sendsPerNetHour } }
 //
 // There are no defaults in code. Without a complete table credit sales and
 // the connector sign-in stay off (creditsSalesEnabled in src/credits-sales.js
@@ -26,7 +27,8 @@ const COUNTS = {
   purchase: ["buyerPerHour", "buyerPerDay", "sourcePerHour", "sourcePerDay", "failedMax", "failedWindowMs", "failedHoldMs"],
   efw: ["warningRefundDayMaxUsd"],
   badKey: ["failedMax", "windowMs"],
-  mcpOAuth: ["emailCodeTries", "sendsPerEmail", "sendsPerIp", "failsPerEmail", "lockoutMs", "tokenPerIp", "authorizePerIp", "registerPerIp", "windowMs", "badTokenMax", "pendingMax", "documentMaxBytes", "pendingPerAddress", "pendingPerClient", "sendsGlobalPerHour", "sendsPerEmailDay", "unusedClientIdleMs"],
+  mcpOAuth: ["emailCodeTries", "sendsPerEmail", "sendsPerIp", "failsPerEmail", "lockoutMs", "tokenPerIp", "authorizePerIp", "registerPerIp", "windowMs", "badTokenMax", "pendingMax", "documentMaxBytes", "pendingPerAddress", "pendingPerClient", "pendingPerNetwork", "sendsGlobalPerHour", "sendsPerEmailDay", "unusedClientIdleMs"],
+  account: ["sendsGlobalPerHour", "sendsPerNetHour"],
 };
 const LISTS = { flagged: ["outcomeTypes", "riskLevels"] };
 /** Every key the table must hold, as "section.key" (for docs and tests). */

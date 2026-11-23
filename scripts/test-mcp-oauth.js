@@ -199,10 +199,11 @@ async function harness({ table = {}, latencyMs = 0, balances = [] } = {}) {
   const h = { oa, stores, clock, sent, U, close: () => server.close() };
   h.register = (ip, uris = ["https://claude.ai/cb"]) => fetch(`${U}/oauth/register`, { method: "POST", headers: { "content-type": "application/json", "x-test-ip": ip }, body: JSON.stringify({ redirect_uris: uris }) });
   h.client = async (ip) => (await (await h.register(ip)).json()).client_id;
-  h.authorize = (ip, client) => fetch(`${U}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: client, redirect_uri: "https://claude.ai/cb", state: "s", code_challenge_method: "S256", code_challenge: "A".repeat(43) })}`, { redirect: "manual", headers: { "x-test-ip": ip } });
+  // `cookie`: the sign-in cookie the browser already holds (a browser's earlier sign-in), if any.
+  h.authorize = (ip, client, cookie = null) => fetch(`${U}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: client, redirect_uri: "https://claude.ai/cb", state: "s", code_challenge_method: "S256", code_challenge: "A".repeat(43) })}`, { redirect: "manual", headers: { "x-test-ip": ip, ...(cookie ? { cookie } : {}) } });
   // A started sign-in from `ip`: its rid, cookie and CSRF token (null when refused).
-  h.start = async (ip, client) => {
-    const a = await h.authorize(ip, client);
+  h.start = async (ip, client, jar = null) => {
+    const a = await h.authorize(ip, client, jar);
     if (a.status !== 303) return { status: a.status };
     const rid = new URL(a.headers.get("location"), U).searchParams.get("rid");
     const cookie = (a.headers.get("set-cookie") || "").split(";")[0];
@@ -228,36 +229,74 @@ const signedIn = (html) => /name="keyId"|No open balance/.test(html);
   } finally { h.close(); }
 }
 
-// G1: wrong codes are counted before any is compared, across parallel requests.
+// G1: wrong codes are counted before any is compared, across parallel requests:
+// per requester address over every sign-in it holds, and per emailed code.
+const wrongCode = (s, i) => String((Number(s.code) + 1 + i) % 1_000_000).padStart(6, "0");
+async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ length: Math.min(pool, jobs.length) }, async () => { while (jobs.length) await jobs.shift()(); })); }
 {
   const L = BASE_TABLE.mcpOAuth;
-  const h = await harness({ latencyMs: 8 });
+  // One code's tries outnumber the address bound, so the address bound is the one met.
+  const h = await harness({ latencyMs: 8, table: { emailCodeTries: L.failsPerEmail + 2 } });
   try {
     const client = await h.client("198.18.0.1");
     const email = "victim@example.com";
+    const ip = "198.18.1.1";
     const open = [];
-    // One request more than the bound, each from its own address (the per-address limits never bind).
-    for (let i = 0; i < L.failsPerEmail + 2; i++) {
-      const s = await h.start(`198.18.1.${i + 1}`, client);
-      await (await h.post(s, { action: "email", email })).text();
-      s.code = h.sent.at(-1)?.code;
-      open.push(s);
-    }
-    ok(open.every((s) => s.code) && h.sent.length === open.length, `setup: ${open.length} sign-ins for one email, each with its own code`);
-    const keep = open.pop();
-    const wrong = (s, i) => { const c = String((Number(s.code) + 1 + i) % 1_000_000).padStart(6, "0"); return c; };
+    // Two sign-ins on one address (two browsers), each with its own code.
+    for (let i = 0; i < 2; i++) open.push(await h.start(ip, client));
+    for (const s of open) { await (await h.post(s, { action: "email", email })).text(); s.code = h.sent.at(-1)?.code; }
+    ok(open.every((s) => s.code && s.csrf) && h.sent.length === open.length, `setup: ${open.length} sign-ins on one address, each with its own code`);
     let compared = 0, refused = 0, other = 0;
-    // Every guess in flight at once, up to a pool of concurrent connections.
-    const jobs = open.flatMap((s) => Array.from({ length: L.emailCodeTries }, (_, i) => async () => {
-      const r = await h.post(s, { action: "code", code: wrong(s, i) });
+    const jobs = open.flatMap((s) => Array.from({ length: L.failsPerEmail + 2 }, (_, i) => async () => {
+      const r = await h.post(s, { action: "code", code: wrongCode(s, i) });
       const t = await r.text();
       if (r.status === 429) refused++; else if (/did not match|no longer works/.test(t)) compared++; else other++;
     }));
-    const POOL = 48;
-    await Promise.all(Array.from({ length: Math.min(POOL, jobs.length) }, async () => { while (jobs.length) await jobs.shift()(); }));
-    ok(compared <= L.failsPerEmail && refused > 0, `parallel wrong codes: at most the bound are compared (${compared} compared, ${refused} refused, ${other} other; the bound is the table's)`);
-    const right = await h.post(keep, { action: "code", code: keep.code });
-    ok(right.status === 429 && !signedIn(await right.text()), `after the lockout the right code is refused too (${right.status})`);
+    await inParallel(jobs);
+    ok(compared <= L.failsPerEmail && refused > 0, `parallel wrong codes from one address: at most the bound are compared (${compared} compared, ${refused} refused, ${other} other; the bound is the table's)`);
+    const s2 = await h.start(ip, client, open[0].cookie);
+    const sent = h.sent.length;
+    const again = await h.post(s2, { action: "email", email: "other@example.com" });
+    ok(again.status === 429 && /Too many requests/.test(await again.text()) && h.sent.length === sent, `the locked address is sent no new code, and is told so (${again.status})`);
+    // The owner, from an address of its own, signs in with its own fresh code.
+    const own = await h.start("198.18.1.200", client);
+    await h.post(own, { action: "email", email });
+    const html = await (await h.post(own, { action: "code", code: h.sent.at(-1).code })).text();
+    ok(signedIn(html), "the email's owner, on another address, still signs in with its own code");
+  } finally { h.close(); }
+}
+// G1 per code: parallel wrong guesses at one emailed code spend its tries together.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const h = await harness({ latencyMs: 8, table: { failsPerEmail: L.emailCodeTries * 4 + 10 } });
+  try {
+    const client = await h.client("198.18.4.1");
+    const s = await h.start("198.18.4.2", client);
+    await h.post(s, { action: "email", email: "one-code@example.com" });
+    s.code = h.sent.at(-1).code;
+    const jobs = Array.from({ length: L.emailCodeTries * 3 }, (_, i) => async () => { await (await h.post(s, { action: "code", code: wrongCode(s, i) })).text(); });
+    await inParallel(jobs);
+    const right = await h.post(s, { action: "code", code: s.code });
+    ok(!signedIn(await right.text()), `after parallel wrong guesses past its tries, the code itself no longer signs in (${right.status})`);
+  } finally { h.close(); }
+}
+// A stranger's wrong codes for someone else's email never lock its owner out.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const h = await harness();
+  try {
+    const client = await h.client("198.18.5.1");
+    const email = "owner@example.com";
+    // Strangers, each on its own address, start sign-ins with the owner's email and guess.
+    for (let i = 0; i < L.failsPerEmail + 2; i++) {
+      const s = await h.start(`198.18.6.${i + 1}`, client);
+      await h.post(s, { action: "email", email });
+      for (let k = 0; k < L.emailCodeTries; k++) await (await h.post(s, { action: "code", code: "000000" === h.sent.at(-1).code ? "000001" : "000000" })).text();
+    }
+    const own = await h.start("198.18.7.1", client);
+    await h.post(own, { action: "email", email });
+    const r = await h.post(own, { action: "code", code: h.sent.at(-1).code });
+    ok(r.status === 200 && signedIn(await r.text()), `strangers' wrong codes for an email do not lock its owner out (${r.status})`);
   } finally { h.close(); }
 }
 
@@ -267,9 +306,11 @@ const signedIn = (html) => /name="keyId"|No open balance/.test(html);
   const h = await harness();
   try {
     const client = await h.client("198.18.2.1");
-    let ins = 0;
+    let ins = 0, jar = null;
+    // One browser on one address, so the address bound is the one that would bind.
     for (let i = 0; i < L.failsPerEmail + 2; i++) {
-      const s = await h.start(`198.18.3.${i + 1}`, client);
+      const s = await h.start("198.18.3.1", client, jar);
+      jar = s.cookie;
       await h.post(s, { action: "email", email: "often@example.com" });
       if (signedIn(await (await h.post(s, { action: "code", code: h.sent.at(-1).code })).text())) ins++;
     }
@@ -277,7 +318,9 @@ const signedIn = (html) => /name="keyId"|No open balance/.test(html);
   } finally { h.close(); }
 }
 
-// G2: pending sign-ins are capped per address and per app, each evicting its own oldest.
+// G2: pending sign-ins are capped per browser, per address and per app; a
+// requester over a cap lets go of its own oldest, or its new one is refused,
+// never another requester's.
 {
   const L = BASE_TABLE.mcpOAuth;
   const A = 3;
@@ -288,27 +331,70 @@ const signedIn = (html) => /name="keyId"|No open balance/.test(html);
       const ip = `198.18.10.${a + 1}`;
       const client = await h.client(ip);
       const mine = [];
-      for (let i = 0; i < L.pendingPerAddress + 2; i++) mine.push(await h.start(ip, client));
-      ok(mine.every((s) => s.status === 303), `address ${a + 1}: every sign-in it starts is answered (its own oldest gives way)`);
+      let jar = null;
+      for (let i = 0; i < L.pendingPerAddress + 2; i++) { const s = await h.start(ip, client, jar); jar = s.cookie || jar; mine.push(s); }
+      ok(mine.every((s) => s.status === 303), `address ${a + 1}: every sign-in one browser starts is answered (its own oldest gives way)`);
       firsts.push(mine[0]); lasts.push(mine.at(-1));
     }
-    ok((await h.page(firsts[0])).status === 400 && (await h.page(lasts[0])).status === 200, "an address past its cap loses its own oldest pending sign-in, never its newest");
+    ok((await h.page(firsts[0])).status === 400 && (await h.page(lasts[0])).status === 200, "a browser past its cap loses its own oldest pending sign-in, never its newest");
     const fresh = await h.start("198.18.11.1", await h.client("198.18.11.1"));
     ok(fresh.status === 303 && fresh.pageStatus === 200, `${A} addresses cannot fill the pending cap for anyone else (${fresh.status})`);
     useGuardsTable({ ...guardsTable(), mcpOAuth: { ...guardsTable().mcpOAuth, pendingMax: BASE_TABLE.mcpOAuth.pendingMax } });
     const shared = await h.client("198.18.12.1");
-    for (let i = 0; i < L.pendingPerClient + 2; i++) await h.start(`198.18.13.${i + 1}`, shared);
+    const early = await h.start("198.18.13.1", shared);
+    for (let i = 1; i < L.pendingPerClient + 2; i++) await h.start(`198.18.13.${i + 1}`, shared);
     const held = Object.values(h.stores.reqs.body.reqs || {}).filter((r) => r.clientId === shared).length;
-    ok(held === L.pendingPerClient, `one app's pending sign-ins stay at its cap (${held})`);
+    ok(held === L.pendingPerClient && (await h.page(early)).status === 200, `one app's pending sign-ins stay at its cap, and its first is kept (${held})`);
   } finally { h.close(); }
 }
-// The global cap stays as the last resort.
+// A stranger on the same address cannot expire another person's pending sign-in.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const h = await harness();
+  try {
+    const ip = "203.0.113.9";
+    const victim = await h.start(ip, await h.client("198.18.14.1"));
+    await h.post(victim, { action: "email", email: "nat-user@example.com" });
+    const code = h.sent.at(-1).code;
+    const other = await h.client("198.18.14.2");
+    const codes = [];
+    for (let i = 0; i < L.pendingPerAddress + 3; i++) codes.push((await h.authorize(ip, other)).status);
+    ok(codes.every((c) => c === 303 || c === 429), `a stranger's sign-ins past the address cap are answered, or refused (${[...new Set(codes)].join(",")})`);
+    ok((await h.page(victim)).status === 200, "a stranger on the same address does not expire another person's pending sign-in");
+    ok(signedIn(await (await h.post(victim, { action: "code", code })).text()), "and that person signs in with the code they were sent");
+    const retry = await h.start(ip, await h.client("198.18.14.3"), victim.cookie);
+    ok(retry.status === 303 && retry.pageStatus === 200, `a browser holding a sign-in on a full address starts a new one in place of its own (${retry.status})`);
+  } finally { h.close(); }
+}
+// A caller spread over many /64s and apps cannot make a fresh, unrelated sign-in fail.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const P = 3 * L.pendingPerAddress + 4;
+  const h = await harness({ table: { pendingMax: P, authorizePerIp: 1000, registerPerIp: 1000 } });
+  try {
+    const early = await h.start("2001:db8:99:1::1", await h.client("2001:db8:99:1::1"));
+    ok(early.status === 303 && early.pageStatus === 200, "setup: an unrelated sign-in is pending before the flood");
+    const codes = [];
+    let client = null;
+    for (let i = 0; i < P * 4; i++) {
+      const ip = `2001:db8:${(i % 3) + 1}:${i + 1}::1`;
+      if (i % 4 === 0) client = await h.client(ip);
+      codes.push((await h.authorize(ip, client)).status);
+    }
+    ok(codes.every((c) => c === 303 || c === 429), `the flood is answered or refused, never 503 (${[...new Set(codes)].join(",")})`);
+    ok(Object.keys(h.stores.reqs.body.reqs || {}).length <= P, "and the pending map stays inside its cap");
+    const fresh = await h.start("2001:db8:77:1::1", await h.client("2001:db8:77:1::1"));
+    ok(fresh.status === 303 && fresh.pageStatus === 200, `a fresh, unrelated sign-in starts after the flood (${fresh.status})`);
+    ok((await h.page(early)).status === 200, "and the unrelated sign-in started before it is kept: the flood's own entries give way first");
+  } finally { h.close(); }
+}
+// A full map makes room instead of refusing: the last resort is never a 503.
 {
   const h = await harness({ table: { pendingMax: 1 } });
   try {
     const c1 = await h.client("198.18.20.1"), c2 = await h.client("198.18.20.2");
     const a1 = await h.authorize("198.18.20.1", c1), a2 = await h.authorize("198.18.20.2", c2);
-    ok(a1.status === 303 && a2.status === 503 && !a2.headers.get("location"), `past the global pending cap a new sign-in answers 503 (${a1.status}, ${a2.status})`);
+    ok(a1.status === 303 && a2.status === 303, `past the global pending cap a new sign-in still starts (${a1.status}, ${a2.status})`);
   } finally { h.close(); }
 }
 

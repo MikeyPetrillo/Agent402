@@ -233,6 +233,29 @@ ok(acct.requestSignIn("k@x.com", "2.2.2.2").status === 429 && acct.requestSignIn
 const ipAcct = createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async () => true, store, ipLimiter: createLimiter("t-ip2", { perMin: 2, perHour: 40 }), emailLimiter: createLimiter("t-email2", { perMin: 100, perHour: 100 }), now: () => clock, log: () => {} });
 ipAcct.requestSignIn("a1@x.com", "3.3.3.3"); ipAcct.requestSignIn("a2@x.com", "3.3.3.3");
 ok(ipAcct.requestSignIn("a3@x.com", "3.3.3.3").status === 429, "...and per client address");
+// The sign-in email draws on hourly send budgets from the private table, one
+// for the whole service and one per client network (an IPv6 /64): past either
+// the answer is the same and no mail is sent.
+{
+  const { useGuardsTable, guardsTable } = await import("./lib/credits-guards-table.js");
+  const { createMemoryLimits } = await import("../src/shared-limits.js");
+  const keep = guardsTable();
+  const sentTo = [];
+  const mk = () => createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async (m) => { sentTo.push(m.to); return true; }, store, limits: createMemoryLimits(), now: () => clock, log: () => {} });
+  try {
+    useGuardsTable({ ...keep, account: { ...keep.account, sendsGlobalPerHour: 2 } });
+    const g = mk();
+    const rs = [];
+    for (let i = 0; i < 3; i++) { const r = g.requestSignIn(`spray${i}@x.com`, `10.0.${i}.1`); rs.push(r); await r.work; }
+    ok(rs.every((r) => r.status === 200 && r.message === SIGN_IN_ANSWER) && sentTo.length === 2, `past the service-wide hourly send budget the answer is the same and no mail is sent (${sentTo.length} sent)`);
+    sentTo.length = 0;
+    useGuardsTable({ ...keep, account: { ...keep.account, sendsPerNetHour: 1 } });
+    const n = mk();
+    const rn = [];
+    for (const [e, ip] of [["n1@x.com", "2001:db8:1:2::1"], ["n2@x.com", "2001:db8:1:2::99"], ["n3@x.com", "2001:db8:1:3::1"]]) { const r = n.requestSignIn(e, ip); rn.push(r); await r.work; }
+    ok(rn.every((r) => r.status === 200 && r.message === SIGN_IN_ANSWER) && sentTo.join() === "n1@x.com,n3@x.com", `past one /64's hourly send budget the answer is the same and no mail is sent; another /64 has its own (${sentTo.join()})`);
+  } finally { useGuardsTable(keep); }
+}
 const token = new URL(mail[0].text.match(/https:\/\/\S+/)[0]).searchParams.get("t");
 const tampered = token.slice(0, -2) + (token.endsWith("AA") ? "BB" : "AA");
 ok((await acct.redeem(tampered)) === null, "a tampered token signs nobody in");

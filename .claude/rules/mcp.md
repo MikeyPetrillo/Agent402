@@ -99,7 +99,10 @@ Loaded when a connector or front-door file is read.
   grant. State is three size-capped json-documents (apps, pending sign-ins, grants with codes and tokens as
   digests; `clientStore`/`requestStore` passed from server.js); a registration past the cap evicts the oldest
   app that never completed a sign-in, and such apps are pruned after an idle limit. Pending sign-ins are
-  capped per address and per app, each evicting its own oldest, before the global cap. The `/mcp` reader is
+  capped per browser (the sign-in cookie it presents names its owner), per address, per wider network (an
+  IPv6 /48) and per app: a requester over a cap lets go of its own oldest there, or its new request is
+  refused (429), never another requester's; a full map refuses no one and lets go of the oldest request of
+  the network or app holding the most. The `/mcp` reader is
   mounted before the connector: a token of ours resolves to a grant (`req.mcpCreditsGrant`) or answers 401
   with `WWW-Authenticate` naming the metadata; no token, or someone else's, passes untouched. `/mcp/credits`
   is the same connector that answers 401 without a token. A paid tool under a grant is replayed with a
@@ -109,8 +112,10 @@ Loaded when a connector or front-door file is read.
   variables (docs/configuration.md); every limit (code tries, sends, lockout, per-address rates counted by
   `limiterKey`, so an IPv6 /64 is one address, the bad-token bound, the pending-request cap and the
   document size) comes from the private credits table (`mcpOAuth` in `src/credits-guards.js`), and the
-  sign-in stays off without it. A wrong code is counted on the shared per-email counter before it is compared
-  (a right code gives its count back); code sends have a global hourly budget and a per-address daily total.
+  sign-in stays off without it. A wrong code is counted before it is compared on two shared counters,
+  the requester's address and the emailed code (a right code gives its counts back), never per email, so a
+  stranger's guesses never lock an email's owner out; an address past its bound is sent no new code. Code
+  sends have a global hourly budget and a per-address daily total.
   Tokens carry a server-keyed tag: a made-up token is refused with no store read, a token found bad is held
   as bad briefly, and only failed lookups are slowed (429 past the bound); a valid token is never refused.
   Under a grant a refusal names no balance and no key. The sign-in pages (one h1 each, errors with

@@ -17,7 +17,7 @@ import { stripScripts } from "./lib/html-text.js";
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { bootPaidServer } from "./lib/paid-boot.js";
-import { guardsTable } from "./lib/credits-guards-table.js";
+import { guardsTable, useGuardsTable } from "./lib/credits-guards-table.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -158,12 +158,17 @@ const waitCode = async (to, n) => {
   return null;
 };
 
+// One code's tries outnumber the address bound, so the lockout always lands
+// on a code attempt (the page under test), never on the send of a new code.
+{ const t = guardsTable(); useGuardsTable({ ...t, mcpOAuth: { ...t.mcpOAuth, emailCodeTries: t.mcpOAuth.failsPerEmail + 2 } }); }
 const OL = guardsTable().mcpOAuth;
 const srv = await bootPaidServer({ label: "mcp-oauth-pages", args: ["--import", "./scripts/lib/stripe-stub-preload.js"], env: {
   STRIPE_SECRET_KEY: "sk_test_stub", STRIPE_STUB_PORT: String(stripeStub.address().port), STRIPE_WEBHOOK_SECRET: "",
   CREDITS_SALES: "on", MCP_OAUTH: "on", CREDITS_GUARDS_JSON: process.env.CREDITS_GUARDS_JSON,
   ZEPTOMAIL_URL: `http://127.0.0.1:${mailSink.address().port}/send`, ZEPTOMAIL_TOKEN: "t", RESEND_API_KEY: "", EMAIL_FROM: "credits@agent402.tools", COMPANY_POSTAL_ADDRESS: "PO Box 1, Test Town, NC 00000",
   BASE_URL: "https://agent402.tools", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
+  // One trusted hop, as in production, so a test browser can stand at an address of its own.
+  TRUST_PROXY_HOPS: "1",
 } });
 const B = srv.url;
 const same = { "sec-fetch-site": "same-origin" };
@@ -193,13 +198,15 @@ const csrfIn = (html) => (/name="csrf" value="([^"]+)"/.exec(html) || [])[1];
 
 try {
   const reg = await (await fetch(`${B}/oauth/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ redirect_uris: [REDIRECT], client_name: "Claude" }) })).json();
-  const start = async () => {
+  // A browser: `ip` its client address (none: this machine's), `jar` the sign-in cookie it already holds.
+  const from = (s) => (s?.ip ? { "x-forwarded-for": s.ip } : {});
+  const start = async ({ ip = null, jar = null } = {}) => {
     const v = randomBytes(32).toString("base64url");
-    const a = await fetch(`${B}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: REDIRECT, state: "st", code_challenge_method: "S256", code_challenge: createHash("sha256").update(v).digest("base64url") })}`, { redirect: "manual" });
-    return { rid: new URL(a.headers.get("location"), B).searchParams.get("rid"), cookie: (a.headers.get("set-cookie") || "").split(";")[0] };
+    const a = await fetch(`${B}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: REDIRECT, state: "st", code_challenge_method: "S256", code_challenge: createHash("sha256").update(v).digest("base64url") })}`, { redirect: "manual", headers: { ...from({ ip }), ...(jar ? { cookie: jar } : {}) } });
+    return { ip, rid: new URL(a.headers.get("location"), B).searchParams.get("rid"), cookie: (a.headers.get("set-cookie") || "").split(";")[0] };
   };
-  const page = async (s) => (await fetch(`${B}/oauth/consent?rid=${s.rid}`, { headers: { cookie: s.cookie } })).text();
-  const post = async (s, fields, html) => { const r = await fetch(`${B}/oauth/consent`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: s.cookie, ...same }, body: new URLSearchParams({ rid: s.rid, csrf: csrfIn(html), ...fields }).toString() }); return { status: r.status, location: r.headers.get("location"), html: await r.text() }; };
+  const page = async (s) => (await fetch(`${B}/oauth/consent?rid=${s.rid}`, { headers: { cookie: s.cookie, ...from(s) } })).text();
+  const post = async (s, fields, html) => { const r = await fetch(`${B}/oauth/consent`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: s.cookie, ...from(s), ...same }, body: new URLSearchParams({ rid: s.rid, csrf: csrfIn(html), ...fields }).toString() }); return { status: r.status, location: r.headers.get("location"), html: await r.text() }; };
 
   // ---- the email step ----
   const S = await start();
@@ -228,7 +235,9 @@ try {
   ok(/name="action" value="email"/.test(r.html) && /Send a new code/.test(r.html), "code step: a new code can be asked for in place");
 
   // ---- lockout: the code form is disabled, a new code is offered ----
-  let L = await start();
+  // (one browser on an address of its own: a lockout holds the address that guessed)
+  const LIP = "198.51.100.77";
+  let L = await start({ ip: LIP });
   let lh = await page(L);
   lh = (await post(L, { action: "email", email: "locked@example.com" }, lh)).html;
   let locked = null;
@@ -237,7 +246,7 @@ try {
     if (x.status === 429) { locked = x; break; }
     lh = x.html;
     if (!/id="oc-code"/.test(lh)) lh = (await post(L, { action: "email", email: "locked@example.com" }, lh)).html;
-    if (!/id="oc-code"/.test(lh)) { L = await start(); lh = await page(L); lh = (await post(L, { action: "email", email: "locked@example.com" }, lh)).html; }
+    if (!/id="oc-code"/.test(lh)) { L = await start({ ip: LIP, jar: L.cookie }); lh = await page(L); lh = (await post(L, { action: "email", email: "locked@example.com" }, lh)).html; }
   }
   ok(Boolean(locked), "setup: wrong codes lock the email out");
   if (locked) {
