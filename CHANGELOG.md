@@ -4,9 +4,42 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
-## v2.14.0 - 2026-11-23
+## v2.15.0 - 2026-11-24
 
-### 2026-11-23 (thirty retired tools)
+### 2026-11-24 (chain reads, source credits, caller URLs, receipts by settlement)
+Tools:
+- evm-rpc, eth-call, chain-storage and event-logs read Base, and other chains
+  answer 400; the x402 toolkit's chain reads answer 400 on Monad.
+  wallet-balances reads this server's own RPC lanes, onchain-sql-schema is
+  served from the schema kept here, and the signature lookups read Sourcify's
+  signature database.
+- whois answers registration facts computed from the registry record,
+  domain-availability returns no record fields and holds a daily cap per
+  registry, archive-snapshot answers a computed Wayback Machine link without
+  asking the archive, and cert-transparency makes its second search only with
+  its key. search-suggest reads Wikipedia's opensearch.
+- Answers carry their source's credit where the source asks for one (crt.sh,
+  Team Cymru, Hyperliquid, RugCheck, EAS, GoPlus and Wikipedia), and contract
+  source answers carry each file's license; the catalog text and the 402
+  samples are unchanged.
+- A tool that reads a URL the caller names sends the Agent402-Fetch token in
+  its User-Agent and honors robots.txt for that token; site-crawl matches
+  robots groups on the exact token.
+Payments:
+- The report products settle first under the same plan as the /v1 routes. A
+  streamed answer's signed receipt is kept and fetched by its settlement at
+  /api/receipt/<tx>, and a credits stream names its receipt address in the
+  response head.
+Site:
+- /terms adds a model outputs section and a clause on caller-named URLs, and
+  /crawler describes those reads. The lead sentence scopes signed receipts to
+  successful direct calls. /start shows the wallet new command for a first
+  wallet.
+MCP:
+- The connector sign-in answers every token it cannot accept with 401
+  invalid_token.
+
+### 2026-11-24 (thirty retired tools)
 Tools:
 - onchain-sql-week, onchain-sql-range and fred-release-observations are
   retired and answer 410 naming onchain-sql, onchain-sql and fred-series. A
@@ -33,7 +66,7 @@ Site:
 - /markets lists perpetuals, market signals and DeFi, without an options
   group.
 
-### 2026-11-23 (fred-series from its publishers; code execution retired)
+### 2026-11-24 (fred-series from its publishers; code execution retired)
 Tools:
 - code-run and code-run-pro are retired and answer 410 and name none: code
   execution is no longer offered.
@@ -46,6 +79,8 @@ Tools:
   unchanged; units and frequency are computed here and marked derived. Other
   series IDs answer 404 with the supported list, and the published example is
   now UNRATE.
+
+## v2.14.0 - 2026-11-23
 
 ### 2026-11-23 (redact, then chat)
 Tools:
