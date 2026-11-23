@@ -47,7 +47,8 @@
 //     a URL the request names; the listing must be active, not simulated, and
 //     hold that key active, ed25519, unexpired, with a thumbprint equal to the
 //     keyid. Fetched in the background (redirects refused, 200 only, 16 KB, 5 s),
-//     cached at most 60 s (a miss 60 s too), 30 fetches a minute, 4 at once, 500
+//     cached at most 60 s (a miss 60 s too), 30 fetches a minute (keys never
+//     verified at most half), 4 at once, 500
 //     cached; a request whose key is not cached yet reads `tap-registry-pending`,
 //     a registry that fails reads unverified, and no request ever waits on it;
 //   - covered components: @method @authority @path and content-digest for
@@ -101,7 +102,7 @@ const TAP_PAYMENT_HEADERS = ["authorization", "payment-signature", "x-payment"];
 const TAP_KEY_TTL_MS = 60_000;
 const TAP_MISS_TTL_MS = 60_000;
 const TAP_KEYS_MAX = 500;
-const TAP_FETCH_PER_MIN = 30;
+export const TAP_FETCH_PER_MIN = 30;
 const TAP_FETCH_INFLIGHT = 4;
 const TAP_REGISTRY_MAX_BYTES = 16_384;
 export const TAP_BODY_MAX = 1_048_576;
@@ -382,14 +383,19 @@ export function createWebBotAuth({ fetchDirectory = defaultFetchDirectory, now =
   let fetchWindow = { start: 0, n: 0 };
   const tapKeys = new Map(); // keyid -> { entry: {key, agentId, directory}|null, exp, at }
   const tapPending = new Set();
-  let tapWindow = { start: 0, n: 0 };
+  let tapWindow = { start: 0, n: 0, unknown: 0 };
 
+  // Keys never seen verified take at most half the minute's reads, so a
+  // flood of made-up key ids cannot starve the refresh of a key that verified.
   function scheduleTap(keyid) {
     if (tapPending.has(keyid) || tapPending.size >= TAP_FETCH_INFLIGHT) return;
     const t = now();
-    if (t - tapWindow.start >= 60_000) tapWindow = { start: t, n: 0 };
+    if (t - tapWindow.start >= 60_000) tapWindow = { start: t, n: 0, unknown: 0 };
     if (tapWindow.n >= TAP_FETCH_PER_MIN) return;
+    const known = Boolean(tapKeys.get(keyid)?.entry);
+    if (!known && (tapWindow.unknown || 0) >= Math.floor(TAP_FETCH_PER_MIN / 2)) return;
     tapWindow.n++;
+    if (!known) tapWindow.unknown = (tapWindow.unknown || 0) + 1;
     tapPending.add(keyid);
     const url = `${registryOrigin}/v1/tap/registry/keys/${keyid}`;
     Promise.resolve().then(() => fetchRegistryKey(url)).then((out) => {

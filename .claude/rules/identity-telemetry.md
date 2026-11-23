@@ -44,7 +44,7 @@ Loaded when a sign-in, signed-agent, payer or PostHog file is read.
   switch, for tags `agent-browser-auth` and `agent-payer-auth`: Ed25519, keyid a JWK thumbprint whose key
   comes only from the pinned registry `TAP_REGISTRY_ORIGIN` (`/v1/tap/registry/keys/{keyid}`; active,
   not simulated, thumbprint equal to the keyid), read in the background (16 KB, 5 s, no redirects, 30 a
-  minute, 4 at once, 500 cached, at most 60 s each, a miss 60 s); `@authority`/`@scheme` from BASE_URL;
+  minute (keys never verified at most half of them), 4 at once, 500 cached, at most 60 s each, a miss 60 s); `@authority`/`@scheme` from BASE_URL;
   windows 60 s (identity) and 480 s (payer); Content-Digest hashed as the body parser reads the body (a
   passive tap on the stream's events, 1 MiB); a payer signature covers every payment credential header
   present, an identity one never covers authorization or cookie; Signature-Agent only compared with the

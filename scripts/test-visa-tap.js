@@ -179,7 +179,18 @@ const check = (v, t) => v.checkTap(t.req, Buffer.from(t.body));
     for (let i = 0; i < 4; i++) await check(slow.v, tap({ keyid: wba.ed25519Thumbprint(generateKeyPairSync("ed25519").publicKey.export({ format: "jwk" }).x) }));
     await tick(5);
   }
-  ok(calls === 30, `at most 30 registry reads a minute (${calls})`);
+  ok(calls === Math.floor(wba.TAP_FETCH_PER_MIN / 2), `keys never seen before take at most half the minute's registry reads (${calls})`);
+}
+// A flood of keys never seen cannot starve the refresh of a key that verified before.
+{
+  const { v, fetched } = verifier();
+  await check(v, tap()); await tick();
+  ok((await check(v, tap())).verified === true, "setup: a known key verifies");
+  clock += 60_001; // its cache entry is now stale
+  for (let i = 0; i < wba.TAP_FETCH_PER_MIN * 2; i++) { await check(v, tap({ keyid: wba.ed25519Thumbprint(generateKeyPairSync("ed25519").publicKey.export({ format: "jwk" }).x) })); await tick(); }
+  const before = fetched.length;
+  await check(v, tap()); await tick();
+  ok(fetched.length === before + 1 && (await check(v, tap())).verified === true, `after a flood of unknown keys, the known key is still read again and verifies (${fetched.length - before} read)`);
 }
 
 // --- the middleware: a passive tap on the body, never refusing --------------------
