@@ -23,7 +23,7 @@ const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll, cgNoteUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
-import { markResaleBarred, markResaleComputed, markRefAnswer, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
+import { markResaleBarred, markResaleComputed, markRefAnswer, MARKET_DATA_RESALE_REASON, markResaleCleared } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.js";
 import { hlSharedInfo } from "./hyperliquid-shared.js";
@@ -792,3 +792,6 @@ markRefAnswer(CRYPTO_TOOLS, ["stablecoin-peg"], (answer) => {
 // A call that ends in an error counts its CoinGecko reads on the unsettled
 // share of the day (src/tools/coingecko-rate.js).
 underBudgetAll(cgScopeAll(CRYPTO_TOOLS), PAYMENT_WINDOW_BUDGET_MS);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(CRYPTO_TOOLS, ["stablecoin-peg"], "computed over market data whose terms allow products that incorporate it");

@@ -476,6 +476,7 @@ if (ONLY_PART !== "2") {
 // --- boot checks -----------------------------------------------------------------
 {
   const h = async () => ({});
+  // Tools with upstream work are marked cleared for resale (src/resale-terms.js); scripts/test-resale-clearance.js holds the refusal.
   const catalog = {
     "POST /a": { slug: "fine", price: "$0.03", handler: h },
     "POST /b": { slug: "ident", price: "$0.01", handler: h },
@@ -483,13 +484,13 @@ if (ONLY_PART !== "2") {
     "POST /d": { slug: "seller", price: "$0.01", handler: h },
     "POST /e": { slug: "long", price: "$0.01", handler: h },
     "POST /f": { slug: "binary", price: "$0.01", handler: h, mimeType: "image/png" },
-    "POST /g": { slug: "slowimg", price: "$0.03", handler: h },
+    "POST /g": { slug: "slowimg", price: "$0.03", handler: h, resaleCleared: true },
     "POST /h": { slug: "free", price: "$0", handler: h },
     "POST /i": { slug: "dust", price: "$0.0000001", handler: h },
     "POST /j": { slug: "nohandler", price: "$0.01" },
-    "POST /k": { slug: "unbounded", price: "$0.01", handler: h },
-    "POST /l": { slug: "chatlike", price: "$0.01", handler: h },
-    "POST /m": { slug: "quick", price: "$0.01", handler: h },
+    "POST /k": { slug: "unbounded", price: "$0.01", handler: h, resaleCleared: true },
+    "POST /l": { slug: "chatlike", price: "$0.01", handler: h, resaleCleared: true },
+    "POST /m": { slug: "quick", price: "$0.01", handler: h, resaleCleared: true },
   };
   const cfg = { slugs: Object.values(catalog).map((d) => d.slug).concat("missing"), deadlineMs: 25_000 };
   const flags = { fine: { compute: true }, ident: { compute: true, identityBound: true }, lasting: { compute: true, lastingEffect: true }, seller: { compute: true, paysThirdParty: true }, long: { compute: true, longRunning: true }, binary: { compute: true }, slowimg: { ownTimeoutMs: 60_000 }, free: { compute: true }, dust: { compute: true }, unbounded: {}, chatlike: { clamped: true, ownTimeoutMs: 90_000 }, quick: { ownTimeoutMs: 20_000 } };
@@ -3735,7 +3736,7 @@ try {
       ok(JSON.stringify(marked) === JSON.stringify(["http-check", "ip-info", "robots-check", "sitemap", "tls-cert", "whois"]) && JSON.stringify(markEndsAtCeiling([{ slug: "a" }], ["a", "b"])) === "[\"b\"]", `the mark is set slug by slug, on the handlers audited and no other (${marked.join(", ")})`);
     } finally { globalThis.fetch = realFetch; }
     // The eligibility rule reads the mark.
-    const marked = { slug: "m1", price: "$0.01", handler: async () => ({}), endsAtCeiling: true }, plain = { slug: "m2", price: "$0.01", handler: async () => ({}) };
+    const marked = { slug: "m1", price: "$0.01", handler: async () => ({}), endsAtCeiling: true, resaleCleared: true }, plain = { slug: "m2", price: "$0.01", handler: async () => ({}), resaleCleared: true };
     const cfgE = referralConfig({ ...ENV, REFERRAL_SLUGS: "m1,m2", REFERRAL_COMMISSION_BPS: "default:1000" });
     const flagsLikeServer = (def) => ({ clamped: def.endsAtCeiling === true, ownTimeoutMs: null });
     const routesE = referralRoutes(cfgE, { a: marked, b: plain }, flagsLikeServer);
@@ -5165,7 +5166,11 @@ const screenFile = join(tmp, "screen.json");
 writeFileSync(screenFile, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [LISTED.address.toLowerCase()] }));
 // A wallet on WALLET_BLOCKLIST in the main boot.
 const BLOCKED = newAccount();
-const REF_ENV = { SANCTIONS_SCREEN_FILE: screenFile, AGENT402_BASE_RPC: `${fac.url}/rpc`, EVM_LOGS_PUBLIC_RPCS_BASE: "", REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT, REFERRAL_RECEIPT_WAIT_MS: "0", REFERRAL_PAY_TO: PAY_TO, REFERRAL_FACILITATOR_URL: fac.url, REFERRAL_SIGNER_KEY: SIGNER_KEY, REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral", REFERRAL_SLUGS: "hash", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_COMMISSION_BPS: "default:1234" };
+// The suite's slugs whose upstream terms are not cleared for resale through a
+// third party (src/resale-terms.js) are cleared here for the gate's own
+// paths; whois and github-repo are not, to prove the boot refusal.
+const CLEARED_FOR_TEST = "v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,http-check,robots-check,sitemap,image-gen,image-gen-premium,attest,qr";
+const REF_ENV = { RESALE_CLEARED_FOR_TEST: CLEARED_FOR_TEST, SANCTIONS_SCREEN_FILE: screenFile, AGENT402_BASE_RPC: `${fac.url}/rpc`, EVM_LOGS_PUBLIC_RPCS_BASE: "", REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT, REFERRAL_RECEIPT_WAIT_MS: "0", REFERRAL_PAY_TO: PAY_TO, REFERRAL_FACILITATOR_URL: fac.url, REFERRAL_SIGNER_KEY: SIGNER_KEY, REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral", REFERRAL_SLUGS: "hash", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_COMMISSION_BPS: "default:1234" };
 const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGNER_KEY: "", REFERRAL_SLUGS: "", REFERRAL_SETUP_URL: "", REFERRAL_COMMISSION_BPS: "" };
 
 // Switches unset: nothing is mounted.
@@ -5354,7 +5359,7 @@ await new Promise((r) => directFac.listen(0, "127.0.0.1", r));
 
 fac.reset();
 // Paid data tools whose reads carry fixed timeouts of their own, each ended by a run's ceiling (src/run-ceiling.js).
-const DATA_SLUGS = "dns,device-510k,device-adverse-events,device-recalls,drug-adverse-events,drug-label,drug-ndc,drug-recalls,earthquakes,fec-candidates,federal-awards,fema-disasters,food-recalls,fx-rate,geo-lookup,http-check,ip-info,place-lookup,robots-check,sitemap,tls-cert,treasury-avg-rates,treasury-debt,treasury-yield-curve,treasury-yield-history,vehicle-recalls,vin-decode,weather-air-quality,weather-alerts,weather-current,weather-daily,weather-forecast,weather-history,weather-hourly,whois,yield-curve-spread".split(",");
+const DATA_SLUGS = "dns,device-510k,device-adverse-events,device-recalls,drug-adverse-events,drug-label,drug-ndc,drug-recalls,earthquakes,fec-candidates,federal-awards,fema-disasters,food-recalls,fx-rate,geo-lookup,http-check,ip-info,place-lookup,robots-check,sitemap,tls-cert,treasury-avg-rates,treasury-debt,treasury-yield-curve,treasury-yield-history,vehicle-recalls,vin-decode,weather-air-quality,weather-alerts,weather-current,weather-daily,weather-forecast,weather-history,weather-hourly,yield-curve-spread".split(",");
 // Raw pass-throughs of a source whose terms bar resale through a third party (src/resale-terms.js): listed, refused at boot with the reason.
 const RESALE_BARRED_SLUGS = ["crypto-price", "price-coingecko", "crypto-market", "crypto-history", "coin-ohlc", "coin-market-chart-range", "coin-history", "crypto-trending", "crypto-global", "global-defi", "coin-price-by-contract", "coin-profile", "coin-categories", "coin-search", "exchanges", "exchange-tickers", "exchange-rates", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer", "public-holidays", "bank-holidays", "school-holidays"];
 const srv = await bootPaidServer({
@@ -5364,7 +5369,7 @@ const srv = await bootPaidServer({
     ...REF_ENV, ...COSTS,
     WALLET_ADDRESS: OUR_WALLET, TRUST_PROXY_HOPS: "1",
     FACILITATOR_URL: `http://127.0.0.1:${directFac.address().port}`, AGENT402_BASE_RPC: `${fac.url}/rpc`,
-    REFERRAL_SLUGS: "hash,mime,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,stablecoin-peg,edgar-company-facts,image-gen,image-gen-premium,attest,qr,no-such-tool," + UNIT_PRICED.join(",") + "," + DATA_SLUGS.join(",") + "," + RESALE_BARRED_SLUGS.join(","),
+    REFERRAL_SLUGS: "whois,github-repo,hash,mime,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,stablecoin-peg,edgar-company-facts,image-gen,image-gen-premium,attest,qr,no-such-tool," + UNIT_PRICED.join(",") + "," + DATA_SLUGS.join(",") + "," + RESALE_BARRED_SLUGS.join(","),
     // The price feed stablecoin-peg reads never answers: its run has to be cut off at the deadline.
     HANG_FETCH_HOSTS: "api.coingecko.com,pro-api.coingecko.com",
     // The handler deadline is short so a stalled upstream is cut off inside the test.
@@ -5395,7 +5400,7 @@ try {
     const notByCeiling = DATA_SLUGS.filter((x) => !OWN_HOST_SLUGS.includes(x) && !/^upstream work ends at the deadline$/.test(whyServed[x] || ""));
     const refusedData = DATA_SLUGS.filter((x) => new RegExp(`\\[referral\\] ${x} is not served`).test(bootLog));
     ok(OWN_HOST_SLUGS.every((x) => new RegExp(`\\[referral\\] ${x} is not served under /ref: its published example or input hints name this server's own host`).test(bootLog)) && /\[referral\] mime is not served under \/ref: the public route can be had for less than the listed price \(free by proof-of-work or the trial parameter\)/.test(bootLog) && /\[referral\] hash is served under \/ref although the public route can be had for less \(free by proof-of-work or the trial parameter\): it is named in REFERRAL_PARITY_GRANDFATHERED/.test(bootLog) && (await call(`${srv.url}/ref/mime`, { method: "GET", headers: xff() })).status === 404 && (await call(`${srv.url}/ref/robots-check`, { method: "GET", headers: xff() })).status === 404, `a slug whose published example names this server's own host, and one the public route gives free, are refused at boot with the reason; hash, which this boot names in REFERRAL_PARITY_GRANDFATHERED, is named at boot and served (${refusedData.join(",")})`);
-    ok(DATA_SLUGS.length === 36 && notByCeiling.length === 0 && refusedData.join() === OWN_HOST_SLUGS.join() && /\[referral\] dns is served under \/ref: upstream work ends at the deadline/.test(bootLog), `each of the other 33 paid data tools is served under /ref because its upstream work ends at the deadline, dns (a kit tool whose lookup the ceiling cancels) among them (${notByCeiling.join(",") || "all 36 by the ceiling"})`);
+    ok(DATA_SLUGS.length === 35 && notByCeiling.length === 0 && refusedData.join() === OWN_HOST_SLUGS.join() && /\[referral\] dns is served under \/ref: upstream work ends at the deadline/.test(bootLog), `each of the other 32 paid data tools is served under /ref because its upstream work ends at the deadline, dns (a kit tool whose lookup the ceiling cancels) among them (${notByCeiling.join(",") || "all 35 by the ceiling"})`);
     const pricing = (await call(`${srv.url}/api/pricing`, { method: "GET", headers: xff() })).json;
     const rowsP = Array.isArray(pricing?.endpoints) ? pricing.endpoints : [];
     const priceOf = new Map(rowsP.filter((r) => r && r.slug).map((r) => [r.slug, r.price]));
@@ -5405,7 +5410,7 @@ try {
       const want = baseUnitsOf(priceOf.get(slug));
       if (q.status !== 402 || want === null || q.json?.accepts?.[0]?.amount !== want.toString() || q.json.accepts[0].payTo !== PAY_TO) wrongPrice.push(`${slug}: ${q.status} ${q.json?.accepts?.[0]?.amount} want ${want}`);
     }
-    ok(priceOf.size > 400 && wrongPrice.length === 0, `each one's 402 pays the split contract the tool's direct list price (${wrongPrice.join("; ") || "34 of 34"})`);
+    ok(priceOf.size > 400 && wrongPrice.length === 0, `each one's 402 pays the split contract the tool's direct list price (${wrongPrice.join("; ") || "32 of 32"})`);
     // Tools priced per unit: served because the deadline ends every leg's
     // reads; a request with no input is quoted the LIST price and shows the
     // one-unit request it runs; the buyer's own request is quoted exactly what
@@ -5468,6 +5473,12 @@ try {
     const statuses = [];
     for (const x of ["crypto-price", "rwa-issuer", "public-holidays", "school-holidays"]) statuses.push((await call(`${srv.url}/ref/${x}`, { method: "GET", headers: xff() })).status);
     ok(missing.length === 0 && statuses.every((st) => st === 404), `every listed raw pass-through of a source whose terms bar resale is refused at boot with the reason and not served (${missing.join(",") || "all 25"}; ${statuses.join(",")})`);
+  }
+  {
+    // A slug whose upstream terms are not cleared for resale through a third party is refused at boot with the reason.
+    const why = "its upstream terms are not cleared for resale through a third party";
+    const st = (await call(`${srv.url}/ref/whois`, { method: "GET", headers: xff() })).status;
+    ok(["whois", "github-repo"].every((x) => !served.includes(x) && bootLog.split("\n").some((l) => l.endsWith(`[referral] ${x} is not served under /ref: ${why}`))) && st === 404, `an uncleared slug is refused at boot with the reason and not served (${st})`);
   }
   ok(/\[referral\] image-gen is not served under \/ref: its own upstream wait \(60 s\) is past the handler deadline \(4 s\)/.test(bootLog), "image-gen is left out at boot: its own upstream wait is past the handler deadline");
   {

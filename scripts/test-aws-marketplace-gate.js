@@ -97,8 +97,11 @@ const DEFS = {
   "POST /api/binary": { route: "POST /api/binary", slug: "binary", name: "Binary", category: "media", price: "$0.002", mimeType: "image/png", description: "Bytes.", discovery: { input: {} }, handler: async () => ({}) },
   "POST /api/ident": { route: "POST /api/ident", slug: "ident", name: "Ident", category: "memory", price: "$0.002", description: "Wallet memory.", discovery: { input: {} }, handler: async () => ({}) },
 };
+// The stand-in tools are cleared for resale through a third party (src/resale-terms.js).
+for (const d of Object.values(DEFS)) d.resaleCleared = true;
 {
   ok(awsIneligibility(DEFS["POST /api/echo"]) === null, "a fixed-price JSON tool is eligible");
+  ok(/not cleared for resale/.test(awsIneligibility({ ...DEFS["POST /api/echo"], resaleCleared: undefined })) && awsIneligibility({ ...DEFS["POST /api/echo"], resaleCleared: undefined }, { compute: true }) === null, "a tool whose upstream terms are not cleared is refused; one that reaches no upstream needs no clearance");
   ok(/identity-bound/.test(awsIneligibility(DEFS["POST /api/ident"], { identityBound: true })), "an identity-bound route is refused");
   ok(/bytes/.test(awsIneligibility(DEFS["POST /api/binary"])), "a tool that answers bytes is refused");
   ok(/model/.test(awsIneligibility({ ...DEFS["POST /api/echo"], modelBacked: true })), "a model-backed tool is refused");

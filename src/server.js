@@ -2839,6 +2839,8 @@ const AWS_ROUTES = AWS_CONFIG ? awsRoutes(AWS_CONFIG, CATALOG, (def) => ({
   longRunning: isLongRunningSlug(def.slug),
   modelBacked: isModelBacked(def),
   chatTier: isChatTierDef(def),
+  // Reaches no upstream: nothing to clear for resale (src/resale-terms.js).
+  compute: isComputePayable(def),
 }), { ownHosts: REFERRAL_OWN_HOSTS }) : null;
 if (AWS_ROUTES) {
   for (const r of AWS_ROUTES.refused) console.warn(`[aws-marketplace] ${r.slug} is not served under /aws: ${r.reason}`);

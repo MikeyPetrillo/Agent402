@@ -18,6 +18,7 @@
 import { markEndsAtCeiling } from "../run-ceiling.js";
 import { OPEN_METEO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 import { bad, openMeteoJson, resolveLocation, requireCoords, locationFields, tempUnitOf, LOCATION_PROPERTIES, cacheNote } from "./weather-kit.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 export const ENSEMBLE_SOURCE = "computed from Open-Meteo ensemble data, ensemble-api.open-meteo.com (CC BY 4.0)";
 export const ENSEMBLE_METHOD = "Each probability is the share of ensemble members whose value for the date meets the condition. Raw model output at the model grid point, not calibrated to a weather station.";
@@ -631,3 +632,6 @@ async function boardCities(raw) {
 // its data: every answer of these tools carries them (src/data-attribution.js).
 openMeteoLicensed(WEATHER_PROBABILITY_TOOLS);
 markEndsAtCeiling(WEATHER_PROBABILITY_TOOLS, ["weather-market-board", "weather-market-brackets", "weather-probability"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(WEATHER_PROBABILITY_TOOLS, ["weather-probability", "weather-market-brackets", "weather-market-board"], "Open-Meteo commercial plan, CC BY 4.0");

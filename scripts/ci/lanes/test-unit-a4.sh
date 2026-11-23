@@ -145,6 +145,8 @@ t node scripts/test-own-relayer.js
 t node scripts/test-referral-gate.js
 # The AWS Marketplace front door (/aws/<slug>): one aws:base offer, a signed quote that an altered price breaks, one sale per payment id, replayed or expired tokens refused unbooked, off answers as an unknown path, direct 402s byte-identical (stub payment-service keys, keys made in the test).
 t node scripts/test-aws-marketplace-gate.js
+# Resale clearance: /ref and /aws sell only tools whose upstream terms are cleared (marked beside the handler) or that reach no upstream (offline)
+t node scripts/test-resale-clearance.js
 # The referral book's sweep: refused share and spread, dropped records read in turn and given up only on answered reads, charged reads inside the chain budget, one sweep at a time, a failed batch written again change by change (offline).
 t node scripts/test-referral-book-sweep.js
 # A run's ceiling: every tool marked endsAtCeiling ends its upstream work at it, starts none after it, and never answers from a cut read

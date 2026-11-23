@@ -31,7 +31,7 @@ import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
 import { markEndsAtCeiling, ceilingLeftMs, CEILING_TIMER_SLACK_MS } from "../run-ceiling.js";
-import { markResaleComputed } from "../resale-terms.js";
+import { markResaleComputed, markResaleCleared } from "../resale-terms.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
 import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 
@@ -676,3 +676,12 @@ openMeteoLicensed(BUNDLE_TOOLS);
 markEndsAtCeiling(BUNDLE_TOOLS, ["weather-risk-brief", "filings-brief", "token-diligence"]);
 // Resale terms (src/resale-terms.js): the diligence read is computed.
 markResaleComputed(BUNDLE_TOOLS, ["token-diligence"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(BUNDLE_TOOLS, ["weather-risk-brief"], "Open-Meteo commercial plan, CC BY 4.0");
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(BUNDLE_TOOLS, ["token-diligence"], "computed over market data whose terms allow products that incorporate it");
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(BUNDLE_TOOLS, ["filings-brief"], "SEC EDGAR public filings");

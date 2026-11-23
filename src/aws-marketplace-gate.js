@@ -50,6 +50,7 @@
 // registered for the listing.
 import { binaryTypesOf } from "./tool-media-type.js";
 import { namesOwnHost } from "./referral-gate.js";
+import { resaleClearanceRefusal } from "./resale-terms.js";
 import { withoutChargeSentences } from "./not-charged.js";
 
 export const AWS_NETWORK = "aws:base";
@@ -156,11 +157,15 @@ const hasPriceFn = (def) => typeof def?.quote === "function" || typeof def?.tier
 /**
  * Why a catalog definition cannot be sold here, or null. `flags` are the
  * server's readings: identityBound, lastingEffect, paysThirdParty,
- * longRunning, modelBacked, chatTier.
+ * longRunning, modelBacked, chatTier, compute (reaches no upstream).
  */
 export function awsIneligibility(def, flags = {}, { ownHosts = [] } = {}) {
   if (!def || typeof def !== "object") return "not in the catalog";
   if (typeof def.handler !== "function") return "in the catalog but has no handler";
+  // Sold through AWS Marketplace only when its upstream terms are cleared for
+  // resale through a third party, or it reaches none (src/resale-terms.js).
+  const resaleRefused = resaleClearanceRefusal(def, { compute: flags.compute === true });
+  if (resaleRefused) return resaleRefused;
   const method = String(def.route || "").split(" ")[0];
   if (method !== "GET" && method !== "POST") return "not a GET or POST route";
   if (flags.identityBound) return "identity-bound route (an AWS buyer carries no wallet)";

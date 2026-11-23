@@ -26,6 +26,7 @@ import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { FRED_TERMS, FRED_TERMS_URL, termsAnswers } from "../data-attribution.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
 // weather-kit.js too, not just here) — re-exported so this file's own
@@ -1372,3 +1373,6 @@ for (const t of MACRO_TOOLS) if (t.attribution === "fred") termsAnswers(t, FRED_
 // run's ceiling when one is set (src/run-ceiling.js): a caller that stops
 // waiting at a deadline of its own can serve them.
 markEndsAtCeiling(MACRO_TOOLS, ["treasury-avg-rates", "treasury-debt", "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(MACRO_TOOLS, ["treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "treasury-debt", "treasury-avg-rates"], "US Treasury public data");
