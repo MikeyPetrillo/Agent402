@@ -38,7 +38,6 @@ const METERED = [
   ["api.cdp.coinbase.com", "CDP_API_KEY_ID", "Coinbase CDP (SQL billed + Bazaar discovery free)"],
   ["api.openai.com", "OPENAI_API_KEY", "OpenAI"],
   ["openrouter.ai", "OPENROUTER_API_KEY", "OpenRouter"],
-  ["e2b.dev", "E2B_API_KEY", "E2B sandboxes"],
   // The tool reads NEYNAR_API_KEY || WARPCAST_API_KEY (onchain-identity-kit.js),
   // so checking only the first reports a BLIND SPOT on a perfectly reachable
   // vendor - and a false blind spot makes the run exit non-zero and reads as

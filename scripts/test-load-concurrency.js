@@ -139,7 +139,7 @@ const SLOW_TOOL_THREAD_SHARE = 0.25;
 // Keys the server could spend are stripped from the child's environment:
 // this test touches no upstream, and the CI lane's job-level keys must never
 // reach a server a load test drives.
-const SPEND_KEYS = ["BRAVE_API_KEY", "FRED_API_KEY", "FRED_API_KEY_V2", "E2B_API_KEY", "COINGECKO_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY", "OPENAI_API_KEY", "X_BEARER_TOKEN", "STRIPE_SECRET_KEY", "MPP_SECRET_KEY", "TEMPO_API_KEY", "REDIS_URL", "STATE_DATABASE_URL"];
+const SPEND_KEYS = ["BRAVE_API_KEY", "FRED_API_KEY", "FRED_API_KEY_V2", "COINGECKO_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY", "OPENAI_API_KEY", "X_BEARER_TOKEN", "STRIPE_SECRET_KEY", "MPP_SECRET_KEY", "TEMPO_API_KEY", "REDIS_URL", "STATE_DATABASE_URL"];
 const childEnv = { ...process.env, TRUST_PROXY_HOPS: "1" }; // buyers are told apart by X-Forwarded-For behind one proxy hop
 for (const k of Object.keys(childEnv)) if (SPEND_KEYS.includes(k) || /_API_KEY$/.test(k)) delete childEnv[k];
 const TOKEN = "load-concurrency-operator-token-0123456789";

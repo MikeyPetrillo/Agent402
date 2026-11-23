@@ -61,23 +61,6 @@
       }
     },
     {
-      "slug": "code-run",
-      "name": "python arithmetic on the base tier",
-      "input": {
-        "code": "print(6*7)",
-        "language": "python"
-      },
-      "requires": "E2B_API_KEY",
-      "expect": {
-        "matches": {
-          "stdout": "42"
-        },
-        "falsy": [
-          "error"
-        ]
-      }
-    },
-    {
       "slug": "embed-large",
       "name": "a second text",
       "input": {

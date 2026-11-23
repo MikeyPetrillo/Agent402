@@ -48,8 +48,6 @@ export const UPSTREAM_BUDGETS = [
     why: "a hard monthly quota, bounded here by its daily share" },
   { match: "api.openai.com", name: "openai", env: "BUDGET_OPENAI_CALLS", dflt: 2000,
     why: "transcribe, embeddings, moderation and image generation" },
-  { match: "api.e2b.dev", name: "e2b", env: "BUDGET_E2B_CALLS", dflt: 500,
-    why: "paid sandbox time, billed by the minute" },
   { match: "api.neynar.com", name: "neynar", env: "BUDGET_NEYNAR_CALLS", dflt: 2000,
     why: "the Farcaster tools" },
   { match: "api.hunter.io", name: "hunter", env: "BUDGET_HUNTER_CALLS", dflt: 200,

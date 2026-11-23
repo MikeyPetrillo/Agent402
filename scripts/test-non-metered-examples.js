@@ -15,7 +15,7 @@
 //
 // SCOPE FILTER (documented, deliberate):
 //   IN  — price > 0 AND documented OpenAPI example does not spend Brave /
-//         OpenAI / OpenRouter / E2B / FRED / Neynar /
+//         OpenAI / OpenRouter / FRED / Neynar /
 //         Alchemy-hard / CDP keys. Free-public APIs (data.gov DEMO_KEY,
 //         weather.gov, CoinGecko keyless, Nominatim, Open-Meteo, …) stay IN
 //         even when they live in WALLET_ONLY_SLUGS.
@@ -664,7 +664,7 @@ async function boot() {
   // through. Keep DATA_GOV unset → DEMO_KEY (honest free-public path).
   const strip = [
     "BRAVE_API_KEY", "BRAVE_ANSWERS_API_KEY", "BRAVE_SUGGEST_API_KEY",
-    "OPENAI_API_KEY", "OPENROUTER_API_KEY", "E2B_API_KEY",
+    "OPENAI_API_KEY", "OPENROUTER_API_KEY",
     "FRED_API_KEY", "FRED_API_KEY_V2", "NEYNAR_API_KEY", "WARPCAST_API_KEY",
     "ALCHEMY_API_KEY", "CDP_API_KEY_ID", "CDP_API_KEY_SECRET",
     "X402_UPSTREAM_BUYER_KEY", "ALGORAND_UPSTREAM_BUYER_MNEMONIC",
@@ -891,8 +891,6 @@ function runControls() {
     "control: Brave search is excluded from this suite");
   ok(excludeReason("llm", "/api/llm") === "metered_upstream_key_or_buyer",
     "control: OpenAI llm is excluded");
-  ok(excludeReason("code-run", "/api/code-run") === "metered_upstream_key_or_buyer",
-    "control: E2B code-run is excluded");
   ok(WALLET_ONLY_SLUGS.has("gov-data"),
     "control: gov-data is WALLET_ONLY (wallet-gated live) yet still in THIS suite's scope");
   // A bundle product reads every upstream its legs read: it is never graded
@@ -1086,8 +1084,8 @@ async function main() {
     `in-scope count is substantial (${work.length} ≥ ${MIN_IN_SCOPE}) — filter is not vacuous`);
   ok(work.some((t) => t.slug === "gov-data"),
     "gov-data is in the strict sweep (the #730 class must be covered)");
-  ok(!work.some((t) => t.slug === "search" || t.slug === "llm" || t.slug === "code-run"),
-    "metered Brave/OpenAI/E2B slugs are absent from the work list");
+  ok(!work.some((t) => t.slug === "search" || t.slug === "llm"),
+    "metered Brave/OpenAI slugs are absent from the work list");
   ok(excluded.some((e) => e.slug === "search"),
     "Brave search was excluded by the filter (not merely absent from catalog)");
 

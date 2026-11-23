@@ -1,5 +1,5 @@
 {
-  "about": "Paid-upstream tools (tier 2): OpenRouter/OpenAI wires, Brave, E2B, FRED, the browser worker. Skipped on a keyless boot; run weekly with the audit key (--tier 2). Cheap links only.",
+  "about": "Paid-upstream tools (tier 2): OpenRouter/OpenAI wires, Brave, FRED, the browser worker. Skipped on a keyless boot; run weekly with the audit key (--tier 2). Cheap links only.",
   "cases": [
     {
       "slug": "search",
@@ -341,38 +341,6 @@
           "size",
           "quality"
         ]
-      }
-    },
-    {
-      "slug": "code-run-pro",
-      "name": "javascript with stdout and a result",
-      "input": {
-        "code": "console.log('out'); [1,2,3].reduce((a,b)=>a+b,0)",
-        "language": "javascript"
-      },
-      "requires": "E2B_API_KEY",
-      "expect": {
-        "matches": {
-          "stdout": "out"
-        },
-        "falsy": [
-          "error"
-        ]
-      }
-    },
-    {
-      "slug": "code-run-pro",
-      "name": "a runtime error is reported, not a 500",
-      "input": {
-        "code": "raise ValueError('boom')",
-        "language": "python"
-      },
-      "requires": "E2B_API_KEY",
-      "expect": {
-        "matches": {
-          "error.message": "boom",
-          "error.name": "ValueError"
-        }
       }
     },
     {

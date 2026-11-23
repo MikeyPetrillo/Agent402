@@ -31,6 +31,9 @@ const KALSHI_ON = kalshiToolsEnabled();
  *  optional `note` (one sentence, plain text) is added to the 410's hint when
  *  a live tool answers a narrower question than the retired route did. */
 export const RETIRED_TOOLS = Object.freeze({
+  // 2026-11-23: code execution is no longer offered.
+  "code-run": { retiredAt: "2026-11-23", replacement: null, note: "Code execution is no longer offered." },
+  "code-run-pro": { retiredAt: "2026-11-23", replacement: null, note: "Code execution is no longer offered." },
   // A replacement is named only when it answers the SAME question as the
   // retired route (the same quantity for the same subject, possibly over a
   // stated narrower range). A tool that answers a neighboring question is not

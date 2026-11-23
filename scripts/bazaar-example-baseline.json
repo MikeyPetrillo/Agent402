@@ -158,8 +158,6 @@
   "POST /api/cert-transparency",
   "POST /api/checksum",
   "POST /api/cidr",
-  "POST /api/code-run",
-  "POST /api/code-run-pro",
   "POST /api/color",
   "POST /api/compound-interest",
   "POST /api/compress-compare",

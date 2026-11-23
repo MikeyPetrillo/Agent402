@@ -276,7 +276,7 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   served. It is taken before the call and given back when the call provably never left this process
   (`neverReachedUpstream`: the name did not resolve, the connection was refused or never opened, or the signal was
   already aborted at the call) or the upstream refused it before any work (`upstreamRefusedBeforeWork`: a 4xx answer;
-  for E2B's create also the SDK's AuthenticationError, RateLimitError and ServiceBusyError). A 2xx, 3xx or 5xx
+  also an SDK's named AuthenticationError, RateLimitError or ServiceBusyError). A 2xx, 3xx or 5xx
   answer, a timeout and a reset keep their unit. The operator view counts the units given back as `releasedToday`.
   Suite: `scripts/test-upstream-hard-caps.js`.
 - **CoinGecko unpaid reads per caller:** `COINGECKO_UNSETTLED_PER_CALLER_HOUR` (default 8) is the most places one caller holds an hour in the share of CoinGecko reads for unconfirmed coin ids; past it that caller's ids are checked against the coin lists first, and no call is refused for it (`src/tools/coingecko-rate.js`).

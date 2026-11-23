@@ -264,7 +264,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       - id: gate
@@ -903,7 +902,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Full history: scripts/test-page-dates.js dates every page module
@@ -941,7 +939,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -988,7 +985,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: node openclaw/test-real-install.js
       # The same file against the PREVIOUS pin, so raising the pin never drops
@@ -999,7 +995,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: node openclaw/test-real-install.js
       # The pinned host (2026.9.x and later) requires Node >= 24.16; the lane itself
@@ -1032,7 +1027,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           SOCKET_API_TOKEN: ""
           OPEN_METEO_API_KEY: ""
           COINGECKO_API_KEY: ""
@@ -1129,7 +1123,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1162,7 +1155,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # The official x402 MCP client, for test-mcp-x402.js and
@@ -1178,7 +1170,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm install --no-save --ignore-scripts --no-audit --no-fund @x402/mcp@2.30.0
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -1197,12 +1188,6 @@ jobs:
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Offline suites (7 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a3 1
-
-      - name: Code-run-kit tests (E2B sandbox — validation always runs; live calls opt-in via E2B_LIVE_TEST=1)
-        run: node scripts/test-code-run-kit.js
-        env:
-          E2B_LIVE_TEST: ${{ secrets.E2B_API_KEY && '1' || '' }}
-          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
 
       - name: Offline suites (20 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a3 2
@@ -1261,7 +1246,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1294,7 +1278,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -1456,7 +1439,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1489,7 +1471,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # The real HTTP clients scripts/test-402-real-clients.js reads a full-rail
@@ -1506,7 +1487,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
         run: |
           python3 -m venv "$RUNNER_TEMP/real-clients"
           "$RUNNER_TEMP/real-clients/bin/python" -m pip install --quiet --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r /dev/stdin <<'PINS'
@@ -1647,7 +1627,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1680,7 +1659,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -1798,7 +1776,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1831,7 +1808,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -1893,7 +1869,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1926,7 +1901,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # scripts/test-facilitator-access-policy.js boots facilitator/index.js,
@@ -1940,7 +1914,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci --ignore-scripts
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -2017,7 +1990,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2050,7 +2022,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -2124,7 +2095,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2160,7 +2130,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -2285,7 +2254,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2318,7 +2286,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       - name: Start server in free mode
@@ -2430,7 +2397,7 @@ jobs:
         run: bash scripts/test-heartbeat-probe.sh
 
       # Strict FREE_MODE sweep of paid tools that do NOT burn Brave/OpenAI/
-      # OpenRouter/E2B/FRED/Neynar/etc. Fails on 502/503/504
+      # OpenRouter/FRED/Neynar/etc. Fails on 502/503/504
       # (unlike test-all.js NETWORK leniency — that hole kept gov-data green
       # while dead; issue #730). Filter never calls metered routes; own-boot
       # strips keys too. Uses the shared FREE_MODE server when TARGET_URL is set.
@@ -2484,7 +2451,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2517,7 +2483,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       - name: Deep security audit (payment gate + PoW replay/slug-bind/tamper + SSRF + attribution; boots paid-mode)
@@ -2547,7 +2512,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: |
           X402_SYNC_ON_START=false FREE_MODE=true PORT=3091 node src/server.js > /tmp/a402-test.log 2>&1 &
@@ -2757,7 +2721,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2790,7 +2753,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # Moved here from test-unit-b (2026-08-25 rebalance): self-booting suites
@@ -2832,7 +2794,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2870,7 +2831,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # Chromium is ~150 MB from Playwright's CDN plus an apt round for fonts,
@@ -2912,7 +2872,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
         run: bash scripts/ci-apt-install.sh --playwright-chromium
       # The CI data keys reach THIS step alone: the server it boots is the only
       # process that reads them (scripts/test-ci-secretless-install.js). The CI
@@ -2994,7 +2953,6 @@ jobs:
           BRAVE_SUGGEST_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
@@ -3087,7 +3045,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3120,7 +3077,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # Chromium is ~150 MB from Playwright's CDN plus an apt round for fonts,
@@ -3162,7 +3118,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
         run: bash scripts/ci-apt-install.sh --playwright-chromium
       - name: Start server in free mode
         run: |
@@ -3389,7 +3344,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3413,7 +3367,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
 
@@ -3469,7 +3422,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3493,7 +3445,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
 
@@ -3604,7 +3555,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3628,7 +3578,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
 
@@ -3718,7 +3667,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           SOCKET_API_TOKEN: ""
           OPEN_METEO_API_KEY: ""
           COINGECKO_API_KEY: ""

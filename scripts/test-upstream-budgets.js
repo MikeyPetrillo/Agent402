@@ -70,7 +70,7 @@ const rep = (hosts) => ({ day: "2026-09-14", hosts });
 {
   const exposure = readFileSync(new URL("./test-ci-key-exposure.js", import.meta.url), "utf8");
   const names = new Set(UPSTREAM_BUDGETS.map((b) => b.name));
-  for (const [cred, name] of [["BRAVE_API_KEY","brave"],["ALCHEMY_API_KEY","alchemy"],["COINGECKO_API_KEY","coingecko"],["E2B_API_KEY","e2b"],["OPENAI_API_KEY","openai"],["NEYNAR_API_KEY","neynar"]]) {
+  for (const [cred, name] of [["BRAVE_API_KEY","brave"],["ALCHEMY_API_KEY","alchemy"],["COINGECKO_API_KEY","coingecko"],["OPENAI_API_KEY","openai"],["NEYNAR_API_KEY","neynar"]]) {
     ok(exposure.includes(cred) && names.has(name), `${cred} is both leak-guarded and budget-alarmed`);
   }
 }

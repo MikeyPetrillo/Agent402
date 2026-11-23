@@ -46,7 +46,6 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[LLM Gateway (OpenAI /v1)|LLM-Gateway]] | OpenAI-compatible chat, embeddings, rerank, images, video and speech at `/v1` (plus the Anthropic Messages and OpenAI Responses wires) - flat chat tiers from $0.003 per call, a metered tier whose 402 quotes each request from its body, embeddings and rerank from $0.002, model-optional auto-routing, streaming, response caching; any OpenAI SDK adopts it by changing `base_url` |
 | [[LLM Proxy Gateway|LLM-Proxy]] | Three tiers of OpenAI inference via x402 - gpt-6-luna, gpt-6.1-sol, gpt-5.6-terra |
 | [[Image Generation Gateway|Image-Gen]] | Three tiers of GPT Image generation via x402 - text-to-image, no API key needed |
-| [[Code Execution Sandbox|Code-Execution]] | Sandboxed Python/JS execution via E2B - isolated cloud VMs, pay per run |
 | [[Text-to-Speech|TTS]] | Convert text to speech - three tiers, 10 voices, up to 6 formats depending on tier, pay per call |
 | [[Speech-to-Text|STT]] | Transcribe audio to text via OpenAI - URL-based input, multi-language |
 | [[Text Embeddings|Embeddings]] | Generate embedding vectors via OpenAI - 1536/3072 dimensions for RAG and search |

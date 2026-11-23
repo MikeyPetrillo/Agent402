@@ -242,7 +242,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `SETTLE_FIRST_SLUGS` (server.js: every `/v1` chat, Messages, Responses and generateContent tier
   and the metered tier, embeddings, rerank, speech, `/v1/images/generations` and the fast, pro and
   edit image tiers, and dub; not video; plus `SETTLE_FIRST_CATALOG_SLUGS`: web search and answer,
-  image generation, speech, transcription, judgment and code runs, each settling after its own
+  image generation, speech, transcription and judgment, each settling after its own
   input checks and before its first paid upstream call), `settleFirstPlanFor` asks `gatewaySettleFirstPlan` (the settle
   breaker) for a verified x402 payment (`settleFirstPaymentKindOf`: never Tempo, card, credits,
   proof-of-work, a trial, a first-call allowance grant, or the resend of a payment already settled

@@ -56,17 +56,6 @@ const BRAVE_ROUTES = new Set([
 ]);
 const skipBrave = process.env.BRAVE_LIVE_TEST !== "1";
 
-// E2B-backed routes — same leak shape as Brave (found in the 2026-07-29 paid-
-// upstream audit): the CI test job boots the server with the REAL E2B_API_KEY,
-// so this sweep's example calls spin real sandboxes and bill the E2B account
-// invisibly (CI has no PostHog). The old NETWORK-set comment assumed the key
-// was absent in CI; it is not. Live coverage stays in the dedicated
-// scripts/test-code-run-kit.js step, which runs live deliberately in CI.
-const E2B_ROUTES = new Set([
-  "/api/code-run", "/api/code-run-pro",
-]);
-const skipE2b = process.env.E2B_LIVE_TEST !== "1";
-
 const NETWORK = new Set([
   "/v1/images/fast", "/v1/images/pro", "/v1/images/edits", "/v1/videos/generations",  // llm-images-fast-kit.js
   "/api/asset-transfers", "/api/token-balances", "/api/token-allowance", "/api/tx-receipt", "/api/block-receipts", "/api/token-price-history", "/api/wallet-transfers-multichain",  // alchemy-data-kit.js
@@ -478,7 +467,7 @@ function buildGetUrl(path, op) {
   return `${TARGET}${path}${[...qs].length ? `?${qs}` : ""}`;
 }
 
-let braveSkipped = 0, e2bSkipped = 0, strictSkipped = 0, coingeckoSkipped = 0;
+let braveSkipped = 0, strictSkipped = 0, coingeckoSkipped = 0;
 const timings = [];
 // The sweep used to be one serial await-fetch per endpoint. Locally that is
 // ~2 minutes because almost nothing reaches the network; in CI, where the real
@@ -492,7 +481,6 @@ const timings = [];
 const tasks = [];
 for (const [path, methods] of paths) {
   if (skipBrave && BRAVE_ROUTES.has(path)) { braveSkipped += Object.keys(methods).length; continue; }
-  if (skipE2b && E2B_ROUTES.has(path)) { e2bSkipped += Object.keys(methods).length; continue; }
   for (const [method, op] of Object.entries(methods)) {
     const cat = (op.tags && op.tags[0]) || "other";
     // Discovery/composition surfaces (skill packs) live in the OpenAPI spec so
@@ -616,7 +604,7 @@ for (const r of results) {
 }
 
 const totalOps = paths.reduce((a, [, m]) => a + Object.keys(m).length, 0);
-console.log(`\nExercised ${totalOps - braveSkipped - e2bSkipped - strictSkipped - coingeckoSkipped} endpoints at ${TARGET}${strictSkipped ? ` (handed ${strictSkipped} route(s) to the strict non-metered sweep - TEST_ALL_SKIP_STRICT_COVERED)` : ""}${coingeckoSkipped ? ` (handed ${coingeckoSkipped} CoinGecko route(s) to the sampled sweep + nightly corpus - keyed Demo credits)` : ""}${braveSkipped ? ` (skipped ${braveSkipped} Brave route(s) — set BRAVE_LIVE_TEST=1 to include; paid-canary covers post-deploy verification)` : ""}${e2bSkipped ? ` (skipped ${e2bSkipped} E2B route(s) — set E2B_LIVE_TEST=1 to include; test-code-run-kit covers live in CI)` : ""}\n`);
+console.log(`\nExercised ${totalOps - braveSkipped - strictSkipped - coingeckoSkipped} endpoints at ${TARGET}${strictSkipped ? ` (handed ${strictSkipped} route(s) to the strict non-metered sweep - TEST_ALL_SKIP_STRICT_COVERED)` : ""}${coingeckoSkipped ? ` (handed ${coingeckoSkipped} CoinGecko route(s) to the sampled sweep + nightly corpus - keyed Demo credits)` : ""}${braveSkipped ? ` (skipped ${braveSkipped} Brave route(s) — set BRAVE_LIVE_TEST=1 to include; paid-canary covers post-deploy verification)` : ""}\n`);
 // Where the wall-clock actually went. Printed always: a slow sweep that only
 // reports a total gives the next reader nothing to act on.
 {

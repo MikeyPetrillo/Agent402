@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Settle first beyond the /v1 model routes (src/settle-first.js; server.js
 // SETTLE_FIRST_CATALOG_SLUGS): web search and answer, image generation,
-// speech, transcription, judgment and code runs. One PAID-mode server
+// speech, transcription and judgment. One PAID-mode server
 // (scripts/lib/paid-wires-rig.js) whose stub facilitators record every settle
 // call and whose stub upstreams (Brave, the images, speech and transcription
 // APIs, the judgment API, the sandbox API) record every call they are sent,
@@ -54,7 +54,6 @@ const ROUTES = [
   { slug: "image-gen", route: { method: "POST", path: "/api/image-gen", body: { prompt: "a red square" } }, host: "llm", badBody: { prompt: "" } },
   { slug: "tts-lite", route: { method: "POST", path: "/api/tts-lite", body: { text: "hello there" } }, host: "llm", badBody: { text: "" } },
   { slug: "judge", route: { method: "POST", path: "/v1/judge", body: { state: "The export button crashes in Safari.", questions: { repro: { type: "noul", instructions: "Does the report give steps to reproduce?" } } } }, host: "api.typesafe.ai", badBody: { questions: { repro: { type: "noul", instructions: "x" } } } },
-  { slug: "code-run", route: { method: "POST", path: "/api/code-run", body: { code: "print(1)", language: "python" } }, host: "api.e2b.app", badBody: { code: "print(1)", language: "cobol" }, noServe: true },
 ];
 
 // The stub upstreams' behavior: `failing` (a set of hosts) answers 500.
@@ -67,7 +66,6 @@ function installUpstreams() {
       const answers = Object.fromEntries(Object.keys(j?.questions || {}).map((id) => [id, { type: "noul", noul: 0.8 }]));
       reply(200, { model: "jev-1.14.0", answers, usage: { input_tokens: 10, output_tokens: 1 } }); return true;
     }
-    if (host === "api.e2b.app") { reply(500, { message: "stub sandbox service down" }); return true; }
     return false;
   };
   rig.st.llmHook = async ({ path, res, reply }) => {
@@ -82,7 +80,7 @@ function installUpstreams() {
 const ENV = {
   REFUND_OWED_NOTICE_MINUTES: "0",
   BRAVE_API_KEY: "stub-brave-key", BRAVE_ANSWERS_API_KEY: "stub-brave-key",
-  OPENAI_API_KEY: "stub-openai-key", TYPESAFE_API_KEY: "stub-typesafe-key", E2B_API_KEY: "stub-e2b-key",
+  OPENAI_API_KEY: "stub-openai-key", TYPESAFE_API_KEY: "stub-typesafe-key",
   UPSTREAM_STUB_HOSTS: "api.search.brave.com,api.typesafe.ai",
 };
 
@@ -116,7 +114,7 @@ async function sendStt(headers, { empty = false } = {}) {
 // =============================================================================
 // boot A: settle first always on
 // =============================================================================
-rig = await bootPaidWires({ label: "settle-first-routes-a", env: (F) => ({ ...ENV, E2B_API_URL: `${F}/up/api.e2b.app`, GATEWAY_SETTLE_FIRST: "always", HARDCAP_E2B_SANDBOXES: "2" }) });
+rig = await bootPaidWires({ label: "settle-first-routes-a", env: () => ({ ...ENV, GATEWAY_SETTLE_FIRST: "always" }) });
 installUpstreams();
 try {
   for (const R of ROUTES) {
@@ -198,21 +196,6 @@ try {
       `search: a third resend of that payment runs nothing, is charged nothing more, says its one charge is owed back (charged: true, refundOwed: true), and is answered with the debt's refund status (${c.status} ${JSON.stringify(c.json).slice(0, 200)} ${c.order} ${c.row})`);
   }
 
-  // ---- a daily usage ceiling already reached: refused before any settle call ----
-  // (HARDCAP_E2B_SANDBOXES=2 here: the failed run above took one sandbox.)
-  {
-    const CODE = ROUTES.find((x) => x.slug === "code-run").route;
-    const a = await fresh(CODE);
-    const ra = await rig.pay(a, CODE);
-    await ok(ra.status === 503 && rig.outcomesOf(a).settled === 1, `code-run: the run that takes the last sandbox of the day settles first (${ra.status})`);
-    const b = await fresh(CODE);
-    const from = mark();
-    const rb = await rig.pay(b, CODE);
-    await sleep(100);
-    await ok(rb.status === 503 && /usage limit/.test(rb.json?.error || "") && rig.outcomesOf(b).attempts === 0 && orderOf(b, from) === "nothing" && !(await refunds()).some((x) => x.payer === b.address.toLowerCase()),
-      `code-run: with the daily ceiling reached, the next run is refused 503 before any settle call, and nothing is owed (${rb.status} ${orderOf(b, from)})`);
-  }
-
   // ---- transcription (multipart wire) ----
   {
     const w = await fresh(STT);
@@ -241,7 +224,7 @@ try {
 // =============================================================================
 // boot B: GATEWAY_SETTLE_FIRST=off, the same calls run their upstream first
 // =============================================================================
-rig = await bootPaidWires({ label: "settle-first-routes-b", env: (F) => ({ ...ENV, E2B_API_URL: `${F}/up/api.e2b.app`, GATEWAY_SETTLE_FIRST: "off" }) });
+rig = await bootPaidWires({ label: "settle-first-routes-b", env: () => ({ ...ENV, GATEWAY_SETTLE_FIRST: "off" }) });
 installUpstreams();
 try {
   for (const R of ROUTES.filter((x) => !x.noServe)) {
@@ -266,7 +249,7 @@ try {
 // fail on a catalog route is served first twice, then settles first (the same
 // per-wallet count as /v1), and those unsettled runs feed the budget meter.
 // =============================================================================
-rig = await bootPaidWires({ label: "settle-first-routes-c", env: (F) => ({ ...ENV, E2B_API_URL: `${F}/up/api.e2b.app`, GATEWAY_SETTLE_FIRST_BUDGET_USD: "1000" }) });
+rig = await bootPaidWires({ label: "settle-first-routes-c", env: () => ({ ...ENV, GATEWAY_SETTLE_FIRST_BUDGET_USD: "1000" }) });
 installUpstreams();
 try {
   const SEARCH = ROUTES[0].route;
@@ -287,6 +270,27 @@ try {
   await sleep(200);
   const after = (await meterOf())?.unsettledUsd24h ?? 0;
   await ok(after - before > 0.015, `search, budget mode: those two unsettled runs feed the same budget meter as the /v1 routes (${before} -> ${after})`);
+} finally {
+  await rig.stop();
+}
+
+// =============================================================================
+// boot D: a daily usage ceiling already reached is refused before any settle
+// call (HARDCAP_OPENAI_CALLS=1: the first image run takes the day's one unit)
+// =============================================================================
+rig = await bootPaidWires({ label: "settle-first-routes-d", env: () => ({ ...ENV, GATEWAY_SETTLE_FIRST: "always", HARDCAP_OPENAI_CALLS: "1" }) });
+installUpstreams();
+try {
+  const IMG = ROUTES.find((x) => x.slug === "image-gen").route;
+  const a = await fresh(IMG);
+  const ra = await rig.pay(a, IMG);
+  await ok(ra.status === 200 && rig.outcomesOf(a).settled === 1, `image-gen: the run that takes the last unit of the day settles first (${ra.status})`);
+  const b = await fresh(IMG);
+  const from = mark();
+  const rb = await rig.pay(b, IMG);
+  await sleep(100);
+  await ok(rb.status === 503 && /usage limit/.test(rb.json?.error || "") && rig.outcomesOf(b).attempts === 0 && orderOf(b, from) === "nothing" && !(await refunds()).some((x) => x.payer === b.address.toLowerCase()),
+    `image-gen: with the daily ceiling reached, the next run is refused 503 before any settle call, and nothing is owed (${rb.status} ${orderOf(b, from)})`);
 } finally {
   await rig.stop();
 }

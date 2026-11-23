@@ -514,9 +514,6 @@ export const WALLET_ONLY_SLUGS = new Set([
   // so this can never repeat the route-execute-pro gap (a paid tier that
   // shipped without this line and was free-tier-reachable for days).
   "pdf-summarize",
-  // Code execution kit: every call spins up an E2B sandbox (compute cost).
-  // PoW would let one client farm our E2B quota for free.
-  "code-run", "code-run-pro",
   // TTS kit: every call burns upstream speech credit (ElevenLabs, Kokoro and the backup speech models).
   "tts", "tts-hd", "tts-lite",
   // Dub: runs a chat gateway tier and a tts tier in-process (both above).

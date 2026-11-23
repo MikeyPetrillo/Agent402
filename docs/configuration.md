@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1124 variables in 114 groups.
+1120 variables in 114 groups.
 
 ## Contents
 
@@ -204,7 +204,6 @@ holds it.
 | `BUDGET_BRAVE_CALLS` | Budget brave calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_COINGECKO_CALLS` | Budget coingecko calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_DATABENTO_CALLS` | Budget databento calls. |  | `src/upstream-budgets.js` |
-| `BUDGET_E2B_CALLS` | Budget e2b calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_HUNTER_CALLS` | Budget hunter calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_NEYNAR_CALLS` | Budget neynar calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_OPENAI_CALLS` | Budget openai calls. |  | `src/upstream-budgets.js` |
@@ -536,7 +535,6 @@ holds it.
 | `HARDCAP_ALCHEMY_CALLS` | Hardcap alchemy calls. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS` | Network reads a day by the multichain wallet transfers tool, one per network a call asks for (default 30000; off disables, 0 refuses all). |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_BRAVE_CALLS` | Hardcap brave calls. |  | `src/upstream-hard-caps.js` |
-| `HARDCAP_E2B_SANDBOXES` | Hardcap e2b sandboxes. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_OPENAI_CALLS` | Hardcap openai calls. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_SYNC_MS` | Hardcap sync, in milliseconds. |  | `src/upstream-hard-caps.js` |
 
@@ -1594,8 +1592,6 @@ holds it.
 | `DATA_GOV_API_KEY` | Data gov API key (a credential, set on the host). | `DEMO_KEY` | `src/tools/gov-kit.js` |
 | `DEPLOY_OVERLAP_SECONDS` | Deploy overlap, in seconds. |  | `src/replay-topology.js` |
 | `DNS_LOOKUP_TIMEOUT_MS` | Dns lookup timeout, in milliseconds. |  | `src/tools/fetch-guard.js` |
-| `E2B_API_KEY` | E2b API key (a credential, set on the host). |  | `src/tools/code-run-kit.js` |
-| `E2B_MAX_CONCURRENT` | E2b maximum concurrent. |  | `src/tools/code-run-kit.js` |
 | `ECONOMY_FRESH_MS` | Economy fresh, in milliseconds. |  | `src/x402-economy.js` |
 | `EDGAR_FETCH_TIMEOUT_MS` | Edgar fetch timeout, in milliseconds. | `12000` | `src/tools/edgar-13f-datasets.js`, `src/tools/edgar-kit.js` |
 | `EDGAR_USER_AGENT` | Edgar user agent. |  | `src/tools/edgar-kit.js` |

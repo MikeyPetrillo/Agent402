@@ -39,9 +39,8 @@ are optional and no-op when their env vars are unset. `mcp/`, `tollbooth/`, and 
   `TARGET_URL=http://localhost:3000 node scripts/test-all.js` (every tool answers its
   own example), `node scripts/test-mcp-http.js`, and `node scripts/test-mcp-all.js`.
   Offline unit tests need no server: `npm test` (kit2/convert/memory) plus the other
-  `scripts/test-*.js`. `test-all.js` skips Brave (20) and E2B (2) routes unless
-  `BRAVE_LIVE_TEST=1` / `E2B_LIVE_TEST=1` is set, keys or not; those are covered by
-  the paid canary/dedicated CI steps.
+  `scripts/test-*.js`. `test-all.js` skips the Brave routes unless
+  `BRAVE_LIVE_TEST=1` is set, keys or not; those are covered by the paid canary.
 
 - **No linter.** The project has no ESLint/Prettier config or `lint` script; its
   quality gate is the `scripts/test-*.js` suite above.

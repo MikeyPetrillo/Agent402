@@ -15,10 +15,9 @@ import { IMAGE_GEN_TOOLS } from "./tools/image-gen-kit.js";
 import { TTS_TOOLS } from "./tools/tts-kit.js";
 import { STT_TOOLS } from "./tools/stt-kit.js";
 import { JUDGE_TOOLS } from "./tools/judge-kit.js";
-import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 
 /** Catalog routes with a real upstream cost, each with its own settle point. */
-export const SETTLE_FIRST_CATALOG_TOOLS = [...SEARCH_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...JUDGE_TOOLS, ...CODE_RUN_TOOLS];
+export const SETTLE_FIRST_CATALOG_TOOLS = [...SEARCH_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...JUDGE_TOOLS];
 /** The image tiers that share the images handler (not the video route: its
  *  job is parked and resumed across calls), dub and redact-chat, behind the chat gateway's settle point. */
 export const SETTLE_FIRST_SHARED_TOOLS = [...IMAGES_FAST_TOOLS.filter((t) => t.slug !== "v1-videos"), ...DUB_TOOLS, ...REDACT_CHAT_TOOLS];

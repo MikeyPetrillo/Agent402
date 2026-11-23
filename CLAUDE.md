@@ -377,7 +377,7 @@ idempotency cache, credits debit and refund ledger all follow this rule.
 **One exception, settle first** (`src/settle-first.js`; `GATEWAY_SETTLE_FIRST=off` removes it).
 Normal operation is unchanged: every buyer is served first and charged only on success. On the
 routes in `SETTLE_FIRST_SLUGS` (server.js: the `/v1` model and image routes, dub, web search and
-answer, image generation, speech, transcription, judgment and code runs), an x402 `exact` payment is settled
+answer, image generation, speech, transcription and judgment), an x402 `exact` payment is settled
 BEFORE the handler's upstream work when `gatewaySettleFirstPlan` names its buyer: per wallet,
 always, a wallet (per network) or one authorization holding `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX`
 (2) /v1 runs that did not settle, whatever the cause, with no settled call since; and, only while

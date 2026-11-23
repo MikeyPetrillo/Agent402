@@ -26,7 +26,7 @@
 //                 true for the whole answer, or the array keys it excuses).
 //   error-shaped  an `error` (set), `errors` (non-empty) or `ok: false` in a
 //                 200, where the documented example does not carry that key
-//                 (a validator's `errors` list and code-run's `error` are the
+//                 (a validator's `errors` list and a run's own `error` are the
 //                 contract), or a skill pack whose every step reports
 //                 `ok: false`.
 //   unchecked     not a JSON object or array, no documented example, or a
