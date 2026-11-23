@@ -16,6 +16,7 @@
 //   - the source is named on every answer (the tool's credit).
 import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
 import { settleBeforeUpstream } from "../settle-first.js";
+import { CAP_NAMES } from "../upstream-cap-refusals.js";
 
 export const WIKIPEDIA_OPENSEARCH_URL = "https://en.wikipedia.org/w/api.php";
 export const SUGGEST_USER_AGENT = "Agent402SuggestBot/1.0 (https://agent402.tools/crawler; help@agent402.tools) search-suggest";
@@ -34,7 +35,7 @@ const WINDOW_MS = 60_000;
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
-const busy = (retryAfter = 1) => Object.assign(bad("Search suggestions are busy - retry shortly", 503), { retryAfter: Math.max(1, Math.ceil(retryAfter)) });
+const busy = (retryAfter = 1, { ours = true } = {}) => Object.assign(bad("Search suggestions are busy - retry shortly", 503), { retryAfter: Math.max(1, Math.ceil(retryAfter)), ...(ours ? { capRefusal: CAP_NAMES.suggestRate } : {}) });
 
 // One read at a time: each caller's turn starts when the previous read ends.
 let tail = Promise.resolve();
@@ -111,7 +112,7 @@ export async function wikipediaSuggestions(q, count) {
     url.search = new URLSearchParams({ action: "opensearch", format: "json", formatversion: "2", namespace: "0", limit: String(count), search: q }).toString();
     const ctx = { label: "Search suggestions", step: "opensearch", timeoutMs: TIMEOUT_MS, tag: "[search-suggest]" };
     const res = await upstreamFetch(url, { headers: { "User-Agent": SUGGEST_USER_AGENT, "Api-User-Agent": SUGGEST_USER_AGENT, Accept: "application/json" } }, ctx);
-    if (res.status === 429) throw busy();
+    if (res.status === 429) throw busy(1, { ours: false });
     if (!res.ok) throw bad(`Search suggestions upstream error (HTTP ${res.status})`, 502);
     let data;
     try { data = await bodyUnderDeadline(res.json(), ctx); }

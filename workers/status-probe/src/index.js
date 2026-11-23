@@ -554,6 +554,15 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     },
   },
   {
+    // Our own upstream caps (src/upstream-cap-refusals.js): "reached" while a
+    // cap refused a call within the last hour. Never charged, but a buyer was
+    // turned away, so it pages; ok clears; unknown does neither. Same title as
+    // heartbeat.yml.
+    title: "Scheduled check needs review: upstream-caps",
+    verdict: ({ gateway: b }) => (b.upstreamCaps === "reached" ? "bad" : b.upstreamCaps === "ok" ? "good" : "quiet"),
+    body: () => "/api/gateway-status reports upstreamCaps=reached: one of this server's own upstream caps refused a call within the last hour (answered 503 before any settle point). /__operator/upstream-caps.json names the cap and the tool. Auto-closes when the word is ok.",
+  },
+  {
     // Arc settlements Circle left pending (src/circle-pending.js): unresolved
     // (kept, needs an operator) and full page; ok and off clear;
     // near_capacity and unknown do neither. Same title as heartbeat.yml.

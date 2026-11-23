@@ -1010,6 +1010,7 @@ import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
 import { withCallerInputErrors, readableAsText } from "./caller-input-errors.js";
+import { withCapRefusalCount, upstreamCapsWord, upstreamCapRefusals } from "./upstream-cap-refusals.js";
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, verifyHeartbeatToken, PROBE_POW_SLUG, powReplayFlush } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, limiterKey } from "./rate-limit.js";
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
@@ -2691,6 +2692,9 @@ for (const def of Object.values(CATALOG)) {
   // other bare error stays a 500. Wrapped here, over the assembled catalog,
   // so the HTTP route, the connector and the skill packs share it.
   if (isComputePayable(def) && typeof def.handler === "function") def.handler = withCallerInputErrors(def.handler);
+  // A refusal by one of our own upstream caps is counted under the slug
+  // (src/upstream-cap-refusals.js: the operator view and upstreamCaps word).
+  if (typeof def.handler === "function") def.handler = withCapRefusalCount(def.slug, def.handler);
   if (isIdentityBoundRoute(def)) def.identityBound = true;
   // Long-running composites settle AFTER a 2-4 min handler: EVM exact only
   // (see acceptsForItem) and no Tempo challenge (see mpp-tempo).
@@ -4694,6 +4698,11 @@ app.get("/api/gateway-status", async (req, res) => {
     // status Worker can page on halted / no_credentials / refused / in_doubt;
     // the operator also gets the mode and counts. Never an id or text.
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // "reached" while one of our own upstream caps (src/upstream-cap-refusals.js)
+    // refused a call within the last hour, else "ok"; the counts per cap and
+    // slug are on /__operator/upstream-caps.json. The status Worker and the
+    // heartbeat page on "reached".
+    upstreamCaps: (() => { try { return upstreamCapsWord(); } catch { return "unknown"; } })(),
     // The state database (the stores that left the volume): one word.
     stateDb: { status: stateDbStatus() },
     // The live rail scan behind /revenue (src/revenue-live.js): fresh / due
@@ -12117,6 +12126,11 @@ if (AWS_ROUTES && AWS_ROUTES.defs.size) {
   });
   app.all(["/aws", "/aws/:slug"], awsRoute);
 }
+// Calls our own upstream caps refused, per cap and per slug (operator only).
+app.get("/__operator/upstream-caps.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(upstreamCapRefusals());
+});
 // The AWS Marketplace gate's counters and the paid runs that ended without an answer (operator only).
 app.get("/__operator/aws.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);

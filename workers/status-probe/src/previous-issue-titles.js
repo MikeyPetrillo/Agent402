@@ -98,6 +98,7 @@ export const PREVIOUS_TITLES = Object.freeze({
   "refund-ledger": ["Refund ledger needs attention"],
   "refunds": ["Refunds owed to a buyer are waiting"],
   "replay-store-marks": ["Replay store marks PENDING (Redis)"],
+  "upstream-caps": [],
   "report-quality": ["Paid report quality REGRESSED"],
   "revenue-read": ["Live revenue read is stale"],
   "robinhood-settler": ["robinhoodSettler: our own relayer has been settling Robinhood sales for hours"],

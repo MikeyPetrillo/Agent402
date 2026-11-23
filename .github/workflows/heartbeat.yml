@@ -1458,6 +1458,33 @@ jobs:
               ;;
           esac
 
+      # Our own upstream caps (src/upstream-cap-refusals.js): one word on
+      # /api/gateway-status. reached (a cap refused a call within the last hour)
+      # pages; ok closes; unknown does neither. The status Worker runs the same
+      # check under the same title.
+      - name: Upstream caps check (alarm when a cap refused a call)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamCaps // "unknown"' 2>/dev/null || echo unknown)
+          echo "upstream caps: $WORD"
+          TITLE="Scheduled check needs review: upstream-caps"
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            reached)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Arc settlements Circle left pending (src/circle-pending.js): one word on
       # /api/gateway-status. unresolved / full page; ok and off close;
       # near_capacity and unknown do neither.

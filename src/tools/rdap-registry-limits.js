@@ -13,6 +13,7 @@
 // turns over; nothing is sent and, being a 503, nothing is charged. The count
 // is this process's own.
 import { capByCeiling } from "../run-ceiling.js";
+import { CAP_NAMES } from "../upstream-cap-refusals.js";
 
 export const PACE_MS = 100;
 export const PACE_MAX_WAIT_MS = 3000;
@@ -49,7 +50,7 @@ export function createRegistryLimits({ paceMs = PACE_MS, dailyMax = () => regist
     const count = cur && cur.day === day ? cur.count : 0;
     if (count >= max) {
       const retryAfter = Math.max(1, Math.ceil(((day + 1) * DAY_MS - t) / 1000));
-      throw Object.assign(new Error(`Lookups to this registry's RDAP service (${host}) reached this service's daily limit, so this one was not sent; retry after 00:00 UTC (in ${retryAfter}s)`), { statusCode: 503, retryAfter, attribution: "ours", registryDailyLimit: true });
+      throw Object.assign(new Error(`Lookups to this registry's RDAP service (${host}) reached this service's daily limit, so this one was not sent; retry after 00:00 UTC (in ${retryAfter}s)`), { statusCode: 503, retryAfter, attribution: "ours", registryDailyLimit: true, capRefusal: CAP_NAMES.rdapRegistryDay });
     }
     days.set(host, { day, count: count + 1 });
     if (days.size > 500) for (const [h, v] of days) { if (v.day !== day) days.delete(h); }
