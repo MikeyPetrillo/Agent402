@@ -18,6 +18,7 @@
 //   - /start is in the docs nav, the sitemap, /llms.txt and the page dates.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { pageText } from "./lib/html-text.js";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -35,8 +36,8 @@ let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const ORIGIN = "https://agent402.tools";
-const plain = (html) => String(html).replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ")
-  .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+// What a reader sees (scripts/lib/html-text.js: case-blind, stripped until stable).
+const plain = (html) => pageText(html);
 
 // ---- offline renders ----------------------------------------------------------
 const catalog = {

@@ -6,6 +6,7 @@
 // pages state the price includes the tax (G.S. 105-164.7(2)).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { stripTags } from "./lib/html-text.js";
 import { ncTaxReport, ncTaxableKind, isNcBilling, taxIncludedPortion, monthBounds, NC_TAXABLE_SLUGS } from "../src/nc-sales-tax.js";
 import { TERMS_VERSION, creditsTermsVersion } from "../src/credits-sales.js";
 
@@ -62,7 +63,7 @@ ok(/metadata: \{ credits_pack: packKey, terms: creditsTermsVersion\(\)[ ,}]/.tes
 // /terms names every taxable kind and keeps the tax-included statement (G.S. 105-164.7(2)).
 {
   const { termsPage } = await import("../src/terms.js");
-  const text = termsPage("https://agent402.tools").replace(/<[^>]*>/g, "").replace(/\s+/g, " ");
+  const text = stripTags(termsPage("https://agent402.tools"), "").replace(/\s+/g, " ");
   ok(/Prices are the same everywhere and include North Carolina sales tax where it applies/.test(text), "/terms says prices include North Carolina sales tax");
   ok(/generated speech, audio or video, or that edits an image or audio file you send, includes that tax/.test(text), "/terms names generated speech, audio and video and edits of a buyer's image or audio file as taxed");
 }
@@ -86,7 +87,7 @@ console.log(failed ? `${failed} failed` : "all passed");
 // (a new slug of another sort) cannot be taxed without the terms saying so.
 {
   const { termsPage } = await import("../src/terms.js");
-  const text = termsPage("https://agent402.tools").replace(/<[^>]*>/g, "").replace(/\s+/g, " ");
+  const text = stripTags(termsPage("https://agent402.tools"), "").replace(/\s+/g, " ");
   const NAMED = {
     "digital audio work": "returns generated speech, audio",
     "digital audiovisual work": "audio or video",

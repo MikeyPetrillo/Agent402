@@ -13,6 +13,7 @@
 //
 //   node scripts/test-mcp-oauth-pages.js
 import "./lib/offline-stores.js";
+import { stripScripts } from "./lib/html-text.js";
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { bootPaidServer } from "./lib/paid-boot.js";
@@ -26,7 +27,10 @@ const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input"
 const attrsOf = (s) => Object.fromEntries([...String(s).matchAll(/([a-zA-Z-]+)(?:="([^"]*)")?/g)].map((m) => [m[1].toLowerCase(), m[2] ?? ""]));
 /** Every element with its attributes and the chain of open elements above it. */
 function elements(html) {
-  const body = html.replace(/<!--[\s\S]*?-->/g, "").replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, "");
+  // Comments, scripts and styles out, repeated until nothing changes, so a
+  // fragment one pass would splice back together cannot survive.
+  let body = String(html), prev;
+  do { prev = body; body = stripScripts(body.replace(/<!--[\s\S]*?-->/g, ""), ""); } while (body !== prev);
   const out = [], stack = [];
   for (const m of body.matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g)) {
     const tag = m[2].toLowerCase();

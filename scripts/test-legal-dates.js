@@ -5,6 +5,7 @@
 // fails until the date is bumped AND the pin below is updated with it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { stripScripts, stripTags } from "./lib/html-text.js";
 import { createHash } from "node:crypto";
 
 // The date follows the text a reader sees with every optional switch off: a
@@ -63,7 +64,7 @@ const RENDERED = {
   // and the shared site chrome (header, nav, footer) set aside.
   const mainText = (html) => {
     const m = /<main[\s\S]*?<\/main>/.exec(String(html));
-    return (m ? m[0] : String(html)).replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    return stripTags(stripScripts(m ? m[0] : String(html))).replace(/\s+/g, " ").trim();
   };
   const renderHash = (html) => createHash("sha256").update(mainText(html).replace(DATE_LINE, "last updated <date>.")).digest("hex").slice(0, 16);
   for (const variant of ["off", "on"]) {
