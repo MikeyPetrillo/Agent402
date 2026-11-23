@@ -22,7 +22,7 @@ import { spawn } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 process.env.POSTHOG_TEST_CAPTURE = "1";
 const {
@@ -330,7 +330,7 @@ ok(got.length === 51 && goneOther?.properties.routes === 10 && goneTotal === 120
 }
 
 // --- integration: the real funnel through a paid-mode server ----------------------
-const [FAC_PORT, PORT] = await getFreePorts(2), B = `http://127.0.0.1:${PORT}`;
+let B = "";
 // Mock facilitator: /supported advertises the exact scheme on Base so the
 // middleware's kind sync succeeds and real 402 challenges build offline.
 const facilitator = createServer((req, res) => {
@@ -342,36 +342,36 @@ const facilitator = createServer((req, res) => {
     res.end("{}");
   }
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
-const proc = spawn(process.execPath, ["src/server.js"], {
+let srv = null;
+const bootOpts = {
+  stores: "posthog-funnel",
+  readyPath: "/api/pow",
+  timeoutMs: 30_000,
   env: {
-    ...process.env,
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     X402_SYNC_ON_START: "true", // the kind sync MUST run for 402s to build
     POW_DIFFICULTY: "12",
-    PORT: String(PORT),
     FREE_MODE: "",
     POSTHOG_TEST_CAPTURE: "1",
     POSTHOG_PAYWALL_FLUSH_MS: "1000", // flush fast so the test can observe it
     SALES_LEDGER_DB: `/tmp/a402-funnel-sales-${process.pid}.db`, // isolated ledger for the /api/sales assertion
   },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let serverLog = "";
-proc.stdout.on("data", (d) => { serverLog += d; });
-proc.stderr.on("data", (d) => { serverLog += d; });
+};
+const serverLog = () => srv?.log() || "";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
 const solve = (c) => { let n = 0; while (lz(createHash("sha256").update(`${c.challenge}:${n}`).digest()) < c.difficulty) n++; return n; };
 
 try {
-  let up = false;
-  for (let i = 0; i < 60; i++) { try { if ((await fetch(`${B}/api/pow`)).ok) { up = true; break; } } catch {} await sleep(500); }
-  ok(up, "paid-mode server booted against the mock facilitator");
+  srv = await bootServer(bootOpts).catch(() => null);
+  ok(Boolean(srv), "paid-mode server booted against the mock facilitator");
+  B = srv?.url;
 
   // Stage 1: discovery. DRAIN each body before asserting: the server captures
   // discovery from res.on("finish"), which only fires once the response has
@@ -407,7 +407,7 @@ try {
 
   await sleep(1800); // let the paywall rollup flush (1s window) + finish hooks run
 
-  const captured = serverLog.split("\n")
+  const captured = serverLog().split("\n")
     .filter((l) => l.includes("[posthog-test]"))
     .map((l) => { try { return JSON.parse(l.slice(l.indexOf("{"))); } catch { return null; } })
     .filter(Boolean);
@@ -437,7 +437,7 @@ try {
 } catch (e) {
   ok(false, `integration leg threw: ${e.message}`);
 } finally {
-  proc.kill("SIGKILL");
+  srv?.child.kill("SIGKILL");
   facilitator.close();
 }
 

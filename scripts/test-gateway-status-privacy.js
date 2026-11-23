@@ -16,24 +16,19 @@
 // The operator still sees everything - the figures are needed to act - and an
 // operator-authed read is never cached.
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const PORT = await getFreePort();
 const TOKEN = "privacy-test-operator-token-0123456789";
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
+const srv = await bootServer({
+  stores: "gateway-status-privacy",
+  timeoutMs: 60_000,
+  env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
          AGENT402_OPERATOR_TOKEN: TOKEN, SOR_EVM_CHAINS: "", X_BEARER_TOKEN: "t" },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-const base = `http://127.0.0.1:${PORT}`;
-for (let i = 0; i < 120; i++) {
-  try { const r = await fetch(`${base}/health`); if (r.ok) break; } catch {}
-  await new Promise((r) => setTimeout(r, 500));
-}
+const base = srv.url;
 
 const pub = await fetch(`${base}/api/gateway-status`);
 const pubBody = await pub.json();
@@ -276,6 +271,6 @@ ok(/max-age/.test(pub.headers.get("cache-control") || ""), "the public read is s
      "the wish qualification bar stays published - the paid radar states it too, so hiding it here would be theatre");
 }
 
-child.kill();
+srv.child.kill();
 console.log(`\ntest-gateway-status-privacy: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

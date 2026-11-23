@@ -19,12 +19,12 @@
 // Non-EVM payloads (Solana, Stellar, Algorand) name no EVM address: covered
 // by the pure extractor checks at the top (this harness offers Base only).
 import "./lib/file-mode.js";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 import { x402ScreenedAddressesOf } from "../src/x402-payer-screen.js";
 import { payerFromRequest } from "../src/payer.js";
 
@@ -156,10 +156,10 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
 // ---------------------------------------------------------------------------
 // 2. The real paid server.
 const TMP = mkdtempSync(join(tmpdir(), "x402-payer-screen-"));
-const [PORT_A, PORT_B, FAC_PORT, UP_PORT] = await getFreePorts(4);
 let proc = null;
-const serverLog = [];
-setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.slice(-25)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); }, 180_000).unref();
+const booted = [];
+const serverLog = () => booted.flatMap((s) => s.log().split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 400)));
+setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog().slice(-25)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); }, 180_000).unref();
 
 const fac = { verify: {}, settle: {} };
 const bump = (m, k) => { m[k] = (m[k] || 0) + 1; };
@@ -182,7 +182,8 @@ const facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 const FAC = `http://127.0.0.1:${FAC_PORT}`;
 
 // A stub over api.openai.com for the async route (a test boot can never spend).
@@ -192,7 +193,8 @@ const upstream = createServer((req, res) => {
   req.resume();
   req.on("end", () => { up.calls++; setTimeout(() => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ created: 1, data: [{ b64_json: PNG_B64 }], usage: { input_tokens: 1, output_tokens: 1 } })); }, 200); });
 });
-await new Promise((r) => upstream.listen(UP_PORT, "127.0.0.1", r));
+await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
+const UP_PORT = upstream.address().port;
 const preload = join(TMP, "openai-stub.mjs");
 writeFileSync(preload, `
 const STUB = ${JSON.stringify(`http://127.0.0.1:${UP_PORT}`)};
@@ -209,8 +211,11 @@ globalThis.fetch = function (input, init) {
 const STORE = join(TMP, "screen.json");
 writeFileSync(STORE, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 2 }, addresses: [LISTED, OTHER_LISTED] }));
 
+// Both boots share one set of file stores, as they did before (the files this
+// suite names per boot are named by the boot's label).
+const STORES = ownStoreEnv("x402-payer-screen");
 const boot = async (port, storeFile) => {
-  const env = { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  const env = { ...STORES, TRUST_PROXY_HOPS: "1", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: FAC, AGENT402_BASE_RPC: `${FAC}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", TEMPO_RELAY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "", AGENT402_OPERATOR_TOKEN: "payer-screen-test-operator-token-0123456789",
@@ -218,12 +223,11 @@ const boot = async (port, storeFile) => {
     AGENT402_TASK_DATA_DIR: join(TMP, `tasks-${port}`), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, `sales-${port}.db`), HANGUP_FORGIVE_FILE: join(TMP, `hangup-${port}.json`),
     MEMORY_DB_FILE: join(TMP, "memory.db"),
     SANCTIONS_SCREEN_FILE: storeFile, SANCTIONS_LIST_URL: `${FAC}/SDN.XML` };
-  proc = spawn(process.execPath, ["--import", preload, "src/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
-  const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 400)); };
-  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-  const base = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${base}/health`)).ok) return base; } catch { /* booting */ } await sleep(500); }
-  throw new Error("server did not boot");
+  let srv;
+  try { srv = await bootServer({ stores: false, args: ["--import", preload], timeoutMs: 80_000, env }); } catch (e) { throw new Error(`server did not boot\n${e.message}`); }
+  booted.push(srv);
+  proc = srv.child;
+  return srv.url;
 };
 const stop = async () => { if (!proc) return; const p = proc; proc = null; p.kill("SIGTERM"); await new Promise((r) => { const t = setTimeout(() => { p.kill("SIGKILL"); r(); }, 8000); p.once("exit", () => { clearTimeout(t); r(); }); }); };
 
@@ -261,7 +265,7 @@ const status = async (B, auth) => (await (await fetch(`${B}/api/gateway-status`,
 const PUT = (key, value) => JSON.stringify({ key, value });
 try {
   // ---- Boot A: the stored list is loaded ----
-  let B = await boot(PORT_A, STORE);
+  let B = await boot("a", STORE);
   const pub = await status(B);
   ok(pub?.status === "fresh" && Object.keys(pub).join() === "status", `x402 alone (no Tempo direct mode) publishes the screen's one word: ${JSON.stringify(pub)}`);
 
@@ -334,13 +338,13 @@ try {
 
   const op = await status(B, true);
   ok(op?.status === "fresh" && op?.evmAddresses === 2 && op?.x402?.refused >= 6 && op?.x402?.servedUnscreened === 0, `the operator view counts the x402 refusals (${JSON.stringify(op?.x402)})`);
-  const logText = serverLog.join("\n").toLowerCase();
+  const logText = serverLog().join("\n").toLowerCase();
   ok(/x402 payer 0x5a5a\.\.\.5a5a refused before the handler/.test(logText), "the server log names the refusal with the address masked");
   ok(!logText.includes(LISTED.slice(2)), "the server log never carries the full address");
   await stop();
 
   // ---- Boot B: no list loaded (fail open), same memory store ----
-  B = await boot(PORT_B, join(TMP, "no-such-store.json"));
+  B = await boot("b", join(TMP, "no-such-store.json"));
   ok((await status(B))?.status === "missing", "with no list loaded the status word reads missing");
   // The memory handler itself answers this read (the screen let it through),
   // and it finds nothing: the refused write in the first boot never ran.
@@ -353,12 +357,12 @@ try {
   ok(r.status === 200 && JSON.stringify(r.json).includes("clean-value"), `control: the clean payer's write from the first boot reads back (${JSON.stringify(r.json).slice(0, 120)})`);
   const opB = await status(B, true);
   ok(opB?.status === "missing" && opB?.x402?.servedUnscreened >= 1, `the operator view counts payments served unscreened (${JSON.stringify(opB?.x402)})`);
-  ok(/serving x402 payments unscreened/.test(serverLog.join("\n")), "the unscreened state is logged");
+  ok(/serving x402 payments unscreened/.test(serverLog().join("\n")), "the unscreened state is logged");
 } finally {
   await stop();
   facilitator.close(); upstream.close();
   rmSync(TMP, { recursive: true, force: true });
 }
-if (fail) for (const l of serverLog.slice(-30)) console.error("  server:", l);
+if (fail) for (const l of serverLog().slice(-30)) console.error("  server:", l);
 console.log(`\ntest-x402-payer-screen: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

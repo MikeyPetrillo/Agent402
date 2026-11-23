@@ -17,25 +17,23 @@
 //     these settlements went missing from the funnel, the sales ledger and the
 //     served-call tally until the tally moved to onSettleOutcome.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 requireUpstreamCosts("test-settlement-event");
 
-let pass = 0, fail = 0, proc = null, facilitator = null, upstream = null;
+let pass = 0, fail = 0, srv = null, facilitator = null, upstream = null;
 const TMP = mkdtempSync(join(tmpdir(), "settlement-event-"));
-const serverLog = [];
+const serverLog = () => (srv?.log() || "").split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 2000));
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await cond()) return true; await sleep(50); } return cond(); };
-setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.slice(-25)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); }, 120_000).unref();
+setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog().slice(-25)) console.error("  server:", l); srv?.child.kill("SIGKILL"); process.exit(1); }, 120_000).unref();
 
-const [PORT, FAC_PORT, UP_PORT] = await getFreePorts(3);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 const BAD_PAYER = "0x" + "ba".repeat(20);
 
 const fac = { verify: 0, settle: 0 };
@@ -56,7 +54,8 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 const up = { calls: 0, delayMs: 300 };
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -71,7 +70,8 @@ upstream = createServer((req, res) => {
     }, up.delayMs);
   });
 });
-await new Promise((r) => upstream.listen(UP_PORT, "127.0.0.1", r));
+await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
+const UP_PORT = upstream.address().port;
 
 const preload = join(TMP, "openai-stub.mjs");
 writeFileSync(preload, `
@@ -84,10 +84,13 @@ globalThis.fetch = function (input, init) {
   return real.call(this, input, init);
 };
 `);
-proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
+const bootOpts = {
+  stores: "settlement-event",
+  args: ["--import", preload],
+  timeoutMs: 80_000,
   // The slow-route sync window (src/slow-sync-window.js) is off: this suite
   // drives slow routes synchronously; test-slow-sync-window.js covers the window.
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", SLOW_SYNC_WINDOW_SECONDS: "off", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  env: { TRUST_PROXY_HOPS: "1", SLOW_SYNC_WINDOW_SECONDS: "off", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "",
     POSTHOG_API_KEY: "", POSTHOG_TEST_CAPTURE: "1",
@@ -98,10 +101,7 @@ proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
     // booked as owed, the path whose settlement had no event.
     HANGUP_FORGIVE: "off",
     AGENT402_MCP_TASK_TTL_MS: "" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 2000)); };
-proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+};
 
 const PATH = "/api/image-gen-premium";
 const SLUG = "image-gen-premium";
@@ -115,7 +115,7 @@ const credential = (payer) => Buffer.from(JSON.stringify({
 const wallet = (n) => `0x${n.toString(16).padStart(40, "0")}`;
 const post = (headers, path = PATH, body = BODY) => fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body });
 const job = async (url) => (await fetch(`${B}${url}`)).json();
-const events = () => serverLog
+const events = () => serverLog()
   .filter((l) => l.includes("[posthog-test]"))
   .map((l) => { try { return JSON.parse(l.slice(l.indexOf("{"))); } catch { return null; } })
   .filter(Boolean);
@@ -124,7 +124,8 @@ const settledEvents = () => events().filter((e) => e.event === "payment_settled"
 const agree = async () => waitFor(() => settledEvents().length >= fac.settle, 5000);
 
 try {
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch { /* booting */ } await sleep(500); }
+  srv = await bootServer(bootOpts);
+  B = srv.url;
 
   const r0 = await post({ "x-forwarded-for": "10.9.1.1" });
   ok(r0.status === 402, `an unpaid call gets the ordinary 402 (got ${r0.status})`);
@@ -185,7 +186,7 @@ try {
   const e5 = settledEvents();
   ok(e5.length === 3 && e5[2].properties.slug === SLUG && e5[2].properties.payer === wallet(5) && e5[2].properties.paid === true,
     `the settlement the buyer never received still emits exactly one payment_settled (got ${e5.length})`);
-  ok(serverLog.some((l) => /\[hangup\] CHARGED-BUT-NOT-SERVED/.test(l)), "and the charge is booked as owed in the refund ledger");
+  ok(serverLog().some((l) => /\[hangup\] CHARGED-BUT-NOT-SERVED/.test(l)), "and the charge is booked as owed in the refund ledger");
   // The sales ledger and the served-call tally ride the same hook.
   const sales = await (await fetch(`${B}/api/sales`)).json();
   ok(Number(sales.totals?.byRail?.["external:usdc"] || 0) === 3, `the sales ledger holds all three settlements by name (byRail ${JSON.stringify(sales.totals?.byRail)})`);
@@ -195,9 +196,9 @@ try {
   ok(settledEvents().length === fac.settle, `payment_settled events and facilitator settles agree (${settledEvents().length} vs ${fac.settle})`);
   ok(!events().some((e) => e.event === "charged_but_failed"), "no charged_but_failed was recorded for a settled 200");
 } finally {
-  proc?.kill("SIGKILL"); facilitator?.close(); upstream?.close();
+  srv?.child.kill("SIGKILL"); facilitator?.close(); upstream?.close();
   rmSync(TMP, { recursive: true, force: true });
 }
-if (fail) for (const l of serverLog.slice(-40)) console.error("  server:", l);
+if (fail) for (const l of serverLog().slice(-40)) console.error("  server:", l);
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

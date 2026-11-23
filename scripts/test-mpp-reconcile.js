@@ -7,11 +7,10 @@
 // payer address reaches any output, the public status carries words only, and
 // the operator routes are operator-only on a booted server.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import {
   reconcileRecords, statusWordFor, createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc,
   CATEGORIES, MISMATCH_CATEGORIES, INFO_CATEGORIES, dayStartMs, EXPLAIN_NOTE_MAX,
@@ -418,19 +417,14 @@ delete process.env.MPP_RECONCILE;
 
 // --- booted server: operator auth + the public view -------------------------
 {
-  const PORT = await getFreePort();
   const TOKEN = "mpp-reconcile-test-operator-token-0123456789";
-  const child = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, MPP_RECONCILE_FILE: join(dir, "server.json"), MPP_RECONCILE_EXPLAINED_FILE: join(dir, "server-explained.json"), MPP_RECONCILE: "off" },
-    stdio: ["ignore", "pipe", "pipe"],
+  const srv = await bootServer({
+    stores: "mpp-reconcile",
+    timeoutMs: 60_000,
+    env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, MPP_RECONCILE_FILE: join(dir, "server.json"), MPP_RECONCILE_EXPLAINED_FILE: join(dir, "server-explained.json"), MPP_RECONCILE: "off" },
   });
-  const base = `http://127.0.0.1:${PORT}`;
-  let up = false;
-  for (let i = 0; i < 120; i++) {
-    try { const res = await fetch(`${base}/health`); if (res.ok) { up = true; break; } } catch {}
-    await new Promise((res) => setTimeout(res, 500));
-  }
-  ok(up, "server booted");
+  const base = srv.url;
+  ok(true, "server booted");
   const noAuth = await fetch(`${base}/__operator/mpp-reconcile.json`);
   ok(noAuth.status === 404, "GET /__operator/mpp-reconcile.json without the token: 404");
   const noAuthRun = await fetch(`${base}/__operator/mpp-reconcile/run`, { method: "POST" });
@@ -465,7 +459,7 @@ delete process.env.MPP_RECONCILE;
   ok(xRestore.status === 200 && rBody.changed === true && rBody.explainedCount === 0, "operator restore lifts the mark");
   // The detail's day rows come from this machine's local sales ledger (other suites' fixtures), so only the explain answers and the stored explanations are checked here.
   ok(!JSON.stringify([xBody, rBody, det2.explained]).toLowerCase().includes(PAYER.slice(2)), "no payer address in any explain response or the listed explanations");
-  child.kill();
+  srv.child.kill();
 }
 
 console.log(`\ntest-mpp-reconcile: ${pass} passed, ${fail} failed`);
