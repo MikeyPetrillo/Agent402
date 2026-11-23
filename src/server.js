@@ -808,7 +808,7 @@ const SOLANA_INTEL_TOOLS = solanaIntelToolsEnabled();
 const TOKEN_BRIEF_TOOLS = rugcheckEnabled() ? TOKEN_BRIEF_TOOLS_ALL : [];
 import { SANCTIONS_TOOLS, startSanctionsRefresh, startSanctionsPayoutStore, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
-import { SETTLE_FIRST_CATALOG_TOOLS, settleFirstSlugs } from "./settle-first-tools.js";
+import { SETTLE_FIRST_CATALOG_TOOLS, SETTLE_FIRST_REPORT_TOOLS, settleFirstSlugs } from "./settle-first-tools.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";
 import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled } from "./tools/farcaster-social-kit.js";
 // Listed only when a Neynar/Warpcast key is present (same rule as the X data kit).
@@ -13998,10 +13998,17 @@ async function admitPaidRun(req, res, def) {
 // (tts-kit), transcription (stt-kit), judgment (judge-kit) and code runs
 // (code-run-kit). Their unsettled runs count toward the wallet's settle-first
 // count and the budget meter like a /v1 run's (setSettleFirstRouteReader).
+// And the report products (SETTLE_FIRST_REPORT_TOOLS: the composites, less
+// the one that bounds its own spend): every paid model call they make is a
+// fetchOpenRouter call, behind the same settle point, after their own checks
+// and free source reads. Their unsettled runs count the same way, so a wallet
+// rotated through the reports meets the same budget meter as one rotated
+// through /v1.
 // The lists live in src/settle-first-tools.js, which the copy guard reads too.
 const SETTLE_FIRST_CATALOG_SLUGS = new Set(SETTLE_FIRST_CATALOG_TOOLS.map((t) => t.slug));
+const SETTLE_FIRST_REPORT_SLUGS = new Set(SETTLE_FIRST_REPORT_TOOLS.map((t) => t.slug));
 const SETTLE_FIRST_SLUGS = settleFirstSlugs(GATEWAY_TOOLS_ENABLED);
-setSettleFirstRouteReader((req) => SETTLE_FIRST_CATALOG_SLUGS.has(CATALOG[`${req.method} ${req.path}`]?.slug));
+setSettleFirstRouteReader((req) => { const slug = CATALOG[`${req.method} ${req.path}`]?.slug; return SETTLE_FIRST_CATALOG_SLUGS.has(slug) || SETTLE_FIRST_REPORT_SLUGS.has(slug); });
 /**
  * Arm this run to settle its payment before its upstream work, or null (it
  * settles after the handler, as every run does in normal operation). Armed
@@ -14449,6 +14456,10 @@ for (const tool of ALL_KIT) {
             // (settlement_unconfirmed, src/payments.js): the transfer may
             // still land and the buyer was told not to pay again, so it
             // feeds the burst alarm and never the payer's count.
+            // A run settled first was paid (a failure after it is owed back
+            // and repaid from the refund ledger), and a payment refused at its
+            // settle point ran no paid call: neither is an unpaid report run.
+            if (settledFirstOf(req) || settleFirstRefusalOf(req)) return;
             const st = res.statusCode;
             const receipt402 = st === 402 ? decodeSettleReceipt(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE")) : null;
             if (st === 200) recordCompositeSpendSuccess(guardKey);

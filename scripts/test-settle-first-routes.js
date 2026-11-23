@@ -291,4 +291,88 @@ try {
   await rig.stop();
 }
 
+// =============================================================================
+// boot D: the report products (EXPENSIVE_COMPOSITE_SLUGS, less the route
+// that bounds its own spend). Each reaches its paid model calls through the
+// chat gateway's settle point (fetchOpenRouter), so an armed run settles
+// before its first model call. The research report is driven end to end on
+// the stub model: a plan, grounded searches, a synthesis.
+// =============================================================================
+{
+  const RESEARCH = { method: "POST", path: "/v1/research", body: { query: "How do agents pay per request over HTTP?" } };
+  let reportFails = false;
+  const researchHook = async ({ path, j, reply }) => {
+    if (!/chat\/completions/.test(path)) return false;
+    if (reportFails) { reply(500, { error: { message: "stub upstream failure" } }); return true; }
+    const msg = (content, extra = {}) => reply(200, { id: "gen-r", object: "chat.completion", created: 1, model: j.model || "x", choices: [{ index: 0, message: { role: "assistant", content, ...extra }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cost: 0.001 } });
+    if (j.response_format?.type === "json_object") { msg(JSON.stringify({ sub_questions: ["What is x402?", "How is a payment settled?", "Who verifies it?"], outline: ["Overview"] })); return true; }
+    if (Array.isArray(j.plugins) && j.plugins.some((p) => p?.id === "web")) {
+      const n = Math.floor(Math.random() * 1e9);
+      msg("x402 carries a signed payment in an HTTP header [1].", { annotations: [1, 2].map((k) => ({ type: "url_citation", url_citation: { url: `https://127.0.0.1/source-${n}-${k}`, title: `Source ${n}-${k}`, content: "x402 carries a signed payment in an HTTP header and a facilitator settles it." } })) });
+      return true;
+    }
+    msg("Agents pay per request by sending a signed payment in an HTTP header, which a facilitator settles [1].");
+    return true;
+  };
+  rig = await bootPaidWires({ label: "settle-first-routes-d", env: () => ({ ...ENV, GATEWAY_SETTLE_FIRST: "always" }) });
+  installUpstreams();
+  rig.st.llmHook = researchHook;
+  try {
+    const w = await fresh(RESEARCH, 4);
+    let from = mark();
+    const r = await rig.pay(w, RESEARCH);
+    await ok(r.status === 200 && orderOf(w, from) === "settle-first" && rig.outcomesOf(w).settled === 1 && typeof r.json?.report === "string",
+      `research: a wallet that never paid is served, its payment settled BEFORE the first model call, once (${r.status} ${orderOf(w, from)} ${JSON.stringify(rig.outcomesOf(w))} ${r.status !== 200 ? r.text.slice(0, 200) : ""})`);
+    const w2 = await fresh(RESEARCH, 4);
+    from = mark();
+    const bad = await rig.send({ ...RESEARCH, body: { query: "" } }, await rig.credentialFor(w2, RESEARCH));
+    await ok(bad.status === 400 && rig.outcomesOf(w2).attempts === 0 && orderOf(w2, from) === "nothing",
+      `research: a buyer's mistake is refused ${bad.status} before any settle call or model call (${orderOf(w2, from)})`);
+    const w3 = await fresh(RESEARCH, 4);
+    reportFails = true;
+    from = mark();
+    const failed = await rig.pay(w3, RESEARCH);
+    reportFails = false;
+    const row = await refundOf((x) => x.payer === w3.address.toLowerCase() && x.slug === "research");
+    await ok(failed.status >= 500 && orderOf(w3, from) === "settle-first" && rig.outcomesOf(w3).settled === 1 && row?.status === "owed" && String(row.note).startsWith(CLASS) && failed.json?.charged === true && !/not charged|nothing was charged/i.test(JSON.stringify(failed.json)),
+      `research: the model failing after the settlement is owed under ${CLASS} and the answer says the payment was taken (${failed.status} ${orderOf(w3, from)} ${row?.note})`);
+    const poor = await rig.wallet("evm");
+    rig.fund(poor, 0n);
+    from = mark();
+    const unpaid = await rig.pay(poor, RESEARCH);
+    await ok(unpaid.status === 402 && upstreamSince(from) === 0 && rig.outcomesOf(poor).settled === 0,
+      `research: a payment that does not settle is answered 402 with no model call (${unpaid.status}, ${upstreamSince(from)} model calls)`);
+    const guard = (await rig.operator("/api/gateway-status"))?.unsettledReports;
+    await ok(guard?.unsettledInWindow === 0 && guard?.status === "ok", `research: runs settled first, or refused at their settle point, are not unpaid report runs for the report guard (${JSON.stringify(guard)})`);
+  } finally {
+    await rig.stop();
+  }
+
+  // The default budget mode: a wallet with history whose report settlements
+  // fail is served twice, then settles first, and those runs feed the meter.
+  rig = await bootPaidWires({ label: "settle-first-routes-e", env: () => ({ ...ENV, GATEWAY_SETTLE_FIRST_BUDGET_USD: "1000" }) });
+  installUpstreams();
+  rig.st.llmHook = researchHook;
+  try {
+    const SQL = { method: "POST", path: "/api/sql-guard", body: { sql: "select 1" } };
+    const w = await rig.wallet("evm");
+    rig.fund(w, 10n ** 12n);
+    await ok((await rig.pay(w, SQL)).status === 200, "setup: the wallet has a paid sale on the books");
+    await sleep(150);
+    const meterOf = async () => (await rig.operator("/api/gateway-status"))?.settleFailures?.settleFirst?.meter;
+    const before = (await meterOf())?.unsettledUsd24h ?? 0;
+    rig.st.settleAnswer = ({ id }) => (id === w.id ? { status: 500, body: { error: "facilitator unavailable" } } : null);
+    const seen = [];
+    for (let i = 0; i < 3; i++) { const from = mark(); const r = await rig.pay(w, RESEARCH); seen.push(`${r.status}:${orderOf(w, from)}`); }
+    rig.st.settleAnswer = null;
+    await ok(seen.slice(0, 2).every((x) => x.endsWith(":upstream-first")) && seen[2].endsWith(":settle-only") && !seen.some((x) => x.startsWith("429")),
+      `research, budget mode: a wallet with history whose settlements fail is served twice, then settles first and runs no model call, never refused (${seen.join(" ")})`);
+    await sleep(200);
+    const after = (await meterOf())?.unsettledUsd24h ?? 0;
+    await ok(after - before > 0.5, `research, budget mode: those unsettled report runs feed the settle-first budget meter (${before} -> ${after})`);
+  } finally {
+    await rig.stop();
+  }
+}
+
 console.log(`\n${pass} passed, 0 failed`);

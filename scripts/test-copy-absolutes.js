@@ -1188,11 +1188,11 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   // carries the sentence too.
   {
     const sft = await import("../src/settle-first-tools.js");
-    const tools = [...sft.SETTLE_FIRST_GATEWAY_TOOLS, ...sft.SETTLE_FIRST_SHARED_TOOLS, ...sft.SETTLE_FIRST_CATALOG_TOOLS];
+    const tools = [...sft.SETTLE_FIRST_GATEWAY_TOOLS, ...sft.SETTLE_FIRST_SHARED_TOOLS, ...sft.SETTLE_FIRST_CATALOG_TOOLS, ...sft.SETTLE_FIRST_REPORT_TOOLS];
     const srv = readFileSync(join(root, "src/server.js"), "utf8");
     ok(/const SETTLE_FIRST_SLUGS = settleFirstSlugs\(GATEWAY_TOOLS_ENABLED\);/.test(srv) && /new Set\(SETTLE_FIRST_CATALOG_TOOLS\.map/.test(srv)
-      && ["v1-images-edit", "dub"].every((slug) => tools.some((t) => t.slug === slug)),
-      "the description check reads the lists server.js arms settle-first from (images edit and dub included)");
+      && ["v1-images-edit", "dub", "research", "dossier", "linkedin-article"].every((slug) => tools.some((t) => t.slug === slug)) && !tools.some((t) => t.slug === "decide-execute"),
+      "the description check reads the lists server.js arms settle-first from (images edit, dub and the report products included)");
     const claimers = tools.filter((t) => /\b(?:fail\w*|errors?)\b[^.]{0,160}\bnot charged\b/i.test(String(t.description || "")));
     const bareTools = claimers.filter((t) => !String(t.description).includes(fam.SETTLE_FIRST_MARK)).map((t) => t.slug);
     ok(tools.length >= 6 && claimers.length >= 2 && bareTools.length === 0, `every settle-first tool description that says a failure is not charged carries the settle-first sentence (${claimers.length} of ${tools.length}${bareTools.length ? `; bare: ${bareTools.join(", ")}` : ""})`);

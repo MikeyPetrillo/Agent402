@@ -52,7 +52,11 @@ const blockedUntil = new Map(); // payer -> timestamp the block lifts
 // REPORTED: a console.warn and the unsettledReports word on
 // /api/gateway-status (ok / burst, held for GLOBAL_PAUSE_MS), which the
 // status Worker and the heartbeat page on. It refuses nothing: no buyer is
-// refused a report for other buyers' unsettled runs.
+// refused a report for other buyers' unsettled runs. The bound on unpaid
+// report runs across wallets is settle first (src/settle-first-tools.js
+// SETTLE_FIRST_REPORT_TOOLS): those runs feed the settle-first budget meter,
+// and past it a wallet with no settled history pays before the first model
+// call, so adding wallets adds no unpaid runs.
 //
 // Each buyer adds at most MAX_FAILS of its own failures to that count, so the
 // alarm reports several buyers failing together and never one buyer alone
