@@ -59,7 +59,10 @@ export const ACCESS_PREFIX = "a402m_";
 export const REFRESH_PREFIX = "a402r_";
 export const SCOPE = "credits:spend";
 export const AUTH_MCP_PATH = CREDITS_CONNECTOR_PATH;
-const OAUTH_COOKIE = "a402_oauth";
+// The sign-in browser cookie holds an opaque random value only (32 random
+// bytes); the server keeps its SHA-256 digest with the pending request, never
+// the value, and nothing secret is ever written into it.
+const CONSENT_COOKIE = "a402_oauth";
 const CHALLENGE_RE = /^[A-Za-z0-9_-]{43}$/;
 const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/;
 const ID_RE = /^[0-9a-f]{32}$/;
@@ -121,6 +124,13 @@ const DAY_MS = 86_400_000;
 const TOKEN_BODY = 32;
 
 const digest = (s) => createHash("sha256").update(String(s)).digest("hex");
+/** The row of a stored bag under a key a caller named: the bag's own key
+ *  only, so "__proto__", "constructor" or "prototype" names no row and an
+ *  assignment to the row can never reach a prototype. */
+export function ownRow(bag, key) {
+  if (typeof key !== "string" || key === "__proto__" || key === "constructor" || key === "prototype") return undefined;
+  return bag && typeof bag === "object" && Object.hasOwn(bag, key) ? bag[key] : undefined;
+}
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 const sameBytes = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && timingSafeEqual(x, y); };
 const hex = (n) => randomBytes(n).toString("hex");
@@ -263,7 +273,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
   const view = () => grantsKind.view();
   // An app's last use, written at most once per TOUCH_MS (`done`: it completed a sign-in).
   const touchClient = (clientId, { done = false } = {}) => clients.change((b) => {
-    const c = b.clients[clientId];
+    const c = ownRow(b.clients, clientId);
     if (!c) return SKIP_UPDATE;
     const t = now();
     if (!(done && !c.doneAt) && t - (Number(c.usedAt) || 0) < TOUCH_MS) return SKIP_UPDATE;
@@ -302,7 +312,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     return { access_token: access, token_type: "Bearer", expires_in: Math.floor(cfg.accessTtlMs() / 1000), refresh_token: refresh, scope: SCOPE };
   }
   function revokeIn(b, gid, why) {
-    const g = b.grants[gid];
+    const g = ownRow(b.grants, gid);
     if (!g || g.revokedAt) return false;
     g.revokedAt = new Date(now()).toISOString();
     g.revokedWhy = why;
@@ -360,7 +370,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
   async function revokeForEmail(email, id) {
     const e = normEmail(email);
     if (!ID_RE.test(String(id || ""))) return false;
-    const ok = await change((b) => (b.grants[id]?.email === e ? revokeIn(b, id, "owner") : false));
+    const ok = await change((b) => (ownRow(b.grants, id)?.email === e ? revokeIn(b, id, "owner") : false));
     if (ok) forgetGrant(id);
     return Boolean(ok);
   }
@@ -373,7 +383,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     const e = normEmail(email);
     const cap = capOf(capRaw);
     if (cap == null || !ID_RE.test(String(id || ""))) return { ok: false, status: 400 };
-    const ok = await change((b) => { const g = b.grants[id]; if (!g || g.email !== e || g.revokedAt) return false; g.capUsd = cap; return true; });
+    const ok = await change((b) => { const g = ownRow(b.grants, id); if (!g || g.email !== e || g.revokedAt) return false; g.capUsd = cap; return true; });
     if (ok) forgetGrant(id);
     return ok ? { ok: true, capUsd: cap } : { ok: false, status: 404 };
   }
@@ -392,7 +402,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
     const set = await requests.change((b) => {
-      const r = b.reqs[rid];
+      const r = ownRow(b.reqs, rid);
       if (!r) return false;
       r.otp = { h: mac("otp", `${rid}|${email}|${code}`), email, exp: t + cfg.emailCodeTtlMs(), tries: 0 };
       return true;
@@ -434,7 +444,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       res.set("Content-Security-Policy", `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self' https://checkout.stripe.com${returnOrigin ? ` ${returnOrigin}` : ""}; frame-ancestors 'none'`);
       return res;
     };
-    const cookieOut = (v, maxAgeS) => `${OAUTH_COOKIE}=${v}; Path=/oauth; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}${secure ? "; Secure" : ""}`;
+    const cookieOut = (v, maxAgeS) => `${CONSENT_COOKIE}=${v}; Path=/oauth; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}${secure ? "; Secure" : ""}`;
     const originOf = (u) => { try { return new URL(u).origin; } catch { return null; } };
     const hostOf = (u) => { try { return new URL(u).host; } catch { return "?"; } };
     const errPage = (res, status, title, text) => pageHeaders(res).status(status).type("html").send(consentErrorPage(baseUrl, title, text));
@@ -560,10 +570,10 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     // The pending request this browser started, or null.
     async function pending(req, rid) {
       if (!ID_RE.test(String(rid || ""))) return null;
-      const cookie = readCookie(req, OAUTH_COOKIE);
+      const cookie = readCookie(req, CONSENT_COOKIE);
       if (!COOKIE_RE.test(cookie)) return null;
       const s = await requests.view();
-      const r = s.reqs[rid];
+      const r = ownRow(s.reqs, rid);
       if (!r || !(r.exp > now()) || !sameBytes(r.cookie, digest(cookie))) return null;
       return { r, client: { name: r.clientName || "An app" }, cookie };
     }
@@ -633,12 +643,12 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       const { r } = p;
 
       if (action === "deny") {
-        await requests.change((b) => { delete b.reqs[rid]; return true; }).catch(() => {});
+        await requests.change((b) => { if (ownRow(b.reqs, rid)) delete b.reqs[rid]; return true; }).catch(() => {});
         res.setHeader("Set-Cookie", cookieOut("", 0));
         return redirectWith(res, r.redirectUri, { error: "access_denied", state: r.state, iss: baseUrl });
       }
       if (action === "restart") {
-        await requests.change((b) => { if (b.reqs[rid]) { delete b.reqs[rid].otp; delete b.reqs[rid].email; delete b.reqs[rid].lastEmail; } return true; }).catch(() => {});
+        await requests.change((b) => { const x = ownRow(b.reqs, rid); if (x) { delete x.otp; delete x.email; delete x.lastEmail; } return true; }).catch(() => {});
         return render(res, rid, await pending(req, rid));
       }
       if (action === "email") {
@@ -661,7 +671,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
         if (!(await takeAttempt(otp.email))) return render(res, rid, p, { error: LOCKED_TEXT, status: 429, lockedOut: true });
         let verdict = "bad";
         await requests.change((b) => {
-          const rr = b.reqs[rid];
+          const rr = ownRow(b.reqs, rid);
           if (!rr?.otp || rr.otp.h !== otp.h) { verdict = "bad"; return SKIP_UPDATE; }
           rr.otp.tries = (Number(rr.otp.tries) || 0) + 1;
           const good = Boolean(rr.otp.h) && /^\d{6}$/.test(code) && sameBytes(rr.otp.h, mac("otp", `${rid}|${rr.otp.email}|${code}`));
@@ -711,7 +721,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
           // The sign-in is spent first (once, under its own document's swap),
           // so two approvals of one sign-in never make two grants.
           rr = await requests.change((b) => {
-            const x = b.reqs[rid];
+            const x = ownRow(b.reqs, rid);
             if (!x || x.email !== r.email) return SKIP_UPDATE;
             delete b.reqs[rid];
             return x;

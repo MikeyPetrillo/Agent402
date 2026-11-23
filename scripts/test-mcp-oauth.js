@@ -557,6 +557,12 @@ try {
   const post = (s, fields, h = same) => fetch(`${B}/oauth/consent`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: s.cookie, ...h }, body: new URLSearchParams({ rid: s.rid, ...fields }).toString() });
 
   const S = await start(p1);
+  {
+    // The cookie carries an opaque random value (32 random bytes) and nothing
+    // else; a second sign-in gets a different one.
+    const T = await start(p1);
+    ok(/^a402_oauth=[A-Za-z0-9_-]{43}$/.test(S.cookie) && S.cookie !== T.cookie && !S.cookie.includes(S.rid), "the sign-in cookie is an opaque random value, new for each sign-in");
+  }
   ok(S.a.status === 303 && /^[0-9a-f]{32}$/.test(S.rid) && /^a402_oauth=/.test(S.cookie) && /HttpOnly/.test(S.a.headers.get("set-cookie")) && /SameSite=Lax/.test(S.a.headers.get("set-cookie")) && /Secure/.test(S.a.headers.get("set-cookie")), "authorize starts a sign-in bound to an HttpOnly, Secure cookie");
   let pg = await page(S);
   const csp = pg.res.headers.get("content-security-policy") || "";
@@ -566,6 +572,29 @@ try {
   const csrf = csrfIn(pg.html);
   ok((await post(S, { action: "email", email: "x@y.com", csrf: "nope" })).status === 403, "a form without the CSRF token is refused");
   ok((await post(S, { action: "email", email: "x@y.com", csrf }, { "sec-fetch-site": "cross-site", origin: "https://evil.example" })).status === 403, "a cross-site form is refused");
+  // A key a caller names never reaches a prototype: "__proto__",
+  // "constructor" and "prototype" as the request id, on every action that
+  // writes to the pending request, are an expired sign-in, and the server's
+  // other sign-ins read as before (a polluted prototype would put every page
+  // on the code step).
+  {
+    const { ownRow } = await import("../src/mcp-oauth.js");
+    const bag = JSON.parse('{"__proto__": {"x": 1}, "a": {"y": 2}}');
+    ok(ownRow(bag, "a")?.y === 2 && ownRow(bag, "__proto__") === undefined && ownRow({}, "constructor") === undefined && ownRow({}, "prototype") === undefined && ownRow({}, "toString") === undefined && ownRow(bag, 7) === undefined, "ownRow reads own rows only; prototype keys name none");
+    const bad = [];
+    for (const rid of ["__proto__", "constructor", "prototype"]) {
+      for (const action of ["email", "restart", "deny", "code", "choose"]) {
+        const x = await post({ ...S, rid }, { action, email: "x@y.com", code: "123456", csrf });
+        if (x.status !== 400) bad.push(`${rid}/${action}: ${x.status}`);
+      }
+      const g = await get(`${B}/oauth/consent?rid=${rid}`, { cookie: S.cookie });
+      if (g.status !== 400) bad.push(`GET ${rid}: ${g.status}`);
+    }
+    ok(bad.length === 0, `prototype keys as the request id are an expired sign-in on every action (${bad.join(", ") || "all 400"})`);
+    const fresh = await start(p1);
+    const fp = await page(fresh);
+    ok(fp.res.status === 200 && /Email me a code/.test(fp.html) && !/name="code"/.test(fp.html), "and a new sign-in still opens on the email step");
+  }
 
   // Any address gets a code (a first purchase is made signed in), with the same answer.
   r = await post(S, { action: "email", email: "nobody@example.com", csrf });
