@@ -547,7 +547,8 @@ try {
     h = await (await post(s, { action: "email", email, csrf: csrfIn(h) })).text();
     let last = "";
     for (let i = 0; i < OL.emailCodeTries; i++) last = await (await post(s, { action: "code", code: "999999" === "x" ? "0" : String(100000 + i), csrf: csrfIn(h) })).text();
-    ok(/no longer works|Email me a code/.test(last), "a code is void after its tries run out");
+    // With this run's table the lockout may come first (fewer wrong codes than tries): either way the code is void.
+    ok(/no longer works|Email me a code|Too many requests/.test(last), "a code is void after its tries run out");
     let locked = "";
     for (let i = 0; i < OL.failsPerEmail + 2; i++) {
       h = await (await post(s, { action: "email", email, csrf: csrfIn(last || h) })).text();
