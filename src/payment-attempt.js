@@ -4,8 +4,8 @@
 // Shape only: nothing here verifies or spends it.
 //
 // A payment header has to DECODE to be one: base64 JSON naming a scheme and
-// an offered network (x402 v1 top level, v2 under `accepted`; the same read
-// as the refusal classifier in src/payment-reject.js), or a Payment
+// an offered network (x402 v1 top level, v2 under `accepted` when it is there;
+// x402PaymentOffer, the same read as the refusal classifier in src/payment-reject.js), or a Payment
 // credential whose JSON carries a challenge and a payload. Bytes that do not
 // decode are not a payment attempt, so a junk header buys neither an exemption
 // from the unpaid-quote limiters nor an already-paid answer from the gateway
@@ -17,7 +17,7 @@
 // the repeat's payment is never settled, and an unpaid request (a crawler, a
 // discovery validator, anyone) gets the route's 402 instead of someone
 // else's paid answer.
-import { decodeB64Json } from "./payment-reject.js";
+import { decodeB64Json, x402PaymentOffer } from "./payment-reject.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 
 // CAIP-2: namespace:reference (the legacy Algorand reference ends in "=").
@@ -42,8 +42,7 @@ export function registerOfferedNetworks(ids) {
 export function x402PaymentNetwork(value) {
   const p = decodeB64Json(value);
   if (!p) return null;
-  const scheme = p.scheme ?? p.accepted?.scheme;
-  const network = p.network ?? p.accepted?.network;
+  const { scheme, network } = x402PaymentOffer(p);
   if (typeof scheme !== "string" || !scheme || typeof network !== "string" || !CAIP2.test(network)) return null;
   if (offeredNetworks && !offeredNetworks.has(network)) return null;
   return network;

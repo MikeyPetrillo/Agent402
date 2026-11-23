@@ -46,6 +46,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { getFreePorts } from "./lib/free-port.js";
+import { registerOfferedNetworks, x402PaymentNetwork, decodesAsX402Payment } from "../src/payment-attempt.js";
 
 const POW_SECRET = "test-unpaid-quote-budget-secret";
 process.env.POW_SECRET = POW_SECRET;
@@ -151,6 +152,18 @@ ok(looksLikePayment({ "payment-signature": REAL_PAYMENT }) && looksLikePayment({
 ok(looksLikePayment({ authorization: "Bearer a402_notarealkey" }) && looksLikePayment({ authorization: REAL_MPP }), "a credits key and an MPP Payment credential that decodes are plausible credentials");
 ok(!looksLikePayment({ authorization: "x" }) && !looksLikePayment({ authorization: "Bearer junk" }) && !looksLikePayment({ "payment-signature": "bm90LWEtcGF5bWVudA" }), "junk in an Authorization or a too-short payment header is NOT a credential");
 ok(!looksLikePayment({ "payment-signature": JUNK_PAYMENT }) && !looksLikePayment({ "x-payment": JUNK_PAYMENT }) && !looksLikePayment({ authorization: `Payment ${JUNK_PAYMENT}` }), "a long junk payment header or Payment credential that does not decode is NOT a credential either");
+{
+  // A v2 payment names its network in the signed `accepted` block: an offered
+  // network at the top level beside an accepted one this server does not sell
+  // is not an attempt, and the other way round it is.
+  registerOfferedNetworks(["eip155:8453"]);
+  const v2 = (top, acc) => Buffer.from(JSON.stringify({ x402Version: 2, scheme: "exact", network: top, accepted: { scheme: "exact", network: acc }, payload: {} })).toString("base64");
+  const v1 = (top, acc) => Buffer.from(JSON.stringify({ x402Version: 1, scheme: "exact", network: top, accepted: { scheme: "exact", network: acc }, payload: {} })).toString("base64");
+  ok(x402PaymentNetwork(v2("eip155:8453", "eip155:1")) === null && !decodesAsX402Payment(v2("eip155:8453", "eip155:1")), "a v2 payment whose accepted network is not offered is not an attempt, whatever its top-level network");
+  ok(x402PaymentNetwork(v2("eip155:1", "eip155:8453")) === "eip155:8453", "a v2 payment is read at its accepted network");
+  ok(x402PaymentNetwork(v1("eip155:8453", "eip155:1")) === "eip155:8453" && x402PaymentNetwork(v1("eip155:1", "eip155:8453")) === null, "a v1 payment is read at its top level");
+  registerOfferedNetworks([]);
+}
 ok(looksLikePowSolution(REAL_POW), "the `<token>:<nonce>` shape pow.js issues is a plausible proof-of-work solution");
 ok(!looksLikePowSolution("a:b") && !looksLikePowSolution("not-a-token:1") && !looksLikePowSolution(issueChallenge("hash").token) && !looksLikePowSolution(`${issueChallenge("hash").token}:`), "junk, a token with no nonce and a nonce with no token are not solutions");
 ok(hasCredentialHeader({ "payment-signature": REAL_PAYMENT }) && hasCredentialHeader({ "x-pow-solution": REAL_POW }), "a plausible payment or proof-of-work header marks a request as not a price check");

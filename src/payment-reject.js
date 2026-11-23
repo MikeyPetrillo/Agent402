@@ -406,6 +406,18 @@ export function classifySettlementRefusal(paymentResponseHeader) {
     detail: `The ${name} facilitator refused to settle this payment under a billing quota on this server's account, not because of your wallet. Nothing was charged. Request this route again without payment for its current accepts and pay on another network listed there.` };
 }
 
+/** The scheme and network a decoded x402 payment names, as the paywall
+ *  matches it: a v2 payment's `accepted` block (the requirement the payer
+ *  signed against) when it carries one, else the top level (v1, or a v2
+ *  payload with no accepted block). A top-level field beside an accepted
+ *  block is never read. Pure. */
+export function x402PaymentOffer(payload) {
+  if (!payload || typeof payload !== "object") return { scheme: undefined, network: undefined };
+  const acc = payload.accepted;
+  const signed = Number(payload.x402Version) !== 1 && acc && typeof acc === "object" && !Array.isArray(acc) ? acc : null;
+  return signed ? { scheme: signed.scheme, network: signed.network } : { scheme: payload.scheme, network: payload.network };
+}
+
 export function advertisedAccepts(paymentRequiredHeader) {
   const env = decodeB64Json(paymentRequiredHeader);
   const accepts = env && Array.isArray(env.accepts) ? env.accepts : [];
@@ -433,8 +445,7 @@ export function classifyPaymentRejection({ paymentHeader, paymentRequiredHeader,
         detail: `This payment declares x402Version ${payload.x402Version}; this resource serves x402Version ${x402Version}. Upgrade the x402 client.` };
     }
 
-    const scheme = payload.scheme ?? payload.accepted?.scheme;
-    const network = payload.network ?? payload.accepted?.network;
+    const { scheme, network } = x402PaymentOffer(payload);
     if (!scheme || !network) {
       return { reason: "malformed-payload", retry: "rebuild-payment",
         detail: "The payment payload names no scheme/network. Copy them verbatim from one accepts entry in PAYMENT-REQUIRED." };

@@ -41,6 +41,12 @@ ok(classify(payment({ x402Version: 1 }))?.reason === "version-mismatch",
   "a client on an older x402 version is told so (the leading hypothesis for the render loop)");
 ok(classify(payment({ scheme: "upto" }))?.reason === "unsupported-scheme", "a scheme this route does not sell is named, with what is offered");
 ok(classify(payment({ network: "eip155:1" }))?.reason === "unsupported-network", "a chain this route does not sell is named");
+// A v2 payment is matched on its `accepted` block (what the payer signed
+// against), never on a top-level network or scheme beside it.
+ok(classify(payment({ accepted: accept({ network: "eip155:1" }) }))?.reason === "unsupported-network", "a v2 payment whose accepted block names a chain this route does not sell is named, whatever its top-level network says");
+ok(classify(payment({ network: "eip155:1", accepted: accept() }))?.reason !== "unsupported-network", "a v2 payment whose accepted block names an offered chain is not refused for a top-level network beside it");
+ok(classify(payment({ accepted: accept({ scheme: "upto" }) }))?.reason === "unsupported-scheme", "the scheme is read from the accepted block too");
+ok(classify(payment({ x402Version: 1, accepted: accept({ network: "eip155:1" }) }), b64({ x402Version: 1, accepts: [accept()] }))?.reason !== "unsupported-network" && classify(payment({ x402Version: 1, network: "eip155:1" }), b64({ x402Version: 1, accepts: [accept()] }))?.reason === "unsupported-network", "a v1 payment is read at its top level");
 ok(classify(payment({}, { validBefore: String(NOW - 1) }))?.reason === "authorization-expired", "an expired authorization is distinguished from a bad one");
 ok(classify(payment({}, { value: "1" }))?.reason === "amount-below-price", "an underpaying authorization is named with both amounts");
 ok(classify(payment({}, { to: "0x" + "99".repeat(20) }))?.reason === "wrong-recipient", "paying the wrong address is named");
