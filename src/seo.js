@@ -706,6 +706,9 @@ ${PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.sl
 - [agent402-google-adk](https://www.npmjs.com/package/agent402-google-adk): Google ADK (Gemini agents)
 - [agent402-strands](https://www.npmjs.com/package/agent402-strands): AWS Strands agent runtime
 - [agent402-agentkit](https://www.npmjs.com/package/agent402-agentkit): Coinbase AgentKit action provider (CDP, Privy, ZeroDev, viem wallets)
+- [agent402-openai-agents](https://www.npmjs.com/package/agent402-openai-agents): OpenAI Agents SDK tools (find, route, call, about)
+- [elizaos-plugin-agent402](https://www.npmjs.com/package/elizaos-plugin-agent402): elizaOS plugin: find and call tools, paid over x402 from an EVM wallet or with a credits key
+- [agent402-openclaw](https://www.npmjs.com/package/agent402-openclaw): OpenClaw model provider: the auto-routed tier and explicit models through a local proxy, paid over x402 or with a credits key
 
 ## Skill packs (a whole job, one payment)
 ${packItems}
