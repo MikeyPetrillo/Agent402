@@ -107,6 +107,25 @@ ok(echoed === SOL, "the response still echoes the resolved network");
   ok(q("eip155:42220").network === ids.celo && q(" eip155:42220 ").network === ids.celo, "a raw CAIP-2 id still passes through, trimmed");
   const dirSellers = (allIndexedTools({ network: "celo", limit: 100 }).results || []).map((r) => r.seller);
   ok(has(dirSellers, "https://celo-only.example") && !has(dirSellers, "https://base-only-weather.example"), "/api/index/tools?network=celo reads the same short name");
+
+  // The directory's network filter matches a CAIP-2 id exactly: eip155:10
+  // (OP mainnet) is not a prefix match for eip155:100 or eip155:1088.
+  seedWeather("https://op-only.example", ["eip155:10"]);
+  seedWeather("https://chain-100.example", ["eip155:100"]);
+  seedWeather("https://chain-1088.example", ["eip155:1088"]);
+  seedWeather("https://op-and-base.example", [ids.base, "eip155:10", "eip155:100"]);
+  const xi = await import("../src/x402-index.js");
+  xi._resetFlatCacheForTest(); xi._resetIndexRowsForTest();
+  const dir = (network) => (allIndexedTools({ network, limit: 500 }).results || []).map((r) => r.seller);
+  for (const net of ["eip155:10", "optimism", " Optimism ", "EIP155:10"]) {
+    const got = dir(net);
+    ok(has(got, "https://op-only.example") && has(got, "https://op-and-base.example") && !has(got, "https://chain-100.example") && !has(got, "https://chain-1088.example"),
+      `/api/index/tools?network=${JSON.stringify(net)} matches eip155:10 exactly (${got.length} rows)`);
+  }
+  ok(!has(dir("eip155:1"), "https://op-only.example") && !has(dir("eip155:1"), "https://chain-100.example"), "network=eip155:1 matches no eip155:1x row");
+  const at100 = dir("eip155:100");
+  ok(has(at100, "https://chain-100.example") && has(at100, "https://op-and-base.example") && !has(at100, "https://op-only.example"), "a seller with several networks matches each one exactly");
+  ok(dir("8453").length === 0 && dir("eip155").length === 0, "a fragment of an id matches nothing");
 }
 
 // The CALLER: the Solana SOR branch must ask for Solana rows, strictly.
