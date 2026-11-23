@@ -35,6 +35,7 @@ paths:
   - "src/first-call-allowance.js"
   - "src/returning-wallet.js"
   - "src/sale-repeats.js"
+  - "src/sale-repeats-correction.js"
   - "src/sale-source.js"
   - "src/push-refusal-body.js"
   - "src/unpaid-quote-budget.js"
@@ -57,7 +58,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   with and without repeat rows; add a new summing reader to its READERS). The rule is not an EVM
   hash's, a card invoice's or a private-rail transaction's: each can stand behind several sales.
   `scripts/sale-repeats.js` lists stored repeats (dry run by default); its `--apply` is the
-  owner's call.
+  owner's call. The same read and correction (`src/sale-repeats-correction.js`) run on the
+  server's own ledger at `GET /__operator/sale-repeats.json` (counts, dates, tools and held-back
+  reasons; never a payer or a settlement id) and `POST /__operator/sale-repeats/apply`
+  `{"expect": <rows>}` (409 unless `expect` is the count a read now finds; one transaction under
+  the lease `sale-repeats-apply`; attested or feedback-named rows held back; a second call moves
+  nothing; `scripts/test-sale-repeats-routes.js`).
 - **Idempotency:** opt-in `Idempotency-Key` (and x402 `payment-identifier` as an alias), bound
   to credential + route + query + body, committed only after a settled 200. With no explicit key, an
   x402 EVM payment's identity (network, signed payer, nonce; `paymentNonceIdentityOf`) is the

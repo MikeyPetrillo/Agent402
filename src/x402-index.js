@@ -10804,11 +10804,17 @@ const VALID_INCLUDE = new Set(["all", "external", "local"]);
  * non-Agent402 sellers (`external`) — the same router, used as a neutral
  * discovery API over the whole x402 ecosystem.
  */
-// Short chain names buyers may pass to ?network= — resolved to CAIP-2.
-const ROUTE_NETWORKS = {
-  base: "eip155:8453", polygon: "eip155:137", arbitrum: "eip155:42161",
-  robinhood: "eip155:4663", arc: "eip155:5042", ink: "eip155:57073", solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-};
+// ?network= on /api/route and /api/index/tools: a chain's short name resolves
+// to its CAIP-2 id through the chain-page table (normalizeNetwork), which names
+// every chain the router pays on, so a new chain needs no second list here. A
+// hand-kept table here once named seven chains: ?network=celo passed through
+// as "celo", matched no row's eip155:42220, and hid every Celo seller the
+// Celo router call would buy from. Case, spaces and a mainnet suffix fold; a
+// raw CAIP-2 id or an unknown name passes through as given.
+export function resolveNetworkParam(v) {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s ? normalizeNetwork(s) : null;
+}
 
 // The decorated remote pool per entry and the per-tool statics (lowercased
 // haystack, injection verdict, price rank) are memoized by object identity
@@ -11840,7 +11846,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // advertises that chain. Positive-signal filter: local tools and sellers
   // whose crawl source carries no accepts (networks unknown) are kept — the
   // filter is "exclude sellers known NOT to settle there", not a guarantee.
-  const wantNet = networkFilter ? (ROUTE_NETWORKS[String(networkFilter).trim().toLowerCase()] || String(networkFilter).trim()) : null;
+  const wantNet = networkFilter ? resolveNetworkParam(String(networkFilter)) : null;
   // The same envelope on the empty answer: a consumer must not have to learn
   // one shape for a hit and another for a miss.
   if (!terms.length) return { query: q, count: 0, results: [], sellers: 0, sellersMatched: 0, include: inc, topMax: ROUTE_TOP_MAX, truncated: false, ...partialFields(0, 0), ...(wantNet ? { network: wantNet } : {}) };
@@ -12543,7 +12549,10 @@ function directoryHayOf(t) {
 }
 /** How many row search texts have been built (a repeat search builds none). */
 export function _directoryHayBuildsForTest() { return directoryHayBuilds; }
+// The directory's network filter reads a chain's short name as /api/route does.
+const withResolvedNetwork = (args) => (args && args.network ? { ...args, network: resolveNetworkParam(String(args.network)) || "" } : args);
 export function allIndexedTools(args = {}) {
+  args = withResolvedNetwork(args);
   // One index of the whole ecosystem WITH provenance on every row. Ours are
   // NOT floated to the top: 515 of them would fill the first six pages and bury
   // the third-party index this page exists to show, which would read as a
@@ -12558,6 +12567,7 @@ export function allIndexedTools(args = {}) {
 /** allIndexedTools, the filter run across turns of at most DIRECTORY_SLICE_MS
  *  (a search is one pass over the whole directory). Same answer. */
 export function allIndexedToolsAsync(args = {}) {
+  args = withResolvedNetwork(args);
   if (listingsOn()) return listings.directory(args);
   return runSlicedAsync(indexedToolsSteps(args));
 }

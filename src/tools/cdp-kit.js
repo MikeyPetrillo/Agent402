@@ -525,6 +525,9 @@ export const SQL_QUERY_BUDGET = 3;
 // whole-range send included. scripts/test-pricing-margin.js holds this many
 // queries plus a settlement inside onchain-sql's margin bound at its price.
 export const SQL_WINDOW_MAX_QUERIES = SQL_QUERY_BUDGET;
+const SQL_WINDOW_DAYS_PER_CALL = SQL_WINDOW_MAX_QUERIES - 1;
+// The per-call limit as the tool's descriptions state it.
+const SQL_WINDOW_SENTENCE = `A plain row select on solana.instructions over more than a day whose whole range runs past the query service's time window is read one UTC day at a time and merged in order, at most ${SQL_WINDOW_MAX_QUERIES} queries per call including the whole-range send, so up to ${SQL_WINDOW_DAYS_PER_CALL} ${SQL_WINDOW_DAYS_PER_CALL === 1 ? "day" : "days"} per call; windowed.stoppedBy and the note give the next block_time range to send.`;
 // The budget also carries how the call's sends are paced: `own` (this
 // server's own read) and `callerGone` (the buyer's connection closed before
 // any byte of the answer).
@@ -1179,7 +1182,21 @@ export const SQL_RANGE_PATH = "/api/onchain-sql-range";
 // partial walk names the range route.
 const SQL_ROUTE = Object.freeze({ maxQueries: SQL_WINDOW_MAX_QUERIES, pointsToRange: true });
 const SQL_RANGE_ROUTE = Object.freeze({ maxQueries: SQL_RANGE_MAX_QUERIES, pointsToRange: false });
-const AGGREGATE_CALL = /\b(?:count\w*|sum\w*|avg\w*|min|max|(?:min|max)\w+|any\w*|arg(?:min|max)\w*|uniq\w*|group\w*|quantile\w*|median\w*|top_?k\w*|stddev\w*|var(?:pop|samp)\w*|covar\w*|corr\w*|skew\w*|kurt\w*|entropy\w*|simplelinearregression\w*|stochastic\w*|histogram\w*|sequence\w*|windowfunnel\w*|retention\w*|deltasum\w*|boundingratio\w*|\w+test\w*|rankcorr\w*|exponentialmovingaverage\w*|intervallengthsum\w*|sparkbar\w*|first_value|last_value|nth_value|row_number|rank|dense_rank|percent_rank|cume_dist|ntile|lag\w*|lead\w*)\s*\(/i;
+// An aggregate or window function, read one call name at a time: each
+// `name(` is found by one linear scan and its name tested whole against the
+// list (a pattern that searched for the names inside the query backtracked
+// quadratically on a long identifier). A name longer than any function's is
+// treated as one, so the query is not split.
+const AGGREGATE_NAME = /^(?:count\w*|sum\w*|avg\w*|min|max|(?:min|max)\w+|any\w*|arg(?:min|max)\w*|uniq\w*|group\w*|quantile\w*|median\w*|top_?k\w*|stddev\w*|var(?:pop|samp)\w*|covar\w*|corr\w*|skew\w*|kurt\w*|entropy\w*|simplelinearregression\w*|stochastic\w*|histogram\w*|sequence\w*|windowfunnel\w*|retention\w*|deltasum\w*|boundingratio\w*|\w+test\w*|rankcorr\w*|exponentialmovingaverage\w*|intervallengthsum\w*|sparkbar\w*|first_value|last_value|nth_value|row_number|rank|dense_rank|percent_rank|cume_dist|ntile|lag\w*|lead\w*)$/i;
+const CALL_NAME_MAX = 64;
+function hasAggregateCall(code) {
+  const re = /\b(\w+)\s*\(/g;
+  let m;
+  while ((m = re.exec(code))) {
+    if (m[1].length > CALL_NAME_MAX || AGGREGATE_NAME.test(m[1])) return true;
+  }
+  return false;
+}
 const NOT_SPLIT = /\b(?:group\s+by|having|distinct|join|union|intersect|except|over|window|qualify|sample|final|prewhere|offset|fetch|settings|format|into|array\s+join)\b/i;
 const utcText = (ms) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 /** Positions of the outer clauses a plain select may carry, on the clause mask. */
@@ -1201,10 +1218,14 @@ export function dayWindowPlan(sql, now = Date.now()) {
   const norm = sqlNorm(s);
   const masked = sqlClauses(s);
   if (!/^select\b/i.test(norm) || subqueryDepth(s) > 0) return null;
-  if (NOT_SPLIT.test(norm) || AGGREGATE_CALL.test(norm)) return null;
+  if (NOT_SPLIT.test(norm) || hasAggregateCall(norm)) return null;
+  // Positions are read on one string the length of the query: the code with
+  // identifier quotes blanked to spaces (not removed), so FROM, WHERE, ORDER
+  // BY and its first key are all at the query's own positions.
+  const code = sqlCode(s).replace(/[`"]/g, " ");
   const froms = norm.match(/\bfrom\b/gi) || [];
   if (froms.length !== 1) return null;
-  const from = /\bfrom\s+solana\s*\.\s*instructions\b/i.exec(norm);
+  const from = /\bfrom\s+solana\s*\.\s*instructions\b/i.exec(code);
   if (!from) return null;
   const where = outerKeyword(masked, /where\b/iy);
   if (!where || where.at < from.index) return null;
@@ -1214,7 +1235,8 @@ export function dayWindowPlan(sql, now = Date.now()) {
   const limitAt = outerKeyword(masked, /limit\b/iy);
   let direction = "asc";
   if (order) {
-    const key = /^\s*block_time\b(?:\s+(asc|desc)\b)?\s*(?:,|$|limit\b)/i.exec(norm.slice(order.end));
+    // The first key must be block_time itself; anything else is not split.
+    const key = /^\s*block_time\b(?:\s+(asc|desc)\b)?\s*(?:,|$|limit\b)/i.exec(code.slice(order.end));
     if (!key) return null;
     if (key[1] && key[1].toLowerCase() === "desc") direction = "desc";
   }
@@ -1675,14 +1697,14 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.030",
     description:
-      "Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions (filter it by block_time). ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
+      `Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions (filter it by block_time). ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). ${SQL_WINDOW_SENTENCE} Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.`,
     tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],
     discovery: {
       bodyType: "json",
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated. A plain row select on solana.instructions over more than a day whose whole range runs past the query service's time window is read one UTC day at a time and merged in order (windowed names the days read; a walk that ends early is served partial and marked so). A result the query service cannot send is served in part and says so: rows over its ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB per-row limit are omitted and counted (recovered "row-size", rowsOmitted, omittedReason, rowLimitBytes, maxRowBytes, note), and a result too large as a whole is re-run with LIMIT ${SQL_RECOVER_ROWS} (recovered "result-size", rowBytes, a note with the LIMIT that fits).` },
+          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated. ${SQL_WINDOW_SENTENCE} windowed names the days read; a walk that ends early is served partial and marked so. A result the query service cannot send is served in part and says so: rows over its ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB per-row limit are omitted and counted (recovered "row-size", rowsOmitted, omittedReason, rowLimitBytes, maxRowBytes, note), and a result too large as a whole is re-run with LIMIT ${SQL_RECOVER_ROWS} (recovered "result-size", rowBytes, a note with the LIMIT that fits).` },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],

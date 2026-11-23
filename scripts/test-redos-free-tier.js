@@ -353,6 +353,31 @@ try {
     jobs.push({ slug: name, pure: true, method: "POST", url: path, body: JSON.stringify({ q: { toString: 1 } }), label: `${name} q noToString (body)` });
     jobs.push({ slug: name, pure: true, method: "GET", url: `${path}?q%5BtoString%5D=1`, label: `${name} q noToString` });
   }
+  // Inputs the published example does not reach: a tool whose cost grows
+  // with a setting the example leaves at its cheapest (log-timestamps reads
+  // its example in UTC; any other zone converts every stamp) gets the corpus
+  // again under that setting, and a body dense with what it parses.
+  const VARIANTS = {
+    "log-timestamps": [
+      { set: { assumeZone: "America/New_York" }, dense: { field: "text", unit: "2026-11-02 14:03:07 x\n", chars: 95_000 } },
+      { set: { assumeZone: "Asia/Kolkata" }, dense: { field: "text", unit: "Nov  2 14:05:11 host a\n", chars: 95_000 } },
+    ],
+  };
+  for (const e of targets) {
+    const op = openapi.paths?.[e.path]?.[e.method.toLowerCase()];
+    const c = op?.requestBody?.content?.["application/json"];
+    if (!c || !VARIANTS[e.slug]) continue;
+    for (const v of VARIANTS[e.slug]) {
+      const ex = { ...(c.example || {}), ...v.set };
+      const tag = Object.entries(v.set).map(([k, x]) => `${k}=${x}`).join(",");
+      const d = v.dense;
+      jobs.push({ slug: e.slug, pure: true, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [d.field]: d.unit.repeat(Math.floor(d.chars / d.unit.length)) }), label: `${e.slug} ${d.field} dense (${tag})` });
+      for (const [k, sv] of Object.entries(c.schema?.properties || {})) {
+        if (![].concat(sv.type || []).includes("string")) continue;
+        for (const [pn, pv] of Object.entries(longCorpus(80_000))) jobs.push({ slug: e.slug, pure: true, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [k]: pv }), label: `${e.slug} ${k} ${pn} (${tag})` });
+      }
+    }
+  }
   const slugs = new Set(jobs.map((j) => j.slug));
   ok(slugs.size >= (ONLY ? 1 : 100), `${jobs.length} adversarial calls across ${slugs.size} tools and skills`);
   // This shard's calls: the list above is built in a fixed order, so each

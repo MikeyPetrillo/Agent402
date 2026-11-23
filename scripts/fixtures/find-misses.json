@@ -106,7 +106,8 @@
         "date-format",
         "time-convert",
         "timezone-convert",
-        "epoch-convert"
+        "epoch-convert",
+        "log-timestamps"
       ],
       "_why": "each of these converts part of the ask; the row guards that it reads as served"
     },
@@ -123,7 +124,10 @@
     },
     {
       "q": "check json syntax and locate errors",
-      "top": "json-format"
+      "top": [
+        "json-format",
+        "json-lint"
+      ]
     },
     {
       "q": "payment batch schedule across tokyo timezones",
@@ -316,6 +320,76 @@
       "top": "domain-availability"
     },
     {
+      "q": "add up the sum total of a csv column",
+      "top": "csv-aggregate"
+    },
+    {
+      "q": "parse csv and count distinct values in a column",
+      "top": "csv-aggregate"
+    },
+    {
+      "q": "parse json and report the error position",
+      "top": "json-lint"
+    },
+    {
+      "q": "convert english number words to digits",
+      "top": "number-words"
+    },
+    {
+      "q": "spell out a dollar amount in words for writing a check",
+      "top": "number-words"
+    },
+    {
+      "q": "ordinal words like twenty-first to a number",
+      "top": "number-words"
+    },
+    {
+      "q": "figure out which encoding a string uses and decode it",
+      "top": "encoding-detect"
+    },
+    {
+      "q": "identify whether a blob is base64 hex or url encoded",
+      "top": [
+        "encoding-detect",
+        "skill-decode-blob"
+      ]
+    },
+    {
+      "q": "extract timestamps from log lines and normalize them to utc",
+      "top": "log-timestamps"
+    },
+    {
+      "q": "find out of order entries in a syslog by their timestamps",
+      "top": "log-timestamps"
+    },
+    {
+      "q": "group csv rows by a column and sum another column",
+      "top": "csv-aggregate"
+    },
+    {
+      "q": "average min and max of a csv column",
+      "top": "csv-aggregate"
+    },
+    {
+      "q": "line and column of a json syntax error",
+      "top": "json-lint"
+    },
+    {
+      "q": "find duplicate keys in a json document",
+      "top": "json-lint"
+    },
+    {
+      "q": "show one time in a list of time zones in a single call",
+      "top": [
+        "time-convert",
+        "timezone-convert"
+      ]
+    },
+    {
+      "q": "parse a semicolon separated csv into json",
+      "top": "csv-to-json"
+    },
+    {
       "q": "query a month of solana instructions",
       "top": [
         "onchain-sql-range"
@@ -329,12 +403,9 @@
     }
   ],
   "gaps": [
-    "add up the sum total of a csv column",
     "verify a time zone identifier for validity",
     "verify the signature on a signed receipt",
-    "parse csv and count distinct values in a column",
     "split adjusted daily share prices for a year",
-    "parse json and report the error position",
     "map csv headers onto an import schema",
     "clean up a log file and drop junk lines"
   ]

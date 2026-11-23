@@ -8,6 +8,7 @@ import { walletSignInEnabled } from "./wallet-sign-in.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_SECONDS, sttLongEnabled, sttAdditions } from "./tools/stt-kit.js";
 import { speechAdditions } from "./tools/llm-gateway-kit.js";
+import { SQL_WINDOW_MAX_QUERIES } from "./tools/cdp-kit.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER, WALLET_PROOF_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
 import { tempoGasSponsorConfig, chargeSponsorAccount } from "./tempo-charge-sponsor.js";
@@ -26,6 +27,9 @@ const mppOfferGateShown = () => mppMethodsSummary().enabled && mppOfferGateEnabl
 // such model on the route the entry is about (src/speech-additions.js: the
 // NAMED_AUDIO_MODELS switch and the model's admission, read at call time).
 export const namedSpeechShown = () => process.env.OPENROUTER_TTS_ENABLED === "true" && speechAdditions().length > 0;
+// The entry about one named speech model: shown while this server serves that model.
+export const ELEVEN_V3_CONVERSATIONAL = "elevenlabs/eleven-v3-conversational";
+export const elevenV3ConversationalShown = () => namedSpeechShown() && speechAdditions().some((m) => m.id === ELEVEN_V3_CONVERSATIONAL);
 export const namedTranscriptionShown = () => Object.keys(STT_TIERS).some((slug) => (slug !== "transcribe-long" || sttLongEnabled()) && sttAdditions(slug).length > 0);
 
 // The Tempo fee sponsorship entry: shown while this server offers Tempo and
@@ -44,6 +48,75 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 // the feed show it only while that function reads true (CHANGELOG.md scopes
 // the same item to a server that sets the switch).
 const ENTRIES = [
+  {
+    date: "2026-11-22",
+    title: "Speech model headers",
+    items: [
+      "Gateway: Every speech answer names the model that produced it in the `X-Agent402-Model` header; a call that named a model and was served by another also carries `X-Agent402-Model-Fallback: 1`.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Named speech model length",
+    shownWhen: elevenV3ConversationalShown,
+    items: [
+      "Gateway: On a server that lists it in `NAMED_AUDIO_MODELS`, `elevenlabs/eleven-v3-conversational` takes up to 1,000 characters on `/v1/audio/speech`, listed on its `/v1/models` entry.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Chain names on the router and index",
+    items: [
+      "Router: `/api/route?network=` and `/api/index/tools?network=` now accept the short name of every chain we list (celo, monad, avalanche, sei, optimism, stellar, algorand and the rest), so a chain's sellers show under its name exactly as the router sees them.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "MCP connector JSON answers",
+    items: [
+      "MCP: The hosted MCP connector answers JSON to clients that accept JSON without naming an event stream, and the `memory.read` MCP listing now carries example arguments.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Parse tools",
+    items: [
+      "Tools: Five new tools, free through proof of work: number-words, encoding-detect, log-timestamps, csv-aggregate and json-lint.",
+      "Tools: time-convert takes a `zones` list and returns one instant in up to 50 time zones in one answer.",
+      "Tools: csv-to-json takes delimiter names (semicolon, tab, pipe) or any single character.",
+      "Tools: json-lint lists a duplicate key up to 200 characters and its path up to 300 (`keyTruncated`, `keyLength` and `pathTruncated` say when one was cut).",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Domain availability",
+    items: [
+      "Tools: New domain-availability tool: asks the TLD's own registry over RDAP whether a domain name is registered.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "onchain-sql day reads",
+    items: [
+      "Tools: onchain-sql: a long-range plain row select on `solana.instructions` that runs past the query service's time window is now read one day at a time, with partial answers marked in fields.",
+      `Tools: onchain-sql: a call read one day at a time sends at most ${SQL_WINDOW_MAX_QUERIES} queries in all, the whole-range send included; a range with more days answers the first ones, and its fields name the limit and where to continue.`,
+      "Tools: onchain-sql: only a query whose ORDER BY starts with block_time (quoted or not) is read one day at a time; any other first key is answered as before.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Seller-trust wallets",
+    items: [
+      "Router: seller-trust's `routerGate` names the wallet its settled calls were measured at (`measuredAtWallet`), the Base payTo the seller's 402 named at our last crawl (`livePayTo`) with that wallet's own counted calls, and a `walletNote` when the two differ, since the router counts history only at the payTo the live 402 names.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Regex time limit",
+    items: [
+      "Tools: The regex tool's 750 ms limit covers the pattern's own run, so a busy server no longer times out an ordinary pattern; a catastrophic pattern is still stopped and not charged.",
+    ],
+  },
   {
     date: "2026-11-22",
     title: "Agentic commerce",

@@ -42,4 +42,6 @@ export const FREE_TIER_SLUGS = new Set([
   // Weather calculators (src/tools/weather-calc-kit.js): published formulas
   // over the caller's own numbers, no forecast read.
   "aqi-calc", "degree-days-calc", "heat-index-calc", "sun-times", "wmo-weather-code",
+  // Parse kit (src/tools/parse-kit.js): one pass over capped caller text.
+  "csv-aggregate", "encoding-detect", "json-lint", "log-timestamps", "number-words",
 ]);

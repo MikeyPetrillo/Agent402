@@ -69,7 +69,7 @@ import { assertUpstreamBody } from "./llm-gateway-kit.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { mediaMeterEnabled, setMeterSentinel } from "../gateway-meter.js";
 import { audioProviderPolicy } from "../openrouter-audio-policy.js";
-import { admittedSttAdditions } from "../speech-additions.js";
+import { admittedSttAdditions, sttMaxMinutesFor, sttAdditionNamed } from "../speech-additions.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
 import { attributed, ATTRIBUTION, KIND, secondsOf, isDnsFailure, currentBudget, handlerBudgetMs, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
@@ -126,8 +126,16 @@ const TIERS = STT_TIERS;
  *  margin bound of the tier's price. Read at call time. */
 export function sttAdditions(tierSlug) {
   const t = TIERS[tierSlug];
-  return t ? admittedSttAdditions({ priceUsd: t.priceUsd, maxMinutes: t.maxMinutes }) : [];
+  return t ? admittedSttAdditions({ priceUsd: t.priceUsd, maxMinutes: t.maxMinutes, tierSlug }) : [];
 }
+/** The audio-minute cap a request holds on a tier: the named model's own where
+ *  it declares a lower one (src/speech-additions.js), else the tier's. */
+export function sttCapMinutesFor(tierSlug, model = null) {
+  const t = TIERS[tierSlug];
+  const m = model ? sttAdditionNamed(model) : null;
+  return m ? sttMaxMinutesFor(m, tierSlug, t.maxMinutes) : t.maxMinutes;
+}
+const minutesLabel = (n) => `${Number(n.toFixed(2))} minute${n === 1 ? "" : "s"}`;
 /** The named model a request asks for, or null for the tier's own. A name
  *  this tier does not serve is a 400 before any fetch or spend, and so is a
  *  name beside diarize (speaker labels come from one model). */
@@ -149,7 +157,11 @@ export function sttModelOf(input, tierSlug, req = null, diarize = false) {
 export function sttModelProperty(tierSlug) {
   const served = sttAdditions(tierSlug);
   if (!served.length) return {};
-  return { model: { type: "string", description: `Optional: a model to transcribe with in place of ${TIERS[tierSlug].model}, one of ${served.map((m) => m.id).join(", ")} (model-backed; same price and cap; not with diarize). The answer names the model that served it.` } };
+  // A model with its own cap under the tier's names it beside its id.
+  const capOf = (m) => sttMaxMinutesFor(m, tierSlug, TIERS[tierSlug].maxMinutes);
+  const own = served.some((m) => capOf(m) < TIERS[tierSlug].maxMinutes);
+  const names = served.map((m) => (capOf(m) < TIERS[tierSlug].maxMinutes ? `${m.id} (up to ${minutesLabel(capOf(m))} of audio)` : m.id)).join(", ");
+  return { model: { type: "string", description: `Optional: a model to transcribe with in place of ${TIERS[tierSlug].model}, one of ${names} (model-backed; same price${own ? "" : " and cap"}; not with diarize). The answer names the model that served it.` } };
 }
 
 function validateInput(input, req = null, tierSlug = null) {
@@ -341,8 +353,12 @@ export function upstreamNameFor(filename, format) {
 /** A cut that wrote at least this close to the cap may have dropped audio past it. */
 const CUT_REACHED_SLACK_SEC = 0.25;
 
-function overCapError(durationSec, tierSlug) {
+function overCapErrorFor(durationSec, tierSlug, own = null, req = null) {
   const tier = TIERS[tierSlug];
+  // A named model's own cap, under the tier's: a 400 naming the model and its cap.
+  if (own) {
+    return bad(`Audio is ${(durationSec / 60).toFixed(1)} minutes - ${own.model} accepts up to ${minutesLabel(own.minutes)} on this route. Send it without "model" for up to ${tier.maxMinutes} minutes, or split the recording.${notChargedOn(req)}`, 400);
+  }
   const mins = (durationSec / 60).toFixed(1);
   // The longer tier is named only while it is served (TRANSCRIBE_LONG=on),
   // and only for a recording it takes.
@@ -356,15 +372,15 @@ function overCapError(durationSec, tierSlug) {
 }
 /** The charge sentence is made on a route call only (finalFailure's rule): a
  *  skill-pack step runs inside a charged answer and prints the step's error. */
-function unreadableError(reason, tierSlug, req) {
-  return Object.assign(bad(`This file's audio format could not be read: ${reason}, so its length can be neither measured nor trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap. Send a standard mp3, wav, m4a, ogg, flac, or webm file.${notChargedOn(req)}`, 400), { hint: "format-unreadable" });
+function unreadableErrorFor(reason, tierSlug, req, capMinutes = TIERS[tierSlug].maxMinutes, owner = null) {
+  return Object.assign(bad(`This file's audio format could not be read: ${reason}, so its length can be neither measured nor trimmed to ${owner ? `${owner}'s` : "this tier's"} ${Number(capMinutes.toFixed(2))}-minute cap. Send a standard mp3, wav, m4a, ogg, flac, or webm file.${notChargedOn(req)}`, 400), { hint: "format-unreadable" });
 }
 /** Our decoder could not run (no slot in the time the call's budget leaves
  *  after the upstream's, its deadline, no ffmpeg here):
  *  the length is unbounded, so no upstream call. The charge sentence is made
  *  on a route call only (finalFailure's rule). */
-function decoderBusyError(reason, tierSlug, req) {
-  return Object.assign(attributed(bad(`This file's length could not be confirmed, and it could not be trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap just now: ${reason}. This is on our side, not your file.${notChargedOn(req)} Retry in a minute.`, 503), ATTRIBUTION.OURS), { retryAfter: 30 });
+function decoderBusyErrorFor(reason, tierSlug, req, capMinutes = TIERS[tierSlug].maxMinutes, owner = null) {
+  return Object.assign(attributed(bad(`This file's length could not be confirmed, and it could not be trimmed to ${owner ? `${owner}'s` : "this tier's"} ${Number(capMinutes.toFixed(2))}-minute cap just now: ${reason}. This is on our side, not your file.${notChargedOn(req)} Retry in a minute.`, 503), ATTRIBUTION.OURS), { retryAfter: 30 });
 }
 
 /** The audio to send upstream, bounded by the tier's duration cap. Throws 422
@@ -395,8 +411,14 @@ function decoderBusyError(reason, tierSlug, req) {
  *  possible) is a 400 that names it. Returns { buf, filename, durationSec,
  *  trimmedToCapSeconds?, durationUnconfirmed? }; durationSec is the length the
  *  margin math and the answer use. */
-export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null, { diarize = false } = {}) {
+export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null, { diarize = false, model = null } = {}) {
   const tier = TIERS[tierSlug];
+  // The cap: the tier's, or a named model's own where it is lower.
+  const capMinutes = sttCapMinutesFor(tierSlug, model);
+  const own = capMinutes < tier.maxMinutes ? { model, minutes: capMinutes } : null;
+  const overCapError = (sec, slug) => overCapErrorFor(sec, slug, own, req);
+  const unreadableError = (reason, slug, r) => unreadableErrorFor(reason, slug, r, capMinutes, own?.model);
+  const decoderBusyError = (reason, slug, r) => decoderBusyErrorFor(reason, slug, r, capMinutes, own?.model);
   const durationUnreadable = () => bad("Could not read the audio duration from the file - send a standard mp3, wav, m4a, ogg, flac, or webm file", 422);
   // The header parser picks its reader from the file name, so bytes under the
   // wrong name (an Ogg file named .m4a or .mp3) can declare nothing. Such a
@@ -406,7 +428,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   const declared = await probeContainer(buf, filename);
   const headerless = declared === null;
   const container = declared ?? { audioTracks: 0, durationSec: 0, pictureBytes: 0 };
-  const capSec = tier.maxMinutes * 60;
+  const capSec = capMinutes * 60;
   const overCap = (sec) => sec > capSec + 2;
   // A container with more than one audio track declares the longest track's
   // length (Matroska, WebM, Ogg) or the first's (MP4). Only the first track is
@@ -836,7 +858,7 @@ function makeHandler(tierSlug) {
     const { url, language, diarize, model } = validateInput(input, req, tierSlug);
     const { buf, filename } = await fetchAudio(url);
     // A named model's upstream call keeps the speaker-label path's cap, so the decode leaves it that time.
-    return transcribePrepared(await prepareAudioWithinCap(buf, filename, tierSlug, req, { diarize: diarize || Boolean(model) }), tierSlug, language, diarize, req, model);
+    return transcribePrepared(await prepareAudioWithinCap(buf, filename, tierSlug, req, { diarize: diarize || Boolean(model), model }), tierSlug, language, diarize, req, model);
   };
 }
 

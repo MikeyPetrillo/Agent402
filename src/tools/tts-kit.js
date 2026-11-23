@@ -61,6 +61,7 @@ import { createUnansweredTracker } from "../unanswered-rule.js";
 import { currentCallerKey } from "../request-timing.js";
 import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, KIND } from "../upstream-deadline.js";
 import { settleBeforeUpstream } from "../settle-first.js";
+import { setServedModelHeaders, logSpeechServed } from "../speech-served.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
@@ -525,22 +526,30 @@ function makeServe(tierSlug) {
 export const makeTtsHandler = makeHandler;
 export const __makeHandlerForTest = makeHandler;
 
-/** The route handler of a quoted tier: a request gated at a quote below the
- *  quote of the text being served (req.__meteredQuoteUsd, stashed by the gate
- *  that priced it) is refused before any model call, so a call is never
- *  served past what was paid. */
+/** The route handler of a tier. On a quoted tier, a request gated at a quote
+ *  below the quote of the text being served (req.__meteredQuoteUsd, stashed by
+ *  the gate that priced it) is refused before any model call, so a call is
+ *  never served past what was paid. Every served answer names the model that
+ *  spoke in X-Agent402-Model beside its `model` field (src/speech-served.js);
+ *  these routes take no `model`, so none is a fallback from a named one. */
 function makeRouteHandler(tierSlug) {
   const inner = makeHandler(tierSlug);
-  if (!TTS_QUOTE[tierSlug]) return inner;
+  const route = TTS_ROUTES[tierSlug];
   return async (input, req) => {
     const gated = Number(req?.__meteredQuoteUsd);
-    if (Number.isFinite(gated) && gated > 0) {
+    if (TTS_QUOTE[tierSlug] && Number.isFinite(gated) && gated > 0) {
       const q = ttsQuoteUsd(tierSlug, ttsQuoteChars(input));
       if (q > gated + 1e-9) throw bad(`This request was quoted at $${gated} but the text being served quotes $${q}. Nothing was charged; resend the request exactly as it should be served.`);
     }
-    return inner(input);
+    const out = await inner(input);
+    if (out?.model) {
+      logSpeechServed({ route, served: out.model });
+      setServedModelHeaders(req, out.model);
+    }
+    return out;
   };
 }
+const TTS_ROUTES = Object.freeze({ "tts-lite": "/api/tts-lite", tts: "/api/tts", "tts-hd": "/api/tts-hd" });
 /** The tool fields of a quoted tier: its floor as the list price, the quote
  *  function every gate prices through, the ceiling at the cap, the formula in
  *  words, and the input check the Tempo gate runs before its relay. No card
@@ -591,7 +600,7 @@ export const TTS_TOOLS = [
         },
       },
     },
-    handler: makeHandler("tts-lite"),
+    handler: makeRouteHandler("tts-lite"),
   },
   {
     route: "POST /api/tts",

@@ -379,6 +379,39 @@ console.log("\n# STT — cap-before-spend (local duration probe)");
 }
 
 // ---------------------------------------------------------------------------
+// 5a. The named speech and transcription models (src/speech-additions.js):
+//     each is held to its own cap where it declares one, else the route's,
+//     and that cap times its private row must sit inside the margin bound of
+//     the route's price. A model that declares a cap is one meant to be
+//     served at it, so a declared cap past the bound fails here; a model with
+//     no cap of its own that does not fit is simply not served (checked as
+//     not admitted). Only PASS/FAIL is printed: the rows are private.
+console.log("\n# Named audio models: each one's cap vs the route's price");
+{
+  const A = await import("../src/speech-additions.js");
+  const G = await import("../src/tools/llm-gateway-kit.js");
+  const S = await import("../src/tools/stt-kit.js");
+  const speechPrice = Number(LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-audio-speech").price.replace("$", ""));
+  const costs = upstreamCosts();
+  for (const m of A.SPEECH_ADDITIONS) {
+    const cap = A.speechMaxCharsFor(m, G.SPEECH_MAX_CHARS);
+    const fits = A.withinMargin(cap, costs.speech?.[m.id], speechPrice);
+    if (m.maxChars) ok(fits, `${m.id}: its own cap of ${cap} chars stays within the margin bound of /v1/audio/speech`);
+    const admitted = A.admittedSpeechAdditions({ priceUsd: speechPrice, maxChars: G.SPEECH_MAX_CHARS, env: { NAMED_AUDIO_MODELS: "all" } }).some((x) => x.id === m.id);
+    ok(admitted === fits, `${m.id}: admitted on /v1/audio/speech exactly when its cap (${cap} chars) fits the bound`);
+  }
+  for (const m of A.STT_ADDITIONS) {
+    for (const [tier, t] of Object.entries(S.STT_TIERS)) {
+      const cap = A.sttMaxMinutesFor(m, tier, t.maxMinutes);
+      const fits = A.withinMargin(cap, costs.sttPerMinute?.[m.id], t.priceUsd);
+      if (m.maxMinutes) ok(fits, `${m.id}: its own cap of ${cap} minutes on ${tier} stays within the margin bound`);
+      const admitted = A.admittedSttAdditions({ priceUsd: t.priceUsd, maxMinutes: t.maxMinutes, tierSlug: tier, env: { NAMED_AUDIO_MODELS: "all" } }).some((x) => x.id === m.id);
+      ok(admitted === fits, `${m.id} on ${tier}: admitted exactly when its cap (${cap} minutes) fits the bound`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 5b. onchain-sql: the query service meters every query, and one call may
 //     send SQL_QUERY_BUDGET of them (the buyer's query, then the row-size
 //     measure and the filtered run or one small re-run). That many at the

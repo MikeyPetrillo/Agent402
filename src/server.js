@@ -733,6 +733,7 @@ import * as analyticsDbModule from "./analytics-db.js";
 import { wholesalePage } from "./wholesale-page.js";
 import { WEATHER_CALC_TOOLS } from "./tools/weather-calc-kit.js";
 import { DATE_TIME_TOOLS } from "./tools/date-time-kit.js";
+import { PARSE_TOOLS } from "./tools/parse-kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "./tools/text-analysis-kit.js";
 import { VALIDATION_TOOLS } from "./tools/validation-kit.js";
 import { CRYPTO_HASH_TOOLS } from "./tools/crypto-hash-kit.js";
@@ -886,7 +887,8 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats } from "./sales-ledger.js";
+import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats, salesLedgerFilePath } from "./sales-ledger.js";
+import { correctServerLedger, summaryOf as saleRepeatsSummary } from "./sale-repeats-correction.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -912,7 +914,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...DOMAIN_AVAILABILITY_TOOLS, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...DOMAIN_AVAILABILITY_TOOLS, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...PARSE_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -2511,6 +2513,9 @@ for (const tier of EXEC_TIERS) {
   const tool = buildSellerTrustTool({
     getSellerDetail: (host) => sellerDetail(host),
     getSettledCalls: (origin) => dispatchEvidence().settled.get(norm(origin)) || 0,
+    // The same binding entry: the wallet those figures were measured at and
+    // every wallet's own figures, so routerGate can name where it counted.
+    getGateEvidence: (origin) => dispatchEvidence().binding.get(norm(origin)) || null,
     // Evidence for the address the seller ADVERTISES, from the cached on-chain
     // merchant scan. Never fetches — a cold cache reports "not checked", never
     // a clean bill.
@@ -7402,6 +7407,36 @@ app.post("/__operator/refunds/backfill-sales", async (req, res) => {
   } catch (e) {
     res.status(e?.statusCode === 400 ? 400 : 500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
   }
+});
+// Sales rows that repeat a Solana settlement (src/sale-repeats.js): the dry
+// run and the correction of scripts/sale-repeats.js, run against this
+// server's own ledger (src/sale-repeats-correction.js, the same code). The
+// answer is counts, dates and tools, never a payer or a settlement id. The
+// correction runs only when `expect` equals the repeat-row count a dry run
+// reads now, in one transaction under a lease; a second one moves nothing.
+const saleRepeatsError = (res, e) => res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
+app.get("/__operator/sale-repeats.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorHeavyLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const r = await correctServerLedger({ filePath: salesLedgerFilePath });
+    res.json({ dryRun: true, ...saleRepeatsSummary(r.plan), apply: { method: "POST", path: "/__operator/sale-repeats/apply", body: { expect: r.plan.rows } } });
+  } catch (e) { saleRepeatsError(res, e); }
+});
+app.post("/__operator/sale-repeats/apply", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorHeavyLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  const expect = req.body && typeof req.body === "object" ? req.body.expect : undefined;
+  if (!Number.isInteger(expect) || expect < 0) return res.status(400).json({ error: "expect must be the repeat-row count the dry run answered (an integer)" });
+  try {
+    const r = await correctServerLedger({ filePath: salesLedgerFilePath, apply: true, expect });
+    if (r.busy) return res.status(409).json({ error: "a correction is already running", reason: r.busy });
+    const summary = saleRepeatsSummary(r.plan);
+    if (r.refused) return res.status(409).json({ error: `expect ${expect} but the ledger holds ${r.plan.rows} repeat row(s); read the dry run again`, applied: false, ...summary });
+    res.json({ applied: true, moved: r.moved, ...summary, note: "a running server leaves the moved rows out of its own figures already; its in-memory copy drops them at its next restart" });
+  } catch (e) { saleRepeatsError(res, e); }
 });
 app.get("/__operator/dataset.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
