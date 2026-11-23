@@ -752,7 +752,7 @@ export const VALIDATE_MORE_TOOLS = [
     price: "$0.001",
     description:
       "Check the format and check digits of a financial or national identifier: BIC/SWIFT code, UK National Insurance number, Brazil CPF and CNPJ (numeric and alphanumeric), Australian ABN, SEDOL, ISIN, LEI (ISO 17442, MOD 97-10) and Norwegian organization number. Pass type, or omit it and the tool tries every type and lists the candidates. Answers type, valid, normalized and the reason. Offline: format and check digits only, with no registry lookup, so a valid answer does not mean the number is issued or active.",
-    tags: ["validate", "check-digit", "bic", "swift", "isin", "lei", "sedol", "cpf", "cnpj", "abn", "nino", "national-insurance", "organization-number", "identifier", "finance"],
+    tags: ["validate", "verify", "check-digit", "checksum", "bic", "swift", "isin", "lei", "sedol", "cpf", "cnpj", "abn", "nino", "national-insurance", "organization-number", "identifier", "finance"],
     discovery: {
       bodyType: "json",
       input: { value: "US0378331005" },
@@ -781,7 +781,7 @@ export const VALIDATE_MORE_TOOLS = [
     price: "$0.002",
     description:
       "Read a CI or build log (npm, pnpm, yarn, pip and pytest, cargo, go, Maven, Gradle, GitHub Actions) and find the first real error: its line, the failing step and command, the exit code, and its class (lockfile mismatch, dependency resolution, compile error, test failure, timeout, out of memory, network, permission). Returns the relevant lines with their line numbers and a fixed next step for the class. Rule-based pattern matching, no model; up to 100 KB of log.",
-    tags: ["ci", "build", "log", "triage", "error", "failure", "github-actions", "npm", "pip", "cargo", "go", "maven", "gradle", "debug"],
+    tags: ["ci", "build", "log", "triage", "error", "failure", "fail", "job", "github", "actions", "github-actions", "npm", "pip", "cargo", "go", "maven", "gradle", "debug"],
     discovery: {
       bodyType: "json",
       input: {

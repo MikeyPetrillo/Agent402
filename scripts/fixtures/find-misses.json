@@ -350,7 +350,6 @@
     "verify the signature on a signed receipt",
     "parse csv and count distinct values in a column",
     "split adjusted daily share prices for a year",
-    "parse json and report the error position",
     "map csv headers onto an import schema",
     "clean up a log file and drop junk lines"
   ]

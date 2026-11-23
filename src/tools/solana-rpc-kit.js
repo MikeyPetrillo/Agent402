@@ -263,7 +263,7 @@ export const SOLANA_RPC_TOOLS = [
         required: ["method"],
       },
       output: {
-        example: { network: "mainnet", method: "getSlot", result: 380123456 },
+        example: { network: "mainnet", method: "getSlot", result: 472743760 },
       },
     },
     handler: async (i) => {
