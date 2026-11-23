@@ -5,17 +5,15 @@
 //
 //   node scripts/test-memory-stores.js          (offline; boots a free-mode server)
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const ms = await import("../src/memory-stores.js");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
-const sleep = (t) => new Promise((r) => setTimeout(r, t));
 
 // CI runs without --expose-gc; enable it here so the heap comparison runs.
 const v8 = await import("node:v8"); const vm = await import("node:vm");
@@ -119,20 +117,17 @@ const EXPECT = [
 ];
 const dir = mkdtempSync(join(tmpdir(), "a402-memstores-"));
 const TOKEN = "memory-stores-operator-token-0123456789";
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], {
+const srv = await bootServer({
+  stores: "memstores",
   env: {
-    ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
+    FREE_MODE: "true", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
     X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"),
     ROUTER_WORKERS: "0", AGENT402_OPERATOR_TOKEN: TOKEN, LOAD_SHED: "off",
   },
-  stdio: ["ignore", "ignore", "inherit"],
-});
-const base = `http://127.0.0.1:${port}`;
+}).catch((e) => { console.error(e.message); return null; });
+const base = srv?.url;
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
-  ok(up, "the free-mode server booted");
+  ok(Boolean(srv), "the free-mode server booted");
   const anon = await fetch(`${base}/__operator/heap.json`);
   ok(anon.status === 404, `heap.json without the operator token is 404 (${anon.status})`);
   const res = await fetch(`${base}/__operator/heap.json`, { headers: { authorization: `Bearer ${TOKEN}` } });
@@ -146,7 +141,7 @@ try {
   // part of it, so the check is that the budget held and nothing was cut.
   ok(Number.isFinite(body.storesReadMs) && body.storesReadMs < 200 && body.storesSkipped === 0, `the live read is bounded (${body.storesReadMs} ms, ${body.storesSkipped} skipped)`);
 } finally {
-  proc.kill("SIGKILL");
+  srv?.child.kill("SIGKILL");
   rmSync(dir, { recursive: true, force: true });
 }
 

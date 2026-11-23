@@ -8,9 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "no
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const dir = mkdtempSync(join(tmpdir(), "a402-mppagents-"));
 const DB = join(dir, "sales.db");
@@ -83,8 +81,6 @@ ok(!/0x[0-9a-f]{40}/i.test(body), "no payer address anywhere in the answer");
 
 // --- booted half: operator route ---------------------------------------------
 const TOKEN = "operator-test-secret-mpp";
-const PORT = await getFreePort();
-const base = `http://127.0.0.1:${PORT}`;
 // The server reads the ledger at its own clock, so the route's fixture lands
 // in the real current week: two outside agents (one paying twice), plus a
 // blank and a missing payer that are payments but never agents.
@@ -120,21 +116,14 @@ Database.prototype.prepare = function (sql) {
 };
 `);
 const scans = () => (existsSync(SCAN_LOG) ? readFileSync(SCAN_LOG, "utf8").split("\n").filter(Boolean).length : 0);
-const child = spawn(process.execPath, ["--import", PRELOAD, "src/server.js"], {
-  env: { ...process.env, ...ownStoreEnv("mppagents"), FREE_MODE: "true", PORT: String(PORT), AGENT402_OPERATOR_TOKEN: TOKEN, SALES_LEDGER_DB: DB, X402_INDEX_CRAWL: "off" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let log = "";
-child.stdout.on("data", (d) => { log += d; });
-child.stderr.on("data", (d) => { log += d; });
-const finish = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } try { rmSync(dir, { recursive: true, force: true }); } catch { /* */ } console.log(`\n${passed} passed, ${failed} failed`); process.exit(code); };
-let up = false;
-for (let i = 0; i < 120; i++) {
-  try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* */ }
-  await new Promise((res) => setTimeout(res, 500));
-}
+let bootError = "";
+const srv = await bootServer({ stores: "mppagents", args: ["--import", PRELOAD], env: { FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN, SALES_LEDGER_DB: DB, X402_INDEX_CRAWL: "off" } })
+  .catch((e) => { bootError = e.message; return null; });
+const base = srv?.url;
+const finish = (code) => { try { srv?.child.kill("SIGKILL"); } catch { /* */ } try { rmSync(dir, { recursive: true, force: true }); } catch { /* */ } console.log(`\n${passed} passed, ${failed} failed`); process.exit(code); };
+const up = Boolean(srv);
 ok(up, "server booted");
-if (!up) { console.error(log.slice(-800)); finish(1); }
+if (!up) { console.error(bootError.slice(-800)); finish(1); }
 const scansBeforeSales = scans();
 const sales = await fetch(`${base}/__operator/sales.json`, { headers: { "x-operator-token": TOKEN } });
 const sj = await sales.json().catch(() => null);
