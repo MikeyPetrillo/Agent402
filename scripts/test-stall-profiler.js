@@ -79,6 +79,10 @@ const { longestBusyRun, startStallProfiler } = await import("../src/stall-profil
   const { readFileSync: rf } = await import("node:fs");
   const boot = rf(new URL("../src/boot-profile.js", import.meta.url), "utf8");
   ok(/if \(process\.env\.STALL_PROFILER === "on"\) \{[\s\S]*startStallProfiler/.test(boot) && !/RAILWAY_DEPLOYMENT_ID \|\| process\.env\.STALL_PROFILER === "on"\)\) \{\s*const t = setTimeout\(\(\) => \{ import\("\.\/stall-profiler/.test(boot), "rolling stall profiling starts only with STALL_PROFILER=on, never merely because we run on Railway");
+  // The boot CPU profile is retired (the boot stall it chased no longer
+  // recurs); the loop-lag monitor it shared the first import with stays.
+  ok(!/Profiler\.start\b/.test(boot) && !/BOOT_CPU_PROFILE/.test(boot), "no CPU profile runs at boot, on Railway or with any setting");
+  ok(/^import \{ startLoopLagMonitor \} from "\.\/loop-lag\.js";\nstartLoopLagMonitor\(\);$/m.test(boot), "the loop-lag monitor still starts in the module body of the first import");
   const srv = rf(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/app\.post\("\/__operator\/stall-profile"[\s\S]{0,200}operatorAuthed\(req\)/.test(srv), "the on-demand window is operator-authed");
 }

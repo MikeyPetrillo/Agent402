@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1123 variables in 113 groups.
+1122 variables in 113 groups.
 
 ## Contents
 
@@ -899,7 +899,7 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `RAILWAY_DEPLOYMENT_ID` | Railway deployment id. | `local` | `src/boot-profile.js`, `src/state-db.js` |
+| `RAILWAY_DEPLOYMENT_ID` | Railway deployment id. | `local` | `src/state-db.js` |
 | `RAILWAY_ENVIRONMENT` | Railway environment. |  | `src/model-catalog.js`, `src/production-env.js` |
 | `RAILWAY_ENVIRONMENT_NAME` | Railway environment name. |  | `src/mcp-loopback.js`, `src/model-catalog.js`, `src/production-env.js` and 1 more |
 | `RAILWAY_GIT_COMMIT_SHA` | Build id the host platform provides; read for /health, the MCP version and asset URLs. |  | `src/ledger-chrome.js`, `src/mcp-http.js`, `src/server.js` |
@@ -1570,7 +1570,6 @@ holds it.
 | `BING_SITE_URL` | Bing site URL. | `https://agent402.tools/` | `src/search-data.js` |
 | `BING_WEBMASTER_API_KEY` | Bing webmaster API key (a credential, set on the host). |  | `src/search-data.js` |
 | `BLS_API_KEY` | U.S. Bureau of Labor Statistics Public Data API v2 registration key (a credential, set on the host). fred-series reads BLS series keyless (v1, 25 queries a day) without it, 500 a day with it; reads are cached by decade. |  | `src/tools/us-macro-series.js` |
-| `BOOT_CPU_PROFILE` | Boot CPU profile. |  | `src/boot-profile.js` |
 | `BRAVE_ANSWERS_API_KEY` | Brave answers API key (a credential, set on the host). |  | `src/tools/search.js` |
 | `BRAVE_API_KEY` | Key for the web search tools (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/llm-context-kit.js`, `src/tools/search.js` |
 | `BUYER_REFUSAL_WINDOW_MS` | Buyer refusal window, in milliseconds. |  | `src/tool-failure-monitor.js` |

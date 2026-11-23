@@ -190,7 +190,6 @@
     "BING_SITE_URL": "Bing site URL.",
     "BING_WEBMASTER_API_KEY": "Bing webmaster API key (a credential, set on the host).",
     "BLS_API_KEY": "U.S. Bureau of Labor Statistics Public Data API v2 registration key (a credential, set on the host). fred-series reads BLS series keyless (v1, 25 queries a day) without it, 500 a day with it; reads are cached by decade.",
-    "BOOT_CPU_PROFILE": "Boot CPU profile.",
     "BRAVE_ANSWERS_API_KEY": "Brave answers API key (a credential, set on the host).",
     "BRAVE_API_KEY": "Key for the web search tools (a credential, set on the host).",
     "BROKEN_LISTINGS_WIDESPREAD_MIN": "Broken listings widespread minimum.",
