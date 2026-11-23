@@ -22,6 +22,7 @@ import { createServer } from "node:http";
 import { createHash, generateKeyPairSync, createSign, createVerify, createPublicKey, randomUUID } from "node:crypto";
 import express from "express";
 import { bootPaidServer } from "./lib/paid-boot.js";
+import { notChargedOn } from "../src/not-charged.js";
 
 const gateMod = await import("../src/aws-marketplace-gate.js");
 const { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsIneligibility, awsRoutes, createAwsPaymentClaims, createAwsMarketplaceGate, paymentJwksBase, AWS_DEFAULT_SLUGS } = gateMod;
@@ -92,7 +93,7 @@ const handlerRuns = { echo: 0, flaky: 0 };
 let flakyFailures = 0;
 const DEFS = {
   "POST /api/echo": { route: "POST /api/echo", slug: "echo", name: "Echo", category: "text", price: "$0.003", description: "Echo text.", discovery: { inputSchema: { properties: { text: { type: "string" } }, required: ["text"] }, input: { text: "hi" } }, handler: async (i) => { handlerRuns.echo++; return { echo: i.text }; } },
-  "POST /api/flaky": { route: "POST /api/flaky", slug: "flaky", name: "Flaky", category: "text", price: "$0.002", description: "Fails on demand.", discovery: { inputSchema: { properties: { text: { type: "string" } } }, input: { text: "x" } }, handler: async () => { handlerRuns.flaky++; if (flakyFailures > 0) { flakyFailures--; throw Object.assign(new Error("upstream unavailable"), { statusCode: 502 }); } return { fine: true }; } },
+  "POST /api/flaky": { route: "POST /api/flaky", slug: "flaky", name: "Flaky", category: "text", price: "$0.002", description: "Fails on demand.", discovery: { inputSchema: { properties: { text: { type: "string" } } }, input: { text: "x" } }, handler: async (_i, req) => { handlerRuns.flaky++; if (flakyFailures > 0) { flakyFailures--; throw Object.assign(new Error(`upstream unavailable.${notChargedOn(req)} Retry shortly.`), { statusCode: 502 }); } return { fine: true }; } },
   "POST /api/binary": { route: "POST /api/binary", slug: "binary", name: "Binary", category: "media", price: "$0.002", mimeType: "image/png", description: "Bytes.", discovery: { input: {} }, handler: async () => ({}) },
   "POST /api/ident": { route: "POST /api/ident", slug: "ident", name: "Ident", category: "memory", price: "$0.002", description: "Wallet memory.", discovery: { input: {} }, handler: async () => ({}) },
 };
@@ -228,6 +229,9 @@ async function quote(path = "/aws/echo") {
   const r1 = await post("/aws/flaky", { text: "a" }, { "payment-signature": hdr });
   const j1 = await r1.json();
   ok(r1.status === 502 && j1.paymentUsed === false && j1.attemptsLeft === 2, "a failed run: the error, and the payment usable for two more attempts");
+  // The payment was taken before the handler ran: a handler's "Nothing was
+  // charged" (src/not-charged.js, printed on a route call) is not passed on.
+  ok(j1.error === "upstream unavailable. Retry shortly." && !/charged/i.test(JSON.stringify(j1)), `a failed run's error drops the handler's not-charged sentence (${j1.error})`);
   const r2 = await post("/aws/flaky", { text: "a" }, { "payment-signature": hdr });
   await new Promise((res) => setTimeout(res, 20));
   ok(r2.status === 200 && sales.filter((s) => s.tx === id).length === 1, "the resend: served and booked once");
@@ -237,9 +241,11 @@ async function quote(path = "/aws/echo") {
   const h2 = paymentHeader(second.required, t2.token);
   flakyFailures = 5;
   const outs = [];
-  for (let i = 0; i < 4; i++) outs.push((await post("/aws/flaky", { text: "b" }, { "payment-signature": h2 })).status);
+  const bodies = [];
+  for (let i = 0; i < 4; i++) { const r = await post("/aws/flaky", { text: "b" }, { "payment-signature": h2 }); outs.push(r.status); bodies.push(await r.json().catch(() => ({}))); }
   await new Promise((res) => setTimeout(res, 20));
   ok(outs.join(",") === "502,502,502,409" && !sales.some((s) => s.tx === t2.id), "three failed attempts spend it: the fourth is refused, nothing booked");
+  ok(bodies[2].paymentUsed === true && !/\b(?:not|never) charged\b|nothing (?:was|is) charged/i.test(JSON.stringify(bodies[2])), "the attempt that spends the payment says it was used and never that nothing was charged");
   ok(gate.failed().some((f) => f.paymentId === t2.id) && gate.stats().chargedWithoutAnswer === 1, "the spent payment is on the operator record of paid runs without an answer");
   flakyFailures = 0;
 }
