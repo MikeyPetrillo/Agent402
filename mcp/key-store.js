@@ -12,7 +12,8 @@
 // AGENT402_KEY_STORE picks the store: auto (default), macos, windows,
 // secret-tool, file, or off (never read one).
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, renameSync, chmodSync, unlinkSync } from "node:fs";
+import { readFileSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, fchmodSync, closeSync, statSync, constants as fsConstants } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { ensureConfigDir } from "./config-dir.js";
 
@@ -75,7 +76,8 @@ $v = [A402Cred]::Read('${KEY_SERVICE}'); if ($v) { [Console]::Out.Write($v) } el
 const keyFile = (dir) => join(dir, KEY_FILE_NAME);
 
 /** Store `key`. Returns { stored: true, kind, where, warning? } or { stored: false, kind, reason }. */
-export function storeKey(key, { kind, dir, run = runCommand } = {}) {
+// `stagingName` fixes the staging file name (tests only); unset, it is random.
+export function storeKey(key, { kind, dir, run = runCommand, stagingName = null } = {}) {
   const line = `${String(key).trim()}\n`;
   if (kind === "macos") {
     // Interactive mode reads the command on stdin, so the key is not an argument.
@@ -96,11 +98,32 @@ export function storeKey(key, { kind, dir, run = runCommand } = {}) {
   }
   if (kind === "file") {
     ensureConfigDir(dir);
+    // A folder other local users can write to lets them plant or swap the
+    // file the key goes into, so the key is never kept there.
+    if (process.platform !== "win32") {
+      const st = statSync(dir);
+      const notMine = typeof process.getuid === "function" && st.uid !== process.getuid();
+      if (notMine || (st.mode & 0o022) !== 0) return { stored: false, kind, reason: `other users can write to the config folder ${dir}, so the key is not kept there; make it yours and private (chmod 700) or set AGENT402_CONFIG_DIR to a folder only you can write` };
+    }
     const path = keyFile(dir);
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, line, { mode: 0o600 });
-    if (process.platform !== "win32") chmodSync(tmp, 0o600);
-    renameSync(tmp, path);
+    // Staged under a random name in the same folder, created exclusively
+    // (never an existing file, never through a symlink) as 0600, then renamed
+    // over the key's own name (a rename replaces a link, never follows it).
+    const tmp = join(dir, stagingName || `.${KEY_FILE_NAME}.${randomBytes(12).toString("hex")}.tmp`);
+    let fd;
+    try { fd = openSync(tmp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW || 0), 0o600); }
+    catch (e) { return { stored: false, kind, reason: e?.code === "EEXIST" ? `a file already exists at ${tmp}, so the key was not written through it` : `could not create ${tmp} (${e?.code || e?.message})` }; }
+    try {
+      if (process.platform !== "win32") fchmodSync(fd, 0o600);
+      writeSync(fd, line);
+      fsyncSync(fd);
+      closeSync(fd); fd = null;
+      renameSync(tmp, path);
+    } catch (e) {
+      if (fd != null) { try { closeSync(fd); } catch { /* already closed */ } }
+      try { unlinkSync(tmp); } catch { /* not created */ }
+      return { stored: false, kind, reason: `could not write ${path} (${e?.code || e?.message})` };
+    }
     return { stored: true, kind, where: path, warning: `the key is stored in a plain file readable by your user account (${path}, mode 0600), since no OS keychain was available; anyone who can read your files can read it` };
   }
   return { stored: false, kind, reason: `no key store (${KEY_STORE_ENV}=off)` };
