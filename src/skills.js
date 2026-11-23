@@ -636,7 +636,7 @@ const SKILL_PACKS_ALL = [
     promptArgs: [
       {
         name: "series",
-        description: "What to analyze - a ticker (AAPL), a FRED series id fred-series serves (UNRATE), or a treasury maturity (10Y)",
+        description: "What to analyze - a ticker (AAPL), a FRED series id fred-series serves (UNRATE), or a Treasury yield id it serves (DGS10)",
         required: true,
         substitute: "AAPL",
       },

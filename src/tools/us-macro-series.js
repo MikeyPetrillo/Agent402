@@ -46,6 +46,7 @@
 //     suggest its endorsement (https://www.bea.gov/help/guidelines-for-citing-bea),
 //     so every answer says it is not endorsed or certified by BEA.
 import { safeFetch, retryTransient } from "./fetch-guard.js";
+import { CAP_NAMES } from "../upstream-cap-refusals.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -157,7 +158,9 @@ function takeBlsQuery() {
 /** Test seam: forget every cached read and the day's BLS count. */
 export function _resetUsMacroForTest() { cache.clear(); inflight.clear(); blsDay.day = ""; blsDay.used = 0; }
 
-const busy = (what) => Object.assign(bad(`${what} is not available right now; retry shortly. Nothing was charged.`, 503), { retryAfter: 60 });
+// The publisher did not answer, or answered a refusal (a BLS daily threshold
+// on its side included): the upstream's outage, not ours.
+const busy = (what) => Object.assign(bad(`${what} did not answer or refused the read (the publisher's own limit or outage); retry shortly. Nothing was charged.`, 503), { retryAfter: 60, attribution: "upstream" });
 
 // ---- BLS ---------------------------------------------------------------------
 /** One decade of a BLS series (startYear a multiple of 10), oldest first. */
@@ -167,7 +170,7 @@ async function blsDecade(id, startYear) {
   const hit = cached(k);
   if (hit) return hit;
   return once(k, async () => {
-    if (!takeBlsQuery()) throw Object.assign(bad("The U.S. Bureau of Labor Statistics daily query allowance of this server is used up; this decade of the series is not held yet. Retry tomorrow, or ask for a window this server has read today. Nothing was charged.", 503), { retryAfter: 3600 });
+    if (!takeBlsQuery()) throw Object.assign(bad("The U.S. Bureau of Labor Statistics daily query allowance of this server is used up; this decade of the series is not held yet. Retry tomorrow, or ask for a window this server has read today. Nothing was charged.", 503), { retryAfter: 3600, capRefusal: CAP_NAMES.blsDay });
     const key = blsKey();
     const body = { seriesid: [id], startyear: String(startYear), endyear: String(endYear), ...(key ? { registrationkey: key } : {}) };
     const url = key ? "https://api.bls.gov/publicAPI/v2/timeseries/data/" : "https://api.bls.gov/publicAPI/v1/timeseries/data/";
