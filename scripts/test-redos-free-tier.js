@@ -353,6 +353,15 @@ try {
     jobs.push({ slug: name, pure: true, method: "POST", url: path, body: JSON.stringify({ q: { toString: 1 } }), label: `${name} q noToString (body)` });
     jobs.push({ slug: name, pure: true, method: "GET", url: `${path}?q%5BtoString%5D=1`, label: `${name} q noToString` });
   }
+  // The route's network filter is read as text too: a long run of
+  // separators around a mainnet word, in the query and in the body.
+  if (!ONLY || ONLY.has("_route")) {
+    const sep = "-".repeat(40_000) + "main" + "-".repeat(40_000) + "x";
+    jobs.push({ slug: "_route", pure: true, method: "POST", url: "/api/route", body: JSON.stringify({ q: "weather forecast", network: sep }), label: "_route network separators (body)" });
+    const short = "-".repeat(3_000) + "main" + "-".repeat(3_000) + "x";
+    jobs.push({ slug: "_route", pure: true, method: "GET", url: `/api/route?${new URLSearchParams({ q: "weather forecast", network: short })}`, label: "_route network separators" });
+    for (const [pn, pv] of Object.entries(corpus(4_000))) jobs.push({ slug: "_route", pure: true, method: "GET", url: `/api/route?${new URLSearchParams({ q: "weather forecast", network: pv })}`, label: `_route network ${pn}` });
+  }
   // Inputs the published example does not reach: a tool whose cost grows
   // with a setting the example leaves at its cheapest (log-timestamps reads
   // its example in UTC; any other zone converts every stamp) gets the corpus

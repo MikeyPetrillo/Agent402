@@ -138,5 +138,29 @@ ok(echoed === SOL, "the response still echoes the resolved network");
     "the Solana SOR branch ranks with networkFilter:'solana' + strictNetwork, so its window holds Solana rows only");
 }
 
+// A long network value costs linear time: the route caps it, the fold on
+// it reads no backtracking pattern, and a crawled catalog's value is capped.
+{
+  const xi = await import("../src/x402-index.js");
+  const hostile = "-".repeat(16_000) + "main" + "-".repeat(16_000) + "x";
+  const time = (fn) => { let best = Infinity; for (let i = 0; i < 3; i++) { const t = performance.now(); fn(); best = Math.min(best, performance.now() - t); } return best; };
+  const a = time(() => xi.resolveNetworkParam(hostile));
+  ok(a < 50, `resolveNetworkParam reads a 32,000-character value in under 50 ms (${a.toFixed(1)} ms)`);
+  const b = time(() => xi.normalizeNetwork(hostile));
+  ok(b < 50, `normalizeNetwork folds a 32,000-character value in under 50 ms (${b.toFixed(1)} ms)`);
+  for (const [v, want] of [["Algorand MainNet", "algorand"], ["solana-mainnet-beta", "solana"], ["Base Mainnet", "base"], ["base_main_net", "base"]]) {
+    const expect = xi.resolveNetworkParam(want);
+    ok(xi.normalizeNetwork(v) === expect, `"${v}" folds onto ${want} (${xi.normalizeNetwork(v)})`);
+  }
+  ok(xi.normalizeNetwork("base-sepolia") === "base-sepolia" || xi.normalizeNetwork("base-sepolia") === xi.resolveNetworkParam("base-sepolia"), "a testnet never folds onto mainnet");
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const routeGet = src.slice(src.indexOf('app.get("/api/route", '), src.indexOf('app.post("/api/route", '));
+  const routePost = src.slice(src.indexOf('app.post("/api/route", '), src.indexOf("app.get(\"/api/route/external-debug\""));
+  ok([routeGet, routePost].every((h) => /networkParamOf\(req\.(?:query|body\?)\.network\)/.test(h)), "GET and POST /api/route cap the network value before it is read");
+  const ix = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  ok((ix.match(/\.filter\(\(v\) => typeof v === "string" && v\.trim\(\) && v\.length <= NETWORK_VALUE_MAX\)/g) || []).length >= 2, "a crawled catalog's network values are capped before they are folded");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

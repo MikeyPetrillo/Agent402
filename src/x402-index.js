@@ -2617,15 +2617,23 @@ function priceRank(p) {
 // chain's real mainnet id) rather than a hand-maintained list, so a future
 // chain addition is covered automatically with no second edit required here.
 const NETWORK_SHORTHAND = new Map(Object.values(CHAIN_PAGES).map((C) => [C.networkParam, C.acceptNetwork]));
-function normalizeNetwork(n) {
+// The longest network value read: a CAIP-2 id or a chain's display name fits
+// well inside it; a longer value names no chain and is not folded.
+export const NETWORK_VALUE_MAX = 128;
+export function normalizeNetwork(n) {
   if (typeof n !== "string") return n;
   const exact = NETWORK_SHORTHAND.get(n.toLowerCase());
   if (exact) return exact;
   // Display names for a mainnet ("Algorand MainNet", "Base Mainnet",
   // "solana-mainnet-beta") fold onto the same chain; a testnet never does.
-  if (!n.includes(":")) {
-    const folded = n.toLowerCase().trim().replace(/[\s_-]*main[\s_-]*net([\s_-]*beta)?$/, "").replace(/[\s_-]+/g, "");
-    if (folded !== n.toLowerCase() && NETWORK_SHORTHAND.has(folded)) return NETWORK_SHORTHAND.get(folded);
+  // Linear: the separators go first (one pass), then a fixed suffix is cut
+  // (a pattern with a separator run before the suffix backtracked
+  // quadratically on a long run of separators).
+  if (!n.includes(":") && n.length <= NETWORK_VALUE_MAX) {
+    const lower = n.toLowerCase();
+    const compact = lower.trim().replace(/[\s_-]+/g, "");
+    const folded = compact.endsWith("mainnetbeta") ? compact.slice(0, -11) : compact.endsWith("mainnet") ? compact.slice(0, -7) : compact;
+    if (folded !== lower && NETWORK_SHORTHAND.has(folded)) return NETWORK_SHORTHAND.get(folded);
   }
   return n;
 }
@@ -3514,7 +3522,7 @@ function entryPaymentBlockAccepts(p) {
   if (Array.isArray(p.accepts) && p.accepts.length) return p.accepts;
   const nets = [...new Set(
     [p.network, p.chain, ...(Array.isArray(p.networks) ? p.networks : [])]
-      .filter((v) => typeof v === "string" && v.trim())
+      .filter((v) => typeof v === "string" && v.trim() && v.length <= NETWORK_VALUE_MAX)
       .map((v) => normalizeNetwork(v.trim())),
   )].slice(0, 16);
   if (!nets.length) return [];
@@ -3592,7 +3600,7 @@ function manifestX402BlockAccepts(p) {
   const payTo = typeof x.payTo === "string" ? x.payTo.trim() : (typeof x.pay_to === "string" ? x.pay_to.trim() : "");
   const nets = [...new Set(
     [...(Array.isArray(x.networks) ? x.networks : []), x.network, x.primaryNetwork]
-      .filter((v) => typeof v === "string" && v.trim())
+      .filter((v) => typeof v === "string" && v.trim() && v.length <= NETWORK_VALUE_MAX)
       .map((v) => normalizeNetwork(v.trim())),
   )].slice(0, 16);
   return nets.map((network) => ({
@@ -10812,7 +10820,7 @@ const VALID_INCLUDE = new Set(["all", "external", "local"]);
 // Celo router call would buy from. Case, spaces and a mainnet suffix fold; a
 // raw CAIP-2 id or an unknown name passes through as given.
 export function resolveNetworkParam(v) {
-  const s = typeof v === "string" ? v.trim() : "";
+  const s = typeof v === "string" ? v.slice(0, NETWORK_VALUE_MAX).trim() : "";
   return s ? normalizeNetwork(s) : null;
 }
 

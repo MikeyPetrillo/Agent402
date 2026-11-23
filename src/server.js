@@ -584,7 +584,7 @@ import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SC
 import { setAlgorandCrawlSources, makeIndexerInboundCount } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
-import { submissionSlotStatus } from "./x402-index.js";
+import { submissionSlotStatus, NETWORK_VALUE_MAX } from "./x402-index.js";
 import { sellerLoad, sellerLoadStatus, sendRouterProbe } from "./seller-load.js";
 import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
@@ -10335,12 +10335,16 @@ async function computeRouteJudged(q, k, include, net, ip = null, meter = null) {
 }
 const routeCachePath = "/api/route";
 const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
+// A route's network value as read: a string, cut to the longest network
+// name (the index's own bound), so nothing longer reaches a reader or the
+// cache key; anything else is no filter.
+const networkParamOf = (v) => (typeof v === "string" ? v.slice(0, NETWORK_VALUE_MAX) : undefined);
 app.get("/api/route", (req, res) => {
   withRouteAnswerNote(req, res, "route");
   const q = readableAsText(req.query.q ?? req.query.task ?? req.query.query);
   const top = req.query.top ?? req.query.k;
   const include = req.query.include;
-  const net = req.query.network;
+  const net = networkParamOf(req.query.network);
   return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include, network: net }, (meter) => computeRouteJudged(q, top, include, net, clientIp(req), meter), "_route", req, res);
 });
 app.post("/api/route", (req, res) => {
@@ -10348,7 +10352,7 @@ app.post("/api/route", (req, res) => {
   const q = readableAsText(req.body?.q ?? req.body?.task ?? req.body?.query);
   const top = req.body?.top ?? req.body?.k;
   const include = req.body?.include;
-  const net = req.body?.network;
+  const net = networkParamOf(req.body?.network);
   return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include, network: net }, (meter) => computeRouteJudged(q, top, include, net, clientIp(req), meter), "_route", req, res);
 });
 // Operator-only: why does the SOR external resolver keep/drop each candidate for
