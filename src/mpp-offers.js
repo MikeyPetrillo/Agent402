@@ -19,7 +19,7 @@
 // while (src/mpp-tempo.js tempoLeads); discovery documents the default order.
 
 import { tempoDiscoveryInfo, tempoOfferedFor } from "./mpp-tempo.js";
-import { tempoTokenLabel } from "./tempo-currencies.js";
+import { tempoTokenLabel, TEMPO_OUSD_ADDRESS } from "./tempo-currencies.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { stripeDiscoveryInfo } from "./mpp-stripe.js";
 import { mppOfferGateClause, mppOfferGateSentence } from "./mpp-offer-gate.js";
@@ -27,6 +27,16 @@ import { mppOfferGateClause, mppOfferGateSentence } from "./mpp-offer-gate.js";
 /** A readable name for a Tempo TIP-20 currency address. */
 export function tempoCurrencyLabel(address) {
   return tempoTokenLabel(address) || String(address || "");
+}
+
+// The one sentence that names Visa CLI (plain text, no mark): its agents pay
+// tempo/charge in OUSD, so it is said only while this instance's tempo
+// challenges name OUSD (TEMPO_CURRENCY), and every surface reads it here.
+export const VISA_CLI_MPP_SENTENCE = "Agents using Visa CLI can pay over MPP on Tempo.";
+/** VISA_CLI_MPP_SENTENCE while the tempo method is on and offers OUSD, else "". */
+export function visaCliMppSentence() {
+  const t = tempoDiscoveryInfo();
+  return t && t.currencies.some((c) => String(c).toLowerCase() === TEMPO_OUSD_ADDRESS.toLowerCase()) ? VISA_CLI_MPP_SENTENCE : "";
 }
 
 /** Ordered MPP offers for one route, as its 402 would list them.

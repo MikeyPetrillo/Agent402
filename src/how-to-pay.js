@@ -19,7 +19,7 @@ import { siteOrgLd } from "./site-org.js";
 import { GUIDE_SITE, GUIDE_SITE_NAME, guideLink } from "./ask402-links.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { RAILS, railKey, x402EvmOnly, liveRails } from "./rails.js";
-import { mppMethodsSummary } from "./mpp-offers.js";
+import { mppMethodsSummary, visaCliMppSentence } from "./mpp-offers.js";
 import { mppOfferGateSentence } from "./mpp-offer-gate.js";
 import { connectorWires } from "./connector-pay.js";
 import { mppFlagshipRows, mppFlagshipSnippet, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
@@ -139,7 +139,8 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
   const mppTable = mppMethodRows.length
     ? table(["method", "pays with", "what you need"], mppMethodRows.join(""))
     : p(`This instance has no MPP method switched on, so its 402s carry the x402 offer only. The hosted service lists the methods it takes in ${link("/.well-known/x402", "/.well-known/x402")} under ${code("mpp")}.`);
-  const mppOrder = mpp.enabled ? `The 402 lists the methods in this order: ${esc(mpp.order.join(", then "))}. A stock mppx client takes the first one it holds a method for.` : "";
+  const visaCli = mpp.tempo ? visaCliMppSentence() : "";
+  const mppOrder = mpp.enabled ? `The 402 lists the methods in this order: ${esc(mpp.order.join(", then "))}. A stock mppx client takes the first one it holds a method for.${visaCli ? ` ${esc(visaCli)}` : ""}` : "";
 
   // ---- card ---------------------------------------------------------------------
   const cardHtml = mpp.stripe

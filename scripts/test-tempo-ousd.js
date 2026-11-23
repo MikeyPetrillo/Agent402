@@ -41,6 +41,24 @@ const USDC_E = "0x20C000000000000000000000b9537d11c60E8b50";
   const tempoOffers = mppOffersFor({ priceUsd: 0.01 }).filter((o) => o.method === "tempo");
   await ok(tempoOffers.map((o) => o.description).join("|") === "USDC.e on Tempo|OUSD on Tempo", `the offers name OUSD, after USDC.e (${tempoOffers.map((o) => o.description).join("|")})`);
   await ok(tempoCurrencyLabel(OUSD.toLowerCase()) === "OUSD" && tempoCurrencyLabel("0xabc") === "0xabc", "the label reads OUSD in any case; an unknown token keeps its address");
+  // The Visa CLI sentence is read from the same offer: said on the MPP
+  // surfaces while a tempo challenge names OUSD, and nowhere otherwise.
+  {
+    const { visaCliMppSentence, VISA_CLI_MPP_SENTENCE } = await import("../src/mpp-offers.js");
+    const { llmsTxt, llmsFullTxt } = await import("../src/seo.js");
+    const { whatIsMppPage } = await import("../src/what-is-mpp.js");
+    const { howToPayPage } = await import("../src/how-to-pay.js");
+    const surfaces = () => ({ "/llms.txt": llmsTxt("https://agent402.example.test", {}), "/llms-full.txt": llmsFullTxt("https://agent402.example.test", {}), "/what-is-mpp": whatIsMppPage("https://agent402.example.test", {}), "/how-to-pay": howToPayPage("https://agent402.example.test", {}) });
+    await ok(VISA_CLI_MPP_SENTENCE === "Agents using Visa CLI can pay over MPP on Tempo." && visaCliMppSentence() === VISA_CLI_MPP_SENTENCE, "with OUSD listed the Visa CLI sentence is said");
+    for (const [path, text] of Object.entries(surfaces())) await ok(text.split(VISA_CLI_MPP_SENTENCE).length === 2, `${path} says it once while OUSD is listed`);
+    process.env.TEMPO_CURRENCY = "usdc,pathusd";
+    await ok(visaCliMppSentence() === "", "without OUSD it is not said");
+    for (const [path, text] of Object.entries(surfaces())) await ok(!/Visa/.test(text), `${path} names no Visa CLI without OUSD`);
+    process.env.TEMPO_CURRENCY = "usdc,ousd";
+    process.env.TEMPO_API_KEY = ""; process.env.TEMPO_RELAY = "";
+    await ok(visaCliMppSentence() === "", "with the tempo method off it is not said");
+    process.env.TEMPO_API_KEY = "stub";
+  }
   process.env.TEMPO_CURRENCY = "ousd";
   await ok(tempo.tempoDiscoveryInfo()?.currency === OUSD, "the name resolves where TEMPO_CURRENCY names OUSD alone");
   for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
