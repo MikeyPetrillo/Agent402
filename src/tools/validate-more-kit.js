@@ -86,6 +86,8 @@ const result = (valid, reason, extra = {}) => ({ valid, reason, ...extra });
 const ID_TYPES = {
   bic: {
     label: "BIC / SWIFT code (ISO 9362)",
+    // How the tool's description names this type (scripts/test-validate-more-kit.js).
+    named: "BIC/SWIFT",
     check(v) {
       if (!/^[A-Z0-9]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(v)) return { format: false, ...result(false, "A BIC is 8 or 11 characters: 4 institution, 2 country letters, 2 location, optional 3 branch") };
       const country = v.slice(4, 6);
@@ -96,6 +98,8 @@ const ID_TYPES = {
   },
   "uk-nino": {
     label: "UK National Insurance number",
+    // How the tool's description names this type (scripts/test-validate-more-kit.js).
+    named: "UK National Insurance number",
     check(v) {
       if (!/^[A-Z]{2}[0-9]{6}[A-Z]?$/.test(v)) return { format: false, ...result(false, "A National Insurance number is 2 letters, 6 digits and a suffix letter A to D") };
       const suffix = v.length === 9 ? v[8] : null;
@@ -108,6 +112,8 @@ const ID_TYPES = {
   },
   "br-cpf": {
     label: "Brazil CPF (individual taxpayer number)",
+    // How the tool's description names this type (scripts/test-validate-more-kit.js).
+    named: "CPF",
     check(v) {
       if (!/^[0-9]{11}$/.test(v)) return { format: false, ...result(false, "A CPF is 11 digits") };
       if (/^(\d)\1{10}$/.test(v)) return { format: true, ...result(false, "A CPF of one repeated digit is not issued") };
@@ -119,6 +125,8 @@ const ID_TYPES = {
   },
   "br-cnpj": {
     label: "Brazil CNPJ (company taxpayer number, numeric or alphanumeric)",
+    // How the tool's description names this type (scripts/test-validate-more-kit.js).
+    named: "CNPJ",
     check(v) {
       if (!/^[0-9A-Z]{12}[0-9]{2}$/.test(v)) return { format: false, ...result(false, "A CNPJ is 14 characters: 12 digits or capital letters, then 2 check digits") };
       if (/^(\d)\1{13}$/.test(v)) return { format: true, ...result(false, "A CNPJ of one repeated digit is not issued") };
@@ -135,6 +143,8 @@ const ID_TYPES = {
   },
   "au-abn": {
     label: "Australian Business Number",
+    // How the tool's description names this type (scripts/test-validate-more-kit.js).
+    named: "Australian ABN",
     check(v) {
       if (!/^[0-9]{11}$/.test(v)) return { format: false, ...result(false, "An ABN is 11 digits") };
       if (v[0] === "0") return { format: true, ...result(false, "An ABN does not start with 0") };
@@ -147,6 +157,8 @@ const ID_TYPES = {
   },
   sedol: {
     label: "SEDOL (London Stock Exchange security code)",
+    // How the tool's description names this type (scripts/test-validate-more-kit.js).
+    named: "SEDOL",
     check(v) {
       if (!/^[0-9BCDFGHJKLMNPQRSTVWXYZ]{6}[0-9]$/.test(v)) return { format: false, ...result(false, "A SEDOL is 7 characters: 6 digits or consonants, then a check digit") };
       const w = [1, 3, 1, 7, 3, 9];
@@ -158,6 +170,8 @@ const ID_TYPES = {
   },
   isin: {
     label: "ISIN (ISO 6166 security identifier)",
+    // How the tool's description names this type (scripts/test-validate-more-kit.js).
+    named: "ISIN",
     check(v) {
       if (!/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(v)) return { format: false, ...result(false, "An ISIN is 12 characters: 2 letters, 9 letters or digits, then a check digit") };
       let digits = "";
@@ -168,6 +182,8 @@ const ID_TYPES = {
   },
   lei: {
     label: "LEI (ISO 17442 legal entity identifier)",
+    // How the tool's description names this type (scripts/test-validate-more-kit.js).
+    named: "LEI",
     check(v) {
       if (!/^[A-Z0-9]{18}[0-9]{2}$/.test(v)) return { format: false, ...result(false, "An LEI is 20 characters: 18 letters or digits, then 2 check digits") };
       if (mod97(v) !== 1) return { format: true, ...result(false, "The ISO 7064 MOD 97-10 check does not match") };
@@ -176,6 +192,8 @@ const ID_TYPES = {
   },
   "no-orgnr": {
     label: "Norwegian organization number",
+    // How the tool's description names this type (scripts/test-validate-more-kit.js).
+    named: "Norwegian organization number",
     check(v) {
       if (!/^[0-9]{9}$/.test(v)) return { format: false, ...result(false, "A Norwegian organization number is 9 digits") };
       const d = digitsOf(v);

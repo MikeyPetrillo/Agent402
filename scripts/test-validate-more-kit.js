@@ -293,5 +293,13 @@ const SIG = "5".repeat(87);
   ok(!/ - /.test(t.description), "solana-rpc's description uses no spaced hyphen as a dash");
 }
 
+// ---- id-validate's description names every type the kit checks -------------
+{
+  const d = tool("id-validate").description;
+  const types = Object.entries(_test.ID_TYPES);
+  const missing = types.filter(([, t]) => typeof t.named !== "string" || !t.named || !d.includes(t.named)).map(([k]) => k);
+  ok(types.length >= 9 && missing.length === 0, `id-validate's description names each of the ${types.length} types it checks (${missing.join(", ") || "all named"})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
