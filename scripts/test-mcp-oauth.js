@@ -390,18 +390,23 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
     }
     ok(codes.every((c) => c === 303 || c === 429), `the flood is answered or refused, never 503 (${[...new Set(codes)].join(",")})`);
     ok(Object.keys(h.stores.reqs.body.reqs || {}).length <= P, "and the pending map stays inside its cap");
-    const fresh = await h.start("2001:db8:77:1::1", await h.client("2001:db8:77:1::1"));
-    ok(fresh.status === 303 && fresh.pageStatus === 200, `a fresh, unrelated sign-in starts after the flood (${fresh.status})`);
-    ok((await h.page(early)).status === 200, "and the unrelated sign-in started before it is kept: the flood's own entries give way first");
+    const fresh = await h.authorize("2001:db8:77:1::1", await h.client("2001:db8:77:1::1"));
+    ok(fresh.status === 303 || fresh.status === 429, `a fresh sign-in after the flood is started or refused, never 503 (${fresh.status})`);
+    ok((await h.page(early)).status === 200, "and the unrelated sign-in started before the flood is kept: no one else's live sign-in is let go");
   } finally { h.close(); }
 }
-// A full map makes room instead of refusing: the last resort is never a 503.
+// A full map never lets go of another requester's live sign-in: a newcomer
+// with nothing to give up is refused (429, never 503); a browser holding a
+// sign-in of its own starts a new one in its place.
 {
   const h = await harness({ table: { pendingMax: 1 } });
   try {
     const c1 = await h.client("198.18.20.1"), c2 = await h.client("198.18.20.2");
-    const a1 = await h.authorize("198.18.20.1", c1), a2 = await h.authorize("198.18.20.2", c2);
-    ok(a1.status === 303 && a2.status === 303, `past the global pending cap a new sign-in still starts (${a1.status}, ${a2.status})`);
+    const first = await h.start("198.18.20.1", c1);
+    const a2 = await h.authorize("198.18.20.2", c2);
+    ok(first.status === 303 && a2.status === 429 && (await h.page(first)).status === 200, `past the global pending cap a newcomer is refused and the live sign-in is kept (${first.status}, ${a2.status})`);
+    const again = await h.start("198.18.20.1", c1, first.cookie);
+    ok(again.status === 303 && again.pageStatus === 200, `a browser holding a pending sign-in starts a new one in its own one's place (${again.status})`);
   } finally { h.close(); }
 }
 
@@ -468,11 +473,39 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
     const client = await h.client("198.18.60.1");
     const send = async (ip, email) => { const s = await h.start(ip, client); const r = await h.post(s, { action: "email", email }); return { status: r.status, html: await r.text() }; };
     const a = await send("198.18.61.1", "one@example.com");
-    const b = await send("198.18.61.2", "one@example.com");
-    ok(a.status === 200 && b.status === 429 && /Too many requests/.test(b.html) && h.sent.length === 1, `a second code to one address in a day is refused (${a.status}, ${b.status})`);
-    await send("198.18.61.3", "two@example.com");
+    const b = await send("198.18.61.1", "One+again@example.com");
+    ok(a.status === 200 && b.status === 429 && /Too many requests/.test(b.html) && h.sent.length === 1, `a second code from one requester to one mailbox in a day is refused, its "+tag" spelling too (${a.status}, ${b.status})`);
+    await send("198.18.61.2", "one@example.com");
     const c = await send("198.18.61.4", "three@example.com");
     ok(c.status === 429 && /Too many requests/.test(c.html) && h.sent.length === 2, `past the service-wide hourly budget a send is refused with the same answer (${c.status}, ${h.sent.length} sent)`);
+  } finally { h.close(); }
+}
+// Strangers asking for codes to someone's address, from networks of their
+// own, spend their own allowances: the owner's own sign-in still gets a code.
+{
+  const L = BASE_TABLE.mcpOAuth;
+  const h = await harness({ table: { sendsGlobalPerHour: 100_000, sendsPerIp: 100_000, sendsPerEmail: 100_000, pendingPerAddress: 1000, pendingPerNetwork: 1000, pendingPerClient: 1000, pendingMax: 100_000, authorizePerIp: 100_000 } });
+  try {
+    const victim = "Victim@Gmail.com";
+    const spellings = ["victim@gmail.com", "v.i.c.t.i.m@gmail.com", "victim+x@googlemail.com", "VICTIM+y@gmail.com"];
+    let strangerSent = 0, strangerRefused = 0;
+    for (let n = 0; n < 4; n++) {
+      const ip = `2001:db8:${70 + n}::1`;
+      const client = await h.client(ip);
+      for (let i = 0; i < L.sendsPerEmailDay + 2; i++) {
+        const s = await h.start(ip, client, null);
+        if (s.status !== 303) break;
+        const before = h.sent.length;
+        const r = await h.post(s, { action: "email", email: spellings[(n + i) % spellings.length] });
+        await r.text();
+        if (h.sent.length > before) strangerSent++; else strangerRefused++;
+      }
+    }
+    ok(strangerRefused > 0, `strangers past their own allowances are refused (${strangerSent} sent, ${strangerRefused} refused)`);
+    const own = await h.start("2001:db8:99::1", await h.client("2001:db8:99::1"));
+    const before = h.sent.length;
+    const r = await h.post(own, { action: "email", email: victim });
+    ok(r.status === 200 && h.sent.length === before + 1 && h.sent.at(-1).to === victim.trim().toLowerCase(), `the owner's own sign-in still receives a code, at the address as typed (${r.status})`);
   } finally { h.close(); }
 }
 useGuardsTable(BASE_TABLE);

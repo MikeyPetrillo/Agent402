@@ -28,6 +28,7 @@
 //
 // No key is needed to manage a balance and no key is ever put in a URL: the
 // page acts on the key id, and a new key is answered once in a POST response.
+import { mailboxKey } from "./mailbox-key.js";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { SKIP_UPDATE } from "./json-document.js";
@@ -223,7 +224,9 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     if (ipLimiter?.check(String(ip || "?")).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
     const email = normEmail(rawEmail);
     if (!validEmail(email)) return { status: 400, message: "Enter your email address." };
-    if (emailLimiter?.check(`e:${digest(email).slice(0, 32)}`).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
+    // Counted per mailbox (src/mailbox-key.js), so "+tag" and dotted
+    // spellings of one inbox share the limit; the link goes to the address typed.
+    if (emailLimiter?.check(`e:${digest(mailboxKey(email)).slice(0, 32)}`).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
     const work = (async () => {
       await sweepQuietly();
       const room = await sendRoom(ip);

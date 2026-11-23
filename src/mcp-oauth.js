@@ -47,6 +47,7 @@
 // and per emailed code, so parallel guesses meet both bounds together and no
 // one else's guesses refuse an email's owner. Thresholds come from the private table;
 // a refusal never says which check refused.
+import { mailboxKey } from "./mailbox-key.js";
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { SKIP_UPDATE } from "./json-document.js";
 import { shared, createMemoryLimits } from "./shared-limits.js";
@@ -420,8 +421,21 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     // "limited" (refused by a limit; no code made), "gone" (no such sign-in)
     // or whether the mail was sent. The service-wide budget is read last, so
     // a send another limit refused does not spend it.
-    if (await locked(ip) || await over("send-ip", netKey(ip), cfg.sendsPerIp()) || await over("send-email", email, cfg.sendsPerEmail())
-      || await over("send-email-day", email, cfg.sendsPerEmailDay(), DAY_MS) || await over("send-global", "all", cfg.sendsGlobalPerHour(), HOUR_MS)) return "limited";
+    // The per-recipient budgets are charged to the mailbox (its "+tag" and
+    // dotted spellings count as one, src/mailbox-key.js) together with the
+    // requester's network, so a stranger spends only its own allowance for an
+    // address it names. The mailbox's day ceiling across requesters holds back
+    // a requester that has sent there before, never one's first send of the
+    // day: the owner's own sign-in always gets a code, whatever others asked.
+    if (await locked(ip) || await over("send-ip", netKey(ip), cfg.sendsPerIp())) return "limited";
+    const mailbox = mailboxKey(email);
+    const mine = `${mailbox}|${netKey(ip)}`;
+    if (await over("send-email", mine, cfg.sendsPerEmail())) return "limited";
+    const mineToday = await add("send-email-day", mine, 1, DAY_MS);
+    if (mineToday > cfg.sendsPerEmailDay()) return "limited";
+    const mailboxToday = await add("send-mailbox-day", mailbox, 1, DAY_MS);
+    if (mineToday > 1 && mailboxToday > cfg.sendsPerEmailDay()) return "limited";
+    if (await over("send-global", "all", cfg.sendsGlobalPerHour(), HOUR_MS)) return "limited";
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
     const set = await requests.change((b) => {
@@ -599,16 +613,14 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
             while (n >= cap && mine.length) { delete b.reqs[mine.shift()[0]]; n--; }
             if (n >= cap) { refused = true; return SKIP_UPDATE; }
           }
-          // A full map refuses no one: the oldest request of the network or
-          // app holding the most goes, so a flood lets go of its own first.
-          while (Object.keys(b.reqs).length >= cfg.pendingMax()) {
-            const counts = new Map();
-            for (const r of Object.values(b.reqs)) for (const g of [`w|${r.wide || r.net}`, `c|${r.clientId}`]) counts.set(g, (counts.get(g) || 0) + 1);
-            let top = null, most = 0;
-            for (const [g, n] of counts) if (n > most) { top = g; most = n; }
-            const first = oldestFirst((r) => `w|${r.wide || r.net}` === top || `c|${r.clientId}` === top)[0];
-            if (!first) break;
-            delete b.reqs[first[0]];
+          // A full map makes room only from requests that have expired or
+          // that this requester holds; another requester's live sign-in is
+          // never let go, and with neither to give up the new one is refused.
+          if (Object.keys(b.reqs).length >= cfg.pendingMax()) {
+            for (const [k, r] of Object.entries(b.reqs)) if (!(r?.exp > t)) delete b.reqs[k];
+            const mineAll = oldestFirst((r) => ownerOf(r) === owner);
+            while (Object.keys(b.reqs).length >= cfg.pendingMax() && mineAll.length) delete b.reqs[mineAll.shift()[0]];
+            if (Object.keys(b.reqs).length >= cfg.pendingMax()) { refused = true; return SKIP_UPDATE; }
           }
           b.reqs[rid] = { clientId, clientName: client.name, redirectUri, challenge: q.code_challenge, state, resource, net, wide, owner, cookie: digest(cookie), at: t, exp: t + cfg.requestTtlMs() };
           return true;

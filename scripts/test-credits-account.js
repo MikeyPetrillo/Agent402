@@ -230,6 +230,16 @@ ok(!/a402_/.test(mail[0].text + mail[0].html), "the sign-in email carries no key
 ok(acct.requestSignIn("not-an-email", "1.1.1.1").status === 400, "a malformed address is refused");
 acct.requestSignIn("k@x.com", "1.1.1.1");
 ok(acct.requestSignIn("k@x.com", "2.2.2.2").status === 429 && acct.requestSignIn("nobody@x.com", "2.2.2.2").status === 200, "requests are limited per address (from any client address)");
+// The limit counts a mailbox, not a spelling: "+tag" and Gmail's dots and
+// googlemail.com reach one inbox, so they share it; mail goes as typed.
+{
+  const { mailboxKey } = await import("../src/mailbox-key.js");
+  ok(mailboxKey(" V.Ictim+news@GoogleMail.com ") === "victim@gmail.com" && mailboxKey("a.b+c@example.com") === "a.b@example.com" && mailboxKey("plain@x.com") === "plain@x.com" && mailboxKey("+only@x.com") === "+only@x.com", "the mailbox key folds +tags, and Gmail's dots and domain");
+  const sentTo = [];
+  const mb = createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async (m) => { sentTo.push(m.to); return true; }, store, ipLimiter: createLimiter(`t-mb-ip-${Math.random()}`, { perMin: 1000, perHour: 1000 }), emailLimiter: createLimiter(`t-mb-e-${Math.random()}`, { perMin: 2, perHour: 6 }), now: () => clock, log: () => {} });
+  const codes = ["victim@gmail.com", "victim+1@gmail.com", "v.ictim@gmail.com", "victim+2@googlemail.com"].map((e, i) => mb.requestSignIn(e, `5.5.5.${i + 1}`).status);
+  ok(codes[0] === 200 && codes[1] === 200 && codes[2] === 429 && codes[3] === 429, `spellings of one mailbox share its limit (${codes.join(",")})`);
+}
 const ipAcct = createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async () => true, store, ipLimiter: createLimiter("t-ip2", { perMin: 2, perHour: 40 }), emailLimiter: createLimiter("t-email2", { perMin: 100, perHour: 100 }), now: () => clock, log: () => {} });
 ipAcct.requestSignIn("a1@x.com", "3.3.3.3"); ipAcct.requestSignIn("a2@x.com", "3.3.3.3");
 ok(ipAcct.requestSignIn("a3@x.com", "3.3.3.3").status === 429, "...and per client address");
