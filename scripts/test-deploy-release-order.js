@@ -139,5 +139,23 @@ ok(clawAt > registryAt && npmAt.every((i) => i < clawAt), "ClawHub runs after ev
   ok(steps.filter((s) => s["continue-on-error"]).length === 1, "the ClawHub step is the only publish step that continues on error");
 }
 
+// The consumer-install audit reads the npm registry and its advisory feed, so
+// it runs in the publish gate only (a release), never in a lane the deploy
+// waits on: a new upstream advisory or an unreadable registry never holds a
+// deploy or a hotfix. Its lane scripts are read too (scripts/ci/lanes/).
+{
+  const AUDIT = "scripts/test-package-audit.js";
+  const where = [];
+  for (const [jn, job] of Object.entries(wf.jobs || {})) {
+    for (const st of job.steps || []) if (String(st.run || "").split("\n").some((l) => !/^\s*#/.test(l) && l.includes(AUDIT))) where.push(jn);
+  }
+  ok(where.length === 1 && where[0] === "publish-gate", `${AUDIT} runs in the publish gate only (${where.join(", ") || "nowhere"})`);
+  const gateIf = String(wf.jobs?.["publish-gate"]?.if || "");
+  ok(/needs\.markers\.outputs\.publish == 'true'/.test(gateIf), "the publish gate runs only on a release (the [publish] marker or a publish dispatch)");
+  const deployNeeds = [].concat(wf.jobs?.deploy?.needs || []);
+  const laneJobs = deployNeeds.filter((n) => n !== "publish-gate" && n !== "publish");
+  ok(laneJobs.every((n) => !where.includes(n)), "no job the deploy needs besides the gate and publish runs the audit");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

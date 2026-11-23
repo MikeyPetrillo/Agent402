@@ -76,6 +76,31 @@ ok(adapterSteps >= 1, `the scan found the adapter step (${adapterSteps})`);
   }
   ok(pkgSteps >= 10 && pipSteps >= 1, `the scan found the package-install steps by what they run (${pkgSteps}, ${pipSteps} pip)`);
 }
+// A step that runs a repository script which installs from the registry (a
+// packed tarball beside third-party packages, or a framework the adapter test
+// installs) blanks every credential the workflow maps from a secret, named
+// or not at its job's level: such a step's env is the one a dependency's code
+// could read, whichever job it moves to.
+{
+  const wfParsed = load(text);
+  const REGISTRY_INSTALL_SCRIPTS = ["scripts/test-package-audit.js", "adapters/eliza/test-runtime.js"];
+  const CREDENTIAL = /KEY|TOKEN|SECRET|COSTS/;
+  const credentialNames = new Set();
+  for (const m of text.matchAll(/^\s+([A-Z0-9_]+): \$\{\{ secrets\.[A-Z0-9_]+/gm)) if (CREDENTIAL.test(m[1])) credentialNames.add(m[1]);
+  ok(credentialNames.has("UPSTREAM_COSTS_JSON") && credentialNames.has("BRAVE_API_KEY"), `the credential scan reads the workflow's secret-mapped names (${credentialNames.size})`);
+  const seen = new Set();
+  for (const [jn, job] of Object.entries(wfParsed.jobs || {})) {
+    for (const st of job.steps || []) {
+      const run = String(st.run || "");
+      const scripts = REGISTRY_INSTALL_SCRIPTS.filter((f) => run.split("\n").some((l) => !/^\s*#/.test(l) && l.includes(f)));
+      if (!scripts.length) continue;
+      scripts.forEach((f) => seen.add(f));
+      const missing = [...credentialNames].filter((k) => String(st.env?.[k] ?? "x") !== "");
+      ok(missing.length === 0, `${jn}: "${String(st.name || "").slice(0, 48)}" (${scripts.join(", ")}) blanks every secret-mapped credential${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
+    }
+  }
+  ok(REGISTRY_INSTALL_SCRIPTS.every((f) => seen.has(f)), `every registry-installing script was found in a step (${[...seen].join(", ")})`);
+}
 ok(checkedSteps >= 10, `the scan found the secretless install steps (${checkedSteps}) - zero would mean it is blind`);
 
 // Package code in a job that holds a deploy-class secret (a job under the

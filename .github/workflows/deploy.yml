@@ -1018,12 +1018,31 @@ jobs:
       # modules were built for the lane's Node (a first cut ran under the
       # openclaw step's Node 24 and the server never answered).
       - name: elizaOS plugin against a REAL elizaOS runtime (latest + beta)
+        # Every secret-mapped credential is blanked: the step installs packages
+        # from the registry (scripts/test-ci-secretless-install.js).
         env:
+          BURNER_KEY: ""
+          POW_SECRET: ""
+          CDP_API_KEY_ID: ""
+          CDP_API_KEY_SECRET: ""
+          ROBINHOOD_FACILITATOR_URL_SECRET: ""
+          SOLANA_BURNER_KEY: ""
+          AGENT_KEY: ""
+          UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
+          SOCKET_API_TOKEN: ""
+          OPEN_METEO_API_KEY: ""
           COINGECKO_API_KEY: ""
+          TEST_PAYER_STELLAR_SECRET: ""
+          CLAWHUB_TOKEN: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          MPP_SECRET_KEY: ""
+          INDEXNOW_KEY: ""
         run: |
           node adapters/eliza/test-runtime.js
           ELIZA_CORE_VERSION=beta node adapters/eliza/test-runtime.js
@@ -1555,14 +1574,6 @@ jobs:
         env:
           SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}
         run: node scripts/socket-check.js
-
-      # Each package the publish job ships is packed, installed from the
-      # tarball into an empty directory (a consumer's install: a package's own
-      # overrides do not apply there) and audited; a high or critical advisory
-      # fails, and so does a README changed since its version was published.
-      - name: Published packages install clean (packed tarball, npm audit --omit=dev, README as published)
-        if: matrix.shard == 1
-        run: node scripts/test-package-audit.js
 
       - name: Offline suites (27 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a4 4
@@ -3686,6 +3697,39 @@ jobs:
           npm ci
           npm --prefix mcp ci
           node mcp/test.js
+      # Each package the publish job ships is packed, installed from the
+      # tarball into an empty directory (a consumer's install: a package's own
+      # overrides do not apply there) and audited; a high or critical advisory
+      # not on scripts/package-audit-accepted.json fails, and so does a README
+      # changed since its version was published. It runs here, on a release
+      # only, so the registry's advisory feed never holds a deploy; an
+      # unreachable registry warns. Every secret-mapped credential is blanked:
+      # it installs from the registry (scripts/test-ci-secretless-install.js).
+      - name: Published packages install clean (packed tarball, npm audit --omit=dev, README as published)
+        env:
+          BURNER_KEY: ""
+          POW_SECRET: ""
+          CDP_API_KEY_ID: ""
+          CDP_API_KEY_SECRET: ""
+          ROBINHOOD_FACILITATOR_URL_SECRET: ""
+          SOLANA_BURNER_KEY: ""
+          AGENT_KEY: ""
+          UPSTREAM_COSTS_JSON: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          SOCKET_API_TOKEN: ""
+          OPEN_METEO_API_KEY: ""
+          COINGECKO_API_KEY: ""
+          TEST_PAYER_STELLAR_SECRET: ""
+          CLAWHUB_TOKEN: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          MPP_SECRET_KEY: ""
+          INDEXNOW_KEY: ""
+        run: node scripts/test-package-audit.js
       - name: MCP package gate (pack → install the tarball → real initialize handshake)
         # mcp/test.js runs from the working tree, so a module missing from
         # package.json's `files` allowlist is invisible to it. That shipped a
