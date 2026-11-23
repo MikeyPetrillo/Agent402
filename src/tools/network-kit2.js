@@ -59,6 +59,8 @@ function pickHost(input, keys = ["domain", "host", "hostname", "url", "email"]) 
 // handler (domain-audit-pro's certificate probe included). No key, or the
 // hour's reads spent: crt.sh alone answers.
 export const CERTSPOTTER_HOURLY_MAX = 100;
+// With crt.sh alone, a failure inside this long is asked once more.
+const CRT_RETRY_WITHIN_MS = 3000;
 const HOUR_MS = 3_600_000;
 const certspotterReads = []; // send times (ms) inside the last hour, oldest first
 export function certspotterKey(env = process.env) {
@@ -150,7 +152,9 @@ async function certTransparencyHandler(body) {
   const HEDGE_MS = 1500;
 
   const csKey = certspotterKey();
-  const crtP = fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(Array.isArray(rows) ? rows : []) }));
+  const crtRead = () => fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(Array.isArray(rows) ? rows : []) }));
+  const crtStarted = Date.now();
+  const crtP = crtRead();
   let csP = null;
   const fireCertspotter = () => (csP ??= takeCertspotterRead()
     ? fetchJson(csUrl, "certspotter", { Authorization: `Bearer ${csKey}` }).then((rows) => ({ source: "certspotter", ...mapCertspotter(Array.isArray(rows) ? rows : []) }))
@@ -164,8 +168,15 @@ async function certTransparencyHandler(body) {
 
   let result, hedgeTimer;
   if (!csKey) {
-    // crt.sh alone: its own failure is the answer's.
-    try { result = await crtP; } catch (err) {
+    // crt.sh alone. A fast upstream failure (its front end answers a backend
+    // failure in well under a second) is asked once more; then its failure is
+    // the answer's.
+    let err = null;
+    try { result = await crtP; } catch (e) { err = e; }
+    if (!result && err?.statusCode === 502 && Date.now() - crtStarted < CRT_RETRY_WITHIN_MS) {
+      try { result = await crtRead(); err = null; } catch (e) { err = e; }
+    }
+    if (!result) {
       if (err?.statusCode) throw err;
       throw bad(err?.name === "AbortError" ? "cert transparency log did not respond - try again later" : `Could not reach a cert transparency log: ${err?.message}`, 502);
     }

@@ -110,6 +110,19 @@ try {
   threw = null;
   try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
   ok(threw?.statusCode === 502 && !csHit, `no key: crt.sh failing is a 502 and certspotter is never asked (${threw?.statusCode}, asked=${csHit})`);
+  let crtCalls = 0;
+  stub((url) => {
+    if (isHost(url, "crt.sh")) return Promise.resolve(++crtCalls === 1 ? errRes(404) : jsonRes(CRT_ROWS));
+    if (url.includes("certspotter")) { csHit = true; return Promise.resolve(jsonRes(CS_ROWS)); }
+    return Promise.reject(new Error("unexpected host"));
+  });
+  r = await tool.handler({ domain: "example.com" });
+  ok(r.source === "crt.sh" && crtCalls === 2 && !csHit, `no key: a fast crt.sh failure is asked once more (${crtCalls} reads)`);
+  crtCalls = 0;
+  stub((url) => { if (isHost(url, "crt.sh")) { crtCalls++; return Promise.resolve(errRes(502)); } csHit = true; return Promise.resolve(jsonRes(CS_ROWS)); });
+  threw = null;
+  try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
+  ok(threw?.statusCode === 502 && crtCalls === 2 && !csHit, `no key: two failures answer 502, never a third read (${crtCalls})`);
   stub((url) => {
     if (isHost(url, "crt.sh")) return new Promise((res) => setTimeout(() => res(jsonRes(CRT_ROWS)), 1700));
     if (url.includes("certspotter")) { csHit = true; return Promise.resolve(jsonRes(CS_ROWS)); }
