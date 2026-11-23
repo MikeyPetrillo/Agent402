@@ -1056,7 +1056,7 @@
     "TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS": "Tempo access key check timeout, in milliseconds.",
     "TEMPO_API_BASE_URL": "Tempo API base URL.",
     "TEMPO_API_KEY": "Turns on the Tempo rail (a credential, set on the host).",
-    "TEMPO_CURRENCY": "Tempo currency.",
+    "TEMPO_CURRENCY": "Comma list of Tempo tokens, one tempo/charge challenge each, in order; an address or a name (usdc = USDC.e, pathusd = PathUSD, ousd = OUSD). Put the token most buyers hold first (usdc,ousd keeps USDC.e first for stock clients).",
     "TEMPO_DATA_API_KEY": "Tempo data API key (a credential, set on the host).",
     "TEMPO_DECIMALS": "Tempo decimals.",
     "TEMPO_EARLY_CONFIRM": "Tempo early confirm.",

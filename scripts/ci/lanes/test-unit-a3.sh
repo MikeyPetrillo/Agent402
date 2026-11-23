@@ -91,6 +91,8 @@ t node scripts/test-render-film-out.js
 t node scripts/test-wallet-sign-in.js
 # Web Bot Auth verification: the RFC 9421 Ed25519 example, draft-shaped signatures and each refusal, bounded directory fetches, never refusing a request; every switch off and on answers pricing, openapi, llms.txt and the identity-bound 402s byte for byte alike (two paid boots, stub facilitator)
 t node scripts/test-web-bot-auth.js
+# Visa CLI Trusted Agent Protocol signatures: a label only (pinned registry, profiles and windows, Content-Digest over the streamed body, single-use nonce, bounded registry reads; a verified request is answered as an unsigned one on a paid boot - offline)
+t node scripts/test-visa-tap.js
 # Configuration reference: every environment variable src/ reads has a purpose line; docs/configuration.md is current (offline)
 t node scripts/test-config-reference.js
 # Debug and test switches are never honored on a production boot (src/test-seams.js; offline)

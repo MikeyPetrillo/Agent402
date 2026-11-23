@@ -30,6 +30,7 @@ paths:
   - "src/facilitator-*.js"
   - "src/stellar-confirm.js"
   - "src/tempo-confirm.js"
+  - "src/tempo-currencies.js"
   - "src/svm-funding-refusal.js"
   - "src/avm-*.js"
   - "src/first-call-allowance.js"
@@ -999,6 +1000,16 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`scripts/test-next-step.js`).
 - **Funnel discovery window:** `FUNNEL_FOUND_WINDOW_MS` (default 21600000, 6 hours; at least 1 minute) is how long the funnel links a caller's last discovery read to its later paid-route calls (`src/funnel-sources.js`).
 - **Funnel discovery cap:** `FUNNEL_FOUND_CAP` (default 50000; at least 100) is the most callers that trail holds, in memory per replica, keyed on a per-process hash of the address.
+- **Tempo currencies:** `src/tempo-currencies.js` holds the Tempo dollar tokens (USDC.e, PathUSD,
+  OUSD: six decimals, the same address on mainnet 4217 and testnet 42431) and the names
+  `TEMPO_CURRENCY` takes for them (`usdc`, `pathusd`, `ousd`). One tempo/charge challenge per entry,
+  in order, and a stock mppx client pays the first, so production lists USDC.e first and OUSD after
+  it (`TEMPO_CURRENCY=usdc,ousd`, plus any other entry it keeps); a buyer that holds OUSD picks the
+  OUSD challenge wherever it sits. The gate takes only a listed currency. The offers label, the
+  dollar readers (`src/price-usd.js` by address only, since the ticker OUSD also names an 18-decimal
+  token elsewhere; `src/sanctions-screen.js`) and the /revenue Tempo row read the same list. A
+  refund goes out in the paid token and pays its fee in it (`scripts/refund-run.js`), so the Tempo
+  refund wallet holds OUSD before an OUSD sale can be refunded (`scripts/test-tempo-ousd.js`).
 - **Tempo gas sponsorship (per call):** `src/tempo-charge-sponsor.js`, off unless
   `TEMPO_GAS_SPONSORSHIP=on`. Decided when the 402's tempo challenge is minted (a sponsored
   challenge carries `methodDetails.feePayer: true`), never at settlement: a sponsored credential

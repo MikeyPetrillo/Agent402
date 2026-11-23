@@ -118,6 +118,7 @@ import { redactSecrets } from "./tools/redact.js";
 import { withSponsorCeiling, sponsorCeilingWord } from "./tempo-sponsor-ceiling.js";
 import { chargeSponsorReserveUsd, chargeSponsorshipWord } from "./tempo-charge-sponsor.js";
 import { screenAddresses, screenFunding, maskAddress, TEMPO_SCREEN_REFUSED_DETAIL } from "./sanctions-screen.js";
+import { TEMPO_PATH_USD_ADDRESS, resolveTempoCurrency } from "./tempo-currencies.js";
 
 // Tempo mainnet. Same constant mpp-tempo.js pins; a subscription authorization
 // commits to the chain id, so a mismatch is a rejected signature, not a
@@ -127,8 +128,7 @@ export const TEMPO_MAINNET_CHAIN_ID = 4217;
 // purpose: that module's accessors are gated on TEMPO_API_KEY (the relay key),
 // which subscriptions do not need, so importing them would tie this rollout
 // switch to an unrelated credential.
-const PATH_USD_ADDRESS = "0x20c0000000000000000000000000000000000000";
-const USDC_E_ADDRESS = "0x20C000000000000000000000b9537d11c60E8b50";
+const PATH_USD_ADDRESS = TEMPO_PATH_USD_ADDRESS;
 
 // A month is 30 days: mppx's periodUnit enum has no "month" (verified).
 export const PERIOD_COUNT = 30;
@@ -482,8 +482,7 @@ function envRecipient() {
 }
 function envCurrency() {
   const raw = (process.env.TEMPO_CURRENCY || "").split(",").map((s) => s.trim()).filter(Boolean)[0] || PATH_USD_ADDRESS;
-  const c = raw.toLowerCase() === "usdc" ? USDC_E_ADDRESS : raw.toLowerCase() === "pathusd" ? PATH_USD_ADDRESS : raw;
-  return c;
+  return resolveTempoCurrency(raw);
 }
 /**
  * THE GAS SPONSOR, and why this rail cannot run without one.

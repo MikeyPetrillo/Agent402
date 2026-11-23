@@ -340,7 +340,9 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   agents, we read the address of the agent's published key list from the request, fetch that list from the agent's
   own site and check the signature. We count requests by the agent address when the signature checks out, and as
   unverified otherwise, without the address; we keep a signature's one-time value until the signature expires so it
-  is accepted once, and the agent's public keys for up to an hour. A signature is never needed to use the service.</li>
+  is accepted once, and the agent's public keys for up to an hour. For an agent using Visa CLI, whose signature names
+  a key id instead, we look that key id up in Visa's public agent key registry, keep the key for up to a minute, and
+  count the request as a Visa CLI agent when the signature checks out. A signature is never needed to use the service.</li>
 ` : ""}${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can also be bought through a referral link issued by a
   referral network. On those routes the payment is made to the network's payment contract on Base, which pays
   our share to our wallet and pays the reviewer whose link was used; the split is public on chain. When a

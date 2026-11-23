@@ -41,6 +41,7 @@ import { shared, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { parseSdnXml, sdnEvmAddresses, sdnEvmAddressesAsync, loadSdnList, runSliced, sortSteps, storedBodySteps } from "./ofac-sdn.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { envAtLeast as envMs } from "./env-num.js";
+import { TEMPO_DOLLAR_ADDRESSES_LC } from "./tempo-currencies.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -322,9 +323,9 @@ const oneHopKey = () => String(process.env.TEMPO_DATA_API_KEY || "").trim();
 const oneHopBase = () => (process.env.TEMPO_API_BASE_URL || "https://api.tempo.xyz").replace(/\/$/, "");
 const oneHopOff = () => /^(0|off|false|no)$/i.test(String(process.env.SANCTIONS_ONE_HOP || "").trim());
 
-// USD stablecoins valued at face: Tempo's PathUSD and USDC.e by address, and
-// a token the feed names with a USD stablecoin symbol.
-const USD_TOKENS = new Set(["0x20c0000000000000000000000000000000000000", "0x20c000000000000000000000b9537d11c60e8b50"]);
+// USD stablecoins valued at face: Tempo's PathUSD, USDC.e and OUSD by address
+// (src/tempo-currencies.js), and a token the feed names with a USD stablecoin symbol.
+const USD_TOKENS = new Set(TEMPO_DOLLAR_ADDRESSES_LC);
 const USD_SYMBOL_RE = /^(pathusd|usdc(\.e)?|usdt0?|usd[a-z0-9.]{0,8}|[a-z]{1,8}usd)$/i;
 /** The face USD value of one feed transfer, or null when it cannot be valued. Exported for tests. */
 export function transferUsd(t) {

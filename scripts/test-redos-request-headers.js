@@ -103,7 +103,7 @@ function shaped(n) {
 const HEADERS = ["user-agent", "accept", "accept-language", "referer", "origin", "x-forwarded-for", "authorization", "x-payment", "payment-signature", "x-operator-token", "cookie", "if-none-match", "range", "idempotency-key"];
 // Further headers a gate, the connector or the edge code reads; each gets the
 // general shapes.
-const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call", "x-agent402-via-run", "x-agent402-via-grant", "x-agent402-async-run", "signature", "signature-input", "signature-agent", "x-wallet-session"];
+const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call", "x-agent402-via-run", "x-agent402-via-grant", "x-agent402-async-run", "signature", "signature-input", "signature-agent", "content-digest", "x-wallet-session"];
 
 // --- the readers the surfaces do not reach, timed directly --------------------
 // Synchronous functions, so a reading is the time this thread had a core.
@@ -116,6 +116,8 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const compact = await import("../src/payment-required-compact.js");
   // Read only with WEB_BOT_AUTH=on or SIWE_SESSION_SECRET set (off on the boots below).
   const webBotAuth = await import("../src/web-bot-auth.js");
+  const tapMw = webBotAuth.createWebBotAuth({ fetchDirectory: async () => null, fetchRegistryKey: async () => { throw new Error("not read here"); }, note: () => {}, origin: () => ({ authority: "redos.example.test", scheme: "https" }) }).middleware();
+  const TAP_INPUT = `sig2=("@method" "@authority" "@path" "content-digest");created=${Math.floor(Date.now() / 1000)};expires=${Math.floor(Date.now() / 1000) + 60};keyid="${"A".repeat(43)}";alg="ed25519";tag="agent-payer-auth"`;
   const walletSignIn = await import("../src/wallet-sign-in.js");
   const walletSvc = walletSignIn.createWalletSignIn({ env: { SIWE_SESSION_SECRET: "r".repeat(40) }, baseUrl: "https://redos.example.test" });
   const sources = await import("../src/funnel-sources.js");
@@ -150,6 +152,10 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
     "web-bot-auth readSignatureHeaders (signature)": (v) => webBotAuth.readSignatureHeaders({ "signature-input": 'sig1=("@authority");tag="web-bot-auth"', signature: v }),
     "web-bot-auth readSignatureHeaders (signature-agent)": (v) => webBotAuth.readSignatureHeaders({ "signature-input": 'sig1=("@authority");tag="web-bot-auth"', signature: "sig1=:AAAA:", "signature-agent": v }),
     "web-bot-auth check (all three)": (v) => webBotAuth.createWebBotAuth({ fetchDirectory: async () => null, note: () => {} }).check({ headers: { "signature-input": v, signature: v, "signature-agent": v } }),
+    // The Trusted Agent Protocol branch (tags agent-browser-auth, agent-payer-auth): its synchronous half, then the digest compare.
+    "web-bot-auth TAP middleware (signature-input)": (v) => tapMw({ method: "GET", originalUrl: "/", headers: { "signature-input": v, signature: "sig2=:AAAA:" } }, {}, () => {}),
+    "web-bot-auth TAP middleware (signature, signature-agent, content-digest)": (v) => tapMw({ method: "POST", originalUrl: "/", headers: { "signature-input": TAP_INPUT, signature: v, "signature-agent": v, "content-digest": v, "content-length": "1" } }, { once() {} }, () => {}),
+    "web-bot-auth contentDigestMatches (content-digest)": (v) => webBotAuth.contentDigestMatches(v, Buffer.alloc(32)),
     "wallet-sign-in sessionOf (x-wallet-session)": (v) => walletSvc.sessionOf(v),
     "wallet-sign-in sessionHeaderShape (x-wallet-session)": (v) => walletSignIn.sessionHeaderShape(v),
     "returning-wallet walletHintOf (x-agent402-wallet)": (v) => returningWallet.walletHintOf({ headers: { "x-agent402-wallet": v } }),

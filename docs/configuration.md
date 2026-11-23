@@ -164,7 +164,7 @@ holds it.
 | `BASE_NOTIFICATIONS_API_KEY` | Base notifications API key (a credential, set on the host); /health reports only whether it is set. |  | `src/server.js` |
 | `BASE_RPCS` | Base RPC endpoints. |  | `src/leaderboard.js` |
 | `BASE_SEPOLIA_DENIM_ACTIVATION_TIMESTAMP` | Base sepolia denim activation timestamp. |  | `src/chain-block-time.js` |
-| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/price-webhooks.js` and 3 more |
+| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/price-webhooks.js` and 4 more |
 
 ## BAZAAR
 
@@ -1384,7 +1384,7 @@ holds it.
 | `TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS` | Tempo access key check timeout, in milliseconds. |  | `src/mpp-tempo.js` |
 | `TEMPO_API_BASE_URL` | Tempo API base URL. | `https://api.tempo.xyz` | `src/mpp-reconcile.js`, `src/mpp-tempo.js`, `src/sanctions-screen.js` and 1 more |
 | `TEMPO_API_KEY` | Turns on the Tempo rail (a credential, set on the host). |  | `src/mpp-tempo.js` |
-| `TEMPO_CURRENCY` | Tempo currency. |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
+| `TEMPO_CURRENCY` | Comma list of Tempo tokens, one tempo/charge challenge each, in order; an address or a name (usdc = USDC.e, pathusd = PathUSD, ousd = OUSD). Put the token most buyers hold first (usdc,ousd keeps USDC.e first for stock clients). |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_DATA_API_KEY` | Tempo data API key (a credential, set on the host). |  | `src/sanctions-screen.js`, `src/tempo-transfers.js` |
 | `TEMPO_DECIMALS` | Tempo decimals. |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_EARLY_CONFIRM` | Tempo early confirm. |  | `src/server.js` |

@@ -14,7 +14,7 @@ import { GUIDE_SITE_NAME, GUIDE_EXPLAINERS, guideLink } from "./ask402-links.js"
 import { ledgerShell, ledgerFooterCompact, codeBlock, esc } from "./ledger-chrome.js";
 
 import { mppFlagshipRows, mppFlagshipSnippet, mppFlagshipOffersPhrase, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
-import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
+import { mppOfferGateSentenceIfOffered, visaCliMppSentence } from "./mpp-offers.js";
 const STEPS = [
   ["01", "The client requests a paid resource", "A plain HTTP request, no credentials attached. The server answers 402 Payment Required with a WWW-Authenticate: Payment challenge naming the price, the asset, the chain, and a one-time challenge id."],
   ["02", "The client signs and retries", "It signs a payment authorization for exactly that amount with its own wallet key and repeats the identical request, carrying the signed credential in an Authorization: Payment header. The key never leaves the client."],
@@ -72,6 +72,7 @@ export function whatIsMppPage(baseUrl, catalog = null) {
   // Which clients get the x402 offer alone; "" when the gate is off or no MPP
   // challenge is sent.
   const offerGate = mppOfferGateSentenceIfOffered({ code: (x) => x });
+  const visaCli = visaCliMppSentence();
   const faqs = FAQS.map((f) => (f.gated && offerGate ? { ...f, a: `${f.a} ${offerGate}` } : f));
   // Titled for how MPP runs here: the general question ("what is MPP")
   // belongs to the plain-language guide this page links in its opening
@@ -158,7 +159,7 @@ Payment-Receipt: eyJtZXRob2QiOiJldm0i&hellip;
   <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);margin-bottom:12px;">02 / IS IT REAL?</div>
     <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Where MPP settles today.</h2>
-    <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 20px;">Every paid endpoint on <a href="/" style="color:var(--accent-lit);">Agent402.Tools</a> is dual-stack: the same 402 carries an x402 offer <em>and</em> an MPP challenge, and a stock <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel);">mppx</span> client works unmodified.${offerGate ? ` ${esc(offerGate)}` : ""} A real purchase settles over the native MPP wire every day in the service's paid canary. Other x402 sellers advertise MPP as an alternate rail as well.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 20px;">Every paid endpoint on <a href="/" style="color:var(--accent-lit);">Agent402.Tools</a> is dual-stack: the same 402 carries an x402 offer <em>and</em> an MPP challenge, and a stock <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel);">mppx</span> client works unmodified.${offerGate ? ` ${esc(offerGate)}` : ""}${visaCli ? ` ${esc(visaCli)}` : ""} A real purchase settles over the native MPP wire every day in the service's paid canary. Other x402 sellers advertise MPP as an alternate rail as well.</p>
     <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-faint);margin:0;">Reference tooling: <a href="https://github.com/tempoxyz/mpp" rel="noopener" style="color:var(--accent-lit);">tempoxyz/mpp</a> on GitHub. Spec: the Payment auth scheme at <a href="https://paymentauth.org" rel="noopener" style="color:var(--accent-lit);">paymentauth.org</a>.</p>
   </div>
 </section>
