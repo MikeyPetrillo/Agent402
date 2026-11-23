@@ -157,7 +157,8 @@ try {
     const res = await fetch(`${B}/terms`);
     const html = await res.text();
     const clause = (html.match(/<li><b>Prepaid credits:<\/b>([\s\S]*?)<\/li>/) || [])[1] || "";
-    const access = (html.match(/<li>No account\.([\s\S]*?)<\/li>/) || [])[1] || "";
+    // The access line, found by its stable sentence (its opening words follow the switch).
+    const access = (html.match(/<li>((?:(?!<li>)[\s\S])*?Access is by paying per call[\s\S]*?)<\/li>/) || [])[1] || "";
     return { status: res.status, clause, access };
   };
   const OFFERS_CREDITS = /\b(?:are|is) sold\b|\bbuy\b|\bpurchase\b|href="\/credits"/i;
