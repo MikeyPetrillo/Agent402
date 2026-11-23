@@ -26,7 +26,7 @@ import { checkReportGrounding, sanitizeReportProse, cleanSourceTitle, quotedMate
 import { CONTRACT_TOOLS } from "./contract-kit.js";
 import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
 import { testSeamOn } from "../test-seams.js";
-import { attribute, creditAnswers, GOPLUS_ATTRIBUTION } from "../data-attribution.js";
+import { creditAnswers, GOPLUS_ATTRIBUTION } from "../data-attribution.js";
 
 // Keyless control-plane facts the report used to disclaim as "not visible
 // here": GoPlus token_security (honeypot, proxy, mintable, hidden owner, taxes,
@@ -395,10 +395,10 @@ export const TOKEN_RISK_TOOLS = [
 ];
 
 // Every report reads the token-security source (GoPlus), whose API terms ask
-// for attribution by backlink or mention: the description ends with the credit
-// and every answer carries it (src/data-attribution.js). A report is answered
-// only when that read succeeded (the minimum-evidence check above).
-for (const t of TOKEN_RISK_TOOLS) creditAnswers(attribute(t, "goplus"), GOPLUS_ATTRIBUTION);
+// for attribution by backlink or mention: every answer carries the credit with
+// its link (src/data-attribution.js). A report is answered only when that read
+// succeeded (the minimum-evidence check above).
+for (const t of TOKEN_RISK_TOOLS) creditAnswers(t, GOPLUS_ATTRIBUTION);
 
 // Upstream-usage telemetry wrapper: a successful run records its exact spend at
 // the return site; a failed run (thrown >= 400, not charged) is recorded here

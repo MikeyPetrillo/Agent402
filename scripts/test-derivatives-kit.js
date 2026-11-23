@@ -448,12 +448,12 @@ catch (e) {
 }
 mode = "ok";
 
-// Hyperliquid credited on every perp tool's description and answer; the
+// Hyperliquid credited on every perp tool's answers and published example; the
 // options tools (another source) are not.
 {
   const { HYPERLIQUID_ATTRIBUTION } = await import("../src/data-attribution.js");
   for (const t of DERIVATIVES_TOOLS) {
-    if (t.slug.startsWith("perp-")) ok(t.attribution === "hyperliquid" && t.description.endsWith(HYPERLIQUID_ATTRIBUTION) && t.discovery.output.example.credit === HYPERLIQUID_ATTRIBUTION, `${t.slug}: description and example credit Hyperliquid`);
+    if (t.slug.startsWith("perp-")) ok(t.credit === HYPERLIQUID_ATTRIBUTION && t.discovery.output.example.credit === HYPERLIQUID_ATTRIBUTION && !t.description.includes(HYPERLIQUID_ATTRIBUTION), `${t.slug}: answers and example credit Hyperliquid`);
     else ok(t.attribution !== "hyperliquid" && t.credit !== HYPERLIQUID_ATTRIBUTION, `${t.slug}: no Hyperliquid credit (another source)`);
   }
   const out = await h("perp-markets")({ limit: 2 });

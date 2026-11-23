@@ -780,7 +780,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.004",
     description:
-      "Read-only JSON-RPC against Base (network \"base\"; other chains answer 400) - one paid call, no node or API key of your own. Prefer the named reads (block-number, chain-info, block-info, event-logs, erc721-owner, contract-code) for common tasks - they validate inputs and cost less; use this when you need a whitelisted method they do not wrap. Whitelisted methods only: eth_blockNumber, eth_gasPrice, eth_getBalance, eth_getTransactionCount, eth_getBlockByNumber, eth_getTransactionByHash, eth_getTransactionReceipt, eth_call, eth_getCode, eth_getStorageAt, eth_chainId, eth_feeHistory, net_version. Mutating, signing, subscription, and unbounded methods (eth_getLogs) are rejected. Results over 200KB serialized return 413 - narrow the query.",
+      "Read-only JSON-RPC against Base mainnet (network \"base\"), read through Base's own public endpoint; any other chain answers 400 naming Base - one paid call, no node or API key of your own. Prefer the named reads (block-number, chain-info, block-info, event-logs, erc721-owner, contract-code) for common tasks - they validate inputs and cost less; use this when you need a whitelisted method they do not wrap. Whitelisted methods only: eth_blockNumber, eth_gasPrice, eth_getBalance, eth_getTransactionCount, eth_getBlockByNumber, eth_getTransactionByHash, eth_getTransactionReceipt, eth_call, eth_getCode, eth_getStorageAt, eth_chainId, eth_feeHistory, net_version. Mutating, signing, subscription, and unbounded methods (eth_getLogs) are rejected. Results over 200KB serialized return 413 - narrow the query.",
     tags: ["crypto", "rpc", "json-rpc", "evm", "base"],
     discovery: {
       bodyType: "json",

@@ -433,7 +433,7 @@ ok(Object.keys(NEWS_SOURCES).length >= 5 && Object.keys(NEWS_SOURCES).length <= 
     ok(live.credit === HYPERLIQUID_ATTRIBUTION, `pulse handler: the answer credits Hyperliquid (${live.credit})`);
     for (const slug of ["crypto-indicators", "crypto-market-pulse"]) {
       const t = CRYPTO_SIGNALS_TOOLS.find((x) => x.slug === slug);
-      ok(t.attribution === "hyperliquid" && t.description.endsWith(HYPERLIQUID_ATTRIBUTION) && t.discovery.output.example.credit === HYPERLIQUID_ATTRIBUTION, `${slug}: description and example credit Hyperliquid`);
+      ok(t.credit === HYPERLIQUID_ATTRIBUTION && t.discovery.output.example.credit === HYPERLIQUID_ATTRIBUTION, `${slug}: answers and example credit Hyperliquid`);
     }
     ok(!CRYPTO_SIGNALS_TOOLS.find((x) => x.slug === "crypto-news").credit, "crypto-news: no Hyperliquid credit");
   }

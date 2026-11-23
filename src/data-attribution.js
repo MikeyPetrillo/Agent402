@@ -92,12 +92,13 @@ export const CAMS_C3S_ATTRIBUTION = "Contains modified Copernicus CAMS and C3S i
 // Hyperliquid's info API and Sourcify (verified source and its signature
 // database) are public services for builders, credited by name and link
 // (src/tools/onchain-identity-kit.js, solana-intel-kit.js, derivatives-kit.js,
-// contract-kit.js). A tool served wholly from one of them carries the key
-// (its description ends with the sentence) and the sentence as `credit` on
-// every answer; a tool that reads one as a leg, or whose answer another
-// source can serve in its place (Sourcify's verified source and signature
-// database, each with a fallback), carries the sentence in `credit` on the
-// answers that source served (addCredit), and has no key here.
+// contract-kit.js). Each is credited on the answers it serves, in the `credit`
+// field: every answer of a tool served wholly from one of them
+// (creditAnswers), and, for a tool that reads one as a leg or whose answer
+// another source can serve in its place, the answers that source served
+// (addCredit). They have no key in ATTRIBUTIONS: a tool's catalog text and
+// its listing are unchanged, and the 402 sample is read without the field
+// (withoutAnswerOnlyFields below).
 export const GOPLUS_ATTRIBUTION = "Powered by GoPlus Security (https://gopluslabs.io).";
 export const EAS_ATTRIBUTION = "Indexed by EASSCAN (https://easscan.org).";
 export const RUGCHECK_ATTRIBUTION = "Data from RugCheck (https://rugcheck.xyz).";
@@ -120,10 +121,6 @@ export const ATTRIBUTIONS = Object.freeze({
   geonames: GEONAMES_ATTRIBUTION,
   nager: NAGER_ATTRIBUTION,
   fema: FEMA_NOTICE,
-  goplus: GOPLUS_ATTRIBUTION,
-  eas: EAS_ATTRIBUTION,
-  rugcheck: RUGCHECK_ATTRIBUTION,
-  hyperliquid: HYPERLIQUID_ATTRIBUTION,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */
@@ -291,5 +288,28 @@ export function withoutLicenseFields(example) {
   if (!isPlainAnswer(example)) return example;
   const sets = [OPEN_METEO_LICENSE_FIELDS, OPEN_METEO_PLACE_LICENSE_FIELDS];
   const drop = new Set(Object.keys(example).filter((k) => sets.some((f) => Object.hasOwn(f, k) && example[k] === f[k])));
+  return drop.size ? Object.fromEntries(Object.entries(example).filter(([k]) => !drop.has(k))) : example;
+}
+
+// The chain and crypto source credits above and the license fields of
+// verified source files (contract-source): the same on every answer that
+// carries them, and in /openapi.json's example. The 402 sample is read
+// without them (withoutAnswerOnlyFields), so they never take room from the
+// listing's description or the answer's own fields.
+export const SOURCE_LICENSE_NOTE = "Each file is its authors' work, under the license its SPDX-License-Identifier states (licenses, by file; null where a file states none). Reuse of a file follows its license.";
+const ANSWER_ONLY_CREDITS = Object.freeze([GOPLUS_ATTRIBUTION, EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION]);
+
+/** `example` without a `credit` made only of the credits above, and without
+ *  the source license fields (the note and the per-file map beside it).
+ *  Anything else is returned as it is. */
+export function withoutAnswerOnlyFields(example) {
+  if (!isPlainAnswer(example)) return example;
+  const drop = new Set();
+  if (typeof example.credit === "string") {
+    let rest = example.credit;
+    for (const t of ANSWER_ONLY_CREDITS) rest = rest.split(t).join(" ");
+    if (!rest.trim()) drop.add("credit");
+  }
+  if (example.licenseNote === SOURCE_LICENSE_NOTE) { drop.add("licenseNote"); drop.add("licenses"); }
   return drop.size ? Object.fromEntries(Object.entries(example).filter(([k]) => !drop.has(k))) : example;
 }

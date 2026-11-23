@@ -17,7 +17,7 @@ import sha3 from "js-sha3"; // CommonJS — default import, then destructure
 const { keccak256 } = sha3;
 import { ssrfDispatcher } from "./fetch-guard.js";
 import { publicJsonRpc, pickNetwork } from "./chain-kit.js";
-import { SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION } from "../data-attribution.js";
+import { SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, SOURCE_LICENSE_NOTE } from "../data-attribution.js";
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
@@ -181,7 +181,7 @@ export function spdxLicenseOf(content) {
 export function sourceLicenses(sources) {
   return Object.fromEntries(Object.entries(sources || {}).map(([path, content]) => [path, spdxLicenseOf(content)]));
 }
-export const LICENSE_NOTE = "Each file is its authors' work, under the license its SPDX-License-Identifier states (licenses, by file; null where a file states none). Reuse of a file follows its license.";
+export const LICENSE_NOTE = SOURCE_LICENSE_NOTE;
 
 // Derive the human-readable signature lists contract-abi returns from a raw
 // ABI array — same derivation for both providers.
@@ -805,7 +805,7 @@ export const CONTRACT_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Decode EVM smart-contract transaction calldata into the function name and typed parameters. Supply an ABI (from /api/contract-abi) or a signature like transfer(address,uint256) for a fully offline decode; with neither, the 4-byte selector is resolved via Sourcify's signature database (4byte.directory fallback) and each candidate signature is tried. Unknown selectors return a documented partial decode (selector + raw 32-byte words) instead of an error.",
+      "Decode EVM smart-contract transaction calldata into the function name and typed parameters. Supply an ABI (from /api/contract-abi) or a signature like transfer(address,uint256) for a fully offline decode; with neither, the 4-byte selector is resolved via the Sourcify 4byte signature database (4byte.directory fallback) and each candidate signature is tried. Unknown selectors return a documented partial decode (selector + raw 32-byte words) instead of an error.",
     tags: ["crypto", "calldata", "decode", "abi", "selector", "evm", "transaction", "smart-contract"],
     discovery: {
       bodyType: "json",
@@ -921,7 +921,7 @@ export const CONTRACT_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Resolve a 4-byte function selector or a 32-byte event topic hash to its known human-readable Solidity signatures, via Sourcify's signature database with 4byte.directory as fallback. Unknown selectors return {found:false} with an empty list, not an error.",
+      "Resolve a 4-byte function selector or a 32-byte event topic hash to its known human-readable Solidity signatures, via the Sourcify 4byte signature database with 4byte.directory as fallback. Unknown selectors return {found:false} with an empty list, not an error.",
     tags: ["crypto", "selector", "4byte", "signature", "event", "topic", "evm", "smart-contract", "solidity"],
     discovery: {
       bodyType: "json",

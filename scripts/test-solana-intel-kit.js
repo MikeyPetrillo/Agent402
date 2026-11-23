@@ -687,12 +687,11 @@ ok(jupiterHeaders("https://api.jup.ag/price/v3?ids=x", kenv)["x-api-key"] === "k
 ok(!jupiterHeaders("https://api.rugcheck.xyz/v1/x", kenv)["x-api-key"] && !jupiterHeaders("https://api.jup.ag.evil.example/x", kenv)["x-api-key"], "Jupiter: the key never goes to another host, including a lookalike");
 ok(Object.keys(jupiterHeaders("https://lite-api.jup.ag/price/v3", {})).length === 0, "Jupiter: no key configured, no header");
 
-// RugCheck credit on the catalog: the two read from it alone end their
-// description with it; the safety read keeps Jupiter's sentence there; all
-// three examples carry it.
+// RugCheck credit: on the answers and the published examples; the catalog
+// text is unchanged (sol-token-safety keeps Jupiter's sentence there).
 for (const slug of ["sol-token-report", "sol-token-holders"]) {
   const t = SOLANA_INTEL_TOOLS.find((x) => x.slug === slug);
-  ok(t.attribution === "rugcheck" && t.description.endsWith(RUGCHECK_ATTRIBUTION), `${slug}: description ends with the RugCheck credit`);
+  ok(t.credit === RUGCHECK_ATTRIBUTION && !t.description.includes(RUGCHECK_ATTRIBUTION), `${slug}: answers carry the RugCheck credit, the catalog text is unchanged`);
 }
 {
   const t = SOLANA_INTEL_TOOLS.find((x) => x.slug === "sol-token-safety");
