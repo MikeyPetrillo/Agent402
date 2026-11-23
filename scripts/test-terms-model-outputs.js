@@ -27,7 +27,11 @@ for (const variant of ["off", "on"]) {
   ok(/don't present AI output as made by a person/.test(sec) && /Synthetic speech[^.]*must always be disclosed as AI-generated/.test(sec), `${variant}: AI output is never presented as human-made, and synthetic speech is always disclosed`);
   ok(/advice that requires a professional license/.test(sec), `${variant}: no licensed professional advice built on outputs`);
   const gw = /<li><b>AI gateway:<\/b>([\s\S]*?)<\/li>/.exec(html)?.[1] || "";
-  ok(/our gateway service/.test(gw) && /route each call/.test(gw) && /fall back/.test(gw) && /meter the call/.test(gw) && !/proxy/.test(gw), `${variant}: the gateway bullet describes the routes as our service`);
+  ok(/our gateway service/.test(gw) && /priced before it runs/.test(gw) && !/proxy/.test(gw), `${variant}: the gateway bullet describes the routes as our service`);
+  // Fallback is a chat-tier behavior (src/gateway-product-copy.js); embeddings
+  // run the model the request names. The bullet scopes both.
+  const fb = gw.match(/[^.;]*fall(?:s)? back[^.;]*/g) || [];
+  ok(fb.length > 0 && fb.every((c) => /chat tier/.test(c)) && /embeddings[^.;]*the model the request names/.test(gw) && !/fall back to another when one fails, and meter/.test(gw), `${variant}: the bullet scopes fallback to the chat tiers and names the embeddings model accurately (${fb.join(" | ")})`);
   ok(!/—/.test(sec + gw), `${variant}: no em dash`);
 }
 for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
