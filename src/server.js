@@ -3760,6 +3760,8 @@ try {
     credits: _credits, account: _creditsAccount, baseUrl: BASE_URL, sendEmail: faSendEmail,
     secret: acct,
     store: createCreditsAccountStore({ name: "mcp-oauth", file: joinPath(_credits._dir, "_mcp-oauth.json"), log: () => {} }),
+    clientStore: createCreditsAccountStore({ name: "mcp-oauth-clients", file: joinPath(_credits._dir, "_mcp-oauth-clients.json"), log: () => {} }),
+    requestStore: createCreditsAccountStore({ name: "mcp-oauth-requests", file: joinPath(_credits._dir, "_mcp-oauth-requests.json"), log: () => {} }),
   }) : null;
 } catch (e) { console.warn("[mcp-oauth] init failed:", String(e?.message || e).slice(0, 200)); _mcpOAuth = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report

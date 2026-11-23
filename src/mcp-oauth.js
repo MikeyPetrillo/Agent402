@@ -28,12 +28,22 @@
 // connector that asks for sign-in (401 without a token), for apps that only
 // start a sign-in when the server asks for one.
 //
-// State: one document (src/json-document.js; a row in the state database,
-// updated by compare-and-swap so replicas never drop each other's writes).
+// State: three documents (src/json-document.js; each a row in the state
+// database, updated by compare-and-swap so replicas never drop each other's
+// writes), one per kind, so no kind anyone can add to fills another: the
+// registered apps (each document held to a size cap; a registration past it
+// lets go of the oldest app that never signed anyone in), the pending
+// sign-ins (capped per client address and per app, each letting go of its
+// own oldest, with a service-wide cap as the last resort), and the grants
+// with their codes and tokens (made only by a person signed in by email).
+// An app that never completed a sign-in is let go after a short idle.
+// Tokens carry a tag keyed by this server, so a made-up token is refused
+// without a store read, and one found bad is held as bad for a short while.
 // Limits: counters in the shared store (src/shared-limits.js), each falling
 // back to this process's own count when the shared store does not answer.
-// Thresholds come from the environment (see docs/configuration.md); a
-// refusal never says which check refused.
+// A wrong email code is counted before it is compared, so parallel guesses
+// meet the per-email bound together. Thresholds come from the private table;
+// a refusal never says which check refused.
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { SKIP_UPDATE } from "./json-document.js";
 import { shared, createMemoryLimits } from "./shared-limits.js";
@@ -87,6 +97,11 @@ const cfg = {
   windowMs: () => guard("windowMs"),
   badTokenMax: () => guard("badTokenMax"),
   pendingMax: () => guard("pendingMax"),
+  pendingPerAddress: () => guard("pendingPerAddress"),
+  pendingPerClient: () => guard("pendingPerClient"),
+  sendsGlobalPerHour: () => guard("sendsGlobalPerHour"),
+  sendsPerEmailDay: () => guard("sendsPerEmailDay"),
+  unusedClientIdleMs: () => guard("unusedClientIdleMs"),
   documentMaxBytes: () => guard("documentMaxBytes"),
 };
 // A client address is counted by its limiter key (an IPv6 address by its /64).
@@ -97,6 +112,13 @@ const CLIENT_IDLE_MS = 30 * 86_400_000;
 const REVOKED_KEEP_MS = CONNECTED_APP_KEEP_DAYS * 86_400_000;
 const TOUCH_MS = 5 * 60_000;
 const ACCESS_CACHE_MS = 15_000;
+const BAD_CACHE_MS = 60_000;
+const BAD_CACHE_MAX = 5_000;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+// A token: its prefix, 24 random bytes and a tag of 8 bytes keyed by this
+// server (base64url: 32 + 11 characters, the 43 TOKEN_RE reads).
+const TOKEN_BODY = 32;
 
 const digest = (s) => createHash("sha256").update(String(s)).digest("hex");
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
@@ -146,10 +168,12 @@ export function buildCodeEmail({ code, appName }) {
  * @param {object} d
  * @param {object} d.credits   createCredits() (balancesForEmail, createCheckout, claim, sessionOwner, grantSpentToday)
  * @param {object} d.account   createCreditsAccount() (sessionEmail), for the balance page's list
- * @param {object} d.store     a json-document for clients, requests, grants and tokens
+ * @param {object} d.store          a json-document for grants, their codes and tokens
+ * @param {object} [d.clientStore]  a json-document for registered apps (default: d.store)
+ * @param {object} [d.requestStore] a json-document for pending sign-ins (default: d.store)
  * @param {Buffer|string} d.secret
  */
-export function createMcpOAuth({ credits, account = null, store, secret, baseUrl, sendEmail, limits = shared, now = () => Date.now(), log = console.log }) {
+export function createMcpOAuth({ credits, account = null, store, clientStore = null, requestStore = null, secret, baseUrl, sendEmail, limits = shared, now = () => Date.now(), log = console.log }) {
   const local = createMemoryLimits({ keyCap: 20_000 });
   // Its own key, derived from the one handed in, so no other surface's token verifies here.
   const own = secret ? createHmac("sha256", secret).update("mcp-oauth").digest() : null;
@@ -161,61 +185,106 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
   const waiting = () => mcpOAuthSwitch() && creditsSalesSwitch() && !creditsSalesEnabled();
 
   // ---- limits: one hit on a shared fixed-window counter (local on a miss) ----
-  async function over(name, key, limit, windowMs = cfg.windowMs()) {
+  async function add(name, key, delta, windowMs) {
     const k = digest(`${name}|${key}`).slice(0, 40);
-    let r = await limits.counterAdd(`mcpo-${name}`, k, 1, windowMs).catch(() => ({ ok: false }));
-    if (!r?.ok) r = await local.counterAdd(`mcpo-${name}`, k, 1, windowMs);
-    return Number(r.value) > limit;
+    let r = await limits.counterAdd(`mcpo-${name}`, k, delta, windowMs).catch(() => ({ ok: false }));
+    if (!r?.ok) r = await local.counterAdd(`mcpo-${name}`, k, delta, windowMs);
+    return Number(r.value) || 0;
   }
+  const over = async (name, key, limit, windowMs = cfg.windowMs()) => (await add(name, key, 1, windowMs)) > limit;
   async function locked(email) {
     const k = digest(`lock|${email}`).slice(0, 40);
     let r = await limits.counterGet("mcpo-fails", k).catch(() => ({ ok: false }));
     if (!r?.ok) r = await local.counterGet("mcpo-fails", k);
     return Number(r.value) >= cfg.failsPerEmail();
   }
-  async function noteFail(email) {
-    const k = digest(`lock|${email}`).slice(0, 40);
-    const r = await limits.counterAdd("mcpo-fails", k, 1, cfg.lockoutMs()).catch(() => ({ ok: false }));
-    if (!r?.ok) await local.counterAdd("mcpo-fails", k, 1, cfg.lockoutMs());
-  }
+  // A code attempt is counted BEFORE the code is compared, on one shared
+  // counter: parallel attempts each take a number, and an attempt numbered
+  // past the bound is refused without a comparison. A right code gives its
+  // number back, so signing in never counts toward a lockout.
+  const takeAttempt = async (email) => (await add("fails", `lock|${email}`, 1, cfg.lockoutMs())) <= cfg.failsPerEmail();
+  const giveBack = (email) => add("fails", `lock|${email}`, -1, cfg.lockoutMs()).catch(() => {});
 
-  // ---- the store -------------------------------------------------------------
-  const shape = (b) => {
-    const o = b && typeof b === "object" ? b : {};
-    for (const k of ["clients", "reqs", "codes", "grants", "tokens"]) if (!o[k] || typeof o[k] !== "object") o[k] = {};
-    return o;
-  };
-  const prune = (b, t) => {
-    for (const [k, r] of Object.entries(b.reqs)) if (!(r.exp > t)) delete b.reqs[k];
+  // ---- the stores: one document per kind ----------------------------------------
+  const unavailable = () => Object.assign(new Error("connector sign-in store unavailable"), { statusCode: 503 });
+  const FULL = Symbol("full");
+  const bytes = (b, keys) => Buffer.byteLength(JSON.stringify(keys.map((k) => b[k])));
+  // `keys`: the top-level maps this kind owns (a shared document keeps the
+  // other kinds' maps as they are). `prune`: drops what has lapsed. A change
+  // marked `grows` is refused (503) when this kind would pass its size cap.
+  function kind(st, keys, prune) {
+    const shape = (raw) => {
+      const o = raw && typeof raw === "object" ? raw : {};
+      for (const k of keys) if (!o[k] || typeof o[k] !== "object") o[k] = {};
+      return o;
+    };
+    return {
+      async view() {
+        const r = await st.read();
+        if (!r?.ok) throw unavailable();
+        return shape(r.body);
+      },
+      async change(fn, { grows = false } = {}) {
+        let out;
+        const r = await st.update((raw) => {
+          const b = prune(shape(raw), now());
+          const v = fn(b);
+          if (v === SKIP_UPDATE) { out = undefined; return SKIP_UPDATE; }
+          if (v === FULL) { out = FULL; return SKIP_UPDATE; }
+          if (grows && bytes(b, keys) > cfg.documentMaxBytes()) { out = FULL; return SKIP_UPDATE; }
+          out = v;
+          return b;
+        }, { fallback: {} });
+        if (!r?.ok || out === FULL) throw unavailable();
+        return out;
+      },
+    };
+  }
+  const lastSeen = (c) => Math.max(Number(c.at) || 0, Number(c.usedAt) || 0, Number(c.doneAt) || 0);
+  // An app that never completed a sign-in is let go after a short idle (never
+  // while a sign-in it started could still finish); one that did, after the
+  // longest a refresh token could still be presented.
+  const clientIdleOut = (c, t) => t - lastSeen(c) > (c.doneAt ? Math.max(CLIENT_IDLE_MS, cfg.refreshTtlMs() + DAY_MS) : Math.max(cfg.unusedClientIdleMs(), cfg.requestTtlMs()));
+  const clients = kind(clientStore || store, ["clients"], (b, t) => {
+    for (const [k, c] of Object.entries(b.clients)) if (!c || clientIdleOut(c, t)) delete b.clients[k];
+    return b;
+  });
+  const requests = kind(requestStore || store, ["reqs"], (b, t) => {
+    for (const [k, r] of Object.entries(b.reqs)) if (!(r?.exp > t)) delete b.reqs[k];
+    return b;
+  });
+  const grantsKind = kind(store, ["codes", "grants", "tokens"], (b, t) => {
     for (const [k, c] of Object.entries(b.codes)) if (!(c.exp > t - 600_000)) delete b.codes[k];
     for (const [k, x] of Object.entries(b.tokens)) if (!(x.exp > t) || !b.grants[x.g] || b.grants[x.g].revokedAt) delete b.tokens[k];
     for (const [k, g] of Object.entries(b.grants)) if (g.revokedAt && t - Date.parse(g.revokedAt) > REVOKED_KEEP_MS) delete b.grants[k];
-    const inUse = new Set(Object.values(b.grants).filter((g) => !g.revokedAt).map((g) => g.clientId));
-    for (const [k, c] of Object.entries(b.clients)) if (!inUse.has(k) && t - (Number(c.usedAt) || Number(c.at) || 0) > CLIENT_IDLE_MS) delete b.clients[k];
     return b;
+  });
+  const change = (fn, opts) => grantsKind.change(fn, opts);
+  const view = () => grantsKind.view();
+  // An app's last use, written at most once per TOUCH_MS (`done`: it completed a sign-in).
+  const touchClient = (clientId, { done = false } = {}) => clients.change((b) => {
+    const c = b.clients[clientId];
+    if (!c) return SKIP_UPDATE;
+    const t = now();
+    if (!(done && !c.doneAt) && t - (Number(c.usedAt) || 0) < TOUCH_MS) return SKIP_UPDATE;
+    c.usedAt = t;
+    if (done && !c.doneAt) c.doneAt = t;
+    return true;
+  }).catch(() => { /* the last-use time is advisory */ });
+
+  // ---- tokens: a tag keyed by this server, checked before any store read ----
+  const tagOf = (prefix, body) => mac("token", `${prefix}${body}`).slice(0, 43 - TOKEN_BODY);
+  const mint = (prefix) => { const body = b64url(randomBytes(24)); return `${prefix}${body}${tagOf(prefix, body)}`; };
+  const minted = (tok) => {
+    if (typeof tok !== "string" || !TOKEN_RE.test(tok)) return false;
+    const prefix = tok.slice(0, ACCESS_PREFIX.length), body = tok.slice(prefix.length, prefix.length + TOKEN_BODY);
+    return sameBytes(tok.slice(prefix.length + TOKEN_BODY), tagOf(prefix, body));
   };
-  // `grows`: a change that adds a record (a client, a pending request) is
-  // refused (503) once the document would pass its size cap.
-  const FULL = Symbol("full");
-  async function change(fn, { grows = false } = {}) {
-    let out;
-    const r = await store.update((raw) => {
-      const b = prune(shape(raw), now());
-      const v = fn(b);
-      if (v === SKIP_UPDATE) { out = undefined; return SKIP_UPDATE; }
-      if (v === FULL) { out = FULL; return SKIP_UPDATE; }
-      if (grows && Buffer.byteLength(JSON.stringify(b)) > cfg.documentMaxBytes()) { out = FULL; return SKIP_UPDATE; }
-      out = v;
-      return b;
-    }, { fallback: {} });
-    if (!r?.ok || out === FULL) throw Object.assign(new Error("connector sign-in store unavailable"), { statusCode: 503 });
-    return out;
-  }
-  async function view() {
-    const r = await store.read();
-    if (!r?.ok) throw Object.assign(new Error("connector sign-in store unavailable"), { statusCode: 503 });
-    return shape(r.body);
-  }
+  // Digests of tokens found bad (not on file, expired, revoked), held briefly
+  // so the same bad token is not read from the store again and again.
+  const badCache = new Map();
+  const heldBad = (key, t) => { const u = badCache.get(key); if (u && u > t) return true; if (u) badCache.delete(key); return false; };
+  const holdBad = (key, t) => { badCache.delete(key); badCache.set(key, t + BAD_CACHE_MS); while (badCache.size > BAD_CACHE_MAX) badCache.delete(badCache.keys().next().value); };
 
   // A verified access token's grant, kept briefly in this process (a revoke
   // here clears it; another replica's revoke is seen within ACCESS_CACHE_MS).
@@ -226,8 +295,8 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
 
   function issueTokens(b, gid, fam) {
     const t = now();
-    const access = `${ACCESS_PREFIX}${b64url(randomBytes(32))}`;
-    const refresh = `${REFRESH_PREFIX}${b64url(randomBytes(32))}`;
+    const access = mint(ACCESS_PREFIX);
+    const refresh = mint(REFRESH_PREFIX);
     b.tokens[digest(access)] = { g: gid, k: "a", exp: t + cfg.accessTtlMs() };
     b.tokens[digest(refresh)] = { g: gid, k: "r", exp: t + cfg.refreshTtlMs(), fam };
     return { access_token: access, token_type: "Bearer", expires_in: Math.floor(cfg.accessTtlMs() / 1000), refresh_token: refresh, scope: SCOPE };
@@ -246,25 +315,26 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
   async function resolveBearer(req) {
     const tok = bearerShape(req.headers?.authorization);
     if (tok === null) return null;
-    if (!tok) return { invalid: true };
+    // A failed lookup is counted per client address, and past the bound it
+    // is answered 429. A token that fails the tag check, or that was found
+    // bad a moment ago, is refused here without a store read; a valid token
+    // passes both and is never refused by this count.
+    const bad = async () => {
+      const over = await add("bearer-bad", `bad|${netKey(req.ip)}`, 1, cfg.windowMs()) > cfg.badTokenMax();
+      return over ? { invalid: true, busy: true } : { invalid: true };
+    };
+    if (!tok || !minted(tok)) return bad();
     const key = digest(tok);
     const hit = accessCache.get(key);
     const t = now();
     if (hit && hit.until > t && hit.exp > t) return { grant: hit.grant };
     accessCache.delete(key);
+    if (heldBad(key, t)) return bad();
     let b;
     try { b = await view(); } catch { return { unavailable: true }; }
     const x = b.tokens[key];
     const g = x && x.k === "a" && x.exp > t ? b.grants[x.g] : null;
-    if (!g || g.revokedAt) {
-      // Every token is looked up; only a failed lookup is counted, and a
-      // client address past the bound gets its failed lookups answered 429
-      // (a valid token is never refused here).
-      const ipKey = digest(`bad|${netKey(req.ip)}`).slice(0, 40);
-      let r = await limits.counterAdd("mcpo-bearer-bad", ipKey, 1, cfg.windowMs()).catch(() => ({ ok: false }));
-      if (!r?.ok) r = await local.counterAdd("mcpo-bearer-bad", ipKey, 1, cfg.windowMs());
-      return Number(r.value) > cfg.badTokenMax() ? { invalid: true, busy: true } : { invalid: true };
-    }
+    if (!g || g.revokedAt) { holdBad(key, t); return bad(); }
     const grant = grantView(g, x.g);
     if (accessCache.size > 5000) accessCache.delete(accessCache.keys().next().value);
     accessCache.set(key, { until: t + ACCESS_CACHE_MS, exp: x.exp, grant });
@@ -313,17 +383,21 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
   async function sendCode(rid, email, ip, appName) {
     // Every address gets a code, as every address gets a sign-in link on the
     // balance page: a purchase is made signed in, so a first purchase starts
-    // here the same way. The answer is the same for every address.
-    if (await over("send-ip", netKey(ip), cfg.sendsPerIp()) || await over("send-email", email, cfg.sendsPerEmail()) || await locked(email)) return false;
+    // here the same way. The answer is the same for every address. Resolves
+    // "limited" (refused by a limit; no code made), "gone" (no such sign-in)
+    // or whether the mail was sent. The service-wide budget is read last, so
+    // a send another limit refused does not spend it.
+    if (await locked(email) || await over("send-ip", netKey(ip), cfg.sendsPerIp()) || await over("send-email", email, cfg.sendsPerEmail())
+      || await over("send-email-day", email, cfg.sendsPerEmailDay(), DAY_MS) || await over("send-global", "all", cfg.sendsGlobalPerHour(), HOUR_MS)) return "limited";
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
-    const set = await change((b) => {
+    const set = await requests.change((b) => {
       const r = b.reqs[rid];
       if (!r) return false;
       r.otp = { h: mac("otp", `${rid}|${email}|${code}`), email, exp: t + cfg.emailCodeTtlMs(), tries: 0 };
       return true;
     });
-    if (!set) return false;
+    if (!set) return "gone";
     const m = buildCodeEmail({ code, appName });
     const sent = await sendEmail({ to: email, subject: headerText(m.subject), html: m.html, text: m.text }).catch(() => false);
     if (!sent) log("[mcp-oauth] a sign-in code email was not sent");
@@ -412,10 +486,23 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       const id = `c_${hex(16)}`;
       const t = now();
       try {
-        await change((s) => {
-          const ids = Object.keys(s.clients);
-          if (ids.length >= CLIENTS_MAX) delete s.clients[ids.sort((x, y) => (s.clients[x].usedAt || s.clients[x].at) - (s.clients[y].usedAt || s.clients[y].at))[0]];
-          s.clients[id] = { name, redirectUris: [...uris], at: t };
+        await clients.change((s) => {
+          // Past the count or the size cap, the apps that never signed anyone
+          // in give way, oldest first; an app that did is never let go here.
+          const rec = { name, redirectUris: [...uris], at: t };
+          const max = cfg.documentMaxBytes();
+          let size = bytes(s, ["clients"]) + Buffer.byteLength(JSON.stringify(id)) + Buffer.byteLength(JSON.stringify(rec)) + 2;
+          let count = Object.keys(s.clients).length + 1;
+          if (size > max || count > CLIENTS_MAX) {
+            const unused = Object.entries(s.clients).filter(([, c]) => !c.doneAt).sort((x, y) => lastSeen(x[1]) - lastSeen(y[1]));
+            for (const [k, c] of unused) {
+              if (size <= max && count <= CLIENTS_MAX) break;
+              size -= Buffer.byteLength(JSON.stringify(k)) + Buffer.byteLength(JSON.stringify(c)) + 2;
+              count--;
+              delete s.clients[k];
+            }
+          }
+          s.clients[id] = rec;
           return true;
         }, { grows: true });
       } catch { return oauthErr(res, 503, "temporarily_unavailable"); }
@@ -429,8 +516,8 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       const q = req.query || {};
       const clientId = str(q.client_id, 40), redirectUri = str(q.redirect_uri, 500);
       let s;
-      try { s = await view(); } catch { return errPage(res, 503, "Sign-in is unavailable", "Try again in a moment."); }
-      const client = clientId && CLIENT_RE.test(clientId) && Object.hasOwn(s.clients, clientId) ? s.clients[clientId] : null;
+      try { s = await clients.view(); } catch { return errPage(res, 503, "Sign-in is unavailable", "Try again in a moment."); }
+      const client = clientId && CLIENT_RE.test(clientId) && Object.hasOwn(s.clients, clientId) && !clientIdleOut(s.clients[clientId], now()) ? s.clients[clientId] : null;
       if (!client) return errPage(res, 400, "Unknown app", "This app is not registered here. Remove the connector and add it again.");
       if (!redirectUri || !client.redirectUris.includes(redirectUri)) return errPage(res, 400, "Unknown return address", "This app asked to return to an address it did not register, so nothing was sent to it.");
       const state = str(q.state, 500);
@@ -447,15 +534,25 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       if (q.resource != null && (!resource || !resources.has(resource))) return bad("invalid_target", "resource must name this server's MCP connector.");
       const rid = hex(16);
       const cookie = b64url(randomBytes(32));
+      // The client address, keyed so the store never holds it.
+      const net = mac("net", netKey(clientIp(req))).slice(0, 22);
       try {
-        // Pending requests are capped: past the cap no new one starts (503).
-        await change((b) => {
+        // Pending requests are capped per client address and per app, each
+        // letting go of its own oldest; past the service-wide cap, which
+        // stays as the last resort, no new one starts (503).
+        await requests.change((b) => {
+          const t = now();
+          const oldestFirst = (pick) => Object.entries(b.reqs).filter(([, r]) => pick(r)).sort((x, y) => (Number(x[1].at) || 0) - (Number(y[1].at) || 0));
+          for (const [pick, cap] of [[(r) => r.net === net, cfg.pendingPerAddress()], [(r) => r.clientId === clientId, cfg.pendingPerClient()]]) {
+            const mine = oldestFirst(pick);
+            while (mine.length >= cap) delete b.reqs[mine.shift()[0]];
+          }
           if (Object.keys(b.reqs).length >= cfg.pendingMax()) return FULL;
-          b.reqs[rid] = { clientId, redirectUri, challenge: q.code_challenge, state, resource, cookie: digest(cookie), at: now(), exp: now() + cfg.requestTtlMs() };
-          if (b.clients[clientId]) b.clients[clientId].usedAt = now();
+          b.reqs[rid] = { clientId, clientName: client.name, redirectUri, challenge: q.code_challenge, state, resource, net, cookie: digest(cookie), at: t, exp: t + cfg.requestTtlMs() };
           return true;
         }, { grows: true });
       } catch { return errPage(res, 503, "Sign-in is unavailable", "Try again in a moment."); }
+      touchClient(clientId);
       res.setHeader("Set-Cookie", cookieOut(cookie, Math.floor(cfg.requestTtlMs() / 1000)));
       noStore(res).redirect(303, `${OAUTH_CONSENT_PATH}?rid=${rid}`);
     });
@@ -465,25 +562,28 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       if (!ID_RE.test(String(rid || ""))) return null;
       const cookie = readCookie(req, OAUTH_COOKIE);
       if (!COOKIE_RE.test(cookie)) return null;
-      const s = await view();
+      const s = await requests.view();
       const r = s.reqs[rid];
       if (!r || !(r.exp > now()) || !sameBytes(r.cookie, digest(cookie))) return null;
-      const client = s.clients[r.clientId];
-      if (!client) return null;
-      return { r, client, cookie };
+      return { r, client: { name: r.clientName || "An app" }, cookie };
     }
-    async function render(res, rid, p, { message = "", error = "", status = 200 } = {}) {
+    async function render(res, rid, p, { message = "", error = "", status = 200, lockedOut = null } = {}) {
       const { r, client, cookie } = p;
       const step = r.email ? "choose" : r.otp && r.otp.exp > now() ? "code" : "email";
+      // A locked email's code form is shown disabled, with a new code offered.
+      const isLocked = step === "code" && (lockedOut ?? await locked(r.otp.email).catch(() => false));
       const balances = r.email ? await credits.balancesForEmail(r.email).catch(() => []) : [];
       const packs = Object.entries(sellablePacks()).map(([id, x]) => ({ id, usd: x.cents / 100 }));
       pageHeaders(res, originOf(r.redirectUri)).status(status).type("html").send(consentPage(baseUrl, {
         step, rid, csrf: csrfOf(rid, cookie), client: { name: client.name, returnHost: hostOf(r.redirectUri) },
-        email: r.email || r.otp?.email || "", balances, packs, salesOn: creditsSalesEnabled(), capUsd: cfg.defaultCapUsd(), capMaxUsd: creditsBalanceMaxCents() / 100,
-        message: message || (step === "code" ? "A six-digit code is on its way to this email." : ""), error,
+        email: r.email || r.otp?.email || r.lastEmail || "", balances, packs, salesOn: creditsSalesEnabled(), capUsd: cfg.defaultCapUsd(), capMaxUsd: creditsBalanceMaxCents() / 100,
+        message: message || (step === "code" && !error && !isLocked ? "A six-digit code is on its way to this email." : ""), error: error || (isLocked ? LOCKED_TEXT : ""), locked: isLocked,
       }));
     }
     const expired = (res) => errPage(res, 400, "This sign-in has expired", "Go back to the app and connect again.");
+    // The one answer to every limit (it never says which), with a way on.
+    const LOCKED_TEXT = "Too many requests. Wait a while, then send a new code, or use another email.";
+    const BUSY_TEXT = "Too many requests. Try again later.";
 
     app.get(OAUTH_CONSENT_PATH, async (req, res, next) => {
       if (!enabled()) return next();
@@ -533,40 +633,44 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       const { r } = p;
 
       if (action === "deny") {
-        await change((b) => { delete b.reqs[rid]; return true; }).catch(() => {});
+        await requests.change((b) => { delete b.reqs[rid]; return true; }).catch(() => {});
         res.setHeader("Set-Cookie", cookieOut("", 0));
         return redirectWith(res, r.redirectUri, { error: "access_denied", state: r.state, iss: baseUrl });
       }
       if (action === "restart") {
-        await change((b) => { if (b.reqs[rid]) { delete b.reqs[rid].otp; delete b.reqs[rid].email; } return true; }).catch(() => {});
+        await requests.change((b) => { if (b.reqs[rid]) { delete b.reqs[rid].otp; delete b.reqs[rid].email; delete b.reqs[rid].lastEmail; } return true; }).catch(() => {});
         return render(res, rid, await pending(req, rid));
       }
       if (action === "email") {
         const email = normEmail(req.body?.email);
         if (!validEmail(email)) return render(res, rid, p, { error: "Enter the email address that holds your credits.", status: 400 });
-        await sendCode(rid, email, ip, p.client.name).catch((e) => log(`[mcp-oauth] code send failed: ${String(e?.message || e).slice(0, 120)}`));
+        const sent = await sendCode(rid, email, ip, p.client.name).catch((e) => { log(`[mcp-oauth] code send failed: ${String(e?.message || e).slice(0, 120)}`); return false; });
         const again = await pending(req, rid);
         if (!again) return expired(res);
-        if (!again.r.otp) return render(res, rid, again, { error: "Too many requests. Try again later.", status: 429 });
+        if (sent === "limited" || !again.r.otp) {
+          const lockedOut = sent === "limited" && await locked(email).catch(() => false);
+          return render(res, rid, again, { error: lockedOut ? LOCKED_TEXT : BUSY_TEXT, status: 429, lockedOut });
+        }
         return render(res, rid, again);
       }
       if (action === "code") {
         const otp = r.otp;
         const code = String(req.body?.code || "").trim();
         if (!otp || !(otp.exp > now())) return render(res, rid, p, { error: "That code has expired. Ask for a new one.", status: 400 });
-        if (await locked(otp.email)) return render(res, rid, p, { error: "Too many requests. Try again later.", status: 429 });
+        // Counted first, compared after: an attempt past the bound is refused uncompared.
+        if (!(await takeAttempt(otp.email))) return render(res, rid, p, { error: LOCKED_TEXT, status: 429, lockedOut: true });
         let verdict = "bad";
-        await change((b) => {
+        await requests.change((b) => {
           const rr = b.reqs[rid];
           if (!rr?.otp || rr.otp.h !== otp.h) { verdict = "bad"; return SKIP_UPDATE; }
           rr.otp.tries = (Number(rr.otp.tries) || 0) + 1;
           const good = Boolean(rr.otp.h) && /^\d{6}$/.test(code) && sameBytes(rr.otp.h, mac("otp", `${rid}|${rr.otp.email}|${code}`));
           if (good) { rr.email = rr.otp.email; rr.signedInAt = now(); delete rr.otp; verdict = "ok"; return true; }
-          if (rr.otp.tries >= cfg.emailCodeTries()) { delete rr.otp; verdict = "spent"; } else verdict = "bad";
+          if (rr.otp.tries >= cfg.emailCodeTries()) { rr.lastEmail = rr.otp.email; delete rr.otp; verdict = "spent"; } else verdict = "bad";
           return true;
         }).catch(() => { verdict = "error"; });
+        if (verdict === "ok" || verdict === "error") await giveBack(otp.email);
         if (verdict === "error") return errPage(res, 503, "Sign-in is unavailable", "Try again in a moment.");
-        if (verdict !== "ok") await noteFail(otp.email);
         const again = await pending(req, rid);
         if (!again) return expired(res);
         if (verdict === "ok") return render(res, rid, again);
@@ -599,22 +703,32 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
         const code = b64url(randomBytes(32));
         const gid = hex(16);
         const t = now();
-        let ok = false, full = false;
+        const activeFor = (b) => Object.values(b.grants).filter((g) => g.email === r.email && !g.revokedAt).length;
+        const fullText = `This email already has ${GRANTS_PER_EMAIL} connected apps. Disconnect one on your balance page first.`;
+        let rr = null, ok = false, full = false;
         try {
-          await change((b) => {
-            const rr = b.reqs[rid];
-            if (!rr || rr.email !== r.email) return SKIP_UPDATE;
-            if (Object.values(b.grants).filter((g) => g.email === r.email && !g.revokedAt).length >= GRANTS_PER_EMAIL) { full = true; return SKIP_UPDATE; }
-            const client = b.clients[rr.clientId];
-            b.grants[gid] = { clientId: rr.clientId, clientName: client?.name || "An app", email: r.email, keyId, capUsd: cap, scope: SCOPE, resource: rr.resource, createdAt: new Date(t).toISOString(), lastUsedAt: null, lastNetwork: coarseNetwork(ip) };
-            b.codes[digest(code)] = { grantId: gid, clientId: rr.clientId, redirectUri: rr.redirectUri, challenge: rr.challenge, resource: rr.resource, exp: t + cfg.codeTtlMs(), used: false };
+          if (activeFor(await view()) >= GRANTS_PER_EMAIL) return render(res, rid, p, { error: fullText, status: 400 });
+          // The sign-in is spent first (once, under its own document's swap),
+          // so two approvals of one sign-in never make two grants.
+          rr = await requests.change((b) => {
+            const x = b.reqs[rid];
+            if (!x || x.email !== r.email) return SKIP_UPDATE;
             delete b.reqs[rid];
-            ok = true;
-            return true;
+            return x;
           });
+          if (rr) {
+            await change((b) => {
+              if (activeFor(b) >= GRANTS_PER_EMAIL) { full = true; return SKIP_UPDATE; }
+              b.grants[gid] = { clientId: rr.clientId, clientName: rr.clientName || "An app", email: r.email, keyId, capUsd: cap, scope: SCOPE, resource: rr.resource, createdAt: new Date(t).toISOString(), lastUsedAt: null, lastNetwork: coarseNetwork(ip) };
+              b.codes[digest(code)] = { grantId: gid, clientId: rr.clientId, redirectUri: rr.redirectUri, challenge: rr.challenge, resource: rr.resource, exp: t + cfg.codeTtlMs(), used: false };
+              ok = true;
+              return true;
+            });
+          }
         } catch { return errPage(res, 503, "Sign-in is unavailable", "Try again in a moment."); }
-        if (full) return render(res, rid, p, { error: `This email already has ${GRANTS_PER_EMAIL} connected apps. Disconnect one on your balance page first.`, status: 400 });
+        if (full) return errPage(res, 400, "Too many connected apps", fullText);
         if (!ok) return expired(res);
+        await touchClient(rr.clientId, { done: true });
         res.setHeader("Set-Cookie", cookieOut("", 0));
         log(`[mcp-oauth] a connector grant was made for key ${keyId}`);
         return redirectWith(res, r.redirectUri, { code, state: r.state, iss: baseUrl });
@@ -637,8 +751,10 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
           const code = str(b.code, 200), verifier = str(b.code_verifier, 200), redirectUri = str(b.redirect_uri, 500);
           if (!code || !verifier || !VERIFIER_RE.test(verifier)) return oauthErr(res, 400, "invalid_request", "code and a PKCE code_verifier are required.");
           const resource = b.resource == null ? null : str(b.resource, 500);
+          let known = false;
+          try { known = Object.hasOwn((await clients.view()).clients, clientId); } catch { return oauthErr(res, 503, "temporarily_unavailable"); }
+          if (!known) return oauthErr(res, 401, "invalid_client");
           out = await change((s) => {
-            if (!s.clients[clientId]) return { err: [401, "invalid_client"] };
             const k = digest(code);
             const c = s.codes[k];
             if (!c) return { err: [400, "invalid_grant"] };
@@ -648,12 +764,12 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
             if (resource != null && !(resources.has(resource) && (c.resource == null || c.resource === resource))) { revokeIn(s, c.grantId, "code-refused"); return { err: [400, "invalid_target"], revoked: c.grantId }; }
             const g = s.grants[c.grantId];
             if (!g || g.revokedAt) return { err: [400, "invalid_grant"] };
-            s.clients[clientId].usedAt = now();
             return { ok: issueTokens(s, c.grantId, hex(8)) };
           });
         } else if (gt === "refresh_token") {
           const rt = str(b.refresh_token, 200);
-          if (!rt || !TOKEN_RE.test(rt) || !rt.startsWith(REFRESH_PREFIX)) return oauthErr(res, 400, "invalid_grant");
+          // A token this server never made is refused before the store is read.
+          if (!rt || !rt.startsWith(REFRESH_PREFIX) || !minted(rt)) return oauthErr(res, 400, "invalid_grant");
           out = await change((s) => {
             const k = digest(rt);
             const x = s.tokens[k];
@@ -676,6 +792,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       } catch { return oauthErr(res, 503, "temporarily_unavailable"); }
       if (out?.revoked) { forgetGrant(out.revoked); log("[mcp-oauth] a connector grant was revoked: a spent code or refresh token was presented again"); }
       if (!out?.ok) return oauthErr(res, out?.err?.[0] || 400, out?.err?.[1] || "invalid_grant");
+      touchClient(clientId);
       noStore(res).json(out.ok);
     });
 
@@ -685,7 +802,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       cors(res);
       if (await over("token", netKey(clientIp(req)), cfg.tokenPerIp())) return busy(res);
       const tok = str(req.body?.token, 200);
-      if (tok && TOKEN_RE.test(tok)) {
+      if (tok && minted(tok)) {
         const gid = await change((s) => { const x = s.tokens[digest(tok)]; if (!x) return SKIP_UPDATE; revokeIn(s, x.g, "client"); return x.g; }).catch(() => null);
         if (gid) forgetGrant(gid);
       }
@@ -756,5 +873,5 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
     });
   }
 
-  return { enabled, mount, resolveBearer, grantsForEmail, revokeForEmail, setCapForEmail, _view: view };
+  return { enabled, mount, resolveBearer, grantsForEmail, revokeForEmail, setCapForEmail, _view: view, _mintAccessForTest: () => mint(ACCESS_PREFIX) };
 }
