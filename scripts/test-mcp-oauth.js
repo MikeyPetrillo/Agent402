@@ -528,7 +528,10 @@ try {
 
   // Every token is looked up; only failed lookups are slowed, never a valid token.
   {
-    const Tb = T5; // a grant still in force (its key is switched off; listing tools pays nothing)
+    // A grant still in force (its key is switched off; listing tools pays
+    // nothing), with an access token fresh from a refresh, so no cache answers for it.
+    const Tb = await (await tok({ grant_type: "refresh_token", refresh_token: T5.refresh_token, client_id: cr.client_id })).json();
+    ok(typeof Tb.access_token === "string", "setup: a fresh access token for the bad-token check");
     let last = null;
     for (let i = 0; i < OL.badTokenMax + 60; i++) last = await mcp(B, rpc(1, "tools/list", {}), { token: "a402m_" + randomBytes(32).toString("base64url") });
     ok(last.status === 429, `past the bound, failed token lookups from one client are answered 429 (${last.status})`);
