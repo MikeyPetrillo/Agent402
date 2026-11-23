@@ -421,6 +421,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   claim. `POST /__operator/refunds/update`: 409 only for a state conflict, 503 when the store did not
   confirm, 400 for missing evidence (`refundRowUpdate`). A debt with no settle tx keys on payer,
   slug, minute and request (`fallbackEvidence`).
+- **Discovery documents under load:** while the load gate (`src/load-shed.js`) sheds free work, a
+  GET or HEAD with no query for the x402 manifest (and its aliases), `/openapi.json`, `/llms.txt`,
+  `/llms-full.txt` or `/api/pricing` is answered from that document's last 200 (kept as plain
+  bytes by a capture mounted after the compressor; `src/discovery-snapshots.js`), with its own
+  headers, its ETag and an `Age` header, instead of a 503. A copy older than
+  `DISCOVERY_SNAPSHOT_MAX_AGE_MS` (default one hour) or none since boot is shed as before. Counts
+  on `/__operator/perf.json` (`discoverySnapshots`; `scripts/test-discovery-snapshots.js`).
 - **Search refusals:** `src/discovery-refusals.js` counts every search `/api/find` and `/api/route`
   turn away, per UTC day, by route and rule (`load-gate`, `client-rate`, `client-compute`,
   `shared-compute`, `inflight`, `deadline`) under a keyed, day-scoped digest of the limiter's client

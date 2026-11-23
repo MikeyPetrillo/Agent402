@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1124 variables in 114 groups.
+1125 variables in 114 groups.
 
 ## Contents
 
@@ -385,6 +385,7 @@ holds it.
 | `DISCOVERY_REFUSALS_FILE` | Discovery refusals file path. | `/data/discovery-refusals.json` | `src/discovery-refusals.js` |
 | `DISCOVERY_REFUSALS_FLUSH_MS` | Discovery refusals flush, in milliseconds. |  | `src/discovery-refusals.js` |
 | `DISCOVERY_REFUSALS_MAX_CLIENTS` | Discovery refusals maximum clients. |  | `src/discovery-refusals.js` |
+| `DISCOVERY_SNAPSHOT_MAX_AGE_MS` | Oldest copy of a discovery document (manifest, openapi.json, llms.txt, llms-full.txt, /api/pricing) answered while the load gate sheds, in milliseconds (default one hour). |  | `src/discovery-snapshots.js` |
 | `DISCOVERY_TEST_HANG_QUERY` | Discovery test hang query. |  | `src/server.js` |
 
 ## EMAIL

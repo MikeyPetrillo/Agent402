@@ -323,6 +323,7 @@
     "DIRECT_UPSTREAM_SINCE": "Direct upstream since.",
     "DIRECT_UPSTREAM_TIMEOUT_MS": "Direct upstream timeout, in milliseconds.",
     "DIRECT_UPSTREAM_URL": "Direct upstream URL.",
+    "DISCOVERY_SNAPSHOT_MAX_AGE_MS": "Oldest copy of a discovery document (manifest, openapi.json, llms.txt, llms-full.txt, /api/pricing) answered while the load gate sheds, in milliseconds (default one hour).",
     "DISCOVERY_CLIENT_CPU_MS": "Discovery client CPU, in milliseconds.",
     "DISCOVERY_COMPUTE_DEADLINE_MS": "Discovery compute deadline, in milliseconds.",
     "DISCOVERY_COMPUTE_PER_HOUR": "Discovery compute per hour.",

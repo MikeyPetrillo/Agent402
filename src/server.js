@@ -51,6 +51,7 @@ import { salePathOf, saleRunKeyOf } from "./sale-path.js";
 import { requestIdMiddleware } from "./request-id.js";
 import { answerContractOf, classifyAnswer, observeJsonAnswer } from "./answer-shape.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
+import { createDiscoverySnapshots } from "./discovery-snapshots.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
 import { posthogProxyPathAllowed, posthogProxyTypeAllowed, noteRefusedPosthogPath } from "./posthog-proxy.js";
@@ -3175,6 +3176,10 @@ function knownRouteSegments() {
   return set;
 }
 setStallContext(({ fromMs } = {}) => requestsDuring(fromMs, 3));
+// The free discovery documents' last good copies (src/discovery-snapshots.js):
+// kept as they are served (the capture is mounted after the compressor) and
+// answered from while the gate below sheds, so reading how to buy is never shed.
+const DISCOVERY_SNAPSHOTS = createDiscoverySnapshots();
 // Paid calls first (src/load-shed.js). When the event loop is lagging or too
 // many requests are in flight, anything unprotected is refused 503 before it
 // is parsed, so the thread stays free for payment verification and paid
@@ -3209,6 +3214,8 @@ app.use((req, res, next) => {
   if (referralDefOfPath(cp)) return next();
   // So is a tool sold through the AWS Marketplace front door.
   if (awsDefOfPath(path)) return next();
+  // A discovery document is answered from its last good copy rather than shed.
+  if (DISCOVERY_SNAPSHOTS.serve(req, res)) return;
   noteShed(why);
   // A search turned away here is counted with the discovery rules' own
   // refusals (src/discovery-refusals.js), under the rule "load-gate".
@@ -3893,6 +3900,9 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
+// After the compressor: the discovery documents' plain bytes are kept for the
+// load gate above (src/discovery-snapshots.js).
+app.use(DISCOVERY_SNAPSHOTS.capture);
 // Anthropic-SDK base-URL convention: every Anthropic client (the SDK, Claude
 // Code, the Agent SDK) appends `/v1/messages` to ANTHROPIC_BASE_URL, so a
 // buyer pointing one at a TIER (`https://agent402.tools/v1/metered`) posts to
@@ -7267,7 +7277,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ stateQueries: stateQueryStats(), loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), containedTurns: containedTurnsSummary(), brokenListings: brokenListingsSummary(),
+  res.set("Cache-Control", "no-store").json({ stateQueries: stateQueryStats(), loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), discoverySnapshots: DISCOVERY_SNAPSHOTS.status(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), containedTurns: containedTurnsSummary(), brokenListings: brokenListingsSummary(),
     // Counts and labels only: the signed-receipt store's backend and its
     // stored, skipped, failed and dropped counts; the reputation pass's state;
     // the Solana facilitator split's health (null when it is not configured).

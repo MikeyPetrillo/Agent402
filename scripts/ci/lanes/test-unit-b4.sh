@@ -340,6 +340,8 @@ t node scripts/test-13g-cover-fallback.js
 t node scripts/test-backup-s3-wire.js
 # load-shed boot warm-up default is 60 s (offline)
 t node scripts/test-load-shed-warmup.js
+# the discovery documents answer their last good copy while the load gate sheds, not a 503 (boots a FREE_MODE server)
+t node scripts/test-discovery-snapshots.js
 # deploy job redeploys the render/media worker when a push changes its import closure or image inputs (offline)
 t node scripts/test-worker-deploy-step.js
 t node scripts/test-decide-deploy-step.js
