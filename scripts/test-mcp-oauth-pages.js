@@ -31,6 +31,8 @@ function elements(html) {
   // fragment one pass would splice back together cannot survive.
   let body = String(html), prev;
   do { prev = body; body = stripScripts(body.replace(/<!--[\s\S]*?-->/g, ""), ""); } while (body !== prev);
+  // An unclosed comment opener left after the loop is dropped too, so no fragment of one reaches the tag reader.
+  body = body.replace(/<!--|--!?>/g, "");
   const out = [], stack = [];
   for (const m of body.matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g)) {
     const tag = m[2].toLowerCase();
