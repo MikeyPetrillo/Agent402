@@ -105,7 +105,7 @@ try {
   }
   ok(AWS_LISTING_GROUPS.every((g) => html.includes(g.notice.replace(/'/g, "&#39;")) || html.includes(g.notice)), "each group's notice is printed");
   ok(html.includes(`${origin}/aws/.well-known/jwks.json`) && html.includes(`${origin}/aws/openapi.json`) && html.includes("help@agent402.tools"), "the JWKS, the OpenAPI document and the support mailbox are named");
-  ok(/up to 3 attempts/.test(text) && /billing adjustment/.test(text), "the refund rule states the attempts the gate allows and the invoice adjustment");
+  ok(/up to 3 attempts/.test(text) && /is reviewed, and an approved correction is made as a billing adjustment on your AWS invoice through AWS Marketplace\./.test(text), "the refund rule states the attempts the gate allows and the reviewed invoice adjustment");
 
   // The OpenAPI document.
   const oaRes = await fetch(`${srv.url}/aws/openapi.json`);
@@ -166,6 +166,7 @@ try {
   }
 
   ok(/id="aws-marketplace"/.test(termsHtml) && /standard\s+contract for AWS Marketplace/.test(termsHtml), "/terms carries the AWS Marketplace purchases section while the gate is on");
+  ok(/ends without an answer is reviewed, and an approved correction is made as a billing\s+adjustment on your AWS invoice through AWS Marketplace\./.test(termsHtml) && !/is corrected as a billing adjustment/.test(termsHtml), "/terms: a paid call that ends without an answer is reviewed, and an approved correction is an invoice adjustment");
 } finally {
   await srv.stop();
 }
