@@ -388,7 +388,6 @@
     "FLOOR_GAS_PRICE_TTL_MS": "Floor gas price lifetime, in milliseconds.",
     "FLOOR_GAS_UNITS": "Floor gas units.",
     "FOLLOWUPS": "off stops the follow-up loop.",
-    "FRED_API_KEY": "Fred API key (a credential, set on the host).",
     "FREE_ALERTS": "Free alerts.",
     "FREE_ALERTS_SECRET": "Free alerts secret (a credential, set on the host).",
     "FREE_MODE": "true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer.",

@@ -488,7 +488,6 @@
       "input": {
         "days": 90
       },
-      "requires": "FRED_API_KEY",
       "expect": {
         "gt": {
           "current": 0
@@ -504,7 +503,6 @@
       "input": {
         "months": 24
       },
-      "requires": "FRED_API_KEY",
       "expect": {
         "gt": {
           "current": 1
@@ -524,7 +522,6 @@
       "slug": "cpi-yoy",
       "name": "inflation is a plausible number",
       "input": {},
-      "requires": "FRED_API_KEY",
       "expect": {
         "gt": {
           "inflationYoYPct": -5

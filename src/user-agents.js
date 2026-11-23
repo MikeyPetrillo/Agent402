@@ -44,6 +44,13 @@ export const BROWSER_FETCH_MOBILE_UA = browserWithToken(
 export const SITE_CRAWL_TOKEN = "Agent402Bot";
 export const SITE_CRAWL_UA = `${SITE_CRAWL_TOKEN}/1.0 (+${INFO_URL})`;
 
+/** A read of a fixed data API whose terms ask the caller to name itself with
+ *  a contact address (Open Food Facts: "AppName/Version (ContactEmail)"):
+ *  the data token, the contact and the /crawler link. */
+export const DATA_TOKEN = "Agent402-Data";
+export const DATA_CONTACT = "help@agent402.tools";
+export const DATA_UA = `${DATA_TOKEN}/1.0 (${DATA_CONTACT}; +${INFO_URL})`;
+
 /** The string we retired; no component sends it bare. */
 export const RETIRED_BARE_UA = "Agent402/1.0";
 

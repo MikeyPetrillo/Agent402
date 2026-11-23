@@ -1,19 +1,14 @@
-// FRED's Terms of Use, as the FRED tools hold to them (offline: fetch is
-// stubbed, the key is a placeholder):
-//   1. every answer that carries FRED data has a `terms` field that links the
-//      Terms of Use and says users are bound by them, and so does each tool's
-//      published example;
-//   2. fred-series is not a FRED tool: it reads the publishing agencies
-//      (scripts/test-fred-series-sources.js); the notice reader is held here.
+// FRED's Terms of Use, as this catalog holds to them (offline, no network):
+//   1. the notice reader a tool serving a caller-chosen FRED series applies;
+//   2. no macro tool serves FRED data: fred-series and the computed tools read
+//      the publishing agencies, so none carries FRED's terms line or claim.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
 import { MACRO_TOOLS, fredCopyrightOf } from "../src/tools/macro-kit.js";
 import { FRED_TERMS, FRED_TERMS_URL } from "../src/data-attribution.js";
 
 let fail = 0, pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
 const tool = (slug) => MACRO_TOOLS.find((t) => t.slug === slug);
-const h = (slug) => tool(slug).handler;
 
 // --- the notice reader -------------------------------------------------------
 ok(fredCopyrightOf("Seasonally adjusted. Source: U.S. Bureau of Labor Statistics.") === null && fredCopyrightOf("") === null && fredCopyrightOf(undefined) === null, "notes with no copyright notice are not third-party");
@@ -34,39 +29,18 @@ ok(fredCopyrightOf("Copyright.")?.owner === null && fredCopyrightOf("see the cop
   ok(Date.now() - t0 < 500, `a hostile notes text is read in bounded time (${Date.now() - t0} ms)`);
 }
 
-// --- every FRED tool carries the terms line -----------------------------------
-const fredTools = MACRO_TOOLS.filter((t) => t.attribution === "fred");
-ok(fredTools.length >= 4 && !fredTools.some((t) => t.slug === "fred-series") && ["sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds"].every((s) => fredTools.some((t) => t.slug === s)), `every FRED tool is marked (${fredTools.length})`);
-ok(FRED_TERMS.includes(FRED_TERMS_URL) && FRED_TERMS_URL === "https://fred.stlouisfed.org/docs/api/terms_of_use.html" && /bound by/.test(FRED_TERMS), "the terms line links the Terms of Use and says users are bound by them");
-ok(fredTools.every((t) => t.discovery.output.example.terms === FRED_TERMS), `every FRED tool's published example carries the terms line (missing: ${fredTools.filter((t) => t.discovery.output.example.terms !== FRED_TERMS).map((t) => t.slug).join(", ") || "none"})`);
-ok(MACRO_TOOLS.filter((t) => t.attribution !== "fred").every((t) => (t.discovery?.output?.example || {}).terms !== FRED_TERMS), "a tool on another source carries no FRED terms line");
-
-ok(!/FRED\(R\) API|St\. Louis/.test(tool("fred-series").description) && tool("fred-series").attribution === "us-agencies", "fred-series: the description makes no FRED API claim and credits the agencies");
-
-// --- stubbed FRED ----------------------------------------------------------------
-// A FRED tool reads its fixed series' observations only, never a series' notes.
-const realFetch = globalThis.fetch;
-const saved = { v1: process.env.FRED_API_KEY };
-process.env.FRED_API_KEY = "fred-test-not-a-key";
-const undoDns = stubGuardResolver(offlineGuardAnswer);
-const calls = [];
-const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-globalThis.fetch = async (url) => {
-  const u = new URL(String(url));
-  calls.push(u.pathname);
-  if (u.pathname === "/fred/series/observations") return json(200, { observations: [{ date: "2026-02-01", value: "." }, { date: "2026-01-01", value: "4.1" }] });
-  return json(404, {});
-};
-try {
-  // fred-series reads no FRED data (scripts/test-fred-series-sources.js).
-  const u = await h("unemployment-rate")({ months: 2 });
-  ok(u.current === 4.1 && u.terms === FRED_TERMS, `unemployment-rate: the answer carries the terms line (${JSON.stringify(u).slice(0, 120)})`);
-  ok(calls.length >= 1 && calls.every((p) => p === "/fred/series/observations"), `a FRED tool reads observations only (${calls.join()})`);
-} finally {
-  globalThis.fetch = realFetch;
-  undoDns();
-  for (const [k, v] of [["FRED_API_KEY", saved.v1]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+// --- no tool serves FRED data ------------------------------------------------------
+// fred-series and the computed tools (sahm-rule, cpi-yoy, unemployment-rate,
+// fed-funds) read the publishing agencies (scripts/test-fred-series-sources.js,
+// scripts/test-macro-computed-sources.js): none is marked as a FRED tool,
+// carries FRED's terms line or makes a FRED API claim.
+ok(FRED_TERMS.includes(FRED_TERMS_URL) && FRED_TERMS_URL === "https://fred.stlouisfed.org/docs/api/terms_of_use.html" && /bound by/.test(FRED_TERMS), "the terms line, kept for a tool that serves FRED data, links the Terms of Use and says users are bound by them");
+ok(!MACRO_TOOLS.some((t) => t.attribution === "fred"), `no macro tool is marked as serving FRED data (${MACRO_TOOLS.filter((t) => t.attribution === "fred").map((t) => t.slug).join(", ") || "none"})`);
+ok(MACRO_TOOLS.every((t) => (t.discovery?.output?.example || {}).terms !== FRED_TERMS), "no macro tool's example carries FRED's terms line");
+for (const slug of ["fred-series", "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds"]) {
+  ok(tool(slug) && !/FRED\(R\) API|St\. Louis/.test(tool(slug).description), `${slug}: the description makes no FRED API claim`);
 }
+ok(!/stlouisfed\.org/.test(MACRO_TOOLS.map((t) => String(t.handler)).join("\n")), "no macro handler names a FRED host");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

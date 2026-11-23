@@ -775,7 +775,7 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   // Solana: a refusal proven only after waiting out the credential is not
   // followed by a second seller in the same request.
   {
-    const refused = async () => { throw Object.assign(new Error("Seller refused the payment (HTTP 402); the credential expired unused, nothing charged"), { statusCode: 502, refused: true, committed: false }); };
+    const refused = async () => { throw Object.assign(new Error("Seller refused the payment (HTTP 402); the credential expired unused, so the seller was paid nothing"), { statusCode: 502, refused: true, committed: false }); };
     const { e, calls } = await run({ list: [cand("s1.example", [SOL]), cand("s2.example", [SOL])], pay: refused, chains: ["solana"], network: SOL });
     ok(e?.statusCode === 502 && calls.length === 1, `Solana refusal after the wait: no second seller (paid ${calls.length}x)`);
     const pre = async (url) => { if (url.includes("s1")) throw Object.assign(new Error("Seller unreachable"), { statusCode: 502 }); return good(); };

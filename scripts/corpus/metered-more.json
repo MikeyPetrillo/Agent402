@@ -354,7 +354,6 @@
       "slug": "sahm-rule",
       "name": "value and threshold populated",
       "input": {},
-      "requires": "FRED_API_KEY",
       "expect": {
         "populated": [
           "date",

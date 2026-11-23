@@ -59,6 +59,7 @@ import { manageTokenFrom, MANAGE_RESPONSE_HEADERS } from "./manage-token.js";
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
+import { COUNTRIES_DATABASE_PATH, COUNTRIES_LICENSE_PATH } from "./data-attribution.js";
 import { llmsLinkMiddleware } from "./llms-link.js";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
@@ -10801,6 +10802,13 @@ const BRAND_DEFS = `<defs><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"
 
 // Brand mark: the vector logo and the favicon crop (src/brand-mark.js, from
 // assets/brand/logo.svg), the same art as the PNG below.
+// The committed world-countries derivative and its license (ODbL 1.0): the
+// database country-info answers are produced from, offered to their
+// recipients as the ODbL asks (src/data-attribution.js). Free and static.
+const COUNTRIES_DB = readFileSync(new URL("./data/countries.json", import.meta.url), "utf8");
+const COUNTRIES_LICENSE = readFileSync(new URL("./data/LICENSE.md", import.meta.url), "utf8");
+app.get(COUNTRIES_DATABASE_PATH, (_req, res) => res.type("application/json").set("Cache-Control", "public, max-age=86400").send(COUNTRIES_DB));
+app.get(COUNTRIES_LICENSE_PATH, (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=86400").send(COUNTRIES_LICENSE));
 app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(LOGO_SVG));
 
 // The PNG logo is the brand mark (black ground, "402", red dot), 512 by 512,

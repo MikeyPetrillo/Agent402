@@ -85,10 +85,9 @@ export const INVARIANTS = {
 // how we monitor key EXPIRY without false-paging on an intentional unset — a
 // set-but-invalid key makes the tool fail and we page; an unset key is simply
 // skipped (a fork or a deliberately-disabled feature never trips the alarm).
-// These cover the keyed tools whose outage costs revenue: FRED (macro) and
-// Brave (search — a top earner).
+// These cover the keyed tools whose outage costs revenue: Brave (search, a
+// top earner).
 export const KEYED_SELFCHECKS = [
-  { slug: "cpi-yoy", envVar: "FRED_API_KEY" },  // FRED JSON API — key expiry ⇒ every FRED tool dies
   { slug: "search", envVar: "BRAVE_API_KEY" },  // Brave search — top revenue tool
 ];
 
