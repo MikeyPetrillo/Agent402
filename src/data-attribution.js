@@ -113,6 +113,41 @@ export const C3S_CREDIT = `${C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
 /** Both Copernicus services in one sentence, for a description whose tool serves both. */
 export const CAMS_C3S_ATTRIBUTION = "Contains modified Copernicus CAMS and C3S information.";
 
+// Open data credited on the answers it serves (answer fields only: a tool's
+// catalog text and its listing are unchanged).
+//   - World Bank: the Terms of Use for Datasets
+//     (https://www.worldbank.org/ext/en/legal/terms-conditions/datasets)
+//     license datasets under CC BY 4.0 unless one is labeled otherwise, and
+//     ask for the credit "The World Bank: Dataset name: Data source"; each
+//     series' own license is in its metadata (License_Type), which
+//     world-bank-indicator reads before serving it (src/tools/macro-kit.js).
+//   - Open Food Facts (https://world.openfoodfacts.org/terms-of-use): the
+//     database under the ODbL, its contents under the DbCL, images CC BY-SA;
+//     contributors are credited by a link to the product; the API asks for a
+//     User-Agent naming the app and a contact, and at most 15 product reads a
+//     minute (src/tools/data-kit.js barcode-lookup, DATA_UA in src/user-agents.js).
+//   - world-countries (src/data/countries.json, ODbL 1.0): a Produced Work
+//     carries the notice, and its recipients are offered the derived database
+//     (ODbL 4.3 and 4.6): country-info answers carry both, and the server
+//     serves the database and its license (COUNTRIES_DATABASE_PATH, /data/LICENSE).
+export const WORLD_BANK_LICENSE = "CC BY 4.0";
+export const WORLD_BANK_LICENSE_URL = "https://datacatalog.worldbank.org/public-licenses#cc-by";
+/** The World Bank's credit form: "The World Bank: <dataset>: <data source>". */
+export function worldBankCredit(dataset, source) {
+  const clean = (v) => String(v ?? "").replace(/\s*[\r\n]+\s*/g, " ").replace(/\s+/g, " ").replace(/[;,.\s]+$/, "").trim().slice(0, 300);
+  const d = clean(dataset) || "World Development Indicators";
+  const src = clean(source);
+  return src ? `The World Bank: ${d}: ${src}` : `The World Bank: ${d}`;
+}
+export const OPEN_FOOD_FACTS_SOURCE = "Open Food Facts";
+export const OPEN_FOOD_FACTS_LICENSE = "ODbL 1.0 (database), DbCL 1.0 (contents); images CC BY-SA";
+export const openFoodFactsProductUrl = (code) => `https://world.openfoodfacts.org/product/${encodeURIComponent(code)}`;
+export const COUNTRIES_DATABASE_PATH = "/data/countries.json";
+export const COUNTRIES_LICENSE_PATH = "/data/LICENSE";
+export const COUNTRIES_ODBL_NOTICE = "Contains information from world-countries, made available under the ODbL 1.0 (https://opendatacommons.org/licenses/odbl/1-0/).";
+/** The address of the served database: this deployment's own copy. */
+export const countriesDatabaseUrl = () => `${String(process.env.BASE_URL || "https://agent402.tools").replace(/\/+$/, "")}${COUNTRIES_DATABASE_PATH}`;
+
 // Chain and crypto data sources, each credited with a link wherever its data
 // is served. GoPlus's API terms ask for attribution "via a backlink or a
 // mention" (src/tools/token-risk-kit.js); the EAS indexer, RugCheck,

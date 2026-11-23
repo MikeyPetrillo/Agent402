@@ -22,7 +22,8 @@
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingLeftMs } from "../run-ceiling.js";
-import { US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION } from "../data-attribution.js";
+import { US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION, WORLD_BANK_LICENSE, WORLD_BANK_LICENSE_URL, worldBankCredit } from "../data-attribution.js";
+import { notChargedOn } from "../not-charged.js";
 import { usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 
@@ -653,7 +654,7 @@ export const MACRO_TOOLS = [
       },
       output: { example: { country: "US", indicator: "NY.GDP.MKTP.CD", indicatorName: "GDP (current US$)", count: 5, series: [{ year: 2022, value: 25462700000000 }] } },
     },
-    handler: async (i) => {
+    handler: async (i, req) => {
       const country = String(i.country ?? "").trim().toUpperCase();
       const indicator = String(i.indicator ?? "").trim().toUpperCase();
       if (!/^[A-Z]{2,3}$/.test(country)) throw bad('"country" must be a 2- or 3-letter ISO country code');
@@ -664,7 +665,10 @@ export const MACRO_TOOLS = [
       // The World Bank API routinely takes 15-25 s on a cold indicator: the
       // nightly corpus 504'd this at the 15 s default on two of three nights
       // (2026-09-08/10) and the world-data pack lost both of its steps with it.
-      const j = await getJson(url, { timeoutMs: 25_000 });
+      // The indicator's license is read beside the data (both slow on a cold
+      // indicator); an indicator not licensed CC BY 4.0 or CC0 is refused
+      // with no data in the answer.
+      const [j, lic] = await Promise.all([getJson(url, { timeoutMs: 25_000 }), worldBankLicense(indicator).catch((e) => e)]);
       // World Bank's idiosyncratic response: a 2-element array [meta, rows].
       if (!Array.isArray(j) || j.length < 2 || !Array.isArray(j[1])) {
         const msg = Array.isArray(j) && j[0]?.message?.[0]?.value ? j[0].message[0].value : "World Bank returned no series";
@@ -678,6 +682,12 @@ export const MACRO_TOOLS = [
         .filter((r) => r && r.value != null)
         .map((r) => ({ year: parseInt(r.date, 10), value: Number(r.value) }))
         .sort((a, b) => a.year - b.year);
+      if (lic instanceof Error) throw lic;
+      if (!lic.servable) {
+        throw Object.assign(bad(lic.licenseType
+          ? `World Bank indicator ${indicator} is published under "${lic.licenseType}", not CC BY 4.0, so it is not served here.${notChargedOn(req)}`
+          : `World Bank indicator ${indicator} states no license in its metadata, so it is not served here.${notChargedOn(req)}`, 422), { license: lic.licenseType || null });
+      }
       if (!series.length) throw bad("World Bank returned no values for this country/indicator/window", 502);
       return {
         country, indicator,
@@ -685,6 +695,9 @@ export const MACRO_TOOLS = [
         countryName: rows[0]?.country?.value ?? null,
         count: series.length, series,
         source: "World Bank Open Data API",
+        credit: worldBankCredit(lic.dataset, lic.source),
+        license: lic.license,
+        licenseUrl: lic.licenseUrl,
       };
     },
   },
@@ -728,10 +741,62 @@ export const MACRO_TOOLS = [
           code: ind.id, name: ind.name,
           sourceNote: (ind.sourceNote ?? "").replace(/\s+/g, " ").slice(0, 240),
         }));
-      return { query: q, count: matches.length, indicators: matches, source: "World Bank Open Data API" };
+      return { query: q, count: matches.length, indicators: matches, source: "World Bank Open Data API", credit: worldBankCredit("World Development Indicators"), license: WORLD_BANK_LICENSE, licenseUrl: WORLD_BANK_LICENSE_URL };
     },
   },
 ];
+
+// ---- World Bank series licenses ---------------------------------------------
+// Each indicator's license, from the World Bank's own series metadata: the
+// indicator's source (/v2/indicator/<id>), then that source's metadata for it
+// (/v2/sources/<source>/series/<id>/metadata: License_Type, License_URL and
+// Source). Kept a day per indicator.
+const WB_LICENSE_TTL_MS = 24 * 60 * 60 * 1000;
+const WB_LICENSE_MAX = 500;
+const wbLicenses = new Map(); // indicator -> { at, value }
+const wbLicenseReads = new Map(); // indicator -> in-flight read
+/** Test seam: forget every license read. */
+export function _resetWorldBankForTest() { wbLicenses.clear(); wbLicenseReads.clear(); }
+/** CC BY 4.0 in the forms the metadata writes it, or CC0. */
+export function worldBankLicenseServable(type) {
+  const t = String(type || "").replace(/\s+/g, " ").trim();
+  if (/^CC BY[- ]?4(\.0)?$/i.test(t)) return WORLD_BANK_LICENSE;
+  if (/^CC0( 1\.0)?$/i.test(t)) return "CC0";
+  return null;
+}
+async function worldBankLicense(indicator) {
+  const hit = wbLicenses.get(indicator);
+  if (hit && Date.now() - hit.at < WB_LICENSE_TTL_MS) return hit.value;
+  if (wbLicenseReads.has(indicator)) return wbLicenseReads.get(indicator);
+  const read = (async () => {
+    const ind = await getJson(`https://api.worldbank.org/v2/indicator/${encodeURIComponent(indicator)}?format=json`, { timeoutMs: 25_000 });
+    const sourceId = Array.isArray(ind) && Array.isArray(ind[1]) ? String(ind[1][0]?.source?.id ?? "") : "";
+    if (!/^\d{1,4}$/.test(sourceId)) {
+      const msg = Array.isArray(ind) && ind[0]?.message?.[0]?.value ? ind[0].message[0].value : "";
+      if (/not valid|invalid/i.test(msg)) throw bad(`${msg} (check the indicator and country codes)`, 400);
+      throw bad("The World Bank did not say which dataset this indicator is in; retry shortly.", 502);
+    }
+    const meta = await getJson(`https://api.worldbank.org/v2/sources/${sourceId}/series/${encodeURIComponent(indicator)}/metadata?format=json`, { timeoutMs: 25_000 });
+    const src = Array.isArray(meta?.source) ? meta.source[0] : null;
+    const variable = src?.concept?.[0]?.variable?.find?.((v) => String(v?.id).toUpperCase() === indicator) || src?.concept?.[0]?.variable?.[0];
+    if (!variable || !Array.isArray(variable.metatype)) throw bad("The World Bank's metadata for this indicator could not be read; retry shortly.", 502);
+    const field = (id) => variable.metatype.find((m) => m?.id === id)?.value ?? null;
+    const licenseType = field("License_Type");
+    const license = worldBankLicenseServable(licenseType);
+    const licenseUrl = String(field("License_URL") || "");
+    const value = {
+      servable: !!license, licenseType, license,
+      licenseUrl: /^https:\/\/[^\s]+$/.test(licenseUrl) ? licenseUrl : WORLD_BANK_LICENSE_URL,
+      dataset: src?.name || ind[1][0]?.source?.value || null,
+      source: field("Source"),
+    };
+    if (wbLicenses.size >= WB_LICENSE_MAX) wbLicenses.delete(wbLicenses.keys().next().value);
+    wbLicenses.set(indicator, { at: Date.now(), value });
+    return value;
+  })().finally(() => wbLicenseReads.delete(indicator));
+  wbLicenseReads.set(indicator, read);
+  return read;
+}
 
 /** World Bank annual data lags a year; the default window ends at the
  *  previous calendar year. One value feeds the handler and the description. */

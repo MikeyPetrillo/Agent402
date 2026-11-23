@@ -51,10 +51,16 @@ globalThis.fetch = async (url) => {
   ok(worldBankDefaultEndYear(new Date("2031-01-01T00:00:00Z")) === 2030, "the default moves with the clock");
   const t = tool("world-bank-indicator");
   ok(t.discovery.inputSchema.properties.endYear.description.includes(String(y)), `the endYear description states ${y}`);
-  respond = () => [{ page: 1, pages: 1, per_page: 200, total: 1 }, [{ indicator: { id: "NY.GDP.MKTP.CD", value: "GDP (current US$)" }, country: { id: "US", value: "United States" }, date: String(y), value: 1 }]];
+  // The series read, and the indicator's license read beside it (src/tools/macro-kit.js).
+  respond = (u) => {
+    if (/^\/v2\/indicator\//.test(u.pathname)) return [{ page: 1 }, [{ id: "NY.GDP.MKTP.CD", source: { id: "2", value: "World Development Indicators" } }]];
+    if (/\/metadata$/.test(u.pathname)) return { source: [{ id: "2", name: "World Development Indicators", concept: [{ id: "Series", variable: [{ id: "NY.GDP.MKTP.CD", metatype: [{ id: "License_Type", value: "CC BY-4.0" }, { id: "Source", value: "World Bank national accounts data" }] }] }] }] };
+    return [{ page: 1, pages: 1, per_page: 200, total: 1 }, [{ indicator: { id: "NY.GDP.MKTP.CD", value: "GDP (current US$)" }, country: { id: "US", value: "United States" }, date: String(y), value: 1 }]];
+  };
   seen.length = 0;
   await t.handler({ country: "US", indicator: "NY.GDP.MKTP.CD", startYear: 2018 });
-  ok(seen.at(-1)?.searchParams.get("date") === `2018:${y}`, `with no endYear the request window ends at ${y} (got ${seen.at(-1)?.searchParams.get("date")})`);
+  const dataRead = seen.find((u) => /^\/v2\/country\//.test(u.pathname));
+  ok(dataRead?.searchParams.get("date") === `2018:${y}`, `with no endYear the request window ends at ${y} (got ${dataRead?.searchParams.get("date")})`);
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
