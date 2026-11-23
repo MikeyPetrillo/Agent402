@@ -96,7 +96,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   with no key issued. `POST /api/credits/refund` (the key as Bearer) refunds a key's unspent balance
   and disables it; it is served only while `CREDITS_SALES` is on.
 - **Credits purchases:** a purchase is made signed in to `/credits/account` (`POST /credits/account/buy`,
-  bound to that email; `POST /api/credits/checkout` answers 401 with the sign-in pointer). Every pack
+  bound to that email; `POST /api/credits/checkout` answers 401 with the sign-in pointer); the connector sign-in
+  (`src/mcp-oauth.js`) buys only once signed in by its emailed code, through the same `createCheckout` with that
+  email and the client address). Every pack
   and top-up checkout requests card authentication and carries neutral digest tags (`ref_*`) on the
   payment, never an email, address or key. The purchase checks (`purchaseChecks` in
   `src/credits-sales.js`: `CREDITS_BUYER_*`, `CREDITS_SOURCE_*`, `CREDITS_FAILED_*`, and

@@ -2,7 +2,9 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } from "./mpp-subscription-retention.js";
 import { READBACK_FIRST_MS, READBACK_INTERVAL_MS, READBACK_PENDING_INTERVAL_MS } from "./card-refund-readback.js";
 import { DEFAULT_WITHHELD_USER_AGENT_PREFIXES, mppOfferGateEnabled } from "./mpp-offer-gate.js";
-import { mppMethodsSummary } from "./mpp-offers.js";
+import { mppMethodsSummary, visaCliMppSentence } from "./mpp-offers.js";
+import { creditsSalesEnabled, creditsConnectorOn } from "./credits-sales.js";
+import { webBotAuthEnabled } from "./web-bot-auth.js";
 import { mppSubscriptionsEnabled } from "./mpp-subscriptions.js";
 import { walletSignInEnabled } from "./wallet-sign-in.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
@@ -19,6 +21,10 @@ import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOS
 
 // A timer figure as an entry prints it, read from the module that runs it.
 const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a minute" : `${n} minutes`; };
+
+// The OUSD entry: shown while this server's Tempo challenges include OUSD
+// (src/mpp-offers.js reads the same list for its Visa CLI sentence).
+const tempoOusdShown = () => Boolean(visaCliMppSentence());
 
 // The offer gate entry: shown while this server sends MPP challenges and the
 // gate is on (src/mpp-offer-gate.js).
@@ -49,6 +55,61 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 // the feed show it only while that function reads true (CHANGELOG.md scopes
 // the same item to a server that sets the switch).
 const ENTRIES = [
+  {
+    date: "2026-11-22",
+    title: "Start here page",
+    items: [
+      "Site: A new /start page gives the one step that adds Agent402 to Claude desktop, Claude Code or Cursor, lists what runs with no wallet, and shows how to fund a first wallet with USDC on Base.",
+      "Docs: The /start and /base pages, payment.info, /llms.txt, the README and the wiki say that an x402 exact payment on Base is a signature: the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "agent402-mcp 0.16.0 and agent402-client 0.12.0",
+    items: [
+      "Packages: agent402-mcp 0.16.0: `npx agent402-mcp setup` asks for the wallet key once and keeps it in the OS keychain, so the key never sits in a config file or an environment variable.",
+      "Packages: agent402-mcp 0.16.0 reads a key with or without its `0x` prefix, adds daily and monthly spending caps (`AGENT402_MAX_USD_PER_DAY`, `AGENT402_MAX_USD_PER_MONTH`) kept across restarts, and saves media answers as files in `AGENT402_OUTPUT_DIR`, with small images also kept inline.",
+      "Packages: agent402-client 0.12.0: `normalizeEvmKey` reads a private key with or without its `0x` prefix, and a call served under the first-call allowance counts against no spending cap.",
+      "Site: Every install line on the site and in the docs pins agent402-mcp 0.16.0.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Prepaid credits purchases and controls",
+    shownWhen: creditsSalesEnabled,
+    items: [
+      "Credits: On a server that sets `CREDITS_SALES`, smaller credit packs are on sale, and a pack above the daily purchase limit is not offered.",
+      "Credits: On a server that sets `CREDITS_SALES`, a credits purchase is made signed in to the balance page at /credits/account, bound to the email the credits go to, and the bank may ask to confirm the card payment.",
+      "Credits: On a server that sets `CREDITS_SALES`, the balance page sets a daily and a per-call spending limit on each key, revokes a key, and emails a notice when the daily limit refuses a call.",
+      "Credits: On a server that sets `CREDITS_SALES`, a key is frozen while a dispute or a fraud warning on the payment that loaded it is reviewed.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Connect an app to your credits",
+    shownWhen: creditsConnectorOn,
+    items: [
+      "MCP: On a server that sets `CREDITS_SALES` and `MCP_OAUTH=on`, an app added at /mcp/credits signs you in with an emailed code and pays for paid tool calls from your credits balance under a daily cap you set, with no key or wallet.",
+      "MCP: On a server that sets `CREDITS_SALES` and `MCP_OAUTH=on`, a first purchase starts from the same sign-in and goes through the balance page's checkout, and /start and payment.info name the /mcp/credits address.",
+      "Credits: On a server that sets `CREDITS_SALES` and `MCP_OAUTH=on`, the balance page lists each connected app with its spend today, changes its daily cap and disconnects it.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "OUSD on Tempo",
+    shownWhen: tempoOusdShown,
+    items: [
+      "Payments: On a server whose `TEMPO_CURRENCY` lists `ousd`, the Tempo rail also takes OUSD as its own challenge, and a refund of an OUSD payment goes back in OUSD.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Signed agent requests labeled",
+    shownWhen: webBotAuthEnabled,
+    items: [
+      "Payments: On a server that sets `WEB_BOT_AUTH=on`, a request signed by Visa CLI under the Trusted Agent Protocol is labeled as that agent in the traffic rollup; prices, limits and payment are the same as for an unsigned request.",
+    ],
+  },
   {
     date: "2026-11-22",
     title: "Speech model headers",
