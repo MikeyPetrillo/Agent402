@@ -464,9 +464,9 @@
   },
   {
    "slug": "evm-rpc",
-   "name": "gas price on polygon",
+   "name": "gas price on base",
    "input": {
-    "network": "polygon",
+    "network": "base",
     "method": "eth_gasPrice",
     "params": []
    },
@@ -485,6 +485,18 @@
     "params": [
      {}
     ]
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "evm-rpc",
+   "name": "a chain other than base is a 400",
+   "input": {
+    "network": "polygon",
+    "method": "eth_gasPrice",
+    "params": []
    },
    "expect": {
     "status": 400

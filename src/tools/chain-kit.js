@@ -6,8 +6,9 @@
 // set, so they answer on every deployment. Wallet-only (egress = external
 // quota), never PoW-eligible.
 //
-// Supported networks: ethereum, base, polygon, arbitrum, optimism. Mainnets only —
-// agents debugging testnets can use eth-call against a public RPC if needed.
+// Supported networks: ethereum, base, polygon, arbitrum, optimism. Mainnets only.
+// The raw relays (evm-rpc, eth-call, event-logs, and chain-storage in
+// chain-rpc-kit) read Base only (pickRelayNetwork).
 //
 // All tools accept a `network` field. Default is "base" because that's where x402
 // settles and where most agent activity lives today.
@@ -165,17 +166,39 @@ const RPC_METHOD_WHITELIST = new Set([
 // passes through as a 502 instead of burning the failover chain.
 // ============================================================================
 const EVM_RPC_TIMEOUT_MS = 8_000;
-const PUBLIC_RPCS = {
-  ethereum: ["https://ethereum-rpc.publicnode.com", "https://eth.drpc.org", "https://cloudflare-eth.com"],
-  base:     ["https://mainnet.base.org", "https://base-rpc.publicnode.com", "https://base.drpc.org"],
-  polygon:  ["https://polygon-bor-rpc.publicnode.com", "https://polygon.drpc.org"],
-  arbitrum: ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.drpc.org"],
-  optimism: ["https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com", "https://optimism.drpc.org"],
-};
+export const PUBLIC_RPCS = Object.freeze({
+  ethereum: ["https://ethereum-rpc.publicnode.com"],
+  base:     ["https://mainnet.base.org", "https://base-rpc.publicnode.com"],
+  polygon:  ["https://polygon-bor-rpc.publicnode.com"],
+  arbitrum: ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"],
+  optimism: ["https://optimism-rpc.publicnode.com"],
+});
 
-export async function publicJsonRpc(network, method, params) {
+// The raw relays (evm-rpc, eth-call, chain-storage, event-logs) read Base
+// only, through Base's own public endpoint: the one lane they use. Every other
+// chain answers 400 naming Base (pickRelayNetwork); the named reads keep every
+// chain above. mainnet.base.org refuses every eth_getLogs (measured), so
+// event-logs reads Base's public node behind it (EVENT_LOGS_RPCS).
+export const RELAY_NETWORK = "base";
+export const BASE_RELAY_RPCS = Object.freeze(["https://mainnet.base.org"]);
+export const EVENT_LOGS_RPCS = Object.freeze(["https://mainnet.base.org", "https://base-rpc.publicnode.com"]);
+
+/** The network a raw relay reads: Base, or a 400 that names Base and the
+ *  named reads that serve the other chains. */
+export function pickRelayNetwork(value, slug) {
+  const n = value === undefined || value === null || value === "" ? RELAY_NETWORK : String(value).toLowerCase().trim();
+  if (n !== RELAY_NETWORK) {
+    const shown = String(value).slice(0, 40);
+    throw bad(`${slug} reads Base only: network "${shown}" is not supported. Send network "base" (or omit it). For ${Object.keys(NETWORKS).filter((k) => k !== RELAY_NETWORK).join(", ")}, use the named reads (block-number, chain-info, block-info, contract-code, erc721-owner, chain-nonce).`);
+  }
+  return pickNetwork(RELAY_NETWORK);
+}
+
+/** JSON-RPC read with failover. `urls` replaces the lane list (the relays'
+ *  Base-only lane: no other endpoint and no keyed lane is asked). */
+export async function publicJsonRpc(network, method, params, { urls: onlyUrls = null } = {}) {
   const key = process.env.ALCHEMY_API_KEY;
-  const urls = [
+  const urls = onlyUrls ? [...onlyUrls] : [
     ...PUBLIC_RPCS[network.name],
     ...(key ? [`https://${network.subdomain}.g.alchemy.com/v2/${key}`] : []),
   ];
@@ -220,7 +243,7 @@ export async function publicJsonRpc(network, method, params) {
         // A public node's own size limit on a log query ("block range is too
         // large", "query returned more than 10000 results") is the node's
         // plan, not the answer: the next endpoint (the keyed lane last) is asked.
-      if (!isRevert && (res.status === 429 || data.error.code === 429 || /api key|tenant disabled|\b403\b|rate limit|too many requests|archive requests require|personal token|block range|range (?:is )?too (?:large|wide|big)|returned more than|exceeds? (?:the )?(?:max(?:imum)?|limit)|limit exceeded/i.test(msg))) { lastErr = new Error(`provider refused: ${msg}`); continue; }
+      if (!isRevert && (res.status === 429 || data.error.code === 429 || /api key|tenant disabled|\b403\b|rate limit|too many requests|archive requests require|personal token|block range|range (?:is )?too (?:large|wide|big)|returned more than|exceeds? (?:the )?(?:max(?:imum)?|limit)|limit exceeded|request limit reached/i.test(msg))) { lastErr = new Error(`provider refused: ${msg}`); continue; }
         const err = bad(`Node error: ${msg}`, 502);
         // Carry the JSON-RPC error code so callers (tx-simulate) can tell a
         // revert verdict (code 3) from node-side failures like rate limits.
@@ -710,7 +733,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Escape hatch for power users: forward an arbitrary read-only JSON-RPC method to the chain. Method must be in our read-only whitelist (eth_call, eth_getLogs, eth_getBlockByNumber, eth_getTransactionReceipt, eth_chainId, eth_blockNumber, etc.). Mutating methods (eth_sendTransaction, eth_sendRawTransaction) are rejected - sign and broadcast through your own provider.",
+      "Escape hatch for power users: forward an arbitrary read-only JSON-RPC method to Base (network \"base\"; other chains answer 400, use the named reads there). Method must be in our read-only whitelist (eth_call, eth_getLogs, eth_getBlockByNumber, eth_getTransactionReceipt, eth_chainId, eth_blockNumber, etc.). Mutating methods (eth_sendTransaction, eth_sendRawTransaction) are rejected - sign and broadcast through your own provider.",
     tags: ["crypto", "rpc", "json-rpc", "evm", "eth-call", "advanced"],
     discovery: {
       bodyType: "json",
@@ -719,7 +742,7 @@ export const CHAIN_TOOLS = [
         properties: {
           method: { type: "string", description: "JSON-RPC method (must be in the read-only whitelist)." },
           params: { type: "array", description: "JSON-RPC parameter array (often empty for simple methods)." },
-          network: { type: "string", description: "ethereum / base / polygon / arbitrum / optimism (default base)." },
+          network: { type: "string", description: "base (the one network this relay reads; default base). Other chains answer 400." },
         },
         required: ["method"],
       },
@@ -738,8 +761,8 @@ export const CHAIN_TOOLS = [
         throw bad(`Method "${method}" is not in the read-only whitelist. Allowed: ${[...RPC_METHOD_WHITELIST].join(", ")}`);
       }
       const params = Array.isArray(i.params) ? i.params : [];
-      const network = pickNetwork(i.network);
-      const result = await publicJsonRpc(network, method, params);
+      const network = pickRelayNetwork(i.network, "eth-call");
+      const result = await publicJsonRpc(network, method, params, { urls: BASE_RELAY_RPCS });
       return { network: network.name, method, result };
     },
   },
@@ -752,19 +775,19 @@ export const CHAIN_TOOLS = [
   // ===========================================================================
   {
     route: "POST /api/evm-rpc",
-    name: "Multi-chain EVM RPC (read-only)",
+    name: "Base EVM RPC (read-only)",
     slug: "evm-rpc",
     category: "crypto",
     price: "$0.004",
     description:
-      "Read-only JSON-RPC against Ethereum, Base, Polygon, Arbitrum, or Optimism with built-in multi-endpoint failover - one paid call, no node or API key of your own. Prefer the named reads (block-number, chain-info, block-info, event-logs, erc721-owner, contract-code) for common tasks - they validate inputs and cost less; use this when you need a whitelisted method they do not wrap. Whitelisted methods only: eth_blockNumber, eth_gasPrice, eth_getBalance, eth_getTransactionCount, eth_getBlockByNumber, eth_getTransactionByHash, eth_getTransactionReceipt, eth_call, eth_getCode, eth_getStorageAt, eth_chainId, eth_feeHistory, net_version. Mutating, signing, subscription, and unbounded methods (eth_getLogs) are rejected. Results over 200KB serialized return 413 - narrow the query.",
-    tags: ["crypto", "rpc", "json-rpc", "evm", "multichain", "base", "ethereum", "polygon", "arbitrum"],
+      "Read-only JSON-RPC against Base (network \"base\"; other chains answer 400) - one paid call, no node or API key of your own. Prefer the named reads (block-number, chain-info, block-info, event-logs, erc721-owner, contract-code) for common tasks - they validate inputs and cost less; use this when you need a whitelisted method they do not wrap. Whitelisted methods only: eth_blockNumber, eth_gasPrice, eth_getBalance, eth_getTransactionCount, eth_getBlockByNumber, eth_getTransactionByHash, eth_getTransactionReceipt, eth_call, eth_getCode, eth_getStorageAt, eth_chainId, eth_feeHistory, net_version. Mutating, signing, subscription, and unbounded methods (eth_getLogs) are rejected. Results over 200KB serialized return 413 - narrow the query.",
+    tags: ["crypto", "rpc", "json-rpc", "evm", "base"],
     discovery: {
       bodyType: "json",
       input: { network: "base", method: "eth_blockNumber", params: [] },
       inputSchema: {
         properties: {
-          network: { type: "string", description: "ethereum / base / polygon / arbitrum / optimism (default base)." },
+          network: { type: "string", description: "base (the one network this relay reads; default base). Other chains answer 400." },
           method: { type: "string", description: "Whitelisted read-only JSON-RPC method (e.g. eth_blockNumber, eth_getBalance, eth_call)." },
           params: { type: "array", description: "JSON-RPC positional parameter array (default []). Max 8 entries, 4KB serialized. eth_call's block parameter defaults to \"latest\"." },
         },
@@ -779,7 +802,7 @@ export const CHAIN_TOOLS = [
       },
     },
     handler: async (i) => {
-      const network = pickNetwork(i.network);
+      const network = pickRelayNetwork(i.network, "evm-rpc");
       const rawMethod = typeof i.method === "string" ? i.method.trim() : "";
       const method = EVM_RPC_METHOD_BY_LOWER.get(rawMethod.toLowerCase());
       if (!method) {
@@ -796,7 +819,7 @@ export const CHAIN_TOOLS = [
         throw bad(`"params" must be JSON-serializable and ≤${EVM_RPC_MAX_PARAMS_BYTES} bytes serialized`);
       }
       if (method === "eth_call" && params.length === 1) params = [...params, "latest"];
-      const result = await publicJsonRpc(network, method, params);
+      const result = await publicJsonRpc(network, method, params, { urls: BASE_RELAY_RPCS });
       const resultJson = JSON.stringify(result);
       const resultBytes = resultJson === undefined ? 0 : Buffer.byteLength(resultJson, "utf8");
       if (resultBytes > EVM_RPC_MAX_RESULT_BYTES) {
@@ -1010,7 +1033,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Fetch contract event logs (eth_getLogs) on Ethereum, Base, Polygon, Arbitrum, or Optimism - bounded so it always answers: block range capped at 2000 blocks (default: the last 100, auto-narrowed for busy contracts), at most 200 logs returned (truncated flag set if more matched). Filter by contract address and optional topic0 (event signature hash). Keyless multi-endpoint failover.",
+      "Fetch contract event logs (eth_getLogs) on Base (network \"base\"; other chains answer 400) - bounded so it always answers: block range capped at 2000 blocks (default: the last 100, auto-narrowed for busy contracts), at most 200 logs returned (truncated flag set if more matched). Filter by contract address and optional topic0 (event signature hash). Keyless multi-endpoint failover.",
     tags: ["crypto", "event", "events", "logs", "getlogs", "transfer", "topic", "rpc", "evm"],
     discovery: {
       bodyType: "json",
@@ -1025,7 +1048,7 @@ export const CHAIN_TOOLS = [
           topic0: { type: "string", description: "Optional event signature hash (32-byte 0x hex), e.g. the ERC-20 Transfer topic." },
           fromBlock: { type: "string", description: "Start block (decimal or 0x hex). Default: toBlock - 100." },
           toBlock: { type: "string", description: "End block (decimal, 0x hex, or \"latest\"). Default latest." },
-          network: { type: "string", description: "ethereum / base / polygon / arbitrum / optimism (default base)." },
+          network: { type: "string", description: "base (the one network this relay reads; default base). Other chains answer 400." },
         },
         required: ["address"],
       },
@@ -1038,7 +1061,7 @@ export const CHAIN_TOOLS = [
     },
     handler: async (i) => {
       const address = takeAddress(i.address);
-      const network = pickNetwork(i.network);
+      const network = pickRelayNetwork(i.network, "event-logs");
       let topic0 = null;
       if (i.topic0 !== undefined && i.topic0 !== null && i.topic0 !== "") {
         if (typeof i.topic0 !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(i.topic0.trim())) {
@@ -1046,7 +1069,7 @@ export const CHAIN_TOOLS = [
         }
         topic0 = i.topic0.trim().toLowerCase();
       }
-      const latestHex = await publicJsonRpc(network, "eth_blockNumber", []);
+      const latestHex = await publicJsonRpc(network, "eth_blockNumber", [], { urls: EVENT_LOGS_RPCS });
       const latest = Number(BigInt(latestHex));
       const toBlock = i.toBlock === undefined || i.toBlock === "latest" ? latest : takeBlockNumber(i.toBlock, "toBlock");
       const pinnedFrom = i.fromBlock !== undefined;
@@ -1061,7 +1084,7 @@ export const CHAIN_TOOLS = [
           fromBlock: "0x" + from.toString(16),
           toBlock: "0x" + toBlock.toString(16),
           ...(topic0 ? { topics: [topic0] } : {}),
-        }]);
+        }], { urls: EVENT_LOGS_RPCS });
       let raw;
       try {
         raw = await fetchRange(fromBlock);

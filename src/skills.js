@@ -2220,7 +2220,7 @@ const SKILL_PACKS_ALL = [
         // calldata-decode / selector-lookup both failed on every call. A real
         // Base transaction, immutable and public, with real calldata.
         substitute: "0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59" },
-      { name: "network", description: "EVM network (ethereum / base / polygon / arbitrum / optimism, default base)", required: false, substitute: "base" },
+      { name: "network", description: "EVM network, default base. The raw-transaction step (evm-rpc) reads Base only, so on another chain that step answers 400 and the pack returns the steps that ran.", required: false, substitute: "base" },
     ],
     toolSlugs: ["tx-status", "evm-rpc", "calldata-decode", "selector-lookup", "address-label"],
     workflow: [
