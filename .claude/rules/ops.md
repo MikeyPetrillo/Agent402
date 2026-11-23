@@ -29,6 +29,9 @@ paths:
   - "src/upstream-budgets.js"
   - "src/upstream-hard-caps.js"
   - "src/upstream-call-days.js"
+  - "src/upstream-cap-refusals.js"
+  - "src/tools/rdap-registry-limits.js"
+  - "src/tools/us-macro-series.js"
   - "services/**"
   - "scripts/*-deploy-paths.js"
   - "scripts/backup-restore.js"
@@ -168,6 +171,18 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   default 40000, also its most; half the job's 2-minute limit), it reads its own pushed range; `MARKER_WORKFLOW_FILE` (default
   `deploy.yml`) names the workflow whose runs it lists (`scripts/test-ci-gating.js` runs the
   step on a three-push sequence and evaluates the group for every mode a job reads).
+- **Our own upstream caps** (refuse with a 503 before any read and any settle point; counted by
+  `src/upstream-cap-refusals.js`, per cap and slug on `/__operator/upstream-caps.json`; the word
+  `upstreamCaps` on `/api/gateway-status` reads `reached` for an hour after a refusal, and the status
+  Worker and heartbeat page under `Scheduled check needs review: upstream-caps`). A cached answer is
+  not a read and takes no place. `RDAP_REGISTRY_DAILY_MAX`: lookups per registry RDAP host per UTC
+  day per process, shared by whois and domain-availability (default 1000, `off` lifts it).
+  `BLS_API_KEY`: fred-series' BLS reads; keyless the day budget is 20 (the API allows 25), with the
+  key 450 (the API allows 500), reads cached by decade. `CERTSPOTTER_API_KEY`: cert-transparency's
+  second search runs only with it, at most 100 reads an hour per process; past that crt.sh answers
+  alone (no refusal). `SOLANA_DEVNET_RPC_URL`: wallet-balances on solana-devnet (unset, the devnet
+  host of the provider behind `SOLANA_RPC_URL`). search-suggest's per-minute ceiling and queue-wait
+  bound count as a cap too.
 - **CI's data keys:** `OPEN_METEO_API_KEY` and `COINGECKO_CI_API_KEY` (never the production
   CoinGecko key) reach only test-sweeps' strict-sweep server step and the nightly corpus step; the
   server gets `COINGECKO_API_TIER=pro` and `COINGECKO_DAILY_MAX` = `CG_RUN_READ_CAP`
