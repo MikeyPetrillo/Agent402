@@ -9,6 +9,10 @@
 //                          folder; the temp folder too when the first cannot
 //                          be written)
 //   AGENT402_MEDIA_INLINE  "1" (or true/on) returns media inline as before
+//   AGENT402_MEDIA_INLINE_MAX_BYTES
+//                          an image answer up to this size (default 1 MB; 0 = none)
+//                          is also returned inline as an image block, so the model
+//                          still sees it, beside the file
 //
 // File names are made here from a fixed alphabet (the tool's slug, the field
 // name, a time stamp and random characters, with an extension from a fixed
@@ -26,6 +30,14 @@ export const LARGE_BASE64_CHARS = 8 * 1024;
 const MAX_WALK_DEPTH = 12;
 const MAX_FILES_PER_ANSWER = 32;
 
+export const MEDIA_INLINE_MAX_ENV = "AGENT402_MEDIA_INLINE_MAX_BYTES";
+export const DEFAULT_INLINE_IMAGE_MAX_BYTES = 1024 * 1024;
+/** The largest image returned inline beside its file: a whole number of bytes, the default otherwise. */
+export function inlineImageMaxBytes(env = process.env) {
+  const raw = String(env[MEDIA_INLINE_MAX_ENV] ?? "").trim();
+  const n = raw === "" ? NaN : Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_INLINE_IMAGE_MAX_BYTES;
+}
 export const mediaInline = (env = process.env) => /^(1|true|on|yes)$/i.test(String(env[MEDIA_INLINE_ENV] || "").trim());
 
 const EXT = {

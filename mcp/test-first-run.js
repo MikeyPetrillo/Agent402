@@ -130,6 +130,7 @@ const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20_000, 3)]);
   writeFileSync(blocker, "x");
   ok(M.writableOutputDir([join(blocker, "sub"), out]) === out, "an unwritable folder falls through to the next one");
   ok(M.mediaInline({ AGENT402_MEDIA_INLINE: "1" }) && !M.mediaInline({}), "AGENT402_MEDIA_INLINE=1 opts out");
+  ok(M.inlineImageMaxBytes({}) === 1024 * 1024 && M.inlineImageMaxBytes({ AGENT402_MEDIA_INLINE_MAX_BYTES: "5000" }) === 5000 && M.inlineImageMaxBytes({ AGENT402_MEDIA_INLINE_MAX_BYTES: "0" }) === 0 && M.inlineImageMaxBytes({ AGENT402_MEDIA_INLINE_MAX_BYTES: "lots" }) === 1024 * 1024 && M.inlineImageMaxBytes({ AGENT402_MEDIA_INLINE_MAX_BYTES: "-1" }) === 1024 * 1024, "the inline image bound defaults to 1 MB; a value that is not a byte count keeps the default");
   console.log("media-output.js: sniffing, bounded names, no traversal, base64 fields, folders ✓");
 }
 
@@ -221,7 +222,7 @@ const offer = (path, amount) => Buffer.from(JSON.stringify({
   accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(amount), asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }],
 })).toString("base64");
 const row = (slug, price = "$0.01") => ({ slug, method: "POST", path: `/api/${slug}`, price, description: `${slug} test`, category: "util", computePayable: false });
-const ROWS = [row("paid"), row("grant"), row("grant-settled"), row("pic"), row("tts")];
+const ROWS = [row("paid"), row("grant"), row("grant-settled"), row("pic"), row("tts"), row("clip")];
 const BIG_AUDIO = { text: "hi", audio: MP3.toString("base64"), format: "mp3" };
 const stub = createServer((req, res) => {
   const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(typeof body === "string" ? body : JSON.stringify(body)); };
@@ -240,6 +241,7 @@ const stub = createServer((req, res) => {
   if (slug === "grant-settled") return send(200, { ok: true }, { "X-Agent402-Allowance": "first-call", ...receipt });
   if (slug === "pic") { res.writeHead(200, { "content-type": "image/png", ...receipt }); return res.end(PNG); }
   if (slug === "tts") return send(200, BIG_AUDIO, receipt);
+  if (slug === "clip") { res.writeHead(200, { "content-type": "audio/mpeg", ...receipt }); return res.end(MP3); }
   return send(200, { ok: true }, receipt);
 });
 await new Promise((r) => stub.listen(0, "127.0.0.1", r));
@@ -346,11 +348,14 @@ try {
     try {
       const pic = await callSlug(c, "pic");
       const saved = pic.structuredContent?.result?.result;
-      ok(!pic.isError && pic.content.every((b) => b.type === "text") && /Saved image\/png \(20,008 bytes\) to /.test(text(pic)) && saved?.savedTo && dirname(saved.savedTo) === out && readFileSync(saved.savedTo).equals(PNG) && saved.bytes === PNG.length && saved.contentType === "image/png", `an image answer is a file, not inline base64: ${text(pic)} ${JSON.stringify(pic.structuredContent)}`);
+      ok(!pic.isError && pic.content[0].type === "image" && Buffer.from(pic.content[0].data, "base64").equals(PNG) && /Saved image\/png \(20,008 bytes\) to /.test(text(pic)) && saved?.savedTo && dirname(saved.savedTo) === out && readFileSync(saved.savedTo).equals(PNG) && saved.bytes === PNG.length && saved.contentType === "image/png" && saved.inline === true, `an image under the 1 MB default is inline for the model and also a file: ${text(pic)} ${JSON.stringify(pic.structuredContent)}`);
+      const clip = await callSlug(c, "clip");
+      const cs = clip.structuredContent?.result?.result;
+      ok(!clip.isError && clip.content.every((b) => b.type === "text") && /Saved audio\/mpeg \(20,003 bytes\) to /.test(text(clip)) && readFileSync(cs.savedTo).equals(MP3), `an audio answer is a file only: ${text(clip)}`);
       const tts = await callSlug(c, "tts");
       const audio = tts.structuredContent?.result?.audio;
       ok(!tts.isError && audio?.savedTo && readFileSync(audio.savedTo).equals(MP3) && audio.contentType === "audio/mpeg" && !text(tts).includes(BIG_AUDIO.audio.slice(0, 200)) && tts.structuredContent.result.text === "hi", `a large base64 audio field is a file: ${text(tts).slice(0, 300)}`);
-      ok(readdirSync(out).length === 2, "exactly the two media files were written");
+      ok(readdirSync(out).length === 3, "exactly the three media files were written");
     } finally { await c.close(); }
     const inl = await connect({ AGENT_KEY: `0x${HEX}`, AGENT402_CONFIG_DIR: tmp("cfg"), AGENT402_OUTPUT_DIR: out, AGENT402_MEDIA_INLINE: "1" });
     try {
@@ -358,8 +363,17 @@ try {
       ok(pic.content[0].type === "image" && Buffer.from(pic.content[0].data, "base64").equals(PNG), "AGENT402_MEDIA_INLINE=1 returns the image inline");
       const tts = await callSlug(inl, "tts");
       ok(text(tts).includes(BIG_AUDIO.audio.slice(0, 200)), "AGENT402_MEDIA_INLINE=1 leaves base64 fields inline");
-      ok(readdirSync(out).length === 2, "inline mode writes no file");
+      ok(readdirSync(out).length === 3, "inline mode writes no file");
     } finally { await inl.close(); }
+    // The bound, both sides: an image of exactly the bound is inline; one byte over is a file only.
+    for (const [max, inline] of [[PNG.length, true], [PNG.length - 1, false]]) {
+      const b = await connect({ AGENT_KEY: `0x${HEX}`, AGENT402_CONFIG_DIR: tmp("cfg"), AGENT402_OUTPUT_DIR: tmp("out"), AGENT402_MEDIA_INLINE_MAX_BYTES: String(max) });
+      try {
+        const pic = await callSlug(b, "pic");
+        const r = pic.structuredContent?.result?.result;
+        ok(!pic.isError && (pic.content[0].type === "image") === inline && pic.content.filter((x) => x.type === "image").length === (inline ? 1 : 0) && r?.savedTo && readFileSync(r.savedTo).equals(PNG) && r.inline === inline, `bound ${max}: an image of ${PNG.length} bytes is ${inline ? "inline and a file" : "a file only"}: ${JSON.stringify(pic.content.map((x) => x.type))}`);
+      } finally { await b.close(); }
+    }
     console.log("server: media answers written to files with path, size and type; inline opt-out ✓");
   }
 

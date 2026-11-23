@@ -22,6 +22,8 @@ export interface Agent402McpEnv {
   AGENT402_OUTPUT_DIR?: string;
   /** "1" returns media answers inline instead of as files. */
   AGENT402_MEDIA_INLINE?: string;
+  /** An image answer up to this many bytes (default 1048576; "0" = none) is also returned inline beside its file. */
+  AGENT402_MEDIA_INLINE_MAX_BYTES?: string;
   /** Base58 or JSON byte-array secret key of a funded Solana wallet (USDC). */
   SOLANA_AGENT_KEY?: string;
   /** Comma-separated slugs listed first-class (replaces the default set). */

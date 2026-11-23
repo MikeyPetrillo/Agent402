@@ -64,6 +64,7 @@ Every variable the server reads (all optional):
 | `AGENT402_CONFIG_DIR` | per-user config folder | Where `spend.json` (and, without a keychain, the key file) live: `~/Library/Application Support/agent402` on macOS, `%APPDATA%\agent402` on Windows, `~/.config/agent402` elsewhere. |
 | `AGENT402_OUTPUT_DIR` | `~/Downloads/agent402` | Where media answers are written (the OS temp folder when `~/Downloads` is absent or cannot be written). |
 | `AGENT402_MEDIA_INLINE` | _(unset)_ | `1` returns media answers inline (an image or audio content block, or base64) instead of as files. |
+| `AGENT402_MEDIA_INLINE_MAX_BYTES` | `1048576` (1 MB) | An image answer up to this size is also returned inline as an image content block, so the model sees it, beside its file. `0` sends every image to the file only. |
 | `AGENT402_SHOW_ROUTER` | _(unset)_ | `1` lists `router.execute` and `sellers.list` even without a wallet. Both are listed automatically when a wallet key is set; a credits key does not pay `router.execute`, which buys from outside sellers and takes a wallet payment. |
 | `AGENT402_NETWORKS` | _(unset)_ | Restrict + order the chains to pay on - e.g. `robinhood` (USDG on Robinhood Chain), `base,solana`, or a raw CAIP-2 like `eip155:4663`. Unset = the client picks (effectively Base on multi-chain sellers). |
 | `AGENT402_ASYNC` | `auto` | Slow routes (reports, video, the premium image; `async.recommended` on their `/api/pricing` row) are paid with `Prefer: respond-async` and collected from their job link, so a long run never outlives the connection. `off` waits on the connection instead (since 0.13.18 sending `Prefer: wait=<maxSeconds>` where the row gives `async.preferWait`); `always` uses a job on every route that runs as one. |
@@ -97,7 +98,10 @@ labeled "One-time free call" in the tool result and counts against no cap.
 **Media answers as files.** An answer that is bytes (an image, audio, video or
 PDF), or a JSON answer with a large base64 media field, is written to a file in
 `AGENT402_OUTPUT_DIR`, and the tool result gives its absolute path, size and
-content type instead of the bytes, so they never fill the model's context. File
+content type instead of the bytes, so they never fill the model's context. An
+image answer up to `AGENT402_MEDIA_INLINE_MAX_BYTES` (1 MB by default) is also
+returned inline as an image content block, so the model still sees it; audio,
+video, PDFs and larger images go to the file only. File
 names are made by this server (the tool's slug, a time stamp and random
 characters), never taken from the answer.
 

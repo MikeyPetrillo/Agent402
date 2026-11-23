@@ -25,7 +25,8 @@
 //   AGENT402_MAX_USD_PER_DAY / AGENT402_MAX_USD_PER_MONTH
 //                         optional caps per UTC day / month that hold across restarts (./spend-ledger.js)
 //   AGENT402_OUTPUT_DIR   where media answers are written (./media-output.js); AGENT402_MEDIA_INLINE=1
-//                         returns them inline instead
+//                         returns them inline instead; an image up to AGENT402_MEDIA_INLINE_MAX_BYTES
+//                         (default 1 MB) is also inline beside its file
 //   AGENT402_SHOW_ROUTER  "1" lists router.execute and sellers.list without a wallet (both are listed
 //                         when a wallet or credits key is set)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
@@ -42,7 +43,7 @@ import { normalizeEvmKey, evmKeyOrNull, walletKeyError } from "./wallet-key.js";
 import { configDir } from "./config-dir.js";
 import { ledgerFromEnv } from "./spend-ledger.js";
 import { keyStoreKind, readStoredKey } from "./key-store.js";
-import { mediaInline, outputDirCandidates, writableOutputDir, saveMedia, extractMediaFields, isBinaryBody, bareType, sniffType, savedLine } from "./media-output.js";
+import { mediaInline, inlineImageMaxBytes, outputDirCandidates, writableOutputDir, saveMedia, extractMediaFields, isBinaryBody, bareType, sniffType, savedLine } from "./media-output.js";
 // MCP SDK v2 (@modelcontextprotocol/server, pinned exactly in package.json).
 // Handlers are registered by method name. The server answers the 2024-11-05
 // through 2025-11-25 revisions it did under SDK v1, and the SDK lifts every
@@ -741,6 +742,8 @@ function firstCallGrant(res) {
 // Media answers are written to files (./media-output.js) unless
 // AGENT402_MEDIA_INLINE is on; the folder is found once, on the first one.
 const MEDIA_INLINE = mediaInline();
+// An image this small is also returned inline, so the model sees it.
+const INLINE_IMAGE_MAX = inlineImageMaxBytes();
 let mediaDir;
 function mediaFolder() { mediaDir ??= writableOutputDir(outputDirCandidates()); return mediaDir; }
 /** Save `buf` for `tool`, or null when inline is asked for or no folder can be written. */
@@ -755,9 +758,10 @@ function bytesResult(tool, buf, contentType) {
   const type = bareType(contentType) || sniffType(buf) || "application/octet-stream";
   const f = trySave(tool, buf, { contentType: type });
   if (f) {
+    const seen = type.startsWith("image/") && buf.length <= INLINE_IMAGE_MAX;
     return {
-      content: [{ type: "text", text: savedLine(f) }],
-      structuredContent: { slug: tool.slug, result: { contentType: f.contentType, bytes: f.bytes, savedTo: f.path, note: "The answer was written to this file; set AGENT402_MEDIA_INLINE=1 to receive it inline" } },
+      content: [...(seen ? [{ type: "image", data: buf.toString("base64"), mimeType: type }] : []), { type: "text", text: savedLine(f) }],
+      structuredContent: { slug: tool.slug, result: { contentType: f.contentType, bytes: f.bytes, savedTo: f.path, inline: seen, note: seen ? "The answer was written to this file and is also in the image content block" : "The answer was written to this file; set AGENT402_MEDIA_INLINE=1 to receive it inline" } },
     };
   }
   const data = buf.toString("base64");

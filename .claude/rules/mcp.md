@@ -105,5 +105,6 @@ Loaded when a connector or front-door file is read.
   `AGENT402_CONFIG_DIR` (`mcp/spend-ledger.js`; only confirmed spend is written). A 2xx with
   `X-Agent402-Allowance: first-call` and no `PAYMENT-RESPONSE` is labeled "One-time free call" and not counted (the
   client SDK releases it too). Media answers become files in `AGENT402_OUTPUT_DIR` (`mcp/media-output.js`, names made
-  from a fixed alphabet; `AGENT402_MEDIA_INLINE=1` opts out). A suite that spawns the stdio server sets
+  from a fixed alphabet); an image up to `AGENT402_MEDIA_INLINE_MAX_BYTES` (default 1 MB) is also an inline image block,
+  so the model loses no sight of it; `AGENT402_MEDIA_INLINE=1` keeps everything inline. A suite that spawns the stdio server sets
   `AGENT402_KEY_STORE=off` and temp `AGENT402_CONFIG_DIR` / `AGENT402_OUTPUT_DIR`, so a developer's stored key is never read.
