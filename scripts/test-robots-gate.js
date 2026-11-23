@@ -61,6 +61,13 @@ ok((await verdict("User-agent: agent402-fetch\nDisallow: /\n", "https://a.exampl
 ok((await verdict("User-agent: Agent402\nDisallow: /\n", "https://a.example/x")).allowed === false, "a group for the brand token Agent402 applies");
 ok((await verdict("User-agent: Fetch\nDisallow: /\n", "https://a.example/x")).allowed === true, "a group for another product named Fetch (part of our token) does not apply");
 ok((await verdict("User-agent: Agent402-Fetcher\nDisallow: /\n", "https://a.example/x")).allowed === true, "a group for a longer name that starts with our token does not apply");
+{
+  // The group selection itself, on the parser's raw groups (the cache keeps
+  // only our groups too, so this is checked apart from it).
+  const raw = parseRobots("User-agent: Fetch\nDisallow: /a\n\nUser-agent: Agent402-Fetch/2.1\nDisallow: /b\n\nUser-agent: Agent402\nDisallow: /c\n\nUser-agent: *\nDisallow: /d\n");
+  const sel = gate.groupsForToken(raw, FETCH_TOKEN).map((g) => g.agents.join(","));
+  ok(JSON.stringify(sel) === JSON.stringify(["", "agent402-fetch", "agent402-fetch", "*"]), `groupsForToken keeps the exact token (with a version), the brand and *, and drops Fetch (${JSON.stringify(sel)})`);
+}
 ok((await verdict("User-agent: *\nDisallow: /\n", "https://a.example/x")).allowed === false, "with no group naming us, the * group applies");
 ok((await verdict("User-agent: *\nDisallow: /\n\nUser-agent: Agent402-Fetch\nAllow: /\n", "https://a.example/x")).allowed === true, "a group naming us replaces the * group");
 ok((await verdict("User-agent: Agent402-Fetch\nDisallow: /docs\nAllow: /docs/public\n", "https://a.example/docs/public/a")).allowed === true, "the longest matching rule decides (Allow)");
