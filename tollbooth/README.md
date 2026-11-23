@@ -111,6 +111,9 @@ TOLLBOOTH_FACILITATOR_URL=https://x402.org/facilitator \
 npx agent402-tollbooth          # listens on :4021, proxies humans free, charges bots
 ```
 
+`npx agent402-tollbooth --help` lists the main settings and `--version` prints
+the installed version; neither starts a gate.
+
 For real money, drop `TOLLBOOTH_NETWORK` (Base is the default) and point
 `TOLLBOOTH_FACILITATOR_URL` at a facilitator that settles Base mainnet, or set
 `TOLLBOOTH_CDP_API_KEY_ID` and `TOLLBOOTH_CDP_API_KEY_SECRET` to settle through
@@ -362,7 +365,7 @@ Read by the bundled proxy / Express entry point (`index.js`):
 |---|---|---|
 | `TOLLBOOTH_UPSTREAM` | – | Origin the built-in reverse proxy forwards to |
 | `TOLLBOOTH_PAYTO` | – | Wallet address; advertises a USDC x402 quote (and, with `TOLLBOOTH_FACILITATOR_URL`, settles it) |
-| `TOLLBOOTH_FACILITATOR_URL` | – | x402 facilitator that settles your network. With `TOLLBOOTH_PAYTO` the CLI builds a real `@x402/express` middleware and takes payment over x402 **and** MPP (0.8.0). Needs `@x402/express @x402/core @x402/evm` installed; refuses to start without them |
+| `TOLLBOOTH_FACILITATOR_URL` | – | x402 facilitator that settles your network. With `TOLLBOOTH_PAYTO` the CLI builds a real `@x402/express` middleware and takes payment over x402 **and** MPP (0.8.0). Needs `@x402/express @x402/core @x402/evm` installed; refuses to start without them, and refuses with one line naming the network when the facilitator's `/supported` list does not settle `exact` on `TOLLBOOTH_NETWORK` (a facilitator it cannot reach yet is retried on the first paid request) |
 | `TOLLBOOTH_FACILITATOR_HEADERS` | – | Optional JSON object of auth headers sent on the facilitator's `/verify`, `/settle`, `/supported` (e.g. `{"X-API-Key":"…"}`) |
 | `TOLLBOOTH_CDP_API_KEY_ID` + `TOLLBOOTH_CDP_API_KEY_SECRET` | – | Settle through Coinbase's facilitator (CDP) instead of a URL. Needs `npm i @coinbase/x402`. This is how a Coinbase Business account gets paid by agents: `TOLLBOOTH_PAYTO` = the account's USDC (Base) receive address. |
 | `TOLLBOOTH_PRICE` | `"$0.001"` | Advertised price per request |
@@ -383,7 +386,7 @@ Read by the bundled proxy / Express entry point (`index.js`):
 | `TOLLBOOTH_ADAPTIVE_PER_BIT` | `300` | +1 difficulty bit per N charged requests/min |
 | `TOLLBOOTH_SECRET` | random | HMAC secret binding PoW challenges (set it to survive restarts / run multiple instances) |
 | `TOLLBOOTH_SHUTDOWN_GRACE_MS` | `10000` | On SIGTERM or SIGINT the CLI stops taking connections, lets requests in flight finish and exits 0; a request still running after this many ms (at most 120000) is cut and the exit code is 1. A second signal exits at once |
-| `TOLLBOOTH_REPLAY_SQLITE` | – | Path to a SQLite file every process shares as the single-use PoW record. Set it whenever more than one process serves the same `TOLLBOOTH_SECRET`. Needs Node 22.5+ (built-in `node:sqlite`) or an installed `better-sqlite3`; refuses to start if neither can open the file |
+| `TOLLBOOTH_REPLAY_SQLITE` | – | Path to a SQLite file every process shares as the single-use PoW record. Set it whenever more than one process serves the same `TOLLBOOTH_SECRET`. Needs Node 22.5+ (built-in `node:sqlite`) or an installed `better-sqlite3`; refuses to start if neither driver loads, or if the file cannot be opened (the message names the path) |
 | `TOLLBOOTH_RESOURCE_BASE` | `TOLLBOOTH_UPSTREAM` | Absolute base used for the `resource` field / PoW binding |
 | `TOLLBOOTH_VERIFY_TIMEOUT_MS` | `10000` | Abort an x402 settlement check after this long |
 | `TOLLBOOTH_OBSERVE` | `false` | Observe-only: classify and count, never 402 |
@@ -403,9 +406,13 @@ Cloudflare Worker only (`worker.js`, bound in `wrangler.toml`):
 ## How it decides who pays
 
 By default (`mode: "bots"`) it charges requests whose `User-Agent` matches a known
-**AI/LLM crawler** (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider,
-Google-Extended, Amazonbot, …). Classic search indexers (Googlebot, Bingbot) are
-intentionally **not** charged so your SEO indexing stays free.
+**AI/LLM crawler or fetcher** (GPTBot, ClaudeBot, Claude-SearchBot, Claude-User,
+CCBot, PerplexityBot, Perplexity-User, MistralAI-User, Bytespider,
+Google-Extended, GoogleOther, Amazonbot, …; the full list is `AI_BOTS`). Classic
+search indexers (Googlebot, Bingbot) are intentionally **not** charged so your
+SEO indexing stays free. A request with no `User-Agent` at all is charged in every mode: no browser
+sends none, so it falls under the same rule as `mode: "strict"` (a request that
+is not a real-browser request pays).
 
 **Don't want to play whack-a-mole with bot detection?** That's the point of the
 other modes - you stop trying to *identify* bots and instead make access *cost

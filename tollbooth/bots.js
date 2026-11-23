@@ -1,7 +1,8 @@
 // Default set of AI / LLM crawler and agent user-agents to charge.
 //
 // Deliberately AI-focused: traditional search indexers (Googlebot, Bingbot,
-// DuckDuckBot) are NOT here, you almost always want classic SEO indexing to
+// DuckDuckBot) are NOT here (GoogleOther, Google's fetcher for work outside
+// Search, is), you almost always want classic SEO indexing to
 // stay free. Override the whole list with `botUserAgents`, or supply your own
 // `charge(req)` predicate for full control.
 export const AI_BOTS = [
@@ -13,6 +14,10 @@ export const AI_BOTS = [
   "Applebot-Extended", "Diffbot", "Omgilibot", "ImagesiftBot",
   "YouBot", "Timpibot", "DuckAssistBot", "PetalBot",
   "FriendlyCrawler", "AI2Bot", "Scrapy", "python-requests",
+  "Claude-SearchBot", "MistralAI-User", "GoogleOther", "Google-CloudVertexBot",
+  "GoogleAgent-Mariner", "cohere-training-data-crawler", "FirecrawlAgent",
+  "PhindBot", "PanguBot", "img2dataset", "Webzio-Extended", "YandexAdditional",
+  "bedrockbot", "iaskspider", "Andibot", "Kangaroo Bot", "python-httpx",
 ];
 
 /**

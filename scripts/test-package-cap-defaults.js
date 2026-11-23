@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The auto-paying packages each ship a default per-call ceiling that protects
 // the buyer's own wallet: agent402-mcp (AGENT402_MAX_PER_CALL),
-// agent402-openclaw and agent402-agentkit (maxPerCallUsd) and
-// elizaos-plugin-agent402 (AGENT402_MAX_PER_CALL_USD). The default must cover
+// agent402-openclaw, agent402-agentkit and the four meta-tool adapters
+// (maxPerCallUsd) and elizaos-plugin-agent402 (AGENT402_MAX_PER_CALL_USD). The default must cover
 // every fixed price this server lists, so a buyer on defaults is never refused
 // a listed tool. This boots a FREE_MODE server on port 0, reads the dearest
 // fixed price from /api/pricing (each endpoint's price and each gateway tier
@@ -24,6 +24,10 @@ const PACKAGES = [
   ["agent402-openclaw", "openclaw/index.js"],
   ["agent402-agentkit", "adapters/agentkit/index.js"],
   ["elizaos-plugin-agent402", "adapters/eliza/index.js"],
+  ["agent402-langchain", "adapters/langchain/index.js"],
+  ["agent402-ai-sdk", "adapters/ai-sdk/index.js"],
+  ["agent402-openai-agents", "adapters/openai-agents/index.js"],
+  ["agent402-google-adk", "adapters/google-adk/index.js"],
 ];
 const defaults = PACKAGES.map(([name, file]) => {
   const src = readFileSync(`${ROOT}${file}`, "utf8");

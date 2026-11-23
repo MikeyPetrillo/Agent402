@@ -554,6 +554,57 @@ ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes 
   }
 }
 
+// --- an empty User-Agent: no browser sends none, so it pays in every mode
+// (the strict-mode rule: a request that is not a real-browser request pays) ---
+{
+  const bots = createTollbooth({ powDifficulty: 12 });
+  ok(run(bots, mockReq({})).status === 402, "bots: a request with no User-Agent is charged");
+  ok(run(bots, mockReq({ "user-agent": "" })).status === 402, "bots: an empty User-Agent is charged");
+  ok(run(bots, mockReq({ "user-agent": "   " })).status === 402, "bots: a blank User-Agent is charged");
+  ok(run(bots, mockReq({ "user-agent": humanUA })).nexted === true, "bots: a browser UA still passes free");
+  ok(run(bots, mockReq({ "user-agent": "curl/8.0" })).nexted === true, "bots: an unlisted non-empty UA still passes in bots mode (unchanged)");
+  ok(run(createTollbooth({ mode: "strict", powDifficulty: 12 }), mockReq({ accept: "text/html" })).status === 402, "strict: no User-Agent is charged");
+}
+
+// --- payTo with nothing to settle it warns at start (library) ---
+{
+  const warned = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => { warned.push(a.join(" ")); };
+  try {
+    createTollbooth({ powDifficulty: 12, payTo: "0x000000000000000000000000000000000000dEaD" });
+    const w1 = warned.filter((w) => /payTo/.test(w) && /settle/.test(w));
+    ok(w1.length === 1, `payTo with no x402 middleware and no verifyX402 warns once at start (${w1.length})`);
+    warned.length = 0;
+    createTollbooth({ powDifficulty: 12, payTo: "0x000000000000000000000000000000000000dEaD", x402: (_q, _s, n) => n() });
+    createTollbooth({ powDifficulty: 12, payTo: "0x000000000000000000000000000000000000dEaD", verifyX402: async () => false });
+    createTollbooth({ powDifficulty: 12 });
+    ok(warned.filter((w) => /payTo/.test(w) && /settle/.test(w)).length === 0, "control: with a settling middleware, a verifier, or no payTo there is no warning");
+  } finally { console.warn = realWarn; }
+}
+
+// --- the CLI: --help and --version answer without starting a gate ---
+{
+  const { spawnSync } = await import("node:child_process");
+  const { readFileSync: rf } = await import("node:fs");
+  const here = new URL(".", import.meta.url).pathname;
+  const pkg = JSON.parse(rf(new URL("./package.json", import.meta.url), "utf8"));
+  const env = { PATH: process.env.PATH, TOLLBOOTH_SECRET: "x".repeat(40) };
+  for (const flag of ["--help", "-h"]) {
+    const r = spawnSync(process.execPath, ["index.js", flag], { cwd: here, env, encoding: "utf8", timeout: 15000 });
+    ok(r.status === 0 && /Usage/.test(r.stdout) && /TOLLBOOTH_UPSTREAM/.test(r.stdout) && /TOLLBOOTH_FACILITATOR_URL/.test(r.stdout) && !/listening/.test(r.stdout + r.stderr), `${flag} prints the usage and starts nothing (exit ${r.status})`);
+  }
+  for (const flag of ["--version", "-v"]) {
+    const r = spawnSync(process.execPath, ["index.js", flag], { cwd: here, env, encoding: "utf8", timeout: 15000 });
+    ok(r.status === 0 && r.stdout.trim() === pkg.version, `${flag} prints the package version (${r.stdout.trim()})`);
+  }
+  // The deploy templates the README points at ship in the package.
+  const packed = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: here, encoding: "utf8", timeout: 60000 });
+  let files = [];
+  try { files = JSON.parse(packed.stdout)[0].files.map((f) => f.path); } catch { files = []; }
+  ok(pkg.files.some((f) => /^deploy\/?$/.test(f)) && files.some((f) => f.startsWith("deploy/docker/")) && files.some((f) => f.startsWith("deploy/cloudflare/")), `the package includes deploy/ (${files.filter((f) => f.startsWith("deploy/")).length} files)`);
+}
+
 console.log(`\n${pass} passed`);
 
 // In-memory SQLite for the shared-store assertions. Prefers the built-in

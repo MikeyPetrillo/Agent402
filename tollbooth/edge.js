@@ -211,7 +211,10 @@ export function createEdgeTollbooth(config = {}) {
     // strict: a known AI crawler pays even when it sends a browser-like UA and
     // an HTML Accept; anything else that does not look like a browser pays too.
     if (mode === "strict") return isBot(request.headers.get("user-agent") || "") || !looksHuman(request);
-    return isBot(request.headers.get("user-agent") || ""); // "bots" (default)
+    // "bots" (default): a listed AI crawler pays, and so does a request with
+    // no User-Agent at all (no browser sends none: the strict-mode rule).
+    const ua = request.headers.get("user-agent") || "";
+    return !ua.trim() || isBot(ua);
   };
 
   async function gate(request) {

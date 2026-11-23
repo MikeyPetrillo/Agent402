@@ -206,7 +206,11 @@ const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20_000, 3)]);
   const { runSetup, configSnippets } = await import("./setup.js");
   const version = JSON.parse(readFileSync(join(HERE, "package.json"), "utf8")).version;
   const sn = configSnippets();
-  ok(sn.claudeCode === `claude mcp add agent402 -s user -- npx -y agent402-mcp@${version}` && JSON.parse(sn.claudeDesktop).mcpServers.agent402.args[1] === `agent402-mcp@${version}` && !sn.claudeDesktop.includes("env"), "the snippets pin this version and need no env var");
+  const { SUGGESTED_DAY_CAP_USD } = await import("./spend-ledger.js");
+  ok(SUGGESTED_DAY_CAP_USD > 0, `a suggested daily cap is declared ($${SUGGESTED_DAY_CAP_USD})`);
+  const desk = JSON.parse(sn.claudeDesktop).mcpServers.agent402;
+  ok(sn.claudeCode === `claude mcp add agent402 -s user -e AGENT402_MAX_USD_PER_DAY=${SUGGESTED_DAY_CAP_USD} -- npx -y agent402-mcp@${version}` && desk.args[1] === `agent402-mcp@${version}` && JSON.stringify(desk.env) === JSON.stringify({ AGENT402_MAX_USD_PER_DAY: String(SUGGESTED_DAY_CAP_USD) }),
+    "a new setup's snippets pin this version and carry the suggested daily cap, and no key");
   const drive = async (line, run, { tty = false } = {}) => {
     const input = new PassThrough();
     if (tty) { input.isTTY = true; input.setRawMode = () => input; }
@@ -227,6 +231,7 @@ const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20_000, 3)]);
   const good = await drive([`  ${HEX}  \n`], run);
   ok(good.code === 0 && /-w 0x[0-9a-f]{64}/.test(stored[0]) && stored[0].includes(HEX), `setup stores a bare-hex key, normalized: ${good.out}`);
   ok(!good.out.includes(HEX) && good.out.includes(ADDRESS) && good.out.includes("macOS Keychain") && good.out.includes(sn.claudeCode) && /needs no ETH/.test(good.out), `setup prints the wallet, the store and the config, never the key: ${good.out}`);
+  ok(good.out.includes(`"AGENT402_MAX_USD_PER_DAY": "${SUGGESTED_DAY_CAP_USD}"`) && new RegExp(`caps spending at \\$${SUGGESTED_DAY_CAP_USD} a UTC day`).test(good.out) && /remove it for no daily cap/.test(good.out), "setup's printed config carries the suggested daily cap and says how to change or remove it");
   // A terminal: keystrokes typed one by one with a backspace, never echoed.
   const typed = await drive([..."x" + "\u007f" + HEX, "\r"], run, { tty: true });
   ok(typed.code === 0 && !typed.out.includes(HEX) && stored.at(-1).includes(HEX), "typed input with a backspace is read and not echoed");
@@ -265,7 +270,7 @@ const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20_000, 3)]);
   ok(made.code === 0 && key && stored.length === 1, `wallet new stores a fresh 32-byte key in the keychain: ${made.out}`);
   const addr = privateKeyToAccount(key).address;
   ok(!made.out.includes(key) && !made.out.includes(key.slice(2)) && made.out.includes(addr) && made.out.includes("macOS Keychain"), `wallet new prints the address and the store, never the key: ${made.out}`);
-  ok(/Fund it with USDC on Base/.test(made.out) && /no ETH/.test(made.out) && made.out.includes(sn.claudeCode) && made.out.includes('"agent402-mcp@'), `wallet new says how to fund it (USDC on Base, no ETH) and prints the ready config: ${made.out}`);
+  ok(/Fund it with USDC on Base/.test(made.out) && /no ETH/.test(made.out) && made.out.includes(sn.claudeCode) && made.out.includes('"agent402-mcp@') && made.out.includes('"AGENT402_MAX_USD_PER_DAY"'), `wallet new says how to fund it (USDC on Base, no ETH) and prints the ready config: ${made.out}`);
   // A key already stored is never replaced: its funds would be lost.
   const again = await drive(keychain);
   ok(again.code === 1 && stored.length === 1 && again.out.includes(addr) && /nothing was changed/i.test(again.out) && !again.out.includes(key.slice(2)), `wallet new refuses to replace a stored key: ${again.out}`);
@@ -298,6 +303,16 @@ const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20_000, 3)]);
     p.on("exit", (code) => resolve({ code, out }));
   });
   ok(usage.code === 1 && /npx agent402-mcp wallet new/.test(usage.out), `a bare "wallet" prints the usage: ${usage.out}`);
+  for (const flag of ["--help", "-h"]) {
+    const hcfg = tmp(`wnew-h${flag.length}`);
+    const help = await new Promise((resolve) => {
+      const p = spawn(process.execPath, [INDEX, "wallet", "new", flag], { env: { PATH: process.env.PATH, AGENT402_KEY_STORE: "file", AGENT402_CONFIG_DIR: hcfg }, stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      p.stdout.on("data", (d) => (out += d)); p.stderr.on("data", (d) => (out += d));
+      p.on("exit", (code) => resolve({ code, out }));
+    });
+    ok(help.code === 0 && /npx agent402-mcp wallet new/.test(help.out) && !existsSync(join(hcfg, "wallet-key")) && !/Wallet address/.test(help.out), `"wallet new ${flag}" prints the usage and makes no key: ${help.out}`);
+  }
   console.log("wallet-new.js: fresh key stored, never printed, never replaces a stored key ✓");
 }
 // ---------------------------------------------------------------------------
@@ -337,8 +352,10 @@ const STUB = `http://127.0.0.1:${stub.address().port}`;
 const clean = () => {
   const e = { ...process.env, AGENT402_URL: STUB, AGENT402_KEY_STORE: "off", AGENT402_MAX_PER_CALL: "off" };
   for (const k of ["AGENT_KEY", "SOLANA_AGENT_KEY", "AGENT402_CREDITS_KEY", "AGENT402_BUDGET", "AGENT402_MAX_USD_PER_DAY", "AGENT402_MAX_USD_PER_MONTH", "AGENT402_NETWORKS", "AGENT402_MEDIA_INLINE", "AGENT402_OUTPUT_DIR", "AGENT402_CONFIG_DIR", "AGENT402_TOOLS"]) delete e[k];
-  // A media answer outside 6d never lands in the user's Downloads folder.
+  // A media answer outside 6d never lands in the user's Downloads folder,
+  // and the spend ledger never in the user's own config folder.
   e.AGENT402_OUTPUT_DIR = tmp("out-default");
+  e.AGENT402_CONFIG_DIR = tmp("cfg-default");
   return e;
 };
 const connect = async (env) => {
@@ -402,7 +419,36 @@ try {
       const r = await callSlug(c, "paid");
       ok(r.isError && /monthly spending cap \(AGENT402_MAX_USD_PER_MONTH, \$1\) has \$0\.0050 left this month/.test(text(r)) && /resets at \d{4}-\d\d-01T00:00:00\.000Z/.test(text(r)), `the monthly cap reads the ledger: ${text(r)}`);
     } finally { await c.close(); }
-    console.log("server: daily and monthly caps hold across restarts and say when they reset ✓");
+    // An upgraded config (no AGENT402_MAX_USD_PER_DAY) has no daily cap: with
+    // $1,000 already spent today in the ledger it still pays, payment.info
+    // shows no daily cap, and the start-up log says so once in an info line.
+    // A new setup's config (the snippet's env) holds its suggested cap.
+    const { SUGGESTED_DAY_CAP_USD } = await import("./spend-ledger.js");
+    const { configSnippets } = await import("./setup.js");
+    const spentToday = (usd) => {
+      const d = tmp("cfg");
+      const t = new Date().toISOString();
+      writeFileSync(join(d, "spend.json"), JSON.stringify({ version: 1, unit: "micro-USD", days: { [t.slice(0, 10)]: Math.round(usd * 1e6) }, months: { [t.slice(0, 7)]: Math.round(usd * 1e6) } }));
+      return d;
+    };
+    c = await connect({ AGENT_KEY: `0x${HEX}`, AGENT402_CONFIG_DIR: spentToday(1000) });
+    try {
+      const before = seen.signed;
+      const r = await callSlug(c, "paid");
+      ok(!r.isError && seen.signed === before + 1, `a config with no daily cap pays past any amount spent today: ${text(r).slice(0, 200)}`);
+      ok(!("daily" in (await info(c)).spendControls), "a config with no daily cap shows none in payment.info");
+      const lines = c.stderrText().split("\n").filter((l) => /info: no daily spending cap is set/.test(l));
+      ok(lines.length === 1 && lines[0].includes("AGENT402_MAX_USD_PER_DAY") && lines[0].includes(`suggests ${SUGGESTED_DAY_CAP_USD}`), `the server says once at start that no daily cap is set: ${c.stderrText().slice(0, 500)}`);
+    } finally { await c.close(); }
+    const newSetupEnv = JSON.parse(configSnippets().claudeDesktop).mcpServers.agent402.env;
+    c = await connect({ AGENT_KEY: `0x${HEX}`, AGENT402_CONFIG_DIR: spentToday(SUGGESTED_DAY_CAP_USD - 0.005), ...newSetupEnv });
+    try {
+      const before = seen.signed;
+      const r = await callSlug(c, "paid");
+      ok(r.isError && seen.signed === before && text(r).includes(`daily spending cap (AGENT402_MAX_USD_PER_DAY, $${SUGGESTED_DAY_CAP_USD}) has $0.0050 left today`), `a new setup's config holds the suggested daily cap: ${text(r)}`);
+      ok(!/info: no daily spending cap/.test(c.stderrText()), "with a daily cap set the info line is not printed");
+    } finally { await c.close(); }
+    console.log("server: daily and monthly caps hold across restarts and say when they reset; no daily cap unless the config sets one, a new setup's config sets the suggested one ✓");
   }
 
   // 6c) The first-call allowance: a grant from any host but the default one
@@ -530,7 +576,7 @@ globalThis.fetch = async (input, init) => {
     });
     const args = readFileSync(log, "utf8");
     const stdin = readFileSync(`${log}.stdin`, "utf8");
-    ok(r.code === 0 && !r.out.includes(HEX) && r.out.includes(ADDRESS) && r.out.includes("claude mcp add agent402 -s user -- npx -y agent402-mcp@") && !/catalog:/.test(r.out), `setup runs as a command and never starts the server: ${r.out}`);
+    ok(r.code === 0 && !r.out.includes(HEX) && r.out.includes(ADDRESS) && r.out.includes("claude mcp add agent402 -s user -e AGENT402_MAX_USD_PER_DAY=") && !/catalog:/.test(r.out), `setup runs as a command and never starts the server: ${r.out}`);
     ok(!args.includes(HEX) && stdin.includes(`-w 0x${HEX}`) && /add-generic-password -U -s agent402-mcp -a AGENT_KEY/.test(stdin), "setup hands the key to the keychain on stdin, never in arguments");
     console.log("server: the stored key is read when AGENT_KEY is unset; `setup` stores it through the keychain ✓");
   }

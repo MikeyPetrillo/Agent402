@@ -79,8 +79,25 @@ agent402Tools({
   baseUrl?: string,    // default: "https://agent402.tools"
   fetch?: typeof fetch, // x402-wrapped fetch for wallet-required tools
   fetchImpl?: typeof fetch, // base fetch for unpaid lookups (default: global fetch)
+  maxPerCallUsd?: number | "off", // ceiling on one paid call, checked on its list price (default 5; 0 or "off" turns it off)
+  dailyLimitUsd?: number,   // opt-in rolling 24-hour total for paid calls
 })
 ```
+
+### Spending caps
+
+A paid call is checked before your payment `fetch` runs: a tool whose listed
+price is above `maxPerCallUsd` (default $5, agent402-client's default, which
+covers every fixed price in the catalog; `0` or `"off"` turns it off) is
+refused, and so is a call that would bring the rolling 24-hour total above
+`dailyLimitUsd` (opt-in). Every call sent through the payment `fetch` counts
+its list price against that total, whatever its outcome. A refusal throws an
+error with `code: "SPENDING_LIMIT"` and `limit` naming the cap; nothing is
+paid. These caps read the list price; to hold them on the payment that is
+signed, use agent402-client with its `x402Client` option.
+
+A proof-of-work challenge above 28 bits (`MAX_POW_DIFFICULTY`) is refused
+before any work, and the search yields to the event loop while it runs.
 
 ## License
 

@@ -28,7 +28,7 @@ import { createHash } from "node:crypto";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-langchain/0.2.12";
+const USER_AGENT = "agent402-langchain/0.2.13";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -54,7 +54,8 @@ async function shedRetryWaitMs(r) {
 }
 
 // Resolves with the 2xx response, or throws `${label}: HTTP <status>` (plus
-// "after N attempts" when it retried) with `.status` and `.attempts` set.
+// "after N attempts" when it retried, and the server's `error` text) with
+// `.status`, `.body` and `.attempts` set.
 // `init` may be a function, so each attempt gets its own timeout signal.
 async function discoveryFetch(fetchImpl, label, url, init) {
   let r;
@@ -69,10 +70,27 @@ async function discoveryFetch(fetchImpl, label, url, init) {
     if (wait == null) break;
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
-  const err = new Error(`${label}: HTTP ${r.status}${attempts > 1 ? ` after ${attempts} attempts` : ""}`);
-  err.status = r.status;
+  const err = await responseError(`${label}: HTTP ${r.status}${attempts > 1 ? ` after ${attempts} attempts` : ""}`, r);
   err.attempts = attempts;
   throw err;
+}
+
+// The server's own answer to a failed request, on the thrown error: its
+// `error` text joins the message, and `.status` and `.body` (the parsed JSON,
+// else the text, at most ERROR_BODY_MAX characters) are set, so a caller sees
+// why the call failed (a refusal, a limit, a missing parameter).
+const ERROR_BODY_MAX = 4000;
+async function responseError(message, r) {
+  let text = "";
+  try { text = typeof r?.text === "function" ? String(await r.text()) : ""; } catch { text = ""; }
+  text = text.slice(0, ERROR_BODY_MAX);
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+  const said = body && typeof body === "object" && typeof body.error === "string" ? body.error.slice(0, 500) : (!body ? text.trim().slice(0, 300) : "");
+  const err = new Error(said ? `${message}: ${said}` : message);
+  err.status = r?.status;
+  err.body = body ?? (text || null);
+  return err;
 }
 
 const leadingZeroBits = (buf) => {
@@ -85,20 +103,90 @@ const leadingZeroBits = (buf) => {
   return n;
 };
 
+// A challenge the server sends is checked before any work: a difficulty above
+// MAX_POW_DIFFICULTY bits (the most an Agent402 server asks, and what
+// agent402-client accepts) is refused, so a server cannot hold this process
+// in a search with no end, and the search stops after MAX_POW_TRIES_FACTOR
+// times the expected count of hashes. It yields to the event loop between
+// slices, so the host process keeps answering while it solves.
+export const MAX_POW_DIFFICULTY = 28;
+const MAX_POW_TRIES_FACTOR = 64;
+const POW_SLICE = 4096;
+
 // Solve a proof-of-work challenge (from /api/pow/challenge) into the
 // X-Pow-Solution header value the paywall expects.
-function solvePow({ challenge, difficulty, token }) {
-  let n = 0;
-  while (leadingZeroBits(createHash("sha256").update(`${challenge}:${n}`).digest()) < difficulty) n++;
-  return `${token}:${n}`;
+async function solvePow(pow) {
+  const { challenge, difficulty, token } = pow || {};
+  if (typeof challenge !== "string" || challenge.length === 0 || challenge.length > 512) throw new Error("proof-of-work challenge must be a string of 1 to 512 characters");
+  if (typeof difficulty !== "number" || !Number.isInteger(difficulty) || difficulty < 0 || difficulty > MAX_POW_DIFFICULTY) {
+    throw new Error(`proof-of-work difficulty ${JSON.stringify(difficulty)} is refused: this package solves a whole number of bits from 0 to ${MAX_POW_DIFFICULTY}`);
+  }
+  if (typeof token !== "string" || token.length === 0 || token.length > 4096) throw new Error("proof-of-work token must be a string of 1 to 4096 characters");
+  const maxTries = MAX_POW_TRIES_FACTOR * 2 ** difficulty;
+  for (let nonce = 0; nonce < maxTries; nonce++) {
+    if (leadingZeroBits(createHash("sha256").update(`${challenge}:${nonce}`).digest()) >= difficulty) return `${token}:${nonce}`;
+    if (nonce % POW_SLICE === POW_SLICE - 1) await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`proof-of-work search stopped after ${maxTries} hashes without a ${difficulty}-bit solution: the challenge is not solvable as stated`);
+}
+
+// Spending caps for the payment fetch. The per-call ceiling is on by default
+// at DEFAULT_MAX_PER_CALL_USD (agent402-client's default, which covers every
+// fixed price in the catalog); 0, "off" or null turns it off. dailyLimitUsd
+// is opt-in: a rolling 24-hour total for this set of tools. Both are checked
+// before the payment fetch is used, against the price the catalog lists for
+// the tool, and a call sent through the payment fetch counts its list price
+// against dailyLimitUsd whatever its outcome (this package cannot see what
+// the payment fetch signed). To hold the caps on the payment that is signed,
+// use agent402-client with its x402Client option.
+export const DEFAULT_MAX_PER_CALL_USD = 5;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function perCallCeilingOf(value, warn = (m) => console.warn(m)) {
+  if (value === undefined) return DEFAULT_MAX_PER_CALL_USD;
+  if (value === null) return null;
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : value;
+  if (raw === "off" || raw === 0 || raw === "0") return null;
+  const n = typeof raw === "number" ? raw : (typeof raw === "string" && raw !== "" ? Number(raw) : NaN);
+  if (Number.isFinite(n) && n >= 0) return n;
+  const shown = typeof value === "string" && value.length <= 16 ? JSON.stringify(value) : typeof value;
+  warn(`[agent402-langchain] maxPerCallUsd ${shown} is not a USD amount, 0 or "off"; keeping the default ($${DEFAULT_MAX_PER_CALL_USD} per call)`);
+  return DEFAULT_MAX_PER_CALL_USD;
+}
+
+function dailyLimitOf(value) {
+  if (value === undefined || value === null || value === "off") return null;
+  const n = typeof value === "number" ? value : Number(String(value).trim());
+  if (Number.isFinite(n) && n >= 0) return n;
+  // A typo never removes a limit the caller meant to set: nothing is paid
+  // until it is fixed.
+  return 0;
+}
+
+/** The USD amount of a listed price ("$0.005"), or null. */
+const listedUsd = (price) => {
+  const m = /^\$(\d+(?:\.\d+)?)$/.exec(String(price ?? "").trim());
+  return m ? Number(m[1]) : null;
+};
+
+/** A refusal made before anything is paid, with the limit it hit. */
+function spendingLimitError(message, fields) {
+  const err = new Error(message);
+  err.name = "SpendingLimitError";
+  err.code = "SPENDING_LIMIT";
+  Object.assign(err, fields);
+  return err;
 }
 
 /**
  * Framework-agnostic tool specs. `execute(input)` returns the JSON result
  * (or throws on HTTP error).
  */
-export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fetchImpl = globalThis.fetch } = {}) {
+export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fetchImpl = globalThis.fetch, maxPerCallUsd, dailyLimitUsd } = {}) {
   if (typeof fetchImpl !== "function") throw new Error("No fetch available: pass { fetchImpl } on Node < 18");
+  // One ledger per set of tools: what its paid calls have committed in the
+  // last 24 hours.
+  const spend = { maxPerCall: perCallCeilingOf(maxPerCallUsd), daily: dailyLimitOf(dailyLimitUsd), paid: [] };
   const base = String(baseUrl).replace(/\/$/, "");
   const getJSON = async (path) => {
     const r = await discoveryFetch(fetchImpl, `GET ${path}`, `${base}${path}`);
@@ -154,7 +242,7 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
         },
         required: ["slug"],
       },
-      execute: async ({ slug, params }) => callTool({ base, slug, params: params || {}, payFetch, fetchImpl }),
+      execute: async ({ slug, params }) => callTool({ base, slug, params: params || {}, payFetch, fetchImpl, spend }),
     },
     {
       name: "agent402_about",
@@ -166,10 +254,30 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
   ];
 }
 
+/** Refuse a paid call the caps do not allow, before the payment fetch is
+ *  used; otherwise count its list price against the rolling 24 hours. */
+function checkSpend(spend, slug, price) {
+  if (spend.maxPerCall == null && spend.daily == null) return;
+  const usd = listedUsd(price);
+  if (usd == null) {
+    throw spendingLimitError(`refusing to pay for "${slug}": its listed price ${JSON.stringify(price ?? null)} does not read as a USD amount, and a spending cap is set (maxPerCallUsd${spend.daily != null ? " or dailyLimitUsd" : ""})`, { limit: spend.maxPerCall != null ? "maxPerCallUsd" : "dailyLimitUsd", slug });
+  }
+  if (spend.maxPerCall != null && usd > spend.maxPerCall + 1e-9) {
+    throw spendingLimitError(`refusing to pay $${usd} for "${slug}": over maxPerCallUsd $${spend.maxPerCall}. Nothing was paid; raise maxPerCallUsd (0 or "off" turns it off) to allow it.`, { limit: "maxPerCallUsd", slug, priceUsd: usd, cap: spend.maxPerCall });
+  }
+  const now = Date.now();
+  spend.paid = spend.paid.filter((p) => now - p.at < DAY_MS);
+  const spent = spend.paid.reduce((a, p) => a + p.usd, 0);
+  if (spend.daily != null && spent + usd > spend.daily + 1e-9) {
+    throw spendingLimitError(`refusing to pay $${usd} for "${slug}": would bring 24h spend to $${(spent + usd).toFixed(6)}, over dailyLimitUsd $${spend.daily}. Nothing was paid.`, { limit: "dailyLimitUsd", slug, priceUsd: usd, spent: Number(spent.toFixed(6)), cap: spend.daily });
+  }
+  spend.paid.push({ at: now, usd });
+}
+
 // One-shot tool invocation: resolve the slug → call the route, auto-paying via
 // proof-of-work (free tier) or the user's x402 fetch (wallet-required tools).
 // Mirrors agent402-client.call() behavior so this package stays zero-dep.
-async function callTool({ base, slug, params, payFetch, fetchImpl }) {
+async function callTool({ base, slug, params, payFetch, fetchImpl, spend }) {
   const pricingRes = await discoveryFetch(fetchImpl, "could not load catalog (GET /api/pricing)", `${base}/api/pricing`);
   const pricing = await pricingRes.json();
   const entry = (pricing.endpoints || []).find((e) => e.slug === slug);
@@ -199,15 +307,13 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
     return r;
   };
 
-  // Wallet-only tool: route through the user's x402 fetch.
+  // Wallet-only tool: route through the user's x402 fetch, inside the caps.
   if (!entry.computePayable) {
+    if (payFetch) checkSpend(spend, slug, entry.price);
     const r = payFetch ? await send({}, payFetch) : await send();
     if (!r.ok) {
-      throw new Error(
-        payFetch
-          ? `call "${slug}" failed: HTTP ${r.status}`
-          : `call "${slug}" needs a wallet: construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch)`,
-      );
+      if (payFetch) throw await responseError(`call "${slug}" failed: HTTP ${r.status}`, r);
+      throw new Error(`call "${slug}" needs a wallet: construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch)`);
     }
     return r.json();
   }
@@ -218,9 +324,9 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
   if (!r.ok) {
     const challengeRes = await discoveryFetch(fetchImpl, `proof-of-work challenge for "${slug}" failed (GET /api/pow/challenge)`, `${base}/api/pow/challenge?slug=${encodeURIComponent(slug)}`);
     const chal = await challengeRes.json();
-    r = await send({ "X-Pow-Solution": solvePow(chal) });
+    r = await send({ "X-Pow-Solution": await solvePow(chal) });
   }
-  if (!r.ok) throw new Error(`call "${slug}" failed after proof-of-work: HTTP ${r.status}`);
+  if (!r.ok) throw await responseError(`call "${slug}" failed after proof-of-work: HTTP ${r.status}`, r);
   return r.json();
 }
 

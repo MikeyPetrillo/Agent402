@@ -41,7 +41,7 @@ import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEO
 import { solvePowAsync } from "./pow-solver.js";
 import { normalizeEvmKey, evmKeyOrNull, walletKeyError } from "./wallet-key.js";
 import { configDir } from "./config-dir.js";
-import { ledgerFromEnv } from "./spend-ledger.js";
+import { ledgerFromEnv, SUGGESTED_DAY_CAP_USD } from "./spend-ledger.js";
 import { keyStoreKind, readStoredKey } from "./key-store.js";
 import { mediaInline, inlineImageMaxBytes, outputDirCandidates, writableOutputDir, saveMedia, extractMediaFields, isBinaryBody, bareType, sniffType, savedLine } from "./media-output.js";
 // MCP SDK v2 (@modelcontextprotocol/server, pinned exactly in package.json).
@@ -86,6 +86,8 @@ if (process.argv[2] === "setup") {
 // never printed and the server below never starts.
 if (process.argv[2] === "wallet") {
   const { runWalletNew, WALLET_USAGE } = await import("./wallet-new.js");
+  // --help (or -h) anywhere after the command prints the usage and makes nothing.
+  if (process.argv.slice(3).some((a) => a === "--help" || a === "-h")) { process.stdout.write(`${WALLET_USAGE}\n`); process.exit(0); }
   if (process.argv[3] === "new") process.exit(await runWalletNew());
   process.stderr.write(`${WALLET_USAGE}\n`);
   process.exit(1);
@@ -1512,6 +1514,11 @@ log(`catalog: ${catalog.size} tools from ${BASE}; ${curated.length} first-class,
       : HAS_CREDITS
         ? `payment: credits key configured (${caps})`
         : "payment: proof-of-work on eligible tools (no AGENT_KEY / SOLANA_AGENT_KEY)");
+  // A paying server with no daily cap says so once, and how to set one; it
+  // refuses nothing for it.
+  if ((parsed.length || (!HAS_WALLET && HAS_CREDITS)) && !Number.isFinite(LEDGER.dayCap)) {
+    log(`info: no daily spending cap is set; AGENT402_MAX_USD_PER_DAY sets one that holds across restarts (\`npx agent402-mcp setup\` suggests ${SUGGESTED_DAY_CAP_USD})`);
+  }
 }
 
 await server.connect(new StdioServerTransport());

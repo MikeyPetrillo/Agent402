@@ -1,14 +1,19 @@
 {
   "name": "agent402-agentkit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Agent402 (500+ pay-per-call web tools and skill packs over x402 or MPP; Agentic Finance) as a Coinbase AgentKit action provider for CDP, Privy, ZeroDev or viem wallets: find, call, about. Pays over x402 in USDC on Base from the agent's wallet, or with a prepaid credits key for Agent402's own services; the pure-CPU tools are free via proof-of-work.",
   "type": "module",
   "main": "index.js",
+  "types": "index.d.ts",
   "exports": {
-    ".": "./index.js"
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
   },
   "files": [
     "index.js",
+    "index.d.ts",
     "README.md"
   ],
   "engines": {

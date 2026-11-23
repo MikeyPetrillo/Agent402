@@ -50,6 +50,7 @@
     "strip-headers.js",
     "example.js",
     "demo.js",
+    "deploy/",
     "README.md"
   ],
   "engines": {

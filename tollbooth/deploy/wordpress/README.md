@@ -63,6 +63,10 @@ no plugin setting can mitigate it.
 
 ## Upgrading
 
+Version 0.1.2 charges more AI crawlers and fetchers by default, the same
+list as agent402-tollbooth (among them Claude-SearchBot, MistralAI-User and
+GoogleOther).
+
 Version 0.1.1 adds the **Verifier secret**: every verifier answer must now
 carry an HMAC made with it (see "Wire the rails"). A site that set a
 Verifier URL on an earlier version and has no secret fails closed after the

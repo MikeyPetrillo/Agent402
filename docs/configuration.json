@@ -7,6 +7,7 @@
     "AGENT402_BUDGET": "named in a code sample a page shows (the reader's own program)",
     "AGENT402_CALL": "a tool name in a code sample",
     "AGENT402_CREDITS_KEY": "named in a code sample a page shows (the reader's own program)",
+    "AGENT402_MAX_USD_PER_DAY": "named in setup copy a page shows (the reader's own npm server config)",
     "AGENT402_DAILY_LIMIT_USD": "named in a code sample a page shows (the reader's own program)",
     "AGENT402_FIND": "a tool name in a code sample",
     "AGENT402_MAX_PER_CALL": "named in a code sample a page shows (the reader's own program)",

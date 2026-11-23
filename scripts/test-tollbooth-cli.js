@@ -266,7 +266,46 @@ ok(facCalls.verify.length === before.v && facCalls.settle.length === before.s, "
 const st = await (await fetch(`${B}/__tollbooth/stats`, { headers: { Authorization: "Bearer t" } })).json();
 ok(st.mppPaid === 1 && st.x402Paid === 1 && st.powSolved === 1, `CLI stats attribute the wires: mppPaid=${st.mppPaid} x402Paid=${st.x402Paid} powSolved=${st.powSolved}`);
 
-child.kill("SIGTERM"); facilitator.close();
+child.kill("SIGTERM");
+// --- start-up refusals name their cause, before any banner --------------------
+// A facilitator that does not settle the configured network refuses the start
+// with one line (the library's check used to fail after "listening" with a raw
+// stack); a replay store path the process cannot open names the path, not a
+// missing SQLite driver. Control: the same facilitator on a network it
+// settles starts.
+{
+  const { mkdtempSync, mkdirSync, chmodSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const runCli = (env, { waitListening = false } = {}) => new Promise((resolve) => {
+    const c = spawn(process.execPath, [join(ROOT, "tollbooth/index.js")], { env: { ...process.env, PORT: "0", TOLLBOOTH_SECRET: SECRET, TOLLBOOTH_UPSTREAM: "", ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    c.stdout.on("data", (d) => { out += d; if (waitListening && /listening/.test(out)) c.kill("SIGTERM"); });
+    c.stderr.on("data", (d) => { err += d; });
+    const t = setTimeout(() => c.kill("SIGKILL"), 20_000);
+    c.on("exit", (code) => { clearTimeout(t); resolve({ code, out, err }); });
+  });
+  const wrongNet = await runCli({ TOLLBOOTH_PAYTO: PAYTO, TOLLBOOTH_FACILITATOR_URL: FAC, TOLLBOOTH_NETWORK: "arbitrum" });
+  const errLines = wrongNet.err.split("\n").filter((l) => l.startsWith("✖"));
+  ok(wrongNet.code === 1 && !/listening/.test(wrongNet.out) && errLines.length === 1 && /does not settle "exact" payments on arbitrum \(eip155:42161\)/.test(errLines[0]) && errLines[0].includes(FAC) && !/\n\s+at /.test(wrongNet.err),
+    `a facilitator that does not settle the network refuses the start in one line, before the banner (exit ${wrongNet.code}: ${wrongNet.err.trim().slice(0, 400)})`);
+  const rightNet = await runCli({ TOLLBOOTH_PAYTO: PAYTO, TOLLBOOTH_FACILITATOR_URL: FAC, TOLLBOOTH_NETWORK: "polygon" }, { waitListening: true });
+  ok(/listening/.test(rightNet.out) && !/✖/.test(rightNet.err), `control: the same facilitator on a network it settles starts (${rightNet.out.trim().slice(0, 200)})`);
+  const dir = mkdtempSync(join(tmpdir(), "tb-replay-"));
+  const missing = await runCli({ TOLLBOOTH_REPLAY_SQLITE: join(dir, "no-such-folder", "replay.db") });
+  ok(missing.code === 1 && /could not be opened/.test(missing.err) && /no-such-folder/.test(missing.err) && !/no SQLite driver/.test(missing.err) && !/listening/.test(missing.out),
+    `a replay store in a missing folder names the path, not the driver (exit ${missing.code}: ${missing.err.trim().slice(0, 300)})`);
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    const locked = join(dir, "locked");
+    mkdirSync(locked); chmodSync(locked, 0o500);
+    const denied = await runCli({ TOLLBOOTH_REPLAY_SQLITE: join(locked, "replay.db") });
+    chmodSync(locked, 0o700);
+    ok(denied.code === 1 && /could not be opened/.test(denied.err) && !/no SQLite driver/.test(denied.err), `a replay store the process may not write names the path, not the driver (exit ${denied.code}: ${denied.err.trim().slice(0, 300)})`);
+  }
+  const fine = await runCli({ TOLLBOOTH_REPLAY_SQLITE: join(dir, "replay.db") }, { waitListening: true });
+  ok(/shared proof-of-work replay store: sqlite/.test(fine.out) && /listening/.test(fine.out), "control: a replay store in a writable folder opens");
+  rmSync(dir, { recursive: true, force: true });
+}
+facilitator.close();
 // --- the bin symlink, which is the ONLY way to see this class of bug --------
 // npm links the bin as .bin/agent402-tollbooth, so argv[1] is the symlink path
 // while import.meta.url is the realpath. The published 0.10.0 compared those
