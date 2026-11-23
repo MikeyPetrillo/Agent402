@@ -10,7 +10,7 @@
 // and refuses 503 uncharged; do not read this status as covering it.
 // Bucketed status only: the balance number never leaves the server. 5-min
 // cache; public-RPC read with graceful "unknown" (an RPC flake must never page).
-const BASE_RPCS = ["https://mainnet.base.org", "https://base.drpc.org"];
+const BASE_RPCS = ["https://mainnet.base.org", "https://base-rpc.publicnode.com"];
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 // Sized against the LARGEST single spend this wallet can be asked to make, not
 // against the smallest.

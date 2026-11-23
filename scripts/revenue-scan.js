@@ -63,7 +63,7 @@ const redact = (s) => {
 const EVM_NETWORKS = {
   base: {
     usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    rpcs: [...alchemy("base-mainnet"), "https://mainnet.base.org", "https://base.drpc.org"],
+    rpcs: [...alchemy("base-mainnet"), "https://mainnet.base.org", "https://base-rpc.publicnode.com"],
     // TIME (12,000 blocks at Base's original 2 s): main() counts it at the
     // live block time (src/chain-block-time.js), so the scan covers the same
     // hours across Base's Denim upgrade (200 ms blocks).
@@ -72,12 +72,12 @@ const EVM_NETWORKS = {
   },
   polygon: {
     usdc: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
-    rpcs: [...alchemy("polygon-mainnet"), "https://polygon.drpc.org", "https://polygon-rpc.com"],
+    rpcs: [...alchemy("polygon-mainnet"), "https://polygon-bor-rpc.publicnode.com"],
     spanBlocks: 9500, // ~5.5h at 2.1s blocks — free-tier RPCs cap getLogs ranges at 10k blocks
   },
   arbitrum: {
     usdc: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
-    rpcs: [...alchemy("arb-mainnet"), "https://arb1.arbitrum.io/rpc", "https://arbitrum.drpc.org"],
+    rpcs: [...alchemy("arb-mainnet"), "https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"],
     spanBlocks: 90000, // ~6h at 0.25s blocks (address-filtered getLogs stays cheap)
   },
   avalanche: {
