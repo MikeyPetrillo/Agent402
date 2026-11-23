@@ -835,10 +835,13 @@ export class Agent402 {
             }
             throw this._fail(slug, r, await this._failureDetail(slug, r));
           }
-          // A call the server served under its first-call allowance was
-          // verified and not settled: nothing was charged, so nothing counts.
+          // A call the built-in host served under its first-call allowance
+          // was verified and not settled, so it is no settled spend; the
+          // authorization that left the process stays held against the caps
+          // until it can no longer settle. From any other host the header is
+          // the seller's own word and the call is a paid one.
           if (!sentPayment()) this._spendRelease(reservation);
-          else if (firstCallGrantOf(r)) { this._spendRelease(reservation); this._freeCalls++; }
+          else if (firstCallGrantOf(r, this.baseUrl)) { this._spendHold(reservation, guarded ? ctx.sent : null, { ownHost: true }); this._freeCalls++; }
           else this._spendHold(reservation, guarded ? ctx.sent : null, { settleLast: true });
           settled = true;
           return await this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: true });
@@ -1274,10 +1277,13 @@ export class Agent402 {
   }
 }
 
-/** True for a delivered answer the server served under its first-call
- *  allowance: the header X-Agent402-Allowance: first-call and no settlement
- *  receipt (PAYMENT-RESPONSE), so a settled call is always counted. */
-function firstCallGrantOf(r) {
+/** True for a delivered answer the built-in host (DEFAULT_BASE_URL's exact
+ *  origin) served under its first-call allowance: the header
+ *  X-Agent402-Allowance: first-call and no settlement receipt
+ *  (PAYMENT-RESPONSE), so a settled call is always counted. Any other host's
+ *  header is never read: the seller holding the payment cannot vouch for it. */
+function firstCallGrantOf(r, baseUrl) {
+  if (!isDefaultOrigin(baseUrl)) return false;
   const get = typeof r?.headers?.get === "function" ? (k) => r.headers.get(k) : () => null;
   return !!r?.ok && String(get("x-agent402-allowance") || "").trim().toLowerCase() === "first-call"
     && !get("payment-response") && !get("x-payment-response");

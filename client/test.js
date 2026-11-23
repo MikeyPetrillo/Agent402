@@ -258,22 +258,29 @@ const advisoryWarnings = [];
   ok(readFileSync(join(here, "wallet-key.js"), "utf8") === readFileSync(join(here, "..", "mcp", "wallet-key.js"), "utf8"), "client/wallet-key.js is the same file as mcp/wallet-key.js");
 }
 
-// Offline: a paid call the server served under its first-call allowance
-// (X-Agent402-Allowance: first-call, no PAYMENT-RESPONSE) counts against no
-// cap; the same header beside a settlement receipt is a paid call.
+// Offline: a paid call the built-in host served under its first-call
+// allowance (X-Agent402-Allowance: first-call, no PAYMENT-RESPONSE) counts in
+// freeCalls and is not settled spend; the payment that may have been sent
+// stays held against the caps. The same header beside a settlement receipt is
+// a paid call, and from any other host the header alone is a paid call.
 {
   const headersOf = (h) => ({ get: (k) => h[k.toLowerCase()] ?? null });
   const body = { ok: true, firstCallAllowance: { note: "first call" } };
   const answer = (h) => ({ ok: true, status: 200, headers: headersOf(h), json: async () => body, text: async () => JSON.stringify(body) });
   const replies = [answer({ "x-agent402-allowance": "first-call" }), answer({ "x-agent402-allowance": "first-call", "payment-response": "e30=" }), answer({})];
-  const c = new Agent402({ baseUrl: "https://seller.example", cache: false, dailyLimitUsd: 0.02, fetch: async () => replies.shift(), fetchImpl: async () => answer({}) });
+  const c = new Agent402({ baseUrl: "https://agent402.tools", cache: false, dailyLimitUsd: 0.03, fetch: async () => replies.shift(), fetchImpl: async () => answer({}) });
   c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
   const first = await c.call("cheap");
-  ok(first.firstCallAllowance && c.spendingSummary().dailyUsd === 0 && c.spendingSummary().freeCalls === 1, `a first-call grant counts against no cap (${JSON.stringify(c.spendingSummary())})`);
+  ok(first.firstCallAllowance && c.spendingSummary().dailyUsd === 0 && c.spendingSummary().freeCalls === 1 && c.spendingSummary().heldUsd === 0.01, `a built-in host grant is a free call, held against the caps (${JSON.stringify(c.spendingSummary())})`);
   await c.call("cheap");
   ok(c.spendingSummary().dailyUsd === 0.01 && c.spendingSummary().freeCalls === 1, "the allowance header beside a settlement receipt is a paid call");
   await c.call("cheap");
-  ok(c.spendingSummary().dailyUsd === 0.02, "the grant left the whole daily limit for paid calls");
+  ok(c.spendingSummary().dailyUsd === 0.02 && c.spendingSummary().heldUsd === 0.01, "paid calls fit beside the held grant");
+  const other = new Agent402({ baseUrl: "https://seller.example", cache: false, dailyLimitUsd: 0.01, fetch: async () => answer({ "x-agent402-allowance": "first-call" }), fetchImpl: async () => answer({}) });
+  other._catalog = c._catalog;
+  await other.call("cheap");
+  let refused = null; try { await other.call("cheap"); } catch (e) { refused = e; }
+  ok(other.spendingSummary().dailyUsd === 0.01 && other.spendingSummary().freeCalls === 0 && refused?.name === "SpendingLimitError", `another host's first-call header is a paid call (${JSON.stringify(other.spendingSummary())})`);
 }
 
 // Offline: index.d.ts (package.json "types") declares every runtime export,
@@ -1196,6 +1203,83 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       ok((await at(60 * 60 * 1000, () => c.spendingSummary().heldUsd)) === 0.01, "default host, dropped connection: still held an hour on (it may have settled)");
     }
   }
+}
+
+// Offline: a seller's X-Agent402-Allowance: first-call header never zeroes
+// spend on its own word. A loopback seller (port 0) takes the signed payment
+// and answers 200 with the header and no PAYMENT-RESPONSE. From any host but
+// the built-in one, the call counts as paid: the daily and per-host caps fill
+// and freeCalls stays 0. From the built-in host's exact origin (the fetch maps
+// it onto the stub), the call counts in freeCalls and is not settled spend,
+// but the authorization that left the process stays held against the caps
+// until it can no longer settle. Real @x402/fetch wrapper, throwaway key,
+// nothing on chain.
+{
+  const { createServer } = await import("node:http");
+  const { x402Client } = await import("@x402/core/client");
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { HOLD_SLACK_MS, DEFAULT_HOST_BLIND_HOLD_MS } = await import("./index.js");
+  const account = privateKeyToAccount("0x" + "44".repeat(32));
+  const st = { signed: [] };
+  const server = createServer((req, res) => {
+    req.resume();
+    const sig = req.headers["payment-signature"];
+    if (!sig) {
+      const offer = Buffer.from(JSON.stringify({ x402Version: 2, resource: { url: `http://127.0.0.1${req.url}`, description: "thing", mimeType: "application/json" },
+        accepts: [{ scheme: "exact", network: "eip155:8453", asset: BASE_USDC, amount: "10000", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }] })).toString("base64");
+      res.writeHead(402, { "content-type": "application/json", "payment-required": offer });
+      return res.end("{}");
+    }
+    st.signed.push(JSON.parse(Buffer.from(sig, "base64").toString("utf8")).payload.authorization);
+    res.writeHead(200, { "content-type": "application/json", "x-agent402-allowance": "first-call" });
+    res.end(JSON.stringify({ ok: true, firstCallAllowance: { note: "first call" } }));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const STUB = `http://127.0.0.1:${server.address().port}`;
+  const toStub = (input) => { const u = new URL(input instanceof Request ? input.url : String(input)); return STUB + u.pathname + u.search; };
+  const viaStub = async (input, init = {}) => {
+    if (!(input instanceof Request)) return fetch(toStub(input), init);
+    const body = input.method === "GET" || input.method === "HEAD" ? undefined : await input.arrayBuffer();
+    return fetch(toStub(input), { method: input.method, headers: input.headers, body });
+  };
+  const build = ({ baseUrl, guard = true, ...caps }) => {
+    const xc = new x402Client();
+    xc.setSpendControls?.(false);
+    registerExactEvmScheme(xc, { signer: account });
+    const c = new Agent402({ baseUrl, cache: false, fetch: wrapFetchWithPayment(viaStub, xc), fetchImpl: viaStub, ...(guard ? { x402Client: xc } : {}), ...caps });
+    c._catalog = new Map([["thing", { method: "POST", path: "/api/thing", computePayable: false, price: "$0.01" }]]);
+    return c;
+  };
+  const callErr = async (c) => { try { await c.call("thing", {}); return null; } catch (e) { return e; } };
+  const realNow = Date.now;
+  const at = async (offsetMs, fn) => { Date.now = () => realNow() + offsetMs; try { return await fn(); } finally { Date.now = realNow; } };
+  try {
+    for (const guard of [true, false]) {
+      const label = guard ? "with the signing guard" : "through a pre-wrapped fetch";
+      for (const caps of [{ dailyLimitUsd: 0.015 }, { maxPerHostUsd: 0.015 }]) {
+        const capName = Object.keys(caps)[0];
+        const c = build({ baseUrl: STUB, guard, ...caps });
+        const before = st.signed.length;
+        const first = await callErr(c);
+        const s = c.spendingSummary();
+        ok(first === null && st.signed.length === before + 1 && s.dailyUsd === 0.01 && s.calls === 1 && s.freeCalls === 0, `${label}, ${capName}: a loopback seller's first-call header with no receipt is a paid call (${JSON.stringify(s)})`);
+        const second = await callErr(c);
+        ok(second?.name === "SpendingLimitError" && second.limit === capName && st.signed.length === before + 1, `${label}, ${capName}: the cap refuses the next call before signing (${second?.name}: ${second?.message?.slice(0, 120)})`);
+      }
+      // The built-in host's exact origin: freeCalls, not settled spend, but held.
+      const c = build({ baseUrl: "https://agent402.tools", guard, dailyLimitUsd: 0.015 });
+      const before = st.signed.length;
+      const first = await at(0, () => c.call("thing", {}));
+      const s = c.spendingSummary();
+      ok(first.firstCallAllowance && st.signed.length === before + 1 && s.freeCalls === 1 && s.dailyUsd === 0 && s.heldUsd === 0.01, `${label}, built-in host: a grant counts in freeCalls and its sent authorization is held (${JSON.stringify(s)})`);
+      const inside = await at(60 * 1000, () => callErr(c));
+      ok(inside?.name === "SpendingLimitError" && inside.limit === "dailyLimitUsd" && st.signed.length === before + 1, `${label}, built-in host: while the authorization can settle, the hold refuses the next call (${inside?.name})`);
+      const releaseMs = guard ? Number(st.signed.at(-1).validBefore) * 1000 + HOLD_SLACK_MS - realNow() : DEFAULT_HOST_BLIND_HOLD_MS;
+      ok((await at(releaseMs + 30000, () => c.spendingSummary().heldUsd)) === 0, `${label}, built-in host: the hold ends once the authorization can no longer settle`);
+    }
+  } finally { server.close(); }
 }
 
 // Offline: a paid call never follows a redirect. Two real loopback servers, a

@@ -7,7 +7,7 @@
 //
 //   node mcp/test-first-run.js   (also run by mcp/test.js)
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, writeFileSync, readFileSync, statSync, existsSync, readdirSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -169,6 +169,34 @@ const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20_000, 3)]);
   if (POSIX) ok(mode(join(dir, "wallet-key")) === 0o600, "the key file is 0600");
   ok(K.readStoredKey({ kind: "macos", dir, run: () => ({ status: 44, stdout: "" }) }) === key, "a key the keychain refused is read from the file");
   ok(K.readStoredKey({ kind: "off", dir, run }) === null, "off reads nothing");
+  // The file store stages the key under a random name created exclusively
+  // (O_EXCL, and O_NOFOLLOW where the platform has it), so a file or symlink
+  // planted at a name another local user can guess never receives it, and a
+  // config folder other users can write to is refused.
+  if (POSIX) {
+    const { symlinkSync, lstatSync } = await import("node:fs");
+    const elsewhere = tmp("victim");
+    const victim = join(elsewhere, "captured");
+    writeFileSync(victim, "");
+    const d2 = tmp("keys");
+    symlinkSync(victim, join(d2, `wallet-key.${process.pid}.tmp`));
+    symlinkSync(victim, join(d2, "wallet-key"));
+    const r2 = K.storeKey(key, { kind: "file", dir: d2, run });
+    ok(r2.stored && readFileSync(victim, "utf8") === "", `a symlink planted at the guessable staging name or the key's own name is never written through (${JSON.stringify(r2)})`);
+    ok(!lstatSync(join(d2, "wallet-key")).isSymbolicLink() && mode(join(d2, "wallet-key")) === 0o600 && readFileSync(join(d2, "wallet-key"), "utf8").trim() === key, "the key file replaces the planted link as a 0600 file of its own");
+    ok(readdirSync(d2).filter((n) => n.includes(".tmp") && n !== `wallet-key.${process.pid}.tmp`).length === 0, `no staging file is left behind (${readdirSync(d2).join(",")})`);
+    const d3 = tmp("keys");
+    symlinkSync(victim, join(d3, "planted.tmp"));
+    const r3 = K.storeKey(key, { kind: "file", dir: d3, run, stagingName: "planted.tmp" });
+    ok(!r3.stored && /already exists/.test(r3.reason) && readFileSync(victim, "utf8") === "" && !existsSync(join(d3, "wallet-key")), `a staging name that already exists is refused, not followed (${JSON.stringify(r3)})`);
+    for (const m of [0o777, 0o770, 0o702]) {
+      const open = tmp("keys");
+      chmodSync(open, m);
+      const r4 = K.storeKey(key, { kind: "file", dir: open, run });
+      ok(!r4.stored && /other users can write/.test(r4.reason) && r4.reason.includes(open) && readdirSync(open).length === 0, `a config folder with mode ${m.toString(8)} is refused and nothing is written (${JSON.stringify(r4)})`);
+      chmodSync(open, 0o700);
+    }
+  }
   console.log("key-store.js: macOS, Windows, Secret Service and file stores; key on stdin only ✓");
 }
 
@@ -317,20 +345,56 @@ try {
     console.log("server: daily and monthly caps hold across restarts and say when they reset ✓");
   }
 
-  // 6c) The first-call allowance is labeled and not counted.
+  // 6c) The first-call allowance: a grant from any host but the default one
+  // is a paid call (a seller holding the payment cannot vouch it was not
+  // taken), and the daily cap and session budget fill. From the default host
+  // (a preload maps its exact origin onto the stub) the call is labeled, is
+  // not spent, and its signed payment stays held against the caps.
   {
     const cfg = tmp("cfg");
-    const c = await connect({ AGENT_KEY: `0x${HEX}`, AGENT402_CONFIG_DIR: cfg, AGENT402_MAX_USD_PER_DAY: "0.01", AGENT402_BUDGET: "0.01" });
+    const c = await connect({ AGENT_KEY: `0x${HEX}`, AGENT402_CONFIG_DIR: cfg, AGENT402_MAX_USD_PER_DAY: "0.015", AGENT402_BUDGET: "1" });
     try {
+      const before = seen.signed;
       const g = await callSlug(c, "grant");
-      ok(!g.isError && text(g).includes("One-time free call") && text(g).includes("counts against no spending cap"), `a granted call is labeled: ${text(g)}`);
+      ok(!g.isError && seen.signed === before + 1 && !text(g).includes("One-time free call") && !/counts against no/.test(text(g)), `another host's first-call header is not labeled free: ${text(g)}`);
       const i = await info(c);
-      ok(i.spendControls.spentThisSessionUsd === 0 && i.spendControls.daily.spentUsd === 0, `a granted call counts against no cap: ${JSON.stringify(i.spendControls)}`);
-      const p = await callSlug(c, "paid");
-      ok(!p.isError && !text(p).includes("One-time free call"), "the next paid call still fits the caps the grant left alone");
-      const after = await info(c);
-      ok(after.spendControls.daily.spentUsd === 0.01 && after.spendControls.spentThisSessionUsd === 0.01, "the paid call is counted");
+      ok(i.spendControls.spentThisSessionUsd === 0.01 && i.spendControls.daily.spentUsd === 0.01, `another host's grant is counted as spent: ${JSON.stringify(i.spendControls)}`);
+      const next = await callSlug(c, "grant");
+      ok(next.isError && /left today/.test(text(next)) && seen.signed === before + 1, `the daily cap refuses the next call before signing: ${text(next)}`);
     } finally { await c.close(); }
+    const c3 = await connect({ AGENT_KEY: `0x${HEX}`, AGENT402_CONFIG_DIR: tmp("cfg"), AGENT402_BUDGET: "0.015" });
+    try {
+      await callSlug(c3, "grant");
+      const r = await callSlug(c3, "grant");
+      ok(r.isError && /session budget exhausted/.test(text(r)), `the session budget counts another host's grant: ${text(r)}`);
+    } finally { await c3.close(); }
+    // The default host's exact origin, mapped onto the stub by a preload.
+    const dir = tmp("preload");
+    const preload = join(dir, "preload.mjs");
+    writeFileSync(preload, `const map = JSON.parse(process.env.FIRST_CALL_TEST_ORIGINS);
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const u = new URL(input instanceof Request ? input.url : String(input));
+  const to = map[u.origin];
+  if (!to) return realFetch(input, init);
+  const target = to + u.pathname + u.search;
+  if (!(input instanceof Request)) return realFetch(target, init);
+  const body = input.method === "GET" || input.method === "HEAD" ? undefined : await input.arrayBuffer();
+  return realFetch(target, { ...init, method: input.method, headers: input.headers, body, redirect: input.redirect });
+};
+`);
+    const own = new Client({ name: "agent402-first-run-test", version: "0.0.0" });
+    await own.connect(new StdioClientTransport({ command: process.execPath, args: ["--import", pathToFileURL(preload).href, INDEX],
+      env: { ...clean(), AGENT402_URL: "https://agent402.tools", FIRST_CALL_TEST_ORIGINS: JSON.stringify({ "https://agent402.tools": STUB }), AGENT_KEY: `0x${HEX}`, AGENT402_CONFIG_DIR: tmp("cfg"), AGENT402_MAX_USD_PER_DAY: "0.015", AGENT402_BUDGET: "1" } }));
+    try {
+      const before = seen.signed;
+      const g = await callSlug(own, "grant");
+      ok(!g.isError && seen.signed === before + 1 && text(g).includes("One-time free call") && text(g).includes("stays held against AGENT402_BUDGET") && !/counts against no/.test(text(g)), `the default host's grant is labeled and says the payment is held: ${text(g)}`);
+      const i = await info(own);
+      ok(i.spendControls.spentThisSessionUsd === 0 && i.spendControls.daily.spentUsd === 0 && i.spendControls.heldThisSessionUsd === 0.01, `the default host's grant is not spent and is held: ${JSON.stringify(i.spendControls)}`);
+      const next = await callSlug(own, "paid");
+      ok(next.isError && seen.signed === before + 1, `while held, the daily cap refuses the next call before signing: ${text(next)}`);
+    } finally { await own.close(); }
     // Control: the allowance header beside a settlement receipt is a paid call.
     const c2 = await connect({ AGENT_KEY: `0x${HEX}`, AGENT402_CONFIG_DIR: tmp("cfg"), AGENT402_MAX_USD_PER_DAY: "1" });
     try {
@@ -338,7 +402,7 @@ try {
       const i = await info(c2);
       ok(!s.isError && !text(s).includes("One-time free call") && i.spendControls.daily.spentUsd === 0.01, `a settled call is counted even with the allowance header: ${JSON.stringify(i.spendControls)}`);
     } finally { await c2.close(); }
-    console.log("server: the first-call allowance is labeled and counts against no cap ✓");
+    console.log("server: a first-call header counts as free only from the default host, and its payment stays held ✓");
   }
 
   // 6d) Media answers become files; AGENT402_MEDIA_INLINE=1 keeps them inline.

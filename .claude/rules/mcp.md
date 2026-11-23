@@ -137,8 +137,10 @@ Loaded when a connector or front-door file is read.
   (`mcp/setup.js`) stored is read from the OS store (`mcp/key-store.js`, `AGENT402_KEY_STORE`; the key always goes on
   stdin, never argv). `AGENT402_MAX_USD_PER_DAY` / `_PER_MONTH` are UTC caps kept in `spend.json` (0600) under
   `AGENT402_CONFIG_DIR` (`mcp/spend-ledger.js`; only confirmed spend is written). A 2xx with
-  `X-Agent402-Allowance: first-call` and no `PAYMENT-RESPONSE` is labeled "One-time free call" and not counted (the
-  client SDK releases it too). Media answers become files in `AGENT402_OUTPUT_DIR` (`mcp/media-output.js`, names made
+  `X-Agent402-Allowance: first-call` and no `PAYMENT-RESPONSE` from the default host's exact origin is labeled
+  "One-time free call" and not counted as spent, but its sent payment is held until the authorization expires (the
+  client SDK does the same: `freeCalls`, `heldUsd`); from any other host the header alone is a paid call. The key file
+  store stages the key under a random name opened O_EXCL|O_NOFOLLOW (0600) and refuses a folder other users can write. Media answers become files in `AGENT402_OUTPUT_DIR` (`mcp/media-output.js`, names made
   from a fixed alphabet); an image up to `AGENT402_MEDIA_INLINE_MAX_BYTES` (default 1 MB) is also an inline image block,
   so the model loses no sight of it; `AGENT402_MEDIA_INLINE=1` keeps everything inline. A suite that spawns the stdio server sets
   `AGENT402_KEY_STORE=off` and temp `AGENT402_CONFIG_DIR` / `AGENT402_OUTPUT_DIR`, so a developer's stored key is never read.

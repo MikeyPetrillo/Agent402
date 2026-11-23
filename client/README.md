@@ -102,10 +102,12 @@ try { await new Agent402().call("extract", { url: "https://example.com" }); }
 catch (e) { if (e instanceof WalletRequiredError) console.log("pass { fetch } (x402 or MPP) or { creditsKey }"); }
 ```
 
-A paid call the server serves free under its first-call allowance (the answer
-carries `X-Agent402-Allowance: first-call` and no settlement receipt, and the
-JSON body a `firstCallAllowance` field) counts against no cap;
-`spendingSummary().freeCalls` counts them.
+A paid call the built-in host (`DEFAULT_BASE_URL`) serves free under its
+first-call allowance (the answer carries `X-Agent402-Allowance: first-call` and
+no settlement receipt, and the JSON body a `firstCallAllowance` field) is not
+settled spend, and `spendingSummary().freeCalls` counts it; the payment that was
+sent stays in `heldUsd`, against the caps, until its authorization expires
+unused. From any other host the header alone is a paid call.
 
 ## Paying with a credits key
 
@@ -360,7 +362,7 @@ whole API: `Agent402Options`, `CallOptions`, the error classes and the helpers.
 | `await a.collectJob(jobUrl, { timeoutMs?, onProgress? })` | Collect a job link (from `AsyncJobPendingError.jobUrl`) until it has the answer |
 | `Agent402.solvePow(pow)` / `await Agent402.solvePowAsync(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value, on the calling thread or on a worker thread; a difficulty above 28 bits is refused |
 | `a.guardX402Client(client)` | Enforce this client's caps on every payment the given `@x402/core` client signs (the same as passing `x402Client`); returns the client |
-| `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, heldUsd, heldCalls, heldByHost, freeCalls, limits }`; `dailyUsd`, `calls` and `byHost` are settled calls, the `held*` fields are payments sent without a delivered answer |
+| `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, heldUsd, heldCalls, heldByHost, freeCalls, limits }`; `dailyUsd`, `calls` and `byHost` are settled calls, the `held*` fields are payments sent without a delivered answer, or served by the built-in host's first-call allowance |
 | `a.clearCache()` | Drop the in-memory result cache |
 
 ## Response size ceiling
