@@ -21,6 +21,7 @@ import { NETWORK_TOOLS2 } from "./network-kit2.js";
 import { promises as dnsPromises } from "node:dns";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { testSeamOn } from "../test-seams.js";
+import { CRTSH_ATTRIBUTION, withCredit } from "../data-attribution.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -310,6 +311,18 @@ export async function probeDomain(domain, { pro = false } = {}) {
   return { domain, emailR, tlsR, hdrR, dnsR, dnsx, www, email, tls, hdr, ct, tech, whois, emailScore, headerScore, tlsScore, composite, grade, assessed, gradeCaveat, signals, fingerprint };
 }
 
+// The pro tier's registration line: what whois computes from the registry's
+// RDAP record (age, days to expiry, transfer lock, DNSSEC). The record's own
+// dates are inputs to those counts only, and no registrar, status list or
+// nameserver list from it enters the report (the nameservers in the report
+// are read from DNS).
+export function registrationLine(whois) {
+  if (!whois) return "WHOIS probe unavailable.";
+  const n = (v) => (Number.isInteger(v) ? v : null);
+  const age = n(whois.ageDays), left = n(whois.daysToExpiry);
+  return `REGISTRATION (computed from the registry's RDAP record): domain age ${age == null ? "unknown" : `${age} days`}; ${left == null ? "days to expiry unknown" : left < 0 ? `registration expired ${-left} days ago` : `expires in ${left} days`}; transfer lock ${whois.transferLocked == null ? "unknown" : whois.transferLocked ? "on" : "OFF"}; DNSSEC per RDAP ${whois.dnssec == null ? "unknown" : whois.dnssec ? "signed" : "unsigned"}.`;
+}
+
 // `deps.probeDomain` is the test seam for the live probes.
 function makeDomainAuditHandlerInner(tierSlug) {
   const t = DOMAIN_AUDIT_TIERS[tierSlug];
@@ -354,7 +367,7 @@ function makeDomainAuditHandlerInner(tierSlug) {
     const proBlock = t.pro ? [
       ct ? `CERTIFICATE TRANSPARENCY: ${ct.count ?? (ct.certs?.length || 0)} certificates read${ct.truncated ? " (MORE exist - the log was truncated at the read limit)" : ""}, ${(ct.subdomains || []).length} distinct subdomains among them. Subdomains: ${(ct.subdomains || ct.names || []).slice(0, 40).join(", ") || "(none parsed)"}${(ct.subdomains || []).length > 40 ? ` (+${(ct.subdomains || []).length - 40} more)` : ""}.` : "CT probe unavailable.",
       tech ? `TECH STACK: ${(tech.technologies || tech.stack || tech.detected || []).map((x) => (typeof x === "string" ? x : x.name || x.technology)).filter(Boolean).slice(0, 40).join(", ") || "(none detected)"}.` : "Tech-stack probe unavailable.",
-      whois ? `REGISTRATION: registrar ${whois.registrar || "?"}, created ${whois.created || whois.creationDate || "?"}, expires ${whois.expires || whois.expiryDate || "?"}; status ${(Array.isArray(whois.status) ? whois.status : [whois.status]).filter(Boolean).join(", ") || "unknown"} (transfer lock = clientTransferProhibited); nameservers ${(whois.nameservers || []).slice(0, 6).join(", ") || "unknown"}; DNSSEC per RDAP ${whois.dnssec == null ? "unknown" : whois.dnssec ? "signed" : "unsigned"}.` : "WHOIS probe unavailable.",
+      registrationLine(whois),
     ].join("\n") : "";
 
     // 3) SYNTHESIZE - grounded, graded, actionable.
@@ -431,7 +444,10 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
       probes: { email: emailR.ok, tls: tlsR.ok, headers: hdrR.ok, ...(t.pro ? { certTransparency: !!ct, techStack: !!tech, whois: !!whois } : {}) },
       synthesis_model: SYNTH,
     };
-    const out = { report, domain, grade, composite, sources: [], tables, meta, grounding };
+    // The certificate log crt.sh answered the pro tier's CT probe: its credit
+    // rides the answer (never the description or the 402 sample).
+    const body = { report, domain, grade, composite, sources: [], tables, meta, grounding };
+    const out = t.pro && ct?.source === "crt.sh" ? withCredit(body, CRTSH_ATTRIBUTION) : { ...body, grounding };
     if (testSeamOn("RESEARCH_DEBUG")) out._debug = { emailBlock, hdrBlock, tlsBlock, proBlock, hostBlock, wwwBlock, mailboxBlock };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(DOMAIN_AUDIT_TIERS[tierSlug]) });
     return out;
