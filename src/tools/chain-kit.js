@@ -178,7 +178,8 @@ export const PUBLIC_RPCS = Object.freeze({
 // only, through Base's own public endpoint: the one lane they use. Every other
 // chain answers 400 naming Base (pickRelayNetwork); the named reads keep every
 // chain above. mainnet.base.org refuses every eth_getLogs (measured), so
-// event-logs reads Base's public node behind it (EVENT_LOGS_RPCS).
+// event-logs, and eth-call's eth_getLogs, read Base's public node behind it
+// (EVENT_LOGS_RPCS).
 export const RELAY_NETWORK = "base";
 export const BASE_RELAY_RPCS = Object.freeze(["https://mainnet.base.org"]);
 export const EVENT_LOGS_RPCS = Object.freeze(["https://mainnet.base.org", "https://base-rpc.publicnode.com"]);
@@ -762,7 +763,8 @@ export const CHAIN_TOOLS = [
       }
       const params = Array.isArray(i.params) ? i.params : [];
       const network = pickRelayNetwork(i.network, "eth-call");
-      const result = await publicJsonRpc(network, method, params, { urls: BASE_RELAY_RPCS });
+      // eth_getLogs reads event-logs' lanes: mainnet.base.org refuses it.
+      const result = await publicJsonRpc(network, method, params, { urls: method === "eth_getLogs" ? EVENT_LOGS_RPCS : BASE_RELAY_RPCS });
       return { network: network.name, method, result };
     },
   },
