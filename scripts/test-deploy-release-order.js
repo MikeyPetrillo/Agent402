@@ -23,7 +23,20 @@ const deploySteps = wf.jobs?.deploy?.steps || [];
   const needs = [].concat(deploy.needs || []);
   const cond = String(deploy.if || "").replace(/\s+/g, " ");
   ok(needs.includes("publish"), "the deploy job needs the publish job (it waits while publish runs)");
-  ok(/\(\s*needs\.publish\.result == 'success' \|\| needs\.publish\.result == 'skipped'\s*\)/.test(cond), "the deploy job runs after a published or skipped publish, never after a failed or cancelled one");
+  ok(needs.includes("publish-gate"), "the deploy job needs the publish gate too (a gate that failed is read, not taken as no publish)");
+  // The publish clause, evaluated for each outcome: a skipped publish counts
+  // only when the gate was skipped too (no [publish] marker); a failed gate
+  // (whose publish then reads skipped) holds the deploy.
+  const clause = (cond.match(/\(\s*needs\.publish\.result[^]*?needs\.publish-gate\.result == 'skipped'\s*\)\s*\)/) || [])[0] || "";
+  const holds = (gate, pub) => {
+    if (!clause) return null;
+    const js = clause.replace(/needs\.publish-gate\.result/g, JSON.stringify(gate)).replace(/needs\.publish\.result/g, JSON.stringify(pub)).replace(/==/g, "===");
+    return Function(`return (${js});`)();
+  };
+  ok(!!clause, `the deploy condition holds the publish clause (${clause.slice(0, 80)})`);
+  for (const [gate, pub, want] of [["skipped", "skipped", true], ["success", "success", true], ["failure", "skipped", false], ["success", "failure", false], ["success", "skipped", false], ["cancelled", "skipped", false]]) {
+    ok(holds(gate, pub) === want, `publish gate ${gate}, publish ${pub}: the deploy ${want ? "runs" : "is held"}`);
+  }
   ok(/^!cancelled\(\)/.test(cond.trim()), "the deploy condition keeps !cancelled() (a skipped publish does not skip the deploy)");
   const lanes = needs.filter((n) => /^test(-|$)/.test(n));
   ok(lanes.length >= 4 && lanes.every((l) => cond.includes(`needs.${l}.result == 'success'`)), `every test lane's success is still required (${lanes.length} lanes)`);
