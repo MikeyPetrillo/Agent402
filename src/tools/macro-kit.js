@@ -24,7 +24,7 @@ import { safeFetch, assertPublicUrl, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling, capByCeiling, assertBeforeCeiling, ceilingLeftMs } from "../run-ceiling.js";
 import { redactSecrets } from "./redact.js";
 import { FRED_TERMS, FRED_TERMS_URL, termsAnswers, US_AGENCIES_ATTRIBUTION } from "../data-attribution.js";
-import { usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
+import { useHeldTreasuryYields, usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
@@ -205,6 +205,8 @@ export const TREASURY_YIELD_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
 const treasuryYieldYears = new Map(); // year -> { at, rows, failedAt }
 const treasuryYieldReads = new Map(); // year -> in-flight read (single flight)
 const treasuryYieldTimer = { interval: null, boot: null };
+// fred-series' Treasury constant maturities read the years held here.
+useHeldTreasuryYields((year) => treasuryYieldYears.get(year) || null);
 export function _resetTreasuryYieldCacheForTest() { stopTreasuryYieldRefresh(); treasuryYieldYears.clear(); treasuryYieldReads.clear(); }
 // Moves every held year's read and failure times `ms` into the past.
 export function _ageTreasuryYieldCacheForTest(ms) {
@@ -898,12 +900,12 @@ MACRO_TOOLS.push(
     // Served from the agencies that publish each series (src/tools/us-macro-series.js),
     // never from FRED: the route keeps FRED's series IDs, inputs and answer shape.
     route: "GET /api/fred-series", name: "US economic time series by FRED series ID", slug: "fred-series", category: "data", attribution: "us-agencies", price: "$0.001",
-    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov"],
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     description:
-      `US economic time series by FRED series ID, read from the agency that publishes it: labor and price series (UNRATE, CPIAUCSL), overnight rates (DFF, FEDFUNDS) and total public debt (GFDEBTN). Date windows, units and lower frequencies; other IDs answer 404 with the list. ${US_AGENCIES_ATTRIBUTION}`,
-    tags: ["fred", "series", "time-series", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "bls", "macro", "economic-data", "treasury"],
+      `US economic time series by FRED series ID, read from the agency that publishes it: GDP and real GDP (GDP, GDPC1), labor and price series (UNRATE, CPIAUCSL), Treasury yields and spreads (DGS10, T10Y2Y), the money stock (M2SL), overnight rates (DFF, FEDFUNDS) and total public debt (GFDEBTN). Date windows, units and lower frequencies; other IDs answer 404 with the list. ${US_AGENCIES_ATTRIBUTION}`,
+    tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "treasury-yields", "money-supply", "bls", "bea", "macro", "economic-data", "treasury"],
     discovery: {
-      input: { seriesId: "UNRATE", startDate: "2024-01-01", endDate: "2024-12-31" },
+      input: { seriesId: "GDPC1", startDate: "2024-01-01", endDate: "2024-12-31" },
       inputSchema: {
         properties: {
           seriesId: { type: "string", maxLength: 40, description: `FRED series ID, one of: ${US_MACRO_SUPPORTED_IDS.join(", ")}` },
@@ -915,7 +917,7 @@ MACRO_TOOLS.push(
         },
         required: ["seriesId"],
       },
-      output: { example: { seriesId: "UNRATE", count: 12, observations: [{ date: "2024-01-01", value: 3.7 }], source: "U.S. Bureau of Labor Statistics", sourceSeries: "LNS14000000", terms: US_MACRO_TERMS.bls } },
+      output: { example: { seriesId: "GDPC1", count: 4, observations: [{ date: "2024-01-01", value: 23115.975 }], source: "U.S. Bureau of Economic Analysis", sourceSeries: "NIPA A191RX (Table 1.1.6, line 1)", terms: US_MACRO_TERMS.bea } },
     },
     handler: async (i) => {
       const seriesId = String(i.seriesId ?? "").trim().toUpperCase();

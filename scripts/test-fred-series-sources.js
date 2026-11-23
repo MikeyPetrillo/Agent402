@@ -26,8 +26,13 @@ const caught = async (p) => { try { await p; return null; } catch (e) { return e
 
 // --- the tool definition --------------------------------------------------------
 ok(tool.attribution === "us-agencies" && ATTRIBUTIONS["us-agencies"] === US_AGENCIES_ATTRIBUTION && tool.description.endsWith(US_AGENCIES_ATTRIBUTION), "fred-series credits the agencies and its description ends with that sentence");
-ok(!/FRED\(R\) API|St\. Louis|stlouisfed/.test(tool.description) && /bls\.gov/.test(tool.discovery.output.example.terms), "fred-series makes no FRED API claim, and its example links the publisher's terms, not FRED's");
-ok(JSON.stringify(tool.upstreamHosts) === JSON.stringify(["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov"]), "fred-series declares the hosts it reads through its source module");
+ok(!/FRED\(R\) API|St\. Louis|stlouisfed/.test(tool.description) && /bea\.gov/.test(tool.discovery.output.example.terms), "fred-series makes no FRED API claim, and its example links the publisher's terms, not FRED's");
+const PUBLISHER_HOSTS = ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"];
+ok(JSON.stringify(tool.upstreamHosts) === JSON.stringify(PUBLISHER_HOSTS), "fred-series declares the hosts it reads through its source module");
+// The series current buyers ask for most are served: Treasury constant
+// maturities and their spreads, the money stock, GDP.
+for (const id of ["DGS1MO", "DGS3MO", "DGS6MO", "DGS1", "DGS2", "DGS3", "DGS5", "DGS7", "DGS10", "DGS20", "DGS30", "T10Y2Y", "T10Y3M", "M1SL", "M2SL", "M1NS", "M2NS", "GDP", "GDPC1"]) ok(SUPPORTED_IDS.includes(id), `${id} is served`);
+ok(tool.discovery.input.seriesId === "GDPC1", "the published example is GDPC1 again, the example buyers had");
 ok(!METERED_SLUGS.has("fred-series"), "fred-series is keyless, so the catalog sweeps drive it");
 ok(SERIES[tool.discovery.input.seriesId], `the published example's series (${tool.discovery.input.seriesId}) is served`);
 for (const id of ["UNRATE", "CPIAUCSL", "FEDFUNDS", "DFF"]) ok(SUPPORTED_IDS.includes(id), `${id}, which the description, packs and corpus name, is served`);
@@ -70,6 +75,34 @@ globalThis.fetch = async (url, opts = {}) => {
       { record_date: "2025-10-31", total_mil_amt: "38040093.8056379" },
       { record_date: "2025-12-31", total_mil_amt: "38514008.7862368" },
     ] });
+  }
+  if (u.hostname === "home.treasury.gov") {
+    const year = Number(u.pathname.split("/").at(-2));
+    const head = year < 2000 ? 'Date,"3 Mo","6 Mo","1 Yr","2 Yr","3 Yr","5 Yr","7 Yr","10 Yr","30 Yr"' : 'Date,"1 Mo","1.5 Month","2 Mo","3 Mo","4 Mo","6 Mo","1 Yr","2 Yr","3 Yr","5 Yr","7 Yr","10 Yr","20 Yr","30 Yr"';
+    const rows = year < 2000 ? ["12/31/1999,5.33,5.78,5.98,6.24,6.30,6.36,6.45,6.45,6.48"] : [`12/31/${year},3.74,3.75,3.67,3.67,3.63,3.59,3.48,3.47,3.55,3.73,3.94,4.18,4.79,4.84`, `01/02/${year},4.40,4.41,4.39,4.36,4.33,4.25,4.17,4.25,4.29,4.38,4.47,4.57,4.86,4.79`];
+    return new Response([head, ...rows].join("\n"), { status: 200, headers: { "content-type": "text/csv" } });
+  }
+  if (u.hostname === "www.federalreserve.gov") {
+    return new Response([
+      '"Series Description","M1; Not seasonally adjusted","M2; Not seasonally adjusted","M1; Seasonally adjusted","M2; Seasonally adjusted"',
+      '"Unit:","Currency","Currency","Currency","Currency"',
+      '"Multiplier:","1e+09","1e+09","1e+09","1e+09"',
+      '"Currency:","USD","USD","USD","USD"',
+      '"Unique Identifier:","H6/H6_M1/M1_N.M","H6/H6_M2/M2_N.M","H6/H6_M1/M1.M","H6/H6_M2/M2.M"',
+      '"Time Period","M1_N.M","M2_N.M","M1.M","M2.M"',
+      "2026-08,19932.1,23242.5,19967.3,23300.9",
+      "2026-09,20009.7,23339.6,20061.2,23413.9",
+      "2026-10,,,,",
+    ].join("\n"), { status: 200, headers: { "content-type": "text/csv" } });
+  }
+  if (u.hostname === "apps.bea.gov") {
+    return new Response([
+      "%SeriesCode,Period,Value",
+      'A001RC,2025Q1,"1"',
+      'A191RC,2025Q1,"30,171,979"', 'A191RC,2025Q2,"30,630,174"', 'A191RC,2025Q3,"31,180,493"',
+      'A191RX,2025Q1,"23,548,210"', 'A191RX,2025Q2,"23,770,976"', 'A191RX,2025Q3,"23,999,000"',
+      'A191RZ,2025Q1,"9"',
+    ].join("\n"), { status: 200, headers: { "content-type": "text/plain" } });
   }
   return new Response("unexpected host", { status: 599 });
 };
@@ -118,14 +151,52 @@ try {
   const g = await run({ seriesId: "GFDEBTN" });
   ok(g.count === 2 && g.observations[0].date === "2025-07-01" && g.observations[1].date === "2025-10-01" && /Fiscal Data/.test(g.source), `GFDEBTN is the quarter-end total, dated by quarter (${JSON.stringify(g.observations.map((o) => o.date))})`);
 
+  // Treasury constant maturities, read from the daily par yield curve
+  const t10 = await run({ seriesId: "DGS10", startDate: "2025-01-01", endDate: "2025-12-31" });
+  ok(t10.count === 2 && t10.observations[0].date === "2025-01-02" && t10.observations[0].value === 4.57 && t10.observations[1].value === 4.18 && /Treasury/.test(t10.source) && /par yield curve/i.test(t10.sourceSeries) && /Treasury/.test(t10.credit) && !t10.derived, `DGS10 is the 10-year column of the Treasury's daily par yield curve, oldest first (${JSON.stringify(t10.observations)})`);
+  const m1 = await run({ seriesId: "DGS1MO", startDate: "2025-01-01", endDate: "2025-12-31" });
+  ok(m1.observations[0].value === 4.40, "a column is read by its header, not its place");
+  const old = await run({ seriesId: "DGS30", startDate: "1999-01-01", endDate: "1999-12-31" });
+  ok(old.count === 1 && old.observations[0].value === 6.48, "a year whose file has fewer columns is read by header");
+  const sp = await run({ seriesId: "T10Y2Y", startDate: "2025-01-01", endDate: "2025-12-31" });
+  ok(sp.derived === true && /Computed by Agent402 from/.test(sp.source) && Math.abs(sp.observations[0].value - (4.57 - 4.25)) < 1e-9, `T10Y2Y is the 10-year less the 2-year, marked derived (${JSON.stringify(sp.observations[0])})`);
+  {
+    const { useHeldTreasuryYields } = await import("../src/tools/us-macro-series.js");
+    _resetUsMacroForTest();
+    const y = new Date().getUTCFullYear();
+    useHeldTreasuryYields((yr) => (yr === y ? { at: Date.now(), rows: [{ recordDate: `${y}-01-05`, yr10: 4.92, yr2: 4.63 }] } : null));
+    const before = hosts.filter((h) => h === "home.treasury.gov").length;
+    const held = await run({ seriesId: "DGS10", startDate: `${y}-01-01` });
+    ok(held.observations.length === 1 && held.observations[0].value === 4.92 && hosts.filter((h) => h === "home.treasury.gov").length === before, "a year the yield-curve tools hold is served from there, with no second read");
+    useHeldTreasuryYields(null);
+  }
+  const wideT = await caught(run({ seriesId: "DGS10", startDate: "1990-01-01", endDate: "2026-01-01" }));
+  ok(wideT?.statusCode === 400 && /calendar years/.test(wideT.message), "a Treasury window wider than its year bound is refused before any read");
+  // Money stock (Federal Reserve Board H.6)
+  const m2 = await run({ seriesId: "M2SL", startDate: "2026-01-01" });
+  ok(m2.count === 2 && m2.observations[1].date === "2026-09-01" && m2.observations[1].value === 23413.9 && /Board of Governors of the Federal Reserve System/.test(m2.source) && /H\.6/.test(m2.sourceSeries) && /not affiliated with the Federal Reserve/.test(m2.credit) && /federalreserve\.gov\/disclaimer/.test(m2.terms), `M2SL is H.6 M2, seasonally adjusted, billions, credited to the Board (${JSON.stringify(m2.observations)})`);
+  const m1n = await run({ seriesId: "M1NS", startDate: "2026-01-01" });
+  ok(m1n.observations[0].value === 19932.1, "M1NS is the not seasonally adjusted column");
+  // GDP (BEA NIPA)
+  const gdp = await run({ seriesId: "GDPC1", startDate: "2025-01-01" });
+  ok(gdp.count === 3 && gdp.observations[0].date === "2025-01-01" && gdp.observations[2].date === "2025-07-01" && gdp.observations[0].value === 23548.21 && /Bureau of Economic Analysis/.test(gdp.source) && /A191RX/.test(gdp.sourceSeries) && /not endorsed or certified by BEA/.test(gdp.credit) && /bea\.gov/.test(gdp.terms), `GDPC1 is BEA's real GDP in billions of chained dollars, quarterly (${JSON.stringify(gdp.observations[0])})`);
+  const ng = await run({ seriesId: "GDP", startDate: "2025-01-01", units: "pc1" });
+  ok(ng.derived === true, "a transformed GDP answer is marked derived");
+  const gd = await run({ seriesId: "GDP", startDate: "2025-01-01" });
+  ok(gd.observations[2].value === 31180.493, `GDP is current dollars, billions (${gd.observations[2].value})`);
+
   // 3: not served
-  const e = await caught(run({ seriesId: "GDPC1" }));
+  const e = await caught(run({ seriesId: "NOTSERVED1" }));
   ok(e?.statusCode === 404 && SUPPORTED_IDS.every((id) => e.message.includes(id)) && Array.isArray(e.supportedSeriesIds), "an ID that is not served is a 404 naming every supported ID");
   const bad = await caught(run({ seriesId: "UNRATE", frequency: "bwew" }));
   ok(bad?.statusCode === 400 && /must be one of: d, w, m, q, sa, a, wef/.test(bad.message), "a FRED frequency code these sources do not offer is a 400 naming the ones they do");
 
   // 1: nothing reached FRED
-  ok(hosts.length > 0 && hosts.every((h) => ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov"].includes(h)), `only the publishers were read (${[...new Set(hosts)].join(", ")})`);
+  ok(hosts.length > 0 && hosts.every((h) => PUBLISHER_HOSTS.includes(h)), `only the publishers were read (${[...new Set(hosts)].join(", ")})`);
+  // The BLS daily budget is sized for the keyed limit when the key is set.
+  process.env.BLS_API_KEY = "test-key";
+  ok(blsDailyBudget() > 25 && blsDailyBudget() < 500, `with BLS_API_KEY the budget sits under the keyed limit of 500 (${blsDailyBudget()})`);
+  delete process.env.BLS_API_KEY;
 } finally {
   globalThis.fetch = realFetch;
   undoDns();

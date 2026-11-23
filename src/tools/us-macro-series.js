@@ -23,6 +23,28 @@
 //     public debt outstanding. "The data on this site is available to copy,
 //     adapt, redistribute, or otherwise use for non-commercial and commercial
 //     purposes" (https://fiscaldata.treasury.gov/about-us/).
+//   - U.S. Treasury, Daily Treasury Par Yield Curve Rates (home.treasury.gov,
+//     one CSV a year): the constant-maturity yields (DGS1MO ... DGS30; the
+//     H.15 constant maturities are these par yields) and the 10-year spreads
+//     T10Y2Y and T10Y3M, computed here. A work of the U.S. Government (public
+//     domain). The host builds each file slowly (15-20 s), so a call waits at
+//     most PUBLISHER_WAIT_MS for a file not held; the read runs on and fills
+//     the cache (an earlier year is kept 30 days).
+//   - Board of Governors of the Federal Reserve System, H.6 Money Stock
+//     Measures (www.federalreserve.gov Data Download Program, the monthly
+//     package): M1SL, M2SL, M1NS, M2NS. "Unless otherwise indicated,
+//     information on Board's website is in the public domain and may be
+//     copied and distributed without permission. Please cite to the Board as
+//     the source of the information" (https://www.federalreserve.gov/disclaimer.htm);
+//     nothing here implies membership in or endorsement by the Federal
+//     Reserve. The Board retires the preformatted packages on 2027-03-31 (the
+//     program on 2027-07-01); H6_PACKAGE_URL moves to the release's XML before then.
+//   - U.S. Bureau of Economic Analysis, National Income and Product Accounts
+//     (apps.bea.gov flat file of quarterly NIPA series, keyless): GDP
+//     (A191RC) and GDPC1 (A191RX), millions in the file, billions here as
+//     FRED gives them. A work of the U.S. Government; BEA asks that nothing
+//     suggest its endorsement (https://www.bea.gov/help/guidelines-for-citing-bea),
+//     so every answer says it is not endorsed or certified by BEA.
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 
 function bad(message, statusCode = 400) {
@@ -40,11 +62,21 @@ export const TERMS = Object.freeze({
   bls: "BLS Public Data API terms of service: https://www.bls.gov/developers/termsOfService.htm",
   nyfed: "New York Fed Terms of Use, which apply to this data as passed on here: https://www.newyorkfed.org/privacy/termsofuse",
   treasury: "U.S. Treasury Fiscal Data: https://fiscaldata.treasury.gov/about-us/",
+  yields: "U.S. Treasury interest rate data: https://home.treasury.gov/resource-center/data-chart-center/interest-rates",
+  frb: "Federal Reserve Board website policies: https://www.federalreserve.gov/disclaimer.htm",
+  bea: "BEA citation guidelines: https://www.bea.gov/help/guidelines-for-citing-bea",
 });
+export const TREASURY_YIELDS_CREDIT = "Source: U.S. Department of the Treasury, Daily Treasury Par Yield Curve Rates (home.treasury.gov).";
+export const FRB_H6_CREDIT = "Source: Board of Governors of the Federal Reserve System (US), H.6 Money Stock Measures (federalreserve.gov). Agent402 is not affiliated with the Federal Reserve.";
+export const BEA_CREDIT = "Source: U.S. Bureau of Economic Analysis, National Income and Product Accounts (bea.gov). This product uses BEA data but is not endorsed or certified by BEA.";
 export const TREASURY_FISCAL_CREDIT = "Source: U.S. Department of the Treasury, Fiscal Data (fiscaldata.treasury.gov).";
 
 const BLS = (id, title) => ({ source: "bls", id, freq: "m", title });
 const NYF = (path, name, title, extra = {}) => ({ source: "nyfed", path, name, freq: "d", title, ...extra });
+const CMT = (col, title) => ({ source: "yields", col, freq: "d", title: `Market Yield on U.S. Treasury Securities at ${title} Constant Maturity (percent, business days)` });
+const SPREAD = (long, short, title) => ({ source: "yields", spread: [long, short], freq: "d", title });
+const H6 = (col, title) => ({ source: "frb", col, freq: "m", title });
+const NIPA = (code, title) => ({ source: "bea", code, freq: "q", title });
 /** FRED series ID -> the publisher's own series. */
 export const SERIES = Object.freeze({
   UNRATE: BLS("LNS14000000", "Unemployment Rate (percent, seasonally adjusted)"),
@@ -65,6 +97,25 @@ export const SERIES = Object.freeze({
   SOFR: NYF("secured/sofr", "Secured Overnight Financing Rate (SOFR)", "Secured Overnight Financing Rate (percent, business days)", { dtcc: true }),
   OBFR: NYF("unsecured/obfr", "Overnight Bank Funding Rate (OBFR)", "Overnight Bank Funding Rate (percent, business days)"),
   GFDEBTN: { source: "treasury", freq: "q", title: "Federal Debt: Total Public Debt (millions of dollars, end of quarter)" },
+  DGS1MO: CMT("1 Mo", "1-Month"),
+  DGS3MO: CMT("3 Mo", "3-Month"),
+  DGS6MO: CMT("6 Mo", "6-Month"),
+  DGS1: CMT("1 Yr", "1-Year"),
+  DGS2: CMT("2 Yr", "2-Year"),
+  DGS3: CMT("3 Yr", "3-Year"),
+  DGS5: CMT("5 Yr", "5-Year"),
+  DGS7: CMT("7 Yr", "7-Year"),
+  DGS10: CMT("10 Yr", "10-Year"),
+  DGS20: CMT("20 Yr", "20-Year"),
+  DGS30: CMT("30 Yr", "30-Year"),
+  T10Y2Y: SPREAD("10 Yr", "2 Yr", "10-Year Treasury Constant Maturity Minus 2-Year Treasury Constant Maturity (percentage points, business days)"),
+  T10Y3M: SPREAD("10 Yr", "3 Mo", "10-Year Treasury Constant Maturity Minus 3-Month Treasury Constant Maturity (percentage points, business days)"),
+  M1SL: H6("M1.M", "M1 (billions of dollars, seasonally adjusted)"),
+  M2SL: H6("M2.M", "M2 (billions of dollars, seasonally adjusted)"),
+  M1NS: H6("M1_N.M", "M1 (billions of dollars, not seasonally adjusted)"),
+  M2NS: H6("M2_N.M", "M2 (billions of dollars, not seasonally adjusted)"),
+  GDP: NIPA("A191RC", "Gross Domestic Product (billions of dollars, seasonally adjusted annual rate)"),
+  GDPC1: NIPA("A191RX", "Real Gross Domestic Product (billions of chained dollars, seasonally adjusted annual rate)"),
 });
 export const SUPPORTED_IDS = Object.freeze(Object.keys(SERIES));
 
@@ -231,6 +282,156 @@ async function treasuryDebtQuarterly() {
   });
 }
 
+// ---- the slower publishers: a call waits at most this long for a read --------
+/** The longest a call waits for a publisher file this process does not hold
+ *  yet; past it the call answers 503 with Retry-After (nothing is settled)
+ *  and the read runs on to its own cap, filling the cache for the retry. */
+export const PUBLISHER_WAIT_MS = 20_000;
+async function withinWait(p, what) {
+  let timer;
+  p.catch(() => {});
+  try {
+    return await Promise.race([p, new Promise((_, rej) => { timer = setTimeout(() => rej(Object.assign(bad(`${what} is being read; retry in 30 s. Nothing was charged.`, 503), { retryAfter: 30 })), PUBLISHER_WAIT_MS); timer.unref?.(); })]);
+  } finally { clearTimeout(timer); }
+}
+const csvCells = (line) => { const out = []; let cur = "", q = false; for (const ch of line) { if (ch === '"') q = !q; else if (ch === "," && !q) { out.push(cur); cur = ""; } else cur += ch; } out.push(cur); return out.map((c) => c.trim()); };
+
+// ---- U.S. Treasury daily par yield curve -----------------------------------------
+export const TREASURY_YIELDS_FIRST_YEAR = 1990;
+/** The most calendar years one call reads (one file each). */
+export const TREASURY_YIELDS_MAX_YEARS = 10;
+const treasuryYieldsUrl = (year) => `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/${year}/all?type=daily_treasury_yield_curve&field_tdr_date_value=${year}&_format=csv`;
+/** One year's file -> [{ date, cols: { "10 Yr": 4.18, ... } }], by header. */
+export function parseTreasuryYieldsCsv(text) {
+  const lines = String(text || "").split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return [];
+  const head = csvCells(lines[0]);
+  if (head[0] !== "Date") throw busy("The U.S. Treasury yield curve file");
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const c = csvCells(lines[i]);
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(c[0]);
+    if (!m) continue;
+    const cols = {};
+    for (let j = 1; j < head.length; j++) { const v = c[j] === "" || c[j] === "N/A" || c[j] == null ? NaN : Number(c[j]); if (Number.isFinite(v)) cols[head[j]] = v; }
+    rows.push({ date: `${m[3]}-${m[1]}-${m[2]}`, cols });
+  }
+  return rows.sort((a, b) => (a.date < b.date ? -1 : 1));
+}
+// The yield-curve tools (src/tools/macro-kit.js) keep the current and last
+// year's files warm in production; a year they hold is used from there
+// rather than read again (macro-kit hands its reader in at import).
+let heldYields = null;
+/** `fn(year)` -> { at, rows: [{ recordDate, mo1 ... yr30 }] } or null. */
+export function useHeldTreasuryYields(fn) { heldYields = typeof fn === "function" ? fn : null; }
+const HELD_TENORS = { mo1: "1 Mo", mo3: "3 Mo", mo6: "6 Mo", yr1: "1 Yr", yr2: "2 Yr", yr3: "3 Yr", yr5: "5 Yr", yr7: "7 Yr", yr10: "10 Yr", yr20: "20 Yr", yr30: "30 Yr" };
+function fromHeld(year) {
+  let h = null;
+  try { h = heldYields ? heldYields(year) : null; } catch { h = null; }
+  if (!h || !Array.isArray(h.rows) || !h.rows.length || !(Date.now() - h.at < 2 * HOUR)) return null;
+  const rows = h.rows.map((r) => ({ date: r.recordDate, cols: Object.fromEntries(Object.entries(HELD_TENORS).filter(([kk]) => Number.isFinite(r[kk])).map(([kk, col]) => [col, r[kk]])) }));
+  return { at: h.at, ttl: HOUR, value: rows, retrievedAt: new Date(h.at).toISOString() };
+}
+function treasuryYieldsYear(year) {
+  const k = `yields:${year}`;
+  const hit = cached(k) || fromHeld(year);
+  if (hit) return Promise.resolve(hit);
+  return once(k, async () => {
+    let html;
+    try {
+      ({ html } = await safeFetch(treasuryYieldsUrl(year), { timeoutMs: 45_000, maxBytes: 5 * 1024 * 1024, ownUpstream: true }));
+    } catch {
+      throw busy("The U.S. Treasury yield curve file");
+    }
+    const rows = parseTreasuryYieldsCsv(html);
+    const current = year >= new Date().getUTCFullYear();
+    return keep(k, rows, current ? HOUR : 30 * 24 * HOUR);
+  });
+}
+async function treasuryYields(s, fromYear, toYear) {
+  const years = [];
+  for (let y = Math.max(fromYear, TREASURY_YIELDS_FIRST_YEAR); y <= toYear; y++) years.push(y);
+  if (years.length > TREASURY_YIELDS_MAX_YEARS) throw bad(`A window on a Treasury yield series may touch at most ${TREASURY_YIELDS_MAX_YEARS} calendar years; narrow startDate and endDate.`);
+  const parts = await withinWait(Promise.all(years.map(treasuryYieldsYear)), "The U.S. Treasury yield curve file");
+  const rows = [];
+  for (const r of parts.flatMap((p) => p.value)) {
+    if (s.spread) { const [a, b] = s.spread; if (Number.isFinite(r.cols[a]) && Number.isFinite(r.cols[b])) rows.push({ date: r.date, value: Math.round((r.cols[a] - r.cols[b]) * 1e6) / 1e6 }); }
+    else if (Number.isFinite(r.cols[s.col])) rows.push({ date: r.date, value: r.cols[s.col] });
+  }
+  return { rows, retrievedAt: parts.map((p) => p.retrievedAt).sort()[0] };
+}
+
+// ---- Federal Reserve Board H.6 -----------------------------------------------------
+// The monthly package (M1, M2 and other release data), every column of it.
+export const H6_PACKAGE_URL = "https://www.federalreserve.gov/datadownload/Output.aspx?rel=H6&series=798e2796917702a5f8423426ba7e6b42&lastobs=&from=&to=&filetype=csv&label=include&layout=seriescolumn&type=package";
+/** The package -> { "M2.M": [{ date, value }], ... } (billions), by the header row. */
+export function parseH6Csv(text) {
+  const lines = String(text || "").split(/\r?\n/).filter((l) => l.trim());
+  const at = lines.findIndex((l) => /^"?Time Period"?,/.test(l));
+  if (at < 0) throw busy("The Federal Reserve Board H.6 file");
+  const head = csvCells(lines[at]);
+  const out = {};
+  for (let j = 1; j < head.length; j++) out[head[j]] = [];
+  for (let i = at + 1; i < lines.length; i++) {
+    const c = csvCells(lines[i]);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(c[0])) continue;
+    for (let j = 1; j < head.length; j++) { if (c[j] === "" || c[j] == null) continue; const v = Number(c[j]); if (Number.isFinite(v)) out[head[j]].push({ date: `${c[0]}-01`, value: v }); }
+  }
+  return out;
+}
+function h6Package() {
+  const k = "frb:h6";
+  const hit = cached(k);
+  if (hit) return Promise.resolve(hit);
+  return once(k, async () => {
+    let html;
+    try {
+      ({ html } = await retryTransient(() => safeFetch(H6_PACKAGE_URL, { timeoutMs: 20_000, maxBytes: 4 * 1024 * 1024, ownUpstream: true })));
+    } catch {
+      throw busy("The Federal Reserve Board H.6 file");
+    }
+    return keep(k, parseH6Csv(html), 6 * HOUR);
+  });
+}
+
+// ---- BEA NIPA quarterly flat file ------------------------------------------------
+export const BEA_NIPA_Q_URL = "https://apps.bea.gov/national/Release/TXT/NipaDataQ.txt";
+const BEA_CODES = ["A191RC", "A191RX"];
+/** The flat file -> { A191RC: [{ date, value }], ... } in billions, for the codes asked. */
+export function parseNipaQuarterly(text, codes = BEA_CODES) {
+  const out = Object.fromEntries(codes.map((c) => [c, []]));
+  const t = String(text || "");
+  for (const code of codes) {
+    let at = t.indexOf(`\n${code},`);
+    while (at >= 0) {
+      const end = t.indexOf("\n", at + 1);
+      const line = t.slice(at + 1, end < 0 ? undefined : end);
+      if (!line.startsWith(`${code},`)) break;
+      const m = /^[A-Z0-9]+,(\d{4})Q([1-4]),"?([-0-9,.]+)"?\s*$/.exec(line);
+      if (m) { const v = Number(m[3].replace(/,/g, "")); if (Number.isFinite(v)) out[code].push({ date: `${m[1]}-${String((Number(m[2]) - 1) * 3 + 1).padStart(2, "0")}-01`, value: Math.round(v) / 1000 }); }
+      at = end;
+    }
+    out[code].sort((a, b) => (a.date < b.date ? -1 : 1));
+  }
+  return out;
+}
+function beaNipa() {
+  const k = "bea:nipa-q";
+  const hit = cached(k);
+  if (hit) return Promise.resolve(hit);
+  return once(k, async () => {
+    let html;
+    try {
+      ({ html } = await safeFetch(BEA_NIPA_Q_URL, { timeoutMs: 60_000, maxBytes: 64 * 1024 * 1024, ownUpstream: true }));
+    } catch {
+      throw busy("The U.S. Bureau of Economic Analysis file");
+    }
+    const parsed = parseNipaQuarterly(html);
+    if (!parsed.A191RC.length || !parsed.A191RX.length) throw busy("The U.S. Bureau of Economic Analysis file");
+    return keep(k, parsed, 12 * HOUR);
+  });
+}
+
 // ---- transformations ---------------------------------------------------------
 const PER_YEAR = { d: 260, w: 52, m: 12, q: 4, sa: 2, a: 1 };
 const round = (x) => (Number.isFinite(x) ? Math.round(x * 1e6) / 1e6 : null);
@@ -347,6 +548,30 @@ export async function usMacroSeries({ seriesId, startDate, endDate, limit = 1000
     retrievedAt = got.retrievedAt;
     sourceName = "Federal Reserve Bank of New York"; sourceSeries = s.path.split("/")[1].toUpperCase();
     credit = `${NYFED_NOTICE(s.name)}${s.dtcc ? ` ${SOFR_DTCC_NOTICE}` : ""} © ${nowYear} Federal Reserve Bank of New York. Content from the New York Fed subject to the Terms of Use at newyorkfed.org.`;
+  } else if (s.source === "yields") {
+    const toYear = endDate ? Math.min(yearOf(endDate), nowYear) : nowYear;
+    let fromYear;
+    if (startDate) fromYear = yearOf(startDate) - pad;
+    else { fromYear = toYear - 1 - pad; defaultedStart = true; }
+    if (startDate && yearOf(startDate) > toYear) fromYear = toYear;
+    const got = await treasuryYields(s, fromYear, toYear);
+    rows = got.rows; retrievedAt = got.retrievedAt;
+    sourceName = "U.S. Department of the Treasury"; sourceSeries = `Daily Treasury Par Yield Curve Rates: ${s.spread ? s.spread.join(" minus ") : s.col}`;
+    credit = TREASURY_YIELDS_CREDIT;
+    if (defaultedStart) windowNote = `With no startDate, this series answers its last 2 calendar years; pass startDate for earlier years (from ${TREASURY_YIELDS_FIRST_YEAR}, up to ${TREASURY_YIELDS_MAX_YEARS} calendar years per call).`;
+  } else if (s.source === "frb") {
+    const got = await withinWait(h6Package(), "The Federal Reserve Board H.6 file");
+    rows = got.value[s.col] || [];
+    if (!rows.length) throw busy("The Federal Reserve Board H.6 file");
+    retrievedAt = got.retrievedAt;
+    sourceName = "Board of Governors of the Federal Reserve System (US)"; sourceSeries = `H.6 Money Stock Measures: ${s.col}`;
+    credit = FRB_H6_CREDIT;
+  } else if (s.source === "bea") {
+    const got = await withinWait(beaNipa(), "The U.S. Bureau of Economic Analysis file");
+    rows = got.value[s.code] || [];
+    retrievedAt = got.retrievedAt;
+    sourceName = "U.S. Bureau of Economic Analysis"; sourceSeries = `NIPA ${s.code} (Table 1.1.${s.code === "A191RX" ? "6" : "5"}, line 1)`;
+    credit = BEA_CREDIT;
   } else {
     const got = await treasuryDebtQuarterly();
     rows = got.value; retrievedAt = got.retrievedAt;
@@ -354,10 +579,11 @@ export async function usMacroSeries({ seriesId, startDate, endDate, limit = 1000
     credit = TREASURY_FISCAL_CREDIT;
   }
   rows = rows.slice();
-  let derived = !!s.monthlyAverage;
+  let derived = !!s.monthlyAverage || !!s.spread;
   if (freqOut && freqOut !== s.freq) { rows = aggregate(rows, s.freq, freqOut); derived = true; }
   if (units !== "lin") { rows = transform(rows, units, freqOut || s.freq); derived = true; }
-  const from = startDate || (defaultedStart ? `${(endDate ? Math.min(yearOf(endDate), nowYear) : nowYear) - 9}-01-01` : null);
+  const back = s.source === "yields" ? 1 : 9;
+  const from = startDate || (defaultedStart ? `${(endDate ? Math.min(yearOf(endDate), nowYear) : nowYear) - back}-01-01` : null);
   if (from) rows = rows.filter((r) => r.date >= from);
   if (endDate) rows = rows.filter((r) => r.date <= endDate);
   const matched = rows.length;

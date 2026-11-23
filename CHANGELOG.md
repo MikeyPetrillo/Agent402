@@ -82,14 +82,17 @@ Tools:
 - code-run and code-run-pro are retired and answer 410 and name none: code
   execution is no longer offered.
 - fred-series now reads each series from the agency that publishes it: labor
-  and price series (UNRATE, U6RATE, CIVPART, EMRATIO, PAYEMS, CES0500000003,
-  JTSJOL, CPIAUCSL, CPIAUCNS, CPILFESL, PPIACO) from the Bureau of Labor
-  Statistics, DFF, EFFR, FEDFUNDS, SOFR and OBFR from the Federal Reserve Bank
-  of New York, and GFDEBTN from Treasury Fiscal Data, with each publisher's
-  credit in the answer. The route, inputs, answer shape and price are
-  unchanged; units and frequency are computed here and marked derived. Other
-  series IDs answer 404 with the supported list, and the published example is
-  now UNRATE.
+  and price series (UNRATE, UNRATENSA, U6RATE, CIVPART, EMRATIO, PAYEMS,
+  CES0500000003, JTSJOL, CPIAUCSL, CPIAUCNS, CPILFESL, PPIACO) from the Bureau
+  of Labor Statistics, GDP and GDPC1 from the Bureau of Economic Analysis, the
+  Treasury constant maturities (DGS1MO, DGS3MO, DGS6MO, DGS1, DGS2, DGS3,
+  DGS5, DGS7, DGS10, DGS20, DGS30) and the T10Y2Y and T10Y3M spreads from the
+  Treasury's daily par yield curve, M1SL, M2SL, M1NS and M2NS from the Federal
+  Reserve Board's H.6 release, DFF, EFFR, FEDFUNDS, SOFR and OBFR from the
+  Federal Reserve Bank of New York, and GFDEBTN from Treasury Fiscal Data,
+  with each publisher's credit in the answer. The route, inputs, answer shape
+  and price are unchanged; units, frequency and the spreads are computed here
+  and marked derived. Other series IDs answer 404 with the supported list.
 
 ## v2.14.0 - 2026-11-23
 

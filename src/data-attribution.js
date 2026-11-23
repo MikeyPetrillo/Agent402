@@ -83,7 +83,7 @@ export const CYMRU_ATTRIBUTION = "IP to ASN data from Team Cymru IP to ASN Mappi
 // terms): the publishers named and the New York Fed's disclaimer for a product
 // described with its rates; each answer carries its publisher's full credit
 // (the BLS statement and retrieval date, the New York Fed's notice).
-export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, the New York Fed and the U.S. Treasury. Agent402 is not affiliated with the New York Fed.";
+export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, BEA, the U.S. Treasury, the Federal Reserve Board and the New York Fed. Agent402 is not affiliated with the Federal Reserve, and BEA does not endorse it.";
 export const CAMS_ATTRIBUTION = "Contains modified Copernicus Atmosphere Monitoring Service information (CAMS ENSEMBLE data provider).";
 export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
 // GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place
