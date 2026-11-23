@@ -8,9 +8,12 @@
 //      slug is the one exception, and a URL is not prose).
 //   3. The OpenAI examples in the adapter READMEs name one model, so moving the
 //      example moves every adapter (one README kept a retired model once).
+//   4. agent402-mcp's suggested daily cap, written into a new setup's config,
+//      is the amount mcp/README.md and /start state.
 // Typed chain counts and lists are held by scripts/test-chain-list-copy.js and
 // the lead sentence by scripts/test-positioning.js.
 //   node scripts/test-package-readme-claims.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,6 +75,21 @@ for (const dir of dirs) {
 const distinct = [...new Set(models.values())];
 ok(models.size >= 3, `the adapter READMEs' OpenAI examples are found (${models.size}): zero would mean the scan is blind`);
 ok(distinct.length === 1, `every adapter README's OpenAI example names one model (${distinct.join(", ")})${distinct.length > 1 ? `: ${[...models.keys()].join(", ")}` : ""}`);
+
+// 4. agent402-mcp's suggested daily cap (SUGGESTED_DAY_CAP_USD in
+// mcp/spend-ledger.js), written only into the config a new setup prints, is
+// the amount the README and /start state, and both say a config without it
+// has no daily cap.
+{
+  const m = /^export const SUGGESTED_DAY_CAP_USD = (\d+(?:\.\d+)?);$/m.exec(read("mcp/spend-ledger.js"));
+  const day = m ? Number(m[1]) : NaN;
+  ok(day > 0, `agent402-mcp's suggested daily cap is read ($${day})`);
+  const readme = read("mcp/README.md");
+  ok(readme.includes(`\`AGENT402_MAX_USD_PER_DAY\` set to \`${day}\``) && readme.includes(`sets \`AGENT402_MAX_USD_PER_DAY\` to a suggested \`${day}\``) && /has no daily cap/.test(readme), "mcp/README.md states the suggested daily cap a new setup writes, and no cap otherwise");
+  ok(!/AGENT402_MAX_USD_PER_DAY[^.|]{0,80}\bby default\b/.test(readme), "mcp/README.md never calls the daily cap a default");
+  const { SETUP_DAY_CAP_SENTENCE, startPage } = await import("../src/start-page.js");
+  ok(SETUP_DAY_CAP_SENTENCE.includes(`AGENT402_MAX_USD_PER_DAY to ${day}, a suggested cap of ${day} USD`) && /remove the line for no daily cap/.test(SETUP_DAY_CAP_SENTENCE) && startPage("https://agent402.tools", {}).includes("a suggested cap of"), `/start states the suggested daily cap: "${SETUP_DAY_CAP_SENTENCE}"`);
+}
 
 console.log(`\ntest-package-readme-claims: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

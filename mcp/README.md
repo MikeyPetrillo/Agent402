@@ -20,7 +20,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0
 npx -y agent402-mcp@0.17.0 setup
 ```
 
-It asks for the wallet's private key (the input is hidden), stores it in your OS keychain (the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux through `secret-tool`; elsewhere a file readable only by your user, with a warning), and prints the config for Claude Code, Claude Desktop and Cursor. That config needs no `AGENT_KEY`: the server reads the stored key whenever `AGENT_KEY` is not set. Fund the wallet with USDC on Base. A Base payment needs no ETH: you sign an authorization and the facilitator pays the network fee.
+It asks for the wallet's private key (the input is hidden), stores it in your OS keychain (the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux through `secret-tool`; elsewhere a file readable only by your user, with a warning), and prints the config for Claude Code, Claude Desktop and Cursor. That config needs no `AGENT_KEY`: the server reads the stored key whenever `AGENT_KEY` is not set. It carries a suggested daily cap, `AGENT402_MAX_USD_PER_DAY` set to `20` ($20 per UTC day, kept across restarts): change the number, or remove it for no daily cap. Fund the wallet with USDC on Base. A Base payment needs no ETH: you sign an authorization and the facilitator pays the network fee.
 
 No wallet yet? Make one on this computer:
 
@@ -46,7 +46,7 @@ Or put the key in the config instead (with or without the `0x` prefix):
 
 > Use a new wallet holding only a few dollars of USDC. Never use your main wallet.
 
-Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`, and no daily or monthly cap unless you set `AGENT402_MAX_USD_PER_DAY` or `AGENT402_MAX_USD_PER_MONTH` (these two hold across restarts).
+Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`, and no daily or monthly cap unless your config sets `AGENT402_MAX_USD_PER_DAY` or `AGENT402_MAX_USD_PER_MONTH` (these two hold across restarts). The config `setup` and `wallet new` print sets `AGENT402_MAX_USD_PER_DAY` to a suggested `20`; a config written by hand, or one from an earlier release, has no daily cap, and the server says so in one line when it starts.
 
 Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.17.0`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
@@ -67,7 +67,7 @@ Every variable the server reads (all optional):
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | `5` | Refuse any single call priced above this many USD (e.g. `0.05`); `0` or `off` disables it. A call it refuses names the price, the cap and the setting to raise. Applies to the wallet and the credits path. |
 | `AGENT402_BUDGET` | _(unset, no cap)_ | Optional hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. A call it refuses names the setting to raise. Applies to the wallet and the credits path. |
-| `AGENT402_MAX_USD_PER_DAY` | _(unset, no cap)_ | Optional cap on USD spent per UTC day, kept across restarts (and shared by every copy of this server for the same user) in `spend.json` (mode 0600) in the config folder. A call it refuses says what is left and when the day resets. `off` means no cap; a value that is not a USD amount refuses paid calls until fixed. |
+| `AGENT402_MAX_USD_PER_DAY` | _(unset, no cap; `setup` and `wallet new` write `20`)_ | Optional cap on USD spent per UTC day, kept across restarts (and shared by every copy of this server for the same user) in `spend.json` (mode 0600) in the config folder. A call it refuses says what is left and when the day resets. `off` means no cap; a value that is not a USD amount refuses paid calls until fixed. |
 | `AGENT402_MAX_USD_PER_MONTH` | _(unset, no cap)_ | The same per UTC calendar month. |
 | `AGENT402_CONFIG_DIR` | per-user config folder | Where `spend.json` (and, without a keychain, the key file) live: `~/Library/Application Support/agent402` on macOS, `%APPDATA%\agent402` on Windows, `~/.config/agent402` elsewhere. The key file is kept only in a folder no other user can write to. |
 | `AGENT402_OUTPUT_DIR` | `~/Downloads/agent402` | Where media answers are written (the OS temp folder when `~/Downloads` is absent or cannot be written). |

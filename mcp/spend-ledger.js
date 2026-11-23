@@ -22,6 +22,11 @@ const LOCK_STALE_MS = 10_000;
 
 export const DAY_CAP_ENV = "AGENT402_MAX_USD_PER_DAY";
 export const MONTH_CAP_ENV = "AGENT402_MAX_USD_PER_MONTH";
+// The daily cap `npx agent402-mcp setup` and `wallet new` write into the
+// config they print for a new install. It is a suggestion in that config, not
+// a default: a server whose config does not set AGENT402_MAX_USD_PER_DAY has
+// no daily cap (an upgrade never starts refusing calls it used to pay).
+export const SUGGESTED_DAY_CAP_USD = 20;
 
 /** A cap from the environment: Infinity when unset, empty or "off". A value
  *  that is not a non-negative USD amount is named on `warn` and read as 0

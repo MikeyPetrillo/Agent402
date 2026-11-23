@@ -58,6 +58,12 @@ export function startApps(baseUrl, { connector = false } = {}) {
   ];
 }
 
+// What the config printed by `setup` and `wallet new` holds beyond the
+// server line: a suggested daily cap (mcp/spend-ledger.js
+// SUGGESTED_DAY_CAP_USD, which scripts/test-package-readme-claims.js holds
+// this sentence to). A config without it has no daily cap.
+export const SETUP_DAY_CAP_SENTENCE = "The config it prints also sets AGENT402_MAX_USD_PER_DAY to 20, a suggested cap of 20 USD per UTC day that holds across restarts: change the number, or remove the line for no daily cap.";
+
 /** The wallet path: the npm server, set up once from a terminal (it keeps the key in the OS keychain), then one config per app. */
 export function walletSetup(baseUrl) {
   const install = mcpInstallHints(baseUrl);
@@ -120,6 +126,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
         <li style="margin:0 0 8px;">Run this once in a terminal. It asks for the key (the input is hidden), keeps it in your system's keychain, and prints the setup for each app:</li>
       </ol>
       ${block(wallet.setup, "Wallet setup")}
+      <p class="ml-measure" ${P}>${esc(SETUP_DAY_CAP_SENTENCE)}</p>
       <p class="ml-measure" style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:16px 0 12px;">Then add the npm server to your app:</p>
       <div class="st-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:16px;">
       ${walletCards}
