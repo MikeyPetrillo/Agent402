@@ -70,6 +70,15 @@ const ENTRIES = [
   },
   {
     date: "2026-11-24",
+    title: "agent402-mcp 0.17.0",
+    items: [
+      "Packages: agent402-mcp 0.17.0: `npx agent402-mcp wallet new` makes a fresh wallet key on this computer, stores it where `npx agent402-mcp setup` would, and prints the wallet's address, how to fund it and the client config; the key is never printed, and a key already stored is never replaced.",
+      "Packages: agent402-client 0.12.1, agent402-tollbooth 0.12.2 and agent402-openclaw 0.6.2 publish their READMEs with the lead sentence that scopes signed receipts to successful direct calls.",
+      "Site: Every install line on the site and in the docs pins agent402-mcp 0.17.0.",
+    ],
+  },
+  {
+    date: "2026-11-24",
     title: "Thirty retired tools",
     items: [
       "Tools: onchain-sql-week, onchain-sql-range and fred-release-observations are retired and answer 410 naming onchain-sql, onchain-sql and fred-series. A partial onchain-sql walk no longer lists longer routes.",

@@ -311,7 +311,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp@0.16.0\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.17.0\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -2054,7 +2054,7 @@ claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.16.0
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.0
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -2068,7 +2068,7 @@ Or in \`.mcp.json\` at the project root:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
@@ -2091,7 +2091,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2320,7 +2320,7 @@ prompted input (VS Code stores it, the file never carries it):
     "agent402": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
@@ -2346,7 +2346,7 @@ interpolation is Windsurf's own):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
@@ -2373,7 +2373,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
@@ -2411,7 +2411,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
@@ -2435,7 +2435,7 @@ Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio serve
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
-args = ["-y", "agent402-mcp@0.16.0"]
+args = ["-y", "agent402-mcp@0.17.0"]
 env = { AGENT_KEY = "0x..." }
 \`\`\`
 
@@ -2479,7 +2479,7 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }

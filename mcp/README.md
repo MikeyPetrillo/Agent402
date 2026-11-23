@@ -11,13 +11,13 @@ Pick one setup. Both run locally through `npx`.
 **1. Free, no wallet.** Pure-CPU tools (no outbound calls, keys or models) run free. Each call solves a proof-of-work puzzle with your CPU, typically well under a second on a laptop. Tools that reach the network or a model ask for a wallet.
 
 ```
-claude mcp add agent402 -s user -- npx -y agent402-mcp@0.16.0
+claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0
 ```
 
 **2. Paid, with a wallet.** Paid tools are settled in USDC on each call. Run setup once:
 
 ```
-npx -y agent402-mcp@0.16.0 setup
+npx -y agent402-mcp@0.17.0 setup
 ```
 
 It asks for the wallet's private key (the input is hidden), stores it in your OS keychain (the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux through `secret-tool`; elsewhere a file readable only by your user, with a warning), and prints the config for Claude Code, Claude Desktop and Cursor. That config needs no `AGENT_KEY`: the server reads the stored key whenever `AGENT_KEY` is not set. Fund the wallet with USDC on Base. A Base payment needs no ETH: you sign an authorization and the facilitator pays the network fee.
@@ -25,7 +25,7 @@ It asks for the wallet's private key (the input is hidden), stores it in your OS
 No wallet yet? Make one on this computer:
 
 ```
-npx -y agent402-mcp@0.16.0 wallet new
+npx -y agent402-mcp@0.17.0 wallet new
 ```
 
 It makes a new wallet key, stores it the same way (the key is never shown), and prints the wallet's address and the same config. Send a few dollars of USDC on Base to that address, no ETH needed. It never replaces a key already stored.
@@ -37,7 +37,7 @@ Or put the key in the config instead (with or without the `0x` prefix):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0xYOUR_PRIVATE_KEY" }
     }
   }
@@ -48,7 +48,7 @@ Or put the key in the config instead (with or without the `0x` prefix):
 
 Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`, and no daily or monthly cap unless you set `AGENT402_MAX_USD_PER_DAY` or `AGENT402_MAX_USD_PER_MONTH` (these two hold across restarts).
 
-Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.16.0`
+Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.17.0`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
 
 Advanced setup (chains, MPP, error codes, the hosted connector) is in [Advanced](#advanced).
