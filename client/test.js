@@ -1674,6 +1674,34 @@ const fakeRouter = () => {
   }
 }
 
+// Offline: a wallet-only tool called with no way to pay throws a typed
+// WalletRequiredError (code WALLET_REQUIRED) whose message names both wires,
+// x402 and MPP, so an agent can branch on it without reading the text.
+{
+  const { WalletRequiredError } = await import("./index.js");
+  ok(typeof WalletRequiredError === "function", "WalletRequiredError is exported");
+  const c = new Agent402({
+    baseUrl: "https://nowallet.example", cache: false,
+    fetchImpl: async () => new Response(JSON.stringify({ x402Version: 2, accepts: [] }), { status: 402, headers: { "content-type": "application/json" } }),
+  });
+  c._catalog = new Map([["paid", { method: "POST", path: "/api/paid", computePayable: false, price: "$0.01" }]]);
+  let err = null;
+  try { await c.call("paid", { a: 1 }); } catch (e) { err = e; }
+  ok(err instanceof WalletRequiredError && err instanceof Error && err.name === "WalletRequiredError" && err.code === "WALLET_REQUIRED",
+    `no wallet: the error is a WalletRequiredError with code WALLET_REQUIRED (${err?.name}, ${err?.code})`);
+  ok(err && err.status === 402 && err.slug === "paid" && err.paid === false, `no wallet: the error keeps status, slug and paid:false (${err?.status}, ${err?.slug}, ${err?.paid})`);
+  ok(err && /\bx402\b/.test(err.message) && /\bMPP\b/.test(err.message) && /creditsKey/.test(err.message), `no wallet: the message names x402, MPP and creditsKey (${err?.message})`);
+  // Control: any other failure on the no-wallet path stays a plain error.
+  const c2 = new Agent402({
+    baseUrl: "https://nowallet.example", cache: false,
+    fetchImpl: async () => new Response(JSON.stringify({ error: "boom" }), { status: 500, headers: { "content-type": "application/json" } }),
+  });
+  c2._catalog = new Map([["paid", { method: "POST", path: "/api/paid", computePayable: false, price: "$0.01" }]]);
+  let err2 = null;
+  try { await c2.call("paid", { a: 1 }); } catch (e) { err2 = e; }
+  ok(err2 && !(err2 instanceof WalletRequiredError) && err2.code !== "WALLET_REQUIRED" && err2.status === 500, `control: a 500 with no wallet is not a WalletRequiredError (${err2?.name}, ${err2?.status})`);
+}
+
 // Offline: every request the SDK issues carries its own User-Agent product
 // token (agent402-client/<version>) - the plain-fetch path AND the x402
 // payFetch path that settles real payments - so sellers can attribute paid

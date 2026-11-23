@@ -1531,6 +1531,14 @@ jobs:
           SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}
         run: node scripts/socket-check.js
 
+      # Each package the publish job ships is packed, installed from the
+      # tarball into an empty directory (a consumer's install: a package's own
+      # overrides do not apply there) and audited; a high or critical advisory
+      # fails, and so does a README changed since its version was published.
+      - name: Published packages install clean (packed tarball, npm audit --omit=dev, README as published)
+        if: matrix.shard == 1
+        run: node scripts/test-package-audit.js
+
       - name: Offline suites (27 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a4 4
 

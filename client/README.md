@@ -91,6 +91,17 @@ never the value.
 
 On Base, an x402 exact payment is a signature (EIP-3009): the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.
 
+A wallet-only tool called with neither a paying `fetch` (x402 or MPP) nor a
+`creditsKey` throws `WalletRequiredError` (`code: "WALLET_REQUIRED"`,
+`status: 402`, `paid: false`); nothing is signed or charged:
+
+```js
+import { Agent402, WalletRequiredError } from "agent402-client";
+
+try { await new Agent402().call("extract", { url: "https://example.com" }); }
+catch (e) { if (e instanceof WalletRequiredError) console.log("pass { fetch } (x402 or MPP) or { creditsKey }"); }
+```
+
 A paid call the server serves free under its first-call allowance (the answer
 carries `X-Agent402-Allowance: first-call` and no settlement receipt, and the
 JSON body a `firstCallAllowance` field) counts against no cap;
