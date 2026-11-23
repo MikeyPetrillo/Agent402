@@ -17,11 +17,10 @@
 // and a booted free server for the operator lever. Nothing is spent.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const dir = mkdtempSync(join(tmpdir(), "seller-funding-"));
 process.env.LEADERBOARD_SNAPSHOT_FILE = join(dir, "leaderboard-snapshot.json");
@@ -1524,25 +1523,27 @@ const SELF_FLAG = /USDC this seller's wallet had sent its payers|USDC that walle
   const TOKEN = "seller-funding-operator-token-for-tests";
   const H = { "x-operator-token": TOKEN, "content-type": "application/json" };
   let proc = null, port = null;
-  const serverLog = [];
+  // Every boot's output; a restart is a new boot on a new port 0 port.
+  const boots = [];
+  const serverLog = () => boots.flatMap((b) => (b.error || b.log()).split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 300))).slice(-60);
   const boot = async () => {
-    port = await getFreePort();
-    proc = spawn(process.execPath, ["src/server.js"], {
+    const srv = await bootServer({
+      stores: false,
+      timeoutMs: 80_000,
       env: {
-        ...process.env, PORT: String(port), FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN,
+        FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN,
         LEADERBOARD_SNAPSHOT_FILE: join(dir2, "lb.json"), LEADERBOARD_FUNDING_FILE: join(dir2, "funding.json"),
         SOR_SELF_FUNDING_CLEARED_FILE: join(dir2, "cleared.json"), SOR_SHARED_PAYTOS_FILE: join(dir2, "shared.json"), LEADERBOARD_FUNDING_SWITCH_FILE: join(dir2, "switch.json"),
         X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
         MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 300)); if (serverLog.length > 60) serverLog.splice(0, serverLog.length - 60); };
-    proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-    for (let i = 0; i < 160; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return true; } catch { /* booting */ } await new Promise((r) => setTimeout(r, 500)); }
-    return false;
+    }).catch((e) => ({ error: e.message }));
+    boots.push(srv);
+    if (srv.error) return false;
+    proc = srv.child; port = srv.port;
+    return true;
   };
-  const stop = () => new Promise((r) => { if (!proc) return r(); proc.once("exit", () => r()); proc.kill("SIGKILL"); });
+  const stop = () => new Promise((r) => { if (!proc || proc.exitCode !== null || proc.signalCode !== null) return r(); proc.once("exit", () => r()); proc.kill("SIGKILL"); });
   const get = async (p, h = H) => { const r = await fetch(`http://127.0.0.1:${port}${p}`, { headers: h }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
   const post = async (body, h = H) => { const r = await fetch(`http://127.0.0.1:${port}/__operator/seller-funding`, { method: "POST", headers: h, body: JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
   try {
@@ -1578,7 +1579,7 @@ const SELF_FLAG = /USDC this seller's wallet had sent its payers|USDC that walle
     ok(en.body.enabled === true && onAgain.body.creditedTo.some((x) => x.settled === 4), "POST enable turns it back on at once");
   } catch (e) {
     ok(false, `booted leg threw: ${e?.stack || e}`);
-    for (const l of serverLog.slice(-20)) console.error("  server:", l);
+    for (const l of serverLog().slice(-20)) console.error("  server:", l);
   } finally {
     await stop();
     try { rmSync(dir2, { recursive: true, force: true }); } catch { /* best-effort */ }
