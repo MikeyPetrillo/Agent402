@@ -145,6 +145,44 @@
     historyBlock(b.keyId, hist);
     return card;
   }
+  // ---- connected apps (the connector sign-in; absent while it is off) ---------
+  function when(v) { return v ? String(v).slice(0, 16).replace("T", " ") + " UTC" : "never"; }
+  function connectedApps(wrap) {
+    fetch(API + "/connected.json", { credentials: "same-origin" }).then(function (r) { return r.status === 200 ? r.json() : null; }).then(function (c) {
+      if (!c) return;
+      wrap.textContent = "";
+      var sec = h("div", { class: "acct-section" }, [
+        h("h3", { text: "Connected apps" }),
+        h("p", { text: "Apps you connected with your email code pay for tool calls from one balance, up to a daily cap (UTC day). Change a cap or disconnect an app here; a disconnected app stops paying at once." }),
+      ]);
+      wrap.appendChild(sec);
+      if (!c.apps || !c.apps.length) { sec.appendChild(h("p", { text: "No apps are connected." })); bind(wrap); return; }
+      c.apps.forEach(function (a) {
+        var card = h("div", { class: "acct-card", "data-app": a.id });
+        card.appendChild(h("div", { class: "acct-head" }, [h("span", { class: "acct-id", text: a.app }), h("span", { class: "acct-state ok", text: "Connected" })]));
+        card.appendChild(h("div", { class: "acct-meta" }, [
+          h("span", { text: "Balance " + a.keyId }), h("span", { text: "Spent today " + usdFine(a.spentTodayUsd) + " of " + usd(a.capUsd) }),
+          h("span", { text: "Connected " + when(a.createdAt) }), h("span", { text: "Last used " + when(a.lastUsedAt) }),
+          a.lastNetwork ? h("span", { text: "From " + a.lastNetwork }) : null,
+        ]));
+        var cap = h("input", { id: "cap-" + a.id, inputmode: "decimal", value: Number(a.capUsd).toFixed(2), "aria-label": "Daily cap in USD" });
+        card.appendChild(h("div", { class: "acct-row" }, [
+          h("label", { for: "cap-" + a.id }, ["Daily cap (USD, up to " + usd(c.capMaxUsd) + ")", cap]),
+          h("button", { class: "btn btn-secondary", type: "button", onclick: function () {
+            post("/connected/cap", { id: a.id, capUsd: cap.value }).then(function (j) { msg(card, j.ok ? "Cap saved: " + usd(j.capUsd) + " a day." : j.error || "Could not change the cap.", !j.ok); });
+          } }, ["Save cap"]),
+          h("button", { class: "btn btn-secondary", type: "button", onclick: function (e) {
+            if (!window.confirm("Disconnect " + a.app + "? It stops paying from your credits at once.")) return;
+            var btn = e.currentTarget; btn.disabled = true;
+            post("/connected/revoke", { id: a.id }).then(function (j) { if (j.ok) connectedApps(wrap); else { btn.disabled = false; msg(card, j.error || "Could not disconnect.", true); } });
+          } }, ["Disconnect"]),
+        ]));
+        card.appendChild(h("div", { class: "acct-msg", "aria-live": "polite" }));
+        sec.appendChild(card);
+      });
+      bind(wrap);
+    }).catch(function () {});
+  }
   function render(s) {
     root.textContent = "";
     var head = h("div", { class: "acct-head" }, [
@@ -167,6 +205,9 @@
     if (!s.balances.length) list.appendChild(h("p", { class: "lede", text: "No balance is on this email." }));
     s.balances.forEach(function (b) { list.appendChild(balanceCard(b, s.packs || [], s.lowNoticeUsd)); });
     root.appendChild(h("p", { class: "note", text: "Each balance holds at most " + usd(s.capUsd) + ". Credits never expire and carry no fees." }));
+    var apps = h("div");
+    root.appendChild(apps);
+    connectedApps(apps);
     bind(root);
   }
   function load() {

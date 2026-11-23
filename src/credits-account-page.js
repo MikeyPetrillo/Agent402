@@ -19,7 +19,7 @@ export const ACCOUNT_CSS = `
   .acct-meta>span{white-space:nowrap}
   .acct-state{font-size:var(--fs-sm);font-weight:500;white-space:nowrap}.acct-state.ok{color:var(--ok)}.acct-state.warn{color:var(--warn)}.acct-state.off{color:var(--faint)}
   .acct-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:18px}
-  .acct-row select{min-height:40px;border:1px solid var(--control);border-radius:var(--radius);background:var(--paper);color:var(--ink);font-family:var(--font-body);font-size:var(--fs-md);padding:0 10px}
+  .acct-row select,.acct-row input{min-height:40px;border:1px solid var(--control);border-radius:var(--radius);background:var(--paper);color:var(--ink);font-family:var(--font-body);font-size:var(--fs-md);padding:0 10px}
   .acct-row label{display:flex;flex-direction:column;gap:6px;font-size:var(--fs-sm);font-weight:500;color:var(--ink)}
   .acct-check{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;min-height:24px;font-weight:400!important;color:var(--muted)!important}
   .acct-section{margin-top:22px}

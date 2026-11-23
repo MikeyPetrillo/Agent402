@@ -83,6 +83,22 @@ Loaded when a connector or front-door file is read.
   keeps it (then 410 expired for 90 days), `ANSWER_SHARE_PER_HOUR` (default 60) caps each payer's shares,
   claimed before the call, and `ANSWER_SHARE_DIR` is the file store without the state database. Takedown:
   `POST /__operator/answer-shares/delete {id, note}` (410 removed).
+- **Connector sign-in (OAuth 2.1):** `src/mcp-oauth.js` (+ `src/mcp-oauth-page.js`), off unless `MCP_OAUTH=on`
+  (exactly) and credits are on sale; off, every route falls through (404) and `/mcp` is untouched. Public clients
+  by dynamic registration (https or localhost redirect URIs), authorize with PKCE S256 only, exact redirect_uri,
+  state required; the consent page (no framing, CSRF token plus same-origin on every form, its own CSP whose
+  form-action names this site, the card checkout and the app's return origin) signs the person in with a code
+  emailed only to an address that holds a balance (single use, tries, lockout), offers buying a pack by card
+  (back to the same sign-in), and binds one key id and a daily cap. Codes single-use and short-lived, access
+  tokens short-lived, refresh tokens rotated; a spent code or refresh token presented again revokes the whole
+  grant. Tokens and codes are stored as digests in one json-document (`mcp-oauth`). The `/mcp` reader is
+  mounted before the connector: a token of ours resolves to a grant (`req.mcpCreditsGrant`) or answers 401
+  with `WWW-Authenticate` naming the metadata; no token, or someone else's, passes untouched. `/mcp/credits`
+  is the same connector that answers 401 without a token. A paid tool under a grant is replayed with a
+  one-call handle (`openGrantHandle`, `X-Agent402-Via-Grant`, read only beside the genuine marker) and paid
+  by the credits gate; free tools stay free. The balance page lists grants (app, key, cap, spend today,
+  created, last use, coarse network) and changes or revokes them. Every threshold is an `MCP_OAUTH_*`
+  variable (docs/configuration.md); a refusal never names its check (`scripts/test-mcp-oauth.js`).
 - **Answer ceiling:** a free tool answer larger than `AGENT402_MCP_MAX_ANSWER_BYTES` (default 1 MiB of compact JSON)
   is cut in document order to valid JSON and carries `answerBound` (`src/mcp-answer-bound.js`: the partial-answer
   fields in bytes, plus one entry per cut list, string or object). A paid answer is delivered whole.

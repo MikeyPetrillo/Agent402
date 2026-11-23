@@ -1,6 +1,10 @@
 // Whether prepaid card credits are on sale, in a leaf module so page renderers
 // can state it without importing server.js. Off unless CREDITS_SALES is set;
 // existing keys keep spending either way.
+/** The connector sign-in's switch (src/mcp-oauth.js): MCP_OAUTH=on exactly. */
+export const mcpOAuthSwitch = () => String(process.env.MCP_OAUTH || "").trim() === "on";
+/** Days a disconnected app's record is kept (src/mcp-oauth.js). */
+export const CONNECTED_APP_KEEP_DAYS = 30;
 export const creditsSalesEnabled = () => /^(1|true|on|yes)$/i.test(String(process.env.CREDITS_SALES || "").trim());
 
 // The terms version a credits checkout records (the date printed on /terms;

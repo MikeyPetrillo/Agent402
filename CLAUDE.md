@@ -20,6 +20,8 @@ LLC: credit the entity, never a personal name.
 - `src/mcp-http.js`: hosted MCP connector at `/mcp` (dotted tool names: `catalog.search`,
   `catalog.find`, `catalog.call`, `payment.info`, `server.describe`, `sellers.list`,
   `demand.request`, flagship aliases). Old snake names remain CallTool aliases only.
+- `src/mcp-oauth.js`, `src/mcp-oauth-page.js`: connector sign-in (OAuth 2.1, off unless `MCP_OAUTH=on` and
+  credits on sale): an app pays for tool calls from one credits key under a daily cap (`.claude/rules/mcp.md`).
 - `src/mcp-mpp.js`, `src/mcp-tasks.js`, `src/mcp-skills.js`, `src/mcp-x402.js`, `src/mcp-x402-routes.js`:
   connector payments, long calls as tasks, skill packs, the x402 MCP codec and the internal x402 twins of
   flagships (both wired to `/mcp` through `x402Loopback`, off in FREE_MODE; see `.claude/rules/mcp.md`).

@@ -207,6 +207,9 @@ export async function ensureCreditsIndexes({ log = console.log } = {}) {
     return { built, rebuilt };
   });
 }
+const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
+// A key's per-grant day records: only today's are kept.
+const pruneGrantDays = (days, day) => Object.fromEntries(Object.entries(days || {}).filter(([, g]) => g?.d === day));
 export const microToUsd = (m) => Math.round(Number(m) / 100) / 10000; // 4 dp
 
 /**
@@ -427,8 +430,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
           if (liveHolds.has(id) || !(Number(h?.at) < cut)) continue;
           const held = Number(h.m) || 0;
           leaving += held;
-          if (h.s) { const taken = Math.max(0, Math.min(held, Number(h.s.m) || 0)); spends.push([id, held, taken, h.s.slug ?? null, h.s.via ?? null]); back += held - taken; }
-          else { back += held; n++; }
+          if (h.s) { const taken = Math.max(0, Math.min(held, Number(h.s.m) || 0)); spends.push([id, held, taken, h.s.slug ?? null, h.s.via ?? null]); back += held - taken; grantHoldDone(rec, h, held, taken); }
+          else { back += held; n++; grantHoldDone(rec, h, held, 0); }
           delete holds[id];
         }
         // Held money no entry accounts for, on a row nobody has touched for the whole window.
@@ -521,7 +524,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     return () => { try { onLowBalance(snap); } catch { /* a notice never breaks a debit */ } };
   };
 
-  async function createCheckout(packKey) {
+  // `returnTo`: { success, cancel } URLs on this site for a purchase started
+  // somewhere other than the credits page (the connector sign-in,
+  // src/mcp-oauth.js); success must carry {CHECKOUT_SESSION_ID}.
+  async function createCheckout(packKey, { returnTo = null } = {}) {
     const p = Object.hasOwn(CREDIT_PACKS, String(packKey)) ? CREDIT_PACKS[packKey] : null;
     if (!p) {
       // Self-correcting: an agent cannot guess "credits-20" from a bare 20,
@@ -551,8 +557,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       // The buyer sees the terms and the credit rules on the pay button's page.
       custom_text: { submit: { message: `By paying you agree to the Terms of Service (${baseUrl}/terms). Credits are for business and developer use, are spent only on Agent402's own services, never expire and carry no fees, and the unspent balance on the key is refunded to this card on request. Prices include North Carolina sales tax where it applies.` } },
       metadata: { credits_pack: packKey, terms: creditsTermsVersion() },
-      success_url: `${baseUrl}/credits/thanks?session={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${baseUrl}/credits?canceled=1`,
+      success_url: returnTo?.success || `${baseUrl}/credits/thanks?session={CHECKOUT_SESSION_ID}`,
+      cancel_url: returnTo?.cancel || `${baseUrl}/credits?canceled=1`,
       payment_intent_data: { description: `Agent402 credits ${p.label}` },
     });
     return { id: session.id, url: session.url };
@@ -918,13 +924,40 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // Each answers { rec?, result, after? }: `rec` is the record to write back
   // (absent when nothing changed), `after` the accounting hook to run once it
   // is written. The file and the database backends apply them the same way.
-  function authorizeOn(rec, hash, need, priceUsd, holdId = null) {
+  // `grant` (a connector grant, src/mcp-oauth.js): { id, capUsd }. Its day's
+  // spend and holds live on the key's own record (rec.grantDays), so the cap
+  // is checked and held under the same lock as the balance, on every replica.
+  function authorizeOn(rec, hash, need, priceUsd, holdId = null, grant = null) {
     if (!rec) return { result: { ok: false, reason: "unknown" } };
     if (rec.disabled) return { result: { ok: false, reason: "disabled", balanceUsd: microToUsd(rec.balanceMicro) } };
+    // A key frozen while a payment that loaded it is questioned spends nothing.
+    if (rec.frozen) return { result: { ok: false, reason: "frozen", balanceUsd: microToUsd(rec.balanceMicro) } };
     if (rec.balanceMicro < need) return { result: { ok: false, reason: "insufficient", balanceUsd: microToUsd(rec.balanceMicro), priceUsd } };
+    let g = null;
+    if (grant) {
+      const day = utcDay(now());
+      const prev = rec.grantDays?.[grant.id];
+      g = prev && prev.d === day ? { ...prev } : { d: day, s: 0, h: 0 };
+      const capMicro = usdToMicro(grant.capUsd);
+      if ((Number(g.s) || 0) + (Number(g.h) || 0) + need > capMicro) return { result: { ok: false, reason: "daily_cap", balanceUsd: microToUsd(rec.balanceMicro), priceUsd, capUsd: microToUsd(capMicro), spentTodayUsd: microToUsd(Number(g.s) || 0) } };
+      g.h = (Number(g.h) || 0) + need;
+      rec.grantDays = { ...pruneGrantDays(rec.grantDays, day), [grant.id]: g };
+    }
     rec.balanceMicro -= need; rec.heldMicro = (rec.heldMicro || 0) + need;
-    if (holdId) rec.holds = { ...(rec.holds || {}), [holdId]: { m: need, at: now() } };
+    if (holdId) rec.holds = { ...(rec.holds || {}), [holdId]: { m: need, at: now(), ...(g ? { g: grant.id, gd: g.d } : {}) } };
     return { rec, result: { ok: true, hash, keyId: rec.keyId, heldMicro: need, balanceUsd: microToUsd(rec.balanceMicro), priceUsd, ...(holdId ? { holdId } : {}) } };
+  }
+  // A grant hold ends: what it held leaves the grant's day, and what the
+  // debit took (if any) is that day's spend. A hold from a day already over
+  // moves nothing (the new day started from zero).
+  function grantHoldDone(rec, entry, held, taken) {
+    const id = entry?.g;
+    if (!id || !rec.grantDays || !Object.hasOwn(rec.grantDays, id)) return;
+    const g = { ...rec.grantDays[id] };
+    if (g.d !== entry.gd) return;
+    g.h = Math.max(0, (Number(g.h) || 0) - held);
+    g.s = (Number(g.s) || 0) + Math.max(0, taken);
+    rec.grantDays = { ...rec.grantDays, [id]: g };
   }
   // A hold the sweep already returned (its entry is gone) is worth nothing
   // now: the settle or release that finally arrives moves no money.
@@ -952,10 +985,12 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       const taken = Number(prior.m) || 0;
       return { result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(Number(prior.h) || taken), returnedUsd: microToUsd(Math.max(0, (Number(prior.h) || taken) - taken)) }, ...(prior.booked ? {} : { after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId, via }) }) };
     }
+    const entry = holdId && rec.holds && Object.hasOwn(rec.holds, holdId) ? rec.holds[holdId] : null;
     heldMicro = takeHold(rec, heldMicro, holdId);
     const held = Math.min(heldMicro, rec.heldMicro || 0);
     const want = Number.isFinite(Number(chargeUsd)) && Number(chargeUsd) > 0 ? usdToMicro(Number(chargeUsd)) : held;
     const taken = Math.min(held, want);
+    grantHoldDone(rec, entry, held, taken);
     const returned = held - taken;
     rec.heldMicro = (rec.heldMicro || 0) - held; rec.balanceMicro += returned; rec.spentMicro += taken; rec.calls += 1; rec.lastUsedAt = new Date(now()).toISOString();
     if (holdId) rec.settledHolds = recentSettled({ ...(rec.settledHolds || {}), [holdId]: { m: taken, h: held, at: now() } });
@@ -974,8 +1009,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   }
   function releaseOn(rec, heldMicro, holdId = null) {
     if (!rec) return { result: null };
+    const entry = holdId && rec.holds && Object.hasOwn(rec.holds, holdId) ? rec.holds[holdId] : null;
     heldMicro = takeHold(rec, heldMicro, holdId);
     const back = Math.min(heldMicro, rec.heldMicro || 0);
+    grantHoldDone(rec, entry, back, 0);
     rec.heldMicro = (rec.heldMicro || 0) - back; rec.balanceMicro += back;
     return { rec, result: { balanceUsd: microToUsd(rec.balanceMicro) } };
   }
@@ -1001,6 +1038,32 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const need = usdToMicro(priceUsd);
     const holdId = usePg ? `${hash.slice(0, 12)}:${randomBytes(8).toString("hex")}` : null;
     return mutate(hash, (rec) => authorizeOn(rec, hash, need, priceUsd, holdId));
+  }
+  // A connector grant's hold (src/mcp-oauth.js): by key id (a grant never
+  // holds the key), under the grant's daily cap. Always a named hold, so the
+  // settle or release finds the grant it counts against. Async on both backends.
+  async function authorizeGrant(keyId, priceUsd, grant) {
+    const hash = await keyHashById(String(keyId || ""));
+    if (!hash) return { ok: false, reason: "unknown" };
+    const need = usdToMicro(priceUsd);
+    const holdId = `${hash.slice(0, 12)}:${randomBytes(8).toString("hex")}`;
+    return mutate(hash, (rec) => (rec && rec.keyId === keyId ? authorizeOn(rec, hash, need, priceUsd, holdId, grant) : { result: { ok: false, reason: "unknown" } }));
+  }
+  /** What a grant spent on its key today (USD), for the balance page. */
+  async function grantSpentToday(keyId, grantId) {
+    const hash = await keyHashById(String(keyId || ""));
+    const rec = hash ? await readRec(hash) : null;
+    const g = rec?.grantDays?.[grantId];
+    return g && g.d === utcDay(now()) ? microToUsd(Number(g.s) || 0) : 0;
+  }
+  /** The key id and purchase email a claimed Checkout session loaded, or null (internal; never on a public answer). */
+  async function sessionOwner(sessionId) {
+    if (typeof sessionId !== "string" || !SESSION_RE.test(sessionId)) return null;
+    const idx = usePg ? (await readyP(), (await pgGet("_sessions")) || {}) : sessionsIdx();
+    const hash = idx[sessionId];
+    if (!hash || isRefused(hash)) return null;
+    const rec = await readRec(hash);
+    return rec?.email ? { keyId: rec.keyId, email: rec.email } : null;
   }
   // Final 200: the hold becomes spend. `chargeUsd` (the meter's actual x
   // markup on a metered route) takes LESS than the hold and returns the rest
@@ -1452,14 +1515,24 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // landed debit: req.creditsDebitId names it. A debit that does not land
   // in CREDITS_DEBIT_WAIT_MS (default 3000) ends the answer without a
   // receipt and is retried as before; the hold is never released for it.
-  function gate(priceFor, { settleBeforeEnd = null } = {}) {
+  // `grantOf(req)`: a connector grant this request is paid under (src/mcp-oauth.js:
+  // the connector's own loopback names it beside its secret marker), or null.
+  // A grant spends its key by id, under the grant's daily cap.
+  function gate(priceFor, { settleBeforeEnd = null, grantOf = null } = {}) {
     // What every request does before the hold: null = not ours, pass through;
-    // `{ done: true }` = answered here; else the key and the priced item.
+    // `{ done: true }` = answered here; else the key (or grant) and the priced item.
     const begin = (req, res) => {
+      const grant = grantOf ? grantOf(req) : null;
       const auth = String(req.headers?.authorization || "");
-      if (!/^Bearer a402_/.test(auth)) return null;
-      const key = auth.slice(7).trim();
+      if (!grant && !/^Bearer a402_/.test(auth)) return null;
+      const key = grant ? null : auth.slice(7).trim();
       const item = priceFor(req.method, req.path, req);
+      if (!item && grant) {
+        // A grant pays priced catalog routes only; anything else is refused, never served free on its say-so.
+        res.setHeader("X-Credits-Error", "not-priced");
+        res.status(402).json({ error: "This route is not sold for credits.", reason: "not-priced" });
+        return { done: true };
+      }
       if (!item) return null; // not a priced catalog route - let the site handle it
       // Identity-bound routes (wallet-keyed memory, my-usage) derive the caller
       // from a SIGNED x402 payer; a credits key carries no verified wallet, so
@@ -1477,14 +1550,18 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
         res.status(402).json({ error: "Prepaid credits are spent only on Agent402's own services. This route buys from an outside seller with our wallet and is sold for a wallet payment only (x402, or MPP on a chain).", reason: "third-party-purchase" });
         return { done: true };
       }
-      return { key, item };
+      return { key, grant, item };
     };
     // After the hold: the refusal, or the settle-on-finish wiring.
     const arm = (req, res, next, a, item) => {
       if (!a.ok) {
         if (a.reason === "unknown" || a.reason === "malformed") noteBadKey(req.ip);
         res.setHeader("X-Credits-Error", a.reason);
-        return res.status(402).json({ error: a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.` : a.reason === "unknown" ? "Unknown credits key." : a.reason === "disabled" ? "This credits key is disabled." : "Malformed credits key.", reason: a.reason, balanceUsd: a.balanceUsd ?? null, priceUsd: item.priceUsd, ...creditsTopupFields(baseUrl) });
+        const said = a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.`
+          : a.reason === "daily_cap" ? `This connection's daily spending cap is reached: $${a.spentTodayUsd} of $${a.capUsd} spent today (UTC). Raise the cap on your balance page, or wait for the next day.`
+          : a.reason === "frozen" ? "This credits balance is on hold while a payment that loaded it is reviewed, so it cannot pay for calls right now."
+          : a.reason === "unknown" ? "Unknown credits key." : a.reason === "disabled" ? "This credits key is disabled." : "Malformed credits key.";
+        return res.status(402).json({ error: said, reason: a.reason, balanceUsd: a.balanceUsd ?? null, priceUsd: item.priceUsd, ...(a.reason === "daily_cap" ? { capUsd: a.capUsd, spentTodayUsd: a.spentTodayUsd } : {}), ...creditsTopupFields(baseUrl) });
       }
       // Accepted: the x402 dispatcher is bypassed for this request, so any
       // UNSIGNED payment headers riding alongside must not survive to a handler
@@ -1492,7 +1569,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       // as the Tempo and Stripe gates do on acceptance.
       for (const h of ["payment-signature", "x-payment", "payment-identifier", "x-pow-solution"]) { if (req.headers && h in req.headers) delete req.headers[h]; }
       req.creditsSettling = true; req.creditsSettled = true; req.creditsKeyId = a.keyId; req.creditsPriceUsd = item.priceUsd;
-      if (a.holdId) { liveHolds.add(a.holdId); keepHoldFresh(a.hash, a.holdId); }
+      if (a.holdId && usePg) { liveHolds.add(a.holdId); keepHoldFresh(a.hash, a.holdId); }
       res.setHeader("X-Credits-Balance", String(a.balanceUsd));
       const slug = item.slug || req.path;
       const via = salePathOf(req);
@@ -1503,11 +1580,11 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       // database they are scheduled (and retried), and the charged amount is
       // recorded when the debit lands.
       const settleHold = (chargeUsd = null) => {
-        if (!usePg) { const c = settle(a.hash, a.heldMicro, slug, chargeUsd, null, via, debitId); if (c) req.creditsCharged = c.chargedUsd; return; }
+        if (!usePg) { const c = settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId ?? null, via, debitId); if (c) req.creditsCharged = c.chargedUsd; return; }
         later(`debit of key ${a.keyId}`, () => settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId, via, debitId), (c) => { if (c) req.creditsCharged = c.chargedUsd; }, a.holdId, { persist: true });
       };
       const releaseHold = () => {
-        if (!usePg) { release(a.hash, a.heldMicro); return; }
+        if (!usePg) { release(a.hash, a.heldMicro, a.holdId ?? null); return; }
         later(`release of key ${a.keyId}`, () => release(a.hash, a.heldMicro, a.holdId), null, a.holdId);
       };
       let done = false;
@@ -1577,7 +1654,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
           settleHold();
           return;
         }
-        const c = settle(a.hash, a.heldMicro, slug, null, null, via, debitId);
+        const c = settle(a.hash, a.heldMicro, slug, null, a.holdId ?? null, via, debitId);
         if (c) { req.creditsCharged = c.chargedUsd; req.creditsChargedOnClose = c.chargedUsd; }
       };
       const priorEnd = res.end;
@@ -1593,7 +1670,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
           const chargeUsd = Number.isFinite(metered) && metered > 0 ? metered : null;
           const landed = (c) => { if (c) { req.creditsCharged = c.chargedUsd; req.creditsDebitId = debitId; } };
           if (!usePg) {
-            try { landed(settle(a.hash, a.heldMicro, slug, chargeUsd, null, via, debitId)); } catch (e) { log(`[credits] debit of key ${a.keyId} failed: ${String(e?.message || e).slice(0, 120)}`); }
+            try { landed(settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId ?? null, via, debitId)); } catch (e) { log(`[credits] debit of key ${a.keyId} failed: ${String(e?.message || e).slice(0, 120)}`); }
             return priorEnd.apply(this, args);
           }
           const self = this;
@@ -1662,12 +1739,17 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       });
       return next();
     };
+    const hold = (b) => (b.grant ? authorizeGrant(b.grant.keyId, b.item.priceUsd, { id: b.grant.id, capUsd: b.grant.capUsd }) : authorize(b.key, b.item.priceUsd));
     if (!usePg) {
       return (req, res, next) => {
         const b = begin(req, res);
         if (!b) return next();
         if (b.done) return;
-        return arm(req, res, next, authorize(b.key, b.item.priceUsd), b.item);
+        if (!b.grant) return arm(req, res, next, authorize(b.key, b.item.priceUsd), b.item);
+        return hold(b).then((a) => arm(req, res, next, a, b.item), () => {
+          res.setHeader("X-Credits-Error", "unavailable");
+          res.status(503).json({ error: "Prepaid credits are unavailable right now; nothing was charged. Retry shortly.", reason: "unavailable" });
+        });
       };
     }
     return async (req, res, next) => {
@@ -1675,7 +1757,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       if (!b) return next();
       if (b.done) return;
       let a;
-      try { a = await authorize(b.key, b.item.priceUsd); }
+      try { a = await hold(b); }
       catch (e) {
         // No hold could be placed: nothing is charged and nothing is served.
         log(`[credits] hold failed: ${String(e?.message || e).slice(0, 120)}`);
@@ -1798,5 +1880,5 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { authorizeGrant, grantSpentToday, sessionOwner, refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }

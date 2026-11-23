@@ -149,7 +149,7 @@ import {
 import { maxHeaderSize } from "node:http";
 import { mcpX402Entries, mcpX402PathOf, MCP_X402_PREFIX, isFixedPriceDef } from "./mcp-x402-routes.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
-import { openLoopbackCall, closeLoopbackCall, cutLoopbackCall } from "./mcp-loopback.js";
+import { openLoopbackCall, closeLoopbackCall, cutLoopbackCall, openGrantHandle } from "./mcp-loopback.js";
 
 // serverInfo reports the agent402-mcp package version in the deployed build
 // (mcp/package.json, which the image copies) with the server's build as
@@ -433,7 +433,7 @@ export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402",
   };
 }
 
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX, quietMiss = () => false }) {
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, creditsLoopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX, quietMiss = () => false }) {
   // The wires this mount takes in the call. `payWires` is the boot's own
   // account (src/connector-pay.js connectorWires, the source the pages read):
   // a wire it denies has no loopback here, so the capability advertisement,
@@ -722,7 +722,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     } catch { return false; }
   }
 
-  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false } = {}) {
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false, grant = null } = {}) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -1078,6 +1078,44 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         ? (twinAsk ? await twinAsk : paymentRequiredFromHeader(r.headers.get("payment-required")))
         : null;
       return withSignedReceipt(translateMppResponse(entry, meta, params, startedAt, isNamed, r, { x402Required }), r);
+    }
+
+    /** A paid call under a connector grant: replayed to the slug's own route
+     *  with a one-call grant handle beside the loopback marker; the credits
+     *  gate holds the price (and the grant's daily cap) before the handler and
+     *  debits only a final 200. Blocking only. */
+    async function payOverCredits(entry, reqParams, args, isNamed, ip, signal, grant) {
+      const def = entry.def;
+      const params = paidParamsOf(args, isNamed);
+      const startedAt = Date.now();
+      if (needsAsyncOrWait(def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
+        return { content: [{ type: "text", text: `${def.slug} can take up to ${Number(def.asyncProfile?.maxSeconds)} s, longer than this connector waits for a call paid from credits (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s). Call the HTTP route ${def.route} with your credits key and the header Prefer: respond-async. Nothing was charged.` }], isError: true };
+      }
+      const idempotencyKey = reqParams?._meta?.["org.agent402/idempotency-key"];
+      const callId = openLoopbackCall();
+      let r;
+      try {
+        r = await creditsLoopback({ def, params, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken, callId, grantHandle: openGrantHandle(grant) });
+        closeLoopbackCall(callId);
+      } catch (err) {
+        const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
+        console.warn(`[mcp] tools/call failed class=${timedOut ? "paid-timeout" : "paid-loopback-error"} wire=credits tool=${def.slug} after=${Date.now() - startedAt}ms`);
+        const { routeCounted } = cutLoopbackCall(callId);
+        onPaidCutoff(def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken, routeCounted });
+        return { content: [{ type: "text", text: connectorCutoffText({ label: `Agent402 (${def.slug})`, seconds: Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000), paid: true, route: def.route, error: timedOut ? null : (err?.message || err) }) }], isError: true };
+      }
+      if (r.status === 402) {
+        const why = typeof r.json?.error === "string" ? r.json.error : "This call could not be paid from your credits.";
+        return { content: [{ type: "text", text: `Agent402 (${def.slug}): ${why} Your balance, connected apps and caps: ${baseUrl}/credits/account. Nothing was charged.` }], isError: true };
+      }
+      if (r.status >= 400) {
+        const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
+        return { content: [{ type: "text", text: `Agent402 (${def.slug}) HTTP ${r.status} - not charged: ${detail}` }], isError: true };
+      }
+      if (r.bytes) return withSignedReceipt(mcpBinaryResult({ slug: def.slug, bytes: r.bytes, contentType: r.contentType, headers: r.headers }), r);
+      const result = r.json !== undefined ? r.json : { text: r.text };
+      if (isNamed) return withSignedReceipt(mcpJsonResult(result), r);
+      return withSignedReceipt({ content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: { slug: def.slug, result } }, r);
     }
 
     /** The params a paid call replays (flagship: args IS params; catalog.call:
@@ -1914,6 +1952,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (x402Read && (!x402Read.ok || x402Read.payment)) {
           return await payOverX402(entry, req.params, args, isNamed, ip, signal, x402Read);
         }
+        if (!entry.free && grant && !credentialHeaderFromMeta(req.params?._meta)) {
+          // Signed in through the connector sign-in: paid from the grant's
+          // credits balance, under its daily cap, by the credits gate.
+          return await payOverCredits(entry, req.params, args, isNamed, ip, signal, grant);
+        }
         if (!entry.free) {
           // Native MPP (2026-08-19): with the MPP gates mounted, a paid tool is
           // payable right here on the connector. The call is replayed as a
@@ -2297,7 +2340,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       res.vary("X-Operator-Token");
       const quiet = req.headers["x-operator-token"] !== undefined && Boolean(quietMiss(req));
       if (quiet) res.set("Cache-Control", "private, no-store");
-      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet };
+      // A connector grant (src/mcp-oauth.js, resolved from this request's
+      // bearer before this handler) pays this request's paid calls from credits.
+      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet, grant: creditsLoopback ? req.mcpCreditsGrant || null : null };
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport?.close(); } catch { /* already closing */ } });

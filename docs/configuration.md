@@ -13,11 +13,11 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1115 variables in 113 groups.
+1131 variables in 114 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MCP](#mcp) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -675,6 +675,29 @@ holds it.
 | `LOOP_LAG_COUNT_MS` | Loop lag count, in milliseconds. |  | `src/loop-lag.js` |
 | `LOOP_LAG_TICK_MS` | Loop lag tick, in milliseconds. |  | `src/loop-lag.js` |
 | `LOOP_LAG_WARN_MS` | Loop lag warn, in milliseconds. |  | `src/loop-lag.js` |
+
+## MCP
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `MCP_LOOPBACK_TEST_SECRET` | MCP loopback test secret (a credential, set on the host). |  | `src/mcp-loopback.js` |
+| `MCP_OAUTH` | on (exactly) turns on the connector sign-in (OAuth 2.1 for /mcp: an app pays for tool calls from a credits balance under a daily cap); it also needs credits on sale. Off, every sign-in route is absent and /mcp is unchanged. |  | `src/credits-sales.js` |
+| `MCP_OAUTH_ACCESS_TTL_SECONDS` | Life of a connector access token, in seconds. | `3600` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_AUTHORIZE_PER_IP` | Connector authorize requests allowed per client address per limit window. | `30` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_AUTH_CODE_TTL_SECONDS` | Life of a connector authorization code, in seconds (at most 600). | `60` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_CODE_FAILS_PER_EMAIL` | Wrong connector sign-in codes per email address before the address is locked out for the lockout window. | `10` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_CODE_SENDS_PER_EMAIL` | Connector sign-in code sends allowed per email address per limit window. | `5` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_CODE_SENDS_PER_IP` | Connector sign-in code sends (and checkouts) allowed per client address per limit window. | `10` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_DEFAULT_CAP_USD` | The daily cap the connector sign-in page offers first, in USD. | `5` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_EMAIL_CODE_TRIES` | Attempts one emailed sign-in code takes before it stops working. | `5` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_EMAIL_CODE_TTL_SECONDS` | Life of an emailed connector sign-in code, in seconds. | `600` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_LIMIT_WINDOW_MINUTES` | The window the connector sign-in limits count in, in minutes. | `60` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_LOCKOUT_MINUTES` | How long the wrong-code count for an email address is kept, in minutes. | `60` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_REFRESH_TTL_DAYS` | Life of a connector refresh token, in days (each use rotates it). | `30` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_REGISTER_PER_IP` | Connector app registrations allowed per client address per limit window. | `10` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_REQUEST_TTL_MINUTES` | Life of a started connector sign-in, in minutes (a card purchase in the middle included). | `60` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_TOKEN_PER_IP` | Connector token and revoke requests allowed per client address (and per app) per limit window; also the bearer tokens that do not verify per client address. | `60` | `src/mcp-oauth.js` |
+| `MCP_SKILLS` | MCP skills. |  | `src/mcp-skills.js` |
 
 ## MEMORY
 
@@ -1625,8 +1648,6 @@ holds it.
 | `MARKET_SCAN_BUDGET_MS` | Market scan budget, in milliseconds. |  | `src/revenue-live.js` |
 | `MAX_CALL_USD` | Maximum call, in USD. | `0.75` | `src/leaderboard.js`, `src/revenue-live.js` |
 | `MAX_WALLETS_SCAN` | Maximum wallets scan. | `0` | `src/leaderboard.js` |
-| `MCP_LOOPBACK_TEST_SECRET` | MCP loopback test secret (a credential, set on the host). |  | `src/mcp-loopback.js` |
-| `MCP_SKILLS` | MCP skills. |  | `src/mcp-skills.js` |
 | `METERED_MEDIA` | Speech, transcription and embedding tools settle on measured work for metered buyers (on). |  | `src/gateway-meter.js` |
 | `MODEL_CATALOG_URL` | Model catalog URL. | `https://openrouter.ai/api/v1/models` | `src/model-catalog.js` |
 | `MONITOR_MANAGE_SECRET` | Monitor manage secret (a credential, set on the host). |  | `src/server.js` |
