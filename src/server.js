@@ -3752,8 +3752,12 @@ try {
     credits: _credits, baseUrl: BASE_URL, secret: accountSecretFrom(process.env.STRIPE_SECRET_KEY), sendEmail: faSendEmail,
     store: createCreditsAccountStore({ name: "credits-account", file: joinPath(_credits._dir, "_account.json"), log: () => {} }),
     ipLimiter: createRateLimiter("credits-sign-in", { perMin: 6, perHour: 40 }),
-    // Keyed on the address (hashed), so rotating client addresses cannot flood one inbox.
+    // Each asker's share for one mailbox (hashed, with its network), the
+    // mailbox's ceiling across askers, and the first asks a full mailbox still
+    // admits (a fixed allowance, however many networks ask).
     emailLimiter: createRateLimiter("credits-sign-in-email", { perMin: 2, perHour: 6 }),
+    mailboxLimiter: createRateLimiter("credits-sign-in-mailbox", { perMin: 4, perHour: 12 }),
+    coldLimiter: createRateLimiter("credits-sign-in-mailbox-first", { perMin: 2, perHour: 6 }),
     termsVersion: creditsTermsVersion,
   }) : null;
 } catch (e) { console.warn("[credits] balance page init failed:", String(e?.message || e).slice(0, 200)); _creditsAccount = null; }

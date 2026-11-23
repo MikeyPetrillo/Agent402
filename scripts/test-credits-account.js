@@ -229,7 +229,8 @@ ok(mail.length === 2 && mail.map((m) => m.to).sort().join() === "k@x.com,nobody@
 ok(!/a402_/.test(mail[0].text + mail[0].html), "the sign-in email carries no key");
 ok(acct.requestSignIn("not-an-email", "1.1.1.1").status === 400, "a malformed address is refused");
 acct.requestSignIn("k@x.com", "1.1.1.1");
-ok(acct.requestSignIn("k@x.com", "2.2.2.2").status === 429 && acct.requestSignIn("nobody@x.com", "2.2.2.2").status === 200, "requests are limited per address (from any client address)");
+ok(acct.requestSignIn("k@x.com", "1.1.1.1").status === 429 && acct.requestSignIn("nobody@x.com", "1.1.1.1").status === 200, "requests are limited per address for one asker");
+ok(acct.requestSignIn("k@x.com", "2.2.2.2").status === 200, "another asker's requests for that address never spend this one's share (the owner is not locked out)");
 // The limit counts a mailbox, not a spelling: "+tag" and Gmail's dots and
 // googlemail.com reach one inbox, so they share it; mail goes as typed.
 {
@@ -237,8 +238,37 @@ ok(acct.requestSignIn("k@x.com", "2.2.2.2").status === 429 && acct.requestSignIn
   ok(mailboxKey(" V.Ictim+news@GoogleMail.com ") === "victim@gmail.com" && mailboxKey("a.b+c@example.com") === "a.b@example.com" && mailboxKey("plain@x.com") === "plain@x.com" && mailboxKey("+only@x.com") === "+only@x.com", "the mailbox key folds +tags, and Gmail's dots and domain");
   const sentTo = [];
   const mb = createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async (m) => { sentTo.push(m.to); return true; }, store, ipLimiter: createLimiter(`t-mb-ip-${Math.random()}`, { perMin: 1000, perHour: 1000 }), emailLimiter: createLimiter(`t-mb-e-${Math.random()}`, { perMin: 2, perHour: 6 }), now: () => clock, log: () => {} });
-  const codes = ["victim@gmail.com", "victim+1@gmail.com", "v.ictim@gmail.com", "victim+2@googlemail.com"].map((e, i) => mb.requestSignIn(e, `5.5.5.${i + 1}`).status);
-  ok(codes[0] === 200 && codes[1] === 200 && codes[2] === 429 && codes[3] === 429, `spellings of one mailbox share its limit (${codes.join(",")})`);
+  const codes = ["victim@gmail.com", "victim+1@gmail.com", "v.ictim@gmail.com", "victim+2@googlemail.com"].map((e) => mb.requestSignIn(e, "5.5.5.1").status);
+  ok(codes[0] === 200 && codes[1] === 200 && codes[2] === 429 && codes[3] === 429, `spellings of one mailbox share one asker's limit (${codes.join(",")})`);
+}
+// A stranger cannot lock the owner out of the sign-in link: each asker
+// (a network, an IPv6 /64) has its own share for a mailbox; the mailbox's
+// ceiling across askers holds back askers that already asked, and a first ask
+// past it comes from a fixed allowance, so many networks cannot raise the mail
+// a mailbox gets. Run at the minimum limits (1 per window) and at a random size.
+for (const [label, per] of [["the minimum limits", 1], ["random limits", 2 + Math.floor(Math.random() * 5)]]) {
+  const sentTo = [];
+  const tag = `${label}-${Math.random()}`;
+  const mk = () => createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async (m) => { sentTo.push(m.to); return true; }, store,
+    ipLimiter: createLimiter(`t-own-ip-${tag}`, { perMin: 1000, perHour: 1000 }),
+    emailLimiter: createLimiter(`t-own-e-${tag}`, { perMin: per, perHour: per }),
+    mailboxLimiter: createLimiter(`t-own-m-${tag}`, { perMin: per * 2, perHour: per * 2 }),
+    coldLimiter: createLimiter(`t-own-c-${tag}`, { perMin: per, perHour: per }), now: () => clock, log: () => {} });
+  const a = mk();
+  const owner = `owner-${Math.floor(Math.random() * 1e6)}@x.com`;
+  // The stranger spends its own share from one network.
+  const stranger = Array.from({ length: per + 3 }, () => a.requestSignIn(owner, "203.0.113.9").status);
+  ok(stranger.slice(0, per).every((c) => c === 200) && stranger.slice(per).every((c) => c === 429), `${label}: one stranger network gets its own share, then 429 (${stranger.join(",")})`);
+  ok(a.requestSignIn(owner, "198.51.100.7").status === 200, `${label}: the owner's own network still gets a link`);
+  {
+    const other = `v6-${Math.floor(Math.random() * 1e6)}@x.com`;
+    const six = Array.from({ length: per + 1 }, (_, i) => a.requestSignIn(other, `2001:db8:aa:1::${i + 1}`).status);
+    ok(six.slice(0, per).every((c) => c === 200) && six[per] === 429, `${label}: addresses in one IPv6 /64 are one asker (${six.join(",")})`);
+  }
+  // Many networks: the mailbox's total stays bounded (ceiling plus the fixed first-ask allowance).
+  const many = Array.from({ length: 40 }, (_, i) => a.requestSignIn(owner, `192.0.2.${i + 1}`).status);
+  const admitted = stranger.filter((c) => c === 200).length + 1 + many.filter((c) => c === 200).length;
+  ok(admitted === per * 2 + per, `${label}: forty more networks cannot push the mailbox past its ceiling and first-ask allowance (${admitted} admitted)`);
 }
 const ipAcct = createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async () => true, store, ipLimiter: createLimiter("t-ip2", { perMin: 2, perHour: 40 }), emailLimiter: createLimiter("t-email2", { perMin: 100, perHour: 100 }), now: () => clock, log: () => {} });
 ipAcct.requestSignIn("a1@x.com", "3.3.3.3"); ipAcct.requestSignIn("a2@x.com", "3.3.3.3");
@@ -253,11 +283,15 @@ ok(ipAcct.requestSignIn("a3@x.com", "3.3.3.3").status === 429, "...and per clien
   const sentTo = [];
   const mk = () => createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async (m) => { sentTo.push(m.to); return true; }, store, limits: createMemoryLimits(), now: () => clock, log: () => {} });
   try {
-    useGuardsTable({ ...keep, account: { ...keep.account, sendsGlobalPerHour: 2 } });
+    useGuardsTable({ ...keep, account: { ...keep.account, sendsGlobalPerHour: 2, sendsPerNetHour: 10 } });
     const g = mk();
     const rs = [];
-    for (let i = 0; i < 3; i++) { const r = g.requestSignIn(`spray${i}@x.com`, `10.0.${i}.1`); rs.push(r); await r.work; }
-    ok(rs.every((r) => r.status === 200 && r.message === SIGN_IN_ANSWER) && sentTo.length === 2, `past the service-wide hourly send budget the answer is the same and no mail is sent (${sentTo.length} sent)`);
+    for (let i = 0; i < 3; i++) { const r = g.requestSignIn(`spray${i}@x.com`, "10.0.0.1"); rs.push(r); await r.work; }
+    ok(rs.every((r) => r.status === 200 && r.message === SIGN_IN_ANSWER) && sentTo.length === 2, `past the service-wide hourly send budget the answer is the same and no more mail goes to a network that already sent (${sentTo.length} sent)`);
+    const other = g.requestSignIn("someone-else@x.com", "10.9.9.1"); await other.work;
+    ok(other.status === 200 && sentTo.length === 3 && sentTo.at(-1) === "someone-else@x.com", "a drained service-wide budget still sends a network's first link of the hour (one requester cannot stop everyone's)");
+    const again = g.requestSignIn("someone-else2@x.com", "10.9.9.1"); await again.work;
+    ok(sentTo.length === 3, "and that network's next one waits like the rest");
     sentTo.length = 0;
     useGuardsTable({ ...keep, account: { ...keep.account, sendsPerNetHour: 1 } });
     const n = mk();
