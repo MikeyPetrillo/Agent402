@@ -48,6 +48,23 @@ Packages:
 - agent402-client 0.12.1, agent402-tollbooth 0.12.2 and agent402-openclaw
   0.6.2 publish their READMEs with the lead sentence that scopes signed
   receipts to successful direct calls.
+- agent402-mcp 0.17.0: the config `setup` and `wallet new` print sets a
+  suggested daily cap, `AGENT402_MAX_USD_PER_DAY` of 20 (change or remove
+  it); a config without one keeps no daily cap, and the server says so in
+  one line at start.
+- agent402-langchain 0.2.13, agent402-ai-sdk 0.2.14, agent402-openai-agents
+  0.1.14 and agent402-google-adk 0.1.14 refuse a paid call listed above $5 by
+  default (`maxPerCallUsd`; `0` or `off` turns it off), take an opt-in
+  `dailyLimitUsd`, and refuse a proof-of-work challenge above 28 bits;
+  agent402-langchain for Python 0.1.7 does the same (`max_per_call_usd`,
+  `daily_limit_usd`).
+- agent402-openclaw 0.6.2, agent402-agentkit 0.2.1, agent402-anthropic-tools,
+  agent402-openai-tools, agent402-llamaindex and agent402-strands 0.2.2 ship
+  TypeScript declarations, as do the four adapters above.
+- agent402-tollbooth 0.12.2 charges Claude-SearchBot, MistralAI-User,
+  GoogleOther and other current AI crawlers by default, refuses to start in
+  one line when its facilitator does not settle the configured network, and
+  names the path when its SQLite replay store cannot be opened.
 Site:
 - Every install line on the site and in the docs pins agent402-mcp 0.17.0.
 

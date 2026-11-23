@@ -325,8 +325,12 @@ t node scripts/test-copy-truth.js
 t node scripts/test-public-index-copy.js
 t node scripts/test-wire-count-copy.js
 t node scripts/test-chain-list-copy.js
-# Package READMEs: no "no cap by default" against agent402-client's default ceiling, Amazon Bedrock naming, one OpenAI example model (offline)
+# Package READMEs: no "no cap by default" against agent402-client's default ceiling, Amazon Bedrock naming, one OpenAI example model, agent402-mcp's default per-call and daily caps on every surface (offline)
 t node scripts/test-package-readme-claims.js
+# Meta-tool adapters: default per-call ceiling, opt-in daily limit, both before the payment fetch; proof-of-work difficulty bound and yielding search (offline stub)
+t node scripts/test-meta-adapter-caps.js
+# Published packages ship TypeScript declarations: types conditions, strict nodenext consumers compile, runtime and declared exports agree, a misuse fails (offline, typescript)
+t node scripts/test-package-types.js
 t node scripts/test-pack-copy-retired.js
 # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
 t node scripts/test-tollbooth-cloud-retired.js
