@@ -86,6 +86,28 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   the cap is not offered, a checkout for it is refused, and a paid session above it is refunded in full
   with no key issued. `POST /api/credits/refund` (the key as Bearer) refunds a key's unspent balance
   and disables it; it is served only while `CREDITS_SALES` is on.
+- **Credits purchases:** a purchase is made signed in to `/credits/account` (`POST /credits/account/buy`,
+  bound to that email; `POST /api/credits/checkout` answers 401 with the sign-in pointer). Every pack
+  and top-up checkout requests card authentication and carries neutral digest tags (`ref_*`) on the
+  payment, never an email, address or key. The purchase checks (`purchaseChecks` in
+  `src/credits-sales.js`: `CREDITS_BUYER_*`, `CREDITS_SOURCE_*`, `CREDITS_FAILED_*`, and
+  `CREDITS_DAILY_MAX_USD`) are counted in the shared store; the service sets its own values, the code
+  ships safe defaults, and a refusal is always `PURCHASE_REFUSED`, which never names the check. A paid
+  session a check refuses (or a flagged charge, `chargeFlagged`) is refunded in full on its own
+  payment with no key (`refused-review`). Copy, comments, commits and tests never state a threshold or
+  which signal a check reads.
+- **Credits freezes:** `charge.dispute.created` and `radar.early_fraud_warning.created` freeze the key
+  (a running call's hold is released, not debited). After a fraud warning the unspent balance is
+  refunded on the warned payment only, automatically (`CREDITS_EFW_AUTO_REFUND`, on unless off) inside
+  the day total `CREDITS_EFW_AUTO_REFUND_DAY_MAX_USD`; otherwise it is owed for approval
+  (`refundRequestsOwed`, `POST /__operator/credits/fraud-refund`). `fraudReviews` is on
+  `/__operator/credits.json`. Stripe event ids are deduplicated in the shared store as well.
+- **Credits keys:** new keys are `a402_ck_` plus 32 random bytes; `KEY_RE` also matches earlier keys.
+  A URL carrying a key is refused before any middleware reads it (`src/credits-key-url.js`);
+  `redactSecrets` removes a key from log text. `POST /api/credits/revoke` disables any key presented,
+  one answer for every key. Past `CREDITS_BAD_KEY_MAX` failed keys a client is answered 429 on any key
+  for the window (shared). Holders set per-key daily and per-call limits on the balance page
+  (`setLimits`).
 - **Card store directories:** with no state database, `CREDITS_DIR` (default `<data root>/credits`,
   `src/credits.js`) and `HUMAN_CHECKOUT_DIR` (default `<data root>/human-checkout`, `src/human-checkout.js`;
   the legacy `human-checkout.json` is read beside it) hold the card stores' files; the data root is `/data`,

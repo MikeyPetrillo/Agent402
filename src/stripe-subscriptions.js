@@ -21,6 +21,7 @@ import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
 import { cleanSaleSource } from "./sale-source.js";
 import { appendPeriodReceipt } from "./receipt-signing.js";
+import { shared } from "./shared-limits.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).
@@ -172,7 +173,7 @@ const shapeTally = (t) => (t && typeof t === "object" ? { ...emptyTally(), ...t,
  *   while signing is off; called on invoice.paid with an amount paid, and the
  *   answer is kept on the record (`signedReceipts`, the newest last)
  */
-export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed, onRefundUpdated, signPeriod = null }) {
+export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed, onRefundUpdated, onFraudWarning = null, onPaymentFailed = null, signPeriod = null }) {
   const path = storePath || STORE_PATH();
   const doc = createJsonDocument({ file: path, log: () => {} });
   const tallyDoc = createJsonDocument({ file: path + TALLY_SUFFIX, log: () => {} });
@@ -528,9 +529,15 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     // Stripe's signature tolerance is 300 s: a captured delivery replays for
     // five minutes. Handlers are idempotent on their records, but a replayed
     // invoice.paid would book a second sale - remember event ids for a day.
-    if (event.id) {
-      if (seenEvents.has(event.id)) return { received: true, type, duplicate: true };
-      seenEvents.set(event.id, Date.now());
+    // The ids are kept in the shared store as well, so a delivery another
+    // server already applied is answered as a duplicate here too.
+    const eventKey = event.id ? String(event.id).slice(0, 80) : null;
+    if (eventKey) {
+      if (seenEvents.has(eventKey)) return { received: true, type, duplicate: true };
+      const prior = await shared.flagGet("stripe-event", eventKey).catch(() => null);
+      if (prior?.ok && prior.until > Date.now()) return { received: true, type, duplicate: true };
+      seenEvents.set(eventKey, Date.now());
+      await shared.flagSet("stripe-event", eventKey, Date.now() + 86_400_000).catch(() => null);
       if (seenEvents.size > 5000) for (const [k, t] of seenEvents) { if (Date.now() - t > 86_400_000 || seenEvents.size > 5000) seenEvents.delete(k); else break; }
     }
     let stored = true; // every record this event writes reached the database
@@ -658,6 +665,30 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         if (obj?.id && typeof onRefundUpdated === "function") { try { await onRefundUpdated(obj); } catch { stored = false; } }
         break;
       }
+      case "radar.early_fraud_warning.created": {
+        // The card network warned that a payment may be fraudulent. A credits
+        // key that payment loaded is frozen and its unspent balance refunded
+        // (the hook). A hook that throws, or a refund that must wait for a
+        // running call, leaves the event unacknowledged, so Stripe delivers it
+        // again; the hook is idempotent on a repeat.
+        const obj = event.data.object;
+        const pi = idOf(obj?.payment_intent);
+        if (pi && typeof onFraudWarning === "function") {
+          try { const r = await onFraudWarning(pi, { warningId: obj?.id || null }); if (r && (r.status === "in_flight" || r.status === "retry" || r.status === "error")) stored = false; }
+          catch { stored = false; }
+        }
+        break;
+      }
+      case "payment_intent.payment_failed": {
+        // A credits payment that did not go through counts against its
+        // purchase checks (the hook); other payments are not read.
+        const obj = event.data.object;
+        if (obj?.metadata?.credits_pack && typeof onPaymentFailed === "function") {
+          const card = obj?.last_payment_error?.payment_method?.card || null;
+          try { await onPaymentFailed({ source: typeof obj.metadata.ref_source === "string" ? obj.metadata.ref_source : null, cardFingerprint: card?.fingerprint || null }); } catch { /* never fail the webhook on a hook */ }
+        }
+        break;
+      }
       case "charge.dispute.closed": {
         // The dispute ended. Won, or an inquiry closed without a chargeback
         // (warning_closed): the money stayed, so the hold on fulfillment ends
@@ -683,7 +714,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       // Database mode: a record waits in the local journal (a backstop). The
       // event is not acknowledged until the record is in the database, so
       // Stripe delivers it again; its id is forgotten so that retry is applied.
-      if (event.id) seenEvents.delete(event.id);
+      if (eventKey) { seenEvents.delete(eventKey); await shared.flagSet("stripe-event", eventKey, 0).catch(() => null); }
       const e = new Error("Webhook received; its record is not stored yet, retry later");
       e.statusCode = 503;
       throw e;

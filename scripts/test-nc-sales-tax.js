@@ -58,7 +58,7 @@ const credits = src("credits.js");
 ok(/billing_address_collection: "required"/.test(credits) && /tax_id_collection: \{ enabled: true \}/.test(credits), "credits checkout requires a billing address and offers a tax ID field");
 ok(/key: "terms"[\s\S]{0,200}optional: false/.test(credits) && /key: "use"[\s\S]{0,200}optional: false/.test(credits), "checkout requires the business-use and terms answers");
 ok(!/automatic_tax/.test(credits.slice(credits.indexOf("async function createCheckout"), credits.indexOf("const claimedAnswer"))), "credits checkout adds no Stripe tax on top of a tax-included price");
-ok(/metadata: \{ credits_pack: packKey, terms: creditsTermsVersion\(\) \}/.test(credits), "checkout records the terms version");
+ok(/metadata: \{ credits_pack: packKey, terms: creditsTermsVersion\(\)[ ,}]/.test(credits), "checkout records the terms version");
 // /terms names every taxable kind and keeps the tax-included statement (G.S. 105-164.7(2)).
 {
   const { termsPage } = await import("../src/terms.js");

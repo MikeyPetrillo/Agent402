@@ -7,6 +7,7 @@
 // backend, stubbed Stripe; the switch is read at call time, so one process
 // renders both states.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

@@ -8,6 +8,7 @@
 // ends and the history names the debit's id.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
+import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
@@ -374,7 +375,7 @@ try {
     ok(!(await B.refusalsToRefund()).includes("cs_pgstuck"), "pg: a fresh pending refusal is not owed");
     t += 6 * 60_000;
     ok((await B.refusalsToRefund()).includes("cs_pgstuck"), "pg: pending past five minutes is owed");
-    delete process.env.CREDITS_DAILY_MAX_USD;
+    looseCreditsChecks();
   }
   // ---- refund on request, on the rows: two containers, one refund ---------
   {

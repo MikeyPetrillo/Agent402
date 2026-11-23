@@ -36,6 +36,14 @@ const SECTIONS = [
     links: [["/transparency", "Disclosures"]],
   },
   {
+    h: "Credits keys",
+    p: [
+      `A prepaid credits key starts with <code>a402_ck_</code> and is followed by 43 base64url characters; keys issued earlier start with <code>a402_</code> and 32 characters. Both match <code>a402_[A-Za-z0-9_-]{32,64}</code>, so a secret scanner can find one in code, logs or a paste. A key is shown once, stored only as a hash, accepted only in the Authorization header (a URL that carries one is refused) and kept out of our logs.`,
+      `Found a key that leaked? Send it to <code>POST /api/credits/revoke</code> as <code>Authorization: Bearer &lt;key&gt;</code>. A live key stops working at once and nothing is spent; the answer is the same for every key. The unspent balance is not spent and stays the holder's.`,
+    ],
+    links: [["/credits", "Prepaid credits"]],
+  },
+  {
     h: "Controls in the serving path",
     p: [
       `Every tool that fetches a caller-supplied URL goes through a DNS-pinned SSRF guard that refuses private, link-local and metadata addresses and re-validates on redirects; on agent402.tools the headless browser and media parsers run in a separate worker that holds no secrets, behind the same egress guard, and the server refuses to start without it (a self-hosted instance runs them in-process unless it configures the worker). The free tier is a signed, single-use, slug-scoped proof-of-work token. Settlement runs after the handler, so on x402 an error is not charged, and a settled receipt that arrives on a failed response is ledgered as a debt with an on-chain proof step before any refund leaves. ${SETTLE_FIRST_SENTENCE} Per-IP and shared rate limits fail closed; a wallet blocklist is enforced before settlement; every page carries a content security policy that allows no inline scripts (the one exception is the sandboxed, network-less frame of the SDK playground), and every response carries HSTS.`,

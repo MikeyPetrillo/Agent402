@@ -63,7 +63,7 @@ export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
   <section>
     <div class="products">${salesEnabled ? cards : closed}</div>
     ${salesEnabled ? `<p class="note">Already bought credits? <a href="/credits/account">Sign in with your purchase email</a> to see your balance and its history, add to it, ask for the unspent balance back or issue a new key.</p>
-    ` : ""}<p class="note">${salesEnabled ? `Your key is shown once on the next page and emailed to you · a balance holds at most $${(creditsBalanceMaxCents() / 100).toFixed(0)} · refund the unspent balance to your card with <span style="font-family:var(--font-mono);">POST /api/credits/refund</span> and the key, or from your balance page · ` : ""}keep it secret · balance at <span style="font-family:var(--font-mono);">GET /api/credits/balance</span> · agents with a wallet pay per call over x402 / MPP</p>
+    ` : ""}<p class="note">${salesEnabled ? `You sign in by email before you pay, and your bank may ask you to confirm the payment · your key is shown once after paying and emailed to you · a balance holds at most $${(creditsBalanceMaxCents() / 100).toFixed(0)} · refund the unspent balance to your card with <span style="font-family:var(--font-mono);">POST /api/credits/refund</span> and the key, or from your balance page · ` : ""}keep it secret · balance at <span style="font-family:var(--font-mono);">GET /api/credits/balance</span> · agents with a wallet pay per call over x402 / MPP</p>
   </section>
   <section>
     <div class="hm-obsidian" style="border-radius:var(--radius);background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-panel);padding:26px 28px;">

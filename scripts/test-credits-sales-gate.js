@@ -128,6 +128,8 @@ try {
 
   for (const [where, text, offPhrase, onPhrase] of await keySurfaces()) ok(text.includes(offPhrase) && !text.includes(onPhrase), `${where} names only a key already issued while sales are off`);
 
+  const rvOff = await fetch(`${B}/api/credits/revoke`, { method: "POST", headers: { authorization: `Bearer a402_ck_${"R".repeat(43)}` } });
+  ok(rvOff.status === 200 && (await rvOff.json()).status === "received", "a key can be revoked while sales are off");
   // redemption must survive: a 404 here would mean an existing key was stranded
   ok((await fetch(`${B}/api/credits/balance`)).status !== 404, "the balance route still exists, so an existing key can still be read");
   ok((await fetch(`${B}/api/credits/claim?session=x`)).status !== 404, "the claim route still exists");
@@ -179,9 +181,12 @@ try {
   proc.kill("SIGKILL");
 
   // --- explicitly on: selling works again, so this is a switch and not a deletion
-  ok(await boot({ CREDITS_SALES: "on" }), "server booted with CREDITS_SALES=on");
+  // The daily purchase limit is wide here so every pack is on offer (a pack
+  // above it is not; scripts/test-credits-terms.js).
+  ok(await boot({ CREDITS_SALES: "on", CREDITS_DAILY_MAX_USD: "1000" }), "server booted with CREDITS_SALES=on");
   const on = await fetch(`${B}/api/credits/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "credits-20" }) });
-  ok(on.status !== 503, `selling is reachable when explicitly enabled (got ${on.status}, not the 503 refusal)`);
+  const onBody = await on.json().catch(() => ({}));
+  ok(on.status === 401 && /\/credits\/account$/.test(String(onBody.signIn)) && /\/credits\/account\/buy$/.test(String(onBody.buy?.url)), `selling is reachable when explicitly enabled, signed in: the API checkout points at the balance page (got ${on.status})`);
   const pricingOn = await (await fetch(`${B}/api/pricing`)).json();
   ok(pricingOn.credits?.onSale === true && pricingOn.credits.checkout?.method === "POST", "/api/pricing advertises the checkout when sales are on");
   ok(pricingOn.credits.balanceMaxUsd === 100 && pricingOn.credits.expires === false && pricingOn.credits.feesUsd === 0 && /\/api\/credits\/refund$/.test(pricingOn.credits.refund?.url) && pricingOn.credits.packs.every((p) => p.priceUsd <= pricingOn.credits.balanceMaxUsd), "/api/pricing states the cap, no expiry, no fees and the refund route, and every pack is within the cap");
@@ -215,8 +220,9 @@ try {
   ok(pricingOn.credits.packs.map((p) => `${p.pack}:${p.priceUsd}`).join() === "credits-5:5,credits-10:10,credits-20:20,credits-50:50,credits-100:100" && pricingOn.credits.checkout.body.pack === "credits-5", "/api/pricing lists the starter packs and its example checkout body names the smallest");
   const ogOn = await (await fetch(`${B}/og/credits.svg`)).text();
   ok(/\$5, \$10, \$20, \$50 or \$100\./.test(ogOn), "the credits share card lists every pack, starters first, while sales are on");
-  const starter = await fetch(`${B}/api/credits/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "credits-5" }) });
-  ok(starter.status !== 503 && starter.status !== 400, `a $5 starter pack checkout is accepted by the route (got ${starter.status})`);
+  const starter = await fetch(`${B}/credits/account/buy`, { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" }, body: JSON.stringify({ pack: "credits-5" }) });
+  ok(starter.status === 401, `a starter pack purchase needs a signed-in balance page first (got ${starter.status})`);
+  ok(/\/credits\/account\/buy$/.test(String(pricingOn.credits.checkout.url)) && /\/credits\/account$/.test(String(pricingOn.credits.checkout.signIn)), "/api/pricing names the signed-in purchase route");
   for (const path of ["/sitemap.xml", "/sitemap-pages.xml"]) {
     const xml = await (await fetch(`${B}${path}`)).text();
     ok(/\/credits<\/loc>/.test(xml), `${path} lists /credits when sales are on`);
@@ -227,6 +233,19 @@ try {
   ok(/Stripe Checkout, for reports and monitors, and for prepaid credits\)/.test(tOn.access), "/terms access line names card for prepaid credits when sales are on");
   ok(/POST \/api\/credits\/refund/.test(pageOn) && /No fees/.test(pageOn) && /refunded on request/.test(pageOn), "/credits states the refund route and no fees when sales are on");
   ok(!/api\/credits\/refund/.test(pageOff) && !/No fees/.test(pageOff), "/credits offers neither while sales are off");
+
+  // A key never travels in a URL, and never reaches the server's log.
+  const leaked = `a402_ck_${"Q".repeat(43)}`;
+  const inUrl = await fetch(`${B}/api/credits/balance?key=${leaked}`);
+  const inUrlBody = await inUrl.json().catch(() => ({}));
+  ok(inUrl.status === 400 && inUrlBody.reason === "key_in_url" && !JSON.stringify(inUrlBody).includes(leaked), "a key in a URL is refused, and the answer does not repeat it");
+  await fetch(`${B}/api/hash`, { method: "POST", headers: { authorization: `Bearer ${leaked}`, "content-type": "application/json" }, body: "{}" });
+  await fetch(`${B}/api/credits/balance`, { headers: { authorization: `Bearer ${leaked}` } });
+  ok(!log.join("\n").includes(leaked.slice(8)), "no key sent in a URL or a header reaches the server's log");
+  // Revoke by key: one answer for every key, with sales on or off.
+  const rvA = await (await fetch(`${B}/api/credits/revoke`, { method: "POST", headers: { authorization: `Bearer ${leaked}` } })).json();
+  const rvB = await (await fetch(`${B}/api/credits/revoke`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "not-a-key" }) })).json();
+  ok(rvA.status === "received" && JSON.stringify(rvA) === JSON.stringify(rvB), "revoking by key answers the same for any key");
 
   // the gate must be read at call time, never latched at boot
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");

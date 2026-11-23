@@ -5,6 +5,7 @@
 // over it. A success event for any refund of the request settles it once.
 // Offline, file backend, a Stripe stub that holds replies until released.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

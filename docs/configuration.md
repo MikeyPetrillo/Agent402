@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1115 variables in 113 groups.
+1124 variables in 113 groups.
 
 ## Contents
 
@@ -293,14 +293,23 @@ holds it.
 | `CREDITS_BAD_KEY_MAX` | Credits bad key maximum. |  | `src/credits.js` |
 | `CREDITS_BAD_KEY_WINDOW_MS` | Credits bad key window, in milliseconds. |  | `src/credits.js` |
 | `CREDITS_BALANCE_MAX_USD` | Credits balance maximum, in USD. |  | `src/changelog.js`, `src/credits-sales.js` |
-| `CREDITS_DAILY_MAX_USD` | Credits daily maximum, in USD. |  | `src/credits-sales.js` |
+| `CREDITS_BUYER_DAY_MAX` | Prepaid credits purchase check: completed purchases one buyer may make per day. | `6` | `src/credits-sales.js` |
+| `CREDITS_BUYER_HOUR_MAX` | Prepaid credits purchase check: completed purchases one buyer may make per hour. | `3` | `src/credits-sales.js` |
+| `CREDITS_DAILY_MAX_USD` | The most one buyer may buy in prepaid credits in any 24 hours, in USD; a pack above it is not offered. |  | `src/credits-sales.js` |
 | `CREDITS_DEBIT_WAIT_MS` | Credits debit wait, in milliseconds. | `3000` | `src/credits.js` |
 | `CREDITS_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout; the legacy human-checkout.json is read beside the latter). |  | `src/credits.js` |
+| `CREDITS_EFW_AUTO_REFUND` | off, false, 0 or no stops the card refund made without review of a key's unspent balance after an early fraud warning (the key is still frozen and the balance listed as owed); on by default. |  | `src/credits.js` |
+| `CREDITS_EFW_AUTO_REFUND_DAY_MAX_USD` | The most refunded automatically after early fraud warnings per UTC day, in USD; past it a frozen key's balance is listed as owed for approval. |  | `src/credits.js` |
 | `CREDITS_EU_UK_REQUIRE_TAX_ID` | Credits eu uk require tax id. |  | `src/credits.js` |
+| `CREDITS_FAILED_HOLD_MS` | Prepaid credits purchase check: how long a held source starts no new purchase, in milliseconds. | `24` | `src/credits-sales.js` |
+| `CREDITS_FAILED_MAX` | Prepaid credits purchase check: credits payments that did not go through, per source, before the source is held from new purchases. | `5` | `src/credits-sales.js` |
+| `CREDITS_FAILED_WINDOW_MS` | Prepaid credits purchase check: the window CREDITS_FAILED_MAX counts in, in milliseconds. | `60` | `src/credits-sales.js` |
 | `CREDITS_HOLD_REFRESH_MAX_MS` | Credits hold refresh maximum, in milliseconds. |  | `src/credits.js` |
 | `CREDITS_INDEXES` | Prepaid credits table indexes built in the background; off leaves them to an operator. | `on` | `src/credits.js` |
 | `CREDITS_INDEX_DELAY_MS` | Delay before the prepaid credits index build starts after the store's first load, in milliseconds. | `60000` | `src/credits.js` |
 | `CREDITS_SALES` | 1, true, on or yes turns prepaid credit sales on; unset keeps them off. |  | `src/credits-sales.js` |
+| `CREDITS_SOURCE_DAY_MAX` | Prepaid credits purchase check: checkouts one client or account may start per day. | `30` | `src/credits-sales.js` |
+| `CREDITS_SOURCE_HOUR_MAX` | Prepaid credits purchase check: checkouts one client or account may start per hour. | `10` | `src/credits-sales.js` |
 
 ## DATABENTO
 

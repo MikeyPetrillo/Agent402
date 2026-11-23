@@ -6,6 +6,7 @@
 // request passes through untouched; accounting hooks fire; state survives a
 // reload; operator status never exposes key material.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { createCredits, CREDIT_PACKS, KEY_RE, usdToMicro, microToUsd } from "../src/credits.js";
 import { rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -346,7 +347,10 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   const tryKey = (k, ip = "203.0.113.9") => { const r = fakeRes(); let next = false; g({ method: "GET", path: "/api/hash", ip, headers: { authorization: `Bearer ${k}` } }, r, () => { next = true; }); return { r, next }; };
   for (let i = 0; i < 3; i++) tryKey("a402_" + String(i).repeat(40));
   const after = tryKey(KEY);
-  ok(after.r.statusCode !== 429 && after.next === true, "failed keys never block a valid key from the same client (a paying customer behind a shared address is served)");
+  ok(after.r.statusCode === 429 && after.next === false && after.r.body?.reason === "rate_limited", "a client past the failed-key bound is answered 429 on any key until its window ends, so no guess can be checked");
+  ok(!/\d/.test(String(after.r.body?.error)), "the 429 names no count or window");
+  const elsewhere = tryKey(KEY, "198.51.100.7");
+  ok(elsewhere.r.statusCode !== 429 && elsewhere.next === true, "the same key from another client is served");
   ok(cr.badKeyStats().failures >= 3 && cr.badKeyStats().clientsOverThreshold === 1, "a client past the threshold is counted for the operator view");
   for (let i = 0; i < 3; i++) tryKey("a402_" + String(i + 5).repeat(40), `2001:db8:1:2::${i + 1}`);
   ok(cr.badKeyStats().clientsOverThreshold === 2, "IPv6 addresses in one /64 count as one client");
@@ -515,7 +519,7 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   process.env.CREDITS_EU_UK_REQUIRE_TAX_ID = "off";
   ok((await euBuy("cs_fr", { country: "FR" })).status === "minted", "CREDITS_EU_UK_REQUIRE_TAX_ID=off lifts the rule");
   delete process.env.CREDITS_EU_UK_REQUIRE_TAX_ID;
-  delete process.env.CREDITS_DAILY_MAX_USD;
+  looseCreditsChecks();
   try { rmSync(LDIR, { recursive: true, force: true }); } catch { /* cleanup */ }
 }
 // The debit books the request's arrival path (src/sale-path.js) with the sale.
