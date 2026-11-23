@@ -136,7 +136,7 @@ export const WHY_SECTION_CSS = `
   .why-pt .why-row > * { white-space:nowrap; }
   .why-pt .why-row > details { white-space:normal; }
   .why-pt .why-row > details[open] { flex-basis:100%; }
-  .why-pt a.why-proof { font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash); }
+  .why-pt a.why-proof { display:inline-flex;align-items:flex-end;min-height:24px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash); }
   .why-pt details summary { cursor:pointer;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);list-style:none; }
   .why-pt details summary::-webkit-details-marker { display:none; }
   .why-pt details[open] summary { margin-bottom:8px; }
