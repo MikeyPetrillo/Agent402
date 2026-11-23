@@ -6,8 +6,8 @@ Use this block (or any subset) wherever a directory asks what Agent402 is. Every
 claim below is served live; verify prices against `/api/pricing` before pasting.
 
 - **What it is:** Agent402 is the payment and trust layer for agentic commerce:
-  agents find, pay for and verify every paid call to Agent402, across x402 and
-  MPP, with signed receipts on its direct routes. The applied layer of Agentic Finance (AIFI).
+  agents find, pay for and verify paid calls to Agent402, across x402 and
+  MPP, with a signed receipt on each successful paid answer a direct route sends in one piece. The applied layer of Agentic Finance (AIFI).
 - **Payment and trust:** x402 across chains with facilitator fallbacks, MPP with
   Tempo and card, and proof of work for the pure-CPU tools, on one server. An
   x402 payment settles after a successful answer, a hang-up before the answer

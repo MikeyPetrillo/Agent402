@@ -10,8 +10,9 @@
 // clause follows receiptsServed() (src/receipt-signing.js), so a server with
 // no signing key loaded never promises one (and says "paid calls" rather than
 // "every paid call"). The published sentence is the one with both wires and
-// the receipt clause, scoped to what is signed: every settled paid answer on
-// the direct routes (src/receipt-signing.js). A /ref/ copy is never signed (src/server.js
+// the receipt clause, scoped to what is signed (src/receipt-signing.js): a
+// settled paid 200 (no failed call, charged-first failures included, and no
+// free or trial answer) on a direct route, sent in one piece. A /ref/ copy is never signed (src/server.js
 // receiptFieldsOf: a tool bought through a referral link is that network's
 // sale), and a streamed answer that is neither an event stream nor sent with
 // TE: trailers carries none; the README's money-path line and /trust's
@@ -27,7 +28,7 @@ export const CATEGORY_LINE = "Payments and trust for AI agents.";
 export function leadSentence({ mpp = true, receipts = true } = {}) {
   const wires = mpp ? "x402 and MPP" : "x402";
   return receipts
-    ? `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across ${wires}, with signed receipts on its direct routes.`
+    ? `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across ${wires}, with a signed receipt on each successful paid answer a direct route sends in one piece.`
     : `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402 across ${wires}.`;
 }
 

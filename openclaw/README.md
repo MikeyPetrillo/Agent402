@@ -1,6 +1,6 @@
 # agent402-openclaw
 
-Part of [Agent402](https://agent402.tools), open source and self-hostable. Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with signed receipts on its direct routes. 500+ ready tools on the same rails.
+Part of [Agent402](https://agent402.tools), open source and self-hostable. Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with a signed receipt on each successful paid answer a direct route sends in one piece. 500+ ready tools on the same rails.
 
 Agent402 as an [OpenClaw](https://openclaw.ai) model provider: explicit models
 **priced per request** from the body by default (metered), and the auto-routed

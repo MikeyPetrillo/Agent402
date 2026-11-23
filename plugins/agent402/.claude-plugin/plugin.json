@@ -1,7 +1,7 @@
 {
   "name": "agent402",
   "version": "2.14.0",
-  "description": "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with signed receipts on its direct routes. 500+ ready tools on the same rails. Find a tool with catalog.find and call it; pure-compute tools run free via proof-of-work.",
+  "description": "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with a signed receipt on each successful paid answer a direct route sends in one piece. 500+ ready tools on the same rails. Find a tool with catalog.find and call it; pure-compute tools run free via proof-of-work.",
   "author": {
     "name": "Havok Holdings LLC",
     "url": "https://agent402.tools/company"
