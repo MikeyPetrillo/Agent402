@@ -808,7 +808,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
   `/supported`) for gas runway every 10 minutes under a lease, one check per listed-facilitator
   rail whose readings replace only that network's rows (`scripts/test-settle-fallback.js`,
-  `scripts/test-tool-failure-monitor.js`). On Solana it reads each listed facilitator's fee
+  `scripts/test-tool-failure-monitor.js`). An EVM row (and the price-floor row) reads low past
+  its threshold and ok again only once back past it by `FACILITATOR_GAS_CLEAR_MARGIN` (default
+  0.2 of it), since the gas price moves the runway (`runwayStatus`). On Solana it reads each listed facilitator's fee
   payers' SOL balance and counts the runway in settlements: the balance less a plain account's
   rent-exempt reserve, divided by `FACILITATOR_SVM_LAMPORTS_PER_SETTLEMENT` (default 20000:
   two 5,000-lamport signatures and a 10,000-lamport priority allowance). A row reads low under

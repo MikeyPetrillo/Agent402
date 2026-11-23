@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1123 variables in 114 groups.
+1124 variables in 114 groups.
 
 ## Contents
 
@@ -433,6 +433,7 @@ holds it.
 | `FACILITATOR_FUNDS_WINDOW_MS` | Facilitator funds window, in milliseconds. |  | `src/tool-failure-monitor.js` |
 | `FACILITATOR_GAS_CHECK` | Facilitator gas check. |  | `src/payments.js` |
 | `FACILITATOR_GAS_CHECK_MS` | Facilitator gas check, in milliseconds. |  | `src/facilitator-gas.js` |
+| `FACILITATOR_GAS_CLEAR_MARGIN` | Share past the settlement-gas threshold (0 to 1, default 0.2) a low reading must reach before facilitatorFunds reads ok again. |  | `src/facilitator-gas.js` |
 | `FACILITATOR_GAS_FAIL_AFTER` | Facilitator gas fail after. |  | `src/facilitator-gas.js` |
 | `FACILITATOR_GAS_FRESH_MS` | Facilitator gas fresh, in milliseconds. |  | `src/robinhood-order.js`, `src/tool-failure-monitor.js` |
 | `FACILITATOR_GAS_MIN_SETTLEMENTS` | Facilitator gas minimum settlements. |  | `src/facilitator-gas.js` |

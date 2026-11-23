@@ -362,6 +362,7 @@
     "FACILITATOR_FUNDS_WINDOW_MS": "Facilitator funds window, in milliseconds.",
     "FACILITATOR_GAS_CHECK": "Facilitator gas check.",
     "FACILITATOR_GAS_CHECK_MS": "Facilitator gas check, in milliseconds.",
+    "FACILITATOR_GAS_CLEAR_MARGIN": "Share past the settlement-gas threshold (0 to 1, default 0.2) a low reading must reach before facilitatorFunds reads ok again.",
     "FACILITATOR_GAS_FAIL_AFTER": "Facilitator gas fail after.",
     "FACILITATOR_GAS_FRESH_MS": "Facilitator gas fresh, in milliseconds.",
     "FACILITATOR_GAS_MIN_SETTLEMENTS": "Facilitator gas minimum settlements.",

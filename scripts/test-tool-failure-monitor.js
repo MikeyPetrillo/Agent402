@@ -764,6 +764,35 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       m.noteFacilitatorRefusal({ network: NET, facilitator: "x", reason: "Out of mainnet settlement funds" });
       assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "refused");
     });
+    await check("gas: low clears only at the floor plus the clear margin, so a runway that moves with the gas price does not flap the word", async () => {
+      const d = gasCheckSettings({});
+      assert.equal(d.clearMargin, 0.2, "default clear margin is a fifth of the floor");
+      assert.equal(gasCheckSettings({ FACILITATOR_GAS_CLEAR_MARGIN: "0.5" }).clearMargin, 0.5);
+      assert.equal(gasCheckSettings({ FACILITATOR_GAS_CLEAR_MARGIN: "nope" }).clearMargin, 0.2, "a malformed value keeps the default");
+      const c = clock();
+      const s2 = { ...settings, clearMargin: 0.2 };
+      const own = "0x" + "ef".repeat(20);
+      const g = createRelayerGasCheck({ urls: [FAC], network: NET, rpcUrl: RPC, settings: s2, now: c.now, ownSigners: [{ label: "own relayer", signer: own }] });
+      const word = async () => (await g.check()).map((r) => r.status);
+      chain.gasPrice = 20_000_000n; chain.down = false;
+      chain.balance = PER * 550n;
+      assert.deepEqual(await word(), ["ok", "ok"], "above the floor from the start reads ok");
+      chain.balance = PER * 499n;
+      assert.deepEqual(await word(), ["low", "low"], "under the floor reads low");
+      chain.balance = PER * 500n;
+      assert.deepEqual(await word(), ["low", "low"], "back at the floor stays low");
+      chain.balance = PER * 599n;
+      assert.deepEqual(await word(), ["low", "low"], "under the floor plus the margin stays low");
+      // The gas price moves the runway: a price fall alone does not clear it
+      // until the runway passes the margin.
+      chain.balance = PER * 499n; chain.gasPrice = 16_000_000n; // runway 623
+      assert.deepEqual(await word(), ["ok", "ok"], "at the floor plus the margin it reads ok again");
+      chain.gasPrice = 20_000_000n; chain.balance = PER * 520n;
+      assert.deepEqual(await word(), ["ok", "ok"], "once ok, a runway over the floor stays ok");
+      chain.balance = PER * 499n;
+      assert.deepEqual(await word(), ["low", "low"], "and under the floor reads low again");
+      chain.gasPrice = 20_000_000n;
+    });
     await check("gas: one failed read keeps the last reading; repeated failures read unread (unknown), never low and never a silent ok", async () => {
       const c = clock();
       const m = createToolFailureMonitor({ now: c.now, env: {} });
@@ -932,6 +961,21 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       assert.equal(logs.length, 2, "one log line per state change");
       await f.check(20_000_000n);
       assert.equal(logs.length, 2, "no line while the state holds");
+    });
+    await check("floor gas: near the floor clears only once the gas is the clear margin under the alarm share", async () => {
+      const c = clock();
+      let eth = 3500;
+      const f = createFloorGasCheck({ network: NET, floorUsd: () => 0.006, readEthUsd: async () => eth, settings: { ...floorSettings, clearMargin: 0.2 }, now: c.now, log: () => {} });
+      assert.equal(floorGasSettings({}).clearMargin, 0.2, "the floor alarm shares the clear margin's default");
+      assert.equal((await f.check(20_000_000n)).status, "low");
+      eth = 2500; // 71% of the floor: under the 80% share, over 80% / 1.2
+      let r = await f.check(20_000_000n);
+      assert.equal(r.status, "low", `just under the share stays low (${r.sharePct}%)`);
+      assert.equal(r.reason, "gasNearFloor");
+      eth = 2200; // 62.6%
+      assert.equal((await f.check(20_000_000n)).status, "ok", "under the share by the margin reads ok");
+      eth = 2500;
+      assert.equal((await f.check(20_000_000n)).status, "ok", "once ok, under the share stays ok");
     });
     await check("floor gas: a failed ETH price read keeps the last good price, then reads unknown (never a page by itself)", async () => {
       const c = clock();
