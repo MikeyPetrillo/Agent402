@@ -53,15 +53,17 @@ import { namesOwnHost } from "./referral-gate.js";
 import { withoutChargeSentences } from "./not-charged.js";
 import { resaleBarredReason } from "./resale-terms.js";
 import { createHash } from "node:crypto";
+import { AWS_LISTING_SLUGS } from "./aws-listing.js";
 
 export const AWS_NETWORK = "aws:base";
 export const AWS_RAIL = "aws";
 export const AWS_WIRE = "aws";
 export const AWS_PREFIX = "/aws";
 export const AWS_JWKS_PATH = "/aws/.well-known/jwks.json";
-/** The first listing: own-code tools with a low failure rate and a fixed price,
- *  each computing its answer from the caller's own input or public data. */
-export const AWS_DEFAULT_SLUGS = Object.freeze(["redact", "sql-guard", "email-guard", "sanctions-name", "sanctions-wallet"]);
+/** The listing's tools (src/aws-listing.js, grouped there with the notice each
+ *  is sold under): fixed-price tools that compute their answer from the
+ *  caller's own input or public data. Each still meets the boot checks. */
+export const AWS_DEFAULT_SLUGS = AWS_LISTING_SLUGS;
 export const AWS_DEFAULTS = Object.freeze({ quoteSeconds: 300, retryMax: 2, quotesPerMin: 60, paidPerMin: 120 });
 /** The settings without which the gate stays off. */
 export const AWS_REQUIRED_VARS = Object.freeze(["AWS_MARKETPLACE_QUOTE_KEY", "AWS_MARKETPLACE_QUOTE_KEY_ID", "AWS_MARKETPLACE_PRODUCT_ID"]);
@@ -128,6 +130,12 @@ export function awsMarketplaceConfigProblem(env = process.env) {
     try { JSON.parse(env.AWS_MARKETPLACE_JWKS_EXTRA); } catch { return "AWS_MARKETPLACE_JWKS_EXTRA is not JSON"; }
   }
   return null;
+}
+
+/** True when this boot sells through the AWS Marketplace front door: paid
+ *  mode with every required setting present and usable. */
+export function awsMarketplaceOffered(env = process.env) {
+  try { return env.FREE_MODE !== "true" && awsMarketplaceConfig(env, { baseUrl: "https://example.invalid" }) !== null; } catch { return false; }
 }
 
 /** The gate's settings, or null when it is off (switched off, or a setting unusable). */
@@ -382,8 +390,10 @@ export function createAwsPaymentClaims({ getClient = async () => null, now = Dat
 const PAYMENT_HEADERS = ["payment-signature", "x-payment"];
 const carriesPayment = (req) => PAYMENT_HEADERS.some((h) => typeof req.headers?.[h] === "string" && req.headers[h] !== "");
 
-/** The x402 route table for the listed tools: one `aws:base` offer each. */
-export function awsRouteTable(config, defs) {
+/** The x402 route table for the listed tools: one `aws:base` offer each.
+ *  `describe` gives a tool's AWS-facing description (src/aws-listing.js
+ *  awsDescriptionOf: no sentence pointing past the listing). */
+export function awsRouteTable(config, defs, describe = (def) => def.description) {
   const table = {};
   let first = true;
   const html = "<!doctype html><meta charset=\"utf-8\"><title>Payment required</title><p>Payment required.</p>";
@@ -398,7 +408,7 @@ export function awsRouteTable(config, defs) {
         maxTimeoutSeconds: config.quoteSeconds,
         extra: { reference: slug, description: String(def.name || slug).slice(0, 200) },
       },
-      description: String(def.description || def.name || slug).slice(0, 1000),
+      description: String(describe(def) || def.name || slug).slice(0, 1000),
       mimeType: "application/json",
       customPaywallHtml: html,
     };
@@ -418,7 +428,7 @@ export async function createAwsMarketplaceGate({
   config, defs, claims,
   recordSale, preValidate = () => null, runAsCaller = (_req, fn) => fn(), handlerInputOf = (req) => (req.method === "GET" ? { ...(req.query || {}) } : (req.body && typeof req.body === "object" ? req.body : {})),
   isSynthetic = () => false, redact = (s) => s, ownHosts = [], ownPaths = [], onServed = null, onToolError = null,
-  clientKey = (req) => String(req.ip || ""), rateLimits = null,
+  clientKey = (req) => String(req.ip || ""), rateLimits = null, describe = (def) => def.description,
   sdk = null, core = null, express = null, now = Date.now, log = (m) => console.warn(m),
 }) {
   if (!config || !defs || !defs.size || !claims || typeof recordSale !== "function") throw new Error("aws gate: missing a dependency");
@@ -453,7 +463,7 @@ export async function createAwsMarketplaceGate({
     } catch { return { abort: true, reason: "invalid_payment", message: "The payment could not be read." }; }
     return undefined;
   });
-  const routes = awsRouteTable(config, defs);
+  const routes = awsRouteTable(config, defs, describe);
   const httpServer = new coreServer.x402HTTPResourceServer(server, routes);
   await httpServer.initialize();
   const mw = X.paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false);
