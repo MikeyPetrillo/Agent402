@@ -54,7 +54,8 @@ async function shedRetryWaitMs(r) {
 }
 
 // Resolves with the 2xx response, or throws `${label}: HTTP <status>` (plus
-// "after N attempts" when it retried) with `.status` and `.attempts` set.
+// "after N attempts" when it retried, and the server's `error` text) with
+// `.status`, `.body` and `.attempts` set.
 // `init` may be a function, so each attempt gets its own timeout signal.
 async function discoveryFetch(fetchImpl, label, url, init) {
   let r;
@@ -69,10 +70,27 @@ async function discoveryFetch(fetchImpl, label, url, init) {
     if (wait == null) break;
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
-  const err = new Error(`${label}: HTTP ${r.status}${attempts > 1 ? ` after ${attempts} attempts` : ""}`);
-  err.status = r.status;
+  const err = await responseError(`${label}: HTTP ${r.status}${attempts > 1 ? ` after ${attempts} attempts` : ""}`, r);
   err.attempts = attempts;
   throw err;
+}
+
+// The server's own answer to a failed request, on the thrown error: its
+// `error` text joins the message, and `.status` and `.body` (the parsed JSON,
+// else the text, at most ERROR_BODY_MAX characters) are set, so a caller sees
+// why the call failed (a refusal, a limit, a missing parameter).
+const ERROR_BODY_MAX = 4000;
+async function responseError(message, r) {
+  let text = "";
+  try { text = typeof r?.text === "function" ? String(await r.text()) : ""; } catch { text = ""; }
+  text = text.slice(0, ERROR_BODY_MAX);
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+  const said = body && typeof body === "object" && typeof body.error === "string" ? body.error.slice(0, 500) : (!body ? text.trim().slice(0, 300) : "");
+  const err = new Error(said ? `${message}: ${said}` : message);
+  err.status = r?.status;
+  err.body = body ?? (text || null);
+  return err;
 }
 
 const leadingZeroBits = (buf) => {
@@ -294,11 +312,8 @@ async function callTool({ base, slug, params, payFetch, fetchImpl, spend }) {
     if (payFetch) checkSpend(spend, slug, entry.price);
     const r = payFetch ? await send({}, payFetch) : await send();
     if (!r.ok) {
-      throw new Error(
-        payFetch
-          ? `call "${slug}" failed: HTTP ${r.status}`
-          : `call "${slug}" needs a wallet: construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch)`,
-      );
+      if (payFetch) throw await responseError(`call "${slug}" failed: HTTP ${r.status}`, r);
+      throw new Error(`call "${slug}" needs a wallet: construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch)`);
     }
     return r.json();
   }
@@ -311,7 +326,7 @@ async function callTool({ base, slug, params, payFetch, fetchImpl, spend }) {
     const chal = await challengeRes.json();
     r = await send({ "X-Pow-Solution": await solvePow(chal) });
   }
-  if (!r.ok) throw new Error(`call "${slug}" failed after proof-of-work: HTTP ${r.status}`);
+  if (!r.ok) throw await responseError(`call "${slug}" failed after proof-of-work: HTTP ${r.status}`, r);
   return r.json();
 }
 
