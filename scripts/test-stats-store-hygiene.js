@@ -52,9 +52,13 @@ const SPAWNS = /\b(?:spawn|spawnSync|fork|execFile|execFileSync)\s*\(/;
 const PASSES_ENV = /\.\.\.process\.env\b|\bbootServer\s*\(|\bownStoreEnv\s*\(/;
 // A custom env on every spawn and none of them the server's.
 const NO_SERVER_CHILD = new Set(["test-doc-snippets.js"]);
-const booting = files.filter((f) => BOOTS_SERVER.test(texts.get(f)));
+// A suite boots the server by naming src/server.js, or through
+// scripts/lib/boot-server.js (bootServer() spawns it with the caller's env).
+const BOOTS_VIA_HELPER = /from\s+["']\.\/lib\/boot-server\.js["']/;
+const booting = files.filter((f) => BOOTS_SERVER.test(texts.get(f)) || BOOTS_VIA_HELPER.test(texts.get(f)));
 const dropping = booting.filter((f) => SPAWNS.test(texts.get(f)) && /\benv\s*:/.test(texts.get(f)) && !PASSES_ENV.test(texts.get(f)) && !NO_SERVER_CHILD.has(f));
-ok(booting.length > 200, `read ${booting.length} suites that name src/server.js`);
+ok(booting.length > 200, `read ${booting.length} suites that boot src/server.js (by name or through scripts/lib/boot-server.js)`);
+ok(BOOTS_VIA_HELPER.test('import { bootServer } from "./lib/boot-server.js";'), "control: a boot through the helper is counted");
 ok(dropping.length === 0, `no suite that boots src/server.js builds a child environment without the caller's${dropping.length ? `:\n  ${dropping.join("\n  ")}` : ""}`);
 ok(BOOTS_SERVER.test('spawn(process.execPath, [join(ROOT, "src", "server.js")])') && !PASSES_ENV.test("env: { PATH: process.env.PATH }"), "control: a boot with a bare environment would be seen");
 
