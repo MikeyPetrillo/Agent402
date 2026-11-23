@@ -96,7 +96,7 @@ jobs:
           node-version: "22"
       - name: Install the x402 client
         if: needs.plan.outputs.slugs != '' && github.ref == 'refs/heads/main'
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Buy the MCP tool listings
         id: buy
         if: needs.plan.outputs.slugs != '' && github.ref == 'refs/heads/main'

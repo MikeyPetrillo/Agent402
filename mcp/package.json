@@ -85,10 +85,10 @@
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
     "@solana/kit": "8.4.0",
-    "@x402/core": "2.30.0",
-    "@x402/evm": "2.30.0",
-    "@x402/fetch": "2.30.0",
-    "@x402/svm": "2.30.0",
+    "@x402/core": "2.32.0",
+    "@x402/evm": "2.32.0",
+    "@x402/fetch": "2.32.0",
+    "@x402/svm": "2.32.0",
     "viem": "2.57.16"
   },
   "overrides": {

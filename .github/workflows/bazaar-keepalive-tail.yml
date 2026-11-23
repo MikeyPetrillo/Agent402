@@ -62,7 +62,7 @@ jobs:
         run: node scripts/keepalive-plan.js tail
       - name: Install the x402 client
         if: steps.plan.outputs.slugs != ''
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Refresh settlements
         if: steps.plan.outputs.slugs != ''
         env:
