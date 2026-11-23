@@ -14,13 +14,14 @@ const tag = (p) => `${p}-${randomBytes(4).toString("hex")}`;
 
 /** A complete table with random values. */
 export function makeGuardsTable() {
-  const minute = 60_000;
+  const minute = 60_000, hour = 60 * minute;
+  const buyerPerHour = n(1, 30), sourcePerHour = n(2, 30), sendsPerEmail = n(60, 300);
   return {
-    purchase: { buyerPerHour: n(2, 4), buyerPerDay: n(5, 8), sourcePerHour: n(2, 4), sourcePerDay: n(5, 8), failedMax: n(2, 4), failedWindowMs: n(30, 90) * minute, failedHoldMs: n(3, 9) * 60 * minute },
+    purchase: { buyerPerHour, buyerPerDay: buyerPerHour + n(1, 60), sourcePerHour, sourcePerDay: sourcePerHour + n(1, 60), failedMax: n(1, 30), failedWindowMs: n(1, 600) * minute, failedHoldMs: n(1, 72) * hour },
     flagged: { outcomeTypes: [tag("type"), tag("type")], riskLevels: [tag("risk")] },
-    efw: { warningRefundDayMaxUsd: n(20, 80) },
-    badKey: { failedMax: n(5, 25), windowMs: n(5, 20) * minute },
-    mcpOAuth: { emailCodeTries: n(3, 5), sendsPerEmail: n(30, 40), sendsPerIp: n(40, 60), failsPerEmail: n(4, 7), lockoutMs: n(30, 90) * minute, tokenPerIp: n(25, 40), authorizePerIp: n(40, 60), registerPerIp: n(6, 10), windowMs: n(30, 90) * minute, badTokenMax: n(5, 10), pendingMax: n(200, 400), documentMaxBytes: n(4, 8) * 1024 * 1024, pendingPerAddress: n(3, 8), pendingPerClient: n(10, 20), sendsGlobalPerHour: n(500, 2000), sendsPerEmailDay: n(50, 90), unusedClientIdleMs: n(2, 6) * 60 * minute },
+    efw: { warningRefundDayMaxUsd: n(15, 500) },
+    badKey: { failedMax: n(2, 60), windowMs: n(1, 60) * minute },
+    mcpOAuth: { emailCodeTries: n(2, 20), sendsPerEmail, sendsPerIp: sendsPerEmail + n(1, 300), failsPerEmail: n(2, 30), lockoutMs: n(1, 600) * minute, tokenPerIp: n(25, 300), authorizePerIp: n(40, 400), registerPerIp: n(4, 60), windowMs: n(1, 600) * minute, badTokenMax: n(3, 100), pendingMax: n(200, 4000), documentMaxBytes: n(2, 64) * 1024 * 1024, pendingPerAddress: n(2, 30), pendingPerClient: n(10, 200), sendsGlobalPerHour: n(2000, 20000), sendsPerEmailDay: sendsPerEmail + n(1, 600), unusedClientIdleMs: n(1, 48) * hour },
   };
 }
 

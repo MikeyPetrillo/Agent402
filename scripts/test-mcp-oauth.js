@@ -39,6 +39,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootPaidServer } from "./lib/paid-boot.js";
 import { guardsTable, useGuardsTable } from "./lib/credits-guards-table.js";
+import "./lib/credits-loose-checks.js"; // wide purchase checks: this suite tests the sign-in, not them
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -246,11 +247,14 @@ const signedIn = (html) => /name="keyId"|No open balance/.test(html);
     const keep = open.pop();
     const wrong = (s, i) => { const c = String((Number(s.code) + 1 + i) % 1_000_000).padStart(6, "0"); return c; };
     let compared = 0, refused = 0, other = 0;
-    await Promise.all(open.flatMap((s) => Array.from({ length: L.emailCodeTries }, async (_, i) => {
+    // Every guess in flight at once, up to a pool of concurrent connections.
+    const jobs = open.flatMap((s) => Array.from({ length: L.emailCodeTries }, (_, i) => async () => {
       const r = await h.post(s, { action: "code", code: wrong(s, i) });
       const t = await r.text();
       if (r.status === 429) refused++; else if (/did not match|no longer works/.test(t)) compared++; else other++;
-    })));
+    }));
+    const POOL = 48;
+    await Promise.all(Array.from({ length: Math.min(POOL, jobs.length) }, async () => { while (jobs.length) await jobs.shift()(); }));
     ok(compared <= L.failsPerEmail && refused > 0, `parallel wrong codes: at most the bound are compared (${compared} compared, ${refused} refused, ${other} other; the bound is the table's)`);
     const right = await h.post(keep, { action: "code", code: keep.code });
     ok(right.status === 429 && !signedIn(await right.text()), `after the lockout the right code is refused too (${right.status})`);
