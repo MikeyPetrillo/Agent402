@@ -87,9 +87,10 @@ const NETWORK = new Set([
   "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/domain-availability", "/api/robots-check", "/api/sitemap",
   "/api/email-validate", "/api/ip-info", "/api/search", "/api/search-lite", "/api/search-news", "/api/search-images", "/api/search-videos", "/api/search-suggest", "/api/answer", "/api/multi-search",
   "/api/llm-context",  // llm-context-kit.js (Brave grounding context - live egress, skipped by BRAVE_ROUTES)
-  // Web-content kit: archive.org (archive-snapshot), caller feed URLs
-  // (feed-parse), caller redirect chains (unshorten-url) — all live egress.
-  "/api/archive-snapshot", "/api/feed-parse", "/api/unshorten-url",
+  // Web-content kit: caller feed URLs (feed-parse) and caller redirect chains
+  // (unshorten-url), live egress. archive-snapshot builds its link here and is
+  // held strictly.
+  "/api/feed-parse", "/api/unshorten-url",
   // a2a-card-fetch: its example names the static sample card on production;
   // the CI sweeps' server answers it from itself (own-examples-preload.js),
   // a local boot without that preload still fetches production - lenient.

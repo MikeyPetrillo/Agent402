@@ -350,9 +350,11 @@ export const WALLET_ONLY_SLUGS = new Set([
   // (github-repo — shared 60/hr per-IP keyless quota PoW must not farm), and
   // arbitrary caller sites (favicon-grab). All egress → wallet-only.
   "lei-lookup", "wikidata-entity", "github-repo", "favicon-grab",
-  // Web-content kit: archive.org availability API (archive-snapshot), arbitrary
-  // caller feed URLs (feed-parse), and redirect-chain following against
-  // arbitrary caller URLs (unshorten-url). All egress → wallet-only.
+  // Web-content kit: arbitrary caller feed URLs (feed-parse) and
+  // redirect-chain following against arbitrary caller URLs (unshorten-url),
+  // both egress. archive-snapshot builds its Wayback Machine link here with no
+  // network call; it stays wallet-only by policy at its listed price
+  // (WALLET_ONLY_POLICY_REASON below).
   // (search-videos rides with the other Brave routes above.)
   "archive-snapshot", "feed-parse", "unshorten-url",
   // Price-feed-kit: a public upstream whose keyless rate limit is shared per-IP. PoW would let one client exhaust the
@@ -537,6 +539,7 @@ export const WALLET_ONLY_POLICY_REASON = new Map([
   ["sql-guard", "is pure computation, but it can mint an execution certificate signed with this server's key"],
   ["action-gate", "is pure computation, but its verdict is what a caller relies on before a real action"],
   ["onchain-sql-schema", "is served from a schema this service keeps, and is sold with the onchain-sql reads it documents"],
+  ["archive-snapshot", "builds its Wayback Machine link here with no network call, and is sold at its listed price"],
 ]);
 
 /** A tool is compute-payable (PoW-eligible) only when src/free-tier.js lists it
