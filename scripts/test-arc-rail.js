@@ -979,7 +979,8 @@ globalThis.fetch = function (input, init) {
   const u = typeof input === "string" ? input : input instanceof URL ? input.href : input && input.url;
   if (STUB && typeof u === "string" && u.startsWith(BASE)) return real(STUB + u.slice(BASE.length), init);
   // The Arc RPC (contract-wallet checks) goes to the same stub, counted there.
-  if (STUB && typeof u === "string" && u.startsWith("https://rpc.mainnet.arc.io")) return real(STUB + "/rpc", init);
+  let host = ""; try { host = typeof u === "string" ? new URL(u).hostname : ""; } catch { /* not a URL */ }
+  if (STUB && host === "rpc.mainnet.arc.io") return real(STUB + "/rpc", init);
   return real(input, init);
 };
 `);

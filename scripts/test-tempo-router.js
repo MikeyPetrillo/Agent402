@@ -243,7 +243,8 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
   const outside = [];
   globalThis.fetch = async (u, init) => {
     const href = String(u?.url || u);
-    if (!href.startsWith("http://127.0.0.1")) { outside.push(href); throw new Error("offline test: no chain RPC"); }
+    let host = ""; try { host = new URL(href).hostname; } catch { /* not a URL */ }
+    if (host !== "127.0.0.1") { outside.push(href); throw new Error("offline test: no chain RPC"); }
     return realFetch(u, init);
   };
   try {

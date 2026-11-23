@@ -36,7 +36,8 @@ https.request = function (opts, ...rest) {
 const realFetch = globalThis.fetch;
 globalThis.fetch = function (input, init) {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input?.url;
-  if (typeof url === "string" && url.includes("stripe.com")) return Promise.reject(new Error("refused by the test preload"));
+  let host = ""; try { host = typeof url === "string" ? new URL(url).hostname : ""; } catch { /* not a URL */ }
+  if (host === "stripe.com" || host.endsWith(".stripe.com")) return Promise.reject(new Error("refused by the test preload"));
   return realFetch.call(this, input, init);
 };
 `);

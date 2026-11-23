@@ -12,6 +12,7 @@ import { Challenge, Credential } from "mppx";
 import { TxEnvelopeTempo } from "ox/tempo";
 import { Secp256k1, Address } from "ox";
 import { encodeFunctionData, erc20Abi } from "viem";
+import { isHost } from "./lib/url-host.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -42,12 +43,12 @@ const json = (status, body) => new Response(JSON.stringify(body), { status, head
 globalThis.fetch = async (input) => {
   const url = String(input?.url || input);
   calls.push(url);
-  if (url.startsWith("http://fixture.local/")) return new Response(listBody, { status: listStatus, headers: { "content-type": "application/xml" } });
+  if (isHost(url, "fixture.local")) return new Response(listBody, { status: listStatus, headers: { "content-type": "application/xml" } });
   if (/\/v1\/transfers\?/.test(url)) { const r = feed(new URL(url)); if (r === "throw") throw new TypeError("fetch failed"); return json(r.status, r.body); }
   if (/api\.tempo\.xyz\/v1\/mpp/.test(url)) return json(200, { success: false, error: { code: "invalid_request", message: "stub" } });
   return json(200, { jsonrpc: "2.0", id: 1, error: { code: -32000, message: "stub rpc" } });
 };
-const isRpc = (u) => !u.startsWith("http://fixture.local/") && !/\/v1\/transfers\?/.test(u) && !/api\.tempo\.xyz\/v1\/mpp/.test(u);
+const isRpc = (u) => !isHost(u, "fixture.local") && !/\/v1\/transfers\?/.test(u) && !/api\.tempo\.xyz\/v1\/mpp/.test(u);
 const isFeed = (u) => /\/v1\/transfers\?/.test(u);
 
 const S = await import("../src/sanctions-screen.js");
@@ -284,7 +285,7 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
 
   const K = await import("../src/tools/sanctions-kit.js");
   const L = await import("../src/ofac-sdn.js");
-  const listCalls = () => calls.filter((u) => u.startsWith("http://fixture.local/")).length;
+  const listCalls = () => calls.filter((u) => isHost(u, "fixture.local")).length;
   S.__resetSanctionsScreenForTests();
   L.__resetSdnListForTests();
   listBody = BOTH;

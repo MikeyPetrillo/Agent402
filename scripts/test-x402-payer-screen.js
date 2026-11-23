@@ -199,7 +199,8 @@ const STUB = ${JSON.stringify(`http://127.0.0.1:${UP_PORT}`)};
 const real = globalThis.fetch;
 globalThis.fetch = function (input, init) {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input?.url;
-  if (typeof url === "string" && url.startsWith("https://api.openai.com/")) return real.call(this, STUB + url.slice("https://api.openai.com".length), init);
+  let p = null; try { p = typeof url === "string" ? new URL(url) : null; } catch { /* not a URL */ }
+  if (p && p.protocol === "https:" && p.hostname === "api.openai.com") return real.call(this, STUB + p.pathname + p.search, init);
   return real.call(this, input, init);
 };
 `);

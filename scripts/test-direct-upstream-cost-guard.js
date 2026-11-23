@@ -30,6 +30,7 @@ import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { getFreePort } from "./lib/free-port.js";
+import { urlMatches } from "./lib/url-host.js";
 
 delete process.env.UPSTREAM_COSTS_JSON;
 delete process.env.UPSTREAM_COSTS_FILE;
@@ -105,8 +106,9 @@ const fetchLog = [];
 globalThis.fetch = async (url, init) => {
   const u = String(url);
   fetchLog.push(u);
-  if (u.startsWith("https://openrouter.ai/api/v1/chat/completions")) return realFetch(`http://127.0.0.1:${OR_PORT}/api/v1/chat/completions`, init);
-  if (u.startsWith(`http://127.0.0.1:${DIRECT_PORT}/`) || u.startsWith(`http://127.0.0.1:${OR_PORT}/`)) return realFetch(url, init);
+  let origin = ""; try { origin = new URL(u).origin; } catch { /* not a URL */ }
+  if (origin === "https://openrouter.ai" && urlMatches(u, "openrouter.ai", "/api/v1/chat/completions")) return realFetch(`http://127.0.0.1:${OR_PORT}/api/v1/chat/completions`, init);
+  if (origin === `http://127.0.0.1:${DIRECT_PORT}` || origin === `http://127.0.0.1:${OR_PORT}`) return realFetch(url, init);
   throw new Error(`test: unexpected outbound fetch to ${u.slice(0, 60)}`);
 };
 
