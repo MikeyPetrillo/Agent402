@@ -4,7 +4,9 @@
 //
 // The snapshot (scripts/published-slugs.json) holds two lists:
 //   tools: the first path segment after /api/ of every tool route we served
-//          (the segment retiredEntryFor matches on; usually the slug)
+//          (the segment retiredEntryFor matches on; usually the slug). A
+//          retired route outside /api (an entry with its own `route`) is
+//          not one.
 //   packs: every skill-pack slug served at /api/skill/<slug>
 // The retired pairwise converters are excluded: server.js answers those with
 // their own 410 (RETIRED_CONVERT_API_RE).
@@ -131,7 +133,7 @@ export function accountFor({ snapshot, live, gated, retiredTools = RETIRED_TOOLS
   const missingFromSnapshot = [
     ...[...live.tools, ...gated.tools].filter((t) => !snapshot.tools.has(t)).map((t) => `tool ${t}`),
     ...[...live.packs, ...(gated.packs || [])].filter((p) => !snapshot.packs.has(p)).map((p) => `pack ${p}`),
-    ...Object.keys(retiredTools).filter((t) => !snapshot.tools.has(t)).map((t) => `retired tool ${t}`),
+    ...Object.keys(retiredTools).filter((t) => !retiredTools[t].route && !snapshot.tools.has(t)).map((t) => `retired tool ${t}`),
     ...Object.keys(retiredPacks).filter((p) => !snapshot.packs.has(p)).map((p) => `retired pack ${p}`),
   ];
   return { unaccounted: [...new Set(unaccounted)].sort(), missingFromSnapshot: [...new Set(missingFromSnapshot)].sort() };
@@ -146,7 +148,7 @@ async function main() {
     let prior = { tools: new Set(), packs: new Set() };
     try { prior = loadSnapshot(); } catch { /* first write */ }
     const hist = withHistory ? historySegments() : { tools: new Set(), packs: new Set() };
-    const tools = new Set([...prior.tools, ...live.tools, ...gated.tools, ...hist.tools, ...Object.keys(RETIRED_TOOLS)]);
+    const tools = new Set([...prior.tools, ...live.tools, ...gated.tools, ...hist.tools, ...Object.keys(RETIRED_TOOLS).filter((slug) => !RETIRED_TOOLS[slug].route)]);
     const packs = new Set([...prior.packs, ...live.packs, ...gated.packs, ...hist.packs, ...Object.keys(RETIRED_PACKS)]);
     const out = {
       _note: "Every /api tool route segment and skill pack ever published. Regenerate with `node scripts/published-slugs.js --write`; entries are never removed. See the script header.",

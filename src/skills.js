@@ -35,8 +35,8 @@ export const PACK_PRICE_TABLE = {
   "market-brief": 0.005, // 3 tools, parts $0.005
   "financial-analysis": 0.019, // 3 tools, parts $0.021
   "financial-research": 0.018, // 6 tools, parts $0.02
-  "macro-economics": 0.028, // 7 tools, parts $0.031
-  "macro-dashboard": 0.046, // 14 tools, parts $0.051
+  "macro-economics": 0.024, // 6 tools, parts $0.026
+  "macro-dashboard": 0.042, // 13 tools, parts $0.046
   "dns-network-ops": 0.006, // 6 tools, parts $0.006
   "crypto-research": 0.031, // 7 tools, parts $0.034
   "content-extraction": 0.017, // 6 tools, parts $0.018
@@ -52,7 +52,7 @@ export const PACK_PRICE_TABLE = {
   "location-intel": 0.009, // 5 tools, parts $0.009
   "user-onboarding": 0.008, // 7 tools, parts $0.008
   "trip-planner": 0.007, // 6 tools, parts $0.007
-  "macro-context": 0.033, // 8 tools, parts $0.036
+  "macro-context": 0.028, // 7 tools, parts $0.031
   "regulatory-watch": 0.021, // 5 tools, parts $0.023
   "search-and-cite": 0.093, // 5 tools, parts $0.103
   "media-pipeline": 0.028, // 6 tools, parts $0.031
@@ -629,7 +629,7 @@ const SKILL_PACKS_ALL = [
     slug: "trend-analysis",
     title: "Trend analysis",
     tagline:
-      "Take any numeric time series - a stock's daily close, a FRED macro indicator, a treasury yield history - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+      "Take any numeric time series - a stock's daily close, an economic indicator, a treasury yield history - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase:
       "You have a question like \"is AAPL trending up over the last year - and what does the next quarter look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
     promptArgs: [
@@ -2686,7 +2686,7 @@ const WITHOUT_STOCK_COPY = {
     claudePrompt: "Check insider activity for AAPL using Agent402's insider-alert skill pack. Get (1) 30-day insider trades, (2) last 3 SEC filings. Flag any cluster buying or selling and correlate with recent filings.",
   },
   "trend-analysis": {
-    tagline: "Take any numeric time series - a FRED macro indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+    tagline: "Take any numeric time series - an economic indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase: "You have a question like \"is unemployment trending up - and what does the next year look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data read (macro) is paid.",
     workflow: [
       "Fetch the series: call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",

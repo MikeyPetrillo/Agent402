@@ -314,7 +314,7 @@ t node scripts/test-stt-language.js
 t node scripts/test-rwa-asset-own-row.js
 # filing-watch form filter reads the full recent list and older filing files, bounded reads (offline)
 t node scripts/test-filing-watch-older-files.js
-# cpi-yoy lists unpublished months; world-bank default end year is last year; release calendar uses the Chicago date (offline)
+# cpi-yoy lists unpublished months; world-bank default end year is last year (offline)
 t node scripts/test-macro-dates.js
 # flight-search refuses a date as past only before today's date in UTC-12 (offline)
 t node scripts/test-flights-local-date.js

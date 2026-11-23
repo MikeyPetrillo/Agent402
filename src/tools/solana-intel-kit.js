@@ -1327,7 +1327,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      `USD price for up to ${SOL_PRICE_MAX_MINTS} Solana token mints in one call, read from the deepest DEX pair that trades each mint: price, 24h change, liquidity across the pairs read, and the mint's decimals with the slot they were read at on chain. A mint no pair prices comes back listed under missing rather than erroring the batch. Pass mint addresses, not tickers (resolve tickers with sol-token-search).`,
+      `USD prices for up to ${SOL_PRICE_MAX_MINTS} Solana token mints in one batch call: each mint's price and 24h change from the deepest DEX market that trades it, its liquidity, and its decimals with the slot they were read at on chain. A mint nothing prices comes back listed under missing rather than erroring the batch. Pass mint addresses, not tickers (resolve tickers with sol-token-search).`,
     tags: ["solana", "price", "token", "spl", "batch"],
     discovery: {
       bodyType: "json",
