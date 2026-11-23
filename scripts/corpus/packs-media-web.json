@@ -53,14 +53,16 @@
     },
     {
       "slug": "archive-snapshot",
-      "name": "a long-archived site",
+      "name": "a link to the capture closest to a year",
       "input": {
         "url": "https://www.wikipedia.org",
         "timestamp": "2015"
       },
       "expect": {
         "equals": {
-          "available": true
+          "available": null,
+          "checked": false,
+          "snapshot.url": "https://web.archive.org/web/2015/https://www.wikipedia.org"
         },
         "populated": [
           "snapshot"
