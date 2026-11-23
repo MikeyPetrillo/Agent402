@@ -57,7 +57,7 @@ function takeUrl(raw) {
 // Machine serves the capture closest to the timestamp in it, or the most
 // recent one for "2" (any capture from the year 2000 on is closer than none).
 // ============================================================================
-export const ARCHIVE_LINK_NOTE = "A link, not a lookup: the archive was not asked whether it holds a capture, so available is null and checked is false. Opening snapshot.url, the Wayback Machine serves the capture closest to the timestamp in it (the most recent when none was asked), or its own page saying the URL was never archived.";
+export const ARCHIVE_LINK_NOTE = "A link, not a lookup: the archive was not asked whether it holds a capture.";
 export function waybackLink(url, timestamp) {
   return `https://web.archive.org/web/${timestamp || "2"}/${url}`;
 }

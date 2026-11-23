@@ -2184,7 +2184,7 @@ let rdapBootstrap = { at: 0, map: null };
 // to expiry (from its expiration date), DNSSEC and the transfer lock (from its
 // flags). The record's own fields keep their keys and read null, so a reader
 // of the earlier shape finds every key it read.
-export const WHOIS_NOTE = "Computed from the registry's RDAP record at checkedAt: ageDays from its registration date, daysToExpiry from its expiration date, dnssec and transferLocked from its flags. The record's own fields (registrar, created, updated, expires, status, nameservers) are not copied and read null; a domain's nameservers are published in its own NS records in DNS.";
+export const WHOIS_NOTE = "Computed from the registry's RDAP record at checkedAt; the record's own fields are not copied and read null.";
 const DAY_MS = 86_400_000;
 /** The whois answer for a registered domain's RDAP object `data`, read at
  *  `nowMs`. Dates are inputs to the day counts only. */
