@@ -422,6 +422,7 @@
     "readability-score",
     "receipts",
     "redact",
+    "redact-chat",
     "regex",
     "relative-time",
     "render",
