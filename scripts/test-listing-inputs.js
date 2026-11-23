@@ -10,12 +10,11 @@
 //
 //   node scripts/test-listing-inputs.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { parseInputs } from "./payai-listing-pass.js";
 import { X_DATA_TOOLS } from "../src/tools/x-data-kit.js";
 import { EXTERNAL_EXAMPLE_INPUT } from "../src/tools/route-execute.js";
@@ -37,23 +36,6 @@ const REQUIRED_ROUTES = [
   "POST /api/route/execute-max", "POST /api/route/execute-pro",
 ];
 
-async function bootServer() {
-  const port = await getFreePort();
-  const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: path.join(HERE, ".."),
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), RUGCHECK_TOOLS: "on", X_BEARER_TOKEN: "", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let log = ""; child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
-  const base = `http://127.0.0.1:${port}`; const t0 = Date.now();
-  while (Date.now() - t0 < 120_000) {
-    try { const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) }); if (r.ok) return { base, child }; } catch { /* booting */ }
-    if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}\n${log.slice(-2000)}`);
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  child.kill("SIGKILL"); throw new Error(`no /health in 120s\n${log.slice(-2000)}`);
-}
-
 const raw = JSON.parse(readFileSync(path.join(HERE, "listing-inputs.json"), "utf8"));
 const inputs = parseInputs(raw, "listing-inputs.json");
 ok(inputs.size === Object.keys(raw).length, `the file parses as an inputs map (${inputs.size} routes)`);
@@ -65,7 +47,11 @@ const text = readFileSync(path.join(HERE, "listing-inputs.json"), "utf8");
 ok(!/\u2014/.test(text), "no em dash in the inputs");
 ok(!/(sk-|Bearer |0x[0-9a-fA-F]{64}|PRIVATE|SECRET|api[_-]?key\s*[:=])/.test(text), "no key, token or secret-shaped string in the inputs");
 
-const { base, child } = await bootServer();
+const srv = await bootServer({
+  stores: false,
+  env: { FREE_MODE: "true", RUGCHECK_TOOLS: "on", X_BEARER_TOKEN: "", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
+});
+const base = srv.url;
 try {
   const [openapi, pricing] = await Promise.all(["/openapi.json", "/api/pricing"].map(async (p) => (await fetch(`${base}${p}`, { signal: AbortSignal.timeout(60_000) })).json()));
   const kitSchema = new Map(X_DATA_TOOLS.map((t) => [t.route, { schema: t.discovery?.inputSchema, price: t.price }]));
@@ -97,7 +83,7 @@ try {
   ok(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(raw["POST /v1/token-brief"].mint), "the token brief names a base58 Solana mint");
   ok(/^0x[0-9a-fA-F]{40}$/.test(raw["POST /v1/token-risk"].address) && /^0x[0-9a-fA-F]{40}$/.test(raw["POST /v1/token-risk/pro"].address), "the token risk inputs name a 0x token address");
 } finally {
-  child.kill("SIGTERM");
+  await srv.stop();
 }
 
 // The validator itself catches a typo.
