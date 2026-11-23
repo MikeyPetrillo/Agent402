@@ -599,6 +599,14 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   word `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads
   attention on the conditions `.claude/rules/payments.md` lists; the status Worker and
   `heartbeat.yml` page on it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
+- **Referral split legs:** each proven `/ref` sale records what its receipt showed
+  (`src/referral-legs.js`, fed by the gate's `bookSale` from `proveReceipt`'s `split`): the routed
+  event's gross, its four leg words, the merchant amount and every transfer out of the split
+  contract with its recipient address. With a state database one `records` row per payment
+  (collection `referral-legs`, id the payment's replay key); without one the last 2000 in memory.
+  Operator only: `splitLegs` on `/__operator/referral.json` (counts and the latest 20) and
+  `/__operator/referral-legs.json?year=YYYY` (per recipient address: units and transfers in that
+  UTC year). A failed write is counted, never thrown (`scripts/test-referral-legs.js`).
 - **Referral gate, standing facts (measured 2026-11-14, stubs for the facilitator and the chain):**
   one paid `/ref` call makes 1 `/verify`, 1 `/settle`, 1 receipt read, 4 book writes, and writes and
   removes one answer file. The book is ONE document rewritten whole by each write, so a write costs

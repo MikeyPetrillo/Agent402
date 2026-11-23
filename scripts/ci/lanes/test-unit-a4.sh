@@ -143,6 +143,8 @@ t node scripts/test-pending-settle.js
 t node scripts/test-own-relayer.js
 # Referral copies of paid routes (/ref/<slug>): the 402 shape, amount parity with the direct route, one run per authorization, handler-first settlement on a signed facilitator request, net booking (local stub facilitator, keys made in the test).
 t node scripts/test-referral-gate.js
+# /ref split legs per proven sale: stored shape, yearly totals per recipient, one row per payment (offline)
+t node scripts/test-referral-legs.js
 # The AWS Marketplace front door (/aws/<slug>): one aws:base offer, a signed quote that an altered price breaks, one sale per payment id, replayed or expired tokens refused unbooked, off answers as an unknown path, direct 402s byte-identical (stub payment-service keys, keys made in the test).
 t node scripts/test-aws-marketplace-gate.js
 # The referral book's sweep: refused share and spread, dropped records read in turn and given up only on answered reads, charged reads inside the chain budget, one sweep at a time, a failed batch written again change by change (offline).

@@ -1071,6 +1071,7 @@ import { getSharedRedisClient } from "./shared-limit.js";
 import { boundedRedisClient } from "./bounded-redis.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
+import { createReferralLegs } from "./referral-legs.js";
 import { createReferralAnswerStore, ANSWER_DIR_NAME as REFERRAL_ANSWER_DIR_NAME } from "./referral-answers.js";
 import { referralReconciliation, reconcileDays } from "./referral-reconcile.js";
 import { join as joinPath, dirname as dirnamePath } from "node:path";
@@ -11847,9 +11848,12 @@ function recordReferralSale(row) {
 }
 let REFERRAL_GATE = null;
 let REFERRAL_BOOK = null;
+// The split legs of each proven /ref sale (src/referral-legs.js), operator only.
+let REFERRAL_LEGS = null;
 if (REFERRAL_ROUTES) {
   try {
     REFERRAL_BOOK = createReferralBook();
+    REFERRAL_LEGS = createReferralLegs();
     // The owed answers, a file each on this process's disk, apart from the
     // book's index and never in the state database (the nightly backup copies
     // that; the directory's name is one the file backup leaves out).
@@ -11902,6 +11906,7 @@ if (REFERRAL_ROUTES) {
       runAsCaller: runAsCallerOf,
       sendToolError,
       recordSale: recordReferralSale,
+      recordSplitLegs: (row) => REFERRAL_LEGS?.record(row),
       saleBooked: (tx, payer, slug) => privateRailSaleCount(tx, "referral", payer, slug),
       isSynthetic: isSyntheticRequest,
       salePathOf,
@@ -12017,8 +12022,19 @@ app.get("/__operator/aws.json", (req, res) => {
 app.get("/__operator/referral.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store").json(REFERRAL_GATE
-    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), openTotal: REFERRAL_BOOK.list().length, openByState: REFERRAL_BOOK.counts(), bookWrites: REFERRAL_BOOK.writeStats(), droppedRefused: (({ count, evictedEarly, unresolved }) => ({ count, evictedEarly, unresolved }))(REFERRAL_BOOK.droppedRefused()), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50), shortNet: REFERRAL_GATE.shortSales() }
+    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), openTotal: REFERRAL_BOOK.list().length, openByState: REFERRAL_BOOK.counts(), bookWrites: REFERRAL_BOOK.writeStats(), droppedRefused: (({ count, evictedEarly, unresolved }) => ({ count, evictedEarly, unresolved }))(REFERRAL_BOOK.droppedRefused()), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50), shortNet: REFERRAL_GATE.shortSales(), splitLegs: REFERRAL_LEGS ? REFERRAL_LEGS.view() : null }
     : { enabled: false });
+});
+// Per recipient address, the transfers the split contract made for our /ref
+// sales in one UTC year (?year=, default this year), from the split legs each
+// proven sale recorded (src/referral-legs.js). Operator only.
+app.get("/__operator/referral-legs.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store");
+  if (!REFERRAL_LEGS) return res.json({ enabled: false });
+  const thisYear = new Date().getUTCFullYear();
+  const y = /^\d{4}$/.test(String(req.query?.year || "")) ? Number(req.query.year) : thisYear;
+  try { res.json({ enabled: true, ...(await REFERRAL_LEGS.totals(y)), recorded: REFERRAL_LEGS.view() }); } catch (e) { res.status(503).json({ error: "the split records could not be read", detail: String(e?.message || e).slice(0, 160) }); }
 });
 // Per tool over one window (?days=, default 30, at most 90): the answers the
 // referral copy served, the sales booked for it in the sales ledger (gross and
