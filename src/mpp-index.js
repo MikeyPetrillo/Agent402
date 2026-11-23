@@ -37,6 +37,7 @@ import { isSlowOrigin } from "./crawl-cadence.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { fetchLlmsExamples, attachInputExamples } from "./mpp-input-examples.js";
+import { sellerText, firstSellerText } from "./seller-text.js";
 
 export { validateOriginInput };
 
@@ -215,7 +216,7 @@ async function discoverMppRegistryUnleased() {
     const services = Array.isArray(parsed?.services) ? parsed.services : [];
     let added = 0, skippedPathScoped = 0;
     for (const svc of services) {
-      const raw = String(svc?.serviceUrl || svc?.url || "").trim();
+      const raw = firstSellerText(svc?.serviceUrl, svc?.url);
       const v = validateOriginInput(raw);
       if (v.error) { skippedPathScoped++; continue; }
       registryByOrigin.set(v.origin, svc);
@@ -274,7 +275,7 @@ export function parseMppScanList(body) {
   const list = Array.isArray(r?.origins) ? r.origins : [];
   const rows = [];
   for (const o of list) {
-    const v = validateOriginInput(String(o?.url || ""));
+    const v = validateOriginInput(sellerText(o?.url));
     if (v.error) continue;
     rows.push({
       origin: v.origin,
@@ -473,8 +474,9 @@ function noteProbeOutcome(origin, ok, now = Date.now()) {
 export function pickProbeTarget(origin, svc, hint = submittedHints.get(origin)) {
   const endpoints = Array.isArray(svc?.endpoints) ? svc.endpoints : [];
   const priced = endpoints.filter((e) => e && typeof e.path === "string" && e.path.startsWith("/"));
-  const pick = priced.find((e) => String(e.method || "GET").toUpperCase() === "GET") || priced[0];
-  if (pick) return { method: String(pick.method || "GET").toUpperCase(), url: `${origin}${pick.path}` };
+  const verbOf = (e) => (firstSellerText(e.method) || "GET").toUpperCase();
+  const pick = priced.find((e) => verbOf(e) === "GET") || priced[0];
+  if (pick) return { method: verbOf(pick), url: `${origin}${pick.path}` };
   // No registry endpoints: the submitter's own hint (validated at submission),
   // else the bare origin root (the caller may first try the seller's own MPP
   // discovery document - see resolveProbeTarget).

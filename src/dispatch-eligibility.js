@@ -26,6 +26,7 @@ import { baseUnprovenAllowanceUsd, baseUnprovenSellerDailyUsd, baseUnprovenLaneD
 import { meetsRouterGate } from "./settlement-proof.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail } from "./evm-usdc-domain.js";
 import { routeExcludedCategory } from "./route-category.js";
+import { malformedRoute } from "./seller-text.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 import { sellerFundingEnabled } from "./leaderboard.js";
 import { EVM_BUYER_CHAINS, isEvmBuyerChain } from "./evm-buyer-chains.js";
@@ -60,6 +61,7 @@ export const DISPATCH_REASONS = Object.freeze({
   settlement_self_funded: "on Base the router counts only settlement the seller did not fund itself: a payment made with USDC that the wallet it pays had sent the payer earlier is the seller's own money coming home and does not count, and without those payments this seller's history is below the floor; payments made with the payers' own money still count",
   settlement_checked_at_pay_time: "on this chain proven-ness is read from the chain at pay time (recent inbound USDC to the seller's own payTo); a thin history may still be tried under the small unproven allowance",
   price_unknown: "no seller price is known for this route, and the router never spends against an unknown price",
+  route_malformed: "the route the index holds is not a usable path (the listing gave a value that is not text where the route belongs), so the router never spends against it",
   url_template: "the route is an unsubstituted path template; the router never spends against it",
   gateway_rail_unsupported: "the seller's accept on this chain is signed under Circle Gateway's EIP-712 domain (extra.name \"GatewayWalletBatched\", extra.verifyingContract the GatewayWallet), not under the token's own, and settles through a batch facilitator - a deliberate, working rail that this router's stock x402 signer cannot produce a credential for; nothing for the seller to fix, and it becomes eligible the day the router speaks the rail",
   payment_method_unsupported: "the seller's accept on this chain asks the buyer to send a transfer and prove it afterwards (extra.paymentMethod such as \"direct-transfer\"), which no stock x402 buyer does - this router signs an authorization for the facilitator to settle - so no buyer of ours can pay the route",
@@ -96,7 +98,7 @@ export function unprovenLaneAtLivePayTo({ chain, row, livePayTo, minSettled, min
   });
   return v.chains?.[chain] || { eligible: false, reason: v.reason };
 }
-const REASON_PRECEDENCE = ["category_excluded", "crawl_failed", "network_unknown", "no_supported_route", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "payment_method_unsupported", "delivery_failing", "settlement_self_funded", "settlement_required"];
+const REASON_PRECEDENCE = ["category_excluded", "crawl_failed", "network_unknown", "no_supported_route", "route_malformed", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "payment_method_unsupported", "delivery_failing", "settlement_self_funded", "settlement_required"];
 // `detail` values a settlement_required verdict can carry beyond the gate's
 // own sentence. Documented in the legend under routerDispatchDetail.
 export const DISPATCH_DETAILS = Object.freeze({
@@ -281,7 +283,8 @@ export function dispatchEligibility({ routable, networks = [], settled = 0, paye
   if (!have.length) {
     return { eligible: false, reason: "no_supported_route", chains: byChain, basis };
   }
-  const rowBlock = urlTemplate ? "url_template" : (priceUsd !== undefined && !(Number(priceUsd) > 0) ? "price_unknown" : null);
+  const rowBlock = routeText && typeof routeText === "object" && "route" in routeText && malformedRoute(routeText.route) ? "route_malformed"
+    : urlTemplate ? "url_template" : (priceUsd !== undefined && !(Number(priceUsd) > 0) ? "price_unknown" : null);
   for (const c of have) {
     if (rowBlock) { byChain[c] = { eligible: false, reason: rowBlock }; continue; }
     // What happened the last time we actually paid this seller on this chain

@@ -79,6 +79,7 @@ const NEW_SELLER_VERDICTS = [
   ["usdc_domain_mismatch", "Advertise the token's own EIP-712 name in the accept's extra (\"USD Coin\" for Base USDC). Until then no stock buyer can pay you, ours included."],
   ["gateway_rail_unsupported", "Nothing to fix: your batched rail works for buyers that speak it. To be routable today as well, add a second accept on the same chain signed under the token's own EIP-712 domain."],
   ["payment_method_unsupported", "Offer the standard exact scheme, where the buyer signs a USDC authorization and the facilitator settles it. A 402 that asks the buyer to send a transfer and prove it afterwards cannot be paid by a stock x402 buyer, ours included."],
+  ["route_malformed", "Give each route as a path string, or a resource URL string or a resource object whose url is a string, so the crawler reads the path you serve."],
   ["url_template", "Serve concrete paths; the router never buys a templated path such as /items/{id}."],
   ["category_excluded", "Nothing to fix: the route stays listed, buyers can still call it directly, and your other routes are judged on their own."],
   ["settlement_required", "If the verdict also carries unprovenTier: true, there is nothing to fix: you are callable now in the unproven lane, and payments from real outside buyers move you up."],
