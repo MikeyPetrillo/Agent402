@@ -39,11 +39,6 @@ const METERED = [
   ["api.openai.com", "OPENAI_API_KEY", "OpenAI"],
   ["openrouter.ai", "OPENROUTER_API_KEY", "OpenRouter"],
   ["e2b.dev", "E2B_API_KEY", "E2B sandboxes"],
-  // The tool reads NEYNAR_API_KEY || WARPCAST_API_KEY (onchain-identity-kit.js),
-  // so checking only the first reports a BLIND SPOT on a perfectly reachable
-  // vendor - and a false blind spot makes the run exit non-zero and reads as
-  // "we could not look" when we could.
-  ["api.neynar.com", ["NEYNAR_API_KEY", "WARPCAST_API_KEY"], "Neynar"],
   ["g.alchemy.com", "ALCHEMY_API_KEY", "Alchemy RPC"],
 ];
 

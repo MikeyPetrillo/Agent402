@@ -16,7 +16,7 @@ export const MPP_FLAGSHIP = [
   { slug: "search-lite", group: "Web", why: "Web search: up to five ranked results with title, URL and snippet." },
   { slug: "extract", group: "Web", why: "Read one known URL as clean markdown, with title, byline and word count." },
   { slug: "crypto-price", group: "Crypto and markets", why: "Spot price, 24h change, volume and market cap for several coins in one call." },
-  { slug: "sol-price", group: "Crypto and markets", why: "USD price for up to 50 Solana token mints, with liquidity and the block read." },
+  { slug: "sol-price", group: "Crypto and markets", why: "USD price for up to 50 Solana token mints from the deepest DEX pair, with liquidity and the slot read on chain." },
   { slug: "perp-funding", group: "Crypto and markets", why: "Current perpetual funding rate, annualized, plus recent hourly prints." },
   { slug: "lending-rates", group: "Crypto and markets", why: "Aave v3 and Compound v3 supply and borrow rates read from the contracts, with the gap between the two per asset." },
   { slug: "kalshi-markets", group: "Crypto and markets", why: "Open prediction markets with yes/no prices, volume and resting size at the best price." },

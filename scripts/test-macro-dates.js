@@ -1,8 +1,7 @@
 // Macro tools: cpi-yoy lists a month with no published value in missingDates
 // (and a note) instead of dropping it silently; world-bank-indicator's
 // default endYear is the previous calendar year and its schema description
-// states the same value; the release calendar's window starts at today's
-// date in America/Chicago. Offline: DNS and fetch are answered locally with
+// states the same value. Offline: DNS and fetch are answered locally with
 // bodies shaped like the upstream APIs.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import dnsPromises from "node:dns/promises";
@@ -12,7 +11,7 @@ dnsPromises.lookup = async () => ({ address: "1.1.1.1", family: 4 });
 stubGuardResolver(oneV4("1.1.1.1")); // the address guard resolves with dns.Resolver
 syncBuiltinESMExports();
 process.env.FRED_API_KEY = "test-key-not-real";
-const { MACRO_TOOLS, worldBankDefaultEndYear, fredCalendarWindow } = await import("../src/tools/macro-kit.js");
+const { MACRO_TOOLS, worldBankDefaultEndYear } = await import("../src/tools/macro-kit.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -50,22 +49,6 @@ globalThis.fetch = async (url) => {
   seen.length = 0;
   await t.handler({ country: "US", indicator: "NY.GDP.MKTP.CD", startYear: 2018 });
   ok(seen.at(-1)?.searchParams.get("date") === `2018:${y}`, `with no endYear the request window ends at ${y} (got ${seen.at(-1)?.searchParams.get("date")})`);
-}
-
-// --- release calendar window in America/Chicago
-{
-  // 02:00 UTC on Oct 20 is 21:00 on Oct 19 in Chicago (CDT, UTC-5).
-  const w = fredCalendarWindow(14, Date.parse("2026-10-20T02:00:00Z"));
-  ok(w.start === "2026-10-19" && w.end === "2026-11-02", `the window starts at Chicago's date (got ${w.start}..${w.end})`);
-  const w2 = fredCalendarWindow(1, Date.parse("2026-10-20T06:00:00Z"));
-  ok(w2.start === "2026-10-20" && w2.end === "2026-10-21", "after Chicago's midnight the next day starts");
-  respond = () => ({ release_dates: [] });
-  seen.length = 0;
-  await tool("fred-release-calendar").handler({ days: 14 });
-  const u = seen.find((x) => x.pathname.endsWith("/releases/dates"));
-  const now = fredCalendarWindow(14);
-  ok(u && u.searchParams.get("realtime_start") === now.start && u.searchParams.get("realtime_end") === now.end, `the handler sends the Chicago window (${u?.searchParams.get("realtime_start")}..${u?.searchParams.get("realtime_end")})`);
-  ok(/America\/Chicago/.test(tool("fred-release-calendar").description), "the description names the zone");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

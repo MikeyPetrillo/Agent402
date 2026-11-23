@@ -812,25 +812,6 @@
    }
   },
   {
-   "slug": "farcaster-profile",
-   "name": "lookup by username",
-   "input": {
-    "username": "dwr"
-   },
-   "expect": {
-    "equals": {
-     "username": "dwr"
-    },
-    "gt": {
-     "followerCount": 1000
-    },
-    "populated": [
-     "displayName"
-    ]
-   },
-   "requires": "NEYNAR_API_KEY"
-  },
-  {
    "slug": "wallet-balances",
    "name": "vitalik on ethereum has tokens",
    "input": {

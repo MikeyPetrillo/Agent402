@@ -41,11 +41,11 @@ import { Challenge, PaymentRequest } from "mppx";
 const MAX_TOTAL_HEADER_BYTES = 16_200;
 const MIN_HEADROOM = 300;
 const PROD_WITH_INK = {
-  "v1-chat": 16_408, "fred-release-observations": 16_282, "nft-metadata": 16_235, "farcaster-by-address": 16_225,
+  "v1-chat": 16_408, "nft-metadata": 16_235,
   "sanctions-wallet": 16_211, "extract": 16_210,
 };
 const LOCAL_AT_MEASURE = {
-  "v1-chat": 8_716, "fred-release-observations": 9_011, "nft-metadata": 9_004, "farcaster-by-address": 8_978,
+  "v1-chat": 8_716, "nft-metadata": 9_004,
   "sanctions-wallet": 8_944, "extract": 8_965,
 };
 const PROD_HOST = "agent402.tools";

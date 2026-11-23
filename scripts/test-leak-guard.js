@@ -43,7 +43,6 @@ delete process.env.BRAVE_SUGGEST_API_KEY;
 // none of those bodies (or the Alchemy key baked into a b20 RPC URL) reach a
 // buyer-visible error.
 process.env.COINGECKO_API_KEY = "cg-LEAKCANARY0000";
-process.env.NEYNAR_API_KEY = "neynar-LEAKCANARY0000";
 delete process.env.WARPCAST_API_KEY;
 process.env.FRED_API_KEY = "fred-LEAKCANARY0000";
 process.env.FRED_API_KEY_V2 = "fredv2-LEAKCANARY0000";
@@ -81,7 +80,6 @@ import { MODERATE_TOOLS } from "../src/tools/moderate-kit.js";
 import { SEARCH_TOOLS } from "../src/tools/search.js";
 // Non-AI credentialed kits (residual-4xx echo paths audited in D5 follow-up).
 import { CRYPTO_TOOLS } from "../src/tools/crypto-kit.js";
-import { ONCHAIN_IDENTITY_TOOLS } from "../src/tools/onchain-identity-kit.js";
 import { MACRO_TOOLS } from "../src/tools/macro-kit.js";
 import { FINANCE_TOOLS } from "../src/tools/finance-kit.js";
 // Alchemy-keyed kits (D5 re-review): key rides the RPC URL, echoed via a
@@ -294,8 +292,7 @@ for (const { slug, handler, input } of HANDLER_CASES) {
 // "the mock actually received the canary" (test validity).
 const NON_AI_CASES = [
   { slug: "crypto-price", handler: bySlug(CRYPTO_TOOLS, "crypto-price"), input: { coins: "bitcoin" } },
-  { slug: "farcaster-profile", handler: bySlug(ONCHAIN_IDENTITY_TOOLS, "farcaster-profile"), input: { fid: 3 } },
-  { slug: "fred-search", handler: bySlug(MACRO_TOOLS, "fred-search"), input: { q: "gdp" } },
+  { slug: "fred-series", handler: bySlug(MACRO_TOOLS, "fred-series"), input: { seriesId: "GDPC1" } },
   { slug: "stock-quote", handler: bySlug(FINANCE_TOOLS, "stock-quote"), input: { symbol: "AAPL" } },
 ];
 

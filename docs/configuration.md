@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1126 variables in 114 groups.
+1122 variables in 114 groups.
 
 ## Contents
 
@@ -206,7 +206,6 @@ holds it.
 | `BUDGET_DATABENTO_CALLS` | Budget databento calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_E2B_CALLS` | Budget e2b calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_HUNTER_CALLS` | Budget hunter calls. |  | `src/upstream-budgets.js` |
-| `BUDGET_NEYNAR_CALLS` | Budget neynar calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_OPENAI_CALLS` | Budget openai calls. |  | `src/upstream-budgets.js` |
 
 ## CDN
@@ -1228,7 +1227,7 @@ holds it.
 | `SOLANA_LB_STUCK_READ_SCANS` | Solana lb stuck read scans. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LB_TX_CONCURRENCY` | Transaction reads in flight per payTo in a Solana board scan (1 to 32). Unset = 2, which keeps the paced public lane's queue short for other readers. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LEADERBOARD` | Solana leaderboard. | `on` | `src/solana-leaderboard.js` |
-| `SOLANA_RPCS` | Solana RPC endpoints. |  | `src/solana-history-rpc.js`, `src/tools/solana-rpc-kit.js` |
+| `SOLANA_RPCS` | Solana RPC endpoints. |  | `src/solana-history-rpc.js` |
 | `SOLANA_RPC_URL` | Solana RPC endpoint URL. | `https://api.mainnet-beta.solana.com` | `src/solana-buyer.js`, `src/solana-history-rpc.js`, `src/tools/solana-intel-kit.js` |
 | `SOLANA_UPSTREAM_BUYER_KEY` | Private key of the Solana spending wallet route-execute buys with (a credential, set on the host). |  | `src/solana-buyer.js` |
 | `SOLANA_UPSTREAM_BUYER_LOW_USD` | Solana upstream buyer low, in USD. | `0.5` | `src/solana-buyer.js` |
@@ -1473,8 +1472,8 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `TYPESAFE_API_KEY` | Typesafe API key (a credential, set on the host). |  | `src/discovery-rerank.js`, `src/tool-judge.js`, `src/tools/judge-kit.js` and 2 more |
-| `TYPESAFE_API_URL` | Typesafe API URL. | `https://api.typesafe.ai/v1/systemone` | `src/discovery-rerank.js`, `src/tool-judge.js`, `src/tools/judge-kit.js` and 2 more |
+| `TYPESAFE_API_KEY` | Typesafe API key (a credential, set on the host). |  | `src/discovery-rerank.js`, `src/tool-judge.js`, `src/tools/judge-kit.js` and 1 more |
+| `TYPESAFE_API_URL` | Typesafe API URL. | `https://api.typesafe.ai/v1/systemone` | `src/discovery-rerank.js`, `src/tool-judge.js`, `src/tools/judge-kit.js` and 1 more |
 | `TYPESAFE_CACHE_TTL_MS` | Typesafe cache lifetime, in milliseconds. | `43200000` | `src/wish-classify.js` |
 | `TYPESAFE_MAX_ROWS` | Typesafe maximum rows. | `60` | `src/wish-classify.js` |
 | `TYPESAFE_MIN_PROBABILITY` | Typesafe minimum probability. | `0.75` | `src/wish-classify.js` |
@@ -1606,7 +1605,6 @@ holds it.
 | `FLIGHT_SELLERS_JSON` | Flight sellers JSON. |  | `src/server.js` |
 | `FOLLOWUPS` | off stops the follow-up loop. |  | `src/server.js` |
 | `FRED_API_KEY` | Fred API key (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/macro-kit.js` |
-| `FRED_API_KEY_V2` | Fred API key v2. |  | `src/tools/macro-kit.js` |
 | `FRONT_DOOR_402` | Adds the front-door block to a first-contact 402 body; off unless set to on. |  | `src/server.js` |
 | `FUNDING_HISTORY_CHUNK_BLOCKS` | Funding history chunk blocks. | `0` | `src/seller-funding.js` |
 | `FUNDING_HISTORY_FROM_BLOCK` | Funding history from block. |  | `src/seller-funding.js` |
@@ -1652,7 +1650,6 @@ holds it.
 | `NAMED_AUDIO_MODELS` | Comma list of the named speech and transcription model ids to serve beside the default chains, or all (unset: none). Each also needs its cost row, inside the route's margin bound. |  | `src/changelog.js`, `src/speech-additions.js` |
 | `NETWORKS_VERIFY_AGE_MS` | Networks verify age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `NEW_CATALOG_QUOTE_BURST` | New catalog quote burst. | `60` | `src/x402-index.js` |
-| `NEYNAR_API_KEY` | Neynar API key (a credential, set on the host). |  | `src/tools/farcaster-social-kit.js`, `src/tools/onchain-identity-kit.js` |
 | `NODE_ENV` | Runtime mode; production turns on production-only behavior such as the index crawlers and the tweet queue. |  | `src/mcp-loopback.js`, `src/model-catalog.js`, `src/posthog.js` and 13 more |
 | `NVD_API_KEY` | Nvd API key (a credential, set on the host). |  | `src/tools/cve-kit.js` |
 | `OFFICE_QUEUE_MAX` | Office queue maximum. |  | `src/tools/office-pool.js` |
@@ -1710,7 +1707,6 @@ holds it.
 | `VIDEOS_MAX_WAIT_MS` | Videos maximum wait, in milliseconds. | `180000` | `src/tools/llm-images-fast-kit.js` |
 | `VIDEOS_POLL_MS` | Videos poll, in milliseconds. | `5000` | `src/tools/llm-images-fast-kit.js` |
 | `VIDEO_PARK_MS` | Video park, in milliseconds. | `1800000` | `src/tools/llm-images-fast-kit.js` |
-| `WARPCAST_API_KEY` | Warpcast API key (a credential, set on the host). |  | `src/tools/farcaster-social-kit.js`, `src/tools/onchain-identity-kit.js` |
 | `WEB_BOT_AUTH` | Web Bot Auth signature verification on requests (on). |  | `src/web-bot-auth.js` |
 | `ZEPTOMAIL_TOKEN` | Zeptomail token (a credential, set on the host). |  | `src/email.js` |
 | `ZEPTOMAIL_URL` | Zeptomail URL. | `https://api.zeptomail.com/v1.1/email` | `src/email.js` |

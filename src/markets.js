@@ -2,30 +2,28 @@
 //
 // One page, one call to copy: crypto-market-pulse answers "what is the crypto
 // market doing right now" in a single request, keyless, priced in tenths of a
-// cent. Every other market-data tool (perps, options, signals, DeFi) is listed
+// cent. Every other market-data tool (perps, signals, DeFi) is listed
 // beneath it with its live price read from the catalog - never typed here, so
 // the page cannot drift from /api/pricing (the rule test-price-prose enforces
 // on the product pages). Deliberately narrow: an agent that lands here should
 // leave with one curl, not a catalog.
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
-import { FEED_TTL_MS, META_TTL_MS as SIGNALS_META_TTL_MS } from "./tools/crypto-signals-kit.js";
+import { META_TTL_MS as SIGNALS_META_TTL_MS } from "./tools/crypto-signals-kit.js";
 import { META_TTL_MS as DERIV_META_TTL_MS } from "./tools/derivatives-kit.js";
 import { SCREENS_MAX_TTL_MS } from "./tools/crypto-screens-kit.js";
 // The longest a reading on this page can sit in a shared cache, read from the
 // kits' own TTLs. The page said "a minute" while every one of them is longer.
-const MAX_CACHE_MIN = Math.round(Math.max(FEED_TTL_MS, SIGNALS_META_TTL_MS, DERIV_META_TTL_MS, SCREENS_MAX_TTL_MS) / 60_000);
+const MAX_CACHE_MIN = Math.round(Math.max(SIGNALS_META_TTL_MS, DERIV_META_TTL_MS, SCREENS_MAX_TTL_MS) / 60_000);
 
 
 /** Group definitions: slug order is the display order. Copy is what the tool
  *  RETURNS, not the upstream it reads - a buyer picks by answer, not by source. */
 const GROUPS = [
-  { id: "pulse", h: "Market pulse and signals", p: "Breadth, news and indicators for the whole market in one call each.",
-    slugs: ["crypto-market-pulse", "crypto-news", "crypto-indicators"] },
+  { id: "pulse", h: "Market pulse and signals", p: "Breadth and indicators for the whole market in one call each.",
+    slugs: ["crypto-market-pulse", "crypto-indicators"] },
   { id: "perps", h: "Perpetual futures", p: "Funding, open interest, basis, books and candles across every listed perp.",
     slugs: ["perp-markets", "perp-funding", "perp-funding-screener", "funding-screener", "perp-open-interest", "perp-basis", "perp-orderbook", "perp-klines"] },
-  { id: "options", h: "Options", p: "Chains, greeks and implied volatility.",
-    slugs: ["options-summary", "crypto-options-chain", "options-ticker"] },
   { id: "defi", h: "DeFi and stablecoins", p: "Lending rates read on chain, token and DEX screens, pool health, venue spreads and stablecoin peg watch, computed per call.",
     slugs: ["lending-rates", "defi-screener", "dex-volume-board", "dex-pool-health", "chain-board", "stablecoin-depeg-watch", "exchange-spread"] },
 ];
@@ -53,7 +51,7 @@ export function marketsPage(baseUrl, catalog) {
   const hi = prices.length ? Math.max(...prices) : 0;
   const canonical = `${baseUrl}/markets`;
   const title = "Crypto market data for agents, one call at a time";
-  const description = `${tools.length} keyless market-data calls - perps, options, DeFi, stablecoins, news and indicators - ${fmtUsd(lo)} to ${fmtUsd(hi)} each, paid per request in USDC over x402 or MPP. No API key, no account.`;
+  const description = `${tools.length} keyless market-data calls - perps, DeFi, stablecoins and indicators - ${fmtUsd(lo)} to ${fmtUsd(hi)} each, paid per request in USDC over x402 or MPP. No API key, no account.`;
   const heroPath = hero ? hero.route.split(" ")[1] : "/api/crypto-market-pulse";
   const heroInput = JSON.stringify(hero?.discovery?.input ?? { limit: 5 });
   const curl = `curl -X POST ${baseUrl}${heroPath} \\\n  -H "Content-Type: application/json" \\\n  -d '${heroInput}'`;
@@ -112,7 +110,7 @@ export function marketsPage(baseUrl, catalog) {
     <div class="mk-hero">
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);">Crypto market data</h1>
-        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">${esc(hero?.name || "Market pulse")} returns breadth, volume, open interest, funding extremes, the day's gainers and losers and BTC and ETH at a glance, in one request at ${esc(hero?.price || "")}. ${tools.length - 1} more calls below cover perps, options, DeFi and stablecoins at ${esc(fmtUsd(lo))} to ${esc(fmtUsd(hi))} each.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">${esc(hero?.name || "Market pulse")} returns breadth, volume, open interest, funding extremes, the day's gainers and losers and BTC and ETH at a glance, in one request at ${esc(hero?.price || "")}. ${tools.length - 1} more calls below cover perps, indicators, DeFi and stablecoins at ${esc(fmtUsd(lo))} to ${esc(fmtUsd(hi))} each.</p>
         <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 22px;">Pay per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a> from any wallet. The first call answers 402 with the price; the paid retry returns the data. ${esc(failedCallFootnote())}</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
           <a class="btn btn-secondary" href="/tools/${esc(MARKETS_HERO_SLUG)}">Docs + sample output</a>

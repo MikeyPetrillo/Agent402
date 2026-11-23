@@ -16,10 +16,6 @@
 //                            indexed DECODED chain data (Base events/txs/
 //                            blocks/user-ops/builder-code attributions,
 //                            Solana token instructions) — no indexer to run
-//   onchain-sql-week $0.10  the same SQL, a solana.instructions week read
-//                            one UTC day at a time on every rail (7 days)
-//   onchain-sql-range $0.33 the same SQL, a long solana.instructions range
-//                            read one UTC day at a time (up to 31 days)
 //   onchain-sql-schema $0.002 the table/column schema for the above
 //
 // Auth: CDP REST uses a short-lived JWT (ES256 for PEM EC keys, EdDSA for
@@ -532,10 +528,6 @@ const SQL_WINDOW_DAYS_PER_CALL = SQL_WINDOW_MAX_QUERIES - 1;
 const SQL_WINDOW_SENTENCE = `A plain row select on solana.instructions over more than a day whose whole range runs past the query service's time window is read one UTC day at a time and merged in order, at most ${SQL_WINDOW_MAX_QUERIES} queries per call including the whole-range send, so up to ${SQL_WINDOW_DAYS_PER_CALL} ${SQL_WINDOW_DAYS_PER_CALL === 1 ? "day" : "days"} per call; windowed.stoppedBy and the note give the next block_time range to send.`;
 // What a day-by-day read is charged, stated wherever a buyer reads before buying.
 export const SQL_WALK_CHARGE = "A walk that read at least one day is a served answer and is charged at this route's price, even when it is partial or holds no rows; a walk that read no day answers 422 and is not charged (a Tempo push payment is final before the call and is booked as owed).";
-// The same rule on the route that takes x402 exact on EVM chains only, where
-// no Tempo push payment can reach it.
-const SQL_WALK_CHARGE_EVM = SQL_WALK_CHARGE.replace(/ \(a Tempo push[^)]*\)\.$/, " (this route takes x402 exact on EVM chains only).");
-const SQL_OTHER_QUERIES = "Any query that is not read by day gets the same answer as on onchain-sql, at this route's price; send it to onchain-sql for the lower price.";
 // The budget also carries how the call's sends are paced: `own` (this
 // server's own read) and `callerGone` (the buyer's connection closed before
 // any byte of the answer).
@@ -582,16 +574,15 @@ function underPaymentLife(req, fn) {
   const left = budget ? budget.remaining() : SVM_SQL_BUDGET_MS;
   return withBudget(fn, Math.max(1, Math.floor(Math.min(left, SVM_SQL_BUDGET_MS))));
 }
-function countedSqlCall(run, { stats = true } = {}) {
+function countedSqlCall(run) {
   return async (input, ctx, mark) => {
     const own = mark === OWN_READ;
     const call = { queries: newQueryBudget({ own, callerGone: own ? () => false : () => clientGoneBeforeFirstByte(ctx) }), budgetSpent: false, own };
     try { return await (own ? run(input, call) : underPaymentLife(ctx, () => run(input, call))); }
     catch (e) { if (e?.queryBudgetSpent) call.budgetSpent = true; throw e; }
     finally {
-      // The query histogram is onchain-sql's (src/sql-query-stats.js): the
-      // range route's calls are not counted in it.
-      if (stats) try {
+      // The query histogram is onchain-sql's (src/sql-query-stats.js).
+      try {
         const used = call.queries.sent, budgetSpent = call.budgetSpent;
         onFinalResponse((status, scope) => noteSqlCall({ status, queries: used, budgetSpent, synthetic: !!scope?.synthetic, sale: status === 200 && typeof scope?.saleOutcome === "function" ? scope.saleOutcome() : null }));
       } catch { /* bookkeeping only */ }
@@ -1169,48 +1160,8 @@ export const SQL_WINDOW_MAX_DAYS = 31;
 // a day answers in seconds (measured 2026-11-03), and one that runs into the
 // service's window takes about 10 s and ends the run.
 export const SQL_WINDOW_MIN_LEFT_MS = 4_000;
-// onchain-sql-range: the same handler for buyers of long ranges. Its day walk
-// reads every UTC day of a range up to SQL_WINDOW_MAX_DAYS (at most
-// SQL_WINDOW_MAX_DAYS + 1 day queries, since the range's ends fall inside
-// days), after the whole-range send and its one retry (QUERY_ATTEMPTS). Any
-// other path keeps SQL_QUERY_BUDGET. scripts/test-pricing-margin.js holds
-// this many queries plus a settlement inside the route's margin bound at its
-// price.
-export const SQL_RANGE_MAX_DAYS = SQL_WINDOW_MAX_DAYS;
-export const SQL_RANGE_MAX_QUERIES = QUERY_ATTEMPTS + SQL_RANGE_MAX_DAYS + 1;
-// The range route's run budget, seconds: the handler's budget and the run
-// time src/evm-validity.js (EVM_RUN_SECONDS, pinned equal by
-// scripts/test-onchain-sql-windows.js) sizes the payment window to. A day
-// answers in seconds and a day that runs into the service's window ends the
-// walk, so 32 days and the whole-range send fit; past the sync window the
-// call runs as a job (Prefer: respond-async, src/slow-routes.js).
-export const SQL_RANGE_RUN_SECONDS = 180;
-export const SQL_RANGE_PATH = "/api/onchain-sql-range";
-// onchain-sql-week: the same walk for up to SQL_WEEK_MAX_DAYS days, answered
-// synchronously inside SVM_SQL_BUDGET_MS on every rail, so a Solana payment
-// (its recent blockhash lives about 60 s) still settles. Sized from the
-// times the query service is known to take: a whole range that runs past its
-// window answers in about 10 s and a day in seconds (measured 2026-11-03), so
-// after the whole-range send and SQL_WINDOW_MIN_LEFT_MS of margin about 26 s
-// remain, eight UTC days at about 3 s each. A slower day ends the walk on
-// time and the answer is marked partial.
-export const SQL_WEEK_MAX_DAYS = 7;
-export const SQL_WEEK_MAX_QUERIES = QUERY_ATTEMPTS + SQL_WEEK_MAX_DAYS + 1;
-export const SQL_WEEK_BUDGET_MS = SVM_SQL_BUDGET_MS;
-export const SQL_WEEK_PATH = "/api/onchain-sql-week";
-// How each route reads a windowed query: its query limit, and the routes a
-// walk it ended early names (longerRange), each with its most days and the
-// payment it takes.
-const SQL_WEEK_POINTER = Object.freeze({ path: SQL_WEEK_PATH, maxDays: SQL_WEEK_MAX_DAYS, rails: "all", async: false });
-const SQL_RANGE_POINTER = Object.freeze({ path: SQL_RANGE_PATH, maxDays: SQL_RANGE_MAX_DAYS, rails: "x402-exact-evm", async: true });
-const SQL_ROUTE = Object.freeze({ maxQueries: SQL_WINDOW_MAX_QUERIES, longer: [SQL_WEEK_POINTER, SQL_RANGE_POINTER] });
-const SQL_WEEK_ROUTE = Object.freeze({ maxQueries: SQL_WEEK_MAX_QUERIES, longer: [SQL_RANGE_POINTER] });
-const SQL_RANGE_ROUTE = Object.freeze({ maxQueries: SQL_RANGE_MAX_QUERIES, longer: [] });
-/** The sentence naming the routes a partial walk points to. */
-function longerSentence(list) {
-  const part = (r) => `${r.path} reads up to ${r.maxDays} days of such a query in one call${r.rails === "all" ? " on every payment rail" : " on x402 exact on EVM chains, as a job (Prefer: respond-async)"}`;
-  return `${list.map(part).join("; ")}.`;
-}
+// How the route reads a windowed query: its query limit.
+const SQL_ROUTE = Object.freeze({ maxQueries: SQL_WINDOW_MAX_QUERIES });
 // An aggregate or window function, read one call name at a time: each
 // `name(` is found by one linear scan and its name tested whole against the
 // list (a pattern that searched for the names inside the query backtracked
@@ -1355,18 +1306,13 @@ async function dayWindowAnswer(plan, body, queries, whole, route = SQL_ROUTE) {
     : complete
       ? `The whole range ran past the query service's window of about 10 s, so it was read one day at a time (${read} of ${plan.spans.length} days, ${plan.direction === "desc" ? "newest" : "oldest"} first) and the rows merged in order.`
       : `The whole range ran past the query service's window of about 10 s, so it was read one day at a time, ${plan.direction === "desc" ? "newest" : "oldest"} first, and ${why} after ${read} of ${plan.spans.length} days: ${list.length ? "these rows cover" : "no rows matched; the days read cover"} ${covered.from} to ${covered.to}. This partial answer was charged; sending the rest of the range is a new call. Send the query again with block_time from ${plan.direction === "desc" ? iso(plan.lo) : covered.to} to ${plan.direction === "desc" ? covered.from : iso(plan.hi)} for the rest.`;
-  // A walk this route's query limit or time ended: the longer routes whose
-  // most days cover the range, named with the payment each takes.
-  const rangeDays = (plan.hi - plan.lo) / RANGE_DAY_MS;
-  const longer = !complete && (stopped === "query-limit" || stopped === "time") ? route.longer.filter((r) => rangeDays <= r.maxDays) : [];
   return {
     rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS,
     // A partial answer's matched is a floor: the rows found so far, or (with
     // none found) zero, never complete.
     ...(complete ? partialFields(list.length, list.length) : list.length ? { ...partialFields(list.length + 1, list.length), matchedIsLowerBound: true } : { returned: 0, matched: 0, complete: false, truncated: true, matchedIsLowerBound: true }),
     windowed: { by: "day", days: plan.spans.length, daysRead: read, order: plan.direction, from: iso(plan.lo), to: iso(plan.hi), ...(covered && !complete ? { coveredFrom: covered.from, coveredTo: covered.to } : {}), ...(why && !complete ? { stoppedBy: stopped } : {}) },
-    ...(longer.length ? { longerRange: longer.map((r) => ({ ...r })) } : {}),
-    note: longer.length ? `${note} ${longerSentence(longer)}` : note,
+    note,
   };
 }
 
@@ -1406,8 +1352,8 @@ export function faucetGate(address, now = Date.now()) {
 
 const SHARED_TAGS = ["wallet", "onboarding", "x402", "agent-wallet"];
 
-/** The onchain-sql handler body, for one route's way of reading a windowed
- *  query (SQL_ROUTE, SQL_WEEK_ROUTE or SQL_RANGE_ROUTE); every other path is the same. */
+/** The onchain-sql handler body, for the route's way of reading a windowed
+ *  query (SQL_ROUTE). */
 function sqlRun(route) {
   return async (input, call) => {
     const sql = String(input?.sql || "").trim();
@@ -1736,7 +1682,7 @@ export const CDP_TOOLS = [
     price: "$0.030",
     description:
       `Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions (filter it by block_time). ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). ${SQL_WINDOW_SENTENCE} ${SQL_WALK_CHARGE} Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.`,
-    tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],
+    tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science", "solana", "instructions"],
     discovery: {
       bodyType: "json",
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
@@ -1752,64 +1698,6 @@ export const CDP_TOOLS = [
       },
     },
     handler: countedSqlCall(sqlRun(SQL_ROUTE)),
-  },
-  {
-    route: "POST /api/onchain-sql-week",
-    name: "Onchain SQL over a week (read by day)",
-    slug: "onchain-sql-week",
-    category: "wallet",
-    price: "$0.10",
-    description:
-      `Run the same read-only SQL as onchain-sql (the same tables, dialect and rules) over a week in one call, on every payment rail. A plain row select on solana.instructions whose whole block_time range runs past the query service's time window is read one UTC day at a time, up to ${SQL_WEEK_MAX_DAYS} days, and the rows are merged in block_time order, up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows; its day walk stops inside ${Math.round(SQL_WEEK_BUDGET_MS / 1000)} seconds, so a Solana payment still settles. When the call's time, the row cap or a day the query service cannot answer ends the walk early, the answer is served partial and marked in fields (complete, truncated, windowed with the days read, coveredFrom and coveredTo) with the range left to read. ${SQL_WALK_CHARGE} ${SQL_OTHER_QUERIES}`,
-    tags: [...SHARED_TAGS, "sql", "onchain-data", "week", "seven-days", "instructions"],
-    discovery: {
-      bodyType: "json",
-      input: { sql: "SELECT block_slot, block_time, executing_account FROM solana.instructions WHERE block_time > now() - INTERVAL 7 DAY AND executing_account = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' ORDER BY block_time LIMIT 100" },
-      inputSchema: {
-        properties: {
-          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars) over the onchain-sql tables (base.*, base_sepolia.*, solana.instructions; a query that filters, groups or aggregates solana.instructions needs a block_time range). A plain row select on solana.instructions (one table, no aggregate, GROUP BY, DISTINCT, JOIN or subquery, ORDER BY block_time if any) over more than a day whose whole range runs past the query service's time window is read one UTC day at a time, up to ${SQL_WEEK_MAX_DAYS} days, and merged in order. Returns up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows; a walk that ends early is marked partial in fields. ${SQL_WALK_CHARGE}` },
-          cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900)." },
-        },
-        required: ["sql"],
-      },
-      output: {
-        example: {
-          rows: [{ block_slot: 380012001, block_time: "2026-11-15T00:00:01Z", executing_account: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }],
-          rowCount: 1, maxRows: SQL_MAX_ROWS, returned: 1, matched: 1, complete: true, truncated: false,
-          windowed: { by: "day", days: 8, daysRead: 8, order: "asc", from: "2026-11-15T12:00:00.000Z", to: "2026-11-22T12:00:00.000Z" },
-        },
-      },
-    },
-    handler: countedSqlCall(sqlRun(SQL_WEEK_ROUTE), { stats: false }),
-  },
-  {
-    route: "POST /api/onchain-sql-range",
-    name: "Onchain SQL over a month (long ranges read by day)",
-    slug: "onchain-sql-range",
-    category: "wallet",
-    price: "$0.33",
-    description:
-      `Run the same read-only SQL as onchain-sql (the same tables, dialect and rules) over long ranges in one call. It takes x402 exact on EVM chains and runs as a job (Prefer: respond-async). A plain row select on solana.instructions whose whole block_time range runs past the query service's time window is read one UTC day at a time, up to ${SQL_RANGE_MAX_DAYS} days, and the rows are merged in block_time order, up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows. When the call's time, the row cap or a day the query service cannot answer ends the walk early, the answer is served partial and marked in fields (complete, truncated, windowed with the days read, coveredFrom and coveredTo) with the range left to read. ${SQL_WALK_CHARGE_EVM} ${SQL_OTHER_QUERIES}`,
-    tags: [...SHARED_TAGS, "sql", "onchain-data", "long-range", "month", "backfill", "history", "instructions"],
-    discovery: {
-      bodyType: "json",
-      input: { sql: "SELECT block_slot, block_time, executing_account FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY AND executing_account = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' ORDER BY block_time LIMIT 100" },
-      inputSchema: {
-        properties: {
-          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars) over the onchain-sql tables (base.*, base_sepolia.*, solana.instructions; a query that filters, groups or aggregates solana.instructions needs a block_time range). A plain row select on solana.instructions (one table, no aggregate, GROUP BY, DISTINCT, JOIN or subquery, ORDER BY block_time if any) over more than a day and up to ${SQL_RANGE_MAX_DAYS} days whose whole range runs past the query service's time window is read one UTC day at a time and merged in order. Returns up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows; a walk that ends early is marked partial in fields. ${SQL_WALK_CHARGE_EVM}` },
-          cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900)." },
-        },
-        required: ["sql"],
-      },
-      output: {
-        example: {
-          rows: [{ block_slot: 377412001, block_time: "2026-10-24T00:00:01Z", executing_account: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }],
-          rowCount: 1, maxRows: SQL_MAX_ROWS, returned: 1, matched: 1, complete: true, truncated: false,
-          windowed: { by: "day", days: 31, daysRead: 31, order: "asc", from: "2026-10-23T12:00:00.000Z", to: "2026-11-22T12:00:00.000Z" },
-        },
-      },
-    },
-    handler: countedSqlCall(sqlRun(SQL_RANGE_ROUTE), { stats: false }),
   },
   {
     route: "GET /api/onchain-sql-schema",
@@ -1833,9 +1721,7 @@ export const CDP_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-// onchain-sql-range runs under its own run budget (SQL_RANGE_RUN_SECONDS),
-// onchain-sql-week under the Solana payment's (SQL_WEEK_BUDGET_MS).
-underBudgetAll(CDP_TOOLS, (t) => (t.slug === "onchain-sql-range" ? SQL_RANGE_RUN_SECONDS * 1000 : t.slug === "onchain-sql-week" ? SQL_WEEK_BUDGET_MS : PAYMENT_WINDOW_BUDGET_MS));
+underBudgetAll(CDP_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
 
 /** One of this server's own reads through the onchain-sql handler: the same
  *  query handling and send pacing, outside the buyers' in-flight cap. */

@@ -39,7 +39,6 @@ const METERED = [
   "api.openai.com",
   "openrouter.ai",
   "e2b.dev",
-  "api.neynar.com",
   "alchemy.com",
   "hist.databento.com",
 ];

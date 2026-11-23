@@ -170,7 +170,6 @@ const DEFAULTS = {
   "src/tools/filing-watch-kit.js": { n: 1, cls: "fixed" },
   "src/tools/judge-kit.js": { n: 5, cls: "fixed" },
   "src/tools/loop-gate-kit.js": { n: 1, cls: "fixed", note: "handed to the judge, fixed vendor host" },
-  "src/tools/judge-preview-kit.js": { n: 3, cls: "fixed" },
   "src/tools/llm-gateway-kit.js": { n: 1, cls: "fixed" },
   "src/gateway-direct-pricebook.js": { n: 1, cls: "fixed", note: "operator-configured listing plus the fixed model catalog host" },
   "src/tools/sanctions-kit.js": { n: 1, cls: "fixed" },

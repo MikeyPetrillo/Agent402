@@ -774,7 +774,7 @@ export const PACK_STEPS = {
   // question→first-citation URL).
   // ──────────────────────────────────────────────────────────────────────
 
-  // Canonical US macro dataset. Pure fanout — all 7 tools take {} args.
+  // Canonical US macro dataset. Pure fanout — all 6 tools take {} args.
   // No prompt args; the as-of date is implicit in each tool's response.
   "macro-economics": {
     mode: "fanout",
@@ -785,7 +785,6 @@ export const PACK_STEPS = {
       { slug: "unemployment-rate",     mapInput: () => ({ months: 12 }) },
       { slug: "fed-funds",             mapInput: () => ({ days: 30 }) },
       { slug: "sahm-rule",             mapInput: () => ({}) },
-      { slug: "fred-release-calendar", mapInput: () => ({ days: 14 }) },
     ],
   },
 
@@ -809,7 +808,7 @@ export const PACK_STEPS = {
     ],
   },
 
-  // The observed-demand basket (see PACK_PRICES note): 14 keyless reads, pure fanout,
+  // The observed-demand basket (see PACK_PRICES note): 13 keyless reads, pure fanout,
   // no step depends on another. NO metered-dollar upstream anywhere in this
   // pack - nothing Brave/E2B/OpenAI-backed - so it introduces no CI-spend
   // surface (test-brave-leak derives reachability from toolSlugs and will
@@ -817,7 +816,6 @@ export const PACK_STEPS = {
   "macro-dashboard": {
     mode: "fanout",
     steps: [
-      { slug: "fred-release-calendar",  mapInput: () => ({ days: 14 }) },
       { slug: "fed-funds",              mapInput: () => ({ days: 30 }) },
       { slug: "cpi-yoy",                mapInput: () => ({}) },
       { slug: "unemployment-rate",      mapInput: () => ({ months: 12 }) },
@@ -864,7 +862,6 @@ export const PACK_STEPS = {
       { slug: "yield-curve-spread",    mapInput: () => ({}) },
       { slug: "sahm-rule",             mapInput: () => ({}) },
       { slug: "fx-dashboard",          mapInput: () => ({}) },
-      { slug: "fred-release-calendar", mapInput: () => ({ days: 14 }) },
     ],
   },
 

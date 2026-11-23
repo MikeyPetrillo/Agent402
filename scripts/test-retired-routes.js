@@ -16,11 +16,11 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { conso
 const throws = (fn, re, m) => { let e = null; try { fn(); } catch (err) { e = err; } ok(e && re.test(e.message), `${m} (${e ? e.message.slice(0, 80) : "did not throw"})`); };
 
 // --- the registry rules ---------------------------------------------------------
-const liveSet = new Set(["coin-search", "lending-rates", "defi-screener", "coin-profile", "chain-board", "stablecoin-depeg-watch", "stablecoin-peg", "dex-volume-board", "global-defi", "dex-pool-health", "l2-gas-comparison", "options-summary", "perp-orderbook", "crypto-options-chain", "kalshi-markets", "kalshi-event", "kalshi-live-data", "stock-quote", "price-coingecko", "crypto-price", "business-days", "cron-next", "slugify", "hash", "contract-source", "wallet-balance", "token-metadata", "tx-receipt", "color", "xml-to-json", "skill-company-dossier", "checksum", "lorem", "password-strength", "qr", "semver", "case", "uuid", "place-lookup", "geo-lookup", "search", "answer", "extract"]);
+const liveSet = new Set(["coin-search", "lending-rates", "defi-screener", "coin-profile", "chain-board", "stablecoin-depeg-watch", "stablecoin-peg", "dex-volume-board", "global-defi", "dex-pool-health", "l2-gas-comparison", "perp-orderbook", "onchain-sql", "fred-series", "kalshi-markets", "kalshi-event", "kalshi-live-data", "stock-quote", "price-coingecko", "crypto-price", "business-days", "cron-next", "slugify", "hash", "contract-source", "wallet-balance", "token-metadata", "tx-receipt", "color", "xml-to-json", "skill-company-dossier", "checksum", "lorem", "password-strength", "qr", "semver", "case", "uuid", "place-lookup", "geo-lookup", "search", "answer", "extract"]);
 ok(assertRetiredRegistryConsistent(liveSet) === true, "control: the registry is consistent against a live set that carries every replacement");
 throws(() => assertRetiredRegistryConsistent(new Set([...liveSet, "options-chain"])), /listed as retired but is live/, "a retired tool that is live again fails the boot");
 throws(() => assertRetiredRegistryConsistent(new Set([...liveSet, "skill-market-open"])), /pack "market-open" is listed as retired but is live/, "a retired pack that is live again fails the boot");
-throws(() => assertRetiredRegistryConsistent(new Set([...liveSet].filter((s) => s !== "crypto-options-chain"))), /names replacement "crypto-options-chain", which is not a live/, "a replacement that is not live fails the boot");
+throws(() => assertRetiredRegistryConsistent(new Set([...liveSet].filter((s) => s !== "coin-search"))), /names replacement "coin-search", which is not a live/, "a replacement that is not live fails the boot");
 ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retiredAt)) && Object.values(RETIRED_PACKS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retiredAt)), "every entry carries a retirement date");
 
 // A replacement answers the SAME question as the retired route; a tool that
@@ -50,6 +50,26 @@ ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retire
   ok(retiredEntryFor("/api/l2-tvl")?.replacement === null && !("Link" in retirementHeaders(RETIRED_TOOLS["l2-tvl"].retiredAt, null)), "such a route answers 410 with a Sunset date and no successor link");
 }
 
+// The 2026-11-23 retirement is pinned whole: a pointer added or dropped is a
+// decision made here. Only a route whose question a live tool answers over a
+// narrower range names one.
+{
+  const POINTERS_2026_11_23 = {
+    "solana-rpc": null, "onchain-sql-week": "onchain-sql", "onchain-sql-range": "onchain-sql", "x-post-counts": null, "x-trends": null,
+    "fc-cast-search": null, "fc-cast-metrics": null, "fc-channel-feed": null, "farcaster-profile": null, "fc-trending": null, "fc-user-casts": null,
+    "fc-cast": null, "fc-cast-replies": null, "fc-channel": null, "fc-user-search": null, "farcaster-by-address": null,
+    "options-summary": null, "crypto-options-chain": null, "options-ticker": null, "sol-swap-quote": null, "sol-token-lookup": null,
+    "judge-vision": null, "judge-locate": null, "judge-long": null,
+    "fred-release-calendar": null, "fred-search": null, "fred-series-info": null, "fred-release-observations": "fred-series",
+    "crypto-news": null, "gravatar-check": null,
+  };
+  const batch = Object.entries(RETIRED_TOOLS).filter(([, e]) => e.retiredAt === "2026-11-23");
+  const wrong = batch.filter(([slug, e]) => !(slug in POINTERS_2026_11_23) || e.replacement !== POINTERS_2026_11_23[slug]).map(([slug, e]) => `${slug} -> ${e.replacement}`);
+  ok(batch.length === 30 && Object.keys(POINTERS_2026_11_23).length === 30 && wrong.length === 0, `the 30 routes retired on 2026-11-23 name exactly the reviewed replacements (${batch.length}; ${wrong.join(", ") || "all match"})`);
+  ok(/\/v1\/judge/.test(RETIRED_TOOLS["judge-long"].note || ""), "judge-long names no replacement (judge is listed only with a backend) and its note points to /v1/judge");
+  ok(RETIRED_TOOLS["options-chain"].replacement === null, "options-chain no longer points at the retired crypto options chain");
+}
+
 // The boot guard is CALLED, against the real catalog, before any route is served.
 {
   const { readFileSync } = await import("node:fs");
@@ -60,9 +80,9 @@ ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retire
 
 // --- the retirement headers (RFC 8594 Sunset, Link rel="successor-version") ---
 {
-  const h = retirementHeaders("2026-09-20", "https://example.test/api/crypto-options-chain");
+  const h = retirementHeaders("2026-09-20", "https://example.test/api/coin-search");
   ok(h.Sunset === "Sun, 20 Sep 2026 00:00:00 GMT", `Sunset is the retirement date as an HTTP-date (got ${h.Sunset})`);
-  ok(h.Link === '<https://example.test/api/crypto-options-chain>; rel="successor-version"', `Link names the successor (got ${h.Link})`);
+  ok(h.Link === '<https://example.test/api/coin-search>; rel="successor-version"', `Link names the successor (got ${h.Link})`);
   const none = retirementHeaders("2026-09-20", null);
   ok(none.Sunset && !("Link" in none), "no replacement: Sunset only, never an invented successor");
   ok(!("Sunset" in retirementHeaders("not-a-date")), "a malformed date sets no Sunset rather than a wrong one");
@@ -77,12 +97,16 @@ const pastSunset = (r, date) => {
 const successorOf = (r) => (/^<([^>]+)>; rel="successor-version"$/.exec(r.headers.get("link") || "") || [])[1] || null;
 
 // --- path resolution ------------------------------------------------------------
-ok(retiredEntryFor("/api/options-chain")?.replacement === "crypto-options-chain", "/api/<retired tool> resolves with its replacement");
+ok(retiredEntryFor("/api/coins-list")?.replacement === "coin-search", "/api/<retired tool> resolves with its replacement");
 ok(retiredEntryFor("/api/options-chain/anything?x=1")?.slug === "options-chain", "a trailing segment does not hide a retired route");
 ok(retiredEntryFor("/api/skill/market-open")?.kind === "pack", "/api/skill/<retired pack> resolves as a pack");
 ok(retiredEntryFor("/api/skill/options-chain") === null, "a tool slug under /api/skill/ is not a retired pack");
 ok(retiredEntryFor("/api/market-open") === null, "a pack slug under /api/ is not a retired tool");
 ok(retiredEntryFor("/api/nope-nope") === null && retiredEntryFor("/v1/options-chain") === null, "unknown and off-prefix paths resolve to nothing");
+// A retired route outside /api is matched on its whole path (the /v1 judge previews).
+ok(retiredEntryFor("/v1/judge/vision")?.slug === "judge-vision" && retiredEntryFor("/V1/Judge/Locate/")?.slug === "judge-locate" && retiredEntryFor("/v1/judge/long?x=1")?.slug === "judge-long", "a retired /v1 route resolves by its whole path, case and a trailing slash aside");
+ok(retiredEntryFor("/v1/judge") === null && retiredEntryFor("/v1/judge/visionary") === null && retiredEntryFor("/v1/judge/vision/x") === null, "control: the live /v1/judge and other /v1 paths resolve to nothing");
+ok(retiredEntryForSlug("judge-vision")?.route === "/v1/judge/vision" && retiredEntryForSlug("solana-rpc")?.route === "/api/solana-rpc", "a retired /v1 slug carries its own route; an /api one its /api route");
 
 // --- slug resolution (the MCP connector's catalog.call takes slugs) --------------
 ok(retiredEntryForSlug("workday-count")?.route === "/api/workday-count" && retiredEntryForSlug("workday-count")?.replacement === "business-days", "a retired tool slug resolves to its route and replacement");
@@ -241,7 +265,7 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
   const pointers = due.filter(([, e]) => e.replacement).length;
   ok(items.length >= 2 && problems.length === 0, `each changelog retirement sentence matches the registry (${problems.join("; ") || `${items.length} items`})`);
   ok(unsaid.length === 0, `every route retired since ${SINCE} is announced in a changelog retirement sentence (missing: ${unsaid.join(", ") || "none"})`);
-  ok(due.length === 23 && pointers === 5 && due.length - pointers === 18, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
+  ok(due.length === 53 && pointers === 8 && due.length - pointers === 45, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
   // Controls: each way a sentence can part from the registry is reported.
   const REG = { geocode: { replacement: "place-lookup" }, "reverse-geocode": { replacement: null }, "place-search": { replacement: null }, "exa-search": { replacement: "search" }, "exa-answer": { replacement: "answer" } };
   const good = "geocode, reverse-geocode and place-search are retired and answer 410: geocode names place-lookup as the replacement, and reverse-geocode and place-search name none. exa-search and exa-answer are retired and answer 410 naming search and answer.";
@@ -280,7 +304,10 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
 }
 const snapshot = loadSnapshot();
 ok(snapshot.tools.size >= 500 && snapshot.packs.size >= 100, `the snapshot is populated (${snapshot.tools.size} tools, ${snapshot.packs.size} packs)`);
-for (const slug of [...Object.keys(RETIRED_TOOLS)]) ok(snapshot.tools.has(slug), `retired tool ${slug} is in the snapshot`);
+// A retired route outside /api (its own `route`, the /v1 judge previews) is
+// not an /api segment, so the snapshot does not carry it.
+for (const slug of Object.keys(RETIRED_TOOLS).filter((s) => !RETIRED_TOOLS[s].route)) ok(snapshot.tools.has(slug), `retired tool ${slug} is in the snapshot`);
+ok(Object.keys(RETIRED_TOOLS).filter((s) => RETIRED_TOOLS[s].route).every((s) => !snapshot.tools.has(s) && /^\/v1\//.test(RETIRED_TOOLS[s].route)), "a retired /v1 route is outside the /api snapshot");
 for (const slug of [...Object.keys(RETIRED_PACKS)]) ok(snapshot.packs.has(slug), `retired pack ${slug} is in the snapshot`);
 const gated = await envGatedSegments();
 
@@ -337,14 +364,32 @@ try {
     const mct = await mc.text();
     ok(/no direct replacement/.test(mct) && /nothing live ranks DEXes across every chain/.test(mct), `catalog.call states the note (got ${mct.slice(0, 200)})`);
   }
-  const get = await fetch(`${base}/api/options-chain`);
+  const get = await fetch(`${base}/api/coins-list`);
   const gb = await get.json();
-  ok(get.status === 410 && gb.error === "gone" && gb.slug === "options-chain", `GET /api/options-chain is 410 gone (got ${get.status} ${JSON.stringify(gb).slice(0, 80)})`);
-  ok(gb.replacement?.slug === "crypto-options-chain" && /^POST \/api\/crypto-options-chain$/.test(gb.replacement?.route || "") && gb.replacement?.url === "http://agent402.test/api/crypto-options-chain", "...naming the live replacement's slug, route and url");
-  ok(gb.retiredAt === "2026-09-20" && /retired on 2026-09-20/.test(gb.hint) && /crypto-options-chain/.test(gb.hint), "...with the date and the replacement in the hint");
+  ok(get.status === 410 && gb.error === "gone" && gb.slug === "coins-list", `GET /api/coins-list is 410 gone (got ${get.status} ${JSON.stringify(gb).slice(0, 80)})`);
+  ok(gb.replacement?.slug === "coin-search" && /^GET \/api\/coin-search$/.test(gb.replacement?.route || "") && gb.replacement?.url === "http://agent402.test/api/coin-search", "...naming the live replacement's slug, route and url");
+  ok(gb.retiredAt === "2026-11-21" && /retired on 2026-11-21/.test(gb.hint) && /coin-search/.test(gb.hint), "...with the date and the replacement in the hint");
   ok(Array.isArray(gb.suggestions) && typeof gb.find === "string", "...and the same find + suggestions the 404 carries");
-  ok(pastSunset(get, "2026-09-20"), `...with a past Sunset header on the retirement date (got ${get.headers.get("sunset")})`);
-  ok(successorOf(get) === "http://agent402.test/api/crypto-options-chain", `...and Link rel="successor-version" to the replacement (got ${get.headers.get("link")})`);
+  ok(pastSunset(get, "2026-11-21"), `...with a past Sunset header on the retirement date (got ${get.headers.get("sunset")})`);
+  ok(successorOf(get) === "http://agent402.test/api/coin-search", `...and Link rel="successor-version" to the replacement (got ${get.headers.get("link")})`);
+  {
+    // The 2026-11-23 retirement on the wire: an /api route naming its
+    // replacement, one naming none, and the /v1 judge previews, each 410.
+    const w = await fetch(`${base}/api/onchain-sql-week`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    const wb = await w.json();
+    ok(w.status === 410 && wb.replacement?.slug === "onchain-sql" && successorOf(w) === "http://agent402.test/api/onchain-sql", `POST /api/onchain-sql-week is 410 naming onchain-sql (got ${w.status} ${JSON.stringify(wb.replacement)})`);
+    const f = await fetch(`${base}/api/fc-cast`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    ok(f.status === 410 && (await f.json()).replacement === null && f.headers.get("link") === null, `POST /api/fc-cast is 410 naming none (got ${f.status})`);
+    for (const path of ["/v1/judge/vision", "/v1/judge/locate", "/v1/judge/long"]) {
+      const r = await fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      const b = await r.json();
+      ok(r.status === 410 && b.error === "gone" && b.retiredAt === "2026-11-23" && pastSunset(r, "2026-11-23"), `POST ${path} is 410 gone with its Sunset (got ${r.status} ${JSON.stringify(b).slice(0, 100)})`);
+    }
+    const lb = await (await fetch(`${base}/v1/judge/long`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).json();
+    ok(lb.hint.includes(RETIRED_TOOLS["judge-long"].note), `the judge-long 410 carries its note (got ${String(lb.hint).slice(0, 160)})`);
+    const v1miss = await fetch(`${base}/v1/judge/visionary`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    ok(v1miss.status !== 410, `control: a /v1 path that was never published is not a retirement (got ${v1miss.status})`);
+  }
   const post = await fetch(`${base}/api/options-chain`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbol: "AAPL" }) });
   ok(post.status === 410, `POST on a retired route is 410 too (got ${post.status})`);
   // The 2026-09-22 explorer-data retirement: every one answers 410, never a
@@ -376,14 +421,14 @@ try {
   // The retired tool's and pack's PAGES answer 410 too, with the same headers,
   // the date and the replacement's page; a slug that never existed stays 404.
   {
-    const page = await fetch(`${base}/tools/options-chain`);
+    const page = await fetch(`${base}/tools/coins-list`);
     const html = await page.text();
     ok(page.status === 410 && /text\/html/.test(page.headers.get("content-type") || ""), `a retired tool's page is 410 (got ${page.status})`);
-    ok(pastSunset(page, RETIRED_TOOLS["options-chain"].retiredAt) && /\/tools\/crypto-options-chain>; rel="successor-version"/.test(page.headers.get("link") || ""), `...with Sunset and a successor Link to the replacement's page (${page.headers.get("link")})`);
-    ok(html.includes(RETIRED_TOOLS["options-chain"].retiredAt) && html.includes('href="/tools/crypto-options-chain"') && /noindex/.test(html), "the page names the retirement date, links the replacement and is not indexed");
+    ok(pastSunset(page, RETIRED_TOOLS["coins-list"].retiredAt) && /\/tools\/coin-search>; rel="successor-version"/.test(page.headers.get("link") || ""), `...with Sunset and a successor Link to the replacement's page (${page.headers.get("link")})`);
+    ok(html.includes(RETIRED_TOOLS["coins-list"].retiredAt) && html.includes('href="/tools/coin-search"') && /noindex/.test(html), "the page names the retirement date, links the replacement and is not indexed");
     // The date is in the page's own sentence, not only in its meta description.
-    ok(html.includes(`<code>options-chain</code> was retired on ${RETIRED_TOOLS["options-chain"].retiredAt}.`), "the page body says the slug was retired on that date");
-    ok((await fetch(`${base}/tools/crypto-options-chain`)).status === 200, "control: the replacement's page is served");
+    ok(html.includes(`<code>coins-list</code> was retired on ${RETIRED_TOOLS["coins-list"].retiredAt}.`), "the page body says the slug was retired on that date");
+    ok((await fetch(`${base}/tools/coin-search`)).status === 200, "control: the replacement's page is served");
     const noRep = await fetch(`${base}/tools/stock-dividends`);
     ok(noRep.status === 410 && !/successor-version/.test(noRep.headers.get("link") || "") && (await noRep.text()).includes('href="/tools"'), "a retired tool with no replacement: 410, no successor, a link to the catalog");
     const packPage = await fetch(`${base}/skills/market-open`);
@@ -404,7 +449,7 @@ try {
     const ct = r.headers.get("content-type") || "";
     ok(r.status === 404 && /application\/json/.test(ct) && (await r.json()).error === "not-found", `${p} is a JSON 404 (${r.status}, ${ct})`);
   }
-  const liveRoute = await fetch(`${base}/api/crypto-options-chain`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  const liveRoute = await fetch(`${base}/api/coin-search?q=bitcoin`);
   ok(liveRoute.status !== 410 && liveRoute.status !== 404, `the replacement itself is served (got ${liveRoute.status})`);
   // Every route ever published is live, key-gated, or retired - and every
   // retired one answers 410 on the wire, never the guessed-slug 404.

@@ -168,7 +168,7 @@ ok(bare.length === 0, `no file sends the bare Agent402/1.0 (${bare.join(", ") ||
 // data provider's fixed API (never a seller, never a URL a caller names), which
 // is what /crawler says. A new file that sends it, or one of these that starts
 // fetching a caller's URL with it, is a change the page has to follow.
-const VENDOR_ONLY = new Set(["src/tools/x-data-kit.js", "src/tools/farcaster-social-kit.js", "src/tools/enrich-kit.js", "src/tools/b2b-enrich-kit.js", "src/tools/network-kit2.js", "src/tools/cve-kit.js", "src/tools/defi-kit.js", "src/tools/derivatives-kit.js", "src/tools/solana-intel-kit.js", "src/tools/crypto-kit.js", "src/tools/crypto-markets-kit.js", "src/tools/crypto-signals-kit.js"]);
+const VENDOR_ONLY = new Set(["src/tools/x-data-kit.js", "src/tools/enrich-kit.js", "src/tools/b2b-enrich-kit.js", "src/tools/network-kit2.js", "src/tools/cve-kit.js", "src/tools/defi-kit.js", "src/tools/derivatives-kit.js", "src/tools/solana-intel-kit.js", "src/tools/crypto-kit.js", "src/tools/crypto-markets-kit.js", "src/tools/crypto-signals-kit.js"]);
 const legacy = files.filter((f) => f !== "src/user-agents.js" && f !== "src/changelog.js" && /Agent402\/1\.0/.test(readFileSync(new URL(`../${f}`, import.meta.url), "utf8")));
 ok(legacy.length > 0 && legacy.every((f) => VENDOR_ONLY.has(f)), `the Agent402/1.0 token appears only in the vendor-API kits (${legacy.filter((f) => !VENDOR_ONLY.has(f)).join(", ") || "no others"})`);
 {

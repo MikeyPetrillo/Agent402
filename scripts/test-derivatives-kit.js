@@ -1,14 +1,13 @@
 // scripts/test-derivatives-kit.js
 // Offline tests for src/tools/derivatives-kit.js. No network: globalThis.fetch
-// is replaced with a router that answers each upstream (Hyperliquid info,
-// Deribit public) from fixtures, so the test pins
-//   - the catalog envelope (11 tools, prices, discovery),
+// is replaced with a router that answers the upstream (Hyperliquid info)
+// from fixtures, so the test pins
+//   - the catalog envelope (10 tools, prices, discovery),
 //   - input validation (400s) before any egress,
 //   - the output shape of every tool on fixture data,
 //   - upstream 5xx -> 502, 429 -> 503, a deadline -> 503 naming the step,
 //   - the "unknown coin" shapes Hyperliquid really returns (500 "null",
-//     200 "null") -> 422, and Deribit's 400 error envelope -> 422 with no
-//     upstream body relayed.
+//     200 "null") -> 422, with no upstream body relayed.
 // Live coverage is the catalog's answers-its-own-example sweep (test-all.js).
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -56,26 +55,6 @@ const PREDICTED = [
   ["BTC", [["VenueA", { fundingRate: "0.00005", nextFundingTime: NOW + 3_600_000, fundingIntervalHours: 4 }], ["HlPerp", { fundingRate: "0.0000125", nextFundingTime: NOW + 600_000, fundingIntervalHours: 1 }]]],
   ["ETH", [["HlPerp", { fundingRate: "-0.00005", nextFundingTime: NOW + 600_000, fundingIntervalHours: 1 }]]],
 ];
-const DERIBIT_BOOK = [
-  { instrument_name: "BTC-25SEP26-120000-P", bid_price: 0.543, ask_price: 0.551, open_interest: 174.5, mark_price: 0.5476, mark_iv: 62.03, underlying_price: 77577.16, volume: 0, volume_usd: 0, estimated_delivery_price: 77233 },
-  { instrument_name: "BTC-26AUG26-80000-C", bid_price: 0.0065, ask_price: 0.008, open_interest: 12.5, mark_price: 0.0073, mark_iv: 48.03, underlying_price: 77317.91, volume: 3.1, volume_usd: 1800, estimated_delivery_price: 77242 },
-  { instrument_name: "BTC-26AUG26-77000-C", bid_price: 0.0115, ask_price: 0.0125, open_interest: 85.2, mark_price: 0.0121, mark_iv: 47.5, underlying_price: 77317.91, volume: 120.5, volume_usd: 112000, estimated_delivery_price: 77242 },
-  { instrument_name: "BTC-26AUG26-77000-P", bid_price: 0.011, ask_price: 0.012, open_interest: 40, mark_price: 0.0115, mark_iv: 47.9, underlying_price: 77317.91, volume: 10, volume_usd: 9000, estimated_delivery_price: 77242 },
-  { instrument_name: "BTC-26AUG26-70000-P", bid_price: 0.001, ask_price: 0.002, open_interest: 300, mark_price: 0.0015, mark_iv: 55, underlying_price: 77317.91, volume: 1, volume_usd: 700, estimated_delivery_price: 77242 },
-];
-const DERIBIT_TICKER = {
-  timestamp: NOW, state: "open",
-  stats: { high: 0.013, low: 0.011, price_change: -4.2, volume: 120.5, volume_usd: 112000 },
-  greeks: { delta: 0.52, gamma: 0.00012, vega: 30.1, theta: -190.2, rho: 2.1 },
-  index_price: 77242.3, instrument_name: "BTC-26AUG26-77000-C", last_price: 0.012, open_interest: 85.2, mark_price: 0.0121,
-  best_ask_price: 0.0125, best_bid_price: 0.0115, mark_iv: 47.5, bid_iv: 46.1, ask_iv: 48.9, underlying_price: 77317.91,
-  underlying_index: "BTC-26AUG26", best_ask_amount: 28.8, best_bid_amount: 40.2,
-};
-const DERIBIT_PERP = {
-  timestamp: NOW, state: "open", stats: { high: 78838.5, low: 76231.5, price_change: 0.59, volume: 8581.8, volume_usd: 664803850 },
-  index_price: 77232.62, instrument_name: "BTC-PERPETUAL", last_price: 77263.5, open_interest: 903679080, mark_price: 77263.43,
-  current_funding: 0.000149, funding_8h: 0.000195, best_ask_price: 77264, best_bid_price: 77263.5, best_ask_amount: 30000, best_bid_amount: 133980,
-};
 // HIP-3 builder-deployed dexs (hyperliquid.gitbook.io Info endpoint > Perpetuals,
 // probed live 2026-09-18): `perpDexs` is [null, dex...] with the native dex as
 // the null at index 0; dex-scoped `meta` rows carry growthMode / onlyIsolated /
@@ -152,26 +131,6 @@ globalThis.fetch = async (url, opts = {}) => {
       default: return res(422, "Failed to deserialize the JSON body into the target type");
     }
   }
-  if (u.startsWith(__test.DERIBIT)) {
-    const { pathname, searchParams } = new URL(u);
-    const method = pathname.split("/").pop();
-    const errEnv = (reason, param) => res(400, { jsonrpc: "2.0", error: { code: -32602, data: { reason, param }, message: "Invalid params" } });
-    if (mode === "deribit-invalid") return errEnv("invalid currency", "currency");
-    if (mode === "deribit-weird-reason") return errEnv("<script>alert(1)</script> SECRET_TOKEN_abc", "currency");
-    const wrap = (result) => res(200, { jsonrpc: "2.0", result });
-    switch (method) {
-      case "get_index_price": return searchParams.get("index_name") === "btc_usd" ? wrap({ index_price: 77232.62, estimated_delivery_price: 77232.62 }) : errEnv("invalid index", "index_name");
-      case "get_book_summary_by_currency": return searchParams.get("currency") === "BTC" ? wrap(DERIBIT_BOOK) : wrap([]);
-      case "get_volatility_index_data": return wrap({ data: [[NOW - 3_600_000, 41.5, 41.7, 41.4, 41.6], [NOW, 41.6, 41.9, 41.6, 41.88]], continuation: null });
-      case "ticker": {
-        const name = searchParams.get("instrument_name");
-        if (name === "BTC-PERPETUAL") return wrap(DERIBIT_PERP);
-        if (name === "BTC-26AUG26-77000-C") return wrap(DERIBIT_TICKER);
-        return errEnv("instrument not found", "instrument_name");
-      }
-      default: return errEnv("unknown method", "method");
-    }
-  }
   throw new Error(`unexpected egress in test: ${u}`);
 };
 
@@ -182,10 +141,10 @@ const EXPECTED = {
   "perp-markets": "$0.003", "perp-funding": "$0.002", "perp-funding-screener": "$0.002", "perp-open-interest": "$0.001",
   "perp-klines": "$0.001", "perp-orderbook": "$0.002", "perp-basis": "$0.002",
   "perp-dexs": "$0.002", "perp-dex-markets": "$0.003", "perp-dex-limits": "$0.002",
-  "options-summary": "$0.005", "crypto-options-chain": "$0.004", "options-ticker": "$0.002",
 };
 ok(DERIVATIVES_TOOLS.length === Object.keys(EXPECTED).length, `${Object.keys(EXPECTED).length} tools exported (got ${DERIVATIVES_TOOLS.length})`);
 ok(new Set(DERIVATIVES_TOOLS.map((t) => t.slug)).size === DERIVATIVES_TOOLS.length, "slugs unique");
+ok(!DERIVATIVES_TOOLS.some((t) => /options/.test(t.slug)), "the options tools are retired (src/retired-tools.js), not served");
 for (const t of DERIVATIVES_TOOLS) {
   ok(EXPECTED[t.slug] === t.price, `${t.slug}: price ${t.price}`);
   ok(t.route === `POST /api/${t.slug}`, `${t.slug}: POST /api/${t.slug}`);
@@ -222,15 +181,6 @@ await throws(h("perp-orderbook")({}), 400, "perp-orderbook: missing coin");
 await throws(h("perp-orderbook")({ coin: "BTC", depth: 21 }), 400, "perp-orderbook: depth > 20");
 await throws(h("perp-basis")({}), 400, "perp-basis: missing coin");
 await throws(h("perp-basis")({ coin: "x".repeat(40) }), 400, "perp-basis: coin too long");
-await throws(h("options-summary")({ currency: "B" }), 400, "options-summary: currency too short");
-await throws(h("options-summary")({ currency: "BTC-USD" }), 400, "options-summary: currency bad chars");
-await throws(h("crypto-options-chain")({ expiry: "2026-08-26" }), 400, "options-chain: expiry wrong format");
-await throws(h("crypto-options-chain")({ type: "straddle" }), 400, "options-chain: bad type");
-await throws(h("crypto-options-chain")({ limit: 0 }), 400, "options-chain: limit 0");
-await throws(h("options-ticker")({}), 400, "options-ticker: neither instrument nor currency");
-await throws(h("options-ticker")({ instrument: "btc perpetual" }), 400, "options-ticker: instrument with space");
-await throws(h("options-ticker")({ instrument: "BTC-PERPETUAL; DROP" }), 400, "options-ticker: instrument bad chars");
-await throws(h("options-ticker")({ currency: "BTC", type: "call-spread" }), 400, "options-ticker: bad type");
 ok(calls.length === before, "input validation rejected before any egress");
 
 // ----------------------------------------------------------------------------
@@ -313,40 +263,6 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
   ok(near(out.funding.hourly, 0.0000125) && near(out.impactPremiumPct, 0.038842, 1e-5), "perp-basis: funding + impact premium");
 }
 
-{
-  const out = await h("options-summary")({});
-  ok(out.currency === "BTC" && out.indexPrice === 77232.62 && out.source === "deribit", "options-summary: default currency BTC + index");
-  ok(out.dvol.value === 41.88 && typeof out.dvol.time === "string", "options-summary: DVOL = latest close");
-  const o = out.options;
-  ok(o.instruments === 5 && near(o.callOpenInterest, 97.7) && near(o.putOpenInterest, 514.5) && near(o.putCallOiRatio, 514.5 / 97.7, 1e-3), "options-summary: call/put OI + ratio");
-  ok(near(o.volume24hUsd, 123500) && o.expiries.length === 2 && o.expiries[0].expiry === "26AUG26", "options-summary: volume + expiries sorted by date");
-  ok(o.topByOpenInterest[0].instrument === "BTC-26AUG26-70000-P" && o.topByOpenInterest[0].type === "put", "options-summary: top by OI");
-  ok(out.perpetual.instrument === "BTC-PERPETUAL" && out.perpetual.funding8h === 0.000195, "options-summary: perpetual block");
-  const eth = await h("options-summary")({ currency: "eth" });
-  ok(eth.currency === "ETH" && eth.options.instruments === 0 && eth.indexPrice === null && eth.perpetual === null, "options-summary: empty book degrades to zeros/nulls, not an error");
-}
-
-{
-  const out = await h("crypto-options-chain")({ currency: "btc", limit: 10 });
-  ok(out.expiry === "26AUG26" && out.expiresAt === new Date(Date.UTC(2026, 7, 26, 8)).toISOString(), "options-chain: nearest expiry by default, 08:00 UTC");
-  ok(out.expiries.join(",") === "26AUG26,25SEP26", "options-chain: available expiries listed");
-  ok(out.count === 4 && out.options[0].strike === 70000 && out.options[3].strike === 80000, "options-chain: sorted by strike");
-  ok(out.options[1].type === "call" && out.options[2].type === "put" && out.underlyingPrice === 77317.91, "options-chain: call before put at equal strike + underlying");
-  const puts = await h("crypto-options-chain")({ currency: "BTC", expiry: "26aug26", type: "put", limit: 1 });
-  ok(puts.count === 1 && puts.options[0].instrument === "BTC-26AUG26-70000-P", "options-chain: expiry case-folded + type filter + limit");
-  await throws(h("crypto-options-chain")({ currency: "BTC", expiry: "31DEC30" }), 422, "options-chain: unlisted expiry", /available: 26AUG26/);
-  await throws(h("crypto-options-chain")({ currency: "ETH" }), 422, "options-chain: currency with no options");
-}
-
-{
-  const out = await h("options-ticker")({ instrument: "btc-perpetual" });
-  ok(out.resolvedFrom === "instrument" && out.ticker.instrument === "BTC-PERPETUAL" && out.ticker.funding8h === 0.000195 && out.ticker.greeks === null, "options-ticker: explicit instrument (perpetual, no greeks)");
-  const atm = await h("options-ticker")({ currency: "BTC" });
-  ok(atm.resolvedFrom === "nearest-expiry-atm" && atm.ticker.instrument === "BTC-26AUG26-77000-C", "options-ticker: currency resolves nearest-expiry ATM call");
-  ok(atm.ticker.greeks.delta === 0.52 && atm.ticker.markIv === 47.5 && atm.ticker.stats.volume24hUsd === 112000, "options-ticker: greeks + IV + stats");
-  await throws(h("options-ticker")({ instrument: "BTC-99JAN99-80000-C" }), 422, "options-ticker: unknown instrument", /instrument not found/);
-}
-
 // ----------------------------------------------------------------------------
 // HIP-3 builder-deployed perp dexs (2026-09-18)
 // ----------------------------------------------------------------------------
@@ -408,29 +324,17 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
 }
 
 // ----------------------------------------------------------------------------
-// Pure helpers
-// ----------------------------------------------------------------------------
-ok(JSON.stringify(__test.parseOptionName("ETH-27MAR26-3000-P")) === JSON.stringify({ underlying: "ETH", expiry: "27MAR26", strike: 3000, type: "put" }), "parseOptionName: option");
-ok(__test.parseOptionName("BTC-PERPETUAL") === null && __test.parseOptionName("BTC-26AUG26") === null, "parseOptionName: non-options are null");
-ok(__test.parseOptionName("XRP_USDC-26AUG26-0d5-C")?.strike === 0.5, "parseOptionName: decimal strike (0d5)");
-ok(__test.expiryToTs("1JAN27") === Date.UTC(2027, 0, 1, 8) && __test.expiryToTs("26XXX26") === null, "expiryToTs: parses + rejects");
-
-// ----------------------------------------------------------------------------
 // Upstream failure mapping
 // ----------------------------------------------------------------------------
 __test.resetMetaCache();
 mode = "http500";
 await throws(h("perp-markets")({}), 502, "HL 500 -> 502");
-await throws(h("options-summary")({}), 502, "Deribit 500 -> 502 (book summary is load-bearing)");
-await throws(h("options-ticker")({ instrument: "BTC-PERPETUAL" }), 502, "Deribit 500 -> 502 (ticker)");
 mode = "http429";
 await throws(h("perp-orderbook")({ coin: "BTC" }), 503, "HL 429 -> 503");
 mode = "timeout";
 await throws(h("perp-klines")({ coin: "BTC" }), 503, "HL deadline -> 503 naming the upstream and the step");
-await throws(h("crypto-options-chain")({}), 503, "Deribit deadline -> 503");
 mode = "htmljunk";
 await throws(h("perp-markets")({}), 502, "HL non-JSON 200 -> 502");
-await throws(h("options-ticker")({ instrument: "BTC-PERPETUAL" }), 502, "Deribit non-JSON 200 -> 502");
 mode = "hl-unknown-500";
 __test.resetMetaCache();
 await throws(h("perp-klines")({ coin: "ZZZZ" }), 422, "HL 500 \"null\" (unknown coin) -> 422, not 502");
@@ -439,13 +343,6 @@ await throws(h("perp-orderbook")({ coin: "ZZZZ" }), 422, "HL 200 \"null\" (unkno
 mode = "ok";
 __test.resetMetaCache();
 await throws(h("perp-funding")({ coin: "ZZZZ" }), 422, "unknown coin rejected against the universe -> 422", /Unknown perp market/);
-mode = "deribit-invalid";
-await throws(h("options-summary")({ currency: "ZZZ" }), 422, "Deribit invalid params -> 422", /invalid currency/);
-mode = "deribit-weird-reason";
-try { await h("crypto-options-chain")({}); fail++; console.error("ASSERT FAIL - weird reason did not throw"); }
-catch (e) {
-  ok(e.statusCode === 422 && !/script|SECRET/.test(e.message) && /invalid params/.test(e.message), `Deribit error body never relayed verbatim (${e.message})`);
-}
 mode = "ok";
 
 globalThis.fetch = realFetch;

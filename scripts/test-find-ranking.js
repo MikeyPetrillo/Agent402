@@ -50,10 +50,9 @@ const TOP1 = [
   ["block number",                  "block-number"],
   ["latest block",                  "block-number"],
   ["event logs",                    "event-logs"],
-  // A month of Solana instructions is the range route's; SQL over Base stays
-  // onchain-sql's (2026-11-22).
-  ["query a month of solana instructions", "onchain-sql-range"],
-  ["query a week of solana instructions", "onchain-sql-week"],
+  // Solana instructions and Base both read through onchain-sql (the day-walk
+  // routes retired 2026-11-23).
+  ["query a month of solana instructions", "onchain-sql"],
   ["run sql on solana",             "onchain-sql"],
   ["query base with sql",           "onchain-sql"],
   ["nft owner",                     "erc721-owner"],

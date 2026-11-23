@@ -157,7 +157,6 @@ KITS["token-brief-kit.js"] = async () => {
     swap(SOLANA_INTEL_TOOLS, "sol-token-report", async () => ({ token: { name: "Jupiter", symbol: "JUP", decimals: 6 }, holders: { rows: [{ owner: "Owner1", tokenAccount: "Acct1", pct: 12.5 }], concentration: { top10Pct: 40 } } })),
     swap(SOLANA_INTEL_TOOLS, "sol-token-safety", down),
     swap(SOLANA_INTEL_TOOLS, "sol-token-pairs", down),
-    swap(SOLANA_INTEL_TOOLS, "sol-token-lookup", down),
     swap(SOLANA_INTEL_TOOLS, "sol-price", async ({ mints }) => ({ prices: { [mints[0]]: { priceUsd: 0.5 } } })),
   ];
   try {

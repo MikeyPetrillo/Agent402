@@ -3,7 +3,7 @@
 //
 // Pattern matches scripts/test-contract-kit.js:
 //   • Catalog envelope + input validation always run (deterministic).
-//   • Live upstream calls (GLEIF, Wikidata, Gravatar, GitHub, favicon fetch)
+//   • Live upstream calls (GLEIF, Wikidata, GitHub, favicon fetch)
 //     are opt-in via ENRICH_LIVE_TEST=1.
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -17,11 +17,11 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-ok(ENRICH_TOOLS.length === 5, `5 tools exported (got ${ENRICH_TOOLS.length})`);
+ok(ENRICH_TOOLS.length === 4, `4 tools exported (got ${ENRICH_TOOLS.length})`);
+ok(!ENRICH_TOOLS.some((t) => t.slug === "gravatar-check"), "gravatar-check is retired (src/retired-tools.js), not served");
 const SPEC = {
   "lei-lookup": { price: "$0.002", category: "data" },
   "wikidata-entity": { price: "$0.005", category: "data" },
-  "gravatar-check": { price: "$0.001", category: "network" },
   "github-repo": { price: "$0.005", category: "data" },
   "favicon-grab": { price: "$0.001", category: "web" },
 };
@@ -35,7 +35,7 @@ for (const t of ENRICH_TOOLS) {
   ok(typeof t.handler === "function", `${t.slug}: has handler`);
   const d = t.discovery;
   ok(d && d.input && d.inputSchema && d.output?.example, `${t.slug}: full discovery envelope`);
-  // All five reach the network — they must be wallet-only (PoW can't farm egress).
+  // All four reach the network — they must be wallet-only (PoW can't farm egress).
   ok(WALLET_ONLY_SLUGS.has(t.slug), `${t.slug}: in WALLET_ONLY_SLUGS`);
 }
 
@@ -64,11 +64,6 @@ await throws(h("wikidata-entity")({ id: "Q" }), 400, "wikidata-entity: bare Q re
 await throws(h("wikidata-entity")({ id: "Q12345678901" }), 400, "wikidata-entity: overlong id rejected");
 await throws(h("wikidata-entity")({ name: "x".repeat(201) }), 400, "wikidata-entity: name over 200 chars");
 
-// gravatar-check
-await throws(h("gravatar-check")({}), 400, "gravatar-check: neither email nor hash");
-await throws(h("gravatar-check")({ email: "not-an-email" }), 400, "gravatar-check: malformed email");
-await throws(h("gravatar-check")({ hash: "zz" }), 400, "gravatar-check: malformed hash");
-await throws(h("gravatar-check")({ hash: "ABCDEF" }), 400, "gravatar-check: wrong-length hash");
 
 // github-repo
 await throws(h("github-repo")({}), 400, "github-repo: missing owner+repo");
@@ -148,10 +143,6 @@ if (process.env.ENRICH_LIVE_TEST === "1") {
     (r) => r.found === true && /Apple/i.test(r.label) && r.facts && Object.keys(r.facts).length > 0);
   await live("wikidata-entity name search", () => h("wikidata-entity")({ name: "Apple Inc" }),
     (r) => r.found === true && r.matches.some((m) => m.id === "Q312"));
-  await live("gravatar-check docs hash", () => h("gravatar-check")({ hash: "205e460b479e2e5b48aec07710c08d50" }),
-    (r) => typeof r.exists === "boolean" && r.hash === "205e460b479e2e5b48aec07710c08d50");
-  await live("gravatar-check email path", () => h("gravatar-check")({ email: "no-such-mailbox-402@example.com" }),
-    (r) => r.exists === false && r.avatarUrl === null);
   await live("github-repo Agent402", () => h("github-repo")({ owner: "MikeyPetrillo", repo: "Agent402" }),
     (r) => r.fullName === "MikeyPetrillo/Agent402" && typeof r.stars === "number");
   await live("favicon-grab github.com", () => h("favicon-grab")({ url: "https://github.com" }),

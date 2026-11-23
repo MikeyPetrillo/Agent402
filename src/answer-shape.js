@@ -84,8 +84,6 @@ export const EMPTY_RESULT_OK = new Map([
   ["fema-disasters", true],
   ["event-logs", true],
   ["onchain-sql", true],
-  ["onchain-sql-range", true],
-  ["onchain-sql-week", true],
   ["search-suggest", true],
   // Keyed on the payer: a payer with no history, store or grants lists none.
   ["memory-grants", true],

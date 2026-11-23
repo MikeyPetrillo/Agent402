@@ -1,33 +1,23 @@
-// id-validate, build-log-triage, json-repair (src/tools/validate-more-kit.js)
-// and solana-rpc (src/tools/solana-rpc-kit.js). Offline: the RPC tool reads a
-// stubbed fetch, installed under the egress meter so the provider's daily
-// ceiling is exercised the way production meets it.
+// id-validate, build-log-triage, json-repair (src/tools/validate-more-kit.js).
+// Offline.
 //
 //   node scripts/test-validate-more-kit.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 
-// The meter wraps whatever globalThis.fetch is when it installs; later blocks swap `inner`.
-let inner = async () => new Response("{}");
-globalThis.fetch = (...a) => inner(...a);
-const { installEgressMeter } = await import("../src/egress-meter.js");
-installEgressMeter();
-
 const { VALIDATE_MORE_TOOLS, _test } = await import("../src/tools/validate-more-kit.js");
-const { SOLANA_RPC_TOOLS, SOLANA_RPC_METHODS, checkSolanaRpcRequest } = await import("../src/tools/solana-rpc-kit.js");
-const { _resetHardCaps } = await import("../src/upstream-hard-caps.js");
 const { FREE_TIER_SLUGS } = await import("../src/free-tier.js");
 const { WALLET_ONLY_SLUGS } = await import("../src/pow.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const tool = (slug) => [...VALIDATE_MORE_TOOLS, ...SOLANA_RPC_TOOLS].find((t) => t.slug === slug);
+const tool = (slug) => VALIDATE_MORE_TOOLS.find((t) => t.slug === slug);
 const run = (slug, input) => tool(slug).handler(input);
 const status = async (fn) => { try { await fn(); return 200; } catch (e) { return e.statusCode ?? "throw:" + e.message; } };
 const errOf = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
 
 // --- free tier and wallet-only placement -----------------------------------
 for (const s of ["id-validate", "build-log-triage", "json-repair"]) ok(FREE_TIER_SLUGS.has(s) && !WALLET_ONLY_SLUGS.has(s), `${s} is on the free tier`);
-ok(!FREE_TIER_SLUGS.has("solana-rpc") && WALLET_ONLY_SLUGS.has("solana-rpc"), "solana-rpc is wallet-only");
+ok(!FREE_TIER_SLUGS.has("solana-rpc") && !WALLET_ONLY_SLUGS.has("solana-rpc"), "solana-rpc is retired: on no tier list");
 
 // --- every published example answers with data ------------------------------
 for (const t of VALIDATE_MORE_TOOLS) {
@@ -203,95 +193,6 @@ for (const [text, want, kinds] of REPAIRS) {
   ok(capped.fixes.length === 200 && capped.fixCount === 301 && capped.truncated === true && capped.matched === 301, "json-repair: the fix list is capped at 200 and says so in fields");
 }
 
-// --- solana-rpc ----------------------------------------------------------------
-const rpcOk = (result) => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200, headers: { "content-type": "application/json" } });
-const rpcErr = (code, message, statusCode = 200) => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code, message } }), { status: statusCode, headers: { "content-type": "application/json" } });
-const ADDR = "11111111111111111111111111111111";
-const SIG = "5".repeat(87);
-{
-  ok(!SOLANA_RPC_METHODS.includes("getProgramAccounts") && SOLANA_RPC_METHODS.every((m) => /^(get|is)[A-Z]/.test(m)), "solana-rpc: the allowlist holds reads only and no getProgramAccounts");
-  for (const m of ["getProgramAccounts", "sendTransaction", "simulateTransaction", "requestAirdrop", "accountSubscribe", "getLargestAccounts"]) {
-    ok(await status(() => run("solana-rpc", { method: m, params: [] })) === 400, `solana-rpc refuses ${m} before any egress`);
-  }
-  ok(checkSolanaRpcRequest({ method: "GETSLOT" }).method === "getSlot", "solana-rpc: methods match case-insensitively and go upstream in canonical casing");
-  const blk = checkSolanaRpcRequest({ method: "getBlock", params: [250000000] });
-  ok(blk.params[1].transactionDetails === "none" && blk.params[1].rewards === false && blk.params[1].maxSupportedTransactionVersion === 0, "solana-rpc: getBlock defaults to no transaction list and no rewards");
-  ok(await status(() => checkSolanaRpcRequest({ method: "getBlock", params: [1, { transactionDetails: "full" }] })) === 400, "solana-rpc: getBlock with full transactions is refused");
-  const sigs = checkSolanaRpcRequest({ method: "getSignaturesForAddress", params: [ADDR] });
-  ok(sigs.params[1].limit === 20, "solana-rpc: getSignaturesForAddress defaults to 20 rows");
-  ok(await status(() => checkSolanaRpcRequest({ method: "getSignaturesForAddress", params: [ADDR, { limit: 1000 }] })) === 400, "solana-rpc: a limit over 100 is refused");
-  ok(checkSolanaRpcRequest({ method: "getTransaction", params: [SIG] }).params[1].maxSupportedTransactionVersion === 0, "solana-rpc: getTransaction reads versioned transactions by default");
-  ok(await status(() => checkSolanaRpcRequest({ method: "getBalance", params: ["0xabc"] })) === 400, "solana-rpc: a non-base58 address is refused");
-  ok(await status(() => checkSolanaRpcRequest({ method: "getAccountInfo", params: [ADDR, { filters: [] }] })) === 400, "solana-rpc: an unknown config field is refused");
-  ok(await status(() => checkSolanaRpcRequest({ method: "getSignatureStatuses", params: [Array(21).fill(SIG)] })) === 400, "solana-rpc: more than 20 signatures is refused");
-  ok(await status(() => checkSolanaRpcRequest({ method: "getSlot", params: [1, 2, 3, 4, 5] })) === 400, "solana-rpc: more than 4 params is refused");
-  ok(await status(() => checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: [ADDR, { mint: ADDR, programId: ADDR }] })) === 400, "solana-rpc: a token filter must be exactly one of mint or programId");
-  ok(await status(() => checkSolanaRpcRequest({ method: "getSlot", network: "devnet" })) === 400, "solana-rpc: only mainnet is served");
-  // Heavy reads are refused or bounded before any egress.
-  ok(await status(() => checkSolanaRpcRequest({ method: "getSlot", network: { toString: 1 } })) === 400 && await status(() => checkSolanaRpcRequest({ method: "getSlot", network: 1 })) === 400, "solana-rpc: a network that is not text is a 400");
-  ok(await status(() => checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: [ADDR, { programId: ADDR }] })) === 400, "solana-rpc: an owner-wide programId scan is refused (name the mint)");
-  ok(checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: [ADDR, { mint: ADDR }] }).params[1].mint === ADDR, "solana-rpc: a mint filter is read");
-  for (const bad of [[ADDR], [ADDR, { mint: ADDR, programId: ADDR }], [ADDR, {}]]) {
-    let msg = "";
-    try { checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: bad }); } catch (e) { msg = e.message; }
-    ok(msg && !/\{ mint \} or \{ programId \}/.test(msg) && /\{ mint \}/.test(msg), `solana-rpc: the getTokenAccountsByOwner refusal names only { mint } (${msg})`);
-  }
-  ok(/an account the node cannot parse comes back as base64/.test(tool("solana-rpc").description), "solana-rpc: the description says what jsonParsed falls back to");
-  for (const enc of [undefined, "base64", "base58", "base64+zstd"]) {
-    const cfg = enc ? { encoding: enc } : undefined;
-    ok(await status(() => checkSolanaRpcRequest({ method: "getAccountInfo", params: cfg ? [ADDR, cfg] : [ADDR] })) === 400, `solana-rpc: getAccountInfo in ${enc || "the default base64"} without a dataSlice is refused`);
-    ok(await status(() => checkSolanaRpcRequest({ method: "getAccountInfo", params: [ADDR, { ...(cfg || {}), dataSlice: { offset: 0, length: 70_000 } }] })) === 400, `solana-rpc: a dataSlice over 64 KB in ${enc || "base64"} is refused`);
-    ok(checkSolanaRpcRequest({ method: "getAccountInfo", params: [ADDR, { ...(cfg || {}), dataSlice: { offset: 0, length: 1024 } }] }).params[1].dataSlice.length === 1024, `solana-rpc: getAccountInfo in ${enc || "base64"} with a dataSlice is read`);
-  }
-  ok(checkSolanaRpcRequest({ method: "getAccountInfo", params: [ADDR, { encoding: "jsonParsed" }] }).params[1].encoding === "jsonParsed", "solana-rpc: getAccountInfo in jsonParsed is read without a slice");
-
-  process.env.SOLANA_RPCS = "https://rpc-a.example.com,https://rpc-b.example.com";
-  _resetHardCaps();
-  const seen = [];
-  inner = async (url, init) => { seen.push([new URL(String(url)).host, JSON.parse(init.body)]); return seen.length === 1 ? rpcErr(-32429, "rate limit", 429) : rpcOk(380000000); };
-  const r = await run("solana-rpc", { method: "getSlot", params: [] });
-  ok(r.result === 380000000 && r.method === "getSlot" && r.network === "mainnet", "solana-rpc: answers the node's result");
-  ok(seen.length === 2 && seen[0][0] === "rpc-a.example.com" && seen[1][0] === "rpc-b.example.com", "solana-rpc: a provider rate limit walks to the next endpoint");
-  ok(seen[1][1].method === "getSlot" && Array.isArray(seen[1][1].params), "solana-rpc: the upstream body is a JSON-RPC request");
-
-  seen.length = 0;
-  inner = async (url, init) => { seen.push(String(url)); return rpcErr(-32009, "Slot 1 was skipped, or missing in long-term storage"); };
-  const e = await errOf(() => run("solana-rpc", { method: "getBlock", params: [1] }));
-  ok(e?.statusCode === 502 && /Node error: Slot 1 was skipped/.test(e.message) && seen.length === 1, "solana-rpc: a node's own error is a 502 answer, not a walk");
-
-  inner = async () => rpcOk({ value: "x".repeat(210_000) });
-  ok((await errOf(() => run("solana-rpc", { method: "getAccountInfo", params: [ADDR, { encoding: "jsonParsed" }] })))?.statusCode === 413, "solana-rpc: a result over 200KB is 413");
-  inner = async () => new Response("{\"result\":\"" + "y".repeat(2_100_000) + "\"}", { status: 200 });
-  ok((await errOf(() => run("solana-rpc", { method: "getAccountInfo", params: [ADDR, { encoding: "jsonParsed" }] })))?.statusCode === 413, "solana-rpc: a node body over the read cap is cut off and answers 413");
-
-  // A block's signature list is served cut and marked, never a 413.
-  inner = async () => rpcOk({ blockHeight: 1, blockhash: ADDR, signatures: Array.from({ length: 3000 }, () => SIG) });
-  const big = await run("solana-rpc", { method: "getBlock", params: [250000000, { transactionDetails: "signatures" }] });
-  ok(big.result.signatures.length === 1000 && big.signaturesTotal === 3000 && big.complete === false && big.truncated === true && big.returned === 1000 && big.matched === 3000, `solana-rpc: a block's 3,000 signatures are served as the first 1,000, marked partial (${big.result?.signatures?.length}, ${big.signaturesTotal})`);
-  inner = async () => rpcOk({ blockHeight: 1, signatures: [SIG, SIG] });
-  const small = await run("solana-rpc", { method: "getBlock", params: [250000000, { transactionDetails: "signatures" }] });
-  ok(small.result.signatures.length === 2 && !("signaturesTotal" in small), "solana-rpc: a small block is served whole and unmarked");
-
-  inner = async () => { throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); };
-  const down = await errOf(() => run("solana-rpc", { method: "getSlot" }));
-  ok(down?.statusCode === 503, `solana-rpc: every endpoint unreachable is the upstream 503 (got ${down?.statusCode})`);
-
-  // The keyed provider's daily ceiling refuses before the call, uncharged.
-  process.env.SOLANA_RPCS = "https://solana-mainnet.g.alchemy.com/v2/test-key";
-  process.env.HARDCAP_ALCHEMY_CALLS = "0";
-  _resetHardCaps();
-  let reached = 0;
-  inner = async () => { reached++; return rpcOk(1); };
-  const capped = await errOf(() => run("solana-rpc", { method: "getSlot" }));
-  ok(capped?.statusCode === 503 && capped?.hardCap === true && reached === 0, "solana-rpc: past the keyed provider's daily ceiling the call is refused with the uncharged 503 and never sent");
-  process.env.HARDCAP_ALCHEMY_CALLS = "5";
-  _resetHardCaps();
-  const okAgain = await run("solana-rpc", { method: "getSlot" });
-  ok(okAgain.result === 1 && reached === 1, "solana-rpc: under the ceiling the keyed lane answers");
-  delete process.env.HARDCAP_ALCHEMY_CALLS;
-  delete process.env.SOLANA_RPCS;
-}
-
 // ---- json-repair and json-lint point at the same place ---------------------
 // For the common broken inputs json-repair's first fix sits where json-lint
 // reports the error; the one difference, a trailing comma (json-repair at the
@@ -311,11 +212,6 @@ const SIG = "5".repeat(87);
   }
   const phrase = /For a trailing comma, json-repair points at the comma and json-lint at the bracket after it\./;
   ok(phrase.test(lint.description) && phrase.test(rep.description), "both descriptions state where each reports a trailing comma");
-}
-// ---- solana-rpc reads without a spaced hyphen as a dash ---------------------
-{
-  const t = tool("solana-rpc");
-  ok(!/ - /.test(t.description), "solana-rpc's description uses no spaced hyphen as a dash");
 }
 
 // ---- id-validate's description names every type the kit checks -------------

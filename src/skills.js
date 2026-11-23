@@ -36,8 +36,8 @@ export const PACK_PRICE_TABLE = {
   "market-brief": 0.005, // 3 tools, parts $0.005
   "financial-analysis": 0.019, // 3 tools, parts $0.021
   "financial-research": 0.018, // 6 tools, parts $0.02
-  "macro-economics": 0.028, // 7 tools, parts $0.031
-  "macro-dashboard": 0.046, // 14 tools, parts $0.051
+  "macro-economics": 0.024, // 6 tools, parts $0.026
+  "macro-dashboard": 0.042, // 13 tools, parts $0.046
   "dns-network-ops": 0.006, // 6 tools, parts $0.006
   "crypto-research": 0.031, // 7 tools, parts $0.034
   "content-extraction": 0.017, // 6 tools, parts $0.018
@@ -53,7 +53,7 @@ export const PACK_PRICE_TABLE = {
   "location-intel": 0.009, // 5 tools, parts $0.009
   "user-onboarding": 0.008, // 7 tools, parts $0.008
   "trip-planner": 0.007, // 6 tools, parts $0.007
-  "macro-context": 0.033, // 8 tools, parts $0.036
+  "macro-context": 0.028, // 7 tools, parts $0.031
   "regulatory-watch": 0.021, // 5 tools, parts $0.023
   "search-and-cite": 0.093, // 5 tools, parts $0.103
   "media-pipeline": 0.028, // 6 tools, parts $0.031
@@ -363,7 +363,7 @@ const SKILL_PACKS_ALL = [
     slug: "macro-economics",
     title: "Macro economics",
     tagline:
-      "Pull the canonical US macro dataset - yield curve, CPI, unemployment, fed funds, Sahm rule - without an API key.",
+      "Pull the canonical US macro dataset - the Treasury yield curve and its spreads, CPI, unemployment, fed funds, Sahm rule - without an API key, each figure with its as-of date.",
     useCase:
       "Producing a weekly macro note, charting a macro indicator dashboard, or feeding a model with the latest FRED/Treasury data.",
     promptArgs: [],
@@ -374,7 +374,6 @@ const SKILL_PACKS_ALL = [
       "unemployment-rate",
       "fed-funds",
       "sahm-rule",
-      "fred-release-calendar",
     ],
     workflow: [
       "Pull the live Treasury yield curve (all maturities from 1M to 30Y) - the base data for every spread/inversion chart.",
@@ -383,22 +382,20 @@ const SKILL_PACKS_ALL = [
       "Pull the headline unemployment rate (unemployment-rate) - the U-3 series.",
       "Get the effective fed funds rate (fed-funds) for the current policy stance.",
       "Compute the Sahm rule (sahm-rule) - a real-time recession indicator that triggers when the 3-month unemployment average rises >0.5pp above its 12-month low.",
-      "Pull the upcoming FRED release calendar (fred-release-calendar) so the brief can flag what's hitting this week.",
     ],
     claudePrompt:
-      "Build today's macro dashboard. Use Agent402 to pull the Treasury yield curve, 10Y–2Y and 10Y–3M spreads, latest CPI YoY, unemployment rate, fed funds rate, and the Sahm rule reading. Highlight any indicator that is at a multi-year extreme, and list FRED releases scheduled for this week.",
+      "Build today's macro dashboard. Use Agent402 to pull the Treasury yield curve, 10Y–2Y and 10Y–3M spreads, latest CPI YoY, unemployment rate, fed funds rate, and the Sahm rule reading. Highlight any indicator that is at a multi-year extreme.",
   },
   {
     slug: "macro-dashboard",
     title: "Macro dashboard refresh",
     tagline:
-      "The full macro + crypto dashboard in one call: 5 FRED series, 5 Treasury reads, yield-curve spread, crypto market/trending/global, and live gas - a 14-tool macro + crypto basket, bundled below its a la carte price.",
+      "The full macro + crypto dashboard in one call: 4 FRED series, 5 Treasury reads, yield-curve spread, crypto market/trending/global, and live gas - a 13-tool macro + crypto basket, bundled below its a la carte price.",
     useCase:
       // The price is read from PACK_PRICES (generated from the catalog), never typed.
       `An agent keeping a live macro dashboard warm needs the same basket of reads every refresh cycle. Buying the tools one at a time costs more per cycle than the bundle; this pack is $${fmtPackUsd(PACK_PRICES["macro-dashboard"])} for one call, one payment, every series in one JSON envelope.`,
     promptArgs: [],
     toolSlugs: [
-      "fred-release-calendar",
       "fed-funds",
       "cpi-yoy",
       "unemployment-rate",
@@ -414,13 +411,13 @@ const SKILL_PACKS_ALL = [
       "gas-estimate",
     ],
     workflow: [
-      "Pull the five FRED macro series: upcoming release calendar (14 days), fed funds rate (30 days), CPI year-over-year, unemployment rate (12 months), and the Sahm Rule recession indicator (FRED series SAHMREALTIME).",
+      "Pull the four FRED macro series: fed funds rate (30 days), CPI year-over-year, unemployment rate (12 months), and the Sahm Rule recession indicator (FRED series SAHMREALTIME).",
       "Read the Treasury complex: full yield curve, 90 days of yield history, the 10y-2y spread, total public debt, and average interest rates on the debt.",
       "Snapshot crypto: top coins by market cap, trending coins, and global market stats (total cap, BTC dominance, volume).",
       "Read live Base gas via gas-estimate so onchain execution cost rides the same refresh.",
     ],
     claudePrompt:
-      "Refresh my macro dashboard using Agent402's macro-dashboard skill pack: FRED releases, fed funds, CPI, unemployment, Sahm rule, the full Treasury yield curve and spread, crypto market overview, and current gas. Summarize what changed since the last refresh in one paragraph.",
+      "Refresh my macro dashboard using Agent402's macro-dashboard skill pack: fed funds, CPI, unemployment, Sahm rule, the full Treasury yield curve and spread, crypto market overview, and current gas. Summarize what changed since the last refresh in one paragraph.",
   },
   {
     slug: "dns-network-ops",
@@ -633,7 +630,7 @@ const SKILL_PACKS_ALL = [
     slug: "trend-analysis",
     title: "Trend analysis",
     tagline:
-      "Take any numeric time series - a stock's daily close, a FRED macro indicator, a treasury yield history - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+      "Take any numeric time series - a stock's daily close, a US economic indicator, a treasury yield history - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase:
       "You have a question like \"is AAPL trending up over the last year - and what does the next quarter look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
     promptArgs: [
@@ -1035,7 +1032,7 @@ const SKILL_PACKS_ALL = [
     slug: "macro-context",
     title: "Macro backdrop snapshot",
     tagline:
-      "Macro backdrop snapshot: the 'is the economic backdrop you're modeling against still current?' pack. Pull the core US macro readings - CPI year-over-year, unemployment, fed funds, the Treasury yield curve, a G10 FX dashboard, the Sahm Rule recession indicator, and the next scheduled economic releases - in one composed workflow. Eight egress tools, one composite snapshot, each figure with its as-of date and source, that the agent can cite in a forecast or an investment decision memo.",
+      "Macro backdrop snapshot: the 'is the economic backdrop you're modeling against still current?' pack. Pull the core US macro readings - CPI year-over-year, unemployment, fed funds, the Treasury yield curve, a G10 FX dashboard, and the Sahm Rule recession indicator - in one composed workflow. Seven egress tools, one composite snapshot, each figure with its as-of date and source, that the agent can cite in a forecast or an investment decision memo.",
     useCase:
       "Every finance/forecast pack in Agent402 assumes the macro backdrop is known. This pack makes that assumption explicit and dated. Before you NPV a 10-year cashflow or forecast a revenue series, pull this snapshot, cite the as-of dates, and pin the assumptions. The Sahm Rule and the yield-curve spreads are two published series read on the business cycle (FRED and Treasury data); CPI + fed funds gives the real-rate environment; the FX dashboard shows how far USD has moved against the other G10 currencies this year. It is the dated input a forecast, a cashflow model or an investment decision memo cites; the pack reports published series and makes no forecast. Pairs with loan-comparison and forecasting-bake-off - neither pack reads macro data itself.",
     toolSlugs: [
@@ -1046,7 +1043,6 @@ const SKILL_PACKS_ALL = [
       "yield-curve-spread",
       "sahm-rule",
       "fx-dashboard",
-      "fred-release-calendar",
     ],
     workflow: [
       "Pull current US CPI year-over-year with cpi-yoy. FRED series CPIAUCSL converted to YoY % change. This is the headline inflation number every cashflow assumption is implicitly indexed to - if you're discounting at a nominal rate, you need to know real-vs-nominal spread. Returns the latest observation date and value; flag if the latest observation is more than 45 days stale (BLS publishes monthly with ~2-week lag - anything older signals a FRED outage or a holiday).",
@@ -1056,10 +1052,9 @@ const SKILL_PACKS_ALL = [
       "Compute yield-curve spreads with yield-curve-spread. Returns the two standard spreads in basis points: 10Y-2Y and 10Y-3M (the spread studied by Estrella & Mishkin for the New York Fed). A negative spread means the curve is inverted at that pair. The tool returns both spreads plus a boolean inverted flag per spread. State any inversion with its as-of date, so a downstream forecast can cite it.",
       "Compute the Sahm Rule with sahm-rule. Defined as: current 3-month moving average of UNRATE minus its 12-month minimum. Triggers when ≥ 0.5 percentage points. FRED publishes it as the Real-time Sahm Rule Recession Indicator (series SAHMREALTIME). Returns the current value and the triggered boolean. Report it beside the spreads from step 5, each with its as-of date: the pack reports the published series and makes no forecast.",
       "Pull G10 FX dashboard with fx-dashboard. Returns USD vs EUR, JPY, GBP, CHF, AUD, CAD, NZD, SEK, NOK - the standard developed-market basket. Critical for any cashflow denominated in non-USD: a 10% USD strengthening turns a 12% EUR-denominated return into 2%. The dashboard returns the current cross plus the YTD change per pair. Surface any pair with >10% YTD change as a 'denomination matters here' callout.",
-      "Pull the next 14 days of economic releases with fred-release-calendar. Returns the schedule of upcoming releases (next CPI, next NFP, next FOMC, etc.) with their release dates. This tells the agent which numbers in the snapshot are about to be refreshed - if CPI prints in 3 days, the agent notes 'CPI is next published on date X' beside every figure that depends on it. Closes the snapshot with a forward-looking 'what will be stale soon' list.",
     ],
     claudePrompt:
-      "Pull the current macro backdrop using Agent402 before doing any finance/forecast math.\n\nAs-of: 2026-06-22 (use today's date). USD-denominated assumptions.\n\n(1) cpi-yoy - return {asOfDate, yoyPct}. Flag if asOfDate > 45 days stale. (2) unemployment-rate - return {asOfDate, level, sixMonthDelta}. (3) fed-funds - return {asOfDate, level, yoyDelta}. (4) treasury-yield-curve - return {asOfDate, points: [{maturity, yield}, ...]} for the standard 1M/3M/6M/1Y/2Y/5Y/10Y/30Y set. (5) yield-curve-spread - return {asOfDate, tenTwo: {spread, isInverted}, tenThreeM: {spread, isInverted}}. (6) sahm-rule - return {asOfDate, value, triggered}. Report it beside the yield-curve spreads from step 5 in the writeup, each with its as-of date. (7) fx-dashboard - return {asOfDate, crosses: [{pair, level, ytdPct}, ...]}. Flag any pair with |ytdPct| > 10 with a 'denomination matters here' note. (8) fred-release-calendar with daysAhead=14 - return {nextReleases: [{date, seriesName}, ...]}. Final return: {asOf: '2026-06-22', cpiYoy, unemployment, fedFunds, yieldCurve, spreads, sahm, fx, nextReleases, backdropSummary: '<one paragraph stating CPI direction, fed-funds direction, curve shape and the Sahm Rule value, each with its as-of date>', oneLineSummary: 'CPI 2.4% YoY (Apr 26), UE 4.1% (May 26, +0.4 over 6m), fed funds 4.25%, curve disinverted 10Y-2Y at +12bps, Sahm not triggered (0.33), USD broadly flat YTD, next CPI prints 2026-07-10.'}. All eight tools are egress (FRED + Treasury + ECB FX). Budget ~$0.10 paid. Cache this snapshot per session - do not re-call within the same agent task.",
+      "Pull the current macro backdrop using Agent402 before doing any finance/forecast math.\n\nAs-of: 2026-06-22 (use today's date). USD-denominated assumptions.\n\n(1) cpi-yoy - return {asOfDate, yoyPct}. Flag if asOfDate > 45 days stale. (2) unemployment-rate - return {asOfDate, level, sixMonthDelta}. (3) fed-funds - return {asOfDate, level, yoyDelta}. (4) treasury-yield-curve - return {asOfDate, points: [{maturity, yield}, ...]} for the standard 1M/3M/6M/1Y/2Y/5Y/10Y/30Y set. (5) yield-curve-spread - return {asOfDate, tenTwo: {spread, isInverted}, tenThreeM: {spread, isInverted}}. (6) sahm-rule - return {asOfDate, value, triggered}. Report it beside the yield-curve spreads from step 5 in the writeup, each with its as-of date. (7) fx-dashboard - return {asOfDate, crosses: [{pair, level, ytdPct}, ...]}. Flag any pair with |ytdPct| > 10 with a 'denomination matters here' note. Final return: {asOf: '2026-06-22', cpiYoy, unemployment, fedFunds, yieldCurve, spreads, sahm, fx, backdropSummary: '<one paragraph stating CPI direction, fed-funds direction, curve shape and the Sahm Rule value, each with its as-of date>', oneLineSummary: 'CPI 2.4% YoY (Apr 26), UE 4.1% (May 26, +0.4 over 6m), fed funds 4.25%, curve disinverted 10Y-2Y at +12bps, Sahm not triggered (0.33), USD broadly flat YTD.'}. All seven tools are egress (FRED + Treasury + ECB FX). Budget ~$0.10 paid. Cache this snapshot per session - do not re-call within the same agent task.",
     promptArgs: [
       {
         name: "asOfDate",
@@ -2692,7 +2687,7 @@ const WITHOUT_STOCK_COPY = {
     claudePrompt: "Check insider activity for AAPL using Agent402's insider-alert skill pack. Get (1) 30-day insider trades, (2) last 3 SEC filings. Flag any cluster buying or selling and correlate with recent filings.",
   },
   "trend-analysis": {
-    tagline: "Take any numeric time series - a FRED macro indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+    tagline: "Take any numeric time series - a US economic indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase: "You have a question like \"is unemployment trending up - and what does the next year look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data read (macro) is paid.",
     workflow: [
       "Fetch the series: call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",

@@ -46,7 +46,7 @@
 // without it - measured) and returned inline as base64, never as a URL that
 // would expose our job ids.
 import { parseMultipartFile } from "../multipart.js";
-import { imageSize, examplePngBase64 } from "./judge-preview-kit.js";
+import { imageSize, examplePngBase64 } from "./image-size.js";
 import { bad, fetchOpenRouter, readUpstreamBody, throwUpstreamError, assertUpstreamBody, MARGIN, OPENROUTER_ATTRIBUTION, upstreamUserId, IMAGES_PATH, IMAGES_PRICE, stripBilling } from "./llm-gateway-kit.js";
 import { redactSecrets } from "./redact.js";
 import { SETTLE_FIRST_SENTENCE } from "../settle-first-copy.js";

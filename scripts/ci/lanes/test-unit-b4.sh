@@ -11,7 +11,7 @@ t node scripts/test-router-sybil.js
 t node scripts/test-data-kit.js
 # Holidays kit: public-holidays v4 contract, cache bounds, business-day math on published calendars, rails, exchanges (offline)
 t node scripts/test-holidays-kit.js
-# id-validate, build-log-triage, json-repair vectors and bounds; solana-rpc allowlist, failover, size caps and the keyed provider's ceiling (offline)
+# id-validate, build-log-triage, json-repair vectors and bounds (offline)
 t node scripts/test-validate-more-kit.js
 # The sweeps' server answers examples naming its own /samples/ and /fixtures/ files from itself, never production (offline)
 t node scripts/test-own-examples-preload.js
@@ -314,7 +314,7 @@ t node scripts/test-stt-language.js
 t node scripts/test-rwa-asset-own-row.js
 # filing-watch form filter reads the full recent list and older filing files, bounded reads (offline)
 t node scripts/test-filing-watch-older-files.js
-# cpi-yoy lists unpublished months; world-bank default end year is last year; release calendar uses the Chicago date (offline)
+# cpi-yoy lists unpublished months; world-bank default end year is last year (offline)
 t node scripts/test-macro-dates.js
 # flight-search refuses a date as past only before today's date in UTC-12 (offline)
 t node scripts/test-flights-local-date.js
