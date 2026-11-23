@@ -731,9 +731,9 @@ Packages: 75. Licenses: MIT 62, Apache-2.0 13.
   commander@15.0.0  MIT
   eventemitter3@5.0.1  MIT
   isows@1.0.7  MIT
-  ox@0.14.29  MIT
+  ox@0.14.59  MIT
   undici-types@8.11.2  MIT
-  viem@2.52.2  MIT
+  viem@2.57.16  MIT
   ws@8.21.1  MIT
   zod@4.6.7  MIT
 
@@ -752,7 +752,7 @@ These bundle no third-party code. Their dependencies are installed by the user's
     peer dependencies: none
   elizaos-plugin-agent402 (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
-    peer dependencies: @x402/evm >=2.0.0 <3, @x402/fetch >=2.0.0 <3, viem >=2.0.0 <3
+    peer dependencies: @elizaos/core >=1.0.0 <2, @x402/evm >=2.0.0 <3, @x402/fetch >=2.0.0 <3, viem >=2.0.0 <3
   agent402-google-adk (MIT)
     dependencies: none
     peer dependencies: @google/adk >=1 <3, zod >=3 <5
