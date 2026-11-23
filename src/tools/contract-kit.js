@@ -805,7 +805,7 @@ export const CONTRACT_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Decode EVM smart-contract transaction calldata into the function name and typed parameters. Supply an ABI (from /api/contract-abi) or a signature like transfer(address,uint256) for a fully offline decode; with neither, the 4-byte selector is resolved via the Sourcify 4byte signature database (4byte.directory fallback) and each candidate signature is tried. Unknown selectors return a documented partial decode (selector + raw 32-byte words) instead of an error.",
+      "Decode EVM smart-contract transaction calldata into the function name and typed parameters. Supply an ABI (from /api/contract-abi) or a signature like transfer(address,uint256) for a fully offline decode; with neither, the 4-byte selector is resolved via an open, community signature database (4byte.directory fallback) and each candidate signature is tried. Unknown selectors return a documented partial decode (selector + raw 32-byte words) instead of an error.",
     tags: ["crypto", "calldata", "decode", "abi", "selector", "evm", "transaction", "smart-contract"],
     discovery: {
       bodyType: "json",
@@ -921,7 +921,7 @@ export const CONTRACT_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Resolve a 4-byte function selector or a 32-byte event topic hash to its known human-readable Solidity signatures, via the Sourcify 4byte signature database with 4byte.directory as fallback. Unknown selectors return {found:false} with an empty list, not an error.",
+      "Resolve a 4-byte function selector or a 32-byte event topic hash to its known human-readable Solidity signatures, via an open, community signature database with 4byte.directory as fallback. Unknown selectors return {found:false} with an empty list, not an error.",
     tags: ["crypto", "selector", "4byte", "signature", "event", "topic", "evm", "smart-contract", "solidity"],
     discovery: {
       bodyType: "json",
