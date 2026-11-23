@@ -66,7 +66,7 @@ const ENTRIES = [
     date: "2026-11-23",
     title: "Start here page",
     items: [
-      "Site: A new /start page gives the one step that adds Agent402 to Claude desktop, Claude Code or Cursor, lists what runs with no wallet, and shows how to fund a first wallet with USDC on Base.",
+      "Site: A new /start page gives the one step that adds Agent402 to Claude desktop, Claude Code or Cursor, lists what runs with no wallet, and shows how to pay from a wallet holding USDC on Base through the npm server (Node.js needed), set up once with its key kept in the system keychain.",
       "Docs: The /start and /base pages, payment.info, /llms.txt, the README and the wiki say that an x402 exact payment on Base is a signature: the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.",
     ],
   },

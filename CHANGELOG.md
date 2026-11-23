@@ -20,8 +20,9 @@ Tools:
 ### 2026-11-23 (start here page)
 Site:
 - A new /start page gives the one step that adds Agent402 to Claude desktop,
-  Claude Code or Cursor, lists what runs with no wallet, and shows how to fund
-  a first wallet with USDC on Base.
+  Claude Code or Cursor, lists what runs with no wallet, and shows how to pay
+  from a wallet holding USDC on Base through the npm server (Node.js needed),
+  set up once with its key kept in the system keychain.
 Docs:
 - The /start and /base pages, payment.info, /llms.txt, the README and the wiki
   say that an x402 exact payment on Base is a signature: the facilitator
