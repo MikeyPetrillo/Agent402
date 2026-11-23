@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1123 variables in 114 groups.
+1125 variables in 114 groups.
 
 ## Contents
 
@@ -1576,6 +1576,7 @@ holds it.
 | `BING_WEBMASTER_API_KEY` | Bing webmaster API key (a credential, set on the host). |  | `src/search-data.js` |
 | `BOOT_CPU_PROFILE` | Boot CPU profile. |  | `src/boot-profile.js` |
 | `BUYER_REFUSAL_WINDOW_MS` | Buyer refusal window, in milliseconds. |  | `src/tool-failure-monitor.js` |
+| `CERTSPOTTER_API_KEY` | Key for the second Certificate Transparency search behind cert-transparency (a credential, set on the host); unset, that leg is off and the first search answers alone. Its reads are held to 100 an hour per process. |  | `src/tools/network-kit2.js` |
 | `CF_IP_RANGES_EXTRA` | Cf IP ranges extra. |  | `src/cdn-client-ip.js` |
 | `CHAIN_SELLER_VIEW_MEMO_MAX` | Chain seller view memo maximum. |  | `src/server.js` |
 | `CHAIN_SELLER_VIEW_MEMO_MAX_MB` | Chain seller view memo maximum MB. |  | `src/server.js` |
@@ -1672,6 +1673,7 @@ holds it.
 | `RAILS_TEST_GRADUATE` | Rails test graduate. |  | `src/rails.js` |
 | `RATE_LIMIT_MAX_KEYS` | Rate limit maximum keys. |  | `src/rate-limit.js` |
 | `RATE_LIMIT_REPLICAS` | Number of replicas the per-process rate limits are divided across (default 1). | `1` | `src/decide/ledger.js`, `src/rate-limit.js`, `src/server.js` and 3 more |
+| `RDAP_REGISTRY_DAILY_MAX` | Lookups whois and domain-availability send to one registry's RDAP service per UTC day, per process (default 1000; off lifts it). A lookup past it answers a retryable 503 and is not sent. |  | `src/tools/rdap-registry-limits.js` |
 | `READY_ROUTER_WAIT_MS` | Ready router wait, in milliseconds. | `30000` | `src/server.js` |
 | `RECONCILE_GRACE_MS` | Reconcile grace, in milliseconds. |  | `src/settlement-reconcile.js` |
 | `REMOVED_ORIGINS_FILE` | Removed origins file path. |  | `src/x402-index.js` |
