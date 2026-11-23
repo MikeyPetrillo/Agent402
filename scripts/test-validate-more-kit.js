@@ -335,5 +335,13 @@ for (const t of ["__proto__", "constructor", "toString", "hasOwnProperty", "valu
   ok(jr.includes(`list its fixes with their line, column and offset (the first ${_test.FIXES_SHOWN} in full; fixCount and fixKinds count all)`) && !/list every fix/.test(jr), "json-repair: the listed fixes are bounded and the counts cover all");
 }
 
+// ---- build-log-triage reads a repeated line once ----
+{
+  let best = Infinity;
+  const log = "a\n".repeat(49_999);
+  for (let i = 0; i < 3; i++) { const t = performance.now(); _test.buildLogTriage({ log }); best = Math.min(best, performance.now() - t); }
+  ok(best < 40, `build-log-triage: 49,999 repeated lines in under 40 ms (${best.toFixed(1)} ms)`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

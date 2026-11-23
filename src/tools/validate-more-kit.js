@@ -470,23 +470,42 @@ export function buildLogTriage(input) {
   const ecoHits = new Map();
   let first = null, firstGeneric = null, lastStep = null, stepAtError = null, command = null, exitCode = null;
   const classLines = [];
+  // A line's readings depend on its text alone, so a line seen before (a log
+  // repeats its lines: progress bars, retries, padding) is read once per call.
+  const seenLines = new Map();
+  const readLine = (t) => {
+    let r = seenLines.get(t);
+    if (r) return r;
+    const eco = [];
+    for (const [name, test] of ECOSYSTEM_MARKERS) if (test(t)) eco.push(name);
+    const step = stepOf(t);
+    if (step) r = { eco, step };
+    else {
+      const ex = /(?:exit code|exit status|exited with code|Error) (\d{1,3})\b/.exec(t);
+      const exitHere = ex && (t.includes("##[error]") || t.startsWith("make") || t.includes("Command failed") || t.includes("exit status") || t.includes("exited with code")) ? Number(ex[1]) : null;
+      const cls = classify(t);
+      r = { eco, step: null, cmd: commandOf(t), exitHere, cls, generic: !cls && GENERIC_ERROR.some((g) => g(t)) };
+    }
+    if (t.length <= 512 && seenLines.size < 20_000) seenLines.set(t, r);
+    return r;
+  };
   for (let k = 0; k < lines.length; k++) {
     const l = lines[k];
     if (!l) continue;
     const t = l.trimStart();
-    for (const [eco, test] of ECOSYSTEM_MARKERS) if (test(t)) ecoHits.set(eco, (ecoHits.get(eco) || 0) + 1);
-    const step = stepOf(t);
+    const rd = readLine(t);
+    for (const eco of rd.eco) ecoHits.set(eco, (ecoHits.get(eco) || 0) + 1);
+    const step = rd.step;
     if (step) { lastStep = { line: k + 1, text: step.text.slice(0, LINE_SHOW_CHARS), kind: step.kind }; continue; }
-    const cmd = commandOf(t);
+    const cmd = rd.cmd;
     if (cmd && !command) command = { line: k + 1, text: cmd.slice(0, LINE_SHOW_CHARS) };
-    const ex = /(?:exit code|exit status|exited with code|Error) (\d{1,3})\b/.exec(t);
-    if (ex && exitCode === null && (t.includes("##[error]") || t.startsWith("make") || t.includes("Command failed") || t.includes("exit status") || t.includes("exited with code"))) exitCode = Number(ex[1]);
-    const cls = classify(t);
+    if (rd.exitHere !== null && exitCode === null) exitCode = rd.exitHere;
+    const cls = rd.cls;
     if (cls) {
       signals[cls]++;
       if (!first) { first = { line: k + 1, cls }; stepAtError = lastStep; }
       if (classLines.length < SHOWN_MAX) classLines.push({ k, cls });
-    } else if (!firstGeneric && GENERIC_ERROR.some((g) => g(t))) {
+    } else if (!firstGeneric && rd.generic) {
       firstGeneric = { line: k + 1, cls: null };
       if (!first) stepAtError = lastStep;
     }
