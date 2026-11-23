@@ -849,7 +849,7 @@ import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH, MOVED_GUIDE
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
-import { playgroundPage } from "./playground.js";
+import { playgroundPage, playgroundToolEntry, PLAYGROUND_TOOL_PATH } from "./playground.js";
 import { payPerCallApiPage, paidMcpToolsPage, comparePage } from "./search-landings.js";
 import { categoryMarkdown, categoriesMarkdownIndex } from "./category-markdown.js";
 import { apiExplorerPage } from "./api-explorer.js";
@@ -6554,7 +6554,15 @@ app.get("/x402-economy", (_req, res) => {
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
 // The use cases page became the Examples section of /docs (same live prices).
 app.get("/use-cases", (_req, res) => res.redirect(301, "/docs#examples"));
-app.get("/playground", (req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL, CATALOG, { variant: Object.keys(req.query || {}).length > 0 })));
+app.get("/playground", (req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL, CATALOG, { variant: Object.keys(req.query || {}).length > 0, slug: typeof req.query?.slug === "string" ? req.query.slug.slice(0, 80) : null })));
+// One tool's form data for the playground (its route, price, input schema and
+// example), fetched when a visitor picks it; the page itself carries only the
+// picker's index and the tool it opens on.
+app.get(`${PLAYGROUND_TOOL_PATH}/:slug`, (req, res) => {
+  const entry = playgroundToolEntry(CATALOG, String(req.params.slug || "").slice(0, 80));
+  if (!entry) return res.status(404).json({ status: "not_found" });
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=900").json(entry);
+});
 app.get("/sdk-playground", (_req, res) => htmlCache(res, 300, 900).send(sdkPlaygroundPage(BASE_URL)));
 // Capitalised wiki URLs whose page the site serves at a lowercase route: 301
 // there (exact-case match; Express string routes are case-insensitive).

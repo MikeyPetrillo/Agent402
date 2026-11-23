@@ -14,37 +14,60 @@ import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 
 
+/** One tool's full entry, as the page builds its form from it: the route,
+ *  the price and the input schema with its example. Served inline for the
+ *  tool the page opens on and at PLAYGROUND_TOOL_PATH/<slug> for the rest. */
+export function playgroundToolEntry(catalog, slug) {
+  const hit = Object.entries(catalog || {}).find(([, d]) => d && d.slug === slug);
+  if (!hit) return null;
+  const [routeKey, def] = hit;
+  const [method, path] = String(def.route || routeKey).split(" ");
+  return {
+    method,
+    path,
+    name: def.name || def.slug,
+    slug: def.slug,
+    category: def.category || "other",
+    description: def.description || "",
+    price: def.price,
+    computePayable: isComputePayable(def),
+    discovery: def.discovery
+      ? { input: def.discovery.input, inputSchema: def.discovery.inputSchema }
+      : undefined,
+  };
+}
+
+export const PLAYGROUND_TOOL_PATH = "/api/playground/tools";
+const DEFAULT_SLUG = "hash";
+
+/** The picker's index: the free-tier tools only (the ones this page can
+ *  run), with what the search box reads. No schemas: a tool's form comes
+ *  from its full entry, inline for the opening tool, fetched for the rest. */
+export function playgroundIndex(catalog) {
+  return Object.values(catalog || {})
+    .filter((d) => d && d.slug && isComputePayable(d))
+    .map((d) => ({ slug: d.slug, name: d.name || d.slug, category: d.category || "other", description: d.description || "" }));
+}
+
 /** `variant`: the request carried a query (a preselected tool, ?slug=...).
  *  Such a URL is the same page as /playground, so it is kept out of the
- *  index (robots.txt also disallows it) while its links are still followed. */
-export function playgroundPage(baseUrl, catalog, { variant = false } = {}) {
+ *  index (robots.txt also disallows it) while its links are still followed.
+ *  `slug`: the tool the page opens on (any catalog tool, paid ones show
+ *  their price); unknown or absent, the default free tool. */
+export function playgroundPage(baseUrl, catalog, { variant = false, slug = null } = {}) {
   const freeCount = fmtNum(toolList(catalog).filter(isComputePayable).length);
   const title = "Playground - try Agent402 tools for free";
   const description = `Try any of Agent402's ${freeCount} free-tier tools directly in your browser. No signup, no wallet - proof-of-work pays automatically.`;
   const canonical = `${baseUrl}/playground`;
 
-  // Embed the catalog the page already has. /api/pricing is the public scrapable
-  // dump and deliberately omits discovery.inputSchema (size); the playground
-  // needs schemas + names to build forms, so ship a slim per-page payload
-  // instead of a second network round-trip that used to leave blank labels
-  // whenever pricing dropped `name`.
-  const toolsPayload = Object.entries(catalog).map(([routeKey, def]) => {
-    const route = def.route || routeKey;
-    const [method, path] = route.split(" ");
-    return {
-      method,
-      path,
-      name: def.name || def.slug,
-      slug: def.slug,
-      category: def.category || "other",
-      description: def.description || "",
-      price: def.price,
-      computePayable: isComputePayable(def),
-      discovery: def.discovery
-        ? { input: def.discovery.input, inputSchema: def.discovery.inputSchema }
-        : undefined,
-    };
-  });
+  // The page ships the picker's index and the one tool it opens on. Every
+  // other tool's form is fetched when it is picked (PLAYGROUND_TOOL_PATH),
+  // so the page no longer carries every schema in the catalog.
+  const index = playgroundIndex(catalog);
+  const opening = (slug && playgroundToolEntry(catalog, String(slug)))
+    || playgroundToolEntry(catalog, DEFAULT_SLUG)
+    || (index[0] ? playgroundToolEntry(catalog, index[0].slug) : null);
+  const toolsPayload = { index, tool: opening, toolPath: PLAYGROUND_TOOL_PATH };
   const extraCss = `
   .crumb{max-width:1180px;margin:0 auto;padding:18px 30px 0;font-family:var(--font-mono);font-size:var(--fs-md);color:var(--faint)}
   .crumb a{color:var(--faint);text-decoration:none}
@@ -82,6 +105,7 @@ export function playgroundPage(baseUrl, catalog, { variant = false } = {}) {
   .pg-paid{margin:16px 0 0;font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
   .pg-paid a{color:var(--accent);white-space:nowrap}
   .pg-status{margin-top:10px;font-size:var(--fs-md);color:var(--faint);font-family:var(--font-mono)}
+  .pg-status.err{color:var(--bad)}
   .pg-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--faint);border-top-color:var(--accent);border-radius:50%;animation:spin var(--dur-spin) linear infinite;vertical-align:middle;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}
   .pg-result{padding:16px;border:1px solid var(--hairline);background:var(--card);min-height:300px;position:sticky;top:80px}

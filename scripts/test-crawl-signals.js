@@ -84,6 +84,26 @@ try {
   ok(/noindex/.test(robotsOf(variant)) && canonOf(variant) === `${SITE}/playground`, "a /playground?slug= variant is noindex with the bare playground as canonical");
   ok(!/noindex/.test(robotsOf((await get("/playground")).text)), "the bare /playground stays indexable");
 
+  // Page weight: the playground ships the picker's index and the tool it opens
+  // on, never every schema in the catalog (it was about 661 KB); a picked
+  // tool's form data is fetched from its own URL.
+  {
+    const bare = (await get("/playground")).text;
+    const island = JSON.parse((bare.match(/<script type="application\/json" id="pg-tools-data">([\s\S]*?)<\/script>/) || [])[1] || "null");
+    const bytes = Buffer.byteLength(bare);
+    ok(bytes < 200_000, `/playground is under 200 KB (${Math.round(bytes / 1024)} KB)`);
+    ok(island && Array.isArray(island.index) && island.index.length > 50 && island.index.every((t) => t.slug && t.name && !("discovery" in t)), `the island carries the free tools' index without schemas (${island?.index?.length})`);
+    ok(island?.tool?.slug === "hash" && island.tool.discovery?.inputSchema && (bare.match(/"inputSchema"/g) || []).length === 1, "the bare page opens on hash and carries exactly one input schema");
+    const free = island.index.find((t) => t.slug !== "hash");
+    const one = await get(`${island.toolPath}/${free.slug}`);
+    const j = JSON.parse(one.text);
+    ok(one.status === 200 && j.slug === free.slug && j.computePayable === true && j.discovery?.inputSchema && /^(GET|POST)$/.test(j.method) && j.path.startsWith("/") && /public/.test(one.headers.get("cache-control") || ""), `a picked tool's form data is served from ${island.toolPath}/<slug> (${free.slug})`);
+    ok((await get(`${island.toolPath}/no-such-tool`)).status === 404, "an unknown tool 404s there");
+    const paid = (await get("/playground?slug=search")).text;
+    const pi = JSON.parse((paid.match(/<script type="application\/json" id="pg-tools-data">([\s\S]*?)<\/script>/) || [])[1] || "null");
+    ok(pi?.tool?.slug === "search" && pi.tool.computePayable === false && pi.tool.price && !pi.index.some((t) => t.slug === "search"), "a deep link to a paid tool opens on it (its price shown) while the picker lists free tools only");
+  }
+
   // Open URL space.
   const { CATEGORIES } = await import("../src/pages.js");
   const own = "web";
