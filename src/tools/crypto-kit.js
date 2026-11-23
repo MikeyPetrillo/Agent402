@@ -22,7 +22,7 @@ const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll, cgNoteUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
-import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
+import { attribute, creditAnswers, addCredit, COINGECKO_CREDIT, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
 import { markResaleBarred, markResaleComputed, markRefAnswer, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.js";
@@ -299,6 +299,14 @@ async function readReferenceMap() {
   clearTimeout(timer);
   return map;
 }
+/** `answer` crediting the second source (Hyperliquid's oracle prices, by name
+ *  and link; src/data-attribution.js) when `check` says its read was used,
+ *  after the price source's own credit (the callers are CoinGecko-backed). */
+export function checkCredited(answer, check) {
+  return check === CHECK_SOURCE ? addCredit(addCredit(answer, COINGECKO_CREDIT), HYPERLIQUID_ATTRIBUTION) : answer;
+}
+/** The credit of an answer whose check read the second source. */
+export const CHECKED_CREDIT = `${COINGECKO_CREDIT} ${HYPERLIQUID_ATTRIBUTION}`;
 /** Test seam: forget a failed check, so the next call reads again. */
 export function resetPriceCheck() { checkDownUntil = 0; }
 
@@ -409,6 +417,7 @@ export const CRYPTO_TOOLS = [
           currency: "usd",
           count: 2,
           check: "hyperliquid-oracle",
+          credit: CHECKED_CREDIT,
           coins: {
             bitcoin: { price: 67234.12, change24hPct: 1.42, volume24h: 28100000000, marketCap: 1320000000000, lastUpdated: "2026-06-20T00:30:00Z", stale: false, divergencePct: 0.03 },
             ethereum: { price: 3520.45, change24hPct: 2.18, volume24h: 14200000000, marketCap: 423000000000, lastUpdated: "2026-06-20T00:30:00Z", stale: false, divergencePct: -0.05 },
@@ -452,7 +461,7 @@ export const CRYPTO_TOOLS = [
       // and a USD price says how far it sits from the second source (null
       // where that source has no listed market for the coin, or no check ran).
       const check = await applyPriceCheck(Object.entries(out), currency);
-      return { currency, count: Object.keys(out).length, check, coins: out, ...(unknown.length ? { unknown } : {}) };
+      return checkCredited({ currency, count: Object.keys(out).length, check, coins: out, ...(unknown.length ? { unknown } : {}) }, check);
     },
   },
 

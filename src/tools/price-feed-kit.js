@@ -16,7 +16,7 @@ import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.
 import { markResaleBarred, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate } from "./crypto-markets-kit.js";
-import { applyPriceCheck } from "./crypto-kit.js";
+import { applyPriceCheck, checkCredited, CHECKED_CREDIT } from "./crypto-kit.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, and a read that outlives it is a 503 naming the
@@ -112,7 +112,7 @@ export const PRICE_FEED_TOOLS = [
       },
       output: {
         example: {
-          count: 2, vsCurrency: "usd", check: "hyperliquid-oracle",
+          count: 2, vsCurrency: "usd", check: "hyperliquid-oracle", credit: CHECKED_CREDIT,
           prices: [
             { id: "bitcoin", price: 67000.12, change24h: null, lastUpdated: "2026-09-24T14:50:20.000Z", stale: false, divergencePct: 0.03 },
             { id: "ethereum", price: 3500.05, change24h: null, lastUpdated: "2026-09-24T14:50:20.000Z", stale: false, divergencePct: -0.05 },
@@ -170,7 +170,7 @@ export const PRICE_FEED_TOOLS = [
       // source. It runs after the refusals above, so an answer that is a 4xx
       // never spends the reference read.
       const check = await applyPriceCheck(prices.filter((p) => data[p.id]).map((p) => [p.id, p]), vs);
-      return { count: prices.length, vsCurrency: vs, check, prices, ...(unknown.length ? { unknown } : {}) };
+      return checkCredited({ count: prices.length, vsCurrency: vs, check, prices, ...(unknown.length ? { unknown } : {}) }, check);
     },
   },
 ];

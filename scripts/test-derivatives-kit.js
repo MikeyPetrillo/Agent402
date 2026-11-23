@@ -448,6 +448,18 @@ catch (e) {
 }
 mode = "ok";
 
+// Hyperliquid credited on every perp tool's description and answer; the
+// options tools (another source) are not.
+{
+  const { HYPERLIQUID_ATTRIBUTION } = await import("../src/data-attribution.js");
+  for (const t of DERIVATIVES_TOOLS) {
+    if (t.slug.startsWith("perp-")) ok(t.attribution === "hyperliquid" && t.description.endsWith(HYPERLIQUID_ATTRIBUTION) && t.discovery.output.example.credit === HYPERLIQUID_ATTRIBUTION, `${t.slug}: description and example credit Hyperliquid`);
+    else ok(t.attribution !== "hyperliquid" && t.credit !== HYPERLIQUID_ATTRIBUTION, `${t.slug}: no Hyperliquid credit (another source)`);
+  }
+  const out = await h("perp-markets")({ limit: 2 });
+  ok(out.credit === HYPERLIQUID_ATTRIBUTION && out.source === "hyperliquid", `perp-markets: the answer credits Hyperliquid (${out.credit})`);
+}
+
 globalThis.fetch = realFetch;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
