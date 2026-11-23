@@ -7,7 +7,8 @@
 //      public route and on a /ref copy alike;
 //   2. OpenFEMA: fema-disasters' description ends with the disclaimer its
 //      terms require, and each answer carries the disclaimer, the endpoint it
-//      read (with its version) and the access date, on both datasets.
+//      read (with its version) and the access date, on both datasets, and
+//      no license wording beside it.
 // Additive: no field an answer had is renamed or removed.
 //
 //   node scripts/test-source-credits.js
@@ -91,6 +92,10 @@ try {
   const b = await fema.handler({ state: "TX", limit: 1 });
   ok(b.disclaimer === FEMA_NOTICE && b.endpoint === "https://www.fema.gov/api/open/v1/FemaWebDisasterDeclarations" && b.accessed === today && b.count === 1, `fema-disasters: the fallback answer cites the v1 dataset it read (${b.endpoint})`);
   ok(refAnswerOf(fema, a).disclaimer === FEMA_NOTICE, "fema-disasters: a /ref copy serves the disclaimer");
+  // The credit is the sentence OpenFEMA's terms require, and nothing in the
+  // answer states a license those terms do not use.
+  const noLicenseWords = (v) => !/public domain/i.test(JSON.stringify(v));
+  ok(noLicenseWords(ex) && noLicenseWords(a) && noLicenseWords(b) && /OpenFEMA/.test(a.source) && /OpenFEMA/.test(b.source), `fema-disasters: the example and both answers name OpenFEMA with no license wording beside the disclaimer (${a.source} | ${b.source})`);
 } catch (e) {
   ok(false, `a stubbed run threw: ${e?.stack || e}`);
 } finally {

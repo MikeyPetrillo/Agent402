@@ -1344,7 +1344,7 @@ export const GOV_TOOLS = [
         example: {
           state: "CA", count: 1,
           disasters: [{ title: "WILDFIRES", incidentType: "Fire", declarationType: "Major Disaster", declared: "2026-01-08", disasterNumber: 4812 }],
-          source: "fema.gov openFEMA (public domain)",
+          source: "OpenFEMA (fema.gov)",
           disclaimer: FEMA_NOTICE,
           endpoint: FEMA_SUMMARIES_ENDPOINT,
           accessed: "2026-11-23",
@@ -1386,7 +1386,7 @@ export const GOV_TOOLS = [
             declared: (r.declarationDate || "").slice(0, 10) || null,
             disasterNumber: r.disasterNumber ?? null,
           }));
-          return { state: st, count: disasters.length, disasters, source: "fema.gov openFEMA FemaWebDisasterDeclarations (public domain)", ...femaCitation(FEMA_WEB_ENDPOINT, accessed) };
+          return { state: st, count: disasters.length, disasters, source: "OpenFEMA FemaWebDisasterDeclarations (fema.gov)", ...femaCitation(FEMA_WEB_ENDPOINT, accessed) };
         }
         if (KNOWN_STATE_CODES.has(st)) throw bad(`openFEMA returned no disaster declarations for ${st} from either dataset; every state has declarations on record, so this is an outage at FEMA. Nothing was charged.`, 502);
       }
@@ -1405,7 +1405,7 @@ export const GOV_TOOLS = [
         });
         if (disasters.length >= limit) break;
       }
-      return { state: st, count: disasters.length, disasters, source: "fema.gov openFEMA (public domain)", ...femaCitation(FEMA_SUMMARIES_ENDPOINT, accessed) };
+      return { state: st, count: disasters.length, disasters, source: "OpenFEMA (fema.gov)", ...femaCitation(FEMA_SUMMARIES_ENDPOINT, accessed) };
     },
   },
 ];
