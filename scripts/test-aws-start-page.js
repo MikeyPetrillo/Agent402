@@ -166,7 +166,7 @@ try {
   }
 
   ok(/id="aws-marketplace"/.test(termsHtml) && /standard\s+contract for AWS Marketplace/.test(termsHtml), "/terms carries the AWS Marketplace purchases section while the gate is on");
-  ok(/ends without an answer is recorded with its payment id, the tool, the time and why it ended,\s+is reviewed, and an approved correction is made as a billing adjustment on your AWS invoice through AWS Marketplace\./.test(termsHtml) && !/is corrected as a billing adjustment/.test(termsHtml), "/terms: a paid call that ends without an answer is reviewed, and an approved correction is an invoice adjustment");
+  ok(/Every paid call that ends without an answer is recorded with its payment id, the tool, the time, why it ended and whether the payment can still be retried; one that is not answered on a later attempt is reviewed, and an approved correction is made as a billing adjustment on your AWS invoice through AWS Marketplace\./.test(termsHtml) && !/is corrected as a billing adjustment/.test(termsHtml), "/terms: every paid call that ends without an answer is recorded; one never answered is reviewed, and an approved correction is an invoice adjustment");
 } finally {
   await srv.stop();
 }

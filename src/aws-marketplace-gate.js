@@ -35,10 +35,12 @@
 //     paid, so refusing would charge without serving). A second use is 409.
 //   - A run that does not end in a delivered 200 (a handler error, a timeout,
 //     a buyer gone before the answer) gives the payment back for another
-//     attempt, up to AWS_MARKETPLACE_RETRY_MAX more, inside its validity. The
-//     attempt that exhausts it is recorded for the operator in a store a
-//     deploy keeps (src/aws-unanswered.js: charged without an answer; a
-//     billing adjustment is the owner's, through AWS Marketplace).
+//     attempt, up to AWS_MARKETPLACE_RETRY_MAX more, inside its validity.
+//     Every such attempt is recorded for the operator in a store a deploy
+//     keeps (src/aws-unanswered.js), with whether the payment can still be
+//     retried; a served resend marks it answered, and one never answered
+//     reads owed on refundsOwed (a billing adjustment is the owner's,
+//     through AWS Marketplace).
 //   - The sale is booked once, on the final response (`finish`, status 200),
 //     on the private rail "aws" (src/paid-rails.js): no public reader returns
 //     it and no public figure counts it. Its transaction is the payment id.
@@ -54,7 +56,7 @@ import { withoutChargeSentences } from "./not-charged.js";
 import { resaleBarredReason, resaleClearanceRefusal, refAnswerOf } from "./resale-terms.js";
 import { createHash } from "node:crypto";
 import { AWS_LISTING_SLUGS } from "./aws-listing.js";
-import { createAwsUnansweredBook } from "./aws-unanswered.js";
+import { createAwsUnansweredBook, awsUnansweredWord } from "./aws-unanswered.js";
 
 export const AWS_NETWORK = "aws:base";
 export const AWS_RAIL = "aws";
@@ -484,6 +486,7 @@ export async function createAwsMarketplaceGate({
     });
   };
   const unansweredBook = unanswered || createAwsUnansweredBook({ file: null, now, log });
+  let wordCache = null;
   // A pointer at this server's other surfaces: its host, or a path one of
   // its direct routes answers on (`POST /api/sql-cert-verify`, `/mcp`). A
   // path is read as a whole token, so a word that merely starts like one is not.
@@ -544,6 +547,8 @@ export async function createAwsMarketplaceGate({
       const { retriesLeft } = await claims.end(pay.paymentId, { served });
       if (served) {
         counters.served++;
+        // A resend of a payment that failed before: its unanswered entry is answered now.
+        if (known) { try { await unansweredBook.resolve(pay.paymentId, "served"); } catch { /* bookkeeping only */ } }
         try {
           recordSale({ slug: def.slug, priceUsd: flatUsdOf(def), quoteUsd: flatUsdOf(def), rail: AWS_RAIL, network: AWS_NETWORK, payer: null, tx: pay.paymentId, wire: AWS_WIRE, synthetic: isSynthetic(req) });
           counters.booked++;
@@ -551,11 +556,13 @@ export async function createAwsMarketplaceGate({
         if (onServed) { try { onServed(req, def); } catch { /* bookkeeping only */ } }
       } else {
         counters.failedAttempts++;
+        // Every unanswered attempt is recorded, with whether the payment can
+        // still be retried; a served resend marks it answered (above).
         if (retriesLeft <= 0) {
           counters.chargedWithoutAnswer++;
           try { log(`[aws-marketplace] a paid ${def.slug} call ended without an answer (status ${status}) and payment ${String(pay.paymentId).slice(0, 200)} has no attempts left`); } catch { /* never throws */ }
-          await unansweredBook.record({ at: now(), paymentId: pay.paymentId, slug: def.slug, status, priceUsd: flatUsdOf(def) });
         }
+        await unansweredBook.record({ at: now(), paymentId: pay.paymentId, slug: def.slug, status, priceUsd: flatUsdOf(def), attemptsLeft: retriesLeft, retryUntilMs: pay.untilMs });
       }
       return retriesLeft;
     };
@@ -664,5 +671,16 @@ export async function createAwsMarketplaceGate({
     stats: () => ({ ...counters }),
     failed: async () => (await unansweredBook.list()).entries,
     unanswered: () => unansweredBook.list(),
+    /** The record's word for refundsOwed (src/aws-unanswered.js), shared for 30 seconds. */
+    unansweredWord: async (opts = {}) => {
+      const t = now();
+      if (wordCache && t - wordCache.at < 30_000 && wordCache.key === JSON.stringify(opts)) return wordCache.value;
+      const r = await unansweredBook.list();
+      const value = awsUnansweredWord(r.ok ? r.entries : null, { ...opts, now: t });
+      wordCache = { at: t, key: JSON.stringify(opts), value };
+      return value;
+    },
+    /** The operator's review of an entry; true when an unresolved entry was marked. */
+    markReviewed: async (paymentId) => { const done = await unansweredBook.resolve(paymentId, "reviewed"); if (done) wordCache = null; return done; },
   };
 }

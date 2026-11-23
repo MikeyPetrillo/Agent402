@@ -1323,10 +1323,20 @@ function coverageReadsAlarmVerdict(row) {
 // Words only: every value is read through an allowlist.
 const REFUNDS_LEDGER_WORDS = new Set(["ok", "owed", "aging", "stuck", "unknown"]);
 const REFUNDS_CARD_WORDS = new Set(["none", "pending", "refused", "unknown"]);
+const REFUNDS_AWS_WORDS = new Set(["none", "owed", "unknown"]);
+// The AWS Marketplace record (aws, present only while the /aws gate is on):
+// a paid call that bought no answer and can no longer be retried.
+function refundsAwsPart(aws) {
+  if (aws === "owed") return "AWS Marketplace (aws=owed): a paid /aws call ended without an answer and its payment can no longer be retried. The entries are on /__operator/aws.json (chargedWithoutAnswer, unresolved and not retryable). Review each; make any correction as a billing adjustment through AWS Marketplace (refund.yml never pays these), then mark it reviewed (POST /__operator/aws/reviewed {\"paymentId\":...}).";
+  if (aws === "unknown") return "AWS Marketplace (aws=unknown): the record of paid /aws calls without an answer could not be read; read /__operator/aws.json.";
+  return "";
+}
 export function refundsOwedBody(row) {
   const w = row?.status === "stuck" ? "stuck" : row?.status === "aging" ? "aging" : "owed";
   const ledger = REFUNDS_LEDGER_WORDS.has(row?.ledger) ? row.ledger : null;
   const card = REFUNDS_CARD_WORDS.has(row?.card) ? row.card : null;
+  const awsPart = refundsAwsPart(REFUNDS_AWS_WORDS.has(row?.aws) ? row.aws : null);
+  const awsBlock = awsPart ? `\n\n${awsPart}` : "";
   const wf = `https://github.com/${ISSUES_REPO}/actions/workflows/refund.yml`;
   const ledgerLines = `- owed: a buyer's debt is in the refund ledger (past REFUND_OWED_NOTICE_MINUTES, default 15). Read /__operator/refunds.json, then run the refund workflow (${wf}): dry run first, then live (include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review). A debt that should not be paid is voided there with a note.`;
   const tail = `- aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48).
@@ -1336,7 +1346,7 @@ Auto-closes when the word is ok.`;
   if (!ledger || !card) {
     return `/api/gateway-status reports refundsOwed.status=${w}.
 
-${ledgerLines} A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard.
+${ledgerLines} A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard.${awsBlock}
 ${tail}`;
   }
   const ledgerPart = ledger === "ok" ? "The refund ledger owes nothing (ledger=ok)." : ledger === "unknown" ? "The refund ledger could not be read (ledger=unknown); read /__operator/refunds.json." : `Refund ledger (ledger=${ledger}):\n${ledgerLines}`;
@@ -1349,7 +1359,7 @@ ${tail}`;
 
 ${ledgerPart}
 
-${cardPart}
+${cardPart}${awsBlock}
 
 ${tail}`;
 }

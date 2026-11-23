@@ -866,6 +866,15 @@ for (const [name, T, field, sameBody] of SPEND) {
     const wOdd = worker.body({ gateway: { refundsOwed: { status: "owed", ledger: "<b>1</b>", card: "$5 0xabc" } } });
     for (const b of [odd, wOdd]) assert.ok(!b.includes("<b>") && !b.includes("$5") && !b.includes("0xabc"), b);
     assert.deepEqual(await runStep(step, { refundsOwed: { status: "ok", ledger: "ok", card: "none" } }), [], "ok opens nothing");
+    // An AWS Marketplace payment that bought no answer: the advice names the
+    // operator record and the review, never the refund workflow alone.
+    const wAws = worker.body({ gateway: { refundsOwed: { status: "owed", ledger: "ok", card: "none", aws: "owed" } } });
+    assert.match(wAws, /__operator\/aws\.json/, "Worker: an AWS entry points at the operator record");
+    assert.match(wAws, /\/__operator\/aws\/reviewed/, "Worker: and at the review mark");
+    const wAwsNone = worker.body({ gateway: { refundsOwed: { status: "owed", ledger: "owed", card: "none", aws: "none" } } });
+    assert.doesNotMatch(wAwsNone, /__operator\/aws/, "Worker: aws=none says nothing about AWS");
+    const awsOpens = await runStep(step, { refundsOwed: { status: "owed", ledger: "ok", card: "none", aws: "owed" } });
+    assert.ok(awsOpens.length > 0, "heartbeat: an owed AWS entry pages under the refunds issue");
   });
 }
 

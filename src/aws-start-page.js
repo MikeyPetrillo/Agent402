@@ -16,6 +16,7 @@
 import { LEDGER_HEAD, LEDGER_CSS, esc, jsSrc, codeBlock } from "./ledger-chrome.js";
 import { awsServedGroups, sentencesOf } from "./aws-listing.js";
 import { AWS_JWKS_PATH, AWS_NETWORK, AWS_PREFIX } from "./aws-marketplace-gate.js";
+import { AWS_UNANSWERED_SENTENCE } from "./aws-unanswered-copy.js";
 
 export const AWS_START_PATH = `${AWS_PREFIX}/start`;
 export const AWS_OPENAPI_PATH = `${AWS_PREFIX}/openapi.json`;
@@ -161,7 +162,7 @@ ${groups.map(table).join("\n")}
   <li>AWS Marketplace takes the payment when it issues the payment token, before the request reaches us. One payment buys one answer; a payment sent a second time after its answer is refused with <code>409</code>.</li>
   <li>An input we refuse before running the tool does not use the payment: correct it and send the request again with the same payment while it is valid.</li>
   <li>A call that does not end in an answer gives the payment back for another try: one payment covers up to ${attempts} attempt${attempts === 1 ? "" : "s"} while it is valid, and each failed answer says how many are left.</li>
-  <li>A paid call that ends without an answer after its last attempt is recorded with its payment id, the tool, the time and why it ended, is reviewed, and an approved correction is made as a billing adjustment on your AWS invoice through AWS Marketplace. Adjustments apply to your AWS invoice, not to individual payments. Write to <a href="mailto:${AWS_SUPPORT_EMAIL}">${AWS_SUPPORT_EMAIL}</a> with the payment id to ask about one.</li>
+  <li>${AWS_UNANSWERED_SENTENCE} Adjustments apply to your AWS invoice, not to individual payments. Write to <a href="mailto:${AWS_SUPPORT_EMAIL}">${AWS_SUPPORT_EMAIL}</a> with the payment id to ask about one.</li>
   <li>Your purchase is governed by AWS Marketplace's standard contract together with this refund rule.</li>
 </ul>
 

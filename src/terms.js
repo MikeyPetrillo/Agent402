@@ -11,6 +11,7 @@ import { answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { publicIndexTermsText, withPublicIndexDate } from "./facilitator-public-index.js";
 import { referralOffered } from "./referral-gate.js";
 import { awsMarketplaceOffered } from "./aws-marketplace-gate.js";
+import { AWS_UNANSWERED_SENTENCE } from "./aws-unanswered-copy.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { ROBOTS_UNGATED_READS } from "./tools/robots-gate.js";
 import { refundClauseText } from "./refund-terms.js";
@@ -319,9 +320,8 @@ re-runs per 30 days, above which it alerts without re-running.</p>
 ${awsOn ? `<h2 id="aws-marketplace">AWS Marketplace purchases</h2>
 <p>Tools bought through AWS Marketplace are paid through AWS and billed on your AWS invoice. AWS's standard
 contract for AWS Marketplace governs those purchases together with our refund rule for them: an input we refuse
-before running the tool does not use the payment, a call that does not complete can be sent again with the same
-payment while it is valid, and a paid call that ends without an answer is recorded with its payment id, the tool, the time and why it ended,
-is reviewed, and an approved correction is made as a billing adjustment on your AWS invoice through AWS Marketplace.</p>
+before running the tool does not use the payment, and a call that does not complete can be sent again with the same
+payment while it is valid. ${AWS_UNANSWERED_SENTENCE}</p>
 ` : ""}
 <h2>Availability & changes</h2>
 <p>The service may change, be rate-limited, or be discontinued at any time. We may update these terms;

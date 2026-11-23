@@ -93,9 +93,10 @@ const ENV = { AWS_MARKETPLACE_QUOTE_KEY: Buffer.from(SELLER_PEM).toString("base6
 // ---- eligibility ---------------------------------------------------------------
 const handlerRuns = { echo: 0, flaky: 0 };
 let flakyFailures = 0;
+let slowNext = 0;
 const DEFS = {
   "POST /api/echo": { route: "POST /api/echo", slug: "echo", name: "Echo", category: "text", price: "$0.003", description: "Echo text.", discovery: { inputSchema: { properties: { text: { type: "string" } }, required: ["text"] }, input: { text: "hi" } }, handler: async (i) => { handlerRuns.echo++; return { echo: i.text }; } },
-  "POST /api/flaky": { route: "POST /api/flaky", slug: "flaky", name: "Flaky", category: "text", price: "$0.002", description: "Fails on demand.", discovery: { inputSchema: { properties: { text: { type: "string" } } }, input: { text: "x" } }, handler: async (_i, req) => { handlerRuns.flaky++; if (flakyFailures > 0) { flakyFailures--; throw Object.assign(new Error(`upstream unavailable.${notChargedOn(req)} Retry shortly.`), { statusCode: 502 }); } return { fine: true }; } },
+  "POST /api/flaky": { route: "POST /api/flaky", slug: "flaky", name: "Flaky", category: "text", price: "$0.002", description: "Fails on demand.", discovery: { inputSchema: { properties: { text: { type: "string" } } }, input: { text: "x" } }, handler: async (_i, req) => { handlerRuns.flaky++; if (slowNext > 0) { const ms = slowNext; slowNext = 0; await new Promise((r) => setTimeout(r, ms)); } if (flakyFailures > 0) { flakyFailures--; throw Object.assign(new Error(`upstream unavailable.${notChargedOn(req)} Retry shortly.`), { statusCode: 502 }); } return { fine: true }; } },
   "POST /api/binary": { route: "POST /api/binary", slug: "binary", name: "Binary", category: "media", price: "$0.002", mimeType: "image/png", description: "Bytes.", discovery: { input: {} }, handler: async () => ({}) },
   "POST /api/ident": { route: "POST /api/ident", slug: "ident", name: "Ident", category: "memory", price: "$0.002", description: "Wallet memory.", discovery: { input: {} }, handler: async () => ({}) },
 };
@@ -172,7 +173,7 @@ app.all(["/aws", "/aws/:slug"], (req, res, next) => gate.handler(req, res, next)
 app.use((req, res) => res.status(404).json({ error: "not found" }));
 const srv = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
 const BASE = `http://127.0.0.1:${srv.address().port}`;
-const post = (path, body, headers = {}) => fetch(`${BASE}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+const post = (path, body, headers = {}, signal = undefined) => fetch(`${BASE}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body), signal });
 
 async function quote(path = "/aws/echo") {
   const r = await post(path, undefined);
@@ -274,9 +275,13 @@ async function quote(path = "/aws/echo") {
   // The payment was taken before the handler ran: a handler's "Nothing was
   // charged" (src/not-charged.js, printed on a route call) is not passed on.
   ok(j1.error === "upstream unavailable. Retry shortly." && !/charged/i.test(JSON.stringify(j1)), `a failed run's error drops the handler's not-charged sentence (${j1.error})`);
+  const first = (await gate.failed()).find((f) => f.paymentId === id);
+  ok(first && first.attemptsLeft === 2 && first.retryable === true && first.resolved === null && first.status === 502 && typeof first.retryUntil === "string", `a first failed attempt is recorded at once, with the attempts left and that the payment can still be retried (${JSON.stringify(first)})`);
   const r2 = await post("/aws/flaky", { text: "a" }, { "payment-signature": hdr });
   await new Promise((res) => setTimeout(res, 20));
   ok(r2.status === 200 && sales.filter((s) => s.tx === id).length === 1, "the resend: served and booked once");
+  const after = (await gate.failed()).find((f) => f.paymentId === id);
+  ok(after && after.resolved === "served" && after.retryable === false, `the entry is marked answered when the resend is served (${JSON.stringify(after)})`);
 
   const second = await quote("/aws/flaky");
   const t2 = paymentToken(second.required.accepts[0].extra.quoteToken);
@@ -289,8 +294,24 @@ async function quote(path = "/aws/echo") {
   ok(outs.join(",") === "502,502,502,409" && !sales.some((s) => s.tx === t2.id), "three failed attempts spend it: the fourth is refused, nothing booked");
   ok(bodies[2].paymentUsed === true && !/\b(?:not|never) charged\b|nothing (?:was|is) charged/i.test(JSON.stringify(bodies[2])), "the attempt that spends the payment says it was used and never that nothing was charged");
   const rec = (await gate.failed()).find((f) => f.paymentId === t2.id);
-  ok(rec && rec.slug === "flaky" && rec.status === 502 && rec.reason === "tool_error" && typeof rec.at === "string" && gate.stats().chargedWithoutAnswer === 1, `the spent payment is on the operator record of paid runs without an answer (${JSON.stringify(rec)})`);
+  ok(rec && rec.slug === "flaky" && rec.status === 502 && rec.reason === "tool_error" && typeof rec.at === "string" && rec.attempts === 3 && rec.attemptsLeft === 0 && rec.retryable === false && rec.resolved === null && gate.stats().chargedWithoutAnswer === 1, `the spent payment is on the operator record of paid runs without an answer (${JSON.stringify(rec)})`);
   flakyFailures = 0;
+}
+
+{
+  // A hang-up before the answer, never sent again: recorded as a closed
+  // connection whose payment can still be retried while it is valid.
+  const { required } = await quote("/aws/flaky");
+  const { token, id } = paymentToken(required.accepts[0].extra.quoteToken);
+  slowNext = 400;
+  const ac = new AbortController();
+  const pending = post("/aws/flaky", { text: "slow" }, { "payment-signature": paymentHeader(required, token) }, ac.signal).catch(() => null);
+  await new Promise((res) => setTimeout(res, 80));
+  ac.abort();
+  await pending;
+  await new Promise((res) => setTimeout(res, 600));
+  const hung = (await gate.failed()).find((f) => f.paymentId === id);
+  ok(hung && hung.status === 499 && hung.reason === "connection_closed" && hung.attemptsLeft === 2 && hung.retryable === true && hung.resolved === null, `a hang-up never re-sent is recorded, retryable while valid (${JSON.stringify(hung)})`);
 }
 
 {
@@ -337,7 +358,7 @@ await new Promise((r) => srv.close(r));
   const again = createAwsUnansweredBook({ file, now: () => t, max: 3, log: () => {} });
   const l1 = await again.list();
   ok(l1.ok && l1.entries.length === 1 && l1.entries[0].paymentId === "pay-1" && l1.entries[0].slug === "echo" && l1.entries[0].at === "2026-11-23T12:00:00.000Z" && l1.entries[0].reason === "tool_error" && l1.entries[0].status === 502 && l1.entries[0].priceUsd === 0.003, `a new book over the same store reads it back (a deploy keeps it) (${JSON.stringify(l1.entries[0])})`);
-  ok(Object.keys(l1.entries[0]).sort().join() === "at,paymentId,priceUsd,reason,slug,status", "an entry holds the payment id, tool, time, status, reason and price, and nothing about the buyer");
+  ok(Object.keys(l1.entries[0]).sort().join() === "at,attempts,attemptsLeft,lastAt,paymentId,priceUsd,reason,resolved,resolvedAt,retryUntil,retryable,slug,status", `an entry holds the payment id, tool, times, status, reason, price and whether it can be retried, and nothing about the buyer (${Object.keys(l1.entries[0]).sort().join()})`);
   for (const [i, st] of [[2, 499], [3, 500], [4, 504]].entries()) { t += 1000; await book.record({ paymentId: `pay-${st[0]}`, slug: "echo", status: st[1], priceUsd: 0.003 }); void i; }
   const l2 = await book.list();
   ok(l2.entries.length === 3 && l2.entries[0].paymentId === "pay-2" && l2.entries[0].reason === AWS_UNANSWERED_REASONS.closed, `the record keeps its newest entries up to its bound (${l2.entries.map((e) => e.paymentId).join(",")})`);
@@ -347,11 +368,39 @@ await new Promise((r) => srv.close(r));
   ok(/"entries"/.test(rf(file, "utf8")), "the record is written to its store");
   const broken = createAwsUnansweredBook({ doc: { update: async () => ({ ok: false, error: "down" }), read: async () => ({ ok: false }) }, log: () => {} });
   ok((await broken.record({ paymentId: "p9", slug: "echo", status: 500 })) === false && (await broken.list()).ok === false, "a store that does not answer: the record says so, never throws");
-  // The buyer-facing wording names exactly what the record holds.
+  // Standing and the owed word: retryable while attempts remain and the
+  // payment is valid; owed once neither holds and the notice has passed;
+  // resolved by a served resend or the operator's review.
+  {
+    const { awsUnansweredWord } = await import("../src/aws-unanswered.js");
+    let n = Date.parse("2026-11-23T12:00:00Z");
+    const f2 = join(mkdtempSync(join(tmpdir(), "aws-unanswered-")), "aws-unanswered.json");
+    const b = createAwsUnansweredBook({ file: f2, now: () => n, log: () => {} });
+    await b.record({ paymentId: "retry-1", slug: "echo", status: 502, priceUsd: 0.003, attemptsLeft: 2, retryUntilMs: n + 300_000 });
+    await b.record({ paymentId: "spent-1", slug: "echo", status: 502, priceUsd: 0.003, attemptsLeft: 0, retryUntilMs: n + 300_000 });
+    const word = async () => awsUnansweredWord((await b.list()).entries, { now: n, noticeMinutes: 15, owedHours: 48 });
+    ok((await word()).status === "none", "inside the notice: nothing reads owed");
+    n += 16 * 60_000;
+    let w = await word();
+    ok(w.status === "owed" && w.owed === 1 && w.retryable === 0, `past the notice: the spent payment reads owed; the other's validity has passed too but its notice has not (${JSON.stringify(w)})`);
+    n += 15 * 60_000;
+    w = await word();
+    ok(w.status === "owed" && w.owed === 2, `a retryable payment never re-sent reads owed once its validity and the notice have passed (${JSON.stringify(w)})`);
+    ok(await b.resolve("retry-1", "served") && await b.resolve("spent-1", "reviewed"), "a served resend and the operator's review resolve entries");
+    ok((await b.resolve("spent-1", "reviewed")) === false && (await b.resolve("nope", "reviewed")) === false, "resolving twice, or an unknown id, changes nothing");
+    w = await word();
+    ok(w.status === "none" && w.owed === 0, `resolved entries owe nothing (${JSON.stringify(w)})`);
+    await b.record({ paymentId: "old-1", slug: "echo", status: 500, priceUsd: 0.003, attemptsLeft: 0, retryUntilMs: n });
+    n += 49 * 3600_000;
+    ok((await word()).status === "aging", "an entry owed past owedHours reads aging");
+    ok(awsUnansweredWord(null, { now: n }).status === "unknown", "an unreadable record reads unknown");
+  }
+  // The buyer-facing wording is one sentence, the same on /aws/start and /terms.
+  const { AWS_UNANSWERED_SENTENCE } = await import("../src/aws-unanswered.js");
   const startSrc = rf(new URL("../src/aws-start-page.js", import.meta.url), "utf8");
   const termsSrc = rf(new URL("../src/terms.js", import.meta.url), "utf8");
-  const SAYS = "is recorded with its payment id, the tool, the time and why it ended";
-  ok(startSrc.includes(SAYS) && termsSrc.includes(SAYS), "/aws/start and /terms say what the record holds, in the same words");
+  ok(/every paid call that ends without an answer/i.test(AWS_UNANSWERED_SENTENCE) && /can still be retried/.test(AWS_UNANSWERED_SENTENCE), `the sentence names every unanswered paid call and whether it can be retried (${AWS_UNANSWERED_SENTENCE})`);
+  ok(/AWS_UNANSWERED_SENTENCE/.test(startSrc) && /AWS_UNANSWERED_SENTENCE/.test(termsSrc) && !/after its last attempt is recorded/.test(startSrc + termsSrc), "/aws/start and /terms print the one sentence");
 }
 
 // ---- per-client rate limits and the pointer scrub, on a gate of their own -------------
@@ -540,6 +589,19 @@ try {
   ok(/holiday/.test(notServed.get("public-holidays") || ""), "boot: a resale-barred tool is refused with its terms reason");
   ok(JSON.stringify(opv.routes) === JSON.stringify(["redact", "sql-guard"]), "boot: only the eligible listed tools are served");
   ok(opv.enabled === true && opv.sinceBoot.booked === 2 && opv.sinceBoot.served === 2 && opv.sinceBoot.replayed === 1, "booked once per served call, the replay counted");
+  ok(opv.unanswered && opv.unanswered.status === "none" && opv.unanswered.owed === 0 && Array.isArray(opv.chargedWithoutAnswer), `the operator view counts the unanswered record (${JSON.stringify(opv.unanswered)})`);
+  const gs = await (await fetch(`${on.url}/api/gateway-status`)).json();
+  ok(gs.refundsOwed?.aws === "none", `refundsOwed names the AWS record's word (${JSON.stringify(gs.refundsOwed)})`);
+  const gsOff = await (await fetch(`${off.url}/api/gateway-status`)).json();
+  ok(!("aws" in (gsOff.refundsOwed || {})), "switch off: refundsOwed has no AWS word");
+  const rv = await fetch(`${on.url}/__operator/aws/reviewed`, { method: "POST", headers: { "content-type": "application/json", "x-operator-token": OP }, body: JSON.stringify({ paymentId: "not-on-record" }) });
+  ok(rv.status === 404, "marking an unknown payment reviewed: 404");
+  const rvNo = await fetch(`${on.url}/__operator/aws/reviewed`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ paymentId: "x" }) });
+  ok(rvNo.status === 404, "the review route without the token: 404");
+  const { AWS_UNANSWERED_SENTENCE: SENT } = await import("../src/aws-unanswered.js");
+  const startHtml = await (await fetch(`${on.url}/aws/start`)).text();
+  const termsHtml = await (await fetch(`${on.url}/terms`)).text();
+  ok(startHtml.includes(SENT) && termsHtml.includes(SENT), "the rendered /aws/start and /terms carry the same sentence");
   const opNo = await fetch(`${on.url}/__operator/aws.json`);
   ok(opNo.status === 404, "the operator view without the token: 404");
   const pricing = await (await fetch(`${on.url}/api/pricing`)).text();

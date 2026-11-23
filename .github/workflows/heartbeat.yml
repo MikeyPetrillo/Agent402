@@ -1613,7 +1613,10 @@ jobs:
           case "$LEDGER" in ok|owed|aging|stuck|unknown) ;; *) LEDGER="" ;; esac
           CARD=$(printf '%s' "$GW" | jq -r '.refundsOwed.card // ""' 2>/dev/null || echo "")
           case "$CARD" in none|pending|refused|unknown) ;; *) CARD="" ;; esac
-          echo "refunds owed: $WORD (ledger ${LEDGER:-unread}, card ${CARD:-unread})"
+          # The AWS Marketplace record (present while the /aws gate is on).
+          AWSW=$(printf '%s' "$GW" | jq -r '.refundsOwed.aws // ""' 2>/dev/null || echo "")
+          case "$AWSW" in none|owed|unknown) ;; *) AWSW="" ;; esac
+          echo "refunds owed: $WORD (ledger ${LEDGER:-unread}, card ${CARD:-unread}, aws ${AWSW:-off})"
           WF="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/refund.yml"
           TITLE="Scheduled check needs review: refunds"
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")

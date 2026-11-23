@@ -4812,8 +4812,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // nothing is needed / refused: at least one needs a refund by hand /
     // unknown). Counts for the operator.
     refundsOwed: await (async () => {
-      const notice = Number(process.env.REFUND_OWED_NOTICE_MINUTES);
-      const noticeMinutes = Number.isFinite(notice) && notice >= 0 ? notice : 15;
+      const noticeMinutes = refundNoticeMinutes();
       const owedHours = Number(process.env.REFUND_OWED_ALARM_HOURS) || 48;
       const r = refundAlarmStatus({ owedHours, noticeMinutes });
       const card = _humanCheckout ? await _humanCheckout.owedRefunds().catch(() => null) : [];
@@ -4822,14 +4821,20 @@ app.get("/api/gateway-status", async (req, res) => {
       const cardOwed = noticed.length;
       const cardPending = noticed.filter((x) => x.pending).length;
       const cardAging = aged.filter((x) => x.age >= owedHours * 3600_000).length;
+      // An AWS Marketplace payment that bought no answer and can no longer be
+      // retried (src/aws-unanswered.js), on the same notice and aging, while
+      // the /aws gate is built: aws none / owed / unknown.
+      const aws = AWS_GATE ? await AWS_GATE.unansweredWord({ noticeMinutes, owedHours }).catch(() => ({ status: "unknown" })) : null;
       const status = r.status === "stuck" ? "stuck"
-        : r.status === "aging" || cardAging ? "aging"
-          : r.status === "owed" || cardOwed ? "owed"
-            : card === null ? "unknown" : r.status;
+        : r.status === "aging" || cardAging || aws?.status === "aging" ? "aging"
+          : r.status === "owed" || cardOwed || aws?.status === "owed" ? "owed"
+            : card === null || aws?.status === "unknown" ? "unknown" : r.status;
       const cardWord = card === null ? "unknown" : !cardOwed ? "none" : cardPending === cardOwed ? "pending" : "refused";
+      const awsWord = aws ? { aws: aws.status === "unknown" ? "unknown" : aws.status === "none" ? "none" : "owed" } : {};
+      const awsCounts = aws ? { awsOwedCount: aws.owed, awsAgingCount: aws.aging, awsRetryableCount: aws.retryable } : {};
       return full
-        ? { ...r, status, ledger: r.status, card: cardWord, cardOwedCount: card === null ? null : cardOwed, cardPendingCount: card === null ? null : cardPending, cardAgingCount: card === null ? null : cardAging }
-        : { status, ledger: r.status, card: cardWord };
+        ? { ...r, status, ledger: r.status, card: cardWord, ...awsWord, cardOwedCount: card === null ? null : cardOwed, cardPendingCount: card === null ? null : cardPending, cardAgingCount: card === null ? null : cardAging, ...awsCounts }
+        : { status, ledger: r.status, card: cardWord, ...awsWord };
     })(),
     // Recipients our spending wallets paid for the first time
     // (src/outbound-destinations.js): ok / new (expected: a first buy from a
@@ -12117,6 +12122,11 @@ if (REFERRAL_GATE) {
 // Built asynchronously (it imports the seller SDK); until it is ready, or if
 // it could not be built, /aws answers as an unknown path.
 let AWS_GATE = null;
+// The refundsOwed notice (REFUND_OWED_NOTICE_MINUTES, default 15), shared by the AWS record's word.
+function refundNoticeMinutes() {
+  const notice = Number(process.env.REFUND_OWED_NOTICE_MINUTES);
+  return Number.isFinite(notice) && notice >= 0 ? notice : 15;
+}
 if (AWS_ROUTES && AWS_ROUTES.defs.size) {
   const awsGateReady = createAwsMarketplaceGate({
     config: AWS_CONFIG,
@@ -12174,10 +12184,24 @@ app.get("/__operator/upstream-caps.json", (req, res) => {
 app.get("/__operator/aws.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // chargedWithoutAnswer is the durable record (src/aws-unanswered.js), kept across deploys.
+  // Every paid attempt without an answer is an entry (retryable, answered by a
+  // resend, reviewed, or owed); `unanswered` is the refundsOwed word and counts.
   const record = AWS_GATE ? await AWS_GATE.unanswered() : null;
+  const unanswered = AWS_GATE ? await AWS_GATE.unansweredWord({ noticeMinutes: refundNoticeMinutes(), owedHours: Number(process.env.REFUND_OWED_ALARM_HOURS) || 48 }).catch(() => ({ status: "unknown" })) : null;
   res.set("Cache-Control", "private, no-store").json(AWS_GATE
-    ? { enabled: true, routes: AWS_GATE.slugs(), endpointSlug: AWS_GATE.endpointSlug, notServed: AWS_ROUTES.refused, sinceBoot: AWS_GATE.stats(), chargedWithoutAnswerReadable: record.ok, chargedWithoutAnswer: record.entries }
+    ? { enabled: true, routes: AWS_GATE.slugs(), endpointSlug: AWS_GATE.endpointSlug, notServed: AWS_ROUTES.refused, sinceBoot: AWS_GATE.stats(), unanswered, chargedWithoutAnswerReadable: record.ok, chargedWithoutAnswer: record.entries }
     : { enabled: false, ...(AWS_ROUTES ? { notServed: AWS_ROUTES.refused } : {}) });
+});
+// The operator's review of an AWS payment that bought no answer (a billing
+// adjustment made, or none due): the entry stops reading owed. Body { paymentId }.
+app.post("/__operator/aws/reviewed", express.json(), async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (!AWS_GATE) return res.status(404).json({ error: "the AWS Marketplace gate is not on" });
+  const id = String(req.body?.paymentId || "");
+  if (!/^[\x21-\x7e]{1,200}$/.test(id)) return res.status(400).json({ error: "paymentId must be the payment id on the record" });
+  const done = await AWS_GATE.markReviewed(id);
+  if (!done) return res.status(404).json({ error: "that payment is not an unresolved entry on the record" });
+  res.set("Cache-Control", "private, no-store").json({ ok: true, paymentId: id });
 });
 // The referral gate's counters and its open settlements (operator only).
 app.get("/__operator/referral.json", (req, res) => {
