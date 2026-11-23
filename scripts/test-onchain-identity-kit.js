@@ -92,6 +92,21 @@ await throws(h("eas-attestations")({ address: "not-an-address" }), 400, "eas-att
 await throws(h("eas-attestations")({ address: "0x" + "a".repeat(40), network: "fantom" }), 400, "eas-attestations: bad network");
 await throws(h("eas-attestations")({ address: "0x" + "a".repeat(40), role: "spectator" }), 400, "eas-attestations: bad role");
 
+// eas-attestations credits the EAS indexer on its description and on every
+// answer (stubbed fetch, no egress).
+{
+  const { EAS_ATTRIBUTION } = await import("../src/data-attribution.js");
+  const t = ONCHAIN_IDENTITY_TOOLS.find((x) => x.slug === "eas-attestations");
+  ok(t.attribution === "eas" && t.description.endsWith(EAS_ATTRIBUTION), "eas-attestations: description ends with the EAS indexer credit");
+  ok(t.discovery.output.example.credit === EAS_ATTRIBUTION, "eas-attestations: published example carries the credit");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { attestations: [{ id: "0x1", attester: "0x2", recipient: "0x3", schemaId: "0x4", revocable: true, revoked: false, time: 1, decodedDataJson: null }] } }), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    const r = await h("eas-attestations")({ address: "0x" + "a".repeat(40), network: "base", role: "recipient" });
+    ok(r.count === 1 && r.source === "easscan" && r.credit === EAS_ATTRIBUTION, `eas-attestations: the answer keeps its fields and carries the credit (${r.credit})`);
+  } finally { globalThis.fetch = realFetch; }
+}
+
 // ----------------------------------------------------------------------------
 // Live tests (opt-in)
 // ----------------------------------------------------------------------------
