@@ -155,6 +155,24 @@ export function paceWaitMs(c, paceNext, now) {
   return at - now;
 }
 
+/** The marks a body sets on a part it could not measure, walked to a bounded
+ *  depth: a lookup error, a non-empty `unmeasured` list, `ownerUnavailable`,
+ *  or a record read as null (not false). Returns the marks found, named by
+ *  their path, or an empty list. */
+export function selfMarkedUnmeasured(body, depth = 0, at = "") {
+  const out = [];
+  if (!body || typeof body !== "object" || depth > 4) return out;
+  for (const [k, v] of Object.entries(body).slice(0, 200)) {
+    const p = at ? `${at}.${k}` : k;
+    if (k === "lookupError" && v) out.push(`lookupError at ${p}`);
+    else if (k === "unmeasured" && Array.isArray(v) && v.length) out.push(`unmeasured ${v.slice(0, 5).join(",")}`);
+    else if (k === "ownerUnavailable" && v === true) out.push(`ownerUnavailable at ${p}`);
+    else if (k === "hasRecord" && v === null) out.push(`hasRecord null at ${p}`);
+    else if (v && typeof v === "object") out.push(...selfMarkedUnmeasured(v, depth + 1, p));
+  }
+  return out;
+}
+
 /** What one outcome says about OUR code. `targetHost` is the outside host the
  *  case points the tool at (targetHostOf), or null for a tool on fixed or no
  *  upstreams. */
@@ -174,6 +192,13 @@ export function classify({ status, body, netError, expectFails, tier, targetHost
     if (targetHost && tier !== 0 && status < 400) {
       const tf = targetFailureIn(body);
       if (tf) return { kind: "upstream", note: `outside host ${targetHost} ${tf}` };
+    }
+    // A 200 that marks the missed part itself as not measured (a lookup
+    // that timed out, answered honestly) is that lookup's miss, named; a body
+    // that says nothing about it stays ours below.
+    if (tier !== 0 && status < 400) {
+      const marks = selfMarkedUnmeasured(body);
+      if (marks.length) return { kind: "upstream", note: `the answer marks it unmeasured (${marks.slice(0, 3).join("; ")}): ${expectFails.join("; ").slice(0, 120)}` };
     }
     // A 4xx from a T1 tool whose message blames the network is upstream.
     if (status >= 400 && tier !== 0 && UPSTREAM_TEXT.test(msg) && !NOT_CONFIGURED.test(msg)) return { kind: "upstream", note: `${status}${host} ${msg.slice(0, 120)}` };
