@@ -86,6 +86,26 @@ export const C3S_CREDIT = `${C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
 /** Both Copernicus services in one sentence, for a description whose tool serves both. */
 export const CAMS_C3S_ATTRIBUTION = "Contains modified Copernicus CAMS and C3S information.";
 
+// Chain and crypto data sources, each credited with a link wherever its data
+// is served. GoPlus's API terms ask for attribution "via a backlink or a
+// mention" (src/tools/token-risk-kit.js); the EAS indexer, RugCheck,
+// Hyperliquid's info API and Sourcify (verified source and its signature
+// database) are public services for builders, credited by name and link
+// (src/tools/onchain-identity-kit.js, solana-intel-kit.js, derivatives-kit.js,
+// contract-kit.js). Each is credited on the answers it serves, in the `credit`
+// field: every answer of a tool served wholly from one of them
+// (creditAnswers), and, for a tool that reads one as a leg or whose answer
+// another source can serve in its place, the answers that source served
+// (addCredit). They have no key in ATTRIBUTIONS: a tool's catalog text and
+// its listing are unchanged, and the 402 sample is read without the field
+// (withoutAnswerOnlyFields below).
+export const GOPLUS_ATTRIBUTION = "Powered by GoPlus Security (https://gopluslabs.io).";
+export const EAS_ATTRIBUTION = "Indexed by EASSCAN (https://easscan.org).";
+export const RUGCHECK_ATTRIBUTION = "Data from RugCheck (https://rugcheck.xyz).";
+export const HYPERLIQUID_ATTRIBUTION = "Data from Hyperliquid (https://hyperliquid.xyz).";
+export const SOURCIFY_ATTRIBUTION = "Verified source from Sourcify (https://sourcify.dev).";
+export const SOURCIFY_SIGDB_ATTRIBUTION = "Signatures from the Sourcify signature database (https://4byte.sourcify.dev).";
+
 /** Source key (a tool's `attribution` field) -> the sentence its terms require. */
 export const ATTRIBUTIONS = Object.freeze({
   fred: FRED_NOTICE,
@@ -167,13 +187,22 @@ export function withoutAttributions(text) {
 
 const isPlainAnswer = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && !v.__binary;
 
-/** `answer` with `credit` added as its `credit` field: a plain-object answer
- *  that does not already carry one gets a copy with the field; anything else
- *  is returned as it is. */
+/** `answer` with `credit` in its `credit` field: a plain-object answer with
+ *  no credit gets a copy with the field; one whose credit is a string that
+ *  does not already hold this sentence gets a copy with the sentence after
+ *  it, so an answer built from several sources credits each. Anything else
+ *  (a non-object, a credit that is not a string) is returned as it is. */
 export function withCredit(answer, credit) {
-  if (!isPlainAnswer(answer) || Object.hasOwn(answer, "credit")) return answer;
-  return { ...answer, credit };
+  if (!isPlainAnswer(answer)) return answer;
+  if (!Object.hasOwn(answer, "credit")) return { ...answer, credit };
+  const cur = answer.credit;
+  if (typeof cur !== "string" || cur.includes(credit)) return answer;
+  return { ...answer, credit: cur ? `${cur} ${credit}` : credit };
 }
+
+/** The same as withCredit, for a handler crediting a source one of its legs
+ *  read (the leg answered). */
+export const addCredit = withCredit;
 
 /** Mark `tool` as one whose answers carry `credit` (a source's credit
  *  sentence with its link): set `tool.credit`, add the field to the published
@@ -184,7 +213,7 @@ export function creditAnswers(tool, credit) {
   if (tool.credit === credit) return tool;
   tool.credit = credit;
   const ex = tool.discovery?.output?.example;
-  if (isPlainAnswer(ex) && !Object.hasOwn(ex, "credit")) tool.discovery.output.example = { ...ex, credit };
+  if (isPlainAnswer(ex)) tool.discovery.output.example = withCredit(ex, credit);
   const inner = tool.handler;
   if (typeof inner === "function") {
     tool.handler = async function credited(...args) { return withCredit(await inner.apply(this, args), credit); };
@@ -259,5 +288,28 @@ export function withoutLicenseFields(example) {
   if (!isPlainAnswer(example)) return example;
   const sets = [OPEN_METEO_LICENSE_FIELDS, OPEN_METEO_PLACE_LICENSE_FIELDS];
   const drop = new Set(Object.keys(example).filter((k) => sets.some((f) => Object.hasOwn(f, k) && example[k] === f[k])));
+  return drop.size ? Object.fromEntries(Object.entries(example).filter(([k]) => !drop.has(k))) : example;
+}
+
+// The chain and crypto source credits above and the license fields of
+// verified source files (contract-source): the same on every answer that
+// carries them, and in /openapi.json's example. The 402 sample is read
+// without them (withoutAnswerOnlyFields), so they never take room from the
+// listing's description or the answer's own fields.
+export const SOURCE_LICENSE_NOTE = "Each file is its authors' work, under the license its SPDX-License-Identifier states (licenses, by file; null where a file states none). Reuse of a file follows its license.";
+const ANSWER_ONLY_CREDITS = Object.freeze([GOPLUS_ATTRIBUTION, EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION]);
+
+/** `example` without a `credit` made only of the credits above, and without
+ *  the source license fields (the note and the per-file map beside it).
+ *  Anything else is returned as it is. */
+export function withoutAnswerOnlyFields(example) {
+  if (!isPlainAnswer(example)) return example;
+  const drop = new Set();
+  if (typeof example.credit === "string") {
+    let rest = example.credit;
+    for (const t of ANSWER_ONLY_CREDITS) rest = rest.split(t).join(" ");
+    if (!rest.trim()) drop.add("credit");
+  }
+  if (example.licenseNote === SOURCE_LICENSE_NOTE) { drop.add("licenseNote"); drop.add("licenses"); }
   return drop.size ? Object.fromEntries(Object.entries(example).filter(([k]) => !drop.has(k))) : example;
 }
