@@ -1,5 +1,6 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
+import { SERVER_VERSION } from "./server-version.js";
 import { siteOrgRef } from "./site-org.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { frontDoorOneLine } from "./front-door.js";
@@ -1228,7 +1229,8 @@ export function openapiSpec(baseUrl, catalog) {
       // directory display as OUR NAME, so it is the plain product name; the
       // tagline (both wires, x402 + MPP) lives in the description below.
       title: "Agent402.tools",
-      version: "2.1.0",
+      // package.json's version (src/server-version.js), the release running.
+      version: SERVER_VERSION,
       description:
         // Template literal, not a plain string: this is the spec description
         // every crawler and directory reads, and as a quoted string it shipped
