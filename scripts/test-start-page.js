@@ -28,6 +28,7 @@ const { startPage, startApps, START_PATH } = await import("../src/start-page.js"
 const { BASE_NO_GAS_SENTENCE, BASE_NO_GAS_SHORT } = await import("../src/base-no-gas.js");
 const { mcpInstallHints, AGENT402_MCP_VERSION } = await import("../src/mcp-flagship.js");
 const { HUMAN_PRODUCTS } = await import("../src/human-checkout.js");
+const { NAV_PRIMARY_ACTION } = await import("../src/ledger-chrome.js");
 const { cardReportPriceRange } = await import("../src/report-tiers.js");
 
 let pass = 0, failed = 0;
@@ -57,7 +58,11 @@ const apps = startApps(ORIGIN);
 ok(apps.map((a) => a.name).join() === "Claude desktop,Claude Code,Cursor", `one step per app, in order (${apps.map((a) => a.name).join(", ")})`);
 ok(apps.find((a) => a.id === "claude-desktop").copy === install.hostedUrl && allOff.includes(install.hostedUrl), "Claude desktop pastes the hosted connector address from the install hints");
 ok(apps.find((a) => a.id === "claude-code").copy === install.claudeCodeHosted && allOff.includes(install.claudeCodeHosted), "Claude Code runs the hosted install line from the install hints");
-ok(apps.find((a) => a.id === "cursor").copy === JSON.stringify(install.cursorMcpJson, null, 2) && allOff.includes('"url": "https://agent402.tools/mcp"'), "Cursor adds the install hints' mcp.json block");
+ok(apps.find((a) => a.id === "cursor").copy === `"agent402": ${JSON.stringify(install.cursorMcpJson.mcpServers.agent402, null, 2)}` && allOff.includes('"url": "https://agent402.tools/mcp"'), "Cursor adds the install hints' agent402 entry, the server alone");
+// Each config step says "add this agent402 entry under mcpServers", so the block is that entry, never the wrapper around it.
+for (const [label, html] of [["all off", allOff], ["all on", allOn]]) ok(!/"mcpServers"/.test(html), `${label}: no config block repeats the mcpServers wrapper the step names`);
+ok(/^claude mcp add --transport http -s user agent402 \S+\/mcp$/.test(install.claudeCodeHosted) && / -s user /.test(install.claudeCodeNpm), `the hosted Claude Code line adds the server for the user, like the npm line (${install.claudeCodeHosted})`);
+ok(NAV_PRIMARY_ACTION.label === "Add to your agent" && NAV_PRIMARY_ACTION.href === START_PATH, `the header's Add to your agent goes to the page that adds it (${NAV_PRIMARY_ACTION.href})`);
 ok(!/ChatGPT/i.test(allOn), "names no app without a documented path");
 {
   const src = readFileSync(join(ROOT, "src/start-page.js"), "utf8");
@@ -95,7 +100,7 @@ ok(allOn.includes("Pay from a wallet") && allOn.includes("Buy USDC on Base") && 
   const { walletSetup } = await import("../src/start-page.js");
   const w = walletSetup(ORIGIN);
   const desktop = w.apps.find((a) => a.id === "wallet-claude-desktop");
-  const cfg = JSON.parse(desktop.copy).mcpServers.agent402;
+  const cfg = JSON.parse(`{${desktop.copy}}`).agent402;
   ok(w.setup === `${install.npm} setup` && allOn.includes(w.setup) && allOff.includes(w.setup), `the wallet section gives the setup command (${w.setup})`);
   ok(/Node\.js/.test(allOff) && /keychain/.test(allOff), "it says the npm server needs Node.js and keeps the key in the keychain");
   ok(cfg.command === "npx" && cfg.args.join(" ").includes(`agent402-mcp@${AGENT402_MCP_VERSION}`) && !cfg.env, "the Claude desktop wallet config runs the pinned npm server and carries no key");
@@ -127,7 +132,7 @@ try {
   const start = await get(START_PATH);
   ok(start.status === 200 && /<title>Start here/.test(start.text), "/start answers 200 with its title");
   const startText = plain(start.text);
-  ok(/claude mcp add --transport http agent402 https?:\/\/\S+\/mcp/.test(startText), "the served page carries the Claude Code line");
+  ok(/claude mcp add --transport http -s user agent402 https?:\/\/\S+\/mcp/.test(startText), "the served page carries the Claude Code line");
   ok(!/Credits by card/.test(startText), "the served page offers no credits while CREDITS_SALES is unset");
   ok(start.text.includes(BASE_NO_GAS_SENTENCE), "the served page states the Base gas sentence");
 

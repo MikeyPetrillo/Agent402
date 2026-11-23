@@ -2032,7 +2032,7 @@ client tools and work as usual.
 Tools over the hosted connector (free tier and discovery, no key):
 
 \`\`\`bash
-claude mcp add --transport http agent402 https://agent402.tools/mcp
+claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 \`\`\`
 
 Paid tools from a wallet, through the stdio server:

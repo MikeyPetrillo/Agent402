@@ -52,8 +52,8 @@ did=0
 say "Agent402: 500+ paid tools, metered models and reports for agents. Free tier via proof-of-work, paid per call via x402/MPP."
 say ""
 if have claude; then
-  say "-> Claude Code found: adding the Agent402 MCP connector (claude mcp add --transport http agent402 $MCP_URL)"
-  if claude mcp add --transport http agent402 "$MCP_URL" >/dev/null 2>&1; then say "   done."; did=1; else say "   already added or refused; run it yourself to see why."; fi
+  say "-> Claude Code found: adding the Agent402 MCP connector (claude mcp add --transport http -s user agent402 $MCP_URL)"
+  if claude mcp add --transport http -s user agent402 "$MCP_URL" >/dev/null 2>&1; then say "   done."; did=1; else say "   already added or refused; run it yourself to see why."; fi
   if [ -n "\${AGENT402_CREDITS_KEY:-}" ]; then
     say "-> AGENT402_CREDITS_KEY is set. To use Agent402 as Claude Code's model gateway:"
     say "   export ANTHROPIC_BASE_URL=${b}/v1/metered; export ANTHROPIC_AUTH_TOKEN=\\$AGENT402_CREDITS_KEY"

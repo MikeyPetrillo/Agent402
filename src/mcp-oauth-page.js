@@ -18,6 +18,7 @@ const CONSENT_CSS = `
   .oc-pick{display:flex;flex-direction:column;gap:8px;margin-top:10px}
   .oc-pick label{display:flex;align-items:center;gap:10px;font-size:var(--fs-md);color:var(--ink)}
   .oc-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+  .oc-wrap .btn{min-height:44px}
   .oc-wrap .err{color:var(--bad);margin-top:8px;padding-top:0}
   .oc-wrap .acct-msg{margin:0 0 8px}
   .oc-wrap form + form{margin-top:12px}

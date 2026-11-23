@@ -132,7 +132,7 @@ ${groupsHtml}
     <h2 style="font-weight:700;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 12px;color:var(--on-panel);">Wire it into an agent.</h2>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:640px;">Add the hosted MCP connector and these calls appear as tools, or call the routes directly with the x402 client of your choice. Every route here is also discoverable at /api/find by task ("funding rates", "stablecoin supply").</p>
     <div style="display:flex;gap:11px;flex-wrap:wrap;">
-      <a class="btn btn-primary" href="/docs#add">Add to your agent →</a>
+      <a class="btn btn-primary" href="/start">Add to your agent →</a>
       <a href="/tools/category/crypto" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:13px 24px;">EVERY CRYPTO TOOL</a>
     </div>
   </div>

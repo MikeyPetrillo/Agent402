@@ -292,7 +292,7 @@ ${section("mcp", `
   ${h2("From an MCP host, the payment rides underneath.")}
   ${p(`The hosted connector at ${code(`${baseUrl}/mcp`)} serves the free tier with no install and no wallet${connectorWires().names.length ? `, and makes the wallet-only tools payable in the call over ${connectorWires().phrase}, from an MCP client that speaks it` : ""}. The npm server pays over x402 from a key you give it, with spend caps checked before any payment is signed.`)}
   ${pre("install lines", `# hosted, no wallet: the proof-of-work tools
-claude mcp add --transport http agent402 ${baseUrl}/mcp
+claude mcp add --transport http -s user agent402 ${baseUrl}/mcp
 
 # npm server with a funded EVM key: every paid tool over x402
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.

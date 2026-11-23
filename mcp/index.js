@@ -1282,7 +1282,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
             ? "Every tool on Agent402's own services is available; each call is paid from the credits key (AGENT402_CREDITS_KEY), debited only on a successful call, within the spend controls above. The routes that buy from outside sellers (router.execute, seller-payability, decide.execute, the flight tools) and the wallet-identity tools (memory, usage) need a wallet key."
             : `No wallet or credits key configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (AGENT_KEY / SOLANA_AGENT_KEY) or a prepaid credits key (AGENT402_CREDITS_KEY).`,
         install: {
-          claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
+          claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
           npm: "npx -y agent402-mcp@0.16.0",
@@ -1303,7 +1303,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
           mode: HAS_WALLET ? "usdc" : HAS_CREDITS ? "credits" : "proof-of-work",
         },
         install: {
-          claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
+          claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           npm: "npx -y agent402-mcp@0.16.0",
           maintainer: "Havok Holdings LLC",

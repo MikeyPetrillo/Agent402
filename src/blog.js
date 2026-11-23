@@ -87,7 +87,7 @@ export const BLOG_POSTS = [
 
 <h2>Connect</h2>
 
-<p>Decide is three routes: <code>POST /api/decide</code> for a plan, <code>POST /api/decide/execute</code> to run one, and <code>POST /api/decide/feedback</code> (free) to report whether a step worked, which feeds future rankings. Pay per request in USDC over x402 or MPP. On the hosted MCP connector they are the <code>decide</code> tools; add it with <code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code>. Prices by depth, the full method and the FAQ are on the <a href="/decide">Decide page</a>, and the reference is on the <a href="${REPO_URL}/wiki/Decide">wiki</a>.</p>`,
+<p>Decide is three routes: <code>POST /api/decide</code> for a plan, <code>POST /api/decide/execute</code> to run one, and <code>POST /api/decide/feedback</code> (free) to report whether a step worked, which feeds future rankings. Pay per request in USDC over x402 or MPP. On the hosted MCP connector they are the <code>decide</code> tools; add it with <code>claude mcp add --transport http -s user agent402 https://agent402.tools/mcp</code>. Prices by depth, the full method and the FAQ are on the <a href="/decide">Decide page</a>, and the reference is on the <a href="${REPO_URL}/wiki/Decide">wiki</a>.</p>`,
   },
   {
     slug: "what-is-agentic-finance-aifi",
@@ -298,7 +298,7 @@ export const BLOG_POSTS = [
 
 <p>To add the hosted connector to Claude Code, run:</p>
 
-<pre><code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code></pre>
+<pre><code>claude mcp add --transport http -s user agent402 https://agent402.tools/mcp</code></pre>
 
 <p>Once connected, Claude Code can search all 500+ tools, find the right one for a task, and call the free proof-of-work ones directly. Paid tools need a client that can pay: run the npm package below with <code>AGENT_KEY</code> set to a funded EVM key. The <code>catalog.search</code> and <code>catalog.find</code> tools help the agent discover relevant tools without needing to know the full catalog.</p>
 

@@ -166,6 +166,13 @@ function errorLine(html, field, label) {
   ok(color === "var(--bad)", `${label}: the error line's color after the cascade is the error token (${color})`);
 }
 const oneH1 = (html, label) => { const n = h1s(html).length; ok(n === 1, `${label}: one h1 (${n})`); };
+// Every button on a sign-in step is a 44px target after the cascade (a person
+// signs in from a phone): min-height, or the padding and line box that make it.
+function tapTargets(html, label) {
+  const btns = elements(html).filter((e) => e.tag === "button" && e.parents.some((p) => classesOf(p).includes("oc-wrap")));
+  const short = btns.filter((b) => !(parseFloat(cascaded(html, b, "min-height") || "0") >= 44)).map((b) => `button.${classesOf(b).join(".")}${b.attrs.value ? `[${b.attrs.value}]` : ""}`);
+  ok(btns.length > 0 && short.length === 0, `${label}: ${btns.length} buttons are at least 44px tall${short.length ? ` (not: ${short.join(" | ")})` : ""}`);
+}
 const csrfIn = (html) => (/name="csrf" value="([^"]+)"/.exec(html) || [])[1];
 
 try {
@@ -182,6 +189,7 @@ try {
   const S = await start();
   let html = await page(S);
   oneH1(html, "email step");
+  tapTargets(html, "email step");
   ok(!elements(html).some((e) => e.attrs.role === "alert"), "email step: no error line before anything went wrong");
   const app = elements(html).find((e) => classesOf(e).includes("oc-app"));
   const wrap = app ? cascaded(html, app, "overflow-wrap") : null;
@@ -224,12 +232,14 @@ try {
     ok(/Send a new code/.test(locked.html) && /Use another email/.test(locked.html), "lockout: a new code and another email are offered");
     errorLine(locked.html, "oc-code", "lockout");
     oneH1(locked.html, "lockout");
+    tapTargets(locked.html, "lockout");
   }
 
   // ---- the choose step, empty: buying comes before Deny ----
   const cd = await waitCode(email, 1);
   r = await post(S, { action: "code", code: cd }, r.html);
   oneH1(r.html, "choose step, no balance");
+  tapTargets(r.html, "choose step, no balance");
   const buyAt = r.html.indexOf("Buy by card"), denyAt = r.html.indexOf(">Deny<");
   ok(buyAt > 0 && denyAt > buyAt, "choose step, no balance: the purchase comes before Deny");
   const pack = (/name="pack"><option value="([^"]+)"/.exec(r.html) || [])[1];
@@ -240,6 +250,7 @@ try {
 
   // ---- the choose step with a balance ----
   oneH1(html, "choose step");
+  tapTargets(html, "choose step");
   const allowAt = html.indexOf(">Allow<"), denyAt2 = html.indexOf(">Deny<");
   ok(allowAt > 0 && denyAt2 > allowAt, "choose step: Allow comes before Deny");
   const link = elements(html).find((e) => e.tag === "a" && e.attrs.href === "/credits/account");

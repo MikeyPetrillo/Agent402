@@ -72,7 +72,7 @@ export function quickstartPage(baseUrl) {
 <p class="qs-oneliner">Start with the hosted connector: no install, no wallet. Free tools run with proof-of-work; paid tools answer with their price${connectorWires().names.length ? `, payable in the call over ${connectorWires().phrase} from a client with a wallet` : " and a pointer to payment.info"}.</p>
 
 <span class="qs-label">1. Hosted connector (no install)</span>
-<div class="ml-code" style="margin:0 0 20px"><pre><code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code></pre></div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>claude mcp add --transport http -s user agent402 https://agent402.tools/mcp</code></pre></div>
 
 <span class="qs-label">2. Free npm install</span>
 <div class="ml-code" style="margin:0 0 20px"><pre><code>claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre></div>

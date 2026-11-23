@@ -139,7 +139,7 @@ ${sec(`<div id="connect"><h2 class="dc-h2">Connect.</h2><p class="dc-lede">Three
     <div style="display:grid;grid-template-columns:70px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/execute</span><span style="color:var(--faint);">MCP: decide.execute · plan budget less credit</span></div>
     <div style="display:grid;grid-template-columns:70px 1fr auto;gap:14px;padding:12px 18px;"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/feedback</span><span style="color:var(--faint);">MCP: decide.feedback · free</span></div>
   </div>
-  ${codeBlock(`claude mcp add --transport http agent402 ${baseUrl}/mcp`, { name: "the install command", style: "margin:14px 0 0" })}</div>`)}
+  ${codeBlock(`claude mcp add --transport http -s user agent402 ${baseUrl}/mcp`, { name: "the install command", style: "margin:14px 0 0" })}</div>`)}
 ${sec(`<h2 class="dc-h2">Questions.</h2>${faqs.map((f) => `<details style="border-top:1px solid var(--hairline);padding:16px 0;"><summary style="font-weight:600;font-size:var(--fs-lg);cursor:pointer;color:var(--ink);">${esc(f.q)}</summary><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:10px 0 0;max-width:760px;">${esc(f.a)}</p></details>`).join("")}`, "56px 30px 64px")}
 ${ledgerFooterCompact()}`;
 

@@ -547,7 +547,10 @@ a { color: inherit; }
      an unwrappable host in a 1fr column sets a min-content floor above 375px.
      .mlr-host stays on one line and ends in an ellipsis instead (market-page.js
      ROSTER_CSS); its title carries the whole host. */
-  .lb-name, .lb-addr, .mlr-name, .lb-addr a, pre, pre code { overflow-wrap: anywhere !important; word-break: break-word !important; }
+  .lb-name, .lb-addr, .mlr-name, .lb-addr a, :not(.ml-code-wrap) > pre, :not(.ml-code-wrap) > pre code { overflow-wrap: anywhere !important; word-break: break-word !important; }
+  /* A wrap block (codeBlock wrap: a command to paste) breaks at its spaces
+     only: a token split mid-word pastes broken, so a token wider than the
+     phone scrolls inside its own block instead. */
   /* Inline code keeps whole words: it breaks at the <wbr> points site-chrome.js
      adds after its punctuation (and between camelCase words), and only a run
      with no break point at all (a hash, an address) splits where it must.
@@ -748,7 +751,7 @@ const NAV_ZONES = [
 // The header's one primary action: the home hero's own primary, so a
 // newcomer sees the same next step on every page. Left out on the home page,
 // where the hero carries it (one primary per view).
-export const NAV_PRIMARY_ACTION = Object.freeze({ href: "/docs#add", label: "Add to your agent" });
+export const NAV_PRIMARY_ACTION = Object.freeze({ href: "/start", label: "Add to your agent" });
 
 // Fallback by-chain rows used whenever no live index-snapshot data is wired
 // (offline unit tests, early boot, a throwing/null provider) - the dropdown

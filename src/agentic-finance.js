@@ -87,7 +87,7 @@ export function agenticFinancePage(baseUrl) {
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
   <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:44px;">
     <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 24px;color:var(--on-panel);">Give your agent 500+ tools</h2>
-    <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
+    <a class="btn btn-primary on-panel" href="/start">Add to your agent →</a>
   </div>
 </section>
 ${ledgerFooterCompact()}`;
