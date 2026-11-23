@@ -66,7 +66,7 @@ const ENTRIES = [
     date: "2026-11-23",
     title: "Start here page",
     items: [
-      "Site: A new /start page gives the one step that adds Agent402 to Claude desktop, Claude Code or Cursor, lists what runs with no wallet, and shows how to pay from a wallet holding USDC on Base through the npm server (Node.js needed), set up once with its key kept in the system keychain.",
+      "Site: A new /start page gives the one step that adds Agent402 to Claude desktop, Claude Code or Cursor, lists what runs with no wallet, and shows how to pay from a wallet holding USDC on Base through the npm server (Node.js needed), set up once with its key kept outside the app's config.",
       "Docs: The /start and /base pages, payment.info, /llms.txt, the README and the wiki say that an x402 exact payment on Base is a signature: the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.",
     ],
   },
@@ -74,7 +74,7 @@ const ENTRIES = [
     date: "2026-11-23",
     title: "agent402-mcp 0.16.0 and agent402-client 0.12.0",
     items: [
-      "Packages: agent402-mcp 0.16.0: `npx agent402-mcp setup` asks for the wallet key once and keeps it in the OS keychain, so the key never sits in a config file or an environment variable.",
+      "Packages: agent402-mcp 0.16.0: `npx agent402-mcp setup` asks for the wallet key once and keeps it in the OS keychain (where none is available, in a file only your user can read), so the key need not sit in an app's config or an environment variable.",
       "Packages: agent402-mcp 0.16.0 reads a key with or without its `0x` prefix, adds optional daily and monthly spending caps kept across restarts, and saves media answers as files, with small images also kept inline.",
       "Packages: agent402-client 0.12.0: `normalizeEvmKey` reads a private key with or without its `0x` prefix, and names the setting in its error, never the value.",
       "Site: Every install line on the site and in the docs pins agent402-mcp 0.16.0.",
