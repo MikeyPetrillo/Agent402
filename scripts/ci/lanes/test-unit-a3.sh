@@ -35,6 +35,8 @@ t node scripts/test-mcp-x402.js
 t node scripts/test-mcp-x402-connector.js
 # A paid replay the hosted MCP connector stopped waiting for: the call id rides only the genuine marker, a settled answer the connector never read is booked as owed in either order (an event-loop stall reproduced over the real loopback client), one outcome per call, bounded entries, server and connector wiring pins (offline, port 0)
 t node scripts/test-mcp-loopback-cut.js
+# Connector sign-in (OAuth 2.1, MCP_OAUTH=on): a grant's daily cap on the key's own record, frozen and disabled keys refuse; switch off = every route 404 and unauthenticated /mcp byte-identical; PKCE S256 only, exact redirect_uri, state, single-use short-lived codes, refresh rotation with reuse revoking the grant, consent page unframed with CSRF, email code tries and lockout, buy by card, paid calls held and debited from credits, cap and identity-bound and third-party refusals, connected apps list, cap and revoke, limits from the environment (paid boot, Stripe stub, mail sink)
+t node scripts/test-mcp-oauth.js
 
 # @step 2: Offline suites (21 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)

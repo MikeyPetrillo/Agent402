@@ -79,6 +79,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `CREDITS_ABANDONED_HOLD_MS` (default 10 minutes). A running request keeps its hold fresh against
   that sweep for at most `CREDITS_HOLD_REFRESH_MAX_MS` (default 6 hours, never under the abandoned
   window) (`src/credits.js`).
+- **Connector grants on the credits gate:** the gate's `grantOf` (`loopbackGrantOf`, `src/mcp-loopback.js`)
+  names a connector grant (`src/mcp-oauth.js`) only on the connector's genuine loopback, from a one-call
+  handle the connector opened; such a request holds by key id (`authorizeGrant`) under the grant's daily
+  cap, kept on the key's own record (`grantDays`, today only) so the cap is checked under the same lock
+  as the balance on every replica. Every grant hold is named (`holds[id].g`): its settle adds what the
+  debit took to the day, a release or sweep gives the hold back. A grant on an unpriced route is a 402,
+  never served free; identity-bound and third-party routes are refused as for a key; a `frozen` or
+  disabled key refuses (`reason` frozen or disabled), and the cap answers `reason: daily_cap`.
 - **Credits indexes:** `CREDITS_INDEXES` (default on; `off` leaves the build to an operator) builds the prepaid credits lookup indexes in the background (`ensureCreditsIndexes`, `src/credits.js`).
 - **Credits index delay:** `CREDITS_INDEX_DELAY_MS` (default 60000, 60 s) is how long after the credits store's first load that build starts.
 - **Credits key balance cap:** `CREDITS_BALANCE_MAX_USD` (default 100, the largest pack;

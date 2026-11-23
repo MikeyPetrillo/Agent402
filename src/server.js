@@ -14,7 +14,8 @@ import { createOperatorResolver, payToOperatorOf } from "./payer-operators.js";
 import { summarizeOperators, composeScoreboard } from "./scoreboard.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
-import { stripMcpMarker, watchLoopbackOutcome, loopbackCallCut, noteLoopbackCounted } from "./mcp-loopback.js";
+import { stripMcpMarker, watchLoopbackOutcome, loopbackCallCut, noteLoopbackCounted, loopbackGrantOf } from "./mcp-loopback.js";
+import { createMcpOAuth } from "./mcp-oauth.js";
 import { createMcpX402Gate, mcpX402PaymentSpecs } from "./mcp-x402-routes.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
@@ -3746,6 +3747,18 @@ try {
     termsVersion: creditsTermsVersion,
   }) : null;
 } catch (e) { console.warn("[credits] balance page init failed:", String(e?.message || e).slice(0, 200)); _creditsAccount = null; }
+// Connector sign-in (src/mcp-oauth.js): an app connected to /mcp pays for
+// tool calls from a credits balance under a daily cap. Off unless MCP_OAUTH=on
+// and credits are on sale; its routes are mounted before the connector.
+let _mcpOAuth = null;
+try {
+  const acct = _credits ? accountSecretFrom(process.env.STRIPE_SECRET_KEY) : null;
+  _mcpOAuth = _credits && _creditsAccount && acct ? createMcpOAuth({
+    credits: _credits, account: _creditsAccount, baseUrl: BASE_URL, sendEmail: faSendEmail,
+    secret: acct,
+    store: createCreditsAccountStore({ name: "mcp-oauth", file: joinPath(_credits._dir, "_mcp-oauth.json"), log: () => {} }),
+  }) : null;
+} catch (e) { console.warn("[mcp-oauth] init failed:", String(e?.message || e).slice(0, 200)); _mcpOAuth = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
 // id, carried ONLY in the subscriber's email - never in the report JSON or on
 // the report page, which subscribers are told to share. Derived from the
@@ -11321,6 +11334,9 @@ const mcpMountOpts = {
   // PAYMENT-SIGNATURE header, so the x402 paywall verifies and settles it.
   // FREE_MODE has no paywall, so nothing to pay.
   x402Loopback: FREE_MODE ? null : createMcpMppLoopback({ port: () => loopbackPort }),
+  // A connector grant's paid call (src/mcp-oauth.js): replayed to the route
+  // with a one-call grant handle, paid by the credits gate.
+  creditsLoopback: !FREE_MODE && _mcpOAuth ? createMcpMppLoopback({ port: () => loopbackPort }) : null,
   // What the connector's own text says it takes in the call: the account the
   // pages read (src/connector-pay.js), so the two cannot disagree on a boot.
   payWires: connectorWires(),
@@ -11377,6 +11393,9 @@ const mcpMountOpts = {
     capturePostHogToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false, probe: isProbe });
   },
 };
+// The connector sign-in's routes come first: its /mcp reader resolves a
+// bearer before the connector runs, and /mcp/credits is rewritten to /mcp.
+_mcpOAuth?.mount(app, { express, clientIp });
 mountMcp(app, CATALOG, { ...mcpMountOpts, serverCardAliases: ["/.well-known/mcp/server-card.json"] });
 // ONE-PRODUCT MCP ENDPOINT (2026-09-10): /mcp/sec serves the SEC filings
 // products only - the EDGAR reads and the three filing reports - under their
@@ -12319,7 +12338,7 @@ if (!FREE_MODE) {
       return priceUsd ? { priceUsd, slug: def.slug, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
     // While receipts are signed, a final 200 is debited before its answer
     // ends, so the receipt names a landed debit (src/credits.js).
-    }, { settleBeforeEnd: () => gateMounted("receiptSigner") }));
+    }, { settleBeforeEnd: () => gateMounted("receiptSigner"), grantOf: loopbackGrantOf }));
     markGateMounted("credits");
     console.log("Prepaid card credits enabled (Bearer a402_ keys)");
   }

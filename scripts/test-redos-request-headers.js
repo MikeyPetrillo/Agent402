@@ -103,7 +103,7 @@ function shaped(n) {
 const HEADERS = ["user-agent", "accept", "accept-language", "referer", "origin", "x-forwarded-for", "authorization", "x-payment", "payment-signature", "x-operator-token", "cookie", "if-none-match", "range", "idempotency-key"];
 // Further headers a gate, the connector or the edge code reads; each gets the
 // general shapes.
-const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call", "x-agent402-via-run", "x-agent402-async-run", "signature", "signature-input", "signature-agent", "x-wallet-session"];
+const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call", "x-agent402-via-run", "x-agent402-via-grant", "x-agent402-async-run", "signature", "signature-input", "signature-agent", "x-wallet-session"];
 
 // --- the readers the surfaces do not reach, timed directly --------------------
 // Synchronous functions, so a reading is the time this thread had a core.
@@ -125,7 +125,12 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const returningWallet = await import("../src/returning-wallet.js");
   // Read on a 2025-era POST /mcp; the boots below always send an Accept that names SSE.
   const mcpHttp = await import("../src/mcp-http.js");
+  // Read only with MCP_OAUTH=on and credits on sale (off on the boots below).
+  const mcpOAuth = await import("../src/mcp-oauth.js");
+  const creditsAccount = await import("../src/credits-account.js");
   const readers = {
+    "mcp-oauth bearerShape (authorization)": (v) => mcpOAuth.bearerShape(v),
+    "credits-account readCookie (cookie)": (v) => creditsAccount.readCookie({ headers: { cookie: v } }, "a402_oauth"),
     "mpp-offer-gate requestOptsIntoMppOffers (x-payment-offers)": (v) => offerGate.requestOptsIntoMppOffers({ headers: { "x-payment-offers": v } }),
     "mpp-offer-gate requestOptsIntoMppOffers (accept-payment)": (v) => offerGate.requestOptsIntoMppOffers({ headers: { "accept-payment": v } }),
     "mpp-offer-gate mppOffersWithheldFor (x-payment-offers, accept-payment, authorization)": (v) => offerGate.mppOffersWithheldFor({ headers: { "user-agent": "python-httpx/1", "x-payment-offers": v, "accept-payment": v, authorization: v }, rawHeaders: ["Authorization", v] }),

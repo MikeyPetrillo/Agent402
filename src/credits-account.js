@@ -295,7 +295,7 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
 }
 
 // ---- HTTP ---------------------------------------------------------------------
-const readCookie = (req, name) => {
+export const readCookie = (req, name) => {
   const raw = req.headers?.cookie;
   if (typeof raw !== "string") return "";
   for (const part of raw.split(";")) {
