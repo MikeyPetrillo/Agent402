@@ -1750,7 +1750,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       startFacilitatorGasCheck({
         network: ROBINHOOD_CAIP2,
         urls: () => gasCheckUrls(robinhoodPrimaryUrl, robinhoodFallbacks),
-        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address }] : [],
+        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, ROBINHOOD_CAIP2) }] : [],
         onReadings: robinhoodOrder ? (readings) => robinhoodOrder.update(readings) : null,
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
@@ -4254,6 +4254,29 @@ function startRobinhoodOrderRefresh(order, { intervalMs = Number(process.env.ROB
   const t = setInterval(() => { void run(); }, intervalMs);
   t.unref?.();
   return run;
+}
+
+/**
+ * Whether our own relayer's minimum sale price (ROBINHOOD_RELAYER_MIN_PRICE_USD)
+ * is at or under the lowest price sold on `network`: the catalog's least fixed
+ * list price, raised to that chain's price floor. Only then can the relayer
+ * stand in for a listed facilitator on every sale, so only then is a dry
+ * facilitator row covered (src/tool-failure-monitor.js). A catalog with no
+ * fixed price reads covered.
+ */
+export function ownRelayerCoversLowestPrice(catalog, network, { relayerMinUsd = robinhoodRelayerMinPriceUsd(), env = process.env } = {}) {
+  let lowest = Infinity;
+  for (const def of Object.values(catalog || {})) {
+    if (!def || typeof def !== "object" || typeof def.quote === "function") continue;
+    const m = /^\$?\s*(\d+(?:\.\d+)?)$/.exec(String(def.price ?? "").trim());
+    if (!m || !String(def.price).trim().startsWith("$")) continue;
+    const usd = Number(m[1]);
+    if (Number.isFinite(usd) && usd > 0 && usd < lowest) lowest = usd;
+  }
+  if (lowest === Infinity) return true;
+  const floorMicro = networkPriceFloors(env).get(network) || 0;
+  const sold = Math.max(lowest, floorMicro / 1e6);
+  return Number(relayerMinUsd) <= sold + 1e-9;
 }
 
 export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true, readEthUsd = ethUsdFromCryptoPrice, onReadings = null } = {}) {

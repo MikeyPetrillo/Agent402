@@ -842,6 +842,14 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       }
       m.noteRelayerGas([theirs({ status: "unread", runway: null }), ours()]);
       assert.equal(await word(), "ok", "their unreadable signer is covered too");
+      // Our relayer settles only sales at or over its minimum: when that is
+      // over the lowest price sold on the chain, the cheapest sales still need
+      // the facilitator, so its empty wallet is not covered and pages low.
+      m.noteRelayerGas([theirs(), ours({ coversLowestPrice: false })]);
+      assert.equal(await word(), "low", "a relayer minimum over the lowest price sold: not covered");
+      assert.equal(m.evaluate().relayerGas.find((r) => r.facilitator === "f.example")?.coveredByOwnRelayer, undefined, "the row is not marked covered");
+      m.noteRelayerGas([theirs(), ours({ coversLowestPrice: true })]);
+      assert.equal(await word(), "ok", "a relayer minimum at or under the lowest price sold: covered");
       m.noteRelayerGas([theirs(), ours({ status: "low", runway: 40 })]);
       assert.equal(await word(), "low", "ours low: not covered");
       assert.equal((await m.status({ fresh: true, full: true })).facilitatorFunds.relayersCovered, 0, "ours low: their wallet is not counted as covered");
@@ -963,8 +971,16 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       const bare = await (await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], schedule: false, readEthUsd: async () => 5000 }))();
       assert.equal(bare.find((x) => x.facilitator === "price floor"), undefined, JSON.stringify(bare));
       toolFailureMonitor()._reset();
-      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], ownSigners: [{ label: "own relayer", signer: "0x" + "cd".repeat(20) }], schedule: false, readEthUsd: async () => 5000 });
+      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], ownSigners: [{ label: "own relayer", signer: "0x" + "cd".repeat(20), coversLowestPrice: () => false }], schedule: false, readEthUsd: async () => 5000 });
       const r = await tick();
+      assert.equal(r.find((x) => x.own)?.coversLowestPrice, false, "the relayer's reading carries whether it covers the lowest price sold");
+      {
+        const { ownRelayerCoversLowestPrice } = await import("../src/payments.js");
+        const cat = { "GET /api/a": { slug: "a", price: "$0.001" }, "GET /api/b": { slug: "b", price: "$0.05" }, "POST /v1/x": { slug: "x", price: "dynamic", quote: () => 0.01 } };
+        assert.equal(ownRelayerCoversLowestPrice(cat, NET, { relayerMinUsd: 0.004, env: {} }), false, "a $0.001 sale under a $0.004 minimum");
+        assert.equal(ownRelayerCoversLowestPrice(cat, NET, { relayerMinUsd: 0.004, env: { ROBINHOOD_MIN_PRICE_USD: "0.004" } }), true, "the chain's floor lifts the lowest sale to the minimum");
+        assert.equal(ownRelayerCoversLowestPrice(cat, NET, { relayerMinUsd: 0, env: {} }), true, "a zero minimum covers every price");
+      }
       const floorRow = r.find((x) => x.facilitator === "price floor");
       assert.ok(floorRow && floorRow.status === "low" && floorRow.reason === "gasNearFloor" && floorRow.floorUsd === 0.004, JSON.stringify(r));
       assert.equal((await toolFailureMonitor().status({ fresh: true })).facilitatorFunds.status, "low");

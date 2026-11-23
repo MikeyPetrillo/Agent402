@@ -792,7 +792,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `/supported` is read at once and the first in list order that confirms exact on `eip155:4663`
   settles (`firstConfirmedFacilitator`, logged when it is not the first; none confirms = the first,
   as before); the rest are Robinhood's settle fallback (never routing facilitators), reached after
-  a pre-broadcast refusal or, on `eip155:4663` only, a reverted `transferWithAuthorization`
+  a pre-broadcast refusal or, on `eip155:4663` only, a reverted `transferWithAuthorization` or a node refusal
+  before sending with no transaction (a failed gas estimate, "nonce too high": `isNothingSentNodeRefusal`, Ink too)
   (`isRetryableSettleRefusal`) or a listed facilitator's graceful HTTP 200 `success:false` with no
   transaction and a reason that is not a verdict about the buyer (`isListedPassOnRefusal`,
   `markGracefulRefusals`; verdicts as codes or prose in `src/settle-verdict.js`): that one goes to
@@ -875,7 +876,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   missing receipt stops the chain; its signer joins the gas check (`scripts/test-own-relayer.js`).
   While every fresh gas reading of the first listed facilitator's signer is under
   `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` (default 50) settlements, our relayer settles first
-  (`src/robinhood-order.js`; facilitatorFunds leaves that covered row out). The order's start
+  (`src/robinhood-order.js`; facilitatorFunds leaves that covered row out, `coveredByOwnRelayer`, only while
+  `ROBINHOOD_RELAYER_MIN_PRICE_USD` is at or under the lowest price sold on the chain, the catalog's least fixed price
+  raised to the chain's floor: `ownRelayerCoversLowestPrice`; otherwise the dry row pages low). The order's start
   (`since`) is a state-database document (`robinhood-order:eip155:4663`), so a deploy or another
   replica keeps the clock; `robinhoodSettler` on `/api/gateway-status` reads `relayer` once our
   relayer has been first without a break for longer than `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS`

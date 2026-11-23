@@ -181,6 +181,10 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
     for (const url of [...urls, ...own.map((o) => ({ own: o }))]) {
       if (url && typeof url === "object" && url.own) {
         const { label, signer } = url.own;
+        // Whether our relayer's minimum sale price is at or under the lowest
+        // price sold on this chain (src/payments.js ownRelayerCoversLowestPrice).
+        let covers = {};
+        if (typeof url.own.coversLowestPrice === "function") { try { covers = { coversLowestPrice: url.own.coversLowestPrice() === true }; } catch { covers = { coversLowestPrice: false }; } }
         const key = `own:${label}|${signer}`;
         const s = state.get(key) || { failures: 0, last: null };
         let error = gasError, reading = null;
@@ -188,14 +192,14 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
           try {
             const balance = await rpc("eth_getBalance", [signer, "latest"]);
             const runway = runwayOf(balance, gasPrice, settings.gasPerSettlement);
-            reading = { network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: Number(balance) / 1e18, runway, status: runway !== null && runway < settings.minRunway ? "low" : "ok", at };
+            reading = { network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: Number(balance) / 1e18, runway, status: runway !== null && runway < settings.minRunway ? "low" : "ok", ...covers, at };
           } catch (e) { error = String(e?.message || e).slice(0, 120); }
         }
         if (reading) { s.failures = 0; s.last = reading; state.set(key, s); readings.push(reading); continue; }
         s.failures++;
         state.set(key, s);
-        if (s.failures >= settings.failAfter) readings.push({ network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: s.last?.balanceEth ?? null, runway: s.last?.runway ?? null, status: "unread", failures: s.failures, error, at });
-        else if (s.last) readings.push({ ...s.last, failures: s.failures, error });
+        if (s.failures >= settings.failAfter) readings.push({ network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: s.last?.balanceEth ?? null, runway: s.last?.runway ?? null, status: "unread", failures: s.failures, error, ...covers, at });
+        else if (s.last) readings.push({ ...s.last, ...covers, failures: s.failures, error });
         continue;
       }
       const facilitator = hostOf(url);
