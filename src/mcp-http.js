@@ -471,7 +471,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   const SETUP_NAMED = ["Base", "Polygon", "Arbitrum", "Robinhood Chain", "Arc"];
   const presetOf = (name) => Object.keys(NPM_EVM_PRESETS).find((k) => NPM_EVM_PRESETS[k] === name);
   const otherEvm = RAILS.filter((r) => r.chainId && !SETUP_NAMED.includes(r.name)).map((r) => (presetOf(r.name) ? `${presetOf(r.name)} (${r.caip2})` : `${r.name} ${r.caip2}`));
-  const npmEvmSetup = `Use a new wallet holding only a few dollars of USDC. Never your main wallet. AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by name or CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
+  // The variables a reader sets on the npm server; the wallet warning is its
+  // own sentence after the command (NPM_WALLET_WARNING).
+  const npmEvmSetup = `AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by name or CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
+  const NPM_WALLET_WARNING = "Use a new wallet holding only a few dollars of USDC, never your main wallet.";
   // MPP start-here set (src/mpp-flagship.js) as served by this connector's
   // catalog, prices read from it. Surfaced in payment.info.
   const mppStartHere = mppFlagshipRows(catalog).map((r) => ({ slug: r.slug, method: r.method, path: r.path, url: `${baseUrl}${r.path}`, price: r.price, why: r.why }));
@@ -673,7 +676,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         `It can run up to ${Number(def.asyncProfile?.maxSeconds)} s, longer than this connector's blocking wait (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s)${payX402 ? ", so it is not paid here over x402" : ""}.`,
         ...(asTask ? [`Pay it RIGHT HERE over MPP as an MCP task: call again declaring the MCP tasks extension on the request (_meta["${CLIENT_CAPABILITIES_META}"].extensions["${TASKS_EXTENSION}"]) with an MPP credential in _meta["org.paymentauth/credential"], and the run is handed back as a task handle to poll.`] : []),
         `${asTask ? "Or call" : "Call"} its HTTP route ${def.route} with the header Prefer: respond-async and any x402 client: it answers 202 with a job link.`,
-        `Or run the npm server with a funded wallet: npx agent402-mcp with env ${npmEvmSetup}. Docs: ${baseUrl}/tools/${def.slug}`,
+        `Or run the npm server with a funded wallet: npx agent402-mcp with env ${npmEvmSetup}. ${NPM_WALLET_WARNING} Docs: ${baseUrl}/tools/${def.slug}`,
       ].join(" ");
     }
     const here = x402 || mpp;
@@ -682,7 +685,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       ...(x402 ? [`Pay it RIGHT HERE over x402: sign one of the accepts in this result's PaymentRequired (the JSON in its first text block) and call again with the payment in _meta["x402/payment"] - an x402 MCP client does this automatically; the settle receipt comes back in _meta["x402/payment-response"].`] : []),
       ...(mpp ? [`${x402 ? "Or pay it here" : "Pay it RIGHT HERE"} over MPP: call again with an MPP credential in _meta["org.paymentauth/credential"] - mppx's McpClient.wrap() does this automatically (USDC on Base/Celo via evm.charge, or native Tempo via tempo.charge); the receipt comes back in _meta["org.paymentauth/receipt"].`] : []),
       `${here ? "Or, from" : "To pay it from"} Claude or any MCP client, run the npm server with a funded wallet:`,
-      `npx agent402-mcp with env ${npmEvmSetup} and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET.`,
+      `npx agent402-mcp with env ${npmEvmSetup} and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET. ${NPM_WALLET_WARNING}`,
       `Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
     ].join(" ");
   }
@@ -1886,7 +1889,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               rails: RAILS_PAREN,
               baseGas: BASE_NO_GAS_SENTENCE,
               start: `${baseUrl}/start`,
-              setup: `run the agent402-mcp npm server: \`npx agent402-mcp\` with ${npmEvmSetup} and/or SOLANA_AGENT_KEY=<base58 secret> for Solana. No signup, no API key.`,
+              setup: `run the agent402-mcp npm server: \`npx agent402-mcp\` with ${npmEvmSetup} and/or SOLANA_AGENT_KEY=<base58 secret> for Solana. ${NPM_WALLET_WARNING} No signup, no API key.`,
               // DERIVED. Both ranges here were hand-typed and kept through two
               // repricings: the pack ceiling was over ten times the real one and
               // the report range stopped a tier short of the priciest product.
