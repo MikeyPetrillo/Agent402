@@ -13,6 +13,16 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Every server this suite starts inherits these: no stored wallet key is read
+// from the developer's keychain, and the spend ledger and media files land
+// in a temp folder, never in the user's own config or Downloads folder.
+{
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  process.env.AGENT402_KEY_STORE = "off";
+  process.env.AGENT402_CONFIG_DIR = mkdtempSync(join(tmpdir(), "a402-mcp-cfg-"));
+  process.env.AGENT402_OUTPUT_DIR = mkdtempSync(join(tmpdir(), "a402-mcp-out-"));
+}
 
 const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
 
@@ -57,6 +67,9 @@ const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
   eq(seen[0], ["usdg"], "client sees only the preferred accept");
   console.log("networks.js unit tests \u2713 (parse, filter, preference order, no-match throw, client wrap)");
 }
+// 0-first-run) Keys with or without 0x, caps that hold across restarts, the
+// first-call allowance, media files and `setup` (./test-first-run.js).
+await import("./test-first-run.js");
 // 0a) index.d.ts (package.json "types") describes configuration and tool
 // results only: the package is a command and exports no runtime value, so
 // the declarations must declare none either.

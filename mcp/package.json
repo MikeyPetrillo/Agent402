@@ -1,6 +1,6 @@
 {
   "name": "agent402-mcp",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "mcpName": "io.github.MikeyPetrillo/agent402",
   "author": "Havok Holdings LLC <mike@agent402.tools> (https://agent402.tools)",
   "homepage": "https://agent402.tools",
@@ -22,6 +22,12 @@
     "networks.js",
     "discovery.js",
     "output-schemas.js",
+    "wallet-key.js",
+    "config-dir.js",
+    "spend-ledger.js",
+    "key-store.js",
+    "media-output.js",
+    "setup.js",
     "README.md",
     "pow-solver.js"
   ],

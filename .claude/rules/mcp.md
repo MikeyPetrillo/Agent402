@@ -98,3 +98,13 @@ Loaded when a connector or front-door file is read.
   server needs `npm --prefix mcp ci`). Errors are a local `McpError` over `ProtocolError` that keeps the
   "MCP error <code>: " prefix. The SDK lifts `io.modelcontextprotocol/*` keys out of `params._meta`, so a handler that
   needs one reads the raw message. A JSON-RPC batch on the hosted transport counts one limiter hit per message.
+- **stdio package first run** (`mcp/test-first-run.js`, run by `mcp/test.js`): `AGENT_KEY` is read with or without
+  `0x` (`mcp/wallet-key.js`, the same file as `client/wallet-key.js`); unset, the key `npx agent402-mcp setup`
+  (`mcp/setup.js`) stored is read from the OS store (`mcp/key-store.js`, `AGENT402_KEY_STORE`; the key always goes on
+  stdin, never argv). `AGENT402_MAX_USD_PER_DAY` / `_PER_MONTH` are UTC caps kept in `spend.json` (0600) under
+  `AGENT402_CONFIG_DIR` (`mcp/spend-ledger.js`; only confirmed spend is written). A 2xx with
+  `X-Agent402-Allowance: first-call` and no `PAYMENT-RESPONSE` is labeled "One-time free call" and not counted (the
+  client SDK releases it too). Media answers become files in `AGENT402_OUTPUT_DIR` (`mcp/media-output.js`, names made
+  from a fixed alphabet); an image up to `AGENT402_MEDIA_INLINE_MAX_BYTES` (default 1 MB) is also an inline image block,
+  so the model loses no sight of it; `AGENT402_MEDIA_INLINE=1` keeps everything inline. A suite that spawns the stdio server sets
+  `AGENT402_KEY_STORE=off` and temp `AGENT402_CONFIG_DIR` / `AGENT402_OUTPUT_DIR`, so a developer's stored key is never read.
