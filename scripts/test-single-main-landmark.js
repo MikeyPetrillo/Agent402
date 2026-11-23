@@ -32,7 +32,8 @@ const PATHS = [
 
 for (const path of PATHS) {
   const res = await fetch(`${BASE}${path}`);
-  if (res.status !== 200) { console.log(`skip - ${path} returned ${res.status}, not 200 (may not exist as a static slug)`); continue; }
+  // Every path above is a real page: a non-200 (a 500 included) fails, never skips.
+  if (res.status !== 200) { ok(false, `${path}: answers 200 (got ${res.status})`); continue; }
   const html = await res.text();
   const count = (html.match(/<main[\s>]/g) || []).length;
   ok(count === 1, `${path}: exactly one <main> landmark (got ${count})`);
