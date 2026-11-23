@@ -63,6 +63,9 @@ Credits:
 - A credits key is frozen while a dispute of the payment that loaded it is
   open, and while a fraud warning on that payment is reviewed; its unspent
   balance goes back to that payment's card.
+- When a dispute of one payment on a topped-up key is decided against us, only
+  that payment's share comes off the balance; the rest stays usable, or is
+  owed back to its own card while a fraud warning holds the key.
 - `POST /api/credits/revoke` with a key in the Authorization header disables
   that key at once, with the same answer for every key.
 - A request whose address carries a credits key or a connector token is

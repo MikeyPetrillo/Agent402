@@ -95,6 +95,7 @@ const ENTRIES = [
     title: "Credits keys protected",
     items: [
       "Credits: A credits key is frozen while a dispute of the payment that loaded it is open, and while a fraud warning on that payment is reviewed; its unspent balance goes back to that payment's card.",
+      "Credits: When a dispute of one payment on a topped-up key is decided against us, only that payment's share comes off the balance; the rest stays usable, or is owed back to its own card while a fraud warning holds the key.",
       "Credits: `POST /api/credits/revoke` with a key in the Authorization header disables that key at once, with the same answer for every key.",
       "Credits: A request whose address carries a credits key or a connector token is refused with a 400 before it is read, and the answer never repeats it.",
     ],
