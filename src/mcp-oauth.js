@@ -62,6 +62,8 @@ import { consentPage, consentErrorPage, OAUTH_CONSENT_PATH } from "./mcp-oauth-p
 export const ACCESS_PREFIX = "a402m_";
 export const REFRESH_PREFIX = "a402r_";
 export const SCOPE = "credits:spend";
+/** The most of the service-wide hourly code-mail budget one network may take. */
+export const GLOBAL_SHARE = 0.05;
 export const AUTH_MCP_PATH = CREDITS_CONNECTOR_PATH;
 // The sign-in browser cookie holds an opaque random value only (32 random
 // bytes); the server keeps its SHA-256 digest with the pending request, never
@@ -215,6 +217,13 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     return Number(r.value) || 0;
   }
   const over = async (name, key, limit, windowMs = cfg.windowMs()) => (await add(name, key, 1, windowMs)) > limit;
+  /** A counter's value now, without charging it. */
+  async function read(name, key) {
+    const k = digest(`${name}|${key}`).slice(0, 40);
+    let r = await limits.counterGet(`mcpo-${name}`, k).catch(() => ({ ok: false }));
+    if (!r?.ok) r = await local.counterGet(`mcpo-${name}`, k);
+    return Number(r.value) || 0;
+  }
   // A code attempt is counted BEFORE the code is compared, on two shared
   // counters: the requester's address (every sign-in it holds together) and
   // the emailed code (the pending sign-in it was mailed to). Parallel attempts
@@ -424,21 +433,41 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     // "limited" (refused by a limit; no code made), "gone" (no such sign-in)
     // or whether the mail was sent. The service-wide budget is read last, so
     // a send another limit refused does not spend it.
-    // The per-recipient budgets are charged to the mailbox (its "+tag" and
-    // dotted spellings count as one, src/mailbox-key.js) together with the
-    // requester's network, so a stranger spends only its own allowance for an
-    // address it names. The mailbox's day ceiling across requesters holds back
-    // a requester that has sent there before, never one's first send of the
-    // day: the owner's own sign-in always gets a code, whatever others asked.
+    // Each budget meters the requester (its network, an IPv6 /64) and the
+    // shared totals are ceilings read before anything is charged, so a refused
+    // ask raises no counter another requester is judged by:
+    //   - per (mailbox, network): the requester's own share for an address it
+    //     names (the mailbox folds "+tag" and dotted spellings, src/mailbox-key.js);
+    //   - the mailbox's day ceiling across requesters, first sends included;
+    //     past it a network's first send of the day comes from a fixed
+    //     per-mailbox allowance (the same size as the ceiling), so the mail a
+    //     mailbox gets is bounded however many networks ask;
+    //   - the service-wide hourly budget: one network takes at most
+    //     GLOBAL_SHARE of it, and once it is spent a network with no send
+    //     today still gets one code, so draining it stops no one else.
     if (await locked(ip) || await over("send-ip", netKey(ip), cfg.sendsPerIp())) return "limited";
     const mailbox = mailboxKey(email);
-    const mine = `${mailbox}|${netKey(ip)}`;
+    const net = netKey(ip);
+    const mine = `${mailbox}|${net}`;
     if (await over("send-email", mine, cfg.sendsPerEmail())) return "limited";
-    const mineToday = await add("send-email-day", mine, 1, DAY_MS);
-    if (mineToday > cfg.sendsPerEmailDay()) return "limited";
-    const mailboxToday = await add("send-mailbox-day", mailbox, 1, DAY_MS);
-    if (mineToday > 1 && mailboxToday > cfg.sendsPerEmailDay()) return "limited";
-    if (await over("send-global", "all", cfg.sendsGlobalPerHour(), HOUR_MS)) return "limited";
+    const perDay = cfg.sendsPerEmailDay();
+    const mineToday = await read("send-email-day", mine);
+    if (mineToday >= perDay) return "limited";
+    let cold = false;
+    if (await read("send-mailbox-day", mailbox) >= perDay) {
+      if (mineToday > 0 || await read("send-mailbox-cold-day", mailbox) >= perDay) return "limited";
+      cold = true;
+    }
+    const globalMax = cfg.sendsGlobalPerHour();
+    if (await read("send-net-hour", net) >= Math.max(1, Math.ceil(globalMax * GLOBAL_SHARE))) return "limited";
+    if (await read("send-global", "all") >= globalMax && await read("send-net-day", net) > 0) return "limited";
+    // The send is admitted: charge every budget it draws on.
+    await add("send-email-day", mine, 1, DAY_MS);
+    await add("send-mailbox-day", mailbox, 1, DAY_MS);
+    if (cold) await add("send-mailbox-cold-day", mailbox, 1, DAY_MS);
+    await add("send-net-hour", net, 1, HOUR_MS);
+    await add("send-net-day", net, 1, DAY_MS);
+    await add("send-global", "all", 1, HOUR_MS);
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
     const set = await requests.change((b) => {
@@ -607,15 +636,31 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
           // The browser's own cap: its oldest goes.
           const own = oldestFirst((r) => ownerOf(r) === owner);
           while (own.length >= cfg.pendingPerAddress()) delete b.reqs[own.shift()[0]];
-          // The shared caps (the address, its wider network, the app): a
-          // requester over one lets go of its own oldest there, or its new
-          // request is refused; another requester's is never let go.
-          for (const [pick, cap] of [[(r) => r.net === net, cfg.pendingPerAddress()], [(r) => r.wide === wide, cfg.pendingPerNetwork()], [(r) => r.clientId === clientId, cfg.pendingPerClient()]]) {
+          // The shared caps on the requester's own network (the address, its
+          // wider network): a requester over one lets go of its own oldest
+          // there, or its new request is refused; another requester's is
+          // never let go.
+          for (const [pick, cap] of [[(r) => r.net === net, cfg.pendingPerAddress()], [(r) => r.wide === wide, cfg.pendingPerNetwork()]]) {
             const group = oldestFirst(pick);
             const mine = mineIn(group);
             let n = group.length;
             while (n >= cap && mine.length) { delete b.reqs[mine.shift()[0]]; n--; }
             if (n >= cap) { refused = true; return SKIP_UPDATE; }
+          }
+          // The app: each requester network holds at most its own share of the
+          // app's sign-ins (its oldest gives way), and when the app is full the
+          // network holding the most gives up its oldest, so a newcomer is
+          // never refused because of rows others hold.
+          const inApp = (r) => r.clientId === clientId;
+          const appShare = Math.max(1, Math.min(cfg.pendingPerAddress(), cfg.pendingPerClient()));
+          const ownInApp = oldestFirst((r) => inApp(r) && r.net === net);
+          while (ownInApp.length >= appShare) delete b.reqs[ownInApp.shift()[0]];
+          for (let rows = oldestFirst(inApp); rows.length >= cfg.pendingPerClient(); rows = oldestFirst(inApp)) {
+            const byNet = new Map();
+            for (const row of rows) { const k = String(row[1].net); if (!byNet.has(k)) byNet.set(k, []); byNet.get(k).push(row); }
+            let largest = null;
+            for (const list of byNet.values()) if (!largest || list.length > largest.length || (list.length === largest.length && (Number(list[0][1].at) || 0) < (Number(largest[0][1].at) || 0))) largest = list;
+            delete b.reqs[largest[0][0]];
           }
           // A full map makes room only from requests that have expired or
           // that this requester holds; another requester's live sign-in is
