@@ -285,7 +285,7 @@ holds it.
 | `CREDITS_BALANCE_MAX_USD` | The most one credits key's balance may hold, in USD; a pack or top-up above it is not offered. | `100` | `src/changelog.js`, `src/credits-sales.js` |
 | `CREDITS_DAILY_MAX_USD` | The most one buyer may buy in prepaid credits in any 24 hours, in USD; a pack above it is not offered. | `50` | `src/credits-sales.js` |
 | `CREDITS_DEBIT_WAIT_MS` | Credits debit wait, in milliseconds. | `3000` | `src/credits.js` |
-| `CREDITS_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout; the legacy human-checkout.json is read beside the latter). |  | `src/credits.js` |
+| `CREDITS_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout). |  | `src/credits.js` |
 | `CREDITS_EFW_AUTO_REFUND` | off, false, 0 or no stops the card refund made without review of a key's unspent balance after an early fraud warning (the key is still frozen and the balance listed as owed); on by default, inside the private table's day total (CREDITS_GUARDS_JSON). |  | `src/credits.js` |
 | `CREDITS_EU_UK_REQUIRE_TAX_ID` | Credits eu uk require tax id. |  | `src/credits.js` |
 | `CREDITS_GUARDS_FILE` | A file holding the private credits table, read when CREDITS_GUARDS_JSON is unset. |  | `src/credits-guards.js` |
@@ -553,7 +553,7 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `HUMAN_CHECKOUT_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout; the legacy human-checkout.json is read beside the latter). |  | `src/human-checkout.js` |
+| `HUMAN_CHECKOUT_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout). |  | `src/human-checkout.js` |
 | `HUMAN_CHECKOUT_FAIL_MAX` | Human checkout fail maximum. |  | `src/human-checkout.js` |
 | `HUMAN_CHECKOUT_HEARTBEAT_MS` | Human checkout heartbeat, in milliseconds. |  | `src/human-checkout.js` |
 | `HUMAN_CHECKOUT_REPLAY_MS` | Human checkout replay, in milliseconds. |  | `src/human-checkout.js` |

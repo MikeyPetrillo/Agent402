@@ -3,7 +3,8 @@
 // on report failure, an OWED refund when the refund call itself fails (retried,
 // listed for the operator, never reported as refunded), abandoned-claim
 // takeover after a restart (one regeneration, then refund), long-input metadata
-// chunking, and the legacy single-file import. Offline, in CI.
+// chunking, and that a single-file store beside the directory is not read.
+// Offline, in CI.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHumanCheckout, HUMAN_PRODUCTS, humanCheckoutEnabled, chunkInput, unchunkInput, STALE_CLAIM_MS, isReportPurchase } from "../src/human-checkout.js";
 import { rmSync, mkdirSync, mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
@@ -11,8 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Every store this suite writes lives under one fresh temp root of its own,
-// the legacy single-file store included (read beside HUMAN_CHECKOUT_DIR), so
-// two runs, or a booted server, never read or migrate each other's files.
+// so two runs, or a booted server, never read each other's files.
 const ROOT = mkdtempSync(join(tmpdir(), "a402-human-checkout-"));
 const DIR = join(ROOT, "human-checkout");
 process.env.HUMAN_CHECKOUT_DIR = DIR;
@@ -603,14 +603,15 @@ const rec = await hc.recoverAbandoned();
 ok(rec.length === 1 && rec[0].id === "cs_paid" && genCalls === gBefore + 2, "the boot sweep re-drives an abandoned claim (regenerates) without waiting for a poll");
 ok((await settle("cs_paid")).status === "done", "...and it completes");
 
-// Legacy single-file store is imported once into per-session files.
-// The importer reads human-checkout.json beside the record directory: the
-// suite's own root here, never the shared /data or /tmp file.
+// The single-file store of the first build (human-checkout.json beside the
+// record directory) is no longer read: a file there is left as it is and
+// none of its records is served.
 try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
 const legacyPath = join(ROOT, "human-checkout.json");
-writeFileSync(legacyPath, JSON.stringify({ cs_old: { status: "done", kind: "research", slug: "research", input: "old", report: "# OLD", title: "old", sources: [], tables: [], at: "2026-08-21T00:00:00.000Z" } }));
+const legacyText = JSON.stringify({ cs_old: { status: "done", kind: "research", slug: "research", input: "old", report: "# OLD", title: "old", sources: [], tables: [], at: "2026-08-21T00:00:00.000Z" } });
+writeFileSync(legacyPath, legacyText);
 hc = mk();
-ok(hc.peek("cs_old")?.report === "# OLD" && !existsSync(legacyPath) && existsSync(legacyPath + ".migrated"), "a legacy single-file store beside HUMAN_CHECKOUT_DIR is imported into per-session files once (old report links keep resolving)");
+ok(hc.peek("cs_old") == null && !existsSync(join(DIR, "cs_old.json")) && readFileSync(legacyPath, "utf8") === legacyText && !existsSync(legacyPath + ".migrated"), "a single-file store beside HUMAN_CHECKOUT_DIR is not read: no record from it is served and the file is left untouched");
 
 // --- the Stripe webhook fulfills a paid report session: a buyer who closed the
 // tab before the success redirect still gets one generation and one delivery,
