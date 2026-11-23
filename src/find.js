@@ -509,6 +509,10 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
   for (const form of nameForm.values()) termSet.add(form);
   // Empty for a query that names no direction, so the passes below cost nothing.
   const pairs = conversionPairs(q, terms);
+  // A query that is exactly a tool's slug or one of its aliases names that
+  // tool: it ranks first ("id-validate", "eth_getbalance"), whatever the
+  // shared words score for its neighbors.
+  const wholeQuery = q.trim().toLowerCase();
   const wayOf = new Map(); // slug -> { way, from, to }, only for tools that state one of the pairs
   const scored = [];
   for (const e of all) {
@@ -564,8 +568,9 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
       if (hay.includes(term)) s += 1;
       score += s * idf.get(term);           // weight by how much the term narrows things
     }
-    if (score > 0) {
-      scored.push([score, t, directionScore(slug)]);
+    const named = wholeQuery.length > 1 && completeName(e, wholeQuery);
+    if (score > 0 || named) {
+      scored.push([score, t, directionScore(slug), named ? 1 : 0]);
       if (pairs.length) { const d = directionOf(t, pairs, catalog[t.route]); if (d) wayOf.set(t.slug, d); }
     }
   }
@@ -575,6 +580,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
   // highest score first; then more in-order term pairs win (directional intent);
   // then shorter slug (more specific); then alpha for full determinism.
   scored.sort((a, b) =>
+    b[3] - a[3] ||
     (reversed(a[1]) ? 1 : 0) - (reversed(b[1]) ? 1 : 0) ||
     b[0] - a[0] ||
     b[2] - a[2] ||
