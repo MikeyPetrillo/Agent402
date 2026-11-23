@@ -24,6 +24,7 @@ import { createHash, generateKeyPairSync, sign as cryptoSign, randomBytes } from
 import { readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as wba from "../src/web-bot-auth.js";
 import { createMemoryLimits } from "../src/shared-limits.js";
 import { bootPaidServer } from "./lib/paid-boot.js";
@@ -237,7 +238,7 @@ const check = (v, t) => v.checkTap(t.req, Buffer.from(t.body));
   const src = new URL("../src/", import.meta.url);
   const readers = [];
   const walk = (dir) => { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) walk(p); else if (e.name.endsWith(".js") && !p.endsWith("web-bot-auth.js") && /(\.|\[["'`])(visaCliAgent|webBotAuth)\b/.test(readFileSync(p, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1"))) readers.push(p); } };
-  walk(src.pathname);
+  walk(fileURLToPath(src));
   ok(readers.length === 0, `no module but web-bot-auth.js reads req.webBotAuth or req.visaCliAgent (${readers.join(", ") || "none"})`);
 }
 
