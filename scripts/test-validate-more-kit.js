@@ -231,6 +231,12 @@ const SIG = "5".repeat(87);
   ok(await status(() => checkSolanaRpcRequest({ method: "getSlot", network: { toString: 1 } })) === 400 && await status(() => checkSolanaRpcRequest({ method: "getSlot", network: 1 })) === 400, "solana-rpc: a network that is not text is a 400");
   ok(await status(() => checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: [ADDR, { programId: ADDR }] })) === 400, "solana-rpc: an owner-wide programId scan is refused (name the mint)");
   ok(checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: [ADDR, { mint: ADDR }] }).params[1].mint === ADDR, "solana-rpc: a mint filter is read");
+  for (const bad of [[ADDR], [ADDR, { mint: ADDR, programId: ADDR }], [ADDR, {}]]) {
+    let msg = "";
+    try { checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: bad }); } catch (e) { msg = e.message; }
+    ok(msg && !/\{ mint \} or \{ programId \}/.test(msg) && /\{ mint \}/.test(msg), `solana-rpc: the getTokenAccountsByOwner refusal names only { mint } (${msg})`);
+  }
+  ok(/an account the node cannot parse comes back as base64/.test(tool("solana-rpc").description), "solana-rpc: the description says what jsonParsed falls back to");
   for (const enc of [undefined, "base64", "base58", "base64+zstd"]) {
     const cfg = enc ? { encoding: enc } : undefined;
     ok(await status(() => checkSolanaRpcRequest({ method: "getAccountInfo", params: cfg ? [ADDR, cfg] : [ADDR] })) === 400, `solana-rpc: getAccountInfo in ${enc || "the default base64"} without a dataSlice is refused`);

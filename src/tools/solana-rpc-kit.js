@@ -122,9 +122,9 @@ const METHODS = {
     return [address(p[0], "the mint"), ...(p.length > 1 ? [config(p[1], "the config", ["commitment"])] : [])];
   },
   getTokenAccountsByOwner: (p) => {
-    if (p.length < 2 || p.length > 3) throw bad(`getTokenAccountsByOwner takes [owner, { mint } or { programId }, config?]`);
+    if (p.length < 2 || p.length > 3) throw bad(`getTokenAccountsByOwner takes [owner, { mint }, config?]`);
     const f = p[1];
-    if (!isPlainObject(f) || Object.keys(f).length !== 1 || !(f.mint !== undefined || f.programId !== undefined)) throw bad(`the filter must be exactly one of { mint } or { programId }`);
+    if (!isPlainObject(f) || Object.keys(f).length !== 1 || !(f.mint !== undefined || f.programId !== undefined)) throw bad(`the filter must be exactly { mint }`);
     // An owner's accounts under a whole token program is an unbounded scan:
     // the filter names one mint.
     if (f.mint === undefined) throw bad(`the filter must be { mint }; a { programId } filter reads every account the owner holds under the program and is not served`);
@@ -266,7 +266,7 @@ export const SOLANA_RPC_TOOLS = [
     category: "crypto",
     price: "$0.004",
     description:
-      `Read-only JSON-RPC against Solana mainnet with multi-endpoint failover: one paid call, no node or API key of your own. Allowlisted reads only: ${SOLANA_RPC_METHODS.join(", ")}. getProgramAccounts and every send, simulate, airdrop and subscription method are refused. Heavy reads stay small: getBlock returns signatures (the first ${BLOCK_SIGNATURES_MAX.toLocaleString("en-US")}, marked partial past that) or no transaction list (never full bodies) and no rewards unless asked, getAccountInfo reads raw account bytes through a dataSlice of at most ${ACCOUNT_SLICE_MAX.toLocaleString("en-US")} bytes (or jsonParsed), getTokenAccountsByOwner takes a mint filter, getSignaturesForAddress returns 20 rows by default and 100 at most, getSignatureStatuses takes up to 20 signatures. Results over 200KB serialized return 413; narrow the query (a dataSlice, a mint filter, a smaller limit).`,
+      `Read-only JSON-RPC against Solana mainnet with multi-endpoint failover: one paid call, no node or API key of your own. Allowlisted reads only: ${SOLANA_RPC_METHODS.join(", ")}. getProgramAccounts and every send, simulate, airdrop and subscription method are refused. Heavy reads stay small: getBlock returns signatures (the first ${BLOCK_SIGNATURES_MAX.toLocaleString("en-US")}, marked partial past that) or no transaction list (never full bodies) and no rewards unless asked, getAccountInfo reads raw account bytes through a dataSlice of at most ${ACCOUNT_SLICE_MAX.toLocaleString("en-US")} bytes, or jsonParsed (an account the node cannot parse comes back as base64, held to the result cap below), getTokenAccountsByOwner takes a mint filter, getSignaturesForAddress returns 20 rows by default and 100 at most, getSignatureStatuses takes up to 20 signatures. Results over 200KB serialized return 413; narrow the query (a dataSlice, a mint filter, a smaller limit).`,
     tags: ["crypto", "solana", "rpc", "json-rpc", "svm", "spl", "account", "transaction", "balance", "slot"],
     discovery: {
       bodyType: "json",
