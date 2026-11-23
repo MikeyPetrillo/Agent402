@@ -5158,7 +5158,14 @@ const baseAmountOf = (r) => {
 };
 // Tools priced per unit that declare their smallest request (src/tools/bundle-kit.js).
 const UNIT_PRICED = ["weather-risk-brief", "filings-brief", "token-diligence"];
-const REF_ENV = { AGENT402_BASE_RPC: `${fac.url}/rpc`, EVM_LOGS_PUBLIC_RPCS_BASE: "", REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT, REFERRAL_RECEIPT_WAIT_MS: "0", REFERRAL_PAY_TO: PAY_TO, REFERRAL_FACILITATOR_URL: fac.url, REFERRAL_SIGNER_KEY: SIGNER_KEY, REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral", REFERRAL_SLUGS: "hash", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_COMMISSION_BPS: "default:1234" };
+// The /ref copies refuse every payment while no sanctions list is loaded, so
+// each boot that serves them is given one; LISTED is on it.
+const LISTED = newAccount();
+const screenFile = join(tmp, "screen.json");
+writeFileSync(screenFile, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [LISTED.address.toLowerCase()] }));
+// A wallet on WALLET_BLOCKLIST in the main boot.
+const BLOCKED = newAccount();
+const REF_ENV = { SANCTIONS_SCREEN_FILE: screenFile, AGENT402_BASE_RPC: `${fac.url}/rpc`, EVM_LOGS_PUBLIC_RPCS_BASE: "", REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT, REFERRAL_RECEIPT_WAIT_MS: "0", REFERRAL_PAY_TO: PAY_TO, REFERRAL_FACILITATOR_URL: fac.url, REFERRAL_SIGNER_KEY: SIGNER_KEY, REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral", REFERRAL_SLUGS: "hash", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_COMMISSION_BPS: "default:1234" };
 const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGNER_KEY: "", REFERRAL_SLUGS: "", REFERRAL_SETUP_URL: "", REFERRAL_COMMISSION_BPS: "" };
 
 // Switches unset: nothing is mounted.
@@ -5207,6 +5214,20 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
     const h = await call(`${zero.url}/health`, { method: "GET" });
     ok(h.status === 200 && a.status === 404 && (zero.log().match(/referral gate is off/g) || []).length === 1 && /not usable/.test(zero.log()), `an all-zero signer key: the server boots, the gate is off, one line says why (${h.status}, ${a.status})`);
   } finally { await zero.stop(); }
+}
+
+{
+  // No sanctions list loaded: a /ref payment is refused 503 before anything
+  // runs or reaches the facilitator (the direct routes serve unscreened and
+  // count it; scripts/test-x402-payer-screen.js holds that control).
+  const nolist = await bootPaidServer({ label: "referral-no-list", env: { ...REF_ENV, SANCTIONS_SCREEN_FILE: join(tmp, "no-screen-here.json"), SANCTIONS_LIST_URL: `${fac.url}/no-such-list.xml` } });
+  try {
+    fac.reset();
+    const acc = (await call(`${nolist.url}/ref/hash`, { method: "GET" })).json?.accepts?.[0];
+    const r = acc ? await call(`${nolist.url}/ref/hash`, { body: { text: "abc" }, headers: { "payment-signature": (await signPayment(acc, { account: newAccount() })).header } }) : null;
+    ok(acc && r?.status === 503 && r.json?.reason === "payer-screen-unavailable" && r.json.charged === false && Number(r.headers.get("retry-after")) > 0 && fac.of("/verify").length === 0 && fac.of("/settle").length === 0 && !r.json?.hex, `with no sanctions list loaded a /ref payment is refused 503 before the handler and before any facilitator call (${r?.status} ${r?.json?.reason})`);
+    ok(/no list loaded, refusing payments on the strict screen/.test(nolist.log()), "and the refusal is logged");
+  } finally { await nolist.stop(); }
 }
 
 {
@@ -5330,9 +5351,6 @@ const directFac = createServer((req, res) => {
   });
 });
 await new Promise((r) => directFac.listen(0, "127.0.0.1", r));
-const LISTED = newAccount();
-const screenFile = join(tmp, "screen.json");
-writeFileSync(screenFile, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [LISTED.address.toLowerCase()] }));
 
 fac.reset();
 // Paid data tools whose reads carry fixed timeouts of their own, each ended by a run's ceiling (src/run-ceiling.js).
@@ -5355,7 +5373,7 @@ const srv = await bootPaidServer({
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${orStub.address().port}`, OPENROUTER_FLEX: "off",
     // The direct routes' breaker trips at 3, so a referral run that fed it would show.
     GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "3", GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000",
-    SANCTIONS_SCREEN_FILE: screenFile, SANCTIONS_LIST_URL: `${fac.url}/SDN.XML`,
+    SANCTIONS_SCREEN_FILE: screenFile, SANCTIONS_LIST_URL: `${fac.url}/SDN.XML`, WALLET_BLOCKLIST: BLOCKED.address,
     LEADERBOARD_FIRST_REFRESH_DELAY_MS: "600000",
   },
 });
@@ -5599,6 +5617,14 @@ try {
     const directRefused = await call(`${srv.url}/api/hash`, { body: { text: "abc" }, headers: { ...xff(), "payment-signature": (await signPayment({ ...directAccept }, { account: LISTED, to: directAccept.payTo, value: directAccept.amount, primaryType: "TransferWithAuthorization", validBefore: String(Math.floor(Date.now() / 1000) + 300) })).header } });
     ok(refused.status === 403 && refused.json?.reason === "payer-not-accepted" && refused.json.charged === false && fac.of("/settle").length === settlesBefore && fac.of("/verify").length === verifiesBefore, `a listed payer is refused 403 before the handler and before any facilitator call (${refused.status} ${refused.json?.reason})`);
     ok(directRefused.status === 403 && JSON.stringify(directRefused.json) === JSON.stringify(refused.json), `with the same refusal the direct route sends (${directRefused.status})`);
+  }
+  // WALLET_BLOCKLIST applies here too, before the handler and the facilitator.
+  {
+    const settlesBefore = fac.of("/settle").length, verifiesBefore = fac.of("/verify").length;
+    const blocked = await call(`${srv.url}/ref/hash`, { body: { text: "abc" }, headers: { ...xff(), "payment-signature": (await signPayment(refAccept, { account: BLOCKED })).header } });
+    ok(blocked.status === 403 && blocked.json?.reason === "wallet_blocked" && blocked.json.charged === false && !blocked.json?.hex && fac.of("/settle").length === settlesBefore && fac.of("/verify").length === verifiesBefore, `a payer on WALLET_BLOCKLIST is refused 403 before the handler and before any facilitator call (${blocked.status} ${blocked.json?.reason})`);
+    const control = await call(`${srv.url}/ref/hash`, { body: { text: "abc" }, headers: { ...xff(), "payment-signature": (await signPayment(refAccept, { account: newAccount() })).header } });
+    ok(control.status === 200 && control.json?.hex === createHash("sha256").update("abc").digest("hex"), `CONTROL: the same call from a wallet not on the list is served (${control.status})`);
   }
 
   // The two paywalls do not take each other's payments.
@@ -5874,7 +5900,7 @@ try {
     ok(reopenNone.status === 400 && reopenNone.json?.ok === false && reopenNoToken.status === 404, `the operator route's reopen answers 400 for a record that is not there, and 404 without the token (${reopenNone.status}, ${reopenNoToken.status})`);
   }
   const op = await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } });
-  ok(op.status === 200 && op.json?.enabled === true && op.json.sinceBoot?.settled >= 4 && op.json.sinceBoot.timeouts >= 1 && op.json.sinceBoot.screened === 1 && op.json.routes.includes("hash") && Array.isArray(op.json.open) && Array.isArray(op.json.notServed), `the operator view carries the gate's counters, its open settlements and the slugs it does not serve (${JSON.stringify(op.json?.sinceBoot)})`);
+  ok(op.status === 200 && op.json?.enabled === true && op.json.sinceBoot?.settled >= 4 && op.json.sinceBoot.timeouts >= 1 && op.json.sinceBoot.screened === 2 && op.json.routes.includes("hash") && Array.isArray(op.json.open) && Array.isArray(op.json.notServed), `the operator view carries the gate's counters, its open settlements (two screen refusals: the listed payer and the blocked wallet) and the slugs it does not serve (${JSON.stringify(op.json?.sinceBoot)})`);
 
   {
     // An operator closes an open settlement by hand (POST on the same route, token-authed, with a note).
