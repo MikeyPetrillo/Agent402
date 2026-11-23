@@ -352,6 +352,30 @@ export function objectFieldsSample(v, max = 80) {
   return `${head}: ${keys.slice(0, shown).join(", ")}${tail(shown)}`;
 }
 
+/** What the input schema itself says about one field, as a sentence for the
+ *  parameters table: its allowed values, its default, its range or length,
+ *  and the value the published example sends. Each fact is read from the
+ *  schema, so a page states only what the route enforces or documents. */
+export function paramLimits(v, exampleValue) {
+  if (!v || typeof v !== "object") return "";
+  const e = ledgerEsc;
+  const out = [];
+  const lit = (x) => `<code>${e(typeof x === "string" ? x : JSON.stringify(x))}</code>`;
+  const en = Array.isArray(v.enum) ? v.enum : Array.isArray(v.items?.enum) ? v.items.enum : null;
+  if (en && en.length && en.length <= 12) out.push(`One of ${en.map(lit).join(", ")}.`);
+  else if (en && en.length > 12) out.push(`One of ${en.length} listed values.`);
+  if (v.default !== undefined && v.default !== null && JSON.stringify(v.default).length <= 40) out.push(`Default ${lit(v.default)}.`);
+  const lo = v.minimum ?? v.exclusiveMinimum, hi = v.maximum ?? v.exclusiveMaximum;
+  if (Number.isFinite(lo) && Number.isFinite(hi)) out.push(`From ${e(String(lo))} to ${e(String(hi))}.`);
+  else if (Number.isFinite(lo)) out.push(`At least ${e(String(lo))}.`);
+  else if (Number.isFinite(hi)) out.push(`At most ${e(String(hi))}.`);
+  if (Number.isFinite(v.maxLength)) out.push(`Up to ${e(String(v.maxLength))} characters.`);
+  if (Number.isFinite(v.maxItems)) out.push(`Up to ${e(String(v.maxItems))} items.`);
+  if (typeof v.format === "string") out.push(`Format ${lit(v.format)}.`);
+  if (exampleValue !== undefined && exampleValue !== null && typeof exampleValue !== "object" && String(exampleValue).length <= 48 && !en) out.push(`The example sends ${lit(exampleValue)}.`);
+  return out.join(" ");
+}
+
 export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null, otherMethodRouted = false, mpp = true } = {}) {
   // MPP rides the shim, which mounts only with MPP_SECRET_KEY: a self-host
   // without it offers x402 alone, so the page names only the rails it has.
@@ -430,7 +454,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     const req = required.includes(k);
     const alts = aliasFor(k);
     const altNote = alts.length ? ` <span style="color:var(--faint);">Also accepted as ${alts.map((a) => `<code>${e(a)}</code>`).join(", ")}.</span>` : "";
-    return `<tr><td><code>${e(k)}</code></td><td>${e(schemaType(v))}</td><td>${req ? "yes" : "no"}</td><td>${e(v.description ?? "")}${altNote}</td></tr>`;
+    const limits = paramLimits(v, input[k]);
+    const limitNote = limits ? ` <span style="color:var(--faint);">${limits}</span>` : "";
+    return `<tr><td><code>${e(k)}</code></td><td>${e(schemaType(v))}</td><td>${req ? "yes" : "no"}</td><td>${e(v.description ?? "")}${altNote}${limitNote}</td></tr>`;
   }).join("\n");
 
   // --- Response fields from the documented example (same derivation as /openapi.json).

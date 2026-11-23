@@ -16,7 +16,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
-import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage, objectFieldsSample } from "../src/pages.js";
+import { paramLimits, toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage, objectFieldsSample } from "../src/pages.js";
 import { mppOffersFor, mppRailsPhrase } from "../src/mpp-offers.js";
 import { creditsSalesEnabled } from "../src/credits-sales.js";
 import { stripScripts, stripTags as stripTagsWith } from "./lib/html-text.js";
@@ -31,6 +31,14 @@ let pass = 0;
 let proc = null;
 const fail = (m) => { console.error("FAIL:", m); if (proc) proc.kill("SIGKILL"); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; if (process.env.VERBOSE) console.log(`ok - ${m}`); } else fail(m); };
+
+// The parameters table states what the schema says about each field (allowed
+// values, default, range, length, the example's value), escaped, and nothing
+// the schema does not say.
+ok(paramLimits({ enum: ["md5", "sha256"], default: "sha256" }, "sha256") === "One of <code>md5</code>, <code>sha256</code>. Default <code>sha256</code>.", "a field's allowed values and default come from its schema");
+ok(paramLimits({ minimum: 1, maximum: 100 }, 5) === "From 1 to 100. The example sends <code>5</code>.", "a range and the example's value");
+ok(paramLimits({ maxLength: 10 }, "<b>") === "Up to 10 characters. The example sends <code>&lt;b&gt;</code>.", "an example value is escaped");
+ok(paramLimits({ type: "string", description: "x" }) === "" && paramLimits(null) === "", "a field with no constraint adds nothing");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decode = (s) => String(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 const mainOf = (html) => (html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || [, html])[1];

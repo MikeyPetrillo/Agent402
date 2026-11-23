@@ -50,10 +50,14 @@ const ldNodes = (html) => [...html.matchAll(/<script type="application\/ld\+json
   ok(!sitemapXml(SITE, {}).includes(`<loc>${SITE}${path}</loc>`), `${path} leaves the sitemap while degraded`);
   const html = pp.insiderPage({ ticker: t, data: null, baseUrl: SITE, degraded: true });
   ok(/noindex/.test(robotsOf(html)), `the degraded page's meta robots says noindex, as its header does (${robotsOf(html)})`);
-  const good = { name: "Test Co", rows: [], filingsInWindow: 0, windowDays: 90, filingsRead: 0, startDate: "2026-01-01", endDate: "2026-03-31", cik: "1", latestFiledDate: "2026-03-01" };
+  // A complete build with enough rows to stand on its own (fewer is a thin page, noindex).
+  const row = (i) => ({ insider: `Filer ${i}`, role: "Director", date: "2026-03-0" + i, filedDate: "2026-03-0" + i, code: "S", kind: "open-market sale", shares: 100, price: 10, ownedAfter: 1000, url: "https://www.sec.gov/x.xml" });
+  const good = { name: "Test Co", rows: [row(1), row(2), row(3)], filingsInWindow: 3, windowDays: 90, filingsRead: 0, startDate: "2026-01-01", endDate: "2026-03-31", cik: "1", latestFiledDate: "2026-03-01" };
   const r2 = await pp.loadTeaser("insider", t, { seeded: true, builders: { insider: async () => good } });
   ok(r2.status === "ok" && !pp.entityDegraded(path), "a complete build clears the mark");
   ok(sitemapXml(SITE, {}).includes(`<loc>${SITE}${path}</loc>`), `${path} returns to the sitemap after a complete build`);
+  await pp.loadTeaser("insider", SEED_TICKERS[1], { seeded: true, builders: { insider: async () => ({ ...good, rows: [] }) } });
+  ok(pp.entityDegraded(`/reports/insider/${SEED_TICKERS[1]}`) && !sitemapXml(SITE, {}).includes(`<loc>${SITE}/reports/insider/${SEED_TICKERS[1]}</loc>`), "a thin build (no rows) keeps the page out of the sitemap");
   const okHtml = pp.insiderPage({ ticker: t, data: good, baseUrl: SITE });
   ok(!/noindex/.test(robotsOf(okHtml)), "a complete page is indexable");
 }
