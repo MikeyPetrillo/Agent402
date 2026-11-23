@@ -14,7 +14,7 @@ import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
-import { attributionTailOf, ATTRIBUTIONS, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION, withoutLicenseFields } from "./data-attribution.js";
+import { attributionTailOf, ATTRIBUTIONS, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION, withoutLicenseFields, withoutAnswerOnlyFields } from "./data-attribution.js";
 import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema, binaryListingsEnabled, withBinaryOutputType, JSON_MIME } from "./tool-media-type.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
@@ -2901,7 +2901,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // (src/data-attribution.js) are the same on every answer and stay in
       // /openapi.json's example; the 402 sample is read without them, so they
       // never take room from the listing's description or its sample.
-      const example = withoutLicenseFields(slim.output.example);
+      // So are the answer-only source credits and the source license note
+      // (withoutAnswerOnlyFields).
+      const example = withoutAnswerOnlyFields(withoutLicenseFields(slim.output.example));
       const oversized = example !== undefined && JSON.stringify(example).length > 2048;
       const schema = oversized ? null : boundedResponseSchemaFor(path, example, BAZAAR_SCHEMA_MAX_BYTES, slim.output.optional);
       slim.output = {

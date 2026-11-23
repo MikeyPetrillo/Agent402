@@ -216,7 +216,7 @@ const KITS = [
   ["edgar-kit.js", "EDGAR_TOOLS", "edgar-filings", { ticker: "AAPL", form: "10-K", limit: 5 }, /^EDGAR$/, /^document$/],
   ["crypto-kit.js", "CRYPTO_TOOLS", "crypto-price", { coins: "BTC,ETH,SOL", currency: "usd" }, /^[\w .-]+$/, /^query$/],
   ["captcha-kit.js", "CAPTCHA_TOOLS", "captcha-verify", { provider: "turnstile", secret: "test-secret", token: "test-token" }, /^Captcha provider$/, /^siteverify$/],
-  ["cdp-kit.js", "CDP_TOOLS", "wallet-balances", { address: "0x1111111111111111111111111111111111111111", network: "base" }, /^Coinbase Developer Platform$/, /^token balances$/],
+  ["cdp-kit.js", "CDP_TOOLS", "wallet-balances", { address: "0x1111111111111111111111111111111111111111", network: "base" }, /^Chain RPC$/, /^(eth_getBalance|alchemy_getTokenBalances)$/],
   ["solana-intel-kit.js", "SOLANA_INTEL_TOOLS", "sol-price", { mints: ["So11111111111111111111111111111111111111112"] }, /^DexScreener$/, /^pairs by mint$/],
 ];
 const mods = new Map();

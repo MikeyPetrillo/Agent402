@@ -116,7 +116,7 @@ export const EVM = {
     token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://mainnet.base.org", "https://base.drpc.org",
+      "https://mainnet.base.org", "https://base-rpc.publicnode.com",
     ],
     explorer: (a) => `https://basescan.org/address/${a}#tokentxns`,
     tx: (h) => `https://basescan.org/tx/${h}`,
@@ -127,7 +127,7 @@ export const EVM = {
     // Alchemy first (reliable getLogs); free RPCs fail on historical queries.
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://polygon-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://polygon.drpc.org",
+      "https://polygon-bor-rpc.publicnode.com",
     ],
     explorer: (a) => `https://polygonscan.com/address/${a}#tokentxns`,
     tx: (h) => `https://polygonscan.com/tx/${h}`,
@@ -137,7 +137,7 @@ export const EVM = {
     token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://arb1.arbitrum.io/rpc", "https://arbitrum.drpc.org",
+      "https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com",
     ],
     explorer: (a) => `https://arbiscan.io/address/${a}#tokentxns`,
     tx: (h) => `https://arbiscan.io/tx/${h}`,

@@ -3,9 +3,8 @@
 // drive x402 settlement (no new secrets). Env-gated like llm-kit: missing
 // keys → 503 at call time, never a boot failure.
 //
-//   wallet-balances  $0.002  indexed ERC-20 + native balances for any address
-//                            (base / ethereum / base-sepolia) — one call, no
-//                            per-token contract wrangling
+//   wallet-balances  $0.002  ERC-20 + native (and SPL) balances for any address,
+//                            read from our own RPC lanes (wallet-balances-rpc.js)
 //   testnet-fund     $0.001  base-sepolia faucet (USDC/ETH) — one tenth of a
 //                            cent buys 1 full testnet USDC to rehearse the
 //                            x402 loop safely (wallet-only: the faucet spends
@@ -16,7 +15,8 @@
 //                            indexed DECODED chain data (Base events/txs/
 //                            blocks/user-ops/builder-code attributions,
 //                            Solana token instructions) — no indexer to run
-//   onchain-sql-schema $0.002 the table/column schema for the above
+//   onchain-sql-schema $0.002 the table/column schema for the above, served
+//                            from the schema kept in onchain-sql-schema.js
 //
 // Auth: CDP REST uses a short-lived JWT (ES256 for PEM EC keys, EdDSA for
 // base64 Ed25519 keys) with a per-request `uris` claim. Implemented on
@@ -33,6 +33,9 @@ import { isSvmNetwork } from "../svm-payer.js";
 import { onFinalResponse, currentRequestScope } from "../request-timing.js";
 import { clientGoneError, clientGoneBeforeFirstByte } from "../hangup-settlement.js";
 import { noteSqlCall } from "../sql-query-stats.js";
+import { ONCHAIN_SQL_SCHEMA, SCHEMA_UPDATED } from "./onchain-sql-schema.js";
+import { readWalletBalances } from "./wallet-balances-rpc.js";
+const SCHEMA_NOTE = "Table and column names with their types, as this service maintains them; on Base Sepolia the base tables are read under the base_sepolia. prefix.";
 
 const CDP_HOST = "api.cdp.coinbase.com";
 
@@ -712,6 +715,9 @@ function timedOutQueryError(tookMs, sql = "") {
   return e;
 }
 
+/** Test seam: the CDP transport itself, for the read-handling cases no
+ *  tool's GET reaches now (wallet-balances reads our own RPC). */
+export function _cdpFetchForTest(...args) { return cdpFetch(...args); }
 async function cdpFetch(method, path, body, { idempotent = method === "GET", buyerQuery = false, attempts = null, lineOffset = 0, rewritten = false, queries = null } = {}) {
   // A query the handler rewrote (the row-size measure and filter) is ours:
   // its failure is never logged as the buyer's query.
@@ -1488,7 +1494,7 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.001",
     description:
-      "All token balances for any address in one call, from an indexed chain-data API - ERC-20 + native on EVM, SPL on Solana; no per-token contract calls, no RPC wrangling. Networks: base, ethereum, base-sepolia, solana, solana-devnet. Symbols/decimals populated for whitelisted tokens (USDC always included).",
+      "All token balances for any address in one call, read from this service's own chain RPC - ERC-20 + native on EVM, SPL and Token-2022 + SOL on Solana; no per-token contract calls, no RPC wrangling. Networks: base, ethereum, base-sepolia, solana, solana-devnet. Symbols/decimals populated for listed tokens (USDC always included); other rows carry the contract and raw amount.",
     tags: [...SHARED_TAGS, "balances", "erc-20", "spl", "base", "ethereum", "solana", "portfolio"],
     discovery: {
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" },
@@ -1516,19 +1522,10 @@ export const CDP_TOOLS = [
       if (isSolana ? !SOL_ADDR_RE.test(address) : !EVM_ADDR_RE.test(address)) {
         throw bad(isSolana ? '"address" must be a Solana address (base58)' : '"address" must be an EVM address (0x + 40 hex chars)');
       }
-      const res = await cdpFetch("GET", `/platform/v2/${isSolana ? "solana" : "evm"}/token-balances/${network}/${address}?pageSize=100`);
-      const balances = (res?.balances || []).map((b) => {
-        const decimals = b?.amount?.decimals;
-        const raw = String(b?.amount?.amount ?? "0");
-        const amount = Number.isFinite(decimals) ? (Number(raw) / 10 ** decimals).toString() : null;
-        return {
-          symbol: b?.token?.symbol ?? null,
-          name: b?.token?.name ?? null,
-          contract: b?.token?.contractAddress ?? b?.token?.mintAddress ?? null,
-          amount, raw, decimals: decimals ?? null,
-        };
-      });
-      return { address, network, balances, count: balances.length, ...(res?.nextPageToken ? { truncated: true } : {}) };
+      // Our own RPC reads (src/tools/wallet-balances-rpc.js), never an
+      // indexed data API.
+      const { balances, truncated } = await readWalletBalances(isSolana ? address : address.toLowerCase(), network);
+      return { address, network, balances, count: balances.length, ...(truncated ? { truncated: true } : {}) };
     },
   },
   {
@@ -1706,17 +1703,16 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.002",
     description:
-      "The table + column schema for the onchain-sql tool - every queryable table (base.events, base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions, solana.instructions, …) with its columns and types. Fetch once, then write SQL with confidence.",
+      "The table + column schema for the onchain-sql tool - every queryable table (base.events, base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions, solana.instructions, …) with its columns and types, as this service maintains it (updated names the date it was last checked). Fetch once, then write SQL with confidence.",
     tags: [...SHARED_TAGS, "sql", "schema", "onchain-data", "reference"],
     discovery: {
       input: {},
       inputSchema: { properties: {}, required: [] },
-      output: { example: { schema: { "base.events": [{ name: "block_number", type: "UInt64" }] } } },
+      output: { example: { schema: { tables: [{ name: "base.events", columns: [{ name: "log_id", type: "String" }, { name: "block_number", type: "UInt64" }] }] }, tableCount: 8, updated: SCHEMA_UPDATED, note: SCHEMA_NOTE } },
     },
-    handler: async (input, req) => underPaymentLife(req, async () => {
-      const res = await cdpFetch("GET", "/platform/v2/data/query/schema");
-      return { schema: res };
-    }),
+    // Served from the schema kept in src/tools/onchain-sql-schema.js: no
+    // upstream read.
+    handler: async () => ({ schema: ONCHAIN_SQL_SCHEMA, tableCount: ONCHAIN_SQL_SCHEMA.tables.length, updated: SCHEMA_UPDATED, note: SCHEMA_NOTE }),
   },
 ];
 

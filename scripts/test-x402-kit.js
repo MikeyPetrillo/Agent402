@@ -41,6 +41,30 @@ for (const [network, chainId, usdc, name] of [
   ok(t.typedData.domain.name === name, `transfer-auth ${network} EIP-712 domain name is "${name}" (got "${t.typedData.domain.name}")`);
 }
 
+// --- read lanes: the removed public endpoints serve no chain; a chain left
+// with no lane says so for that chain before any read ---
+{
+  const { x402ReadLaneHosts } = await import("../src/tools/x402-kit.js");
+  const lanes = x402ReadLaneHosts();
+  const hosts = Object.values(lanes).flat().join(" ");
+  ok(!/drpc\.org|cloudflare-eth|mainnet\.optimism\.io|monad\.xyz|chain\.robinhood\.com|api\.avax\.network/.test(hosts), `no removed public endpoint in a read lane (${hosts})`);
+  for (const k of ["base", "polygon", "arbitrum", "optimism", "ethereum", "celo", "avalanche", "sei", "arc"]) ok(lanes[k]?.length >= 1, `${k} keeps a read lane`);
+  ok(lanes.monad.length === 0, "monad has no read lane");
+  const realFetch = globalThis.fetch; let egress = 0;
+  globalThis.fetch = async () => { egress++; throw new Error("no egress expected"); };
+  try {
+    for (const [slug, args] of [["usdc-balance", { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "monad" }], ["gas-estimate", { network: "monad" }], ["tx-status", { hash: "0x" + "1".repeat(64), network: "monad" }]]) {
+      let e = null; try { await h(slug)(args); } catch (x) { e = x; }
+      ok(e?.statusCode === 400 && /Monad chain reads are not supported/.test(e.message), `${slug} on monad: 400 that says Monad has no lane (${e?.message?.slice(0, 70)})`);
+    }
+    if (!process.env.ALCHEMY_API_KEY) {
+      let e = null; try { await h("gas-estimate")({ network: "robinhood" }); } catch (x) { e = x; }
+      ok(e?.statusCode === 503 && /Robinhood Chain reads need the keyed RPC lane/.test(e.message), `gas-estimate on robinhood with no key: 503 naming the missing lane (${e?.message?.slice(0, 70)})`);
+    }
+    ok(egress === 0, "a chain with no lane is refused before any read");
+  } finally { globalThis.fetch = realFetch; }
+}
+
 // --- validation (deterministic) ---
 for (const [slug, args, label] of [
   ["usdc-balance", { address: "nope" }, "usdc-balance rejects bad address"],

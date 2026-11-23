@@ -216,7 +216,7 @@ const NETWORK = new Set([
   // key needed) but share per-IP rate limits: tolerate transient upstream failures.
   "/api/evm-rpc", "/api/eth-call",
   // Contract-kit egress: Sourcify (contract-source / contract-abi), the
-  // openchain.xyz + 4byte.directory signature DBs (selector-lookup, and
+  // Sourcify + 4byte.directory signature DBs (selector-lookup, and
   // calldata-decode's no-ABI fallback), and the shared public RPC pool
   // (tx-simulate). solidity-scan + address-label are pure CPU and stay strict.
   "/api/contract-source", "/api/contract-abi", "/api/calldata-decode",

@@ -13,6 +13,7 @@
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { hlSharedInfo, labelHlStaleness, HL_HISTORY_TTL_MS, __hlShared } from "./hyperliquid-shared.js";
+import { creditAnswers, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
 // The reads answered in 0.1 to 1 s when measured (2026-10-14).
 const TIMEOUT_MS = 10_000;
 const HL_INFO = "https://api.hyperliquid.xyz/info";
@@ -924,6 +925,9 @@ const DERIVATIVES_TOOLS_RAW = [
 ];
 // An answer built from a stale shared read says so in fields.
 export const DERIVATIVES_TOOLS = labelHlStaleness(DERIVATIVES_TOOLS_RAW);
+// The perpetuals tools read Hyperliquid's public info API alone, credited by
+// name and link on every answer (src/data-attribution.js).
+for (const t of DERIVATIVES_TOOLS) if (t.slug.startsWith("perp-")) creditAnswers(t, HYPERLIQUID_ATTRIBUTION);
 
 export const __test = {
   resetMetaCache: () => { metaCache = { at: 0, names: null }; __hlShared.clear(); },

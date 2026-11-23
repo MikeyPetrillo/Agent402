@@ -83,7 +83,11 @@ for (const [label, kp] of [
 }
 
 // --- env gate: no keys → 503, and validation fires BEFORE the gate -------------
-await rejects(() => tool("wallet-balances").handler({ address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0" }), 503, "wallet-balances without CDP keys → 503");
+// wallet-balances reads our own RPC lanes: with none configured it is a 503
+// naming the network, before any read.
+const savedLanes = { a: process.env.ALCHEMY_API_KEY, s: process.env.SOLANA_RPC_URL, d: process.env.SOLANA_DEVNET_RPC_URL };
+delete process.env.ALCHEMY_API_KEY; delete process.env.SOLANA_RPC_URL; delete process.env.SOLANA_DEVNET_RPC_URL;
+await rejects(() => tool("wallet-balances").handler({ address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0" }), 503, "wallet-balances with no EVM lane → 503");
 await rejects(() => tool("wallet-balances").handler({ address: "nope" }), 400, "wallet-balances bad address → 400");
 await rejects(() => tool("wallet-balances").handler({ address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "dogechain" }), 400, "wallet-balances bad network → 400");
 await rejects(() => tool("testnet-fund").handler({ address: "short" }), 400, "testnet-fund bad address → 400");
@@ -92,14 +96,91 @@ await rejects(() => tool("testnet-fund").handler({ address: "0x11111111111111111
 await rejects(() => tool("testnet-fund").handler({ address: "0x1111111111111111111111111111111111111111", network: "solana-devnet" }), 400, "testnet-fund EVM address rejected on solana-devnet → 400");
 await rejects(() => tool("testnet-fund").handler({ address: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", network: "solana-devnet", token: "eth" }), 400, "testnet-fund eth not a solana token → 400");
 await rejects(() => tool("testnet-fund").handler({ address: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", network: "solana-devnet", token: "usdc" }), 503, "testnet-fund solana-devnet valid input reaches the env gate (503 without keys)");
-await rejects(() => tool("wallet-balances").handler({ address: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", network: "solana" }), 503, "wallet-balances solana valid base58 reaches the env gate (503 without keys)");
+await rejects(() => tool("wallet-balances").handler({ address: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", network: "solana" }), 503, "wallet-balances solana valid base58 with no Solana lane → 503");
 await rejects(() => tool("wallet-balances").handler({ address: "0x1111111111111111111111111111111111111111", network: "solana" }), 400, "wallet-balances EVM address rejected on solana → 400");
+// wallet-balances on our own RPC lanes (stubbed, no egress): the EVM lane's
+// two reads, the Solana lane's three; never the indexed data API.
+{
+  const realFetch = globalThis.fetch;
+  const asked = [];
+  const rpcAnswer = (result) => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200, headers: { "content-type": "application/json" } });
+  globalThis.fetch = async (url, init = {}) => {
+    const u = new URL(String(url)); const { method, params } = JSON.parse(init.body || "{}");
+    asked.push({ host: u.host, method, params });
+    if (method === "eth_getBalance") return rpcAnswer("0xde0b6b3a7640000");
+    if (method === "alchemy_getTokenBalances") return rpcAnswer({ address: params[0], tokenBalances: [
+      { contractAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", tokenBalance: "0x0000000000000000000000000000000000000000000000000000000000841098" },
+      { contractAddress: "0x1111111111111111111111111111111111111111", tokenBalance: "0x05" },
+      { contractAddress: "0x2222222222222222222222222222222222222222", tokenBalance: "0x0" },
+    ] });
+    if (method === "getBalance") return rpcAnswer({ context: { slot: 1 }, value: 2_500_000_000 });
+    if (method === "getTokenAccountsByOwner") {
+      const prog = params[1].programId;
+      const acct = (mint, amount, decimals) => ({ pubkey: "x", account: { data: { parsed: { info: { mint, tokenAmount: { amount, decimals } } } } } });
+      return rpcAnswer({ context: { slot: 1 }, value: prog.startsWith("Tokenkeg") ? [acct("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "1500000", 6), acct("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "500000", 6), acct("Zero1111111111111111111111111111111111111111", "0", 6)] : [acct("Mint22222222222222222222222222222222222222222", "42", 2)] });
+    }
+    return new Response("not found", { status: 404 });
+  };
+  try {
+    process.env.ALCHEMY_API_KEY = "test-key-not-real";
+    const r = await tool("wallet-balances").handler({ address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" });
+    ok(asked.length === 2 && asked.every((x) => x.host === "base-mainnet.g.alchemy.com") && !asked.some((x) => /cdp\.coinbase/.test(x.host)), `wallet-balances base: two reads on the keyed EVM lane, none on the data API (${asked.map((x) => x.host + " " + x.method).join(", ")})`);
+    const usdc = r.balances.find((b) => b.symbol === "USDC");
+    ok(r.address === "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0" && r.network === "base" && r.count === r.balances.length && r.count === 3, `wallet-balances base: native + two held tokens, zero balances dropped (${JSON.stringify(r.balances)})`);
+    ok(usdc && usdc.name === "USD Coin" && usdc.contract === "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" && usdc.raw === "8655000" && usdc.amount === "8.655" && usdc.decimals === 6, "wallet-balances base: a listed token carries symbol, name, decimals and the scaled amount");
+    const other = r.balances.find((b) => b.contract === "0x1111111111111111111111111111111111111111");
+    ok(other && other.symbol === null && other.decimals === null && other.amount === null && other.raw === "5", "wallet-balances base: an unlisted token carries its contract and raw amount, the rest null");
+    const eth = r.balances.find((b) => b.native);
+    ok(eth && eth.symbol === "ETH" && eth.amount === "1" && eth.contract === null, "wallet-balances base: the native coin is a row");
+    ok(Object.keys(r).every((k) => ["address", "network", "balances", "count", "truncated"].includes(k)) && r.balances.every((b) => ["symbol", "name", "contract", "amount", "raw", "decimals"].every((k) => Object.hasOwn(b, k))), "wallet-balances: the answer keeps its fields");
+    asked.length = 0;
+    await tool("wallet-balances").handler({ address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base-sepolia" });
+    ok(asked.every((x) => x.host === "base-sepolia.g.alchemy.com"), "wallet-balances base-sepolia: its own keyed lane");
+    process.env.SOLANA_RPC_URL = "https://solana-mainnet.g.alchemy.com/v2/test-key-not-real";
+    asked.length = 0;
+    const sol = await tool("wallet-balances").handler({ address: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", network: "solana" });
+    ok(asked.length === 3 && asked.every((x) => x.host === "solana-mainnet.g.alchemy.com"), `wallet-balances solana: three reads on the configured Solana lane (${asked.map((x) => x.method).join(", ")})`);
+    const sUsdc = sol.balances.find((b) => b.symbol === "USDC");
+    ok(sUsdc && sUsdc.raw === "2000000" && sUsdc.amount === "2" && sol.balances.some((b) => b.native && b.symbol === "SOL" && b.amount === "2.5") && sol.balances.some((b) => b.contract === "Mint22222222222222222222222222222222222222222" && b.amount === "0.42" && b.symbol === null) && sol.count === 3, `wallet-balances solana: SOL, accounts of one mint summed, Token-2022 included, zero dropped (${JSON.stringify(sol.balances)})`);
+    asked.length = 0;
+    await tool("wallet-balances").handler({ address: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", network: "solana-devnet" });
+    ok(asked.every((x) => x.host === "solana-devnet.g.alchemy.com"), "wallet-balances solana-devnet: the keyed provider's devnet host");
+    // A refusal relays none of the upstream's text.
+    globalThis.fetch = async () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "SECRET-UPSTREAM-DETAIL" } }), { status: 200 });
+    const e = await tool("wallet-balances").handler({ address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" }).catch((x) => x);
+    ok(e?.statusCode === 502 && !/SECRET/.test(e.message), `wallet-balances: a refused read is a 502 without the upstream's text (${e?.message})`);
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [k, v] of [["ALCHEMY_API_KEY", savedLanes.a], ["SOLANA_RPC_URL", savedLanes.s], ["SOLANA_DEVNET_RPC_URL", savedLanes.d]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
 await rejects(() => tool("onchain-sql").handler({}), 400, "onchain-sql missing sql → 400");
 await rejects(() => tool("onchain-sql").handler({ sql: "DROP TABLE base.events" }), 400, "onchain-sql non-SELECT → 400");
 await rejects(() => tool("onchain-sql").handler({ sql: "SELECT " + "x,".repeat(31000) + "y FROM base.events" }), 400, "onchain-sql over-length → 400");
 await rejects(() => tool("onchain-sql").handler({ sql: "SELECT 1" }), 503, "onchain-sql valid SELECT reaches the env gate (503 without keys)");
 await rejects(() => tool("onchain-sql").handler({ sql: "WITH t AS (SELECT 1) SELECT * FROM t" }), 503, "onchain-sql WITH…SELECT accepted (503 at env gate)");
-await rejects(() => tool("onchain-sql-schema").handler({}), 503, "onchain-sql-schema reaches the env gate (503 without keys)");
+// onchain-sql-schema answers from the schema this service keeps
+// (src/tools/onchain-sql-schema.js): no key, no upstream read, in the
+// { schema: { tables: [{ name, columns }] } } shape the service's read had.
+{
+  const { ONCHAIN_SQL_SCHEMA, SCHEMA_UPDATED } = await import("../src/tools/onchain-sql-schema.js");
+  const realFetch = globalThis.fetch; let reads = 0;
+  globalThis.fetch = async () => { reads++; throw new Error("no read expected"); };
+  try {
+    const r = await tool("onchain-sql-schema").handler({});
+    const tables = r.schema?.tables || [];
+    const byName = new Map(tables.map((t) => [t.name, t.columns]));
+    ok(reads === 0 && r.schema === ONCHAIN_SQL_SCHEMA && r.updated === SCHEMA_UPDATED && r.tableCount === tables.length, `onchain-sql-schema answers with no upstream read and no key (${reads} reads)`);
+    for (const t of ["base.blocks", "base.transactions", "base.events", "base.encoded_logs", "base.decoded_user_operations", "base.transaction_attributions", "solana.transfers", "solana.instructions"]) {
+      const cols = byName.get(t);
+      ok(Array.isArray(cols) && cols.length > 0 && cols.every((c) => typeof c.name === "string" && /^[a-z_0-9]+$/.test(c.name) && typeof c.type === "string" && c.type.length > 0), `onchain-sql-schema: ${t} lists its columns with types`);
+    }
+    ok(byName.get("base.events").some((c) => c.name === "block_number" && c.type === "UInt64") && byName.get("solana.instructions").some((c) => c.name === "block_time"), "onchain-sql-schema: the columns the health queries name are listed");
+    ok(Object.isFrozen(r.schema) && Object.isFrozen(r.schema.tables) && Object.isFrozen(tables[0].columns), "onchain-sql-schema: the kept schema cannot be changed by a caller");
+    const ex = tool("onchain-sql-schema").discovery.output.example;
+    ok(ex.schema.tables[0].name === "base.events" && ex.schema.tables[0].columns.every((c) => byName.get("base.events").some((k) => k.name === c.name && k.type === c.type)) && ex.updated === SCHEMA_UPDATED, "onchain-sql-schema: the published example is a cut of the answer");
+  } finally { globalThis.fetch = realFetch; }
+}
 await rejects(() => tool("onramp-link").handler({ address: "0x1111111111111111111111111111111111111111", network: "tron" }), 400, "onramp-link bad network → 400");
 await rejects(() => tool("onramp-link").handler({ address: "notanaddress", network: "base" }), 400, "onramp-link EVM address enforced on EVM networks → 400");
 await rejects(() => tool("onramp-link").handler({ address: "0x1111111111111111111111111111111111111111", amount: "-5" }), 400, "onramp-link bad amount → 400");
@@ -132,7 +213,14 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
   const J = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
   const timeout = () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); };
   const addr = (c) => "0x" + c.repeat(40);
-  const bal = () => tool("wallet-balances").handler({ address: addr("1"), network: "base" });
+  // The CDP transport's GET handling, read directly: no tool GETs the
+  // service now (wallet-balances reads our own RPC lanes).
+  const { _cdpFetchForTest } = await import("../src/tools/cdp-kit.js");
+  const { underBudget } = await import("../src/upstream-deadline.js");
+  const bal = underBudget(async () => {
+    const r = await _cdpFetchForTest("GET", `/platform/v2/evm/token-balances/base/${addr("1")}?pageSize=100`);
+    return { count: (r?.balances || []).length };
+  });
   const fund = (a) => tool("testnet-fund").handler({ address: a });
   try {
     // 429: retried once, honoring a short Retry-After, then a 503 with no CDP detail.
@@ -691,15 +779,12 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         globalThis.fetch = async () => J(200, { result: null });
         const noList = await sqlRun();
         ok(noList.rowCount === 0 && "raw" in noList, "a JSON answer without a list is served as before, with the service's body under raw");
-        // The schema read: the same rule.
+        // The schema is kept here and read from no service: an unreadable
+        // service answer never reaches it.
         const schema = () => tool("onchain-sql-schema").handler({});
         globalThis.fetch = async () => text200('{"tables":[{"name":"base.ev');
-        const se = await schema().catch((x) => x);
-        globalThis.fetch = async () => text200("");
-        const se2 = await schema().catch((x) => x);
-        globalThis.fetch = async () => J(200, { "base.events": [{ name: "block_number", type: "UInt64" }] });
         const sv = await schema();
-        ok(se?.statusCode === 502 && /could not be read/.test(se.message) && se2?.statusCode === 502 && sv.schema?.["base.events"]?.[0]?.name === "block_number", `an unreadable schema answer is a 502, never an empty schema; a real one is served (${se?.statusCode}, ${se2?.statusCode})`);
+        ok(sv.schema?.tables?.some((t) => t.name === "base.events" && t.columns.some((c) => c.name === "block_number")), "the schema answer is the kept schema whatever the service would answer");
         // Another CDP read keeps its own handling of a 200 it cannot parse.
         globalThis.fetch = async () => text200("");
         const wb = await bal().catch((x) => x);
@@ -1270,13 +1355,11 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       reply = (n, url) => (/\/schema$/.test(url) ? J(200, { "base.blocks": [] }) : J(200, { result: [{ x: 1 }] }));
       budgets = [];
       await run(undefined, reqOf(SOL));
-      await tool("onchain-sql-schema").handler({}, reqOf(SOL));
-      const [solSql, solSchema] = budgets;
-      ok(solSql?.left <= 40_000 && solSql?.left > 39_000 && solSchema?.left <= 40_000 && solSchema?.left > 39_000,
-        `on Solana both SQL routes run under 40 s (query ${solSql?.left} ms left, schema ${solSchema?.left} ms left)`);
+      const [solSql] = budgets;
+      ok(solSql?.left <= 40_000 && solSql?.left > 39_000,
+        `on Solana the SQL query runs under 40 s (query ${solSql?.left} ms left)`);
       budgets = [];
       await run(undefined, reqOf("eip155:8453"));
-      await tool("onchain-sql-schema").handler({}, reqOf("eip155:8453"));
       await run(undefined, {});
       ok(budgets.every((b) => b?.left > 200_000), `control: paid on Base, or with no payment header, the route's own window holds (${budgets.map((b) => b?.left).join(", ")} ms left)`);
       // A stalled query on Solana ends inside the 40 s, as the uncharged deadline answer.

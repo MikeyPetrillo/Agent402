@@ -84,8 +84,11 @@ export const METERED_SLUGS = new Set([
   "dex-pair", "dex-pool", "dex-quote",
   "nft-collection", "nft-floor",
   "l2-gas-comparison",
-  // CDP (Coinbase Developer Platform keys)
-  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
+  // wallet-balances: the keyed EVM lane and the configured Solana RPC.
+  "wallet-balances",
+  // CDP (Coinbase Developer Platform keys). onchain-sql-schema is served from
+  // a schema kept here and needs no key, so the sweeps drive it.
+  "testnet-fund", "onramp-link", "onchain-sql",
 ]);
 
 /** Pack slugs (the name after "skill-") whose advertised toolSlugs reach a

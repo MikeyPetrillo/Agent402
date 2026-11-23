@@ -22,7 +22,7 @@ import { buildSkillTools } from "../src/tools/skill-runner.js";
 import { SKILL_PACKS } from "../src/skills.js";
 import { missingExampleKeys } from "../src/answer-shape.js";
 import { responseSchemaFor } from "../src/openapi-schema.js";
-import { COINGECKO_CREDIT, COINGECKO_ATTRIBUTION, COINGECKO_API_URL, attributionTailOf, creditAnswers, withCredit } from "../src/data-attribution.js";
+import { COINGECKO_CREDIT, COINGECKO_ATTRIBUTION, COINGECKO_API_URL, HYPERLIQUID_ATTRIBUTION, attributionTailOf, creditAnswers, withCredit } from "../src/data-attribution.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
@@ -153,7 +153,11 @@ const CG_TOOLS = [
 ok(CG_TOOLS.length >= 24, `the CoinGecko-backed tools are read from the kits (${CG_TOOLS.length})`);
 for (const t of CG_TOOLS) {
   ok(t.attribution === "coingecko" && attributionTailOf(t.description) === COINGECKO_CREDIT && t.description.includes(COINGECKO_API_URL), `${t.slug}: description ends with the linked credit`);
-  ok(t.credit === COINGECKO_CREDIT && t.discovery?.output?.example?.credit === COINGECKO_CREDIT, `${t.slug}: published example carries the credit with the link`);
+  // A price answer whose check read the second source credits it after
+  // CoinGecko (crypto-kit checkCredited), as its example shows.
+  const exCredit = t.discovery?.output?.example?.credit;
+  const checked = t.discovery?.output?.example?.check === "hyperliquid-oracle";
+  ok(t.credit === COINGECKO_CREDIT && (checked ? exCredit === `${COINGECKO_CREDIT} ${HYPERLIQUID_ATTRIBUTION}` : exCredit === COINGECKO_CREDIT), `${t.slug}: published example carries the credit with the link`);
 }
 for (const t of [...CRYPTO_TOOLS, ...PRICE_FEED_TOOLS].filter((x) => !CG_TOOLS.includes(x))) {
   ok(t.credit === undefined && !Object.hasOwn(t.discovery?.output?.example || {}, "credit") && t.attribution !== "coingecko", `${t.slug}: not CoinGecko data, no CoinGecko credit`);
@@ -184,7 +188,20 @@ for (const [mod, call] of MODULES) {
   const out = await t.handler({ a: 7 });
   ok(JSON.stringify(out) === JSON.stringify({ a: 7, nested: { b: 2 }, credit: "Credit (https://example.test)." }), "creditAnswers: every field kept, credit added");
   ok(JSON.stringify(t.discovery.output.example) === JSON.stringify({ a: 1, credit: "Credit (https://example.test)." }), "creditAnswers: example gains the credit");
-  ok(JSON.stringify(withCredit([1], "c")) === "[1]" && withCredit(null, "c") === null && withCredit({ credit: "own" }, "c").credit === "own", "withCredit: arrays, null and an answer with its own credit are left as they are");
+  ok(JSON.stringify(withCredit([1], "c")) === "[1]" && withCredit(null, "c") === null, "withCredit: arrays and null are left as they are");
+  // An answer built from several sources credits each: its own credit is
+  // kept and the new sentence follows it, once.
+  ok(withCredit({ credit: "Own." }, "C.").credit === "Own. C.", "withCredit: an answer's own credit is kept and the new source's sentence follows it");
+  ok(withCredit({ credit: "Own. C." }, "C.").credit === "Own. C.", "withCredit: a sentence the credit already holds is not added twice");
+  const n = { credit: 7 }; ok(withCredit(n, "C.") === n, "withCredit: a credit that is not a string is left as it is");
+  // The 402 sample is read without the answer-only source credits and the
+  // source license fields; a CoinGecko credit (keyed, listed) stays.
+  const { withoutAnswerOnlyFields, HYPERLIQUID_ATTRIBUTION: HL, SOURCIFY_ATTRIBUTION: SRC, SOURCE_LICENSE_NOTE } = await import("../src/data-attribution.js");
+  ok(!("credit" in withoutAnswerOnlyFields({ a: 1, credit: HL })) && withoutAnswerOnlyFields({ a: 1, credit: HL }).a === 1, "withoutAnswerOnlyFields: an answer-only credit leaves the sample");
+  ok(withoutAnswerOnlyFields({ credit: `${COINGECKO_CREDIT} ${HL}` }).credit === `${COINGECKO_CREDIT} ${HL}`, "withoutAnswerOnlyFields: a credit holding a listed source's sentence stays whole");
+  const lic = withoutAnswerOnlyFields({ sources: {}, licenses: { "a.sol": "MIT" }, licenseNote: SOURCE_LICENSE_NOTE, credit: SRC });
+  ok(!("licenses" in lic) && !("licenseNote" in lic) && !("credit" in lic) && "sources" in lic, "withoutAnswerOnlyFields: the source license fields and Sourcify's credit leave the sample");
+  const own = { licenses: { x: 1 }, licenseNote: "their own" }; ok(withoutAnswerOnlyFields(own) === own, "withoutAnswerOnlyFields: fields of the same names with other values stay");
 }
 
 // Skill packs: the credit is printed once on the envelope, not per step.

@@ -345,6 +345,18 @@ __test.resetMetaCache();
 await throws(h("perp-funding")({ coin: "ZZZZ" }), 422, "unknown coin rejected against the universe -> 422", /Unknown perp market/);
 mode = "ok";
 
+// Hyperliquid credited on every perp tool's answers and published example; the
+// options tools (another source) are not.
+{
+  const { HYPERLIQUID_ATTRIBUTION } = await import("../src/data-attribution.js");
+  for (const t of DERIVATIVES_TOOLS) {
+    if (t.slug.startsWith("perp-")) ok(t.credit === HYPERLIQUID_ATTRIBUTION && t.discovery.output.example.credit === HYPERLIQUID_ATTRIBUTION && !t.description.includes(HYPERLIQUID_ATTRIBUTION), `${t.slug}: answers and example credit Hyperliquid`);
+    else ok(t.attribution !== "hyperliquid" && t.credit !== HYPERLIQUID_ATTRIBUTION, `${t.slug}: no Hyperliquid credit (another source)`);
+  }
+  const out = await h("perp-markets")({ limit: 2 });
+  ok(out.credit === HYPERLIQUID_ATTRIBUTION && out.source === "hyperliquid", `perp-markets: the answer credits Hyperliquid (${out.credit})`);
+}
+
 globalThis.fetch = realFetch;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -50,7 +50,7 @@ ok(ALL.filter((t) => !meteo.includes(t)).every((t) => !("licenseUrl" in (t.disco
   const own = { sourceUrl: "https://example.com/x", licenseUrl: "https://example.com/l" };
   ok(withoutLicenseFields(own) === own, "a field of the same name with another value is the answer's own and stays");
   const { readFileSync } = await import("node:fs");
-  ok(/const example = withoutLicenseFields\(slim\.output\.example\);/.test(readFileSync(new URL("../src/payments.js", import.meta.url), "utf8")), "the 402 listing builder reads the sample without them, before its byte bounds");
+  ok(/const example = withoutAnswerOnlyFields\(withoutLicenseFields\(slim\.output\.example\)\);/.test(readFileSync(new URL("../src/payments.js", import.meta.url), "utf8")), "the 402 listing builder reads the sample without them, before its byte bounds");
 }
 
 // Real handlers against a stubbed upstream.

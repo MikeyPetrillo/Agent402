@@ -234,6 +234,15 @@ for (const t of CRYPTO_SIGNALS_TOOLS) {
   const live = await h("crypto-market-pulse")({ limit: 5 });
   ok(live.source === "hyperliquid" && live.markets.listed === 3 && live.breadth.advancers === 2 && live.breadth.decliners === 0, `pulse handler on fixture (listed ${live.markets.listed}, counted ${live.markets.counted})`);
   ok(live.majors.BTC.markPx === 77267 && live.topByVolume[0].coin === "BTC" && typeof live.fetchedAt === "string", "pulse handler: majors + leaders + fetchedAt");
+  {
+    const { HYPERLIQUID_ATTRIBUTION } = await import("../src/data-attribution.js");
+    ok(live.credit === HYPERLIQUID_ATTRIBUTION, `pulse handler: the answer credits Hyperliquid (${live.credit})`);
+    for (const slug of ["crypto-indicators", "crypto-market-pulse"]) {
+      const t = CRYPTO_SIGNALS_TOOLS.find((x) => x.slug === slug);
+      ok(t.credit === HYPERLIQUID_ATTRIBUTION && t.discovery.output.example.credit === HYPERLIQUID_ATTRIBUTION, `${slug}: answers and example credit Hyperliquid`);
+    }
+    ok(!CRYPTO_SIGNALS_TOOLS.find((x) => x.slug === "crypto-news").credit, "crypto-news: no Hyperliquid credit");
+  }
   // Each new upstream state drops the shared 5 s document cache first; a
   // stored success would otherwise (correctly) answer for the outage.
   mode = "http500"; __test.resetCaches();

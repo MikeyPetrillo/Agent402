@@ -40,7 +40,7 @@ import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugchec
 export { RUGCHECK_SLUGS, rugcheckEnabled };
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // the hard ceiling on any one upstream document read here.
 import { readBytesCapped, readTextCapped, decodeUtf8 } from "../capped-body.js";
-import { JUPITER_ATTRIBUTION, attribute } from "../data-attribution.js";
+import { JUPITER_ATTRIBUTION, RUGCHECK_ATTRIBUTION, attribute, creditAnswers } from "../data-attribution.js";
 // Read a body under a byte cap: `res.text()` has no cap of its own, so a
 // broken or hostile upstream could push an unbounded buffer into memory once
 // per concurrent call. A declared Content-Length over the cap is refused before
@@ -1392,6 +1392,11 @@ export const SOLANA_INTEL_TOOLS = [
 export { JUPITER_ATTRIBUTION };
 const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-token-search"]);
 for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) attribute(t, "jupiter");
+// RugCheck's report is the source of these three answers (the safety read's
+// summary, the trimmed report, the holder table and count), credited by name
+// and link on every answer (src/data-attribution.js).
+const RUGCHECK_CREDITED = new Set(["sol-token-safety", "sol-token-report", "sol-token-holders"]);
+for (const t of SOLANA_INTEL_TOOLS) if (RUGCHECK_CREDITED.has(t.slug)) creditAnswers(t, RUGCHECK_ATTRIBUTION);
 
 /** The token index entries for a mint, ticker or name, exact mint match
  *  first: one input the token brief reads (src/tools/token-brief-kit.js) and

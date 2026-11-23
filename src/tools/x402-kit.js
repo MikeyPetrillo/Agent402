@@ -12,7 +12,8 @@
 //
 // All chain tools take an optional `network` (base default; also polygon,
 // arbitrum, optimism, ethereum, monad, celo, avalanche, sei, arc, robinhood -
-// robinhood is chain-read only, see requireUsdc()). Marked wallet-only so they
+// robinhood is chain-read only, see requireUsdc(); monad has no read lane and
+// is served by transfer-authorization only). Marked wallet-only so they
 // stay OFF the free hosted connector - the payments surface is the paid
 // HTTP/npm path.
 import { randomBytes } from "node:crypto";
@@ -77,31 +78,34 @@ const NETWORKS = {
   // monitored provider leads; the free public nodes are the fallback, never the primary).
   base: {
     chainId: 8453, usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", name: "USD Coin",
-    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://mainnet.base.org", "https://base-rpc.publicnode.com", "https://base.drpc.org"],
+    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://mainnet.base.org", "https://base-rpc.publicnode.com"],
   },
   polygon: {
     chainId: 137, usdc: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", name: "USD Coin",
-    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://polygon-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://polygon-bor-rpc.publicnode.com", "https://polygon.drpc.org"],
+    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://polygon-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://polygon-bor-rpc.publicnode.com"],
   },
   arbitrum: {
     chainId: 42161, usdc: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", name: "USD Coin",
-    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.drpc.org"],
+    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"],
   },
   optimism: {
     chainId: 10, usdc: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", name: "USD Coin",
-    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://opt-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com", "https://optimism.drpc.org"],
+    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://opt-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://optimism-rpc.publicnode.com"],
   },
   ethereum: {
     chainId: 1, usdc: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", name: "USD Coin",
-    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://ethereum-rpc.publicnode.com", "https://eth.drpc.org", "https://cloudflare-eth.com"],
+    rpcs: [...(process.env.ALCHEMY_API_KEY ? [`https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []), "https://ethereum-rpc.publicnode.com"],
   },
   // Monad (EVM L1, chain 143). Native Circle USDC, but the on-chain EIP-712
   // domain name is "USDC" not "USD Coin" (same fact src/payments.js's
   // makeMonadUsdcScheme relies on for settlement; verified again directly
   // against the chain 2026-08-11: name()="USDC", version()="2", decimals=6).
+  // No RPC lane serves Monad: its chain reads answer 400 (noLane below);
+  // transfer-authorization, which reads no chain, still builds its typed data.
   monad: {
     chainId: 143, usdc: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", name: "USDC",
-    rpcs: ["https://rpc.monad.xyz", "https://rpc2.monad.xyz"],
+    rpcs: [],
+    noLane: { status: 400, reason: "Monad chain reads are not supported: no RPC lane serves Monad (transfer-authorization still builds Monad USDC authorizations)" },
   },
   // Celo (EVM L2, chain 42220). Native Circle USDC, on-chain EIP-712 domain
   // name "USDC" not "USD Coin" (same fact src/payments.js's
@@ -114,7 +118,7 @@ const NETWORKS = {
   // domain name (verified 2026-08-11).
   avalanche: {
     chainId: 43114, usdc: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", name: "USD Coin",
-    rpcs: ["https://api.avax.network/ext/bc/C/rpc", "https://avalanche-c-chain-rpc.publicnode.com"],
+    rpcs: ["https://avalanche-c-chain-rpc.publicnode.com"],
   },
   // Sei (pacific-1 EVM, chain 1329). Native Circle USDC - NOT Noble's IBC
   // token (0x3894…) - on-chain EIP-712 domain name "USDC" (verified 2026-08-11,
@@ -143,17 +147,20 @@ const NETWORKS = {
   // gas-estimate) work here today; USDC payments await facilitator + USDG support.
   robinhood: {
     chainId: 4663,
-    // Alchemy first when the key is set (per-app network enablement required
-    // on the Alchemy dashboard — a not-enabled network 403s and falls through
-    // to the public RPC). This chain has exactly one public endpoint, so the
-    // Alchemy lane is the only redundancy available.
+    // The keyed Alchemy lane is the only one (per-app network enablement
+    // required on the Alchemy dashboard). Without the key the chain reads
+    // answer 503 naming the missing lane (noLane below).
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://robinhood-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://rpc.mainnet.chain.robinhood.com",
     ],
+    noLane: { status: 503, reason: "Robinhood Chain reads need the keyed RPC lane, which is not configured on this deployment" },
   },
 };
 const NETWORK_NAMES = Object.keys(NETWORKS);
+/** Each chain's read lanes (hosts only, never a keyed URL's path). */
+export function x402ReadLaneHosts() {
+  return Object.fromEntries(Object.entries(NETWORKS).map(([k, n]) => [k, n.rpcs.map((u) => new URL(u).host)]));
+}
 const USDC_DECIMALS = 6;
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
@@ -195,6 +202,8 @@ function formatUnits(raw, decimals) {
 // unavailable node, so it is thrown as a JSON-RPC error (code, message, data)
 // for the caller to read, and no other node is asked.
 async function rpc(net, method, params, { passes = 2, revertsAreAnswers = false } = {}) {
+  // A chain with no lane says so for that chain, before any read.
+  if (!net.rpcs.length) throw bad(net.noLane?.reason || `${net.key} chain reads are not supported: no RPC lane serves it`, net.noLane?.status || 400);
   let lastErr, revert = null;
   for (let attempt = 0; attempt < passes && !revert; attempt++) {
     for (const url of net.rpcs) {
@@ -225,6 +234,10 @@ async function rpc(net, method, params, { passes = 2, revertsAreAnswers = false 
 }
 
 const NETWORK_PARAM = { type: "string", description: `chain: ${NETWORK_NAMES.join(" | ")} (default base)` };
+// The chains the read tools serve: every chain with a lane in this build
+// (Monad has none; Robinhood Chain's is the keyed lane, so it is listed).
+const READ_NETWORK_NAMES = NETWORK_NAMES.filter((k) => NETWORKS[k].noLane?.status !== 400);
+const READ_NETWORK_PARAM = { type: "string", description: `chain: ${READ_NETWORK_NAMES.join(" | ")} (default base)` };
 
 export const X402_TOOLS = [
   {
@@ -364,11 +377,11 @@ export const X402_TOOLS = [
   {
     route: "GET /api/usdc-balance", name: "USDC balance", slug: "usdc-balance", category: "payments", price: "$0.001",
     description:
-      "Read the USDC balance of any address on Base, Polygon, Arbitrum, Optimism, Ethereum, Monad, Celo, Avalanche, Sei, or Arc. Read-only on-chain call. The minimal single-token read for payment flows - for EVERY token a wallet holds in one call use wallet-balance. ?address=0x…&network=base",
+      "Read the USDC balance of any address on Base, Polygon, Arbitrum, Optimism, Ethereum, Celo, Avalanche, Sei, or Arc (Monad has no read lane). Read-only on-chain call. The minimal single-token read for payment flows - for EVERY token a wallet holds in one call use wallet-balance. ?address=0x…&network=base",
     tags: ["usdc", "balance", "wallet", "erc20", "multichain"],
     discovery: {
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" },
-      inputSchema: { properties: { address: { type: "string", description: "0x EVM address" }, network: NETWORK_PARAM }, required: ["address"] },
+      inputSchema: { properties: { address: { type: "string", description: "0x EVM address" }, network: READ_NETWORK_PARAM }, required: ["address"] },
       output: { example: { address: "0x…", usdc: "12.5", raw: "12500000", token: "USDC", network: "base" } },
     },
     handler: async (i) => {
@@ -384,13 +397,13 @@ export const X402_TOOLS = [
   {
     route: "GET /api/tx-status", name: "Transaction status", slug: "tx-status", category: "payments", price: "$0.001",
     description:
-      "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Monad/Celo/Avalanche/Sei/Arc/Robinhood Chain: success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
+      "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Celo/Avalanche/Sei/Arc/Robinhood Chain (Monad has no read lane): success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
     tags: ["transaction", "status", "receipt", "confirmation", "multichain", "robinhood", "usdg"],
     discovery: {
       // A real Base transaction, so the documented call returns the shown
       // answer (an all-zero hash answers status "not_found").
       input: { hash: "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb", network: "base" },
-      inputSchema: { properties: { hash: { type: "string", description: "0x transaction hash" }, network: NETWORK_PARAM }, required: ["hash"] },
+      inputSchema: { properties: { hash: { type: "string", description: "0x transaction hash" }, network: READ_NETWORK_PARAM }, required: ["hash"] },
       output: { example: { hash: "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb", network: "base", status: "success", blockNumber: 50829610, from: "0x…", to: "0x…", gasUsed: 91958 } },
     },
     handler: async (i) => {
@@ -412,11 +425,11 @@ export const X402_TOOLS = [
   {
     route: "GET /api/gas-estimate", name: "Gas price", slug: "gas-estimate", category: "payments", price: "$0.001",
     description:
-      "Current gas price on Base, Polygon, Arbitrum, Optimism, Ethereum, Monad, Celo, Avalanche, Sei, Arc, or Robinhood Chain - for an agent budgeting a transaction: returns network, gasPriceGwei and gasPriceWei (decimal strings) from the chain's own eth_gasPrice, the node's suggested all-in price per gas unit. Multiply by the gas a transaction uses (21000 for a plain transfer) for its fee. Read-only. ?network=base",
+      "Current gas price on Base, Polygon, Arbitrum, Optimism, Ethereum, Celo, Avalanche, Sei, Arc, or Robinhood Chain (Monad has no read lane) - for an agent budgeting a transaction: returns network, gasPriceGwei and gasPriceWei (decimal strings) from the chain's own eth_gasPrice, the node's suggested all-in price per gas unit. Multiply by the gas a transaction uses (21000 for a plain transfer) for its fee. Read-only. ?network=base",
     tags: ["gas", "gas-price", "fees", "gwei", "multichain", "robinhood", "usdg"],
     discovery: {
       input: { network: "base" },
-      inputSchema: { properties: { network: NETWORK_PARAM } },
+      inputSchema: { properties: { network: READ_NETWORK_PARAM } },
       output: { example: { network: "base", gasPriceGwei: "0.0051", gasPriceWei: "5100000" } },
     },
     handler: async (i) => {
@@ -438,7 +451,7 @@ export const X402_TOOLS = [
       inputSchema: {
         properties: {
           hash: { type: "string", description: "0x transaction hash" },
-          network: NETWORK_PARAM,
+          network: READ_NETWORK_PARAM,
           to: { type: "string", description: "optional: expected recipient address to check" },
           min: { type: "number", description: "optional: minimum USDC expected to that recipient" },
         },

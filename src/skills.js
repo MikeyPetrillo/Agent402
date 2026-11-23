@@ -1409,7 +1409,7 @@ const SKILL_PACKS_ALL = [
       "onramp-link",
     ],
     workflow: [
-      "Call wallet-balances with {address, network: \"base\"} - returns every indexed ERC-20 + native balance. Find the USDC row (contract 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913) and read its amount: this is the wallet's x402 spending power on Base.",
+      "Call wallet-balances with {address, network: \"base\"} - returns every ERC-20 + native balance the wallet holds. Find the USDC row (contract 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913) and read its amount: this is the wallet's x402 spending power on Base.",
       "If the agent also pays on Solana, call wallet-balances again with {address: <the Solana address>, network: \"solana\"} - same envelope, SPL balances, USDC mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v. (x402 settlement is gasless via EIP-3009 / sponsored transactions, so USDC is the only balance that matters - no ETH or SOL required.)",
       "Call gas-snapshot with {network: \"base\"} for slow/standard/fast gas. The agent never pays gas on x402 buys, but gas context tells you whether any NON-x402 onchain action you're planning (a manual transfer, a contract call) is cheap right now.",
       "If the USDC balance is below your working budget, call onramp-link with {address, network: \"base\", amount: \"<usd>\"} - it mints a single-use hosted onramp URL a human can open to fund the wallet with a card or Apple Pay. Include the URL in your report; it expires unvisited, so minting it costs nothing but the call.",
@@ -2216,7 +2216,7 @@ const SKILL_PACKS_ALL = [
         // calldata-decode / selector-lookup both failed on every call. A real
         // Base transaction, immutable and public, with real calldata.
         substitute: "0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59" },
-      { name: "network", description: "EVM network (ethereum / base / polygon / arbitrum / optimism, default base)", required: false, substitute: "base" },
+      { name: "network", description: "EVM network, default base. The raw-transaction step (evm-rpc) reads Base only, so on another chain that step answers 400 and the pack returns the steps that ran.", required: false, substitute: "base" },
     ],
     toolSlugs: ["tx-status", "evm-rpc", "calldata-decode", "selector-lookup", "address-label"],
     workflow: [

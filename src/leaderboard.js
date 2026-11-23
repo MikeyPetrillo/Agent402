@@ -66,7 +66,6 @@ export { windowSecondsFromEnv };
 const DEFAULT_BASE_RPCS = [
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
-  "https://base.drpc.org",
 ];
 // Published thresholds for the payer-concentration flag. Named here (and
 // echoed in the API envelope) so the flag is reproducible from the two shares

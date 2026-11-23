@@ -33,6 +33,7 @@ const HL_INFO = "https://api.hyperliquid.xyz/info";
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { hlSharedInfo, labelHlStaleness, __hlShared } from "./hyperliquid-shared.js";
+import { creditAnswers, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The Hyperliquid reads answered in 0.3 to 0.5 s when
@@ -422,6 +423,9 @@ const CRYPTO_SIGNALS_TOOLS_RAW = [
 ];
 // An answer built from a stale shared read says so in fields.
 export const CRYPTO_SIGNALS_TOOLS = labelHlStaleness(CRYPTO_SIGNALS_TOOLS_RAW);
+// crypto-indicators and crypto-market-pulse read Hyperliquid's public info
+// API alone, credited by name and link on every answer (src/data-attribution.js).
+for (const t of CRYPTO_SIGNALS_TOOLS) if (t.slug === "crypto-indicators" || t.slug === "crypto-market-pulse") creditAnswers(t, HYPERLIQUID_ATTRIBUTION);
 
 // --- pure assembly (exported for the offline test) -------------------------
 export function computeIndicators(candles, want, points) {

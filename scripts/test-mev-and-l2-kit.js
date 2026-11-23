@@ -93,6 +93,35 @@ await throws(h("l2-gas-comparison")({ networks: ["base"] }), 503, "l2-gas-compar
 if (stashedKey) process.env.ALCHEMY_API_KEY = stashedKey;
 
 // ----------------------------------------------------------------------------
+// Every relay answer names the relay that answered: `relay` and `source`.
+// Stubbed fetch: the first relay refuses, the second answers.
+// ----------------------------------------------------------------------------
+{
+  const realFetch = globalThis.fetch;
+  const row = { slot: "100", block_number: "200", block_hash: "0xbh", builder_pubkey: "0x" + "b".repeat(96), proposer_pubkey: "0x" + "c".repeat(96), value: "1000000000000000000", gas_used: "1", gas_limit: "2", num_tx: "3" };
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    const host = new URL(String(url)).host; asked.push(host);
+    if (host === "boost-relay.flashbots.net") return new Response("rate limited", { status: 429 });
+    return new Response(JSON.stringify([row]), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    for (const [slug, input] of [["mev-recent-blocks", { limit: 1 }], ["mev-builder-share", { window: 10 }], ["mev-block-payment", { slot: 100 }]]) {
+      asked.length = 0;
+      const r = await h(slug)(input);
+      ok(r.relay === "ultrasound" && r.source === "relay.ultrasound.money", `${slug}: names the relay that answered (relay=${r.relay}, source=${r.source}; asked ${asked.join(", ")})`);
+    }
+    globalThis.fetch = async () => new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    const miss = await h("mev-block-payment")({ slot: 1 });
+    ok(miss.found === false && miss.relay === "flashbots" && miss.source === "boost-relay.flashbots.net", "mev-block-payment not found: names the relay asked");
+  } finally { globalThis.fetch = realFetch; }
+  for (const slug of ["mev-recent-blocks", "mev-builder-share", "mev-block-payment"]) {
+    const ex = MEV_AND_L2_TOOLS.find((t) => t.slug === slug).discovery.output.example;
+    ok(typeof ex.source === "string" && ex.relay, `${slug}: published example carries relay and source`);
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Live tests (opt-in)
 // ----------------------------------------------------------------------------
 if (process.env.MEV_LIVE_TEST === "1") {

@@ -21,7 +21,7 @@
 // inherits the Alchemy-then-public fallback chain, the provider-refusal
 // fallthrough and the SSRF dispatcher. Priced with block-number and
 // contract-code, which do the same amount of work.
-import { pickNetwork, publicJsonRpc } from "./chain-kit.js";
+import { pickNetwork, pickRelayNetwork, publicJsonRpc, BASE_RELAY_RPCS } from "./chain-kit.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -143,7 +143,7 @@ export const CHAIN_RPC_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Read one 32-byte storage slot from a contract, the raw state under whatever the source code calls it. Returns the word as hex plus three readings of the same bytes - unsigned integer, address (low 20 bytes) and boolean - because a slot is untyped on chain and only the caller knows which it meant. Useful for proxy implementation slots, paused flags and any value the ABI does not expose. EVM chains: ethereum, base, polygon, arbitrum, optimism.",
+      "Read one 32-byte storage slot from a contract, the raw state under whatever the source code calls it. Returns the word as hex plus three readings of the same bytes - unsigned integer, address (low 20 bytes) and boolean - because a slot is untyped on chain and only the caller knows which it meant. Useful for proxy implementation slots, paused flags and any value the ABI does not expose. Reads Base (network \"base\"); every other chain answers 400 naming Base.",
     tags: ["evm", "storage", "slot", "rpc", "contract"],
     aliases: ["eth_getStorageAt", "storage-at", "slot"],
     discovery: {
@@ -152,7 +152,7 @@ export const CHAIN_RPC_TOOLS = [
         properties: {
           address: { type: "string", description: "0x contract address" },
           slot: { type: "string", description: "Slot index: a decimal number or a 0x-prefixed hex key (EIP-1967 implementation slot is 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc)" },
-          network: { type: "string", description: "ethereum | base | polygon | arbitrum | optimism (default base)" },
+          network: { type: "string", description: "base (the one network this read serves; default base). Other chains answer 400." },
           block: { type: "string", description: "latest (default), pending, earliest, safe, finalized, or a block number" },
         },
         required: ["address", "slot"],
@@ -167,7 +167,7 @@ export const CHAIN_RPC_TOOLS = [
       },
     },
     handler: async (input) => {
-      const network = pickNetwork(input?.network);
+      const network = pickRelayNetwork(input?.network, "chain-storage");
       const address = takeAddress(input?.address);
       const block = takeBlockTag(input?.block);
       const rawSlot = input?.slot;
@@ -177,7 +177,7 @@ export const CHAIN_RPC_TOOLS = [
       if (/^0x[0-9a-f]+$/.test(s)) slot = s;
       else if (/^\d+$/.test(s)) slot = `0x${BigInt(s).toString(16)}`;
       else throw bad('"slot" must be a decimal slot index or a 0x-prefixed hex slot key');
-      const value = await publicJsonRpc(network, "eth_getStorageAt", [address, slot, block]);
+      const value = await publicJsonRpc(network, "eth_getStorageAt", [address, slot, block], { urls: BASE_RELAY_RPCS });
       if (typeof value !== "string" || !/^0x[0-9a-f]*$/i.test(value)) {
         throw Object.assign(new Error("The RPC did not return a storage word for that slot"), { statusCode: 502 });
       }

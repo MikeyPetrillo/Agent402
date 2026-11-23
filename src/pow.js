@@ -340,7 +340,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Named chain-read primitives (2026-07-29): same shared public-RPC pool +
   // Alchemy lane as evm-rpc — PoW would let one client farm the quota.
   "block-number", "chain-info", "block-info", "erc721-owner", "contract-code", "event-logs",
-  // Contract-kit: Sourcify (contract-source / contract-abi), openchain.xyz +
+  // Contract-kit: Sourcify (contract-source / contract-abi), its signature DB +
   // 4byte.directory signature DBs (selector-lookup, and calldata-decode's
   // no-ABI fallback path), and the shared keyless public RPC pool
   // (tx-simulate — same per-IP quota as evm-rpc). solidity-scan and
@@ -522,10 +522,12 @@ export const WALLET_ONLY_SLUGS = new Set([
   "embed", "embed-large",
   // Moderation kit: OpenAI moderation API (free upstream, but wallet-only by policy).
   "moderate",
-  // CDP kit: every call hits the Coinbase Developer Platform on our API keys.
-  // testnet-fund additionally spends a shared per-account faucet budget —
-  // PoW would let one client drain it for free. onchain-sql burns real SQL
-  // engine quota (100GB reads / 30s per query).
+  // CDP kit: testnet-fund, onramp-link and the onchain-sql reads call the
+  // Coinbase Developer Platform on our API keys. testnet-fund additionally
+  // spends a shared per-account faucet budget — PoW would let one client drain
+  // it for free. onchain-sql burns real SQL engine quota (100GB reads / 30s
+  // per query). wallet-balances reads our keyed RPC lanes; onchain-sql-schema
+  // is served from a kept schema (wallet-only by policy, below).
   "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
 ]);
 
@@ -537,6 +539,7 @@ export const WALLET_ONLY_SLUGS = new Set([
 export const WALLET_ONLY_POLICY_REASON = new Map([
   ["sql-guard", "is pure computation, but it can mint an execution certificate signed with this server's key"],
   ["action-gate", "is pure computation, but its verdict is what a caller relies on before a real action"],
+  ["onchain-sql-schema", "is served from a schema this service keeps, and is sold with the onchain-sql reads it documents"],
 ]);
 
 /** A tool is compute-payable (PoW-eligible) only when src/free-tier.js lists it

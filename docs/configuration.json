@@ -945,6 +945,7 @@
     "SOLANA_LEADERBOARD": "Solana leaderboard.",
     "SOLANA_RPCS": "Solana RPC endpoints.",
     "SOLANA_RPC_URL": "Solana RPC endpoint URL.",
+    "SOLANA_DEVNET_RPC_URL": "Solana devnet RPC endpoint URL for wallet-balances on solana-devnet; unset, the devnet host of the same keyed provider as SOLANA_RPC_URL is used when it has one.",
     "SOLANA_UPSTREAM_BUYER_KEY": "Private key of the Solana spending wallet route-execute buys with (a credential, set on the host).",
     "SOLANA_UPSTREAM_BUYER_LOW_USD": "Solana upstream buyer low, in USD.",
     "SOLANA_WALLET_ADDRESS": "Solana address that receives USDC; without it the Solana option is left out of every 402.",

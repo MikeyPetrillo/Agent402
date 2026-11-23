@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1122 variables in 114 groups.
+1123 variables in 114 groups.
 
 ## Contents
 
@@ -1204,6 +1204,7 @@ holds it.
 | `SOLANA_ACTIVITY_STORE_FLUSH_MS` | How often waiting Solana activity scan states are written to the store, a bounded number a tick, in milliseconds. Unset = 60000. |  | `src/solana-activity-store.js` |
 | `SOLANA_ACTIVITY_STORE_MAX_WALLETS` | Wallets whose Solana activity scan state is kept; the least recently written are dropped first. Unset = 500, at most 5000. |  | `src/solana-activity-store.js` |
 | `SOLANA_ACTIVITY_STUCK_SCANS` | Scans in a row a transaction read may fail before the Solana activity scan skips and counts it. Unset = 3. |  | `src/revenue-live.js` |
+| `SOLANA_DEVNET_RPC_URL` | Solana devnet RPC endpoint URL for wallet-balances on solana-devnet; unset, the devnet host of the same keyed provider as SOLANA_RPC_URL is used when it has one. |  | `src/tools/wallet-balances-rpc.js` |
 | `SOLANA_FACILITATOR_RECHECK_MS` | How often the second Solana facilitator's /supported is read again, in milliseconds. Unset = 10 minutes. |  | `src/payments.js` |
 | `SOLANA_FACILITATOR_SHARE` | Percent of Solana quotes that name the second Solana facilitator (integer 0 to 100). Unset = 50. |  | `src/payments.js` |
 | `SOLANA_FACILITATOR_URL` | Ordered list of a second Solana mainnet facilitator that takes a share of Solana quotes and settles the payments whose fee payer it names (src/svm-facilitator-split.js). Unset = unchanged. |  | `src/payments.js` |
@@ -1228,7 +1229,7 @@ holds it.
 | `SOLANA_LB_TX_CONCURRENCY` | Transaction reads in flight per payTo in a Solana board scan (1 to 32). Unset = 2, which keeps the paced public lane's queue short for other readers. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LEADERBOARD` | Solana leaderboard. | `on` | `src/solana-leaderboard.js` |
 | `SOLANA_RPCS` | Solana RPC endpoints. |  | `src/solana-history-rpc.js` |
-| `SOLANA_RPC_URL` | Solana RPC endpoint URL. | `https://api.mainnet-beta.solana.com` | `src/solana-buyer.js`, `src/solana-history-rpc.js`, `src/tools/solana-intel-kit.js` |
+| `SOLANA_RPC_URL` | Solana RPC endpoint URL. | `https://api.mainnet-beta.solana.com` | `src/solana-buyer.js`, `src/solana-history-rpc.js`, `src/tools/solana-intel-kit.js` and 1 more |
 | `SOLANA_UPSTREAM_BUYER_KEY` | Private key of the Solana spending wallet route-execute buys with (a credential, set on the host). |  | `src/solana-buyer.js` |
 | `SOLANA_UPSTREAM_BUYER_LOW_USD` | Solana upstream buyer low, in USD. | `0.5` | `src/solana-buyer.js` |
 | `SOLANA_WALLET_ADDRESS` | Solana address that receives USDC; without it the Solana option is left out of every 402. |  | `src/own-wallets.js`, `src/payments.js`, `src/server.js` and 1 more |
@@ -1571,7 +1572,7 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `ACCEPT_OUTPUT_SCHEMA` | Accept output schema. |  | `src/accept-output-schema.js` |
-| `ALCHEMY_API_KEY` | Key for the on-chain data host behind chain reads (a credential, set on the host). |  | `src/leaderboard.js`, `src/payer-operators.js`, `src/revenue-live.js` and 8 more |
+| `ALCHEMY_API_KEY` | Key for the on-chain data host behind chain reads (a credential, set on the host). |  | `src/leaderboard.js`, `src/payer-operators.js`, `src/revenue-live.js` and 9 more |
 | `APOLLO_API_KEY` | Apollo API key (a credential, set on the host). |  | `src/tools/b2b-enrich-kit.js` |
 | `AUDIO_DECODE_SLOTS` | Audio decode slots. |  | `src/tools/media-kit.js` |
 | `BING_SITE_URL` | Bing site URL. | `https://agent402.tools/` | `src/search-data.js` |
