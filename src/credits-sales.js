@@ -62,7 +62,7 @@ export const creditsBalanceMaxCents = () => {
 // and this one (never a day after today, UTC), and a credits checkout records
 // that printed date as the terms version the buyer accepted. With sales off
 // the pages keep their own dates.
-export const CREDITS_SALES_TERMS_DATE = "2026-11-23";
+export const CREDITS_SALES_TERMS_DATE = "2026-11-24";
 export function creditsLegalDate(own, today = new Date().toISOString().slice(0, 10)) {
   if (!creditsSalesEnabled()) return own;
   return CREDITS_SALES_TERMS_DATE > own && CREDITS_SALES_TERMS_DATE <= today ? CREDITS_SALES_TERMS_DATE : own;

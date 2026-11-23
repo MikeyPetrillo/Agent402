@@ -70,6 +70,24 @@ const ENTRIES = [
   },
   {
     date: "2026-11-24",
+    title: "Open data credits, resale clearance, status, pages",
+    items: [
+      "Tools: sahm-rule, cpi-yoy, unemployment-rate and fed-funds read the Bureau of Labor Statistics and the Federal Reserve Bank of New York directly, and each answer's `credit` names its publisher; their descriptions and the macro skill packs name both publishers.",
+      "Tools: world-bank-indicator reads each indicator's license from the World Bank's metadata, serves only CC BY 4.0 and CC0 indicators with the World Bank's credit and license in the answer, and answers 422 for any other; world-bank-search carries the same credit. barcode-lookup answers credit Open Food Facts with its licenses and a link to the product, and country-info answers carry the ODbL notice and a link to the database this server serves at /data/countries.json.",
+      "Tools: fema-disasters names OpenFEMA as its source.",
+      "Tools: A metered route's quote counts each piece of the input as at least one token per eight characters.",
+      "Payments: A tool is sold through a referral link only when its sources are cleared for resale through a third party, or it reaches none; a referral payment from a blocked wallet is refused, as is every one while the screening list cannot be read, and three crypto screens bought that way leave out the source's own figures.",
+      "Payments: A card dispute closed for review keeps its key frozen until it is resolved, and /terms states where a fraud-warning refund goes.",
+      "Site: /status reads a rail left out of the latest canary as unknown, with its age. The settlement gas word clears only past the floor plus a margin.",
+      "Site: While the server sheds load, the x402 manifest, /openapi.json, /llms.txt, /llms-full.txt and /api/pricing answer their last good copy.",
+      "Site: robots.txt lets the named AI agents fetch the proof-of-work challenge. Public report pages are served with the report drawn, the home page heading names x402 and MPP, the playground loads a picked tool's form on demand, and insider pages show per-insider totals; a page with too little to show is not indexed. The credits and sign-in pages share the site shell.",
+      "Packages: agent402-tollbooth 0.12.2 answers `--help` and `--version`, ships its `deploy/` files, and charges a request with an empty User-Agent.",
+      "Packages: agent402-mcp 0.17.0: `wallet new --help` prints the usage and makes no key.",
+      "Packages: The meta-tool adapters pass the server's error body through to the caller.",
+    ],
+  },
+  {
+    date: "2026-11-24",
     title: "agent402-mcp 0.17.0",
     items: [
       "Packages: agent402-mcp 0.17.0: `npx agent402-mcp wallet new` makes a fresh wallet key on this computer, stores it where `npx agent402-mcp setup` would, and prints the wallet's address, how to fund it and the client config; the key is never printed, and a key already stored is never replaced.",

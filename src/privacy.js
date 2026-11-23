@@ -362,7 +362,10 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   closed or resolved by hand is kept after that (the most recent few hundred). A mark that a payment's sale was
   recorded (the paying wallet, the tool and the transaction) is kept for one hour. We keep the signed payment
   together with the tool's answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes, so that a re-sent payment gets its answer without
-  running or charging twice, and then delete them. A sale, and a refund we owe, are recorded as for any other payment.</li>
+  running or charging twice, and then delete them. For each proven referral payment we also keep, with our sales
+  records, what its settlement transaction shows: the amount, how the network's contract split it, and the wallet
+  address each share was paid to, the reviewer's included; all of it is public on chain. A sale, and a refund we owe,
+  are recorded as for any other payment.</li>
 ` : ""}  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
   code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
