@@ -21,16 +21,30 @@ const { CHANGELOG_ENTRIES, changelogPage, changelogRss } = await import("../src/
 const { sttLongEnabled } = await import("../src/tools/stt-kit.js");
 
 // Each switched route and the switch function that sells it.
-const SWITCHED = [{ route: "/api/transcribe-long", env: "TRANSCRIBE_LONG", on: "on", fn: sttLongEnabled }];
+const { creditsSalesEnabled, creditsConnectorOn } = await import("../src/credits-sales.js");
+const { webBotAuthEnabled } = await import("../src/web-bot-auth.js");
+const { tempoOusdShown } = await import("../src/changelog.js");
+// `offs`: values that leave the switch off (default: unset, empty, off, yes);
+// `also`: settings the switch needs beside it, set for every render.
+const SWITCHED = [
+  { route: "/api/transcribe-long", env: "TRANSCRIBE_LONG", on: "on", fn: sttLongEnabled },
+  // Credit sales (also needs the private table, which this suite's import provides).
+  { route: "/credits/account", env: "CREDITS_SALES", on: "on", fn: creditsSalesEnabled, offs: [undefined, "", "off", "no"] },
+  { route: "/mcp/credits", env: "MCP_OAUTH", on: "on", fn: creditsConnectorOn, also: { CREDITS_SALES: "on" } },
+  { route: "OUSD", env: "TEMPO_CURRENCY", on: "usdc,ousd", fn: tempoOusdShown, offs: [undefined, "", "usdc", "pathusd"], also: { TEMPO_API_KEY: "test-key", TEMPO_RECIPIENT_ADDRESS: "0x000000000000000000000000000000000000dEaD" } },
+  { route: "Visa CLI", env: "WEB_BOT_AUTH", on: "on", fn: webBotAuthEnabled },
+];
 
 for (const s of SWITCHED) {
+  const prior = Object.fromEntries(Object.keys(s.also || {}).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, s.also || {});
   const entries = CHANGELOG_ENTRIES.filter((e) => e.items.some((i) => i.includes(s.route)));
   ok(entries.length > 0, `the changelog has an entry for ${s.route}`);
   ok(entries.every((e) => e.shownWhen === s.fn), `every entry that names ${s.route} is shown only while ${s.env} is on (shownWhen)`);
   ok(entries.every((e) => e.items.filter((i) => i.includes(s.route)).every((i) => i.includes(`${s.env}=${s.on}`))), `each item that names ${s.route} names the switch, so CHANGELOG.md reads true with it off`);
 
   const render = () => ({ page: changelogPage("https://example.test"), rss: changelogRss("https://example.test") });
-  for (const v of [undefined, "", "off", "yes"]) {
+  for (const v of s.offs || [undefined, "", "off", "yes"]) {
     if (v === undefined) delete process.env[s.env]; else process.env[s.env] = v;
     const { page, rss } = render();
     ok(!page.includes(s.route) && !rss.includes(s.route), `${s.env}=${v === undefined ? "(unset)" : JSON.stringify(v)}: /changelog and /changelog.xml do not name ${s.route}`);
@@ -39,6 +53,7 @@ for (const s of SWITCHED) {
   const { page, rss } = render();
   ok(page.includes(s.route) && rss.includes(s.route), `${s.env}=${s.on}: /changelog and /changelog.xml name ${s.route}`);
   delete process.env[s.env];
+  for (const [k, v] of Object.entries(prior)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
 }
 
 // The markdown carries the same item, scoped to the switch.

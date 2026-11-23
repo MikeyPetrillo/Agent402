@@ -24,7 +24,7 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 
 // The OUSD entry: shown while this server's Tempo challenges include OUSD
 // (src/mpp-offers.js reads the same list for its Visa CLI sentence).
-const tempoOusdShown = () => Boolean(visaCliMppSentence());
+export const tempoOusdShown = () => Boolean(visaCliMppSentence());
 
 // The offer gate entry: shown while this server sends MPP challenges and the
 // gate is on (src/mpp-offer-gate.js).
@@ -56,7 +56,7 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 // the same item to a server that sets the switch).
 const ENTRIES = [
   {
-    date: "2026-11-22",
+    date: "2026-11-23",
     title: "Start here page",
     items: [
       "Site: A new /start page gives the one step that adds Agent402 to Claude desktop, Claude Code or Cursor, lists what runs with no wallet, and shows how to fund a first wallet with USDC on Base.",
@@ -64,7 +64,7 @@ const ENTRIES = [
     ],
   },
   {
-    date: "2026-11-22",
+    date: "2026-11-23",
     title: "agent402-mcp 0.16.0 and agent402-client 0.12.0",
     items: [
       "Packages: agent402-mcp 0.16.0: `npx agent402-mcp setup` asks for the wallet key once and keeps it in the OS keychain, so the key never sits in a config file or an environment variable.",
@@ -74,36 +74,44 @@ const ENTRIES = [
     ],
   },
   {
-    date: "2026-11-22",
+    date: "2026-11-23",
     title: "Prepaid credits purchases and controls",
     shownWhen: creditsSalesEnabled,
     items: [
-      "Credits: On a server that sets `CREDITS_SALES`, smaller credit packs are on sale, and a pack above the daily purchase limit is not offered.",
-      "Credits: On a server that sets `CREDITS_SALES`, a credits purchase is made signed in to the balance page at /credits/account, bound to the email the credits go to, and the bank may ask to confirm the card payment.",
-      "Credits: On a server that sets `CREDITS_SALES`, the balance page sets a daily and a per-call spending limit on each key, revokes a key, and emails a notice when the daily limit refuses a call.",
-      "Credits: On a server that sets `CREDITS_SALES`, a key is frozen while a dispute or a fraud warning on the payment that loaded it is reviewed.",
+      "Credits: On a server with `CREDITS_SALES=on` and its private credits table set, smaller credit packs are on sale, and a pack above the daily purchase limit is not offered.",
+      "Credits: On a server with `CREDITS_SALES=on` and its private credits table set, a credits purchase is made signed in to the balance page at /credits/account, bound to the email the credits go to, and the bank may ask to confirm the card payment; `POST /api/credits/checkout` answers 401 with the sign-in address.",
+      "Credits: On a server with `CREDITS_SALES=on` and its private credits table set, the balance page at /credits/account sets a daily and a per-call spending limit on each key, revokes a key, and emails a notice when the daily limit refuses a call.",
     ],
   },
   {
-    date: "2026-11-22",
+    date: "2026-11-23",
+    title: "Credits keys protected",
+    items: [
+      "Credits: A credits key is frozen while a dispute of the payment that loaded it is open, and while a fraud warning on that payment is reviewed; its unspent balance goes back to that payment's card.",
+      "Credits: `POST /api/credits/revoke` with a key in the Authorization header disables that key at once, with the same answer for every key.",
+      "Credits: A request whose address carries a credits key or a connector token is refused with a 400 before it is read, and the answer never repeats it.",
+    ],
+  },
+  {
+    date: "2026-11-23",
     title: "Connect an app to your credits",
     shownWhen: creditsConnectorOn,
     items: [
-      "MCP: On a server that sets `CREDITS_SALES` and `MCP_OAUTH=on`, an app added at /mcp/credits signs you in with an emailed code and pays for paid tool calls from your credits balance under a daily cap you set, with no key or wallet.",
-      "MCP: On a server that sets `CREDITS_SALES` and `MCP_OAUTH=on`, a first purchase starts from the same sign-in and goes through the balance page's checkout, and /start and payment.info name the /mcp/credits address.",
-      "Credits: On a server that sets `CREDITS_SALES` and `MCP_OAUTH=on`, the balance page lists each connected app with its spend today, changes its daily cap and disconnects it.",
+      "MCP: On a server with `CREDITS_SALES=on`, `MCP_OAUTH=on` and its private credits table set, an app added at /mcp/credits signs you in with an emailed code and pays for paid tool calls from your credits balance under a daily cap you set, with no key or wallet.",
+      "MCP: On a server with `CREDITS_SALES=on`, `MCP_OAUTH=on` and its private credits table set, a first purchase starts from the same sign-in at /mcp/credits and goes through the balance page's checkout, and /start and payment.info name the /mcp/credits address.",
+      "Credits: On a server with `CREDITS_SALES=on`, `MCP_OAUTH=on` and its private credits table set, the balance page lists each app connected at /mcp/credits with its spend today, changes its daily cap and disconnects it.",
     ],
   },
   {
-    date: "2026-11-22",
-    title: "OUSD on Tempo",
+    date: "2026-11-23",
+    title: "Another Tempo dollar token",
     shownWhen: tempoOusdShown,
     items: [
-      "Payments: On a server whose `TEMPO_CURRENCY` lists `ousd`, the Tempo rail also takes OUSD as its own challenge, and a refund of an OUSD payment goes back in OUSD.",
+      "Payments: On a server that offers Tempo and sets `TEMPO_CURRENCY=usdc,ousd` (or lists `ousd` among its Tempo tokens), the Tempo rail also takes OUSD as its own challenge, and a refund of an OUSD payment goes back in OUSD.",
     ],
   },
   {
-    date: "2026-11-22",
+    date: "2026-11-23",
     title: "Signed agent requests labeled",
     shownWhen: webBotAuthEnabled,
     items: [
