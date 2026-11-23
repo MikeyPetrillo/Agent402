@@ -388,6 +388,46 @@
     {
       "q": "parse a semicolon separated csv into json",
       "top": "csv-to-json"
+    },
+    {
+      "q": "check the check digits of a brazilian cpf number",
+      "top": "id-validate"
+    },
+    {
+      "q": "validate a bic swift code format",
+      "top": "id-validate"
+    },
+    {
+      "q": "verify the check digit of an isin security code",
+      "top": "id-validate"
+    },
+    {
+      "q": "norwegian organization number check digit",
+      "top": "id-validate"
+    },
+    {
+      "q": "find the first error in a ci build log",
+      "top": "build-log-triage"
+    },
+    {
+      "q": "why did my github actions job fail from its log",
+      "top": "build-log-triage"
+    },
+    {
+      "q": "fix broken json with trailing commas",
+      "top": "json-repair"
+    },
+    {
+      "q": "repair malformed json text",
+      "top": "json-repair"
+    },
+    {
+      "q": "solana getbalance rpc call",
+      "top": "solana-rpc"
+    },
+    {
+      "q": "solana json rpc getaccountinfo read",
+      "top": "solana-rpc"
     }
   ],
   "gaps": [

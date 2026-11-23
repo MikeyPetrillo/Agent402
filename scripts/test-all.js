@@ -139,6 +139,8 @@ const NETWORK = new Set([
   "/api/image-exif", "/api/image-dominant-color", "/api/image-crop",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
   "/api/public-holidays",
+  // solana-rpc-kit.js: live Solana mainnet JSON-RPC, the same upstream class as evm-rpc.
+  "/api/solana-rpc",
   // Holidays kit: the same holiday-source egress as public-holidays.
   "/api/bank-holidays", "/api/school-holidays", "/api/next-holidays", "/api/long-weekends",
   "/api/country-business-days", "/api/business-day-planner", "/api/settlement-calendar",
