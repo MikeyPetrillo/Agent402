@@ -22,7 +22,6 @@
 // Offline: a stub facilitator and a stub speech upstream (the OpenRouter
 // preload), a seeded credits key in a scratch store; no payment leaves the machine.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,25 +29,24 @@ import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { Challenge } from "mppx";
 import Database from "better-sqlite3";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { ttsQuoteUsd, ttsQuoteFormula, TTS_TIERS } from "../src/tools/tts-kit.js";
 import { hashKey } from "../src/credits.js";
 
-const [PORT, FAC_PORT, OR_PORT] = await getFreePorts(3);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 const PAYER = "0x00000000000000000000000000000000000000b3";
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const BASE_NET = "eip155:8453", OP = "eip155:10", RH = "eip155:4663";
 const PREMIUM_USD = 0.002;
 const TMP = mkdtempSync(join(tmpdir(), "tts-quote-paid-"));
 const STORES = ownStoreEnv("tts-quote-paid");
-let pass = 0, proc = null, facilitator = null, speech = null;
-const serverLog = [];
-const cleanup = () => { proc?.kill("SIGKILL"); facilitator?.close(); speech?.close(); try { rmSync(TMP, { recursive: true, force: true }); } catch { /* gone */ } try { rmSync(dirname(STORES.CREDITS_DIR), { recursive: true, force: true }); } catch { /* gone */ } };
+let pass = 0, srv = null, facilitator = null, speech = null;
+const serverLog = () => (srv?.log() || "").split("\n").filter((l) => l.trim()).slice(-60).map((l) => l.slice(0, 300));
+const cleanup = () => { srv?.child.kill("SIGKILL"); facilitator?.close(); speech?.close(); try { rmSync(TMP, { recursive: true, force: true }); } catch { /* gone */ } try { rmSync(dirname(STORES.CREDITS_DIR), { recursive: true, force: true }); } catch { /* gone */ } };
 const fail = (m) => {
   console.error("FAIL:", m);
-  if (serverLog.length) { console.error("--- server output (last lines) ---"); for (const l of serverLog) console.error(l); }
+  if (serverLog().length) { console.error("--- server output (last lines) ---"); for (const l of serverLog()) console.error(l); }
   cleanup(); process.exit(1);
 };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
@@ -66,7 +64,8 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 // The speech upstream: any speech request answers a few mp3 bytes.
 speech = createServer((req, res) => {
   req.on("data", () => {}); req.on("end", () => {
@@ -74,7 +73,8 @@ speech = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => speech.listen(OR_PORT, "127.0.0.1", r));
+await new Promise((r) => speech.listen(0, "127.0.0.1", r));
+const OR_PORT = speech.address().port;
 
 // A prepaid credits key in the store the server reads: the suite's own
 // directory (CREDITS_DIR), never the shared /tmp/credits another run reads.
@@ -85,11 +85,14 @@ const CREDITS_FILE = join(CREDITS_DIR, `k_${hashKey(CREDIT_KEY)}.json`);
 writeFileSync(CREDITS_FILE, JSON.stringify({ keyId: `kid_${randomBytes(4).toString("hex")}`, balanceMicro: 5_000_000, loadedMicro: 5_000_000, spentMicro: 0, calls: 0, createdAt: new Date().toISOString(), pack: "credits-20", sessions: [], paymentIntents: [], lastUsedAt: null }));
 const SALES_DB = join(TMP, "sales.db");
 
-const env = { ...process.env };
-delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
-proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-preload.js", "src/server.js"], {
+delete process.env.STATE_DATABASE_URL; delete process.env.REDIS_URL;
+// stores: false - the suite's own stores (STORES) are named here, the credits key's directory among them.
+const booting = bootServer({
+  stores: false,
+  args: ["--import", "./scripts/lib/openrouter-stub-preload.js"],
+  timeoutMs: 60_000,
   env: {
-    ...env, ...STORES, PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test",
+    ...STORES, FREE_MODE: "", NODE_ENV: "test",
     WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,optimism,robinhood",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, SOLVADOR_KEY: "test-key", SOLVADOR_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     NETWORK_PRICE_PREMIUMS: `${OP}=${PREMIUM_USD}`, ROBINHOOD_MIN_PRICE_USD: "0.006", NETWORK_PRICE_FLOORS: "",
@@ -104,10 +107,7 @@ proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-prelo
     FACILITATOR_GAS_CHECK: "off", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     SOLANA_LEADERBOARD: "off", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000", STATS_ALLOW_EPHEMERAL: "true",
   },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) if (line.trim()) serverLog.push(line.slice(0, 300)); if (serverLog.length > 60) serverLog.splice(0, serverLog.length - 60); };
-proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
 
 const post = (path, body, headers = {}) => fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 const decode402 = (res) => { const h = res.headers.get("payment-required"); try { return h ? JSON.parse(Buffer.from(h, "base64").toString("utf8")) : null; } catch { return null; } };
@@ -133,7 +133,8 @@ const creditSales = () => { const db = new Database(SALES_DB, { readonly: true }
 const waitFor = async (fn, ms = 5000) => { const end = Date.now() + ms; while (Date.now() < end) { try { const v = fn(); if (v) return v; } catch { /* not yet */ } await sleep(100); } return null; };
 
 try {
-  for (let i = 0; i < 240; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(250); }
+  srv = await booting.catch((e) => fail(`server did not boot: ${e.message}`));
+  B = srv.url;
   ok((await fetch(`${B}/health`)).ok, "server booted (paid mode, stub facilitator, stub speech upstream)");
   const pricing = await (await fetch(`${B}/api/pricing`)).json();
   const rhFloor = Number(pricing.payment?.minPriceUsdByNetwork?.robinhood);

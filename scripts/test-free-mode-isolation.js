@@ -18,13 +18,11 @@
 //
 //   node scripts/test-free-mode-isolation.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { createTaskStore } from "../src/mcp-tasks.js";
 
 let pass = 0, fail = 0;
@@ -34,12 +32,10 @@ const TMP = mkdtempSync(join(tmpdir(), "free-mode-isolation-"));
 const TASKS = join(TMP, "tasks");
 const procs = [];
 let facilitator = null;
-const cleanup = () => { for (const p of procs) try { p.kill("SIGKILL"); } catch { /* gone */ } try { facilitator?.close(); } catch { /* closed */ } try { rmSync(TMP, { recursive: true, force: true }); } catch { /* kept */ } };
-setTimeout(() => { console.error("FAIL - timed out"); for (const p of procs) console.error(p.log.join("").slice(-1500)); cleanup(); process.exit(1); }, 180_000).unref();
+const cleanup = () => { for (const p of procs) try { p.child.kill("SIGKILL"); } catch { /* gone */ } try { facilitator?.close(); } catch { /* closed */ } try { rmSync(TMP, { recursive: true, force: true }); } catch { /* kept */ } };
+setTimeout(() => { console.error("FAIL - timed out"); for (const p of procs) console.error(p.log().slice(-1500)); cleanup(); process.exit(1); }, 180_000).unref();
 
-const [FREE_PORT, PAID_PORT, FAC_PORT] = await getFreePorts(3);
-const FREE = `http://127.0.0.1:${FREE_PORT}`;
-const PAID = `http://127.0.0.1:${PAID_PORT}`;
+let FREE = "", PAID = "";
 const VICTIM = "0x" + "3".repeat(40);
 const ATTACKER = "0x" + "4".repeat(40);
 const REFUSED = "0x" + "ba".repeat(20);
@@ -79,26 +75,14 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 const common = { X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
   REDIS_URL: "", SHARED_LIMITS: "off", OPENAI_API_KEY: "", OPENROUTER_API_KEY: "", POSTHOG_API_KEY: "", AGENT402_TASK_DATA_DIR: TASKS };
-const boot = (port, env, label) => {
-  const p = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, ...ownStoreEnv(label), PORT: String(port), ...common, ...env }, stdio: ["ignore", "pipe", "pipe"] });
-  p.log = [];
-  p.stdout.on("data", (d) => p.log.push(String(d)));
-  p.stderr.on("data", (d) => p.log.push(String(d)));
-  procs.push(p);
-  return p;
-};
-const healthy = async (base, p) => {
-  for (let i = 0; i < 200; i++) {
-    if (p.exitCode !== null) return false;
-    try { if ((await fetch(`${base}/health`)).ok) return true; } catch { /* booting */ }
-    await sleep(500);
-  }
-  return false;
-};
+// Resolves to the booted server, or to { error } with the log tail when it never became healthy.
+const boot = (env, label) => bootServer({ stores: label, timeoutMs: 100_000, env: { ...common, ...env } })
+  .then((srv) => { procs.push(srv); return srv; }, (e) => ({ error: e.message }));
 
 // The strix PoC header: base64 JSON naming a wallet, no signature.
 const forged = (wallet) => Buffer.from(JSON.stringify({ payload: { authorization: { from: wallet } } })).toString("base64");
@@ -110,13 +94,15 @@ const call = async (base, method, path, headers = {}, body) => {
 };
 
 try {
-  const free = boot(FREE_PORT, { FREE_MODE: "true", X402_SYNC_ON_START: "false" }, "fmi-free");
-  const paid = boot(PAID_PORT, { FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+  const freeBoot = boot({ FREE_MODE: "true", X402_SYNC_ON_START: "false" }, "fmi-free");
+  const paidBoot = boot({ FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", FIRST_CALL_ALLOWANCE: "" }, "fmi-paid");
-  const [uf, up] = await Promise.all([healthy(FREE, free), healthy(PAID, paid)]);
+  const [free, paid] = await Promise.all([freeBoot, paidBoot]);
+  const uf = !free.error, up = !paid.error;
   ok(uf && up, `both servers booted (free ${uf}, paid ${up})`);
-  if (!uf || !up) throw new Error(`boot failed:\n${free.log.join("").slice(-1500)}\n${paid.log.join("").slice(-1500)}`);
+  if (!uf || !up) throw new Error(`boot failed:\n${free.error || free.log().slice(-1500)}\n${paid.error || paid.log().slice(-1500)}`);
+  FREE = free.url; PAID = paid.url;
 
   // The paywall reads the facilitator's supported kinds after listen.
   let gate = 0;
@@ -186,7 +172,7 @@ try {
 } catch (e) {
   ok(false, `run threw: ${e?.message}`);
 } finally {
-  if (fail) for (const p of procs) console.error(p.log.join("").split("\n").filter((l) => /error|FAIL|warn/i.test(l)).slice(-15).join("\n"));
+  if (fail) for (const p of procs) console.error(p.log().split("\n").filter((l) => /error|FAIL|warn/i.test(l)).slice(-15).join("\n"));
   cleanup();
 }
 
