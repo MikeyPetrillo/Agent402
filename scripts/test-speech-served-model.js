@@ -146,5 +146,26 @@ try {
   rmSync(dir, { recursive: true, force: true });
 }
 
+// An idempotent replay of a served answer carries the same model header: the
+// replay middleware (src/idempotency.js) keeps it with the answer.
+{
+  const { default: express } = await import("express");
+  const { createIdempotency } = await import("../src/idempotency.js");
+  const { createLocalIdempotencyStore } = await import("../src/idempotency-store.js");
+  const app = express();
+  app.use(express.json());
+  app.use(createIdempotency({ isCatalogRoute: () => true, freeMode: true, store: createLocalIdempotencyStore() }));
+  let runs = 0;
+  app.post("/api/tts", (req, res) => { runs++; res.setHeader(SERVED_MODEL_HEADER, "elevenlabs/eleven-v4-turbo"); res.setHeader(MODEL_FALLBACK_HEADER, "1"); res.json({ model: "elevenlabs/eleven-v4-turbo", audio: "AAAA" }); });
+  const server = await new Promise((r) => { const sv = app.listen(0, "127.0.0.1", () => r(sv)); });
+  const url = `http://127.0.0.1:${server.address().port}/api/tts`;
+  const send = () => fetch(url, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "speech-replay-1", "x-payment": "replay-credential" }, body: JSON.stringify({ text: "hi" }) });
+  const a = await send(); await a.text();
+  const b = await send(); await b.text();
+  server.close();
+  ok(runs === 1 && b.headers.get("x-idempotent-replay") === "true", `the second call is a replay (${runs} run, ${b.headers.get("x-idempotent-replay")})`);
+  ok(b.headers.get(SERVED_MODEL_HEADER) === "elevenlabs/eleven-v4-turbo" && b.headers.get(MODEL_FALLBACK_HEADER) === "1", `a replayed speech answer carries ${SERVED_MODEL_HEADER} and ${MODEL_FALLBACK_HEADER} (${b.headers.get(SERVED_MODEL_HEADER)}, ${b.headers.get(MODEL_FALLBACK_HEADER)})`);
+}
+
 if (fail) { console.error(`\nspeech served model: ${pass} passed, ${fail} failed`); process.exit(1); }
 console.log(`speech served model: ${pass} passed`);
