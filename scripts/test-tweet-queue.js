@@ -35,7 +35,7 @@ import { oauthHeader, xCredentialsFromEnv, missingXCredentials, pct } from "../s
 import {
   createTweetQueue, createXPoster, parseTweetQueue, weightedLength, wholeHourMs, hourOf, tweetQueueOptionsFromEnv, defaultStatePath,
 } from "../src/tweet-queue.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error(`FAIL: ${m}`); process.exit(1); } };
@@ -600,11 +600,11 @@ function mk(items, { clock = T0 + MIN, script = [], raw = null, ...extra } = {})
   `);
   const thisHour = Math.floor(Date.now() / H) * H;
   const items = [{ id: "boot-1", when: when(thisHour), text: text("boot-1") }, { id: "boot-2", when: when(thisHour + 5 * H), text: text("boot-2") }, { id: "boot-bad", when: "soon", text: text("boot-bad") }];
+  // The caller's queue, X and mode variables never reach a booted server.
+  const INHERIT_NOT = (k) => /^(TWEET_QUEUE|X_|TWITTER_)/.test(k) || k === "NODE_ENV" || k === "FREE_MODE";
   const baseEnv = () => {
-    const env = { ...process.env };
-    for (const k of Object.keys(env)) if (/^(TWEET_QUEUE|X_|TWITTER_)/.test(k) || k === "NODE_ENV" || k === "FREE_MODE") delete env[k];
     return {
-      ...env, AGENT402_OPERATOR_TOKEN: TOKEN, X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off",
+      AGENT402_OPERATOR_TOKEN: TOKEN, X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off",
       FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false",
       TWEET_QUEUE: JSON.stringify(items), TWEET_QUEUE_FIRST_TICK_MS: "300",
       X_API_KEY: CREDS.consumerKey, X_API_SECRET: CREDS.consumerSecret, X_ACCESS_TOKEN: CREDS.accessToken, X_ACCESS_SECRET: CREDS.accessSecret,
@@ -620,21 +620,26 @@ function mk(items, { clock = T0 + MIN, script = [], raw = null, ...extra } = {})
     const stubLog = join(dir, `${name}-x.log`);
     const statePath = join(dir, `${name}-state.json`);
     writeFileSync(stubLog, "");
-    const PORT = await getFreePort();
     const spawnedAt = Date.now();
-    const child = spawn(process.execPath, ["--import", pathToFileURL(preload).href, "src/server.js"], {
-      env: { ...baseEnv(), PORT: String(PORT), TQ_STUB_LOG: stubLog, TWEET_QUEUE_STATE_FILE: statePath, TWEET_QUEUE_POST_AFTER: "2000-01-01T00:00:00Z", ...extraEnv },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let log = "";
-    child.stdout.on("data", (d) => { log += d; });
-    child.stderr.on("data", (d) => { log += d; });
-    const base = `http://127.0.0.1:${PORT}`;
-    let up = false;
-    for (let i = 0; i < 120 && !up; i++) {
-      try { up = (await fetch(`${base}/health`)).ok; } catch { /* booting */ }
-      if (!up) await wait(500);
-    }
+    // bootServer spreads process.env into the child when it spawns, which it
+    // does before its first await: the excluded keys are lifted out of
+    // process.env for that call only.
+    const lifted = Object.entries(process.env).filter(([k]) => INHERIT_NOT(k));
+    for (const [k] of lifted) delete process.env[k];
+    let booting;
+    try {
+      booting = bootServer({
+        stores: false,
+        args: ["--import", pathToFileURL(preload).href],
+        timeoutMs: 60_000,
+        env: { ...baseEnv(), TQ_STUB_LOG: stubLog, TWEET_QUEUE_STATE_FILE: statePath, TWEET_QUEUE_POST_AFTER: "2000-01-01T00:00:00Z", ...extraEnv },
+      });
+    } finally { for (const [k, v] of lifted) process.env[k] = v; }
+    let bootLog = "";
+    const srv = await booting.catch((e) => { bootLog = e.message; return null; });
+    const up = Boolean(srv);
+    const base = srv?.url ?? "";
+    const log = () => srv?.log() ?? bootLog;
     const posts = () => readFileSync(stubLog, "utf8").split("\n").filter(Boolean);
     const read = async () => {
       const r = await fetch(`${base}/__operator/tweet-queue.json`, { headers: { authorization: `Bearer ${TOKEN}` } });
@@ -642,7 +647,7 @@ function mk(items, { clock = T0 + MIN, script = [], raw = null, ...extra } = {})
       ALL_STATUS.push(bodyText);
       return { res: r, j: JSON.parse(bodyText) };
     };
-    return { up, base, posts, read, statePath, spawnedAt, log: () => log, stop: () => { ALL_LOGS.push(log); child.kill("SIGKILL"); } };
+    return { up, base, posts, read, statePath, spawnedAt, log, stop: () => { ALL_LOGS.push(log()); srv?.child.kill("SIGKILL"); } };
   }
 
   // CONTROL: the production shape posts, once, to the stub.
