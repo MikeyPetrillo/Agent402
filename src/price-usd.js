@@ -15,6 +15,7 @@
 // without pulling in the crawler.
 
 import { EVM_TOKEN_DOMAINS } from "./evm-usdc-domain.js";
+import { TEMPO_OUSD_ADDRESS } from "./tempo-currencies.js";
 
 /**
  * An AMOUNT beside PAYMENT CONTEXT is base units of a token, never dollars
@@ -32,7 +33,7 @@ import { EVM_TOKEN_DOMAINS } from "./evm-usdc-domain.js";
  * catalogues publish `{ amount: "0.032", currency: "USDC" }` meaning dollars.
  * A fractional figure is never base units, so it keeps its dollar reading.
  * Decimals are the declared ones, else 6 for the stablecoins every rail here
- * settles in (USDC on any chain, Tempo USDC.e and PathUSD), else NOTHING: a
+ * settles in (USDC on any chain, Tempo USDC.e, PathUSD and OUSD), else NOTHING: a
  * token we cannot size is a price we do not publish (the live-402 probe learns
  * it), because a wrong exponent is the same million-fold error by another road.
  */
@@ -44,6 +45,7 @@ const SIX_DECIMAL_ASSETS = new Set([
   ...EVM_TOKEN_DOMAINS.filter((d) => d.symbol === "USDC").map((d) => d.asset),
   "0x20C000000000000000000000b9537d11c60E8b50", // Tempo USDC.e
   "0x20c0000000000000000000000000000000000000", // Tempo PathUSD
+  TEMPO_OUSD_ADDRESS, // Tempo OUSD (by address only: the ticker "OUSD" also names an 18-decimal token elsewhere)
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // Solana USDC mint
 ].map((a) => a.toLowerCase()));
 /** Six, when this object names a token we RECOGNISE as dollar-pegged. Null

@@ -8,7 +8,8 @@
 // instant and public RPCs see at most one scan a minute; a flaky chain shows
 // "unavailable" for that rail instead of breaking the page. Balances and
 // transfers are public on-chain data — this page just saves the tab-cycling.
-import { tempoSelfRecipient } from "./mpp-tempo.js";
+import { tempoSelfRecipient, tempoDiscoveryInfo } from "./mpp-tempo.js";
+import { tempoTokenLabel } from "./tempo-currencies.js";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createJsonDocument } from "./json-document.js";
@@ -2237,7 +2238,8 @@ const netName = (n) => NET_ALIAS[n] || n;
 const MPP_RAIL_META = {
   base: { label: "Base", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://basescan.org/address/", tx: "https://basescan.org/tx/" },
   celo: { label: "Celo", asset: "USDC", how: "evm/charge via the shim → x402 settle", explorer: "https://celoscan.io/address/", tx: "https://celoscan.io/tx/" },
-  tempo: { label: "Tempo", asset: "USDC.e / PathUSD", how: "native tempo/charge", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
+  // The tokens the live tempo challenges name, read when the page renders.
+  tempo: { label: "Tempo", get asset() { const l = (tempoDiscoveryInfo()?.currencies || []).map(tempoTokenLabel).filter(Boolean); return l.length ? l.join(" / ") : "USDC.e / PathUSD"; }, how: "native tempo/charge", explorer: "https://explore.tempo.xyz/address/", tx: "https://explore.tempo.xyz/tx/" },
   // Card payments over MPP settle in US dollars, not a stablecoin.
   stripe: { label: "Card (MPP wire)", asset: "USD", how: "a card credential on an MPP call; card checkout purchases are counted separately in the headline" },
 };

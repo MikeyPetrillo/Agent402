@@ -18,19 +18,15 @@
 // A client whose tempo credential the relay just refused sees evm first for a
 // while (src/mpp-tempo.js tempoLeads); discovery documents the default order.
 
-import { tempoDiscoveryInfo, tempoOfferedFor, TEMPO_USDC_E_ADDRESS } from "./mpp-tempo.js";
+import { tempoDiscoveryInfo, tempoOfferedFor } from "./mpp-tempo.js";
+import { tempoTokenLabel } from "./tempo-currencies.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { stripeDiscoveryInfo } from "./mpp-stripe.js";
 import { mppOfferGateClause, mppOfferGateSentence } from "./mpp-offer-gate.js";
 
-const PATH_USD_LC = "0x20c0000000000000000000000000000000000000";
-
 /** A readable name for a Tempo TIP-20 currency address. */
 export function tempoCurrencyLabel(address) {
-  const a = String(address || "").toLowerCase();
-  if (a === TEMPO_USDC_E_ADDRESS.toLowerCase()) return "USDC.e";
-  if (a === PATH_USD_LC) return "PathUSD";
-  return String(address || "");
+  return tempoTokenLabel(address) || String(address || "");
 }
 
 /** Ordered MPP offers for one route, as its 402 would list them.
