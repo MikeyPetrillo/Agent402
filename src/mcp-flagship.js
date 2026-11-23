@@ -541,7 +541,7 @@ export function mcpJsonResult(obj, text = JSON.stringify(obj, null, 2)) {
  * Hosted URL is parameterized; npm / Claude Code / Cursor notes
  * match docs/ecosystem-listings.md + wiki/MCP-Connector.md.
  */
-export const AGENT402_MCP_VERSION = "0.15.0";
+export const AGENT402_MCP_VERSION = "0.16.0";
 
 /** A listed MCP tool description, at most `max` characters. Hosts truncate or
  *  skip long descriptions, so the listing keeps the first whole sentences; the
@@ -573,12 +573,12 @@ export function mcpInstallHints(baseUrl) {
       mcpServers: {
         agent402: {
           command: "npx",
-          args: ["-y", "agent402-mcp@0.15.0"],
+          args: ["-y", "agent402-mcp@0.16.0"],
           env: { AGENT_KEY: "0xYOUR_PRIVATE_KEY" },
         },
       },
     },
-    npm: "npx -y agent402-mcp@0.15.0",
+    npm: "npx -y agent402-mcp@0.16.0",
     maintainer: "Havok Holdings LLC",
   };
 }
