@@ -243,6 +243,39 @@ const advisoryWarnings = [];
   }
 }
 
+// Offline: an EVM key is read with or without its 0x prefix, whitespace or
+// quotes; anything else is refused naming the variable and the form, never
+// the value. The helper is the same file the MCP package ships.
+{
+  const { normalizeEvmKey, evmKeyOrNull, EVM_KEY_FORM } = await import("./index.js");
+  const hex = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
+  for (const raw of [`0x${hex}`, hex, `  ${hex}\n`, `"0x${hex}"`, `0X${hex.toUpperCase()}`]) ok(normalizeEvmKey(raw) === `0x${hex}`, `a key given as ${JSON.stringify(raw.slice(0, 6))}... reads as the same key`);
+  let e = null;
+  try { normalizeEvmKey("0xdeadbeefcafe", "MY_KEY"); } catch (err) { e = err; }
+  ok(e && e.message.includes("MY_KEY is set but is not") && e.message.includes(EVM_KEY_FORM) && !e.message.includes("deadbeefcafe"), `a malformed key names the variable and the form, never the value (${e?.message})`);
+  ok(evmKeyOrNull("nope") === null && evmKeyOrNull(`0x${hex}00`) === null, "a value that is not a key reads as null");
+  const here = dirname(fileURLToPath(import.meta.url));
+  ok(readFileSync(join(here, "wallet-key.js"), "utf8") === readFileSync(join(here, "..", "mcp", "wallet-key.js"), "utf8"), "client/wallet-key.js is the same file as mcp/wallet-key.js");
+}
+
+// Offline: a paid call the server served under its first-call allowance
+// (X-Agent402-Allowance: first-call, no PAYMENT-RESPONSE) counts against no
+// cap; the same header beside a settlement receipt is a paid call.
+{
+  const headersOf = (h) => ({ get: (k) => h[k.toLowerCase()] ?? null });
+  const body = { ok: true, firstCallAllowance: { note: "first call" } };
+  const answer = (h) => ({ ok: true, status: 200, headers: headersOf(h), json: async () => body, text: async () => JSON.stringify(body) });
+  const replies = [answer({ "x-agent402-allowance": "first-call" }), answer({ "x-agent402-allowance": "first-call", "payment-response": "e30=" }), answer({})];
+  const c = new Agent402({ baseUrl: "https://seller.example", cache: false, dailyLimitUsd: 0.02, fetch: async () => replies.shift(), fetchImpl: async () => answer({}) });
+  c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
+  const first = await c.call("cheap");
+  ok(first.firstCallAllowance && c.spendingSummary().dailyUsd === 0 && c.spendingSummary().freeCalls === 1, `a first-call grant counts against no cap (${JSON.stringify(c.spendingSummary())})`);
+  await c.call("cheap");
+  ok(c.spendingSummary().dailyUsd === 0.01 && c.spendingSummary().freeCalls === 1, "the allowance header beside a settlement receipt is a paid call");
+  await c.call("cheap");
+  ok(c.spendingSummary().dailyUsd === 0.02, "the grant left the whole daily limit for paid calls");
+}
+
 // Offline: index.d.ts (package.json "types") declares every runtime export,
 // so a TypeScript consumer sees the whole API.
 {

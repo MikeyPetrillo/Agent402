@@ -147,6 +147,8 @@ export interface SpendingSummary {
   heldUsd: number;
   heldCalls: number;
   heldByHost: Record<string, number>;
+  /** Paid calls the server served free under its first-call allowance (counted against no cap). */
+  freeCalls: number;
   limits: { maxPerCallUsd: number | null; dailyLimitUsd: number | null; maxPerHostUsd: number | null };
 }
 
@@ -266,6 +268,14 @@ export const GATEWAY_VERIFYING_CONTRACTS: Readonly<Record<string, string>>;
 export const MAX_POW_DIFFICULTY: number;
 export const MAX_POW_TRIES_FACTOR: number;
 export const MAX_VALIDITY_SECONDS: number;
+/** The expected form of an EVM private key, as a key error words it. */
+export const EVM_KEY_FORM: string;
+/** An EVM private key read with or without its 0x prefix, surrounding whitespace or one pair of
+ *  quotes, as "0x" + 64 hex characters; throws an error naming `name` (default "AGENT_KEY") and
+ *  the expected form, never the value. */
+export function normalizeEvmKey(raw: unknown, name?: string): `0x${string}`;
+/** The same reading as normalizeEvmKey, or null for a value that is not a key. */
+export function evmKeyOrNull(raw: unknown): `0x${string}` | null;
 export const NETWORK_CAIP2: Readonly<Record<string, string>>;
 export const NETWORK_NAMES: Readonly<Record<string, string[]>>;
 export const KNOWN_ASSETS: Readonly<Record<string, Array<{ asset: string; decimals: number; symbol: string; name?: string; version?: string }>>>;

@@ -52,8 +52,9 @@ because every paid route on Agent402 carries both offers on the same 402:
 ```js
 import { Fetch, evm, tempo } from "mppx/client";
 import { privateKeyToAccount } from "viem/accounts";
+import { Agent402, normalizeEvmKey } from "agent402-client";
 
-const account = privateKeyToAccount(process.env.AGENT_KEY);
+const account = privateKeyToAccount(normalizeEvmKey(process.env.AGENT_KEY));
 // The evm method signs for the tokens you list: USDC on Base and on Celo.
 const mppFetch = Fetch.from({ methods: [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })] });
 
@@ -72,14 +73,27 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
+import { Agent402, normalizeEvmKey } from "agent402-client";
 
 const client = new x402Client();
-registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+registerExactEvmScheme(client, { signer: privateKeyToAccount(normalizeEvmKey(process.env.AGENT_KEY)) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
-const a = new Agent402({ fetch: payFetch });
+const a = new Agent402({ fetch: payFetch, x402Client: client });
 const article = await a.call("extract", { url: "https://agent402.tools/guides/x402-in-5-minutes" });
 ```
+
+`normalizeEvmKey` reads a private key with or without its `0x` prefix, and with
+surrounding spaces, line breaks or quotes (a value copied out of a JSON or
+`.env` file), as `0x` plus 64 hex characters. Anything else throws an error that
+names the variable (`normalizeEvmKey(value, "MY_KEY")`) and the expected form,
+never the value. A Base payment needs no ETH: the wallet signs an authorization
+and the facilitator pays the network fee.
+
+A paid call the server serves free under its first-call allowance (the answer
+carries `X-Agent402-Allowance: first-call` and no settlement receipt, and the
+JSON body a `firstCallAllowance` field) counts against no cap;
+`spendingSummary().freeCalls` counts them.
 
 ## Paying with a credits key
 
@@ -120,10 +134,10 @@ nothing changes. The SDK has no dependencies: install `viem` for
 `signTypedData`.
 
 ```js
-import { Agent402 } from "agent402-client";
+import { Agent402, normalizeEvmKey } from "agent402-client";
 import { privateKeyToAccount } from "viem/accounts";
 
-const signer = privateKeyToAccount(process.env.AGENT_KEY); // its address holds a Gateway deposit on Base or Arc
+const signer = privateKeyToAccount(normalizeEvmKey(process.env.AGENT_KEY)); // its address holds a Gateway deposit on Base or Arc
 const a = new Agent402({ gateway: { signer }, maxPerCallUsd: 0.05 });
 const out = await a.call("extract", { url: "https://agent402.tools/guides/x402-in-5-minutes" });
 ```
@@ -334,7 +348,7 @@ whole API: `Agent402Options`, `CallOptions`, the error classes and the helpers.
 | `await a.collectJob(jobUrl, { timeoutMs?, onProgress? })` | Collect a job link (from `AsyncJobPendingError.jobUrl`) until it has the answer |
 | `Agent402.solvePow(pow)` / `await Agent402.solvePowAsync(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value, on the calling thread or on a worker thread; a difficulty above 28 bits is refused |
 | `a.guardX402Client(client)` | Enforce this client's caps on every payment the given `@x402/core` client signs (the same as passing `x402Client`); returns the client |
-| `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, heldUsd, heldCalls, heldByHost, limits }`; `dailyUsd`, `calls` and `byHost` are settled calls, the `held*` fields are payments sent without a delivered answer |
+| `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, heldUsd, heldCalls, heldByHost, freeCalls, limits }`; `dailyUsd`, `calls` and `byHost` are settled calls, the `held*` fields are payments sent without a delivered answer |
 | `a.clearCache()` | Drop the in-memory result cache |
 
 ## Response size ceiling

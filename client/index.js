@@ -29,13 +29,16 @@ import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEO
 export { AsyncJobPendingError } from "./async-job.js";
 export { verifyReceipt, verifyStreamedReceipt, splitStreamedReceipt, receiptRequestDigest, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_SSE_COMMENT } from "./receipt.js";
 import { solvePowSync, solvePowAsync, checkPowChallenge } from "./pow-solver.js";
+// An EVM private key read with or without its 0x prefix, surrounding
+// whitespace or quotes: privateKeyToAccount(normalizeEvmKey(process.env.AGENT_KEY)).
+export { normalizeEvmKey, evmKeyOrNull, EVM_KEY_FORM } from "./wallet-key.js";
 export { MAX_POW_DIFFICULTY, MAX_POW_TRIES_FACTOR, solvePowAsync } from "./pow-solver.js";
 
 // Keep in lockstep with package.json. Every request the SDK issues carries
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.11.0";
+const VERSION = "0.12.0";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -352,6 +355,8 @@ export class Agent402 {
     // call's own reservation from every other one (see guardX402Client).
     this._signCtx = new AsyncLocalStorage();
     this._guarded = false;
+    // Paid calls the server served free under its first-call allowance.
+    this._freeCalls = 0;
     if (x402Client) this.guardX402Client(x402Client);
     // The chains a pre-wrapped fetch pays on, as CAIP-2 ids (null = unknown).
     this._payNetworks = Array.isArray(payNetworks) && payNetworks.length
@@ -830,7 +835,10 @@ export class Agent402 {
             }
             throw this._fail(slug, r, await this._failureDetail(slug, r));
           }
+          // A call the server served under its first-call allowance was
+          // verified and not settled: nothing was charged, so nothing counts.
           if (!sentPayment()) this._spendRelease(reservation);
+          else if (firstCallGrantOf(r)) { this._spendRelease(reservation); this._freeCalls++; }
           else this._spendHold(reservation, guarded ? ctx.sent : null, { settleLast: true });
           settled = true;
           return await this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: true });
@@ -1259,9 +1267,19 @@ export class Agent402 {
       heldUsd: held.usd,
       heldCalls: held.calls,
       heldByHost: held.byHost,
+      freeCalls: this._freeCalls,
       limits: { maxPerCallUsd: this._spend.maxPerCall, dailyLimitUsd: this._spend.daily, maxPerHostUsd: this._spend.perHost },
     };
   }
+}
+
+/** True for a delivered answer the server served under its first-call
+ *  allowance: the header X-Agent402-Allowance: first-call and no settlement
+ *  receipt (PAYMENT-RESPONSE), so a settled call is always counted. */
+function firstCallGrantOf(r) {
+  const get = typeof r?.headers?.get === "function" ? (k) => r.headers.get(k) : () => null;
+  return !!r?.ok && String(get("x-agent402-allowance") || "").trim().toLowerCase() === "first-call"
+    && !get("payment-response") && !get("x-payment-response");
 }
 
 /** Thrown when a paid call would exceed a configured spending ceiling. The call

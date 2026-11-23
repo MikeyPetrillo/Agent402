@@ -3,7 +3,7 @@
   "name": "io.github.MikeyPetrillo/agent402",
   "title": "Agent402.Tools: payments and trust for AI agents",
   "description": "Payment and trust layer for agentic commerce (Agentic Finance): pay and verify over x402 and MPP",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "repository": {
     "url": "https://github.com/MikeyPetrillo/Agent402",
     "source": "github"
@@ -20,7 +20,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "agent402-mcp",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "transport": {
         "type": "stdio"
       },

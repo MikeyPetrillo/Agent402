@@ -7,8 +7,21 @@
 export interface Agent402McpEnv {
   /** Target service (default https://agent402.tools). */
   AGENT402_URL?: string;
-  /** Hex private key of a funded EVM wallet (USDC). */
+  /** Hex private key of a funded EVM wallet (USDC): 64 hex characters, with or without 0x.
+   *  Unset, the key `npx agent402-mcp setup` stored in the OS keychain is read. */
   AGENT_KEY?: string;
+  /** Where the stored key lives: "auto" (default), "macos", "windows", "secret-tool", "file" or "off". */
+  AGENT402_KEY_STORE?: string;
+  /** Cap on USD spent per UTC day, kept across restarts (unset or "off" means none). */
+  AGENT402_MAX_USD_PER_DAY?: string;
+  /** Cap on USD spent per UTC calendar month, kept across restarts (unset or "off" means none). */
+  AGENT402_MAX_USD_PER_MONTH?: string;
+  /** Folder for spend.json and, without a keychain, the key file (default: the per-user config folder). */
+  AGENT402_CONFIG_DIR?: string;
+  /** Folder media answers are written to (default ~/Downloads/agent402, else the OS temp folder). */
+  AGENT402_OUTPUT_DIR?: string;
+  /** "1" returns media answers inline instead of as files. */
+  AGENT402_MEDIA_INLINE?: string;
   /** Base58 or JSON byte-array secret key of a funded Solana wallet (USDC). */
   SOLANA_AGENT_KEY?: string;
   /** Comma-separated slugs listed first-class (replaces the default set). */
@@ -91,11 +104,25 @@ export interface SpendControls {
   spentThisSessionUsd: number;
   heldThisSessionUsd: number;
   remainingUsd: number | "unlimited";
+  /** Present while AGENT402_MAX_USD_PER_DAY is set. */
+  daily?: SpendCapStatus;
+  /** Present while AGENT402_MAX_USD_PER_MONTH is set. */
+  monthly?: SpendCapStatus;
+  /** The ledger file, while either cap is set. */
+  ledger?: string;
+  ledgerError?: string;
 }
+/** A daily or monthly cap: what is spent and left, and when it resets (ISO 8601, UTC). */
+export interface SpendCapStatus { capUsd: number; spentUsd: number; leftUsd: number; resetsAt: string; setting: string }
+/** A media answer written to a file. */
+export interface SavedMedia { savedTo: string; bytes: number; contentType: string }
 export interface PaymentInfoResult {
   service: string;
   mode: "usdc" | "credits" | "proof-of-work";
   wallet: string | null;
+  /** "AGENT_KEY", the stored key, or null without an EVM key. */
+  walletKeySource: string | null;
+  mediaOutput: string;
   solanaWallet: string | null;
   network: string;
   networks?: unknown;

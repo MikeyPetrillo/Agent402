@@ -202,7 +202,7 @@ const rpc = async (path, method, params, { version, id = 1, headers: extra = {} 
 {
   const transport = new StdioClientTransport({
     command: process.execPath, args: [join(ROOT, "mcp/index.js")], cwd: ROOT,
-    env: { PATH: process.env.PATH || "", HOME: process.env.HOME || "", AGENT402_URL: B },
+    env: { PATH: process.env.PATH || "", HOME: process.env.HOME || "", AGENT402_URL: B, AGENT402_KEY_STORE: "off" },
     stderr: "ignore",
   });
   const client = new Client({ name: "stdio-test", version: "0" });
