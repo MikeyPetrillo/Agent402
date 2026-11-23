@@ -16,6 +16,8 @@
 //                            indexed DECODED chain data (Base events/txs/
 //                            blocks/user-ops/builder-code attributions,
 //                            Solana token instructions) — no indexer to run
+//   onchain-sql-range $0.33 the same SQL, a long solana.instructions range
+//                            read one UTC day at a time (up to 31 days)
 //   onchain-sql-schema $0.002 the table/column schema for the above
 //
 // Auth: CDP REST uses a short-lived JWT (ES256 for PEM EC keys, EdDSA for
@@ -569,14 +571,16 @@ function underPaymentLife(req, fn) {
   const left = budget ? budget.remaining() : SVM_SQL_BUDGET_MS;
   return withBudget(fn, Math.max(1, Math.floor(Math.min(left, SVM_SQL_BUDGET_MS))));
 }
-function countedSqlCall(run) {
+function countedSqlCall(run, { stats = true } = {}) {
   return async (input, ctx, mark) => {
     const own = mark === OWN_READ;
     const call = { queries: newQueryBudget({ own, callerGone: own ? () => false : () => clientGoneBeforeFirstByte(ctx) }), budgetSpent: false, own };
     try { return await (own ? run(input, call) : underPaymentLife(ctx, () => run(input, call))); }
     catch (e) { if (e?.queryBudgetSpent) call.budgetSpent = true; throw e; }
     finally {
-      try {
+      // The query histogram is onchain-sql's (src/sql-query-stats.js): the
+      // range route's calls are not counted in it.
+      if (stats) try {
         const used = call.queries.sent, budgetSpent = call.budgetSpent;
         onFinalResponse((status, scope) => noteSqlCall({ status, queries: used, budgetSpent, synthetic: !!scope?.synthetic, sale: status === 200 && typeof scope?.saleOutcome === "function" ? scope.saleOutcome() : null }));
       } catch { /* bookkeeping only */ }
@@ -1154,6 +1158,27 @@ export const SQL_WINDOW_MAX_DAYS = 31;
 // a day answers in seconds (measured 2026-11-03), and one that runs into the
 // service's window takes about 10 s and ends the run.
 export const SQL_WINDOW_MIN_LEFT_MS = 4_000;
+// onchain-sql-range: the same handler for buyers of long ranges. Its day walk
+// reads every UTC day of a range up to SQL_WINDOW_MAX_DAYS (at most
+// SQL_WINDOW_MAX_DAYS + 1 day queries, since the range's ends fall inside
+// days), after the whole-range send and its one retry (QUERY_ATTEMPTS). Any
+// other path keeps SQL_QUERY_BUDGET. scripts/test-pricing-margin.js holds
+// this many queries plus a settlement inside the route's margin bound at its
+// price.
+export const SQL_RANGE_MAX_DAYS = SQL_WINDOW_MAX_DAYS;
+export const SQL_RANGE_MAX_QUERIES = QUERY_ATTEMPTS + SQL_RANGE_MAX_DAYS + 1;
+// The range route's run budget, seconds: the handler's budget and the run
+// time src/evm-validity.js (EVM_RUN_SECONDS, pinned equal by
+// scripts/test-onchain-sql-windows.js) sizes the payment window to. A day
+// answers in seconds and a day that runs into the service's window ends the
+// walk, so 32 days and the whole-range send fit; past the sync window the
+// call runs as a job (Prefer: respond-async, src/slow-routes.js).
+export const SQL_RANGE_RUN_SECONDS = 180;
+export const SQL_RANGE_PATH = "/api/onchain-sql-range";
+// How each route reads a windowed query: its query limit, and whether a
+// partial walk names the range route.
+const SQL_ROUTE = Object.freeze({ maxQueries: SQL_WINDOW_MAX_QUERIES, pointsToRange: true });
+const SQL_RANGE_ROUTE = Object.freeze({ maxQueries: SQL_RANGE_MAX_QUERIES, pointsToRange: false });
 const AGGREGATE_CALL = /\b(?:count\w*|sum\w*|avg\w*|min|max|(?:min|max)\w+|any\w*|arg(?:min|max)\w*|uniq\w*|group\w*|quantile\w*|median\w*|top_?k\w*|stddev\w*|var(?:pop|samp)\w*|covar\w*|corr\w*|skew\w*|kurt\w*|entropy\w*|simplelinearregression\w*|stochastic\w*|histogram\w*|sequence\w*|windowfunnel\w*|retention\w*|deltasum\w*|boundingratio\w*|\w+test\w*|rankcorr\w*|exponentialmovingaverage\w*|intervallengthsum\w*|sparkbar\w*|first_value|last_value|nth_value|row_number|rank|dense_rank|percent_rank|cume_dist|ntile|lag\w*|lead\w*)\s*\(/i;
 const NOT_SPLIT = /\b(?:group\s+by|having|distinct|join|union|intersect|except|over|window|qualify|sample|final|prewhere|offset|fetch|settings|format|into|array\s+join)\b/i;
 const utcText = (ms) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
@@ -1227,10 +1252,10 @@ export function dayWindowPlan(sql, now = Date.now()) {
 /** Reads a query one day at a time after its whole-range send ran past the
  *  service's window (`whole` is that uncharged error). Answers the merged
  *  rows with what was read in fields, or throws `whole` when no row came. */
-async function dayWindowAnswer(plan, body, queries, whole) {
+async function dayWindowAnswer(plan, body, queries, whole, route = SQL_ROUTE) {
   const target = plan.limit !== null && plan.limit <= SQL_MAX_ROWS ? plan.limit : SQL_MAX_ROWS + 1;
   // Each day is one more query, inside the windowed call's query limit.
-  queries.max = Math.max(queries.sent, Math.min(queries.sent + plan.spans.length, SQL_WINDOW_MAX_QUERIES));
+  queries.max = Math.max(queries.sent, Math.min(queries.sent + plan.spans.length, route.maxQueries));
   const rows = [];
   let read = 0, stopped = null;
   for (const span of plan.spans) {
@@ -1267,17 +1292,21 @@ async function dayWindowAnswer(plan, body, queries, whole) {
   const covered = !last ? null : plan.direction === "asc"
     ? { from: iso(plan.lo), to: iso(last.to ?? plan.hi) }
     : { from: iso(last.from ?? plan.lo), to: iso(plan.hi) };
-  const why = stopped === "query-limit" ? `the call's limit of ${SQL_WINDOW_MAX_QUERIES} queries was reached` : stopped === "time" ? "the call's time ran out" : stopped === "day-past-window" ? "one day of it also ran past the service's window" : stopped ? "the query service did not answer one day of it" : null;
+  const why = stopped === "query-limit" ? `the call's limit of ${route.maxQueries} queries was reached` : stopped === "time" ? "the call's time ran out" : stopped === "day-past-window" ? "one day of it also ran past the service's window" : stopped ? "the query service did not answer one day of it" : null;
   const note = cut
     ? `The whole range ran past the query service's window of about 10 s, so it was read one day at a time (${read} of ${plan.spans.length} days, ${plan.direction === "desc" ? "newest" : "oldest"} first); more than ${SQL_MAX_ROWS} rows matched and the first ${SQL_MAX_ROWS} are returned.`
     : complete
       ? `The whole range ran past the query service's window of about 10 s, so it was read one day at a time (${read} of ${plan.spans.length} days, ${plan.direction === "desc" ? "newest" : "oldest"} first) and the rows merged in order.`
       : `The whole range ran past the query service's window of about 10 s, so it was read one day at a time, ${plan.direction === "desc" ? "newest" : "oldest"} first, and ${why} after ${read} of ${plan.spans.length} days: these rows cover ${covered.from} to ${covered.to}. Send the query again with block_time from ${plan.direction === "desc" ? iso(plan.lo) : covered.to} to ${plan.direction === "desc" ? covered.from : iso(plan.hi)} for the rest.`;
+  // A walk the regular route's query limit or time ended: the range route
+  // reads the same query up to SQL_RANGE_MAX_DAYS days in one call.
+  const longer = route.pointsToRange && !complete && (stopped === "query-limit" || stopped === "time") && plan.spans.length <= SQL_RANGE_MAX_DAYS + 1;
   return {
     rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS,
     ...(complete ? partialFields(list.length, list.length) : { ...partialFields(list.length + 1, list.length), matchedIsLowerBound: true }),
     windowed: { by: "day", days: plan.spans.length, daysRead: read, order: plan.direction, from: iso(plan.lo), to: iso(plan.hi), ...(covered && !complete ? { coveredFrom: covered.from, coveredTo: covered.to } : {}), ...(why && !complete ? { stoppedBy: stopped } : {}) },
-    note,
+    ...(longer ? { longerRange: SQL_RANGE_PATH } : {}),
+    note: longer ? `${note} ${SQL_RANGE_PATH} reads up to ${SQL_RANGE_MAX_DAYS} days of such a query in one call.` : note,
   };
 }
 
@@ -1316,6 +1345,134 @@ export function faucetGate(address, now = Date.now()) {
 }
 
 const SHARED_TAGS = ["wallet", "onboarding", "x402", "agent-wallet"];
+
+/** The onchain-sql handler body, for one route's way of reading a windowed
+ *  query (SQL_ROUTE or SQL_RANGE_ROUTE); every other path is the same. */
+function sqlRun(route) {
+  return async (input, call) => {
+    const sql = String(input?.sql || "").trim();
+    if (!sql) throw bad('"sql" is required');
+    if (sql.length > SQL_MAX_CHARS) throw bad(`"sql" too long (${sql.length} chars, max ${SQL_MAX_CHARS.toLocaleString("en-US")})`);
+    if (!/^\s*(select|with)\b/i.test(sqlNorm(sql))) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
+    const unbounded = solanaRangeRefusal(sql);
+    if (unbounded) { const e = bad(unbounded); e.hint = "add-block-time"; throw e; }
+    const body = { sql };
+    const cacheSeconds = Number(input?.cacheSeconds);
+    if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
+      body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
+    }
+    let capped = cappedSql(sql);
+    body.sql = capped.sql;
+    if (!call.own && !(await takeBuyerPlace(slotWaitMs()))) {
+      throw sqlBusyRefusal(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds.`);
+    }
+    // One query budget for the call: the buyer's query, its retry, and
+    // every recovery run spend it where they are sent.
+    const queries = call.queries;
+    let res;
+    try {
+      try {
+        try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, lineOffset: capped.lineOffset, queries }); }
+        catch (e) {
+          // A subquery the depth reader did not see: the wrapper was one
+          // level too many, so the cap goes in the query's own LIMIT.
+          if (!(e?.nestingTooDeep && capped.lineOffset > 0)) throw e;
+          capped = cappedSql(sql, { wrap: false });
+          body.sql = capped.sql;
+          res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, queries });
+        }
+      }
+      catch (e) {
+        // The whole range ran past the service's window: a plain row
+        // select over a solana.instructions range is read one day at a
+        // time (dayWindowPlan); anything else answers as before.
+        if (e?.pastTimeWindow && !call.own) {
+          const plan = dayWindowPlan(sql);
+          if (plan) return await dayWindowAnswer(plan, body, queries, e, route);
+        }
+        if (!(e?.resultTooLarge && capped.capped)) throw e;
+        // A row over the service's per-row limit is the usual cause: the
+        // rows that fit are served with the rest counted. A query at the
+        // subquery depth limit cannot take the measure's extra level.
+        if (capped.lineOffset > 0) {
+          const fit = await rowsThatFit(body, capped.inner, queries);
+          if (fit) return fit;
+        }
+        // Otherwise the result was too large to send: the same query
+        // again with a small outer row cap, tried again while the call's
+        // query budget holds (a small result of this kind still fails now
+        // and then), served marked truncated, with the row size measured
+        // so the caller can pick a LIMIT. The original is resent only when
+        // the measured rows show its size was not the cause (below); a
+        // large result resent as written fails the same way.
+        const small = { ...body, sql: capped.limitTo(SQL_RECOVER_ROWS) };
+        let res2 = null, tries = 0, last = null;
+        while (res2 === null) {
+          if (queries.left() <= 0) {
+            const text = tries
+              ? `Even ${SQL_RECOVER_ROWS} rows of this query could not be sent by the query service${tries > 1 ? `, ${tries} times` : ""} (it answers its internal error, HTTP ${last.cdpStatus}; ${sendRuleText()}): select fewer or narrower columns (map and array columns are the usual cause). Nothing was charged.`
+              : queryBudgetSpentError().message;
+            if (await queryServiceHealth(sql) !== "failing") { const e3 = bad(text, 422); e3.hint = "narrow-query"; e3.queryBudgetSpent = true; throw unchargedFields(e3, queries); }
+            throw bad(`CDP's query service is failing (HTTP ${last?.cdpStatus ?? 500} on this query and on a known-good query); retry later. Nothing was charged.`, 502);
+          }
+          tries++;
+          try { res2 = await cdpFetch("POST", "/platform/v2/data/query/run", small, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: capped.lineOffset, queries }); }
+          catch (e2) { if (!e2?.resultTooLarge) throw e2; last = e2; }
+        }
+        const got = res2?.result ?? res2?.rows ?? res2?.data ?? res2;
+        if (!Array.isArray(got)) throw bad("CDP upstream error: the query service answered without a result list. Nothing was charged.", 502);
+        // Fewer rows than the cap: that is the whole result, so the 500 was
+        // not its size; served as a complete answer.
+        if (got.length < SQL_RECOVER_ROWS) { res = res2; }
+        else {
+          const list = got;
+          const rowBytes = Math.round(Buffer.byteLength(JSON.stringify(list), "utf8") / list.length);
+          const fits = Math.max(1, Math.floor(SQL_SEND_LIMIT_BYTES / rowBytes));
+          const ordered = hasOuterOrderBy(capped.inner);
+          // Rows this small cannot have made the whole result too large,
+          // so the service's error was not its size: the original is sent
+          // once more while the call's query budget holds (one attempt,
+          // counted in the budget) and served whole. Refused again, or with
+          // no query left, the small rows are served marked truncated and
+          // the note says which, never that the error was a one-off.
+          const rowsSmall = rowBytes * (SQL_MAX_ROWS + 1) < SQL_SEND_LIMIT_BYTES / 2;
+          let refusedAgain = false, resent = false;
+          if (rowsSmall && queries.left() > 0) {
+            resent = true;
+            try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: capped.lineOffset, queries }); }
+            catch (e3) { if (!e3?.resultTooLarge) throw e3; refusedAgain = true; }
+          }
+          if (!resent || refusedAgain) {
+            const kb = Math.round(SQL_SEND_LIMIT_BYTES / 1e3);
+            const sizeText = rowsSmall
+              ? `so the whole answer fits under about ${kb} KB${refusedAgain ? `, yet the query service refused the full result twice (it answered its internal error both times): set a LIMIT and page with an ORDER BY and OFFSET, or send the query again later.` : `, and the call's query budget of ${SQL_QUERY_BUDGET} queries left no room to send the full query again: set a LIMIT and page with an ORDER BY and OFFSET.`}`
+              : `so a LIMIT of ${Math.min(fits, SQL_MAX_ROWS)} usually keeps an answer under about ${kb} KB: set that, or select fewer or narrower columns, and page with an ORDER BY and OFFSET.`;
+            return {
+              rows: list, rowCount: list.length, maxRows: SQL_RECOVER_ROWS, recovered: "result-size", rowBytes,
+              ...partialFields(list.length, list.length), complete: false, truncated: true, matchedIsLowerBound: true,
+              ...(resent ? { resent: true, refusedAgain: true } : {}),
+              note: `The full result ${rowsSmall ? "was not sent by the query service (it answered its internal error" : `was too large for the query service to send (it answers its internal error`}; ${sendRuleText()}), so the query was run again with LIMIT ${SQL_RECOVER_ROWS} and these are ${ordered ? "its first" : "an arbitrary"} ${list.length} rows${ordered ? "" : " (it has no ORDER BY)"}. A row of this result is about ${Math.max(1, Math.round(rowBytes / 1024))} KB, ${sizeText}`,
+            };
+          }
+        }
+      }
+    } finally {
+      if (!call.own) releaseBuyerPlace();
+      if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent;
+    }
+    const rows = res?.result ?? res?.rows ?? res?.data ?? res;
+    const all = Array.isArray(rows) ? rows : [];
+    const list = all.length > SQL_MAX_ROWS ? all.slice(0, SQL_MAX_ROWS) : all;
+    const cut = all.length > list.length;
+    return {
+      rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS,
+      ...partialFields(all.length, list.length),
+      ...(cut ? { ...(capped.capped ? { matchedIsLowerBound: true } : {}), note: `More than ${SQL_MAX_ROWS} rows matched; the first ${SQL_MAX_ROWS} are returned. Add ORDER BY with a LIMIT, a block_number range or an aggregate to get the rows you need.` } : {}),
+      ...(capped.capped ? {} : { rowCapApplied: false }),
+      ...(Array.isArray(rows) ? {} : { raw: res }),
+    };
+  };
+}
 
 export const CDP_TOOLS = [
   {
@@ -1534,129 +1691,36 @@ export const CDP_TOOLS = [
         example: { rows: [{ txs: 123456 }], rowCount: 1, maxRows: 1000, returned: 1, matched: 1, complete: true, truncated: false },
       },
     },
-    handler: countedSqlCall(async (input, call) => {
-      const sql = String(input?.sql || "").trim();
-      if (!sql) throw bad('"sql" is required');
-      if (sql.length > SQL_MAX_CHARS) throw bad(`"sql" too long (${sql.length} chars, max ${SQL_MAX_CHARS.toLocaleString("en-US")})`);
-      if (!/^\s*(select|with)\b/i.test(sqlNorm(sql))) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
-      const unbounded = solanaRangeRefusal(sql);
-      if (unbounded) { const e = bad(unbounded); e.hint = "add-block-time"; throw e; }
-      const body = { sql };
-      const cacheSeconds = Number(input?.cacheSeconds);
-      if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
-        body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
-      }
-      let capped = cappedSql(sql);
-      body.sql = capped.sql;
-      if (!call.own && !(await takeBuyerPlace(slotWaitMs()))) {
-        throw sqlBusyRefusal(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds.`);
-      }
-      // One query budget for the call: the buyer's query, its retry, and
-      // every recovery run spend it where they are sent.
-      const queries = call.queries;
-      let res;
-      try {
-        try {
-          try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, lineOffset: capped.lineOffset, queries }); }
-          catch (e) {
-            // A subquery the depth reader did not see: the wrapper was one
-            // level too many, so the cap goes in the query's own LIMIT.
-            if (!(e?.nestingTooDeep && capped.lineOffset > 0)) throw e;
-            capped = cappedSql(sql, { wrap: false });
-            body.sql = capped.sql;
-            res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, queries });
-          }
-        }
-        catch (e) {
-          // The whole range ran past the service's window: a plain row
-          // select over a solana.instructions range is read one day at a
-          // time (dayWindowPlan); anything else answers as before.
-          if (e?.pastTimeWindow && !call.own) {
-            const plan = dayWindowPlan(sql);
-            if (plan) return await dayWindowAnswer(plan, body, queries, e);
-          }
-          if (!(e?.resultTooLarge && capped.capped)) throw e;
-          // A row over the service's per-row limit is the usual cause: the
-          // rows that fit are served with the rest counted. A query at the
-          // subquery depth limit cannot take the measure's extra level.
-          if (capped.lineOffset > 0) {
-            const fit = await rowsThatFit(body, capped.inner, queries);
-            if (fit) return fit;
-          }
-          // Otherwise the result was too large to send: the same query
-          // again with a small outer row cap, tried again while the call's
-          // query budget holds (a small result of this kind still fails now
-          // and then), served marked truncated, with the row size measured
-          // so the caller can pick a LIMIT. The original is resent only when
-          // the measured rows show its size was not the cause (below); a
-          // large result resent as written fails the same way.
-          const small = { ...body, sql: capped.limitTo(SQL_RECOVER_ROWS) };
-          let res2 = null, tries = 0, last = null;
-          while (res2 === null) {
-            if (queries.left() <= 0) {
-              const text = tries
-                ? `Even ${SQL_RECOVER_ROWS} rows of this query could not be sent by the query service${tries > 1 ? `, ${tries} times` : ""} (it answers its internal error, HTTP ${last.cdpStatus}; ${sendRuleText()}): select fewer or narrower columns (map and array columns are the usual cause). Nothing was charged.`
-                : queryBudgetSpentError().message;
-              if (await queryServiceHealth(sql) !== "failing") { const e3 = bad(text, 422); e3.hint = "narrow-query"; e3.queryBudgetSpent = true; throw unchargedFields(e3, queries); }
-              throw bad(`CDP's query service is failing (HTTP ${last?.cdpStatus ?? 500} on this query and on a known-good query); retry later. Nothing was charged.`, 502);
-            }
-            tries++;
-            try { res2 = await cdpFetch("POST", "/platform/v2/data/query/run", small, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: capped.lineOffset, queries }); }
-            catch (e2) { if (!e2?.resultTooLarge) throw e2; last = e2; }
-          }
-          const got = res2?.result ?? res2?.rows ?? res2?.data ?? res2;
-          if (!Array.isArray(got)) throw bad("CDP upstream error: the query service answered without a result list. Nothing was charged.", 502);
-          // Fewer rows than the cap: that is the whole result, so the 500 was
-          // not its size; served as a complete answer.
-          if (got.length < SQL_RECOVER_ROWS) { res = res2; }
-          else {
-            const list = got;
-            const rowBytes = Math.round(Buffer.byteLength(JSON.stringify(list), "utf8") / list.length);
-            const fits = Math.max(1, Math.floor(SQL_SEND_LIMIT_BYTES / rowBytes));
-            const ordered = hasOuterOrderBy(capped.inner);
-            // Rows this small cannot have made the whole result too large,
-            // so the service's error was not its size: the original is sent
-            // once more while the call's query budget holds (one attempt,
-            // counted in the budget) and served whole. Refused again, or with
-            // no query left, the small rows are served marked truncated and
-            // the note says which, never that the error was a one-off.
-            const rowsSmall = rowBytes * (SQL_MAX_ROWS + 1) < SQL_SEND_LIMIT_BYTES / 2;
-            let refusedAgain = false, resent = false;
-            if (rowsSmall && queries.left() > 0) {
-              resent = true;
-              try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: capped.lineOffset, queries }); }
-              catch (e3) { if (!e3?.resultTooLarge) throw e3; refusedAgain = true; }
-            }
-            if (!resent || refusedAgain) {
-              const kb = Math.round(SQL_SEND_LIMIT_BYTES / 1e3);
-              const sizeText = rowsSmall
-                ? `so the whole answer fits under about ${kb} KB${refusedAgain ? `, yet the query service refused the full result twice (it answered its internal error both times): set a LIMIT and page with an ORDER BY and OFFSET, or send the query again later.` : `, and the call's query budget of ${SQL_QUERY_BUDGET} queries left no room to send the full query again: set a LIMIT and page with an ORDER BY and OFFSET.`}`
-                : `so a LIMIT of ${Math.min(fits, SQL_MAX_ROWS)} usually keeps an answer under about ${kb} KB: set that, or select fewer or narrower columns, and page with an ORDER BY and OFFSET.`;
-              return {
-                rows: list, rowCount: list.length, maxRows: SQL_RECOVER_ROWS, recovered: "result-size", rowBytes,
-                ...partialFields(list.length, list.length), complete: false, truncated: true, matchedIsLowerBound: true,
-                ...(resent ? { resent: true, refusedAgain: true } : {}),
-                note: `The full result ${rowsSmall ? "was not sent by the query service (it answered its internal error" : `was too large for the query service to send (it answers its internal error`}; ${sendRuleText()}), so the query was run again with LIMIT ${SQL_RECOVER_ROWS} and these are ${ordered ? "its first" : "an arbitrary"} ${list.length} rows${ordered ? "" : " (it has no ORDER BY)"}. A row of this result is about ${Math.max(1, Math.round(rowBytes / 1024))} KB, ${sizeText}`,
-              };
-            }
-          }
-        }
-      } finally {
-        if (!call.own) releaseBuyerPlace();
-        if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent;
-      }
-      const rows = res?.result ?? res?.rows ?? res?.data ?? res;
-      const all = Array.isArray(rows) ? rows : [];
-      const list = all.length > SQL_MAX_ROWS ? all.slice(0, SQL_MAX_ROWS) : all;
-      const cut = all.length > list.length;
-      return {
-        rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS,
-        ...partialFields(all.length, list.length),
-        ...(cut ? { ...(capped.capped ? { matchedIsLowerBound: true } : {}), note: `More than ${SQL_MAX_ROWS} rows matched; the first ${SQL_MAX_ROWS} are returned. Add ORDER BY with a LIMIT, a block_number range or an aggregate to get the rows you need.` } : {}),
-        ...(capped.capped ? {} : { rowCapApplied: false }),
-        ...(Array.isArray(rows) ? {} : { raw: res }),
-      };
-    }),
+    handler: countedSqlCall(sqlRun(SQL_ROUTE)),
+  },
+  {
+    route: "POST /api/onchain-sql-range",
+    name: "Onchain SQL over a month (long ranges read by day)",
+    slug: "onchain-sql-range",
+    category: "wallet",
+    price: "$0.33",
+    description:
+      `Run the same read-only SQL as onchain-sql (the same tables, dialect and rules) over long ranges in one call. A plain row select on solana.instructions whose whole block_time range runs past the query service's time window is read one UTC day at a time, up to ${SQL_RANGE_MAX_DAYS} days, and the rows are merged in block_time order, up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows. When the call's time or the row cap ends the walk early, the answer is served partial and marked in fields (complete, truncated, windowed with the days read, coveredFrom and coveredTo) with the range left to read. Aggregates and every other query are answered exactly as onchain-sql answers them.`,
+    tags: [...SHARED_TAGS, "sql", "onchain-data", "long-range", "month", "backfill", "history", "instructions"],
+    discovery: {
+      bodyType: "json",
+      input: { sql: "SELECT block_slot, block_time, executing_account FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY AND executing_account = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' ORDER BY block_time LIMIT 100" },
+      inputSchema: {
+        properties: {
+          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars) over the onchain-sql tables (base.*, base_sepolia.*, solana.instructions; a query on solana.instructions needs a block_time range). A plain row select on solana.instructions (one table, no aggregate, GROUP BY, DISTINCT, JOIN or subquery, ORDER BY block_time if any) over more than a day and up to ${SQL_RANGE_MAX_DAYS} days whose whole range runs past the query service's time window is read one UTC day at a time and merged in order. Returns up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows; a walk that ends early is marked partial in fields.` },
+          cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900)." },
+        },
+        required: ["sql"],
+      },
+      output: {
+        example: {
+          rows: [{ block_slot: 377412001, block_time: "2026-10-24T00:00:01Z", executing_account: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }],
+          rowCount: 1, maxRows: SQL_MAX_ROWS, returned: 1, matched: 1, complete: true, truncated: false,
+          windowed: { by: "day", days: 31, daysRead: 31, order: "asc", from: "2026-10-23T12:00:00.000Z", to: "2026-11-22T12:00:00.000Z" },
+        },
+      },
+    },
+    handler: countedSqlCall(sqlRun(SQL_RANGE_ROUTE), { stats: false }),
   },
   {
     route: "GET /api/onchain-sql-schema",
@@ -1680,7 +1744,8 @@ export const CDP_TOOLS = [
 ];
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CDP_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+// onchain-sql-range runs under its own run budget (SQL_RANGE_RUN_SECONDS).
+underBudgetAll(CDP_TOOLS, (t) => (t.slug === "onchain-sql-range" ? SQL_RANGE_RUN_SECONDS * 1000 : PAYMENT_WINDOW_BUDGET_MS));
 
 /** One of this server's own reads through the onchain-sql handler: the same
  *  query handling and send pacing, outside the buyers' in-flight cap. */

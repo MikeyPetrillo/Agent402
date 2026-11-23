@@ -349,6 +349,7 @@
     "npv",
     "number-format",
     "onchain-sql",
+    "onchain-sql-range",
     "onchain-sql-schema",
     "onramp-link",
     "openapi-diff",

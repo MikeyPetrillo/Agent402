@@ -89,7 +89,7 @@ export const METERED_SLUGS = new Set([
   "nft-collection", "nft-floor",
   "l2-gas-comparison",
   // CDP (Coinbase Developer Platform keys)
-  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
+  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema", "onchain-sql-range",
 ]);
 
 /** Pack slugs (the name after "skill-") whose advertised toolSlugs reach a

@@ -62,6 +62,9 @@ export const EVM_RUN_SECONDS = Object.freeze({
   // the fetch (25 s), the decode (60 s) and the upstream cap (140 s), in
   // src/tools/stt-kit.js (TRANSCRIBE_LONG_RUN_SECONDS, pinned equal).
   "transcribe-long": 230,
+  // onchain-sql-range reads a long range one UTC day at a time: its handler
+  // budget, src/tools/cdp-kit.js SQL_RANGE_RUN_SECONDS (pinned equal).
+  "onchain-sql-range": 180,
 });
 
 /** The sentence a slow route's description carries (server.js appends it). */
