@@ -13,6 +13,23 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 const deploySteps = wf.jobs?.deploy?.steps || [];
+
+// A run that publishes packages deploys only after they are published, so the
+// install lines the new build prints never name a version npm does not hold
+// yet. A run with no publish (skipped) deploys as before; a failed publish
+// holds the deploy. Every earlier gate stays in the deploy job's condition.
+{
+  const deploy = wf.jobs?.deploy || {};
+  const needs = [].concat(deploy.needs || []);
+  const cond = String(deploy.if || "").replace(/\s+/g, " ");
+  ok(needs.includes("publish"), "the deploy job needs the publish job (it waits while publish runs)");
+  ok(/\(\s*needs\.publish\.result == 'success' \|\| needs\.publish\.result == 'skipped'\s*\)/.test(cond), "the deploy job runs after a published or skipped publish, never after a failed or cancelled one");
+  ok(/^!cancelled\(\)/.test(cond.trim()), "the deploy condition keeps !cancelled() (a skipped publish does not skip the deploy)");
+  const lanes = needs.filter((n) => /^test(-|$)/.test(n));
+  ok(lanes.length >= 4 && lanes.every((l) => cond.includes(`needs.${l}.result == 'success'`)), `every test lane's success is still required (${lanes.length} lanes)`);
+  ok(cond.includes("needs.tree-gate.outputs.skip == 'true'") && cond.includes("github.ref == 'refs/heads/main'") && cond.includes("inputs.mode == 'deploy'") && cond.includes("needs.markers.outputs.deploy == 'true'"), "the tree-gate, push-to-main, dispatch and marker gates are unchanged");
+  ok(![].concat(wf.jobs?.publish?.needs || []).includes("deploy"), "the publish job does not wait for the deploy (no cycle)");
+}
 const upserts = deploySteps.filter((s) => /variableCollectionUpsert/.test(String(s.run || "")));
 ok(upserts.length >= 1, `the deploy job holds the variable upsert (${upserts.length})`);
 for (const s of upserts) {
