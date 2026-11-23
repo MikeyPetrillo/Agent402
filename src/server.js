@@ -2663,7 +2663,13 @@ for (const tool of buildFlightTools({
 // identity error — a charged failure. Flag them here, in one place over the
 // fully-assembled catalog, so the paywall offers EVM rails only for these
 // routes. Every other tool is untouched and keeps all configured chains.
+// A route that may be paid before it runs (src/settle-first.js) is marked, so
+// a surface that says its payment settles only on the answer carries the
+// settle-first sentence (src/settle-first-copy.js settleFirstClause). Not
+// enumerable: no listing that spreads a definition picks it up.
+const SETTLE_FIRST_COPY_SLUGS = settleFirstSlugs(GATEWAY_TOOLS_ENABLED);
 for (const def of Object.values(CATALOG)) {
+  if (SETTLE_FIRST_COPY_SLUGS.has(def.slug)) Object.defineProperty(def, "settlesFirst", { value: true, configurable: true });
   // A proof-of-work tool answers 400, with the field named, when its input
   // holds a value that cannot be coerced (src/caller-input-errors.js); any
   // other bare error stays a 500. Wrapped here, over the assembled catalog,
@@ -2679,7 +2685,7 @@ for (const def of Object.values(CATALOG)) {
   const runS = EVM_RUN_SECONDS[def.slug];
   if (runS && !def.runSeconds) {
     def.runSeconds = runS;
-    def.description = `${String(def.description || "").trim()} ${runTimeNote(runS)}`;
+    def.description = `${String(def.description || "").trim()} ${runTimeNote(runS, { settlesFirst: def.settlesFirst === true })}`;
   }
   // The route's async profile (src/slow-routes.js): which routes run as a job
   // on "Prefer: respond-async", which are advertised as slow, and the numbers
