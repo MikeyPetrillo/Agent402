@@ -12,6 +12,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { isHost, urlMatches } from "./lib/url-host.js";
 import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders } from "../src/tools/solana-intel-kit.js";
+import { RUGCHECK_ATTRIBUTION, JUPITER_ATTRIBUTION } from "../src/data-attribution.js";
 
 const realFetch = globalThis.fetch;
 let pass = 0, fail = 0;
@@ -204,6 +205,7 @@ try {
   ok(r.authorities.mintAuthorityDisabled === true && r.authorities.freezeAuthorityDisabled === true, "safety: authorities from Jupiter audit");
   ok(r.holders.topHoldersPct === 15.28 && r.holders.devMints === 1, "safety: holder facts");
   ok(Array.isArray(r.source) && r.source.includes("rugcheck") && typeof r.fetchedAt === "string", "safety: source + fetchedAt");
+  ok(r.credit === RUGCHECK_ATTRIBUTION, "safety: the answer credits RugCheck by name and link");
 
   ok(r.fullReport === null && !calls.some((c) => c.url.endsWith("/report")), "safety: summary + Jupiter carried every field, so the full report is never read");
 
@@ -255,6 +257,7 @@ try {
   ok(r.launchpad === "Pump.Fun" && r.totalHolders === 2873512 && r.verification.jupVerified === true && r.transferFee.pct === 0, "report: launchpad/holders/verification/transferFee");
   ok(!("knownAccounts" in r) && JSON.stringify(r).length < 4000, "report: compact (no knownAccounts echo)");
   ok(r.source === "rugcheck" && typeof r.fetchedAt === "string", "report: source + fetchedAt");
+  ok(r.credit === RUGCHECK_ATTRIBUTION, "report: the answer credits RugCheck by name and link");
 
   // --------------------------------------------------------------------------
   // sol-token-holders
@@ -304,6 +307,7 @@ try {
   ok(r.holders[0].pct === 30 && r.holders[1].pct === 10, "holders: RPC pct is measured against total supply");
   ok(r.concentration && r.concentration.top1Pct === 30, "holders: concentration is computed on the fallback rows");
   ok(r.holdersSource === "solana-rpc" && r.source === "rugcheck+rpc", "holders: the fallback names its own source");
+  ok(r.credit === RUGCHECK_ATTRIBUTION, "holders: the answer credits RugCheck (its holder count) on the fallback path too");
   // The insider flag only exists on the RugCheck path. Saying so is the
   // difference between "no insiders" and "we did not measure insiders".
   ok(r.insiderFlagAvailable === false && r.holders.every((x) => x.insider === false), "holders: insider flag declared unavailable on the RPC path");
@@ -682,6 +686,21 @@ const kenv = { JUPITER_API_BASE: "https://api.jup.ag", JUPITER_API_KEY: "k-test"
 ok(jupiterHeaders("https://api.jup.ag/price/v3?ids=x", kenv)["x-api-key"] === "k-test", "Jupiter: the key rides requests to the configured host");
 ok(!jupiterHeaders("https://api.rugcheck.xyz/v1/x", kenv)["x-api-key"] && !jupiterHeaders("https://api.jup.ag.evil.example/x", kenv)["x-api-key"], "Jupiter: the key never goes to another host, including a lookalike");
 ok(Object.keys(jupiterHeaders("https://lite-api.jup.ag/price/v3", {})).length === 0, "Jupiter: no key configured, no header");
+
+// RugCheck credit on the catalog: the two read from it alone end their
+// description with it; the safety read keeps Jupiter's sentence there; all
+// three examples carry it.
+for (const slug of ["sol-token-report", "sol-token-holders"]) {
+  const t = SOLANA_INTEL_TOOLS.find((x) => x.slug === slug);
+  ok(t.attribution === "rugcheck" && t.description.endsWith(RUGCHECK_ATTRIBUTION), `${slug}: description ends with the RugCheck credit`);
+}
+{
+  const t = SOLANA_INTEL_TOOLS.find((x) => x.slug === "sol-token-safety");
+  ok(t.attribution === "jupiter" && t.description.endsWith(JUPITER_ATTRIBUTION), "sol-token-safety: description keeps Jupiter's sentence");
+}
+for (const slug of ["sol-token-safety", "sol-token-report", "sol-token-holders"]) {
+  ok(SOLANA_INTEL_TOOLS.find((x) => x.slug === slug).discovery.output.example.credit === RUGCHECK_ATTRIBUTION, `${slug}: published example carries the RugCheck credit`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

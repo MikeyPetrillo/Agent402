@@ -36,7 +36,7 @@ import { completeSynthesis, proseOf, reportChat, costOf, settleWithin } from "..
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase } from "./solana-intel-kit.js";
-import { attribute } from "../data-attribution.js";
+import { attribute, addCredit, RUGCHECK_ATTRIBUTION } from "../data-attribution.js";
 import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { testSeamOn } from "../test-seams.js";
@@ -448,7 +448,9 @@ ${riskBlock}`;
     // Token metadata, pool labels and DEX labels inside this payload are written
     // by third parties (anyone can mint a token), so the whole result is marked
     // as data-not-instructions for any downstream tool-using agent.
-    return markUntrusted(out);
+    // RugCheck's report and summary are this brief's risk evidence: a brief
+    // built on either carries its credit (src/data-attribution.js).
+    return markUntrusted(probes.report || probes.safety ? addCredit(out, RUGCHECK_ATTRIBUTION) : out);
   };
 }
 
@@ -497,6 +499,7 @@ const OUT_EXAMPLE = {
     disclaimer: "Evidence from public Solana data sources (RugCheck, DexScreener, Jupiter) at the time of the request. Not investment advice, not a verdict, not exhaustive.",
   },
   untrustedContent: true,
+  credit: RUGCHECK_ATTRIBUTION,
 };
 
 export const TOKEN_BRIEF_TOOLS = [
