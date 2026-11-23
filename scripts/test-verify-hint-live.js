@@ -9,17 +9,16 @@
 // the exact credential that failed, and that a bare 402 stays untouched.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { decodeFunctionData, encodeFunctionResult } from "viem";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
-let pass = 0, facilitator = null, proc = null;
+let B = "";
+let pass = 0, facilitator = null, srv = null;
 const fail = (m) => {
   console.error("FAIL:", m);
-  if (typeof serverLog !== "undefined" && serverLog.length) { console.error("--- server output (last lines) ---"); for (const l of serverLog) console.error(l); console.error("--- end server output ---"); }
-  proc?.kill("SIGKILL"); facilitator?.close(); process.exit(1);
+  const serverLog = (srv?.log() || "").split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 400)).slice(-80);
+  if (serverLog.length) { console.error("--- server output (last lines) ---"); for (const l of serverLog) console.error(l); console.error("--- end server output ---"); }
+  srv?.child.kill("SIGKILL"); facilitator?.close(); process.exit(1);
 };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,25 +47,25 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
-proc = spawn(process.execPath, ["src/server.js"], {
+const bootOpts = {
+  stores: "verify-hint-live",
+  timeoutMs: 60_000,
   env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "",
+    FREE_MODE: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
   },
-  // Keep the server's own output: a one-off in CI (run 33579827783, 2026-09-02)
-  // answered 402 to the first paid request with the stub facilitator seeing
-  // ZERO verifies, and with stdio ignored the reason the paywall logged was
-  // gone with the runner. The last lines are printed on failure only.
-  stdio: ["ignore", "pipe", "pipe"],
-});
-const serverLog = [];
-const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 400)); } if (serverLog.length > 80) serverLog.splice(0, serverLog.length - 80); };
-proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
+  // Keep the server's own output (bootServer holds it): a one-off in CI (run
+  // 33579827783, 2026-09-02) answered 402 to the first paid request with the
+  // stub facilitator seeing ZERO verifies, and with stdio ignored the reason
+  // the paywall logged was gone with the runner. The last lines are printed on
+  // failure only.
+};
 
 const credential = (accepted, nonce) => Buffer.from(JSON.stringify({
   x402Version: 2, resource: accepted.resource, accepted,
@@ -74,7 +73,8 @@ const credential = (accepted, nonce) => Buffer.from(JSON.stringify({
 })).toString("base64");
 
 try {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
+  srv = await bootServer(bootOpts);
+  B = srv.url;
   const bare = await fetch(`${B}/api/hash`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "x" }) });
   ok(bare.status === 402, `unpaid POST /api/hash -> 402 (got ${bare.status})`);
   const req402 = JSON.parse(Buffer.from(bare.headers.get("payment-required"), "base64").toString("utf-8"));
@@ -129,5 +129,5 @@ try {
   ok(Object.keys(burst).length === 1 && burst["402->402"] === 150, `150 refused credentials each resent at once: every resend is the hinted 402 (${JSON.stringify(burst)})`);
 
   console.log(`\nPASS - ${pass} checks (402 hint on both verify-failure shapes, bound to the credential)`);
-  proc.kill("SIGKILL"); facilitator.close(); process.exit(0);
+  srv.child.kill("SIGKILL"); facilitator.close(); process.exit(0);
 } catch (e) { fail(e?.stack || String(e)); }

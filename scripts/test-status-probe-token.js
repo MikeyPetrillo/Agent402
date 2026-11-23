@@ -17,10 +17,9 @@
 // else, and that adding it broke nothing that used the operator token before.
 // Boots the real server, because the value of the check is in the route wiring.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { walk } from "./lib/shipped-files.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -28,17 +27,12 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const OP = "operator-root-token-aaaaaaaaaaaaaaaa";
 const PROBE = "status-probe-only-token-bbbbbbbbbbbb";
-const PORT = await getFreePort();
-const base = `http://127.0.0.1:${PORT}`;
-
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), AGENT402_OPERATOR_TOKEN: OP, STATUS_PROBE_TOKEN: PROBE, X402_INDEX_CRAWL: "off" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let serverLog = "";
-child.stdout.on("data", (d) => { serverLog += d; });
-child.stderr.on("data", (d) => { serverLog += d; });
-const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.exit(code); };
+let srv = null, bootError = "";
+try {
+  srv = await bootServer({ stores: "status-probe-token", timeoutMs: 60_000, env: { FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: OP, STATUS_PROBE_TOKEN: PROBE, X402_INDEX_CRAWL: "off" } });
+} catch (e) { bootError = e.message; }
+const base = srv?.url;
+const done = (code) => { try { srv?.child.kill("SIGKILL"); } catch { /* */ } process.exit(code); };
 
 const probeBody = JSON.stringify({ source: "test", ts: Date.now(), components: { api: { ok: true } } });
 const postProbe = (token) =>
@@ -49,13 +43,9 @@ const postProbe = (token) =>
   });
 
 (async () => {
-  let up = false;
-  for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* */ }
-    await wait(500);
-  }
+  const up = Boolean(srv);
   ok(up, "server booted");
-  if (!up) { console.error(serverLog.slice(-800)); return done(1); }
+  if (!up) { console.error(bootError.slice(-800)); return done(1); }
 
   // 1. It opens the one door.
   const r1 = await postProbe(PROBE);
