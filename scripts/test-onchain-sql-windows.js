@@ -250,8 +250,10 @@ try {
   // ---- the description states the per-call limit ----
   {
     const tool = CDP_TOOLS.find((t) => t.slug === "onchain-sql");
-    const text = `${tool.description} ${tool.discovery.inputSchema.properties.sql.description}`;
-    ok(text.includes(`at most ${SQL_WINDOW_MAX_QUERIES} queries per call`) && text.includes(`${SQL_WINDOW_MAX_QUERIES - 1} ${SQL_WINDOW_MAX_QUERIES - 1 === 1 ? "day" : "days"}`) && /windowed\.stoppedBy/.test(text), "the description states the per-call query limit, the days it reads and where the next range is named");
+    const days = SQL_WINDOW_MAX_QUERIES - 1;
+    for (const [where, text] of [["tool description", tool.description], ["sql field description", tool.discovery.inputSchema.properties.sql.description]]) {
+      ok(text.includes(`at most ${SQL_WINDOW_MAX_QUERIES} queries per call`) && text.includes(`${days} ${days === 1 ? "day" : "days"}`) && /windowed\.stoppedBy/.test(text), `the ${where} states the per-call query limit, the days it reads and where the next range is named`);
+    }
   }
   // ---- aggregates and other queries are passed through unchanged ----
   {
@@ -310,6 +312,7 @@ try {
   ok(prof?.slow === true && prof.maxSeconds === SQL_RANGE_RUN_SECONDS && isLongRunningSlug("onchain-sql-range"), "it runs as a job (slow route) and is EVM exact only (long-running)");
   ok(WALLET_ONLY_SLUGS.has("onchain-sql-range"), "it is wallet-only");
   ok(new RegExp(`up to ${SQL_RANGE_MAX_DAYS} days`).test(RANGE.description) && /partial/.test(RANGE.description) && /one UTC day at a time/.test(RANGE.description), "its description names the day reading, the most days and the partial marking");
+  ok(/x402 exact on EVM chains/.test(RANGE.description) && /runs as a job \(Prefer: respond-async\)/.test(RANGE.description), "its description names the payment it takes and that it runs as a job");
 
   // ---- a 31-day walk in one call, merged in order ----
   {
