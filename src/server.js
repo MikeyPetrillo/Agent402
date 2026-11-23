@@ -5163,8 +5163,10 @@ app.get("/reports/public/:publicId", async (req, res, next) => {
   const headline = reportHeadline(r, label);
   const description = `A ${midSentence(label)} on "${r.input}" from Agent402, shared by its buyer: ${r.sources.length} cited sources, ${r.tables.length} data tables. Read it free, then get one for your own subject.`;
   htmlCache(res, 300, 900).send(reportDeliveryPage(r.publicId, {
+    // Served already drawn, like a sample: a crawler and a reader with no
+    // script get the report itself, and the viewer only wires its buttons.
     api: "/api/reports/public/", baseUrl: BASE_URL, robots: "index, follow, max-image-preview:large", waitCopy: "Loading the report.", note: "",
-    title: headline, description, canonical,
+    record: r, title: headline, description, canonical,
     jsonLd: [
       { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Agent402", item: `${BASE_URL}/` }, { "@type": "ListItem", position: 2, name: "Reports", item: `${BASE_URL}/reports` }, { "@type": "ListItem", position: 3, name: headline, item: canonical }] },
       { "@type": "Report", "@id": `${canonical}#report`, headline, name: headline, about: r.input, isAccessibleForFree: true, ...(r.at ? { datePublished: r.at } : {}), author: siteOrgRef(BASE_URL), publisher: siteOrgRef(BASE_URL), mainEntityOfPage: canonical, description: description.slice(0, 300) },
