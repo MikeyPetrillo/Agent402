@@ -20,8 +20,7 @@ import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const dir = mkdtempSync(join(tmpdir(), "a402-remove-"));
 const FILE = join(dir, "removed-origins.json");
@@ -183,25 +182,17 @@ idx.restoreOrigin(OWN); idx.restoreOrigin(REG);
 // Booted leg: auth, routes, register refusal.
 idx.__testResetSubmitted();
 const TOKEN = `op-${TAG}-secret-token`;
-const PORT = await getFreePort();
-const base = `http://127.0.0.1:${PORT}`;
 const bootFile = join(dir, "boot-removed.json");
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), AGENT402_OPERATOR_TOKEN: TOKEN, X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", REMOVED_ORIGINS_FILE: bootFile },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let log = "";
-child.stdout.on("data", (d) => { log += d; });
-child.stderr.on("data", (d) => { log += d; });
-const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+let srv = null;
+const bootOpts = {
+  stores: "seller-remove",
+  timeoutMs: 60_000,
+  env: { FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN, X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", REMOVED_ORIGINS_FILE: bootFile },
+};
 try {
-  let up = false;
-  for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-    await wait(500);
-  }
-  if (!up) console.error(log.slice(-800));
-  ok(up, "server booted");
+  srv = await bootServer(bootOpts);
+  const base = srv.url;
+  ok(true, "server booted");
   const post = (path, body, headers = {}) => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
   const auth = { authorization: `Bearer ${TOKEN}` };
   const B = `https://booted-${TAG}.example.com`;
@@ -244,7 +235,7 @@ try {
   j = await (await fetch(`${base}/__operator/sellers/removed.json`, { headers: auth })).json();
   ok(j.total === 0, "list empty after restore");
 } finally {
-  try { child.kill("SIGKILL"); } catch { /* gone */ }
+  try { srv?.child.kill("SIGKILL"); } catch { /* gone */ }
   rmSync(dir, { recursive: true, force: true });
 }
 console.log(`\ntest-seller-remove: ${n} assertions passed`);
