@@ -96,7 +96,7 @@ const ROWS = [
 ];
 
 // ---- one stub server: operator ledger, our 402, Base RPC, Algorand indexer ----
-const seen = { claims: 0, claimIds: new Set(), updatesOtherThanClaim: 0, rpcMethods: [], sendRaw: 0 };
+const seen = { claims: 0, claimIds: new Set(), updatesOtherThanClaim: 0, rpcMethods: [], sendRaw: 0, sdn: 0 };
 const accepts = [
   { scheme: "exact", network: "eip155:8453", payTo: TREASURY_EVM, asset: USDC_BASE, amount: "1000" },
   { scheme: "exact", network: ALGO_NET, payTo: TREASURY_ALGO, asset: "31566704", amount: "1000" },
@@ -118,6 +118,14 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/hash" || url.pathname === "/api/solidity-scan") {
     const hdr = Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64");
     return json(402, {}, { "payment-required": hdr });
+  }
+  // The payout screen's list (the job screens every recipient before it
+  // claims): a fixed sample export served here, so the job never downloads
+  // the live list and an unscreened payout stays held, as in production.
+  if (url.pathname === "/sdn") {
+    seen.sdn++;
+    res.writeHead(200, { "content-type": "application/xml" });
+    return res.end(readFileSync(join(root, "scripts/fixtures/ofac-sdn-sample.xml")));
   }
   if (url.pathname === "/rpc") {
     const { method, params, id } = JSON.parse(body || "{}");
@@ -239,6 +247,7 @@ function runJob(extraEnv) {
       // not valid; and the stub refuses every claim before a send could start.
       REFUND_EVM_KEY: "0x" + "11".repeat(32),
       REFUND_ALGORAND_MNEMONIC: "not a mnemonic",
+      SANCTIONS_LIST_URL: `${base}/sdn`,
       ...extraEnv,
     };
     const child = spawn(process.execPath, [join(root, "scripts/refund-run.js")], { cwd: root, env });
@@ -292,6 +301,7 @@ ok(confirmed(shipped.out, 6) && shipped.claimed.has(6),
   "control: a disconnect on an ordinary route verifies and is claimed for repayment, as before");
 ok(shipped.claimed.has(1) && shipped.claimed.has(3),
   "control: a failed answer on a router tier and a treasury-paid debt are claimed for repayment, as before");
+ok(seen.sdn > 0 && !/payout screen refused \(screen did not run|list not loaded\)/.test(shipped.out), `the payout screen ran on the suite's own list, never the live download (${seen.sdn} reads)`);
 ok(heldIds(dry.out, REPEAT_HANGUP_HOLD).join(",") === "7" && heldIds(shipped.out, REPEAT_HANGUP_HOLD).join(",") === "7"
    && !confirmed(shipped.out, 7) && !shipped.claimed.has(7),
   `a disconnect booked past the forgiveness budget is held in its own bucket and never claimed by default (${heldIds(shipped.out, REPEAT_HANGUP_HOLD)})`);
