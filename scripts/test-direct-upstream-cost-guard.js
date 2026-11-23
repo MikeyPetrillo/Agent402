@@ -24,12 +24,9 @@
 //
 //   node scripts/test-direct-upstream-cost-guard.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { ownStoreEnv } from "./lib/own-stores.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { urlMatches } from "./lib/url-host.js";
 
 delete process.env.UPSTREAM_COSTS_JSON;
@@ -405,17 +402,17 @@ setEnv(ON);
 setEnv({});
 {
   setListing(listed(2, 4)); setEndpoints([[4, 8]]);
-  const PORT = await getFreePort();
   const TOKEN = "cost-guard-test-operator-token-0123456789";
-  const log = [];
-  const child = spawn(process.execPath, ["--import", "./scripts/lib/loopback-only-preload.js", "src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: { ...process.env, ...ownStoreEnv("direct-cost-guard"), PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, ...ON },
-    stdio: ["ignore", "pipe", "pipe"],
+  // The listening line only: this process's fetch is stubbed, so readiness is
+  // read below through the real one.
+  const srv = await bootServer({
+    stores: "direct-cost-guard",
+    args: ["--import", "./scripts/lib/loopback-only-preload.js"],
+    readyPath: null,
+    env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, ...ON },
   });
-  child.stdout.on("data", (d) => log.push(String(d)));
-  child.stderr.on("data", (d) => log.push(String(d)));
-  const url = `http://127.0.0.1:${PORT}`;
+  const child = srv.child;
+  const url = srv.url;
   let up = false;
   for (let i = 0; i < 240 && !up; i++) {
     try { up = (await realFetch(`${url}/health`)).ok; } catch { /* booting */ }
@@ -440,13 +437,13 @@ setEnv({});
     ok(r.status === 200 && j.priceBook?.word === "ok" && row?.state === "ok" && Math.abs(row.direct.prompt - 2 * UNIT) < 1e-9 && Math.abs(row.openrouter.cheapestCompletion - 8 * UNIT) < 1e-9, "the operator view carries the listed figures");
     ok(typeof row?.measured?.minSample === "number" && typeof j.priceBook.minSaving === "number" && typeof j.breaker?.threshold === "number", "and the measure, the threshold and the breaker");
     ok(!JSON.stringify(pub).includes(perToken(2)) && !/[0-9]\.[0-9]{3,}/.test(JSON.stringify(pub.directUpstream)), "the public view carries no figure");
-    const all = log.join("");
+    const all = srv.log();
     ok(/\[direct-upstream\] price book: ok/.test(all) && ![2, 4, 8].some((u) => all.includes(perToken(u))) && !/cheap/i.test(all.split("\n").filter((l) => l.includes("[direct-upstream]")).join("")), "the boot log names the word and no price");
     ok(direct.gets.length > 0 && or.gets.some((u) => u.includes("/endpoints")), "the booted server read both stubs (no other host is reachable under the preload)");
     ok(or.getHeaders.filter((h) => h.url.includes("/endpoints")).every((h) => h.title) && direct.getHeaders.every((h) => !h.title), "the catalog read carries the app attribution; the direct listing read does not");
   } finally {
     child.kill("SIGTERM");
-    await new Promise((r) => { child.once("exit", r); setTimeout(r, 5000); });
+    await new Promise((r) => { if (srv.exited()) return r(); child.once("exit", r); setTimeout(r, 5000); });
   }
 }
 
