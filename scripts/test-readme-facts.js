@@ -32,12 +32,12 @@ const surfaces = ["README.md", "package.json", "llms-install.md", ...readdirSync
 const texts = surfaces.map((f) => { try { return [f, read(f)]; } catch { return null; } }).filter(Boolean);
 
 // --- pack count ---
-const PACK_CLAIM = /\b(\d+)\+ (?:curated )?(?:multi-tool )?(?:skill packs|multi-tool (?:workflows|skill packs))\b/gi;
+const PACK_CLAIM = /\b(\d+)\+ (?:curated )?(?:multi-tool )?(?:(?:skill )?packs|multi-tool (?:workflows|skill packs))\b/gi;
 const packClaims = texts.flatMap(([f, t]) => [...t.matchAll(PACK_CLAIM)].map((m) => [f, Number(m[1])]));
 ok(packClaims.length >= 5, `the pack claim is read on several surfaces (${packClaims.length})`);
 const wrongPacks = packClaims.filter(([, n]) => n !== PACK_BRAND_FLOOR);
 ok(wrongPacks.length === 0, `every skill-pack claim says ${PACK_BRAND_FLOOR}+, the floor sync-count.js enforces${wrongPacks.length ? `: ${wrongPacks.map(([f, n]) => `${f} ${n}+`).join(", ")}` : ""}`);
-ok([..."some 70+ skill packs".matchAll(PACK_CLAIM)].length === 1, "control: a stale claim is read");
+ok([..."some 70+ skill packs, all 70+ packs, 70+ curated multi-tool workflows".matchAll(PACK_CLAIM)].length === 3, "control: a stale claim is read in each form");
 
 // --- report range ---
 const r = agentReportPriceRange();
