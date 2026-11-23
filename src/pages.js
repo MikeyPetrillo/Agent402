@@ -82,7 +82,7 @@ export const CATEGORIES = {
   crypto: { label: "Crypto & onchain data", blurb: "Keyless reads across chains: token prices and metadata, order books, stablecoin peg health, wallet balances and transaction history, NFT holdings and metadata, gas snapshots." },
   chain: { label: "Sanctions & address screening", blurb: "Sanctions checks: screen any blockchain address against every digital currency address on the OFAC SDN list, or a person or company name against the list's entries, with the sanctioned entity named on a match." },
   wallet: { label: "Wallet operations", blurb: "Multi-chain balance reads, testnet funding, onramp links, and SQL over onchain data. Non-custodial: the agent signs with its own key." },
-  ai: { label: "AI & compute", blurb: "Inference, generation and sandboxed execution priced per call: chat tiers, image generation, text-to-speech, speech-to-text, and code execution in an isolated sandbox." },
+  ai: { label: "AI & compute", blurb: "Inference and generation priced per call: chat tiers, image generation, text-to-speech and speech-to-text." },
   "skill-pack": { label: "Skill packs", blurb: "Multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails. Cheaper to integrate than orchestrating the steps yourself." },
   "date-time": { label: "Calendar & date math", blurb: "ISO weeks, leap years, day-of-year, epoch conversion, and movable-feast dates - the calendar edge cases that are easy to get subtly wrong." },
   research: { label: "Market & demand research", blurb: "Analyzed reads over this catalog's own demand and the open x402 ecosystem: what agents ask for, what sells, and company research." },

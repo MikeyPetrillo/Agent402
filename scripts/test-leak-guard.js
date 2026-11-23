@@ -50,7 +50,6 @@ process.env.DATABENTO_API_KEY = "db-LEAKCANARY00000000000000000000"; // public-I
 process.env.STOCK_DATA_PROVIDER = "databento";
 
 process.env.ALCHEMY_API_KEY = "alchemy-LEAKCANARY0000";
-process.env.E2B_API_KEY = "e2b_LEAKCANARY0000"; // code-run-kit (E2B sandbox)
 delete process.env.POSTHOG_API_KEY; // telemetry must stay a no-op
 process.env.POSTHOG_TEST_CAPTURE = "1";
 
@@ -89,7 +88,6 @@ import { CHAIN_TOOLS } from "../src/tools/chain-kit.js";
 import { DEX_TOOLS } from "../src/tools/dex-kit.js";
 import { NFT_MARKET_TOOLS } from "../src/tools/nft-market-kit.js";
 import { MEV_AND_L2_TOOLS } from "../src/tools/mev-and-l2-kit.js";
-import { CODE_RUN_TOOLS } from "../src/tools/code-run-kit.js";
 import { redactSecrets } from "../src/tools/redact.js";
 // b20-kit AND x402-kit bake the Alchemy RPC URL into a MODULE-LOAD const, and
 // ES `import` is hoisted above the env assignments above — so a static import
@@ -388,28 +386,6 @@ for (const { slug, handler, input, mode: m } of ALCHEMY_ERROR_CASES) {
   ok(sawCanaryCred, "x402 tx-status [rpc-error-200] mock received the robinhood Alchemy-keyed RPC URL (test validity)");
   const rhErr = `https://robinhood-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}: {"error":"boom"}`;
   ok(!CANARIES.some((c) => redactSecrets(rhErr).includes(c)), "x402: redactSecrets scrubs the Alchemy key baked into the robinhood RPC URL");
-}
-
-// code-run-kit (E2B sandbox) — E2B_API_KEY rides Sandbox.create({ apiKey });
-// both catch branches echo ${e.message} (E2B-SDK text wrapping the upstream
-// error). The installed E2B SDK sanitizes its own errors (generic
-// "Unauthorized" messages that never contain the key), so this is a latent /
-// defensive fix like cdp/b20/x402: drive the handler for the "no leak today"
-// guarantee, then assert the redactSecrets wrap on BOTH echo-site templates
-// scrubs an upstream reply that DID reflect the key (regression-locks the fix
-// against a future SDK/upstream that echoes the key verbatim).
-{
-  const codeRun = bySlug(CODE_RUN_TOOLS, "code-run");
-  let out, err = null;
-  try { out = await codeRun({ code: "print(1)" }); }
-  catch (e) { err = e; out = { thrown: e.message, statusCode: e.statusCode, ...e }; }
-  ok(!CANARIES.some((c) => scan(out).includes(c)), "code-run [sandbox-create error] no secret leak (E2B SDK error is sanitized)");
-  ok(err !== null && [502, 503, 504].includes(err.statusCode), `code-run surfaced a clean upstream error (got ${err ? err.statusCode : "no error"})`);
-  // Both echo sites, redact-wrapped — an upstream that reflects the key must not survive.
-  const createEcho = `Sandbox creation failed: api key '${process.env.E2B_API_KEY}' not found`;
-  const execEcho = `Execution failed: unauthorized for key ${process.env.E2B_API_KEY}`;
-  ok(!CANARIES.some((c) => redactSecrets(createEcho).includes(c)), "code-run: redactSecrets scrubs E2B_API_KEY from the sandbox-creation echo");
-  ok(!CANARIES.some((c) => redactSecrets(execEcho).includes(c)), "code-run: redactSecrets scrubs E2B_API_KEY from the execution-failed echo");
 }
 
 // ---------------------------------------------------------------------------

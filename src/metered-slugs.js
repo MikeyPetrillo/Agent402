@@ -9,7 +9,7 @@ export const METERED_SLUGS = new Set([
   "attest",  // attest-kit.js: spends Base gas from the spending wallet, unset in CI
   // Databento equities: a query is billed by the bytes it returns and CI
   // holds no key on purpose, so an unkeyed sweep would 503 here and a keyed
-  // one would spend on every push. Same rule as Brave, E2B and CoinGecko.
+  // one would spend on every push. Same rule as Brave and CoinGecko.
   "stock-quote", "stock-history",
   // CoinGecko's on-chain pool endpoints answer only to a key (401 keyless),
   // and CI holds none: these 503 on an unkeyed sweep. Offline coverage is
@@ -53,8 +53,6 @@ export const METERED_SLUGS = new Set([
   "ticker-pack",
   // token-risk composites - keyless probes + Opus synthesis over OpenRouter.
   "token-risk", "token-risk-pro",
-  // E2B
-  "code-run", "code-run-pro",
   // Route-and-execute can buy external sellers
   "route-execute", "seller-payability", "route-execute-max", "route-execute-mid", "route-execute-plus", "route-execute-pro",
   // Flights buy from outside sellers (flights-kit.js).
@@ -70,8 +68,8 @@ export const METERED_SLUGS = new Set([
   "decisions",       // the same judgment on the OpenAI Decisions wire
   "decide",          // decision service + model calls; CI runs no decide service
   "decide-execute",  // runs plans and pays sellers; CI runs no decide service
-  // FRED keyed (503 without FRED_API_KEY)
-  "fred-series",
+  // FRED keyed (503 without FRED_API_KEY). fred-series is not here: it reads
+  // the publishing agencies' keyless APIs.
   "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",
   // X API v2 app-only bearer (per-post read billing) and the enrichment
   // providers - each lists only with its own key, and 503s without it.

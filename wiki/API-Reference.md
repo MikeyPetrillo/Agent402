@@ -294,7 +294,7 @@ All errors return a JSON body with an `error` string field.
 
 Handlers throw errors with `.statusCode` set; the server maps these to the appropriate HTTP response.
 
-**On x402, every code in the `4xx`/`5xx` rows above cancels settlement**, so none of them charge you. Only a `200` that then settles successfully is billed. The exceptions: a Tempo push transfer over MPP is final when sent, so a call that then fails is recorded as owed and repaid on-chain through the refund ledger; and a few tools charge a `200` that carries a partial result by design and say so in their description (a code run that hits its time limit answers `200` with `timedOut: true`). See [[Architecture]] for the ordering. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
+**On x402, every code in the `4xx`/`5xx` rows above cancels settlement**, so none of them charge you. Only a `200` that then settles successfully is billed. The exceptions: a Tempo push transfer over MPP is final when sent, so a call that then fails is recorded as owed and repaid on-chain through the refund ledger; and a few tools charge a `200` that carries a partial result by design and say so in their description. See [[Architecture]] for the ordering. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
 A paid call sent with `Prefer: respond-async` to a slow route answers `202 Accepted` with a job link instead of the result; nothing is charged on x402 until the answer is ready (see Async jobs).
 

@@ -22,8 +22,8 @@
 // name did not resolve, the connection was refused or never opened, or the
 // caller's signal was already aborted when the call was made:
 // neverReachedUpstream), or when the upstream refused it before doing any work
-// (a 4xx answer: bad request, our key refused, rate limited; for E2B also its
-// busy refusal, which the SDK documents as changing nothing:
+// (a 4xx answer: bad request, our key refused, rate limited; also an SDK's
+// named busy refusal that is documented as changing nothing:
 // upstreamRefusedBeforeWork). Everything else keeps its unit: a 2xx or 3xx
 // answer, a 5xx, a timeout or a reset after the request was written may all
 // have been served and metered there. Giving a unit back only ever lowers the
@@ -36,12 +36,11 @@ import { createSharedDailySpend } from "./shared-limits.js";
 import { useHeldUnit } from "./settle-first.js";
 
 // `match` is a host suffix the fetch hook checks; null means the kit counts
-// its own units (E2B: one unit per sandbox started, whatever hosts it uses).
+// its own units (one unit per network a multichain read asks for).
 export const HARD_CAPS = [
   { name: "alchemy", match: "alchemy.com", env: "HARDCAP_ALCHEMY_CALLS", dflt: 300000 },
   { name: "brave", match: "api.search.brave.com", env: "HARDCAP_BRAVE_CALLS", dflt: 6000 },
   { name: "openai", match: "api.openai.com", env: "HARDCAP_OPENAI_CALLS", dflt: 6000 },
-  { name: "e2b", match: null, env: "HARDCAP_E2B_SANDBOXES", dflt: 1500 },
   // Network reads by the Alchemy multichain transfers read (alchemy-data-kit.js
   // wallet-transfers-multichain): one unit per network a call asks for.
   { name: "alchemy-multichain", match: null, env: "HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS", dflt: 30000 },
@@ -216,7 +215,7 @@ export function neverReachedUpstream(err, { abortedAtCall = false } = {}) {
 /**
  * True only when `x` (a fetch Response, or a thrown error and up to four
  * causes) shows the upstream refused the call before doing any work: an HTTP
- * status from 400 to 499, or E2B's AuthenticationError (401), RateLimitError
+ * status from 400 to 499, or an SDK's AuthenticationError (401), RateLimitError
  * (429) or ServiceBusyError (503, "nothing was changed by the refused call").
  * A 5xx in general, a 2xx or a 3xx is not: the call may have been served.
  */

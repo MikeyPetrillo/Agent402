@@ -68,6 +68,14 @@ const ENTRIES = [
   },
   {
     date: "2026-11-23",
+    title: "fred-series from its publishers; code execution retired",
+    items: [
+      "Tools: code-run and code-run-pro are retired and answer 410 and name none: code execution is no longer offered.",
+      "Tools: fred-series now reads each series from the agency that publishes it: labor and price series (UNRATE, U6RATE, CIVPART, EMRATIO, PAYEMS, CES0500000003, JTSJOL, CPIAUCSL, CPIAUCNS, CPILFESL, PPIACO) from the Bureau of Labor Statistics, DFF, EFFR, FEDFUNDS, SOFR and OBFR from the Federal Reserve Bank of New York, and GFDEBTN from Treasury Fiscal Data, with each publisher's credit in the answer. The route, inputs, answer shape and price are unchanged; units and frequency are computed here and marked derived. Other series IDs answer 404 with the supported list, and the published example is now UNRATE.",
+    ],
+  },
+  {
+    date: "2026-11-23",
     title: "Redact, then chat",
     items: [
       "Tools: POST /api/redact-chat masks email addresses, card-like runs of 13 to 16 digits, US SSNs written 123-45-6789, US-style phone numbers and IPv4 addresses on this server with numbered placeholders, then sends only the masked text to a chat model in one paid call. It is model-backed; the masking is pattern-based, and other forms (international phone numbers, SSNs without dashes, IPv6 addresses, IBANs, names) pass unmasked, so review the text for anything else sensitive. Its price is the sum of /api/redact and the chat tier it calls.",

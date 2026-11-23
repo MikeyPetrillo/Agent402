@@ -23,7 +23,6 @@ import { readFileSync, readdirSync } from "node:fs";
 // Every pack, listed or not: the skip set must hold for a pack the moment it is listed.
 import { ALL_SKILL_PACKS as SKILL_PACKS } from "../src/skills.js";
 import { SEARCH_TOOLS } from "../src/tools/search.js";
-import { CODE_RUN_TOOLS } from "../src/tools/code-run-kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -129,36 +128,9 @@ const listed = [...skipBlock.matchAll(/"(\/api\/[^"]+)"/g)].map((m) => m[1]);
 const stale = listed.filter((r) => !validRoutes.has(r));
 ok(stale.length === 0, `no stale BRAVE_ROUTES entries${stale.length ? ` (found: ${stale.join(", ")})` : ""}`);
 
-// 5. Same guard for E2B (2026-07-29 paid-upstream audit): the CI server also
-//    boots with the real E2B_API_KEY, so an unskipped code-run example spins a
-//    real sandbox on every run. Live coverage lives in test-code-run-kit.js,
-//    which CI runs live deliberately - the generic sweep must not add its own.
-const E2B_SLUGS = new Set(CODE_RUN_TOOLS.map((t) => t.slug));
-const e2bStart = testAll.indexOf("const E2B_ROUTES");
-const e2bEnd = testAll.indexOf("const skipE2b");
-ok(e2bStart > 0 && e2bEnd > e2bStart, "test-all.js defines an E2B_ROUTES skip set");
-const e2bBlock = testAll.slice(e2bStart, e2bEnd);
-for (const t of CODE_RUN_TOOLS) {
-  ok(e2bBlock.includes(`"/api/${t.slug}"`), `direct route /api/${t.slug} is in E2B_ROUTES`);
-}
-const packsReachingE2b = Object.values(SKILL_PACKS)
-  .map((p) => ({ slug: p.slug, hits: (p.toolSlugs || []).filter((s) => E2B_SLUGS.has(s)) }))
-  .filter((p) => p.hits.length);
-for (const p of packsReachingE2b) {
-  ok(
-    e2bBlock.includes(`"/api/skill/${p.slug}"`),
-    `skill pack "${p.slug}" reaches E2B via ${p.hits.join("+")} - must be in E2B_ROUTES or every CI run spins ${p.hits.length} live sandbox(es)`,
-  );
-}
-ok(/const skipE2b = process\.env\.E2B_LIVE_TEST !== "1"/.test(testAll),
-  "live E2B sweep calls stay opt-in (E2B_LIVE_TEST=1), never the default");
-const e2bValid = new Set([
-  ...CODE_RUN_TOOLS.map((t) => `/api/${t.slug}`),
-  ...packsReachingE2b.map((p) => `/api/skill/${p.slug}`),
-]);
-const e2bListed = [...e2bBlock.matchAll(/"(\/api\/[^"]+)"/g)].map((m) => m[1]);
-const e2bStale = e2bListed.filter((r) => !e2bValid.has(r));
-ok(e2bStale.length === 0, `no stale E2B_ROUTES entries${e2bStale.length ? ` (found: ${e2bStale.join(", ")})` : ""}`);
+// 5. The code-run tools are retired (src/retired-tools.js): no skip set for
+//    them is left in the generic sweep.
+ok(!/E2B_ROUTES|skipE2b/.test(testAll), "test-all.js keeps no skip set for the retired code-run tools");
 
 // --- multi-search must not pay twice for the same query --------------------
 //

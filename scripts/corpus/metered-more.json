@@ -61,23 +61,6 @@
       }
     },
     {
-      "slug": "code-run",
-      "name": "python arithmetic on the base tier",
-      "input": {
-        "code": "print(6*7)",
-        "language": "python"
-      },
-      "requires": "E2B_API_KEY",
-      "expect": {
-        "matches": {
-          "stdout": "42"
-        },
-        "falsy": [
-          "error"
-        ]
-      }
-    },
-    {
       "slug": "embed-large",
       "name": "a second text",
       "input": {
@@ -345,7 +328,6 @@
         "startDate": "2025-01-01",
         "endDate": "2025-12-31"
       },
-      "requires": "FRED_API_KEY",
       "expect": {
         "gte": {
           "count": 11
@@ -364,7 +346,6 @@
       "input": {
         "seriesId": "ZZQXNOPE"
       },
-      "requires": "FRED_API_KEY",
       "expect": {
         "status": 404
       }

@@ -15,7 +15,6 @@ import { IMAGE_GEN_TOOLS } from "./tools/image-gen-kit.js";
 import { TTS_TOOLS } from "./tools/tts-kit.js";
 import { STT_TOOLS } from "./tools/stt-kit.js";
 import { JUDGE_TOOLS } from "./tools/judge-kit.js";
-import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 import { RESEARCH_DEEP_TOOLS } from "./tools/research-deep-kit.js";
 import { DOSSIER_TOOLS } from "./tools/dossier-kit.js";
 import { FUND_TOOLS } from "./tools/fund-report-kit.js";
@@ -30,7 +29,7 @@ import { LINKEDIN_TOOLS } from "./tools/linkedin-article-kit.js";
 import { EXPENSIVE_COMPOSITE_SLUGS, OWN_GLOBAL_BOUND_SLUGS } from "./composite-spend-guard.js";
 
 /** Catalog routes with a real upstream cost, each with its own settle point. */
-export const SETTLE_FIRST_CATALOG_TOOLS = [...SEARCH_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...JUDGE_TOOLS, ...CODE_RUN_TOOLS];
+export const SETTLE_FIRST_CATALOG_TOOLS = [...SEARCH_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...JUDGE_TOOLS];
 /** The report products (EXPENSIVE_COMPOSITE_SLUGS, less a route that bounds
  *  its own spend): every paid model call they make goes through the chat
  *  gateway's settle point (fetchOpenRouter), and an image they draw through the

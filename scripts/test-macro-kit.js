@@ -42,13 +42,13 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
       calls = 0;
       globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ error_code: st, error_message: "Too Many Requests.  Exceeded Rate Limit" }), { status: st, headers: { "content-type": "application/json" } }); };
       let e = null;
-      try { await h("fred-series")({ seriesId: "UNRATE" }); } catch (x) { e = x; }
+      try { await h("unemployment-rate")({}); } catch (x) { e = x; }
       ok(e?.statusCode === 503 && /temporarily unavailable/.test(e.message), `FRED ${st} -> 503 temporarily unavailable (got ${e?.statusCode})`);
       ok(calls === 1, `FRED ${st} is not hammered with retries (calls ${calls})`);
     }
     globalThis.fetch = async () => new Response(JSON.stringify({ error_code: 400, error_message: "Bad Request.  The value for variable api_key is not registered." }), { status: 400, headers: { "content-type": "application/json" } });
     let e = null;
-    try { await h("fred-series")({ seriesId: "UNRATE" }); } catch (x) { e = x; }
+    try { await h("unemployment-rate")({}); } catch (x) { e = x; }
     ok(e?.statusCode === 503 && /not configured/.test(e.message) && !/registered|api_key/.test(e.message), "a key refusal says not configured and relays no key detail");
   } finally {
     globalThis.fetch = realFetch;
@@ -66,9 +66,9 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   const page = '<!doctype html>\n<html lang="en">\n<head>\n    <title>Site Maintenance | St. Louis Fed</title>';
   try {
     globalThis.fetch = async () => new Response(page, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
-    for (const slug of ["fred-series"]) {
+    for (const slug of ["unemployment-rate"]) {
       let e = null;
-      try { await h(slug)({ seriesId: "UNRATE" }); } catch (x) { e = x; }
+      try { await h(slug)({}); } catch (x) { e = x; }
       ok(e?.statusCode === 503 && /scheduled maintenance/.test(e.message) && e.retryAfter === 900 && e.attribution === "upstream", `${slug}: FRED maintenance page -> 503 with retryAfter (got ${e?.statusCode} ${e?.message})`);
     }
   } finally {
@@ -340,8 +340,6 @@ await live("world-bank-search", { q: "inflation", rows: 5 },
 console.log("\nFRED-keyed tools:");
 if (process.env.FRED_API_KEY) {
   console.log("  FRED_API_KEY is set — running live calls");
-  await live("fred-series", { seriesId: "GDPC1", startDate: "2018-01-01", endDate: "2022-12-31" },
-    (r) => r.seriesId === "GDPC1" && Array.isArray(r.observations) && r.observations.length > 0, "fred-series GDPC1");
   // For the "latest reading" tools, assert the returned date is recent (within the
   // last 18 months). Catches the bug where sort_order=asc + limit=N returned the
   // *oldest* N observations (1948-vintage data) instead of the newest.
@@ -357,11 +355,9 @@ if (process.env.FRED_API_KEY) {
     (r) => typeof r.current === "number" && Array.isArray(r.history) && r.history.length > 0 && recent(r.date), "fed-funds DFF 10d (date must be recent)");
 } else {
   console.log("  FRED_API_KEY is NOT set — verifying each FRED tool returns the documented 503");
-  for (const slug of ["fred-series", "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds"]) {
+  for (const slug of ["sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds"]) {
     try {
-      // fred-series requires an input; supply a plausible one so we hit the
-      // requireFredKey() check, not validation.
-      const args = slug === "fred-series" ? { seriesId: "GDPC1" } : {};
+      const args = {};
       await h(slug)(args);
       ok(false, `${slug} should 503 without FRED_API_KEY`);
     } catch (e) {

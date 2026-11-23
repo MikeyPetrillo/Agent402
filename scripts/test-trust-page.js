@@ -72,7 +72,6 @@ const CALL_SITE = {
   // No direct call: report products and /v1 web searches reach it through the model aggregator's web search, by this engine name.
   Exa: 'engine: "exa"',
   "X API": "api.x.com",
-  E2B: "api.e2b.dev",
   TypeSafe: "api.typesafe.ai",
   "Coinbase CDP": "api.cdp.coinbase.com",
   "Tempo's relay": "TEMPO_API_KEY",

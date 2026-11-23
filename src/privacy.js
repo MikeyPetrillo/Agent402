@@ -441,7 +441,6 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
   The <code>/api/x-*</code> tools send the handle, post id or query to the X API.
   Report products and <code>/v1</code> calls that search the web send their search queries to Exa, through OpenRouter's web search.</li>
-  <li>The <code>/api/code-run</code> tools run the code you send in a sandbox operated by E2B.</li>
   <li><code>/api/route</code>, <code>/api/route/execute</code> and <code>/api/decide</code> may send the
   task text you give them to a judgment model operated by TypeSafe to choose among candidate tools;
   <code>/api/decide</code> also sends it to AI models via OpenRouter and to an OpenAI embedding model to

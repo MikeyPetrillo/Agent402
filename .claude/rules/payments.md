@@ -244,7 +244,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `SETTLE_FIRST_SLUGS` (server.js: every `/v1` chat, Messages, Responses and generateContent tier
   and the metered tier, embeddings, rerank, speech, `/v1/images/generations` and the fast, pro and
   edit image tiers, and dub; not video; plus `SETTLE_FIRST_CATALOG_SLUGS`: web search and answer,
-  image generation, speech, transcription, judgment and code runs, each settling after its own
+  image generation, speech, transcription and judgment, each settling after its own
   input checks and before its first paid upstream call; and `SETTLE_FIRST_REPORT_TOOLS`, the report
   products (`EXPENSIVE_COMPOSITE_SLUGS` less `OWN_GLOBAL_BOUND_SLUGS`), settling at their first
   `fetchOpenRouter` call after their own checks and free source reads; the unsettled runs of both

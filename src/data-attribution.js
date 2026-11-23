@@ -79,6 +79,11 @@ export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
 // Mapping service on every asn-info answer (src/tools/network-kit2.js).
 export const CRTSH_ATTRIBUTION = "Certificate data from crt.sh by Sectigo (https://crt.sh).";
 export const CYMRU_ATTRIBUTION = "IP to ASN data from Team Cymru IP to ASN Mapping (https://team-cymru.com/community-services/ip-asn-mapping/).";
+// fred-series (src/tools/us-macro-series.js, which cites each publisher's
+// terms): the publishers named and the New York Fed's disclaimer for a product
+// described with its rates; each answer carries its publisher's full credit
+// (the BLS statement and retrieval date, the New York Fed's notice).
+export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, the New York Fed and the U.S. Treasury. Agent402 is not affiliated with the New York Fed.";
 export const CAMS_ATTRIBUTION = "Contains modified Copernicus Atmosphere Monitoring Service information (CAMS ENSEMBLE data provider).";
 export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
 // GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place
@@ -131,6 +136,7 @@ export const ATTRIBUTIONS = Object.freeze({
   nvd: NVD_NOTICE,
   ecb: ECB_ATTRIBUTION,
   "us-treasury": US_TREASURY_ATTRIBUTION,
+  "us-agencies": US_AGENCIES_ATTRIBUTION,
   "open-meteo-cams": `${OPEN_METEO_ATTRIBUTION} ${CAMS_CREDIT}`,
   "open-meteo-c3s": `${OPEN_METEO_ATTRIBUTION} ${C3S_CREDIT}`,
   "open-meteo-copernicus-geonames": `${OPEN_METEO_ATTRIBUTION} ${GEONAMES_ATTRIBUTION} ${CAMS_C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`,

@@ -54,7 +54,7 @@ function keysOf(req, withUnprovenAddress) {
   return keys;
 }
 
-/** The key a concurrency cap counts one call under (src/tools/code-run-kit.js),
+/** The key a per-caller concurrency cap counts one call under,
  *  or null when the request carries nothing to key on. Never one bucket for
  *  unrelated callers: the request's signed key (identity payer, credits key,
  *  Tempo sender); else, for a call that carries a payment (one that signs no
@@ -118,7 +118,7 @@ let anonymousRequests = 0;
  *  with nothing to key on gets a key of its own, never one shared with
  *  another request. With no request, the enclosing dispatch's scope, else the
  *  shared in-process one. A scope is always open, so a per-caller cap a
- *  request-less step reads (src/tools/code-run-kit.js) always has a key. */
+ *  request-less step reads always has a key. */
 export function runAsCallerOf(req, fn) {
   if (!isRequest(req)) return scope.run(scope.getStore() || IN_PROCESS_SCOPE, fn);
   const own = callerKeysOf(req);

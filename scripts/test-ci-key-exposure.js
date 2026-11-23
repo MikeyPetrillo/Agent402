@@ -87,7 +87,7 @@ ok(testLaneEnv.size > 0, `read the workflow's secret->env bindings (${testLaneEn
 // thing a sweep does.
 const PAID = new Set([
   "BRAVE_API_KEY", "BRAVE_ANSWERS_API_KEY", "BRAVE_SUGGEST_API_KEY",
-  "E2B_API_KEY", "COINGECKO_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY",
+  "COINGECKO_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY",
   "ALCHEMY_API_KEY", "EXA_API_KEY", "EXA_KEY", "X_BEARER_TOKEN",
   "HUNTER_API_KEY", "APOLLO_API_KEY",
 ]);

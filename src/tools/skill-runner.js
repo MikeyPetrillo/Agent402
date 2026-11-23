@@ -811,7 +811,7 @@ export const PACK_STEPS = {
 
   // The observed-demand basket (see PACK_PRICES note): 13 keyless reads, pure fanout,
   // no step depends on another. NO metered-dollar upstream anywhere in this
-  // pack - nothing Brave/E2B/OpenAI-backed - so it introduces no CI-spend
+  // pack - nothing Brave- or OpenAI-backed - so it introduces no CI-spend
   // surface (test-brave-leak derives reachability from toolSlugs and will
   // fail the build if that ever changes).
   "macro-dashboard": {

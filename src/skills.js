@@ -636,7 +636,7 @@ const SKILL_PACKS_ALL = [
     promptArgs: [
       {
         name: "series",
-        description: "What to analyze - a ticker (AAPL), a FRED series id (UNRATE), or a treasury maturity (10Y)",
+        description: "What to analyze - a ticker (AAPL), a FRED series id fred-series serves (UNRATE), or a treasury maturity (10Y)",
         required: true,
         substitute: "AAPL",
       },
@@ -648,7 +648,7 @@ const SKILL_PACKS_ALL = [
       },
       {
         name: "benchmark",
-        description: "Optional second series to correlate against - a ticker (SPY) or a FRED series id. Without it the correlation step is skipped.",
+        description: "Optional second series to correlate against - a ticker (SPY) or a FRED series id fred-series serves. Without it the correlation step is skipped.",
         required: false,
         substitute: "SPY",
       },
@@ -694,7 +694,7 @@ const SKILL_PACKS_ALL = [
     promptArgs: [
       {
         name: "series",
-        description: "What to forecast - a ticker (AAPL) or a FRED series id (UNRATE, CPIAUCSL)",
+        description: "What to forecast - a ticker (AAPL) or a FRED series id fred-series serves (UNRATE, CPIAUCSL)",
         required: true,
         substitute: "AAPL",
       },
@@ -2121,13 +2121,13 @@ const SKILL_PACKS_ALL = [
     tagline:
       "Economic snapshot skill: one parallel call returns the fed funds rate, the unemployment rate and the consumer price index series together.",
     useCase:
-      "An agent providing economic context needs the three most-watched Fed indicators: where rates are (FEDFUNDS), how tight the labor market is (UNRATE), and where inflation stands (CPIAUCSL). Three FRED series calls bundled into one payment.",
+      "An agent providing economic context needs the three most-watched Fed indicators: where rates are (FEDFUNDS), how tight the labor market is (UNRATE), and where inflation stands (CPIAUCSL). Three fred-series calls (series read from the New York Fed and the Bureau of Labor Statistics) bundled into one payment.",
     promptArgs: [],
     toolSlugs: ["fred-series", "fred-series", "fred-series"],
     workflow: [
-      "Call fred-series with series='FEDFUNDS' to get the effective federal funds rate.",
-      "Call fred-series with series='UNRATE' to get the unemployment rate.",
-      "Call fred-series with series='CPIAUCSL' to get the Consumer Price Index for All Urban Consumers.",
+      "Call fred-series with seriesId='FEDFUNDS' to get the effective federal funds rate.",
+      "Call fred-series with seriesId='UNRATE' to get the unemployment rate.",
+      "Call fred-series with seriesId='CPIAUCSL' to get the Consumer Price Index for All Urban Consumers.",
     ],
     claudePrompt:
       "Get a Fed economic snapshot using Agent402's fred-snapshot skill pack: (1) FEDFUNDS - current rate, (2) UNRATE - unemployment, (3) CPIAUCSL - CPI. Summarize the macro picture: is the Fed tightening or easing, and what does the jobs/inflation combo suggest?",

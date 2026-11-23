@@ -38,7 +38,6 @@ const METERED = [
   ["api.cdp.coinbase.com", "CDP_API_KEY_ID", "Coinbase CDP (SQL billed + Bazaar discovery free)"],
   ["api.openai.com", "OPENAI_API_KEY", "OpenAI"],
   ["openrouter.ai", "OPENROUTER_API_KEY", "OpenRouter"],
-  ["e2b.dev", "E2B_API_KEY", "E2B sandboxes"],
   ["g.alchemy.com", "ALCHEMY_API_KEY", "Alchemy RPC"],
 ];
 

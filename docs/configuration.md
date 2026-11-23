@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1124 variables in 113 groups.
+1121 variables in 113 groups.
 
 ## Contents
 
@@ -196,7 +196,6 @@ holds it.
 | `BUDGET_BRAVE_CALLS` | Budget brave calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_COINGECKO_CALLS` | Budget coingecko calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_DATABENTO_CALLS` | Budget databento calls. |  | `src/upstream-budgets.js` |
-| `BUDGET_E2B_CALLS` | Budget e2b calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_HUNTER_CALLS` | Budget hunter calls. |  | `src/upstream-budgets.js` |
 | `BUDGET_OPENAI_CALLS` | Budget openai calls. |  | `src/upstream-budgets.js` |
 
@@ -527,7 +526,6 @@ holds it.
 | `HARDCAP_ALCHEMY_CALLS` | Hardcap alchemy calls. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS` | Network reads a day by the multichain wallet transfers tool, one per network a call asks for (default 30000; off disables, 0 refuses all). |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_BRAVE_CALLS` | Hardcap brave calls. |  | `src/upstream-hard-caps.js` |
-| `HARDCAP_E2B_SANDBOXES` | Hardcap e2b sandboxes. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_OPENAI_CALLS` | Hardcap openai calls. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_SYNC_MS` | Hardcap sync, in milliseconds. |  | `src/upstream-hard-caps.js` |
 
@@ -1569,6 +1567,7 @@ holds it.
 | `AUDIO_DECODE_SLOTS` | Audio decode slots. |  | `src/tools/media-kit.js` |
 | `BING_SITE_URL` | Bing site URL. | `https://agent402.tools/` | `src/search-data.js` |
 | `BING_WEBMASTER_API_KEY` | Bing webmaster API key (a credential, set on the host). |  | `src/search-data.js` |
+| `BLS_API_KEY` | U.S. Bureau of Labor Statistics Public Data API v2 registration key (a credential, set on the host). fred-series reads BLS series keyless (v1, 25 queries a day) without it, 500 a day with it; reads are cached by decade. |  | `src/tools/us-macro-series.js` |
 | `BOOT_CPU_PROFILE` | Boot CPU profile. |  | `src/boot-profile.js` |
 | `BRAVE_ANSWERS_API_KEY` | Brave answers API key (a credential, set on the host). |  | `src/tools/search.js` |
 | `BRAVE_API_KEY` | Key for the web search tools (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/llm-context-kit.js`, `src/tools/search.js` |
@@ -1591,8 +1590,6 @@ holds it.
 | `DATA_GOV_API_KEY` | Data gov API key (a credential, set on the host). | `DEMO_KEY` | `src/tools/gov-kit.js` |
 | `DEPLOY_OVERLAP_SECONDS` | Deploy overlap, in seconds. |  | `src/replay-topology.js` |
 | `DNS_LOOKUP_TIMEOUT_MS` | Dns lookup timeout, in milliseconds. |  | `src/tools/fetch-guard.js` |
-| `E2B_API_KEY` | E2b API key (a credential, set on the host). |  | `src/tools/code-run-kit.js` |
-| `E2B_MAX_CONCURRENT` | E2b maximum concurrent. |  | `src/tools/code-run-kit.js` |
 | `ECONOMY_FRESH_MS` | Economy fresh, in milliseconds. |  | `src/x402-economy.js` |
 | `EDGAR_FETCH_TIMEOUT_MS` | Edgar fetch timeout, in milliseconds. | `12000` | `src/tools/edgar-13f-datasets.js`, `src/tools/edgar-kit.js` |
 | `EDGAR_USER_AGENT` | Edgar user agent. |  | `src/tools/edgar-kit.js` |

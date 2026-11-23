@@ -313,8 +313,6 @@ t node scripts/test-payer.js
 t node scripts/test-payment-identity-rails.js
 # Egress proxy validate+pin (F04 — proxy refuses CONNECT to loopback/RFC1918/metadata/ULA; Chromium can't rebind to a private dest — offline)
 t node scripts/test-egress-proxy.js
-# E2B cost/output caps (F12 — aggregate UTF-8 output truncation + global sandbox concurrency ceiling — offline)
-t node scripts/test-code-run-caps.js
 # Safe-regex guard (rejects ReDoS patterns for caller-supplied regexes — DoS lock — offline)
 t node scripts/test-safe-regex.js
 # Regex tool budget covers the run, not the thread start: the published example answers under a slow worker start, a catastrophic pattern still ends as an uncharged 400, a worker that never starts answers 503 (offline)
@@ -473,11 +471,11 @@ t node scripts/test-alchemy-data-kit.js
 t node scripts/test-llm-context-kit.js
 # search-lite (Brave web search sample: validation + output shaping, stubbed fetch, no live Brave call, offline)
 t node scripts/test-search-lite.js
-# Paid-upstream leak guard (Brave + E2B — every metered route/pack must be skipped — offline)
+# Paid-upstream leak guard (Brave — every metered route/pack must be skipped — offline)
 t node scripts/test-brave-leak.js
 # Derived CI-spend exposure: every paid key a TEST lane can reach must have its slugs bounded
 t node scripts/test-ci-key-exposure.js
-# Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, E2B, Neynar)
+# Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, Neynar)
 t node scripts/test-upstream-budgets.js
 # Per-caller call counts by UTC day for the on-chain data provider: labels, a deploy adds to the stored day, seven days of history
 t node scripts/test-upstream-call-days.js

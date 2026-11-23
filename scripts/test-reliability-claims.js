@@ -37,7 +37,7 @@ const text = claims.map((c) => c.claim).join("\n");
 
 // The CI claim must not assert completeness the code does not deliver.
 const testAll = readFileSync(new URL("./test-all.js", import.meta.url), "utf8");
-const skipsExist = /BRAVE_ROUTES|E2B_ROUTES/.test(testAll) && /skipBrave|skipE2b/.test(testAll);
+const skipsExist = /BRAVE_ROUTES/.test(testAll) && /skipBrave/.test(testAll);
 ok(skipsExist, "CI genuinely skips some routes (the fact the claim has to account for)");
 const ciClaim = claims.find((c) => /documented example/.test(c.claim));
 ok(ciClaim, "the CI claim is present");

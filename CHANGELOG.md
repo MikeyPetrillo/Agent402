@@ -33,6 +33,20 @@ Site:
 - /markets lists perpetuals, market signals and DeFi, without an options
   group.
 
+### 2026-11-23 (fred-series from its publishers; code execution retired)
+Tools:
+- code-run and code-run-pro are retired and answer 410 and name none: code
+  execution is no longer offered.
+- fred-series now reads each series from the agency that publishes it: labor
+  and price series (UNRATE, U6RATE, CIVPART, EMRATIO, PAYEMS, CES0500000003,
+  JTSJOL, CPIAUCSL, CPIAUCNS, CPILFESL, PPIACO) from the Bureau of Labor
+  Statistics, DFF, EFFR, FEDFUNDS, SOFR and OBFR from the Federal Reserve Bank
+  of New York, and GFDEBTN from Treasury Fiscal Data, with each publisher's
+  credit in the answer. The route, inputs, answer shape and price are
+  unchanged; units and frequency are computed here and marked derived. Other
+  series IDs answer 404 with the supported list, and the published example is
+  now UNRATE.
+
 ### 2026-11-23 (redact, then chat)
 Tools:
 - POST /api/redact-chat masks email addresses, card-like runs of 13 to 16

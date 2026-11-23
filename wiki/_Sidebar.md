@@ -32,7 +32,6 @@
 - [[LLM Gateway (OpenAI /v1)|LLM-Gateway]]
 - [[LLM Proxy Gateway|LLM-Proxy]]
 - [[Image Generation Gateway|Image-Gen]]
-- [[Code Execution Sandbox|Code-Execution]]
 - [[Text-to-Speech|TTS]]
 - [[Speech-to-Text|STT]]
 - [[Text Embeddings|Embeddings]]
