@@ -157,8 +157,37 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
     // The server hands the class the admission's error carried to the alarm.
     const { readFileSync } = await import("node:fs");
     const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-    ok(/noteVerifiedPaidOutcome\(\{ payer, slug, status, error, attribution, kind: sqlBusy \? SQL_BUSY_KIND : null, coverRefusal: Object\.hasOwn\(req, "__a402CoverRefusal"\) \? req\.__a402CoverRefusal : null, at \}\)/.test(server)
+    ok(/noteVerifiedPaidOutcome\(\{ payer, slug, status, error, attribution, kind: sqlBusy \? SQL_BUSY_KIND : null, coverRefusal: Object\.hasOwn\(req, "__a402CoverRefusal"\) \? req\.__a402CoverRefusal : null, refusal, at \}\)/.test(server)
       && /req\.__a402CoverRefusal = typeof err\?\.coverRefusal === "string" \? err\.coverRefusal : "";/.test(server), "server.js keeps the refusal's class on the request and passes it to the alarm");
+  }
+  // A tool's own documented per-caller limit (its answer's reason
+  // caller_limit, e.g. testnet-fund's per-address faucet cap) is decided by
+  // what the payer asked for, not a failed answer of ours: not kept. Any other
+  // 429 and any 5xx stay failures.
+  {
+    T._resetTopBuyerFailures();
+    T.setTopBuyers([TOP], t0);
+    const lim = [];
+    for (let i = 0; i < 50; i++) lim.push(T.noteVerifiedPaidOutcome({ payer: TOP, slug: "testnet-fund", status: 429, refusal: "caller_limit", at: t0 + i }, env));
+    ok(lim.every((k) => k === false) && T._localSizes().events === 0 && (await T.topBuyerFailuresStatus({ now: t0 + 1000, env })).status === "ok", "50 per-caller limit refusals keep nothing and leave ok");
+    ok(T.BUYER_LIMIT_REFUSALS.join() === "caller_limit", `the explicit class (${T.BUYER_LIMIT_REFUSALS.join()})`);
+    const kept5 = [T.noteVerifiedPaidOutcome({ payer: TOP, slug: "testnet-fund", status: 429, refusal: "rate_limited", at: t0 }, env), T.noteVerifiedPaidOutcome({ payer: TOP, slug: "testnet-fund", status: 503, refusal: "caller_limit", at: t0 }, env)];
+    ok(kept5.every((k) => k === true), `control: another 429 class, and a non-429 carrying the class, are kept (${kept5.join(",")})`);
+    const { toolErrorFields } = await import("../src/tool-error-fields.js");
+    const { faucetGate } = await import("../src/tools/cdp-kit.js");
+    const { refusalReason, REFUSAL_REASONS } = await import("../src/refusal-reason.js");
+    const addr = "0x" + "ab".repeat(20);
+    faucetGate(addr, t0); faucetGate(addr, t0 + 1);
+    const third = faucetGate(addr, t0 + 2);
+    ok(third.ok === false && third.callerLimit === true, "the faucet's per-address cap is marked a caller limit");
+    const e = Object.assign(new Error(third.reason), { statusCode: 429, callerLimit: third.callerLimit });
+    ok(toolErrorFields(e).reason === "caller_limit" && refusalReason(e.message, 429, e) === "caller_limit" && REFUSAL_REASONS.includes("caller_limit"), "its answer carries reason caller_limit");
+    for (let i = 0; i < 9; i++) faucetGate("0x" + String(i).repeat(40), t0 + 10 + i);
+    const budget = faucetGate("0x" + "cd".repeat(20), t0 + 50);
+    ok(budget.ok === false && budget.callerLimit !== true, "the service-wide faucet budget is not a caller limit (it stays a failure)");
+    const { readFileSync } = await import("node:fs");
+    const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    ok(/refusal = answer\?\.has\?\.\(\) \? refusalClassOf\(answer\.body\(\)\) : null/.test(server) && /coverRefusal: [^\n]*, refusal, at \}\)/.test(server), "server.js reads the answer's refusal class and hands it to the alarm");
   }
   // Env: threshold, window, hold.
   T._resetTopBuyerFailures();

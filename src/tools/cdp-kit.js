@@ -1341,7 +1341,10 @@ export function faucetGate(address, now = Date.now()) {
   faucetLog.all = prune(faucetLog.all);
   const forAddr = prune(faucetLog.byAddress.get(address) || []);
   faucetLog.byAddress.set(address, forAddr);
-  if (forAddr.length >= 2) return { ok: false, reason: "This address already received 2 faucet drips in the last 24h. CDP also enforces its own per-address caps - try again tomorrow." };
+  // The documented per-address cap is a limit on the caller's own asks
+  // (callerLimit: its answer's reason is caller_limit, src/refusal-reason.js),
+  // not a failed answer of ours; the shared budget below is ours and is not.
+  if (forAddr.length >= 2) return { ok: false, callerLimit: true, reason: "This address already received 2 faucet drips in the last 24h. CDP also enforces its own per-address caps - try again tomorrow." };
   if (faucetLog.all.length >= 8) return { ok: false, reason: "The shared faucet budget for this service is exhausted for the next 24h (CDP caps faucet volume per account). Try again later." };
   forAddr.push(now);
   faucetLog.all.push(now);
@@ -1563,7 +1566,7 @@ export const CDP_TOOLS = [
       const token = String(input?.token || "usdc").trim().toLowerCase();
       if (!FAUCET_TOKENS[network].has(token)) throw bad(`"token" must be one of: ${[...FAUCET_TOKENS[network]].join(", ")} on ${network}`);
       const gate = faucetGate(isSolana ? address : address.toLowerCase());
-      if (!gate.ok) throw bad(gate.reason, 429);
+      if (!gate.ok) throw Object.assign(bad(gate.reason, 429), gate.callerLimit ? { callerLimit: true } : {});
       let res;
       try {
         res = isSolana

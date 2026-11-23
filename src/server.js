@@ -529,7 +529,7 @@ import { initAnalyticsDb, recordToolCall, getAnalytics, getToolOutcomes, analyti
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
-import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs, isWatchedTopBuyer, onchainSqlBusyStatus, SQL_BUSY_KIND } from "./top-buyer-failures.js";
+import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, refusalClassOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs, isWatchedTopBuyer, onchainSqlBusyStatus, SQL_BUSY_KIND } from "./top-buyer-failures.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { captureServerException } from "./posthog-observability.js";
 import { webBotAuthEnabled, createWebBotAuth } from "./web-bot-auth.js";
@@ -13904,12 +13904,15 @@ function noteTopBuyerFailure(req, res, slug, status, answer, sqlBusy = false) {
   let error = null, attribution = null;
   try { error = answer?.has?.() ? errorTextOf(answer.body()) : null; } catch { error = null; }
   try { attribution = answer?.has?.() ? attributionTextOf(answer.body()) : null; } catch { attribution = null; }
+  let refusal = null;
+  try { refusal = answer?.has?.() ? refusalClassOf(answer.body()) : null; } catch { refusal = null; }
   const at = Date.now();
   verifiedPayerOf(req, res).then((payer) => {
     const outside = !!payer && !isOwnWallet(payer);
     // A coverage refusal for the payer's own balance (short, settling) is not
     // a failed answer of ours (BUYER_COVER_REFUSALS, src/top-buyer-failures.js).
-    if (outside) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, kind: sqlBusy ? SQL_BUSY_KIND : null, coverRefusal: Object.hasOwn(req, "__a402CoverRefusal") ? req.__a402CoverRefusal : null, at });
+    // So is a tool's own documented per-caller limit (reason caller_limit).
+    if (outside) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, kind: sqlBusy ? SQL_BUSY_KIND : null, coverRefusal: Object.hasOwn(req, "__a402CoverRefusal") ? req.__a402CoverRefusal : null, refusal, at });
     if (sqlBusy) noteSqlBusy({ topBuyer: outside && isWatchedTopBuyer(payer), now: at });
   }, () => { if (sqlBusy) noteSqlBusy({ now: at }); });
 }

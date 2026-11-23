@@ -59,6 +59,10 @@ export function toolErrorFields(err) {
     // (src/tools/robots-gate.js): the fixed reason, the rule that decided it
     // and the robots.txt it came from, both bounded printable text.
     ...(robotsFieldsOf(err) || {}),
+    // A tool's own documented per-caller limit (a 429 whose error carries
+    // callerLimit): the fixed reason, so the caller and the alarms can tell
+    // it from a limit of ours (src/top-buyer-failures.js BUYER_LIMIT_REFUSALS).
+    ...(err?.callerLimit === true && Number(err?.statusCode) === 429 ? { reason: "caller_limit" } : {}),
     // One plain sentence or two on how to recover (bounded, printable text).
     ...(typeof err?.fix === "string" && FIX_RE.test(err.fix) ? { fix: err.fix } : {}),
   };

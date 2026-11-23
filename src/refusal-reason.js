@@ -60,6 +60,7 @@ export const REFUSAL_REASONS = Object.freeze([
   "cover_unread",         // balance unreadable and never read lately: past the allowance of calls at once
   "cover_kept",           // balance unreadable: judged on the wallet's last good read, not covered
   "robots_disallowed",    // the URL's robots.txt disallows our fetch token for it (src/tools/robots-gate.js)
+  "caller_limit",         // a tool's own documented per-caller limit (the error's callerLimit), e.g. a per-address faucet cap
   "other",
 ]);
 
@@ -172,6 +173,7 @@ export function refusalReason(message, status, err = null) {
   if (cover) return cover;
   if (code === 429 && spendRuleOf(err)) return "routing_paused";
   if (code === 403 && err?.robotsDisallowed === true) return "robots_disallowed";
+  if (code === 429 && err?.callerLimit === true) return "caller_limit";
   if (code === 413) return "too_large";
   // The router's no-match refusals answer 404 too; their own words name
   // the class, so a 404 is read as not_found only when they do not.

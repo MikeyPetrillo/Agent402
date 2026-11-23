@@ -164,6 +164,21 @@ const isFailure = (status, attribution = null) => !(Number.isInteger(status) && 
 // decided without a balance read made for the call and stay failures.
 export const BUYER_COVER_REFUSALS = Object.freeze(["short", "settling"]);
 const isBuyerCoverRefusal = (status, coverRefusal) => status === 429 && typeof coverRefusal === "string" && BUYER_COVER_REFUSALS.includes(coverRefusal);
+// A tool's own documented per-caller limit (a 429 whose answer's reason is one
+// of these, src/tool-error-fields.js: testnet-fund's per-address faucet cap)
+// is decided by what the payer asked for, so it is not a failed answer of
+// ours either. A limit of ours on everyone (a shared budget) carries no such
+// reason and stays a failure.
+export const BUYER_LIMIT_REFUSALS = Object.freeze(["caller_limit"]);
+const isBuyerLimitRefusal = (status, refusal) => status === 429 && typeof refusal === "string" && BUYER_LIMIT_REFUSALS.includes(refusal);
+/** The refusal class of a JSON error answer (its `reason`), when it is one of
+ *  BUYER_LIMIT_REFUSALS; else null. */
+export function refusalClassOf(body) {
+  try {
+    const r = body && typeof body === "object" ? (typeof body.reason === "string" ? body.reason : (body.error && typeof body.error === "object" && typeof body.error.reason === "string" ? body.error.reason : null)) : null;
+    return r && BUYER_LIMIT_REFUSALS.includes(r) ? r : null;
+  } catch { return null; }
+}
 /** The attribution field of a JSON error answer (src/tool-error-fields.js),
  *  or null. */
 export function attributionTextOf(body) {
@@ -177,12 +192,14 @@ export function attributionTextOf(body) {
  * Records one final answer to a verified paid request. Only a non-2xx that
  * is not the caller's own input refused (CALLER_INPUT_STATUSES attributed to
  * the caller or to no one) is kept; a 2xx costs one comparison. A 429 whose
- * `coverRefusal` is one of BUYER_COVER_REFUSALS is not kept. Never
+ * `coverRefusal` is one of BUYER_COVER_REFUSALS, or whose `refusal` (the
+ * answer's reason) is one of BUYER_LIMIT_REFUSALS, is not kept. Never
  * throws, never awaits on the caller.
  */
-export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, attribution = null, kind = null, coverRefusal = null, at = Date.now() } = {}, env = process.env) {
+export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, attribution = null, kind = null, coverRefusal = null, refusal = null, at = Date.now() } = {}, env = process.env) {
   try {
     if (isBuyerCoverRefusal(status, coverRefusal)) return false;
+    if (isBuyerLimitRefusal(status, refusal)) return false;
     if (!isFailure(status, typeof attribution === "string" ? attribution : null) || !okPayer(payer)) return false;
     const ev = { id: `${PROC}-${++seq}`, at: Number(at) || Date.now(), slug: String(slug || "unknown").slice(0, 80), status: Number.isInteger(status) ? status : 0, error: typeof error === "string" ? error.slice(0, ERROR_CHARS) : null, kind: okKind(kind) };
     const cutoff = ev.at - keepSpan(env);
