@@ -201,7 +201,7 @@ const ORIGINALS = {
 {
   ok(Math.abs(redactChatPriceUsd() - (priceOf(redactDef) + priceOf(chatDef))) < 1e-9 && priceOf(tool) === redactChatPriceUsd(), `the price is redact's plus ${CHAT_SLUG}'s, read from the definitions ($${redactChatPriceUsd()})`);
   ok(tool.slug === REDACT_CHAT_SLUG && tool.route === "POST /api/redact-chat" && tool.modelBacked === true, "route, slug, model-backed");
-  ok(/pattern matching can miss/i.test(tool.description) && /no original value/i.test(tool.description) && !/\b(guarantee\w*|never sees|100%|fully private|completely)\b/i.test(tool.description), "the description says masking is pattern-based and can miss, with no absolute privacy claim");
+  ok(/pattern matching can miss/i.test(tool.description) && /not the values that were masked/i.test(tool.description) && !/\b(guarantee\w*|never sees|100%|fully private|completely)\b/i.test(tool.description), "the description says masking is pattern-based and can miss, with no absolute privacy claim");
   ok(tool.description.includes(SETTLE_FIRST_MARK), "the description carries the settle-first sentence beside its not-charged claim");
   ok(WALLET_ONLY_SLUGS.has(REDACT_CHAT_SLUG), "wallet-only (no proof-of-work tier)");
   ok(METERED_SLUGS.has(REDACT_CHAT_SLUG), "excluded from the catalog sweeps as metered");
