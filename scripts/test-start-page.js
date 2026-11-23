@@ -55,9 +55,9 @@ const CONNECTOR_URL = `${ORIGIN}/mcp/credits`;
 
 const apps = startApps(ORIGIN);
 ok(apps.map((a) => a.name).join() === "Claude desktop,Claude Code,Cursor", `one step per app, in order (${apps.map((a) => a.name).join(", ")})`);
-ok(apps.find((a) => a.id === "claude-desktop").copy === install.hostedUrl && allOn.includes(install.hostedUrl), "Claude desktop pastes the hosted connector address from the install hints");
-ok(apps.find((a) => a.id === "claude-code").copy === install.claudeCodeHosted && allOn.includes(install.claudeCodeHosted), "Claude Code runs the hosted install line from the install hints");
-ok(apps.find((a) => a.id === "cursor").copy === JSON.stringify(install.cursorMcpJson, null, 2) && allOn.includes('"url": "https://agent402.tools/mcp"'), "Cursor adds the install hints' mcp.json block");
+ok(apps.find((a) => a.id === "claude-desktop").copy === install.hostedUrl && allOff.includes(install.hostedUrl), "Claude desktop pastes the hosted connector address from the install hints");
+ok(apps.find((a) => a.id === "claude-code").copy === install.claudeCodeHosted && allOff.includes(install.claudeCodeHosted), "Claude Code runs the hosted install line from the install hints");
+ok(apps.find((a) => a.id === "cursor").copy === JSON.stringify(install.cursorMcpJson, null, 2) && allOff.includes('"url": "https://agent402.tools/mcp"'), "Cursor adds the install hints' mcp.json block");
 ok(!/ChatGPT/i.test(allOn), "names no app without a documented path");
 {
   const src = readFileSync(join(ROOT, "src/start-page.js"), "utf8");
@@ -88,7 +88,26 @@ ok(creditsOnly.includes("Credits by card.") && !creditsOnly.includes("/mcp/credi
 ok(range && allOn.includes(`Reports by card.`) && allOn.includes(`${range.text} by card`) && allOn.includes("model-backed"), `storefront on: the report line quotes the product table's range (${range?.text}) and says model-backed`);
 ok(!/Reports by card/.test(allOff) && !allOff.includes("/reports"), "storefront off: no report line");
 ok(allOff.includes("Without a wallet") && allOff.includes("Free tools."), "the free tools stay with both switches off");
-ok(allOn.includes("Fund a first wallet") && allOn.includes("Buy USDC on Base") && allOn.includes("basescan.org/address/<your address>"), "the funding section: buy USDC on Base, send it, check the balance");
+ok(allOn.includes("Pay from a wallet") && allOn.includes("Buy USDC on Base") && allOn.includes("basescan.org/address/<your address>"), "the wallet section: buy USDC on Base, send it, check the balance");
+{
+  // A funded wallet must end in a working connection: the npm server (Node.js
+  // named), set up once with the key in the keychain, then a config per app.
+  const { walletSetup } = await import("../src/start-page.js");
+  const w = walletSetup(ORIGIN);
+  const desktop = w.apps.find((a) => a.id === "wallet-claude-desktop");
+  const cfg = JSON.parse(desktop.copy).mcpServers.agent402;
+  ok(w.setup === `${install.npm} setup` && allOn.includes(w.setup) && allOff.includes(w.setup), `the wallet section gives the setup command (${w.setup})`);
+  ok(/Node\.js/.test(allOff) && /keychain/.test(allOff), "it says the npm server needs Node.js and keeps the key in the keychain");
+  ok(cfg.command === "npx" && cfg.args.join(" ").includes(`agent402-mcp@${AGENT402_MCP_VERSION}`) && !cfg.env, "the Claude desktop wallet config runs the pinned npm server and carries no key");
+  ok(w.apps.map((a) => a.name).sort().join() === "Claude Code,Claude desktop,Cursor" && w.apps.every((a) => allOff.includes(a.copy.split("\n")[0].trim())), "every app the page names has a wallet setup on the page");
+  ok(w.apps.find((a) => a.id === "wallet-claude-code").copy === install.claudeCodeNpm, "Claude Code's wallet line is the install hints' npm line");
+  // Card first while credits and the connector are on.
+  const on = startPage(ORIGIN, catalog, { credits: true, connector: true, storefront: true });
+  const appsOn = startApps(ORIGIN, { connector: true });
+  ok(appsOn.find((a) => a.id === "claude-desktop").copy === CONNECTOR_URL && on.indexOf('id="apps"') < on.indexOf('id="fund"') && /pay by card/i.test(plain(on).slice(0, plain(on).indexOf("Pay from a wallet"))), "credits and the connector on: the app cards give the credits connector first, before the wallet section");
+  ok(plain(on).includes(install.hostedUrl) && /free tools/i.test(plain(on)), "the hosted /mcp address is still named, for the free tools");
+  ok(/class="ml-code[^"]*"[^>]*data-name="Claude desktop setup"/.test(on) && /data-name="Wallet setup"/.test(on), "commands sit in code blocks (each gets a copy button)");
+}
 ok(allOn.includes(BASE_NO_GAS_SENTENCE) && allOff.includes(BASE_NO_GAS_SENTENCE), "the page states the Base gas sentence");
 
 // ---- the static trees --------------------------------------------------------

@@ -622,7 +622,7 @@ main:focus, main:focus-visible { outline: none !important; }
 .ml-code > pre { margin: 0; padding: 16px 84px 16px 20px; background: transparent; border: 0; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6; color: var(--on-panel); white-space: pre; overflow-x: auto; overflow-wrap: normal; word-break: normal; }
 .ml-code > pre code { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
 .ml-code-xs > pre { font-size: var(--fs-xs); }
-.ml-code-wrap > pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ml-code-wrap > pre { white-space: pre-wrap; overflow-wrap: normal; word-break: normal; overflow-x: auto; }
 .ml-code-labeled > pre { padding-right: 20px; }
 /* A labeled block carries its copy button in the header row, beside the label; the label stays on one line. */
 .ml-code-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; min-height: 36px; padding: 4px 8px 4px 20px; border-bottom: 1px solid var(--panel-rule-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .06em; color: var(--on-panel-dim); }
