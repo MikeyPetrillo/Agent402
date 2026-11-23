@@ -10,6 +10,7 @@ process.env.ZEPTOMAIL_TOKEN = "zepto-test-token";
 process.env.RESEND_API_KEY = "";
 process.env.COMPANY_POSTAL_ADDRESS = "PO Box 1, Test Town, NC 00000";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +21,7 @@ process.on("exit", () => rmSync(DIR, { recursive: true, force: true }));
 process.env.EMAIL_STATUS_FILE = join(DIR, "email-status.json");
 delete process.env.CREDITS_SALES;
 delete process.env.CREDITS_BALANCE_MAX_USD;
-delete process.env.CREDITS_DAILY_MAX_USD;
+looseCreditsChecks();
 
 const { createCredits, hashKey, CREDIT_PACKS, LOW_BALANCE_MICRO } = await import("../src/credits.js");
 const { createCreditsAccount, mountCreditsAccount, accountSecretFrom, historyCsv, SIGN_IN_ANSWER, SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS, ACCOUNT_COOKIE, NEW_KEY_FRESH_SIGN_IN_MS, buildLowBalanceEmail } = await import("../src/credits-account.js");
@@ -108,7 +109,7 @@ clock += 86_400_001;
 paid("cs_t6", "credits-20", "pi_t6", "buyer@x.com", { credits_topup: T.keyId, credits_account: "buyer@x.com" });
 const t6 = await cr.claim("cs_t6");
 ok(t6.status === "topped_up" && t6.balanceUsd === 88, "a day later the same top-up lands");
-delete process.env.CREDITS_DAILY_MAX_USD;
+looseCreditsChecks();
 
 // ---- (2) history by tool ------------------------------------------------------
 const hist = await cr.historyFor(T.keyId, "BUYER@x.com");
@@ -223,7 +224,8 @@ const acct = createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tool
 const known = acct.requestSignIn("K@x.com", "1.1.1.1"), unknown = acct.requestSignIn("nobody@x.com", "1.1.1.1");
 ok(known.status === 200 && unknown.status === 200 && known.message === unknown.message && known.message === SIGN_IN_ANSWER, "a known and an unknown address get the same answer");
 await known.work; await unknown.work;
-ok(mail.length === 1 && mail[0].to === "k@x.com" && /\/credits\/account\/verify\?t=/.test(mail[0].text), "only the address that bought a balance is sent a link");
+ok(mail.length === 2 && mail.map((m) => m.to).sort().join() === "k@x.com,nobody@x.com" && mail.every((m) => /\/credits\/account\/verify\?t=/.test(m.text)), "every address is sent a link, so a new buyer signs in before a first purchase");
+{ const k = mail.find((m) => m.to === "k@x.com"); mail.length = 0; mail.push(k); }
 ok(!/a402_/.test(mail[0].text + mail[0].html), "the sign-in email carries no key");
 ok(acct.requestSignIn("not-an-email", "1.1.1.1").status === 400, "a malformed address is refused");
 acct.requestSignIn("k@x.com", "1.1.1.1");

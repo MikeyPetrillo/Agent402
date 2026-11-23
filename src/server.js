@@ -471,6 +471,7 @@ import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, sellablePacks } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
 import { createCreditsAccount, mountCreditsAccount, accountSecretFrom } from "./credits-account.js";
+import { refuseCreditsKeyInUrl } from "./credits-key-url.js";
 import { createJsonDocument as createCreditsAccountStore } from "./json-document.js";
 import { creditsAccountPage, creditsVerifyPage, creditsNoticePage, creditsNoticeOffPage } from "./credits-account-page.js";
 import { sendMonitorEmail, emailSendStatus, subscriptionPriceText } from "./email.js";
@@ -3025,6 +3026,9 @@ app.use(paidNoStoreMiddleware());
 // email-link routes under /followups and /alerts are registered early; the
 // PostHog proxy sets its own nosniff as well).
 app.use(securityHeaders());
+// A credits key in a URL is refused before anything reads or records the URL
+// (src/credits-key-url.js).
+app.use(refuseCreditsKeyInUrl());
 // Web Bot Auth (src/web-bot-auth.js): off unless WEB_BOT_AUTH=on. Verifies a
 // signing agent's HTTP Message Signature and records it on req.webBotAuth;
 // never refuses and never changes an answer.
@@ -3317,6 +3321,8 @@ const checkoutLimiter = createRateLimiter("checkout", { perMin: 6, perHour: 40 }
 // Refund requests count on their own key, so a holder resending a refund never
 // uses up the same address's checkout budget.
 const creditsRefundLimiter = createRateLimiter("credits-refund", { perMin: 6, perHour: 40 });
+// Revoking by key counts on its own: a holder retrying a refund never uses up a revoke.
+const creditsRevokeLimiter = createRateLimiter("credits-revoke", { perMin: 6, perHour: 40 });
 // The paths that limiter guards. Named here because the check has to run BEFORE
 // express.json() (mounted globally further down): a malformed body 400s at the
 // parser, so those requests never reached the in-route check at all - which is
@@ -3654,6 +3660,10 @@ try {
     onDisputeClosed: (paymentIntent, { won }) => (won && _credits ? _credits.enableByPaymentIntent(paymentIntent, "disputed") : null),
     // A refund sent on request settles by its own status (src/credits.js settleRefund).
     onRefundUpdated: (refund) => (_credits ? _credits.settleRefund(refund) : null),
+    // An early fraud warning freezes the key that payment loaded and refunds its unspent balance.
+    onFraudWarning: (paymentIntent, o) => (_credits ? _credits.fraudWarning(paymentIntent, o) : null),
+    // A credits payment that did not go through counts against its purchase checks.
+    onPaymentFailed: (f) => (_credits ? _credits.notePaymentFailed(f) : null),
   }) : null;
 } catch (e) { console.warn("[monitors] subscriptions init failed:", String(e?.message || e).slice(0, 200)); _subs = null; }
 // The SAME monitor products, subscribed to with a WALLET instead of a card
@@ -3718,6 +3728,9 @@ try {
     onLowBalance: (n) => { void _creditsAccount?.sendLowBalance(n); },
     onReceipt: (r) => { void _creditsAccount?.sendReceipt(r); },
     onNewKey: (n) => { void _creditsAccount?.sendNewKeyNotice(n); },
+    onSpendLimit: (n) => { void _creditsAccount?.sendSpendLimit(n); },
+    // Stripe-facing tags are keyed digests (never an email or an address).
+    tagSecret: accountSecretFrom(process.env.STRIPE_SECRET_KEY),
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
 // The balance page's sign-in and emails (src/credits-account.js): built with
@@ -5615,12 +5628,21 @@ if (_credits) {
     // no obligation exists. Redemption below is untouched on purpose.
     if (!creditsSalesEnabled()) return res.status(503).json({ error: "Prepaid credits are not on sale. Existing keys still work and spend down as normal; pay per call with a wallet over x402, or buy a report by card." });
     if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
-    try { res.json({ url: (await _credits.createCheckout(req.body?.pack)).url }); }
-    catch (e) {
-      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
-      console.warn("[credits] createCheckout failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
-      res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
-    }
+    // A purchase belongs to an account: it starts from the balance page,
+    // signed in with the email the credits go to (POST /credits/account/buy).
+    res.status(401).json({ error: "Sign in to buy credits: a purchase starts from your balance page, signed in with the email the credits go to.", signIn: `${BASE_URL}/credits/account`, buy: { method: "POST", url: `${BASE_URL}/credits/account/buy`, body: { pack: Object.keys(sellablePacks())[0] || null } } });
+  });
+  // Revoke a key without spending it: whoever holds the key (its owner, or
+  // anyone who found it leaked) sends it and it stops working. The same answer
+  // for every key, so nothing says whether one existed. The balance stays
+  // refundable to the card that bought it from the balance page.
+  app.post("/api/credits/revoke", express.json({ limit: "4kb" }), async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    { const rl = creditsRevokeLimiter.check(clientIp(req)); if (rl.limited) { res.set("Retry-After", String(Math.max(1, Math.ceil(Number(rl.retryAfterSeconds) || 60)))); return res.status(429).json({ status: "rate_limited", error: "Too many requests, please slow down." }); } }
+    const auth = String(req.headers.authorization || "");
+    const key = /^Bearer a402_/.test(auth) ? auth.slice(7).trim() : typeof req.body?.key === "string" ? req.body.key.trim() : "";
+    try { res.json(await _credits.revokeByKey(key)); }
+    catch (e) { console.warn("[credits] revoke failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); res.status(503).json({ status: "error", error: "Could not take the request right now. Retry shortly." }); }
   });
   app.get("/api/credits/claim", async (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -5632,7 +5654,8 @@ if (_credits) {
     res.set("Cache-Control", "no-store");
     const auth = String(req.headers.authorization || "");
     const b = /^Bearer a402_/.test(auth) ? await _credits.balance(auth.slice(7).trim()) : null;
-    if (!b && /^Bearer a402_/.test(auth)) _credits.noteBadKey(req.ip);
+    // Only a failed lookup is slowed; a key that works is always answered.
+    if (!b && /^Bearer a402_/.test(auth)) { const busy = await _credits.badKeyHeld(req.ip); _credits.noteBadKey(req.ip); if (busy) return res.status(429).json({ error: "Too many requests with a credits key from this client. Try again later.", reason: "rate_limited" }); }
     if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", ...creditsTopupFields(BASE_URL) });
     res.json(b);
   });
@@ -5651,7 +5674,7 @@ if (_credits) {
     let r;
     try { r = await _credits.requestRefund(auth.slice(7).trim()); }
     catch (e) { console.warn("[credits] refund request failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); return res.status(503).json({ status: "error", error: "Could not take the refund request right now; nothing moved. Retry shortly." }); }
-    if (r.status === "unknown" || r.status === "malformed") _credits.noteBadKey(req.ip);
+    if (r.status === "unknown" || r.status === "malformed") { const busy = await _credits.badKeyHeld(req.ip); _credits.noteBadKey(req.ip); if (busy) return res.status(429).json({ status: "rate_limited", error: "Too many requests with a credits key from this client. Try again later. Nothing moved." }); }
     const said = {
       refunded: `The unspent balance was refunded to the card that bought this key ($${Number(r.refundedUsd || 0).toFixed(2)}); the key is disabled.`,
       nothing_to_refund: "This key holds no unspent balance; nothing was refunded.",
@@ -5673,7 +5696,7 @@ if (_credits) {
   });
   app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return operatorNotFound(req, res);
-    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund(), refundRequestsOwed: await _credits.refundRequestsOwed() });
+    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund(), refundRequestsOwed: await _credits.refundRequestsOwed(), fraudReviews: await _credits.fraudReviews() });
   });
   // After refunding a refused purchase by hand in Stripe: clears it from
   // creditsRefunds. Body { session: "cs_..." }.
@@ -5684,6 +5707,16 @@ if (_credits) {
     if (!(await _credits.refusalsToRefund()).includes(s)) return res.status(404).json({ error: "that session is not awaiting a refund" });
     await _credits.markRefusalRefunded(s);
     res.json({ ok: true, session: s });
+  });
+  // Approve the refund an early fraud warning left owed on a frozen key (one
+  // the card refund made without review did not send: switched off, over its day total, or
+  // spanning other payments). Body { keyId }.
+  app.post("/__operator/credits/fraud-refund", express.json(), async (req, res) => {
+    if (!operatorAuthed(req)) return operatorNotFound(req, res);
+    const keyId = String(req.body?.keyId || "");
+    if (!/^[0-9a-f]{12}$/.test(keyId)) return res.status(400).json({ error: "keyId must be a 12-character key id" });
+    try { res.json(await _credits.approveFraudRefund(keyId)); }
+    catch (e) { res.status(503).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
   });
   app.post("/__operator/credits/disable", express.json(), async (req, res) => {
     if (!operatorAuthed(req)) return operatorNotFound(req, res);
@@ -6292,7 +6325,7 @@ app.get("/__operator/evidence-watch.json", (req, res) => {
     rows: listed,
   });
 });
-// North Carolina sales tax on card-funded sales of digital audio and video,
+// North Carolina sales tax on card-funded sales of the taxable routes (NC_TAXABLE_SLUGS),
 // by month and billing ZIP, for filing (src/nc-sales-tax.js). Built from the
 // sales ledger; ?month=YYYY-MM (default: this month and last).
 app.get("/__operator/nc-sales-tax.json", async (req, res) => {
@@ -11410,15 +11443,17 @@ app.get("/api/pricing", (_req, res) => {
       // answers 503, so this block must not advertise packs or a checkout an
       // agent would be refused. Existing keys still spend, so it says how.
       credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(sellablePacks()).map((p) => p.cents / 100),
-        // The IDS, not just the dollar amounts: POST /api/credits/checkout takes
+        // The IDS, not just the dollar amounts: the checkout takes
         // {"pack":"credits-20"} and an agent cannot guess that from a bare 20.
         packs: Object.entries(sellablePacks()).map(([id, p]) => ({ pack: id, label: p.label, priceUsd: p.cents / 100 })),
-        checkout: { method: "POST", url: `${BASE_URL}/api/credits/checkout`, body: { pack: Object.keys(sellablePacks())[0] } },
+        checkout: { method: "POST", url: `${BASE_URL}/credits/account/buy`, body: { pack: Object.keys(sellablePacks())[0] }, signIn: `${BASE_URL}/credits/account`, note: "a purchase is made signed in to the balance page with the email the credits go to; card authentication may be asked at checkout" },
+        revoke: { method: "POST", url: `${BASE_URL}/api/credits/revoke`, auth: "Authorization: Bearer a402_<key>", returns: "the same answer for every key; a live key stops working and its unspent balance stays refundable" },
+        keyFormat: "a402_ck_ followed by 43 base64url characters (keys issued earlier: a402_ and 32 characters); sent only in the Authorization header",
         balance: `${BASE_URL}/api/credits/balance`,
         // The terms the purchase carries (src/terms.js), as fields.
         balanceMaxUsd: creditsBalanceMaxCents() / 100, expires: false, feesUsd: 0,
         refund: { method: "POST", url: `${BASE_URL}/api/credits/refund`, auth: "Authorization: Bearer a402_<key>", returns: "the whole unspent balance, rounded up to the cent, to the card that bought the key; the key is disabled" } }
-        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance` },
+        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance`, revoke: { method: "POST", url: `${BASE_URL}/api/credits/revoke`, auth: "Authorization: Bearer a402_<key>" } },
       humanProducts: {
         reports: Object.entries(HUMAN_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsd: p.price / 100, slug: p.slug, buy: `${BASE_URL}/reports` })),
         monitors: Object.entries(MONITOR_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsdPerMonth: p.price / 100, slug: p.slug, subscribe: `${BASE_URL}/monitors` })),

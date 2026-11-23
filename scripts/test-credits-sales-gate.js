@@ -128,6 +128,8 @@ try {
 
   for (const [where, text, offPhrase, onPhrase] of await keySurfaces()) ok(text.includes(offPhrase) && !text.includes(onPhrase), `${where} names only a key already issued while sales are off`);
 
+  const rvOff = await fetch(`${B}/api/credits/revoke`, { method: "POST", headers: { authorization: `Bearer a402_ck_${"R".repeat(43)}` } });
+  ok(rvOff.status === 200 && (await rvOff.json()).status === "received", "a key can be revoked while sales are off");
   // redemption must survive: a 404 here would mean an existing key was stranded
   ok((await fetch(`${B}/api/credits/balance`)).status !== 404, "the balance route still exists, so an existing key can still be read");
   ok((await fetch(`${B}/api/credits/claim?session=x`)).status !== 404, "the claim route still exists");
@@ -146,6 +148,9 @@ try {
   ok(/already issued/.test(String(pricingOff.credits.how)) && /balance/.test(String(pricingOff.credits.balance)), "...and still tells an existing key holder how to spend and read it");
   const pageOff = await (await fetch(`${B}/credits`)).text();
   ok(!/InStock/.test(pageOff) && !/Buy \$20/.test(pageOff) && !/data-pack-buy/.test(pageOff), "/credits carries no Offer, buy snippet or buy button while sales are off");
+  ok(!/Buy \$5 of credits|Buy \$10 of credits/.test(pageOff) && !/\$5, \$10/.test(pageOff), "/credits offers no starter pack while sales are off");
+  const ogOff = await (await fetch(`${B}/og/credits.svg`)).text();
+  ok(/not on sale/.test(ogOff) && !/\$5, \$10/.test(ogOff), "the credits share card names no pack while sales are off");
   const descOf = (html) => (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
   // /terms states whether credits are sold, read from the same switch: the
   // credits clause and the access line both follow it.
@@ -176,9 +181,12 @@ try {
   proc.kill("SIGKILL");
 
   // --- explicitly on: selling works again, so this is a switch and not a deletion
-  ok(await boot({ CREDITS_SALES: "on" }), "server booted with CREDITS_SALES=on");
+  // The daily purchase limit is wide here so every pack is on offer (a pack
+  // above it is not; scripts/test-credits-terms.js).
+  ok(await boot({ CREDITS_SALES: "on", CREDITS_DAILY_MAX_USD: "1000" }), "server booted with CREDITS_SALES=on");
   const on = await fetch(`${B}/api/credits/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "credits-20" }) });
-  ok(on.status !== 503, `selling is reachable when explicitly enabled (got ${on.status}, not the 503 refusal)`);
+  const onBody = await on.json().catch(() => ({}));
+  ok(on.status === 401 && /\/credits\/account$/.test(String(onBody.signIn)) && /\/credits\/account\/buy$/.test(String(onBody.buy?.url)), `selling is reachable when explicitly enabled, signed in: the API checkout points at the balance page (got ${on.status})`);
   const pricingOn = await (await fetch(`${B}/api/pricing`)).json();
   ok(pricingOn.credits?.onSale === true && pricingOn.credits.checkout?.method === "POST", "/api/pricing advertises the checkout when sales are on");
   ok(pricingOn.credits.balanceMaxUsd === 100 && pricingOn.credits.expires === false && pricingOn.credits.feesUsd === 0 && /\/api\/credits\/refund$/.test(pricingOn.credits.refund?.url) && pricingOn.credits.packs.every((p) => p.priceUsd <= pricingOn.credits.balanceMaxUsd), "/api/pricing states the cap, no expiry, no fees and the refund route, and every pack is within the cap");
@@ -200,6 +208,21 @@ try {
   const pageOn = await pageOnRes.text();
   ok(pageOnRes.status === 200 && !/noindex/.test(robotsMeta(pageOn)), `/credits is 200 and indexable when sales are on (got "${robotsMeta(pageOn)}")`);
   ok(!/not on sale/.test(descOf(pageOn)) && /\$20/.test(descOf(pageOn)), `/credits describes the purchase when sales are on ("${descOf(pageOn).slice(0, 40)}...")`);
+  // The starter packs, read from the pack table on every surface that sells.
+  const { CREDIT_PACKS } = await import("../src/credits.js");
+  const dollars = Object.values(CREDIT_PACKS).map((p) => `$${p.cents / 100}`);
+  ok(dollars[0] === "$5" && dollars[1] === "$10", "the pack table starts with the $5 and $10 starter packs");
+  ok(/^Buy \$5, \$10, \$20, \$50 or \$100 by card/.test(descOf(pageOn)), `/credits description lists every pack, starters first ("${descOf(pageOn).slice(0, 50)}...")`);
+  for (const [key, p] of Object.entries(CREDIT_PACKS)) ok(pageOn.includes(`data-pack-buy="${key}"`) && pageOn.includes(`Buy $${p.cents / 100} of credits`) && pageOn.includes(p.note), `/credits sells the ${key} pack with its own note`);
+  const lds = [...pageOn.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].flatMap((m) => { try { const j = JSON.parse(m[1]); return Array.isArray(j["@graph"]) ? j["@graph"] : [j]; } catch { return []; } });
+  const offers = lds.find((j) => j && j["@type"] === "Product" && Array.isArray(j.offers)) || {};
+  ok(Array.isArray(offers.offers) && offers.offers.map((o) => o.price).join() === "5.00,10.00,20.00,50.00,100.00", "the /credits structured data offers every pack at its table price");
+  ok(pricingOn.credits.packs.map((p) => `${p.pack}:${p.priceUsd}`).join() === "credits-5:5,credits-10:10,credits-20:20,credits-50:50,credits-100:100" && pricingOn.credits.checkout.body.pack === "credits-5", "/api/pricing lists the starter packs and its example checkout body names the smallest");
+  const ogOn = await (await fetch(`${B}/og/credits.svg`)).text();
+  ok(/\$5, \$10, \$20, \$50 or \$100\./.test(ogOn), "the credits share card lists every pack, starters first, while sales are on");
+  const starter = await fetch(`${B}/credits/account/buy`, { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" }, body: JSON.stringify({ pack: "credits-5" }) });
+  ok(starter.status === 401, `a starter pack purchase needs a signed-in balance page first (got ${starter.status})`);
+  ok(/\/credits\/account\/buy$/.test(String(pricingOn.credits.checkout.url)) && /\/credits\/account$/.test(String(pricingOn.credits.checkout.signIn)), "/api/pricing names the signed-in purchase route");
   for (const path of ["/sitemap.xml", "/sitemap-pages.xml"]) {
     const xml = await (await fetch(`${B}${path}`)).text();
     ok(/\/credits<\/loc>/.test(xml), `${path} lists /credits when sales are on`);
@@ -210,6 +233,19 @@ try {
   ok(/Stripe Checkout, for reports and monitors, and for prepaid credits\)/.test(tOn.access), "/terms access line names card for prepaid credits when sales are on");
   ok(/POST \/api\/credits\/refund/.test(pageOn) && /No fees/.test(pageOn) && /refunded on request/.test(pageOn), "/credits states the refund route and no fees when sales are on");
   ok(!/api\/credits\/refund/.test(pageOff) && !/No fees/.test(pageOff), "/credits offers neither while sales are off");
+
+  // A key never travels in a URL, and never reaches the server's log.
+  const leaked = `a402_ck_${"Q".repeat(43)}`;
+  const inUrl = await fetch(`${B}/api/credits/balance?key=${leaked}`);
+  const inUrlBody = await inUrl.json().catch(() => ({}));
+  ok(inUrl.status === 400 && inUrlBody.reason === "key_in_url" && !JSON.stringify(inUrlBody).includes(leaked), "a key in a URL is refused, and the answer does not repeat it");
+  await fetch(`${B}/api/hash`, { method: "POST", headers: { authorization: `Bearer ${leaked}`, "content-type": "application/json" }, body: "{}" });
+  await fetch(`${B}/api/credits/balance`, { headers: { authorization: `Bearer ${leaked}` } });
+  ok(!log.join("\n").includes(leaked.slice(8)), "no key sent in a URL or a header reaches the server's log");
+  // Revoke by key: one answer for every key, with sales on or off.
+  const rvA = await (await fetch(`${B}/api/credits/revoke`, { method: "POST", headers: { authorization: `Bearer ${leaked}` } })).json();
+  const rvB = await (await fetch(`${B}/api/credits/revoke`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "not-a-key" }) })).json();
+  ok(rvA.status === "received" && JSON.stringify(rvA) === JSON.stringify(rvB), "revoking by key answers the same for any key");
 
   // the gate must be read at call time, never latched at boot
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");

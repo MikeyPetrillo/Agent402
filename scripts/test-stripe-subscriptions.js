@@ -305,23 +305,23 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
   stripe.subscriptions.retrieve = async (id) => ({ id, status: "active" });
   await rs.recordFromSession("cs_paid");
   const inv = (id, amount, evt) => Buffer.from(JSON.stringify({ id: evt, type: "invoice.paid", data: { object: { id, subscription: "sub_1", customer: "cus_1", amount_paid: amount } } }));
-  await rs.handleWebhook(inv("in_r1", 500, "evt_r1"), "goodsig");
+  await rs.handleWebhook(inv("in_r1", 500, "evt_rc1"), "goodsig");
   let kept = rs.get("sub_1").signedReceipts || [];
   const v = kept[0] ? verifyReceipt(kept[0].receipt, { keys: keys.keys, responseBody: kept[0].statement, request: { method: "POST", path: SUBSCRIPTION_RECEIPT_PATHS["card-subscription"], body: { product: "domain-monitor", target: "example.com", subscription: "sub_1" } } }) : {};
   ok(kept.length === 1 && v.valid === true && v.record.rail === "card-subscription" && v.record.settlement === "in_r1" && v.record.priceUsd === "5" && v.record.payer === null, `the first paid invoice is signed: rail, invoice, amount, no payer (${v.reason})`);
   const conf = await rs.recordFromSession("cs_paid");
   ok(conf.signedReceipts?.length === 1 && conf.signedReceipts[0].receipt === kept[0].receipt && conf.signedReceipts[0].statement === kept[0].statement, "the confirmation read returns the receipt with its period statement");
-  await rs.handleWebhook(inv("in_r1", 500, "evt_r1b"), "goodsig");
+  await rs.handleWebhook(inv("in_r1", 500, "evt_rc1b"), "goodsig");
   ok(rs.get("sub_1").signedReceipts.length === 1, "a redelivered invoice keeps the one receipt");
-  await rs.handleWebhook(inv("in_r2", 500, "evt_r2"), "goodsig");
+  await rs.handleWebhook(inv("in_r2", 500, "evt_rc2"), "goodsig");
   kept = rs.get("sub_1").signedReceipts;
   ok(kept.length === 2 && verifyReceipt(kept[1].receipt, { keys: keys.keys, responseBody: kept[1].statement }).record?.settlement === "in_r2", "a renewal's paid invoice gets its own receipt");
-  await rs.handleWebhook(inv("in_r0", 0, "evt_r0"), "goodsig");
+  await rs.handleWebhook(inv("in_r0", 0, "evt_rc0"), "goodsig");
   ok(rs.get("sub_1").signedReceipts.length === 2, "an invoice that paid nothing (a 100% promotion) gets none");
-  for (const [i, e] of [["in_r3", "evt_r3"], ["in_r4", "evt_r4"]]) await rs.handleWebhook(inv(i, 500, e), "goodsig");
+  for (const [i, e] of [["in_r3", "evt_rc3"], ["in_r4", "evt_rc4"]]) await rs.handleWebhook(inv(i, 500, e), "goodsig");
   ok(rs.get("sub_1").signedReceipts.length === 3 && rs.get("sub_1").signedReceipts[2].settlement === "in_r4", "the last three periods' receipts are kept, newest last");
   signOn = false;
-  await rs.handleWebhook(inv("in_r5", 500, "evt_r5"), "goodsig");
+  await rs.handleWebhook(inv("in_r5", 500, "evt_rc5"), "goodsig");
   ok(rs.get("sub_1").signedReceipts.length === 3 && rs.get("sub_1").lastInvoiceId === "in_r5", "signing off: the invoice is recorded, no receipt is added");
   try { rmSync(RS); rmSync(RS + ".webhooks.json"); } catch { /* ignore */ }
 }

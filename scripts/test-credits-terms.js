@@ -7,6 +7,7 @@
 // backend, stubbed Stripe; the switch is read at call time, so one process
 // renders both states.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -282,6 +283,35 @@ const msg = stripe._last.custom_text.submit.message, desc = stripe._last.line_it
 ok(/refunded to this card on request/.test(msg) && /no fees/.test(msg) && /never expire/.test(msg) && /only on Agent402's own services/.test(msg) && !/not refundable/.test(msg), "the pay button's text states refund on request, no fees, no expiry, own services only");
 ok(/refunded to this card on request/.test(desc) && /no fees/.test(desc) && /never expire/.test(desc), "the product description says the same");
 ok(stripe._last.metadata.terms === creditsTermsVersion(), `the checkout records the terms version (${stripe._last.metadata.terms})`);
+// Stripe records every pack and top-up as Nontaxable (tax falls on the call it
+// is spent on, src/nc-sales-tax.js), never under the gift-card code, and no
+// name, description or code calls it a gift card or a wallet.
+{
+  const { creditsProductData, CREDITS_TAX_CODE } = await import("../src/credits.js");
+  ok(CREDITS_TAX_CODE === "txcd_00000000", "the credits tax code is Nontaxable");
+  const products = [];
+  for (const key of Object.keys(CREDIT_PACKS)) {
+    stripe._last = null;
+    await cr.createCheckout(key);
+    products.push([`pack ${key}`, stripe._last.line_items[0].price_data.product_data]);
+    ok(!stripe._last.automatic_tax, `the ${key} checkout adds no Stripe tax at sale`);
+    products.push([`top-up ${key}`, creditsProductData(CREDIT_PACKS[key], { topup: true })]);
+  }
+  ok(products.length === 2 * Object.keys(CREDIT_PACKS).length && products.every(([, d]) => d.tax_code === "txcd_00000000"), `every pack and top-up product carries the Nontaxable tax code (${products.length} products)`);
+  const bad = products.filter(([, d]) => /gift|wallet/i.test(`${d.name}\n${d.description}\n${d.tax_code}`)).map(([w]) => w);
+  ok(bad.length === 0, `no pack or top-up name, description or tax code says gift or wallet${bad.length ? ` (${bad.join(", ")})` : ""}`);
+  ok(/gift/i.test("Not a Gift card") && /wallet/i.test("WALLET"), "control: the gift and wallet check is case-insensitive");
+  ok(!/txcd_10502000/.test(src), "credits.js never names the gift-card tax code");
+  // The starter packs: the two smallest, on offer, each one key's whole balance.
+  ok(CREDIT_PACKS["credits-5"]?.cents === 500 && CREDIT_PACKS["credits-10"]?.cents === 1000, "the $5 and $10 starter packs are in the pack table");
+  ok(["credits-20", "credits-50", "credits-100"].every((k) => k in CREDIT_PACKS), "the existing packs stay");
+  ok("credits-5" in sellablePacks() && "credits-10" in sellablePacks(), "the starter packs are on offer");
+  paid("cs_s5", "credits-5", "pi_s5", "s5@x.com"); paid("cs_s10", "credits-10", "pi_s10", "s10@x.com");
+  const S5 = await cr.claim("cs_s5"), S10 = await cr.claim("cs_s10");
+  ok(S5.status === "minted" && S5.balanceUsd === 5 && S10.status === "minted" && S10.balanceUsd === 10 && S5.key !== S10.key, "each starter pack mints its own key holding exactly the pack");
+  ok((await cr.claim("cs_s5")).key === undefined, "a starter pack's key is shown once");
+  ok(Object.values(CREDIT_PACKS).every((p) => p.cents <= creditsBalanceMaxCents() && typeof p.note === "string" && p.note.length > 10), "every pack fits the $100 cap and carries its own card note");
+}
 
 // ---- /terms and /privacy: switch-on text matches the code, switch-off unchanged ---
 const { termsPage } = await import("../src/terms.js");

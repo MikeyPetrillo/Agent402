@@ -1,11 +1,19 @@
-// North Carolina sales tax on card-funded sales of digital audio and video.
+// North Carolina sales tax on card-funded sales of digital audio and video,
+// and of edits to a buyer's own image or audio file.
 //
 // North Carolina taxes "certain digital property" (G.S. 105-164.4(a)(1)b),
 // which includes a "digital audio work" (a fixation of musical, spoken or
 // other sounds transferred electronically) and a "digital audiovisual work"
 // (G.S. 105-164.3), and excludes an "information service". The catalog's data,
-// chat, tool, image and report routes are information services; generated
-// speech and video are digital audio and audiovisual works.
+// chat, search, transcription and report routes are information services.
+// Generated speech and video are digital audio and audiovisual works: taxed.
+// A GENERATED image is not taxed: it is not a "photograph" (an image captured
+// by a camera) or any other class of certain digital property. An EDIT of an
+// image or audio file the buyer sends (crop, resize, convert, thumbnail,
+// normalize, a model edit) may be a taxable repair or alteration of certain
+// digital property when the input is a photograph or a recording; that is not
+// settled, so those routes are taxed, conservatively. A pack itself is not
+// taxed at sale; the tax falls on the call it is spent on.
 //
 // A card-funded sale has a billing address: a credits key keeps the one its
 // pack was bought with, and a per-call card payment carries its own. Prices
@@ -22,7 +30,8 @@
 // county rate r of the buyer's county, applied from the ZIP breakdown when
 // filing.
 
-// Routes whose answer is a digital audio or audiovisual work.
+// Routes whose answer is a digital audio or audiovisual work, or an edit of
+// the buyer's own image or audio file.
 export const NC_TAXABLE_SLUGS = Object.freeze({
   "tts-lite": "digital audio work",
   tts: "digital audio work",
@@ -30,6 +39,13 @@ export const NC_TAXABLE_SLUGS = Object.freeze({
   "v1-audio-speech": "digital audio work",
   dub: "digital audio work",
   "v1-videos": "digital audiovisual work",
+  "v1-images-edit": "edit of a buyer's image",
+  "image-crop": "edit of a buyer's image",
+  "image-resize": "edit of a buyer's image",
+  "image-convert": "edit of a buyer's image",
+  "image-thumbnail": "edit of a buyer's image",
+  "audio-convert": "edit of a buyer's audio",
+  "audio-normalize": "edit of a buyer's audio",
 });
 
 export const ncTaxableKind = (slug) => (Object.hasOwn(NC_TAXABLE_SLUGS, String(slug)) ? NC_TAXABLE_SLUGS[slug] : null);
