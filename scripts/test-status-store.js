@@ -275,6 +275,31 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
   check("a rail reading past the canary's daily bound reads unknown with its age, and the overall word is not operational",
     of(snap, "rail_base").current.state === "unknown" && of(snap, "rail_base").current.ageMs === 27 * H && snap.overall === "degraded");
 
+  // A rail the latest paid canary run did not reach: its reading lags its
+  // peers' newest by more than the bound, so it reads unknown on its own
+  // card, with its age and the peers' age, and does not read operational.
+  {
+    const { RAIL_PEER_LAG_MS, staleLine: stale } = await import("../src/status.js");
+    check("the peer lag bound is a few hours: past one canary run's spread, inside a day", RAIL_PEER_LAG_MS >= 2 * H && RAIL_PEER_LAG_MS <= 8 * H);
+    const lagging = (key) => (key === "rail_celo" ? 23 * H : /^rail_/.test(key) ? 28 * MIN : fresh(key));
+    snap = view(storeAt(lagging));
+    const celo = of(snap, "rail_celo");
+    check("a rail 23 h old beside peers proven 28 min ago reads unknown, behind its peers, with both ages",
+      !!celo && celo.current.state === "unknown" && celo.current.reason === "behind its peers" && celo.current.ageMs === 23 * H && celo.current.peerAgeMs === 28 * MIN && celo.current.lastState === "operational");
+    check("...its peers stay operational", of(snap, "rail_base").current.state === "operational");
+    check("...the card says it was not in the latest canary run, with both ages",
+      stale(celo) === '<p class="comp-b">Not in the latest paid canary run: last observed 23h ago, other rails 28m ago.</p>');
+    check("...and the headline is not degraded by a measurement gap inside the daily bound", snap.overall === "operational");
+    const html2 = statusPage("https://example.test", {}, snap);
+    check("the page renders the lagging rail as Not measured, with its line", /<span class="comp-n">Celo<\/span>\s*<span class="comp-s unk">Not measured<\/span>/.test(html2) && html2.includes("Not in the latest paid canary run: last observed 23h ago, other rails 28m ago."));
+    snap = view(storeAt((key) => (key === "rail_celo" ? 5 * H : /^rail_/.test(key) ? 28 * MIN : fresh(key))));
+    check("control: a rail inside the bound behind its peers stays operational", of(snap, "rail_celo").current.state === "operational");
+    snap = view(storeAt(fresh));
+    check("control: rails all observed together stay operational however old inside the daily bound", RAIL_COMPONENTS.every((c) => of(snap, c.key).current.state === "operational"));
+    snap = view(storeAt((key) => (key === "rail_celo" ? 27 * H : /^rail_/.test(key) ? 28 * MIN : fresh(key))));
+    check("a rail past the daily bound keeps the stale reason and degrades the headline", of(snap, "rail_celo").current.reason === "no recent observation" && snap.overall === "degraded");
+  }
+
   snap = view(storeAt((key) => (key === "paywall" ? 50 * MIN : fresh(key))));
   check("a 5-minute component 50 minutes old reads unknown, and the overall word is not operational",
     of(snap, "paywall").current.state === "unknown" && snap.overall === "degraded");

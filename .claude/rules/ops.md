@@ -210,7 +210,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `ok`. Without a bucket, a FREE_MODE boot, a boot outside production and a boot with no state
   database read `off`, which never pages.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
-  re-probed once before it is recorded. The heartbeat signs its paywall read with X-Heartbeat-Token,
+  re-probed once before it is recorded. A rail card on `/status` whose newest reading is more
+  than `RAIL_PEER_LAG_MS` (6 hours) behind the newest rail reading (left out of the latest paid
+  canary run) reads unknown with reason "behind its peers", both ages on the card; that alone
+  does not move the headline, which a rail past the daily bound still degrades (`src/status.js`
+  `markRailsBehindPeers`, `scripts/test-status-store.js`). The heartbeat signs its paywall read with X-Heartbeat-Token,
   so the unpaid budget never refuses it; the status Worker pages "Scheduled check needs review: paywall-read" after three
   unobserved runs (the age of the newest paywall row on /api/status) and closes on its next observed
   read. Roll back the server before (or with) the status Worker, never the
