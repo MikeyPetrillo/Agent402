@@ -22,7 +22,7 @@ import { createServer } from "node:http";
 import { createHash, generateKeyPairSync, createSign, createVerify, createPublicKey, randomUUID } from "node:crypto";
 import express from "express";
 import { bootPaidServer } from "./lib/paid-boot.js";
-import { notChargedOn } from "../src/not-charged.js";
+import { notChargedOn, withoutChargeSentences } from "../src/not-charged.js";
 
 const gateMod = await import("../src/aws-marketplace-gate.js");
 const { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsIneligibility, awsRoutes, createAwsPaymentClaims, createAwsMarketplaceGate, createAwsRateLimits, paymentJwksBase, callerUrlFields, AWS_DEFAULT_SLUGS, AWS_DEFAULTS } = gateMod;
@@ -483,6 +483,23 @@ try {
   await off.stop();
   if (on) await on.stop();
   await new Promise((r) => jwksStub.close(r));
+}
+
+// The gate drops every wording of "this call was not charged" from a
+// handler's error (the payment was taken before the run), and keeps the
+// sentences around it and every sentence that makes no such claim.
+{
+  const claims = [
+    "Nothing was charged.", "You were not charged.", "The call is never charged.", "This call isn't charged.",
+    "It wasn't charged.", "You won't be charged.", "The run was not billed.", "You aren't billed for it.",
+    "Nothing charged.", "Nothing is billed.", "The request was uncharged.", "There is no charge.", "You will not be charged.",
+  ];
+  for (const c of claims) {
+    const out = withoutChargeSentences(`Upstream unavailable. ${c} Retry shortly.`);
+    ok(out === "Upstream unavailable. Retry shortly.", `charge claim dropped: "${c}" (got "${out}")`);
+  }
+  const kept = ["The payment was charged and the answer is kept.", "Seller refused the payment (HTTP 402); the credential expired unused, so the seller was paid nothing.", "Billing runs monthly."];
+  for (const k of kept) ok(withoutChargeSentences(k) === k, `a sentence with no not-charged claim is kept: "${k}"`);
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

@@ -192,7 +192,7 @@ quiet();
     const held = buyer._spentThisWindow();
     const { e } = await buy("hang.example");
     ok(e && e.committed === false && e.paidUnanswered === true && buyer._spentThisWindow() === held, "timeout + the chain shows the credential expired unused -> hold released, uncommitted, still flagged unanswered");
-    ok(e && /expired unused, nothing charged/.test(e.message), "and the error says nothing was charged");
+    ok(e && /expired unused, so the seller was paid nothing/.test(e.message), "and the error says the seller was paid nothing");
   }
   // A reset mid-exchange is treated like a timeout.
   chainReader = CHAIN.consumed;

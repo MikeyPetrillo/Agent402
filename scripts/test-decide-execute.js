@@ -71,7 +71,7 @@ const catalog = {
     calls.push(["router", input]);
     if (routerMode === "committed") throw Object.assign(new Error("seller settled then failed"), { statusCode: 502, committed: true });
     if (routerMode === "fail") throw Object.assign(new Error("no seller"), { statusCode: 502 });
-    if (routerMode === "refused") throw Object.assign(new Error('External seller "https://s.example" failed: Seller refused the payment (HTTP 400); the credential expired unused, nothing charged'), { statusCode: 400 });
+    if (routerMode === "refused") throw Object.assign(new Error('External seller "https://s.example" failed: Seller refused the payment (HTTP 400); the credential expired unused, so the seller was paid nothing'), { statusCode: 400 });
     if (routerMode === "hang") return new Promise(() => {});
     return { result: { ext: true }, receipt: { underlyingPriceUsd: 0.018, seller: "seller.example", paidUsd: 3.3, routingFeeUsd: 3.282 } };
   } },

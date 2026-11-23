@@ -1618,7 +1618,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       const verdict = await readChainVerdict(where);
       const unused = !!(verdict && verdict.debited === false && verdict.expired === true);
       if (unused) committed = false; // provably unpaid: the finally releases the hold
-      console.warn(`[x402-buyer] ${where} did not answer the paid request (${what}) - ${unused ? "the credential expired unused, nothing charged" : "the payment may have settled, hold kept"}`);
+      console.warn(`[x402-buyer] ${where} did not answer the paid request (${what}) - ${unused ? "the credential expired unused, so the seller was paid nothing" : "the payment may have settled, hold kept"}`);
       if (!outboundRecorded) {
         outboundRecorded = true;
         try {
@@ -1632,7 +1632,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // Worded for any caller: what a caller does next (route-execute tries
       // no other seller) is the caller's to say.
       const e = bad(unused
-        ? "Seller did not answer the paid request; the credential expired unused, nothing charged"
+        ? "Seller did not answer the paid request; the credential expired unused, so the seller was paid nothing"
         : "Seller did not answer the paid request; the payment may have settled", 502);
       e.paidUnanswered = true;
       e.committed = committed;
@@ -1891,7 +1891,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           const memoize = memoizeDelivery && !ourWindow && (paid.status === 402 || paid.status === 401) && paidRefusalCarriesChallenge(paid.headers, refusalText) && postSendRefusalIsSellers(url, chain, { proven: !allowUnproven });
           if (memoize) noteSellerRefusal(url, chain, paid.status);
           console.warn(`[x402-buyer] ${where} refused the payment and the chain shows no debit after the credential expired (${verdict.observed} tx read) - not charged${memoize ? `, route noted as refusing on ${chain}` : ""}`);
-          const e = bad(`Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`, 502);
+          const e = bad(`Seller refused the payment (HTTP ${paid.status}); the credential expired unused, so the seller was paid nothing`, 502);
           e.refused = true;
           e.sellerStatus = paid.status;
           throw e;
