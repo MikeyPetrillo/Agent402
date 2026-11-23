@@ -6822,18 +6822,24 @@ function operatorWriteRefused(req) {
   // does not: the request is then the cookie's, held to the origin check like
   // a cookie alone (the gate still counts the wrong token as a guess).
   const headerToken = getOperatorToken(req);
+  let wrongToken = false;
   if (headerToken) {
     // The budget is read before the token, as at the gate: past it the token
     // is not evaluated, so a right and a wrong one answer alike.
-    if (!operatorAttemptLimiter.peek(operatorAttemptIp(req)).limited && operatorTokenOk(headerToken)) return false;
-    // A wrong header token is a guess wherever it is read, so it spends the
-    // same per-address budget here as at the gate (operatorAuthed).
-    operatorAttemptLimiter.check(operatorAttemptIp(req));
-    noteOperatorAuthFailure();
+    const ip = operatorAttemptIp(req);
+    if (operatorAttemptLimiter.peek(ip).limited) wrongToken = false;
+    else if (operatorTokenOk(headerToken)) return false;
+    else wrongToken = true;
   }
   if (String(req.headers["sec-fetch-site"] || "").toLowerCase() === "same-origin") return false;
   const origin = req.headers.origin;
-  return !(OPERATOR_SITE_ORIGIN && typeof origin === "string" && origin === OPERATOR_SITE_ORIGIN);
+  const refused = !(OPERATOR_SITE_ORIGIN && typeof origin === "string" && origin === OPERATOR_SITE_ORIGIN);
+  // A wrong header token on a write this check refuses is a guess, charged
+  // here once, only while the address's budget accepts it (as at the gate):
+  // past it, nothing moves the shared count. A write this check lets through
+  // is left to the gate, so no request is charged twice.
+  if (refused && wrongToken && !operatorAttemptLimiter.check(operatorAttemptIp(req)).limited) noteOperatorAuthFailure();
+  return refused;
 }
 // Operator auth: a raw token via header (curl/API), OR a valid session cookie
 // (browser). Both funnel through here so every gated route agrees.

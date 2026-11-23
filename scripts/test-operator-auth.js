@@ -411,6 +411,28 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     } finally { try { child2.kill("SIGKILL"); } catch { /* */ } }
   }
 
+  // Junk operator writes from one address past its attempt budget do not move
+  // the global wrong-credential counter: a write is charged only while the
+  // address's budget accepts it, and once per request.
+  {
+    const port3 = await getFreePort();
+    const child3 = spawn(process.execPath, ["src/server.js"], {
+      env: { ...process.env, FREE_MODE: "true", PORT: String(port3), AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "1", LATE_SETTLE_RECONCILE: "off" },
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    try {
+      const base3 = `http://127.0.0.1:${port3}`;
+      for (let i = 0; i < 120; i++) { try { if ((await fetch(`${base3}/health`)).ok) break; } catch { /* booting */ } await new Promise((r) => setTimeout(r, 500)); }
+      const failures = async () => (await (await fetch(`${base3}/api/gateway-status`, { headers: { "x-operator-token": TOKEN, "x-forwarded-for": "10.8.8.8" } })).json())?.operatorAuth?.failures1h;
+      const before = await failures();
+      for (let i = 0; i < 80; i++) {
+        await fetch(`${base3}/__operator/monitors/run`, { method: "POST", headers: { cookie: "a402_op=junk", "x-operator-token": `junk-${i}`, "x-forwarded-for": "10.9.9.9", "content-type": "text/plain" }, body: "x" }).then((r) => r.arrayBuffer());
+      }
+      const after = await failures();
+      ok(Number.isFinite(before) && Number.isFinite(after) && after - before <= 12, `80 junk writes from one address move the global counter by at most its budget (${before} -> ${after})`);
+    } finally { try { child3.kill("SIGKILL"); } catch { /* */ } }
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   done(fail ? 1 : 0);
 })().catch((e) => { console.error(e); done(1); });

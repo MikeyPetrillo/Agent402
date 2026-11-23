@@ -317,6 +317,14 @@ await refuses("json-lint", { json: { a: 1 } }, "json", "an object");
   ok(e2 && e2.statusCode === 413 && /answer would be/.test(e2.message) && performance.now() - t1 < 200, `csv-to-json: a wide header over many rows answers 413 before it is built (${e2?.statusCode}: ${e2?.message?.slice(0, 120)})`);
   const rows = tool("csv-to-json").handler({ csv: wide, header: false });
   ok(rows.count === 2001, "csv-to-json: the same CSV without header objects is answered");
+  // Names are measured as they are written in JSON: a control character
+  // takes six bytes there, so a 6 KB input with such a header is refused too.
+  const ctl = "\u0001".repeat(4_000) + "\n" + "1\n".repeat(1_200);
+  const e3 = errOf(() => tool("csv-to-json").handler({ csv: ctl }));
+  ok(e3 && e3.statusCode === 413, `csv-to-json: a control-character header over 1,200 rows answers 413 (${e3?.statusCode ?? "answered"})`);
+  const ctlAgg = `g,${"\u0001".repeat(15_000)}\n` + Array.from({ length: 1000 }, (_, i) => `k${i},1`).join("\n");
+  const e4 = errOf(() => tool("csv-aggregate").handler({ csv: ctlAgg, groupBy: "g", limit: 1000 }));
+  ok(e4 && e4.statusCode === 413, `csv-aggregate: a control-character column name over 1,000 groups answers 413 (${e4?.statusCode ?? "answered"})`);
   for (const slug of ["csv-to-json", "csv-aggregate"]) {
     const t = tool(slug);
     const r = t.handler({ ...t.discovery.input });
@@ -326,6 +334,42 @@ await refuses("json-lint", { json: { a: 1 } }, "json", "an object");
 
 // ---- log-timestamps claims the formats it reads ----
 ok(tool("log-timestamps").description.startsWith("Find each timestamp in the formats below in log text"), "log-timestamps: the description claims the listed formats, not every timestamp");
+
+// ---- csv-aggregate bounds its work before it allocates per-group statistics ----
+{
+  const errOf = (fn) => { try { fn(); return null; } catch (e) { return e; } };
+  const header = ["g", ...Array.from({ length: 199 }, (_, i) => `c${i}`)].join(",");
+  let body = header + "\n";
+  for (let i = 0; body.length < 99_000; i++) body += `k${i}\n`;
+  global.gc?.();
+  const h0 = process.memoryUsage().heapUsed, t0 = performance.now();
+  const e = errOf(() => tool("csv-aggregate").handler({ csv: body, groupBy: "g", limit: 1 }));
+  const ms = performance.now() - t0, grew = process.memoryUsage().heapUsed - h0;
+  ok(e && e.statusCode === 413 && ms < 150 && grew < 64 * 1024 * 1024, `csv-aggregate: a distinct group per row over 199 columns answers 413 before it allocates (${e?.statusCode ?? "answered"}, ${ms.toFixed(0)} ms, heap +${Math.round(grew / 1e6)} MB)`);
+  const ragged = header + "\n" + "x,1\n".repeat(24_000);
+  const e2 = errOf(() => tool("csv-aggregate").handler({ csv: ragged }));
+  ok(e2 && e2.statusCode === 413, `csv-aggregate: rows times columns past its cell budget answers 413 (${e2?.statusCode ?? "answered"})`);
+  const fine = tool("csv-aggregate").handler({ csv: "g,a,b\n" + Array.from({ length: 5_000 }, (_, i) => `k${i % 50},${i},x`).join("\n"), groupBy: "g" });
+  ok(fine.rows === 5000 && fine.matched === 50, "csv-aggregate: an ordinary table inside the budget is summarized");
+}
+
+// ---- csv-to-md bounds its cells before it pads and writes them ----
+{
+  const { KIT2 } = await import("../src/tools/kit2.js");
+  const md = KIT2.find((t) => t.slug === "csv-to-md");
+  const errOf = (fn) => { try { fn(); return null; } catch (e) { return e; } };
+  const wide = Array.from({ length: 2000 }, (_, i) => `column_name_${i}`).join(",") + "\n" + "1\n".repeat(2000);
+  const t0 = performance.now();
+  const e = errOf(() => md.handler({ csv: wide }));
+  const ms = performance.now() - t0;
+  ok(e && e.statusCode === 413 && ms < 50, `csv-to-md: 2,000 columns over 2,000 rows answers 413 before it pads them (${e?.statusCode ?? "answered"}, ${ms.toFixed(1)} ms)`);
+  let dg = ["g", ...Array.from({ length: 199 }, (_, i) => `c${i}`)].join(",") + "\n";
+  for (let i = 0; dg.length < 95_000; i++) dg += `k${i}\n`;
+  const e2 = errOf(() => md.handler({ csv: dg }));
+  ok(e2 && e2.statusCode === 413, `csv-to-md: short rows padded to 200 columns past the cell budget answer 413 (${e2?.statusCode ?? "answered"})`);
+  const r = md.handler({ ...md.discovery.input });
+  ok(typeof r.markdown === "string" && r.rows === 2, "csv-to-md: its published example is still answered");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

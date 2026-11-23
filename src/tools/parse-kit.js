@@ -7,7 +7,7 @@
 // All pure CPU: no network, no key, no model -> proof-of-work eligible
 // (src/free-tier.js). Every reader is one pass over a capped input.
 import { gunzipSync, inflateSync } from "node:zlib";
-import { parseCsv, csvDelimiterOf, csvAnswerTooLarge } from "./kit.js";
+import { parseCsv, csvDelimiterOf, csvAnswerTooLarge, CSV_CELL_MAX } from "./kit.js";
 import { partialFields } from "../partial-answer.js";
 
 function bad(message, statusCode = 400) {
@@ -476,6 +476,10 @@ function logTimestamps(text, tz, year, limit, epoch = true) {
 // ============================================================================
 const CSV_AGG_MAX = 100_000;
 const CSV_AGG_COLS = 200;
+// Rows times summarized columns, and groups times summarized columns: the
+// work a call may ask for, checked before any statistics are made.
+const CSV_AGG_CELL_MAX = CSV_CELL_MAX;
+const CSV_AGG_GROUP_CELL_MAX = 50_000;
 const NUM_RE = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
 const NUM_COMMAS_RE = /^[-+]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
 const tidy = (x) => (Number.isFinite(x) ? Number(x.toPrecision(15)) : null);
@@ -488,16 +492,18 @@ function numberOf(v) {
   return null;
 }
 
-function newStats() { return { count: 0, empty: 0, distinct: new Set(), numeric: 0, sum: 0, min: Infinity, max: -Infinity }; }
+// The distinct set is made on a column's first value, so an empty column in
+// a group holds none.
+function newStats() { return { count: 0, empty: 0, distinct: null, numeric: 0, sum: 0, min: Infinity, max: -Infinity }; }
 function addStat(st, v) {
   if (v.trim() === "") { st.empty++; return; }
   st.count++;
-  st.distinct.add(v);
+  (st.distinct || (st.distinct = new Set())).add(v);
   const n = numberOf(v);
   if (n !== null && Number.isFinite(n)) { st.numeric++; st.sum += n; if (n < st.min) st.min = n; if (n > st.max) st.max = n; }
 }
 function finishStats(st) {
-  const out = { count: st.count, empty: st.empty, distinct: st.distinct.size, numeric: st.numeric };
+  const out = { count: st.count, empty: st.empty, distinct: st.distinct ? st.distinct.size : 0, numeric: st.numeric };
   if (st.numeric) Object.assign(out, { sum: tidy(st.sum), mean: tidy(st.sum / st.numeric), min: st.min, max: st.max });
   return out;
 }
@@ -538,6 +544,12 @@ function csvAggregate(input) {
   const g = groupBy ? idx(groupBy, "groupBy") : -1;
   const limit = intField(input, "limit", { min: 1, max: 1000, dflt: 100 });
   const rows = grid.slice(1);
+  // The work is bounded before it starts: every row is read for every
+  // summarized column, and every group holds statistics for each of them,
+  // so both products are held to a budget (a ragged CSV of short rows, or a
+  // distinct group per row, multiplies them past what the text suggests).
+  const workTooLarge = (what, n, max) => Object.assign(new Error(`"csv" asks for ${n.toLocaleString("en-US")} ${what}, over this tool's ${max.toLocaleString("en-US")}; summarize fewer columns (columns) or group by a column with fewer distinct values`), { statusCode: 413 });
+  if (rows.length * cols.length > CSV_AGG_CELL_MAX) throw workTooLarge("row-by-column cells", rows.length * cols.length, CSV_AGG_CELL_MAX);
   const overall = cols.map(() => newStats());
   const groups = new Map();
   for (const r of rows) {
@@ -545,7 +557,11 @@ function csvAggregate(input) {
     if (g >= 0) {
       const key = r[g] ?? "";
       bucket = groups.get(key);
-      if (!bucket) { bucket = { key, rows: 0, stats: cols.map(() => newStats()) }; groups.set(key, bucket); }
+      if (!bucket) {
+        if ((groups.size + 1) * cols.length > CSV_AGG_GROUP_CELL_MAX) throw workTooLarge("group-by-column summaries", (groups.size + 1) * cols.length, CSV_AGG_GROUP_CELL_MAX);
+        bucket = { key, rows: 0, stats: cols.map(() => newStats()) };
+        groups.set(key, bucket);
+      }
       bucket.rows++;
     }
     cols.forEach((c, k) => {
@@ -558,9 +574,9 @@ function csvAggregate(input) {
   // names and the groups it would list, and refuse a larger one before it
   // is built (a long column name over many groups grew far past its input).
   let perSummary = 2;
-  for (const c of cols) perSummary += header[c].length + 160;
+  for (const c of cols) perSummary += JSON.stringify(header[c]).length + 160;
   let shownGroups = 0, keyBytes = 0;
-  if (g >= 0) { shownGroups = Math.min(limit, groups.size); for (const b of groups.values()) keyBytes += b.key.length + 40; }
+  if (g >= 0) { shownGroups = Math.min(limit, groups.size); for (const b of groups.values()) keyBytes += JSON.stringify(b.key).length + 40; }
   const tooLarge = csvAnswerTooLarge((1 + shownGroups) * perSummary + keyBytes, "summarize fewer columns (columns), list fewer groups (limit), or shorten the column names.");
   if (tooLarge) throw tooLarge;
   const statsOf = (list) => Object.fromEntries(cols.map((c, k) => [header[c], finishStats(list[k])]));
@@ -807,7 +823,7 @@ export const PARSE_TOOLS = [
       input: { text: "forty-two thousand and seven" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Number words (\"one hundred forty-seven\", \"twenty-first\", \"three point five\") or digits (\"42007\", \"1,250.50\"); at most 500 characters" },
+          text: { type: "string", maxLength: 500, description: "Number words (\"one hundred forty-seven\", \"twenty-first\", \"three point five\") or digits (\"42007\", \"1,250.50\"); at most 500 characters" },
         },
         required: ["text"],
       },
@@ -855,7 +871,7 @@ export const PARSE_TOOLS = [
       inputSchema: {
         properties: {
           text: { type: "string", description: "Log text (at most 100,000 characters)" },
-          assumeZone: { type: "string", description: "IANA time zone for stamps that carry no zone or offset (default UTC)" },
+          assumeZone: { type: "string", maxLength: 64, description: "IANA time zone for stamps that carry no zone or offset (default UTC)" },
           year: { type: "number", description: "Year for syslog stamps, which carry none (default the current UTC year)" },
           epoch: { type: "boolean", description: "Read 10- and 13-digit numbers as epoch seconds and milliseconds (default true)" },
           limit: { type: "number", description: "Stamps to list, 1-2000 (default 500); the summary counts every stamp" },
@@ -882,7 +898,7 @@ export const PARSE_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      "Summarize CSV columns: count, empty cells, distinct values, and for numbers sum, mean, min and max, over the whole table or per group with groupBy (a column name). The first row is the header. columns picks the columns to summarize (default all). Comma by default, or delimiter: semicolon, tab, pipe or any single character other than a quote or a line break. CSV up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes) and 200 columns; up to 1,000 groups listed, largest first.",
+      `Summarize CSV columns: count, empty cells, distinct values, and for numbers sum, mean, min and max, over the whole table or per group with groupBy (a column name). The first row is the header. columns picks the columns to summarize (default all). Comma by default, or delimiter: semicolon, tab, pipe or any single character other than a quote or a line break. CSV up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes) and 200 columns; up to 1,000 groups listed, largest first. A call reads up to ${CSV_AGG_CELL_MAX.toLocaleString("en-US")} row-by-column cells and builds up to ${CSV_AGG_GROUP_CELL_MAX.toLocaleString("en-US")} group-by-column summaries; past either it answers 413.`,
     tags: ["csv", "aggregate", "group-by", "sum", "count", "mean", "average", "min", "max", "distinct", "column", "summary", "pivot"],
     discovery: {
       bodyType: "json",
@@ -890,7 +906,7 @@ export const PARSE_TOOLS = [
       inputSchema: {
         properties: {
           csv: { type: "string", description: "CSV text with a header row (at most 100,000 characters)" },
-          groupBy: { type: "string", description: "Column to group rows by (optional)" },
+          groupBy: { type: "string", maxLength: 200, description: "Column to group rows by (optional)" },
           columns: { type: "array", items: { type: "string" }, description: "Columns to summarize (default every column but groupBy); a comma-separated string also works" },
           delimiter: { type: "string", description: "comma (default), semicolon, tab, pipe, or any single character other than a quote or a line break" },
           limit: { type: "number", description: "Groups to list, 1-1000 (default 100), largest first" },

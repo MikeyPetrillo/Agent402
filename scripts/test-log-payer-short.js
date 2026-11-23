@@ -52,8 +52,10 @@ const ALLOW = {
   },
   "src/payments.js": {
     "client.address": "our own relayer wallet, not a buyer",
-    'r.signer || "(unknown)"': "a facilitator's signer wallet, not a buyer",
     "owner": "our own Solana payTo, not a buyer",
+  },
+  "src/facilitator-gas.js": {
+    'r.signer || "(none named)"': "a Solana facilitator's fee payer, not a buyer: the operator reads its balance by that address, so the line names it whole",
   },
   "src/server.js": {
     "rk.signer.kid": "the receipt signing key's public id (published at the receipt key document), not a wallet",

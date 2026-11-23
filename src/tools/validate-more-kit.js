@@ -798,7 +798,7 @@ export const VALIDATE_MORE_TOOLS = [
       inputSchema: {
         properties: {
           value: { type: "string", maxLength: ID_MAX_CHARS, description: `The identifier; spaces, dots, dashes and slashes are ignored (max ${ID_MAX_CHARS} characters)` },
-          type: { type: "string", description: `One of ${ID_TYPE_NAMES.join(", ")} (also swift, nino, cpf, cnpj, abn, orgnr); omit to detect` },
+          type: { type: "string", maxLength: 40, description: `One of ${ID_TYPE_NAMES.join(", ")} (also swift, nino, cpf, cnpj, abn, orgnr); omit to detect` },
         },
         required: ["value"],
       },
@@ -816,7 +816,7 @@ export const VALIDATE_MORE_TOOLS = [
     route: "POST /api/build-log-triage",
     name: "Build log triage",
     slug: "build-log-triage", aliases: ["ci-log-triage", "ci-failure-triage", "build-failure-diagnose"],
-    category: "developer",
+    category: "text",
     price: "$0.002",
     description:
       "Read a CI or build log (npm, pnpm, yarn, pip and pytest, cargo, go, Maven, Gradle, GitHub Actions) and find the first real error: its line, the failing step and command, the exit code, and its class (lockfile mismatch, dependency resolution, compile error, test failure, timeout, out of memory, network, permission). Returns the relevant lines with their line numbers and a fixed next step for the class. Rule-based pattern matching, no model; up to 100 KB of log.",

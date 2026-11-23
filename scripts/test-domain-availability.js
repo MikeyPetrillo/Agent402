@@ -182,6 +182,15 @@ try {
     const got = await Promise.all(["p-a.slow", "p-b.slow", "p-c.slow"].map((n) => errOf(slow.check({ domain: n }))));
     const refused = got.find((e) => e && e.statusCode === 503);
     ok(refused && refused.retryAfter >= 1 && /paced/.test(refused.message) && /not sent/.test(refused.message) && !/HTTP 429|rate-limited/.test(refused.message) && bTimes.length === 2, `a lookup past the pacing queue answers its own retryable 503, never a registry 429 (${refused?.message}; ${bTimes.length} sent)`);
+    ok(refused && refused.attribution === "ours", `our own pacing is attributed to us, not the registry (${refused?.attribution})`);
+    // A pacing wait ends at the run's ceiling: a turn further off than the
+    // ceiling is not waited for.
+    const waitD = make({ paceMs: 1_500 });
+    await waitD.check({ domain: "warm3.test" }).catch(() => {});
+    await waitD.check({ domain: "first-turn.slow" }).catch(() => {});
+    const t0 = Date.now();
+    const cut = await errOf(withRunCeiling(300, () => waitD.check({ domain: "second-turn.slow" })));
+    ok(cut && Date.now() - t0 < 1_000 && [503, 504].includes(cut.statusCode), `a pacing wait past the run's ceiling is not waited for (${cut?.statusCode} after ${Date.now() - t0} ms)`);
   }
 
   // ---- the answer cache ----
