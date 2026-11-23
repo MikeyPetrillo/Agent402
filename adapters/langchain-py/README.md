@@ -46,6 +46,21 @@ at the address that serves the routes directly.
 Without it, calling a wallet-only tool raises a clear error naming what's needed;
 the free proof-of-work tier keeps working regardless.
 
+**Spending caps.** A paid call is checked before `x402_fetch` runs: a tool
+whose listed price is above `max_per_call_usd` (default 5, the same default as
+the JS client; `0` or `"off"` turns it off) is refused, and so is a call that
+would bring the rolling 24-hour total above `daily_limit_usd` (opt-in). Every
+call sent through `x402_fetch` counts its list price against that total,
+whatever its outcome. A refusal raises `SpendingLimitError` (its `limit` names
+the cap) and nothing is paid:
+
+```python
+toolkit = Agent402Toolkit(x402_fetch=my_signed_fetch, max_per_call_usd=0.05, daily_limit_usd=2)
+```
+
+A proof-of-work challenge above 28 bits (`MAX_POW_DIFFICULTY`) is refused
+before any work.
+
 ## Without LangChain
 
 `agent402_tool_specs()` returns the same four entries as framework-agnostic dicts
