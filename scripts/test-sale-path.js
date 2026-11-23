@@ -252,7 +252,7 @@ try {
   ok(!/byPath|agent402-client\/0\.8|organicSales|cohortSales/.test(pub), "nothing of it reaches the public stats or gateway status");
   // The connector really sends that marker on its loopback (the caller path).
   const mpp = readFileSync(new URL("../src/mcp-mpp.js", import.meta.url), "utf8");
-  ok(/\.\.\.mcpLoopbackHeaders\(\{ callId, runKey \}\)/.test(mpp), "src/mcp-mpp.js sets the marker the ledger reads (with the paid replay's call id and a task run's key)");
+  ok(/\.\.\.mcpLoopbackHeaders\(\{ callId, runKey(, \w+)* \}\)/.test(mpp), "src/mcp-mpp.js sets the marker the ledger reads (with the paid replay's call id and a task run's key)");
 } catch (e) {
   ok(false, e?.stack || String(e));
   for (const l of serverLog.slice(-25)) console.error("  server:", l);
