@@ -86,7 +86,7 @@ skill packs built on them. When you use them:</p>
   <li><b>Your right to the content:</b> you represent that you have the right to access the content at
   every URL you name and to use it as you do. You are responsible for following the terms of the site
   that serves it and the rights of whoever owns it, copyright included.</li>
-  <li><b>How we fetch:</b> each URL is fetched once, at your request, as a browser would: without signing in,
+  <li><b>How we fetch:</b> each URL is fetched for that call, at your request, as a browser would: without signing in,
   without cookies or credentials, and without getting past any access control. The request names itself
   as ours (see <a href="/crawler">/crawler</a>). Before returning a page's content we read the site's
   robots.txt, and we do not fetch a path it disallows for our fetch token; such a call answers 403.</li>
