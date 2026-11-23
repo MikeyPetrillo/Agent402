@@ -1161,6 +1161,7 @@
     "X402_BINARY_LISTINGS": "X402 binary listings.",
     "X402_ECONOMY_DB": "X402 economy database.",
     "X402_HOOK_FAULT_FOR_TEST": "X402 hook fault for test.",
+    "RESALE_CLEARED_FOR_TEST": "Test suites only, never read in production: slugs a test boot treats as cleared for resale through a third party (comma list).",
     "X402_INDEX_CRAWL": "on crawls the external seller index regardless of environment detection; off stops it.",
     "X402_INDEX_SEEDS": "X402 index seeds.",
     "X402_PAYWALL_FAILED_RECHECK_HOURS": "X402 paywall failed recheck, in hours.",

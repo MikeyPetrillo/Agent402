@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1125 variables in 114 groups.
+1126 variables in 114 groups.
 
 ## Contents
 
@@ -1682,6 +1682,7 @@ holds it.
 | `REPRICE_MAX_PER_CALL` | Reprice maximum per call. | `120` | `src/x402-index.js` |
 | `REPUTATION_RECHECK_GLOBAL_HOUR` | Seller reputation re-check requests accepted per hour across all callers. | `300` | `src/server.js` |
 | `REPUTATION_RECHECK_PER_IP_HOUR` | Seller reputation re-check requests one caller may send per hour. | `10` | `src/server.js` |
+| `RESALE_CLEARED_FOR_TEST` | Test suites only, never read in production: slugs a test boot treats as cleared for resale through a third party (comma list). |  | `src/resale-terms.js` |
 | `RESEARCH_DEBUG` | Research debug. |  | `src/tools/domain-audit-kit.js`, `src/tools/dossier-kit.js`, `src/tools/fund-report-kit.js` and 4 more |
 | `RESEND_API_KEY` | Resend API key (a credential, set on the host). |  | `src/email.js` |
 | `ROUTABLE_SUMMARY_TTL_MS` | Routable summary lifetime, in milliseconds. |  | `src/x402-index.js` |
