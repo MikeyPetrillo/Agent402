@@ -48,6 +48,7 @@ const CLEARED = [
   "drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "device-510k", "device-adverse-events", "device-recalls", "food-recalls",
   "vin-decode", "vehicle-recalls", "earthquakes", "fema-disasters", "fec-candidates", "federal-awards", "geo-lookup",
   "dns", "ip-info", "tls-cert", "sql-guard", "sanctions-name", "sanctions-wallet",
+  "perp-basis", "perp-dex-limits", "perp-dex-markets", "perp-dexs", "perp-funding", "perp-funding-screener", "perp-klines", "perp-markets", "perp-open-interest", "perp-orderbook",
 ];
 const missing = CLEARED.filter((s) => !defs.has(s));
 ok(missing.length === 0, `every cleared slug is a tool in the kits read here (${missing.join(",") || CLEARED.length})`);
@@ -58,11 +59,10 @@ ok(unsourced.length === 0, `each mark names the source it was cleared for (${uns
 ok(CLEARED.every((s) => R.resaleClearanceRefusal(defs.get(s)) === null), "a marked tool has no clearance refusal");
 
 // Not cleared: model and search pass-throughs, a source that bars sharing its
-// data, the registry record copy, a repository read, the perpetuals reads
-// (an owner decision for third-party listings), a raw relay.
-const UNCLEARED = ["onchain-sql", "onchain-sql-schema", "x-search-recent", "web-search", "whois", "github-repo", "perp-funding", "perp-basis", "evm-rpc"];
+// data, the registry record copy, a repository read, a raw relay.
+const UNCLEARED = ["onchain-sql", "onchain-sql-schema", "x-search-recent", "web-search", "whois", "github-repo", "evm-rpc"];
 const present = UNCLEARED.filter((s) => defs.has(s));
-ok(present.length >= 7, `the uncleared controls are in the kits read here (${present.join(",")})`);
+ok(present.length >= 6, `the uncleared controls are in the kits read here (${present.join(",")})`);
 ok(present.every((s) => defs.get(s).resaleCleared !== true), `none of them carries the mark (${present.filter((s) => defs.get(s).resaleCleared === true).join(",") || "none"})`);
 const NOT_CLEARED = R.RESALE_NOT_CLEARED_REASON;
 ok(typeof NOT_CLEARED === "string" && /not cleared/.test(NOT_CLEARED) && !/https?:|terms of [A-Z]/.test(NOT_CLEARED), `the refusal reason is one neutral sentence (${NOT_CLEARED})`);
@@ -90,6 +90,42 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
   threw = false;
   try { R.markResaleCleared([{ slug: "z" }], ["z"], ""); } catch { threw = true; }
   ok(threw, "a clearance mark must name its source");
+}
+
+// Everything sold through a third party today is cleared, so no listed slug is
+// refused at boot: the /ref list (73 slugs) and the AWS listing (74, read
+// from src/aws-listing.js where the build has it).
+{
+  const PERPS = ["perp-basis", "perp-dex-limits", "perp-dex-markets", "perp-dexs", "perp-funding", "perp-funding-screener", "perp-klines", "perp-markets", "perp-open-interest", "perp-orderbook"];
+  const REF_LISTED = [
+    "weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality", "place-lookup", "weather-window", "weather-thresholds", "weather-probability", "weather-market-brackets", "weather-market-board", "weather-risk-brief",
+    "weather-forecast", "weather-alerts", "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar",
+    "funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health", "token-diligence", "stablecoin-peg",
+    "fx-rate", "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "treasury-debt", "treasury-avg-rates",
+    "edgar-13f-dataset-head", "edgar-13f-datasets", "edgar-13f-holdings", "edgar-company-concept", "edgar-company-facts", "edgar-company-lookup", "edgar-filings", "edgar-recent-ipos", "edgar-search", "edgar-xbrl-frame", "edgar-insider-trades",
+    "drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "device-510k", "device-adverse-events", "device-recalls", "food-recalls",
+    "vin-decode", "vehicle-recalls", "earthquakes", "fema-disasters", "fec-candidates", "federal-awards", "geo-lookup", "dns", "ip-info", "tls-cert", ...PERPS,
+  ];
+  let awsListed = null;
+  try { awsListed = (await import("../src/aws-listing.js")).AWS_LISTING_SLUGS; } catch { awsListed = null; }
+  const AWS_LISTED = Array.isArray(awsListed) ? [...awsListed] : [
+    "redact", "sql-guard", "email-guard", "sanctions-name", "sanctions-wallet",
+    "edgar-13f-dataset-head", "edgar-13f-datasets", "edgar-13f-holdings", "edgar-company-concept", "edgar-company-facts", "edgar-company-lookup", "edgar-filings", "edgar-recent-ipos", "edgar-search", "edgar-xbrl-frame",
+    "treasury-avg-rates", "treasury-debt", "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "fx-rate",
+    "device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "food-recalls",
+    "earthquakes", "federal-awards", "fema-disasters", "geo-lookup", "vehicle-recalls", "vin-decode",
+    "weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality", "place-lookup", "weather-window", "weather-thresholds", "weather-probability", "weather-market-brackets", "weather-market-board", "weather-forecast", "weather-alerts",
+    "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar", "dns", "tls-cert", "ip-info",
+    "stablecoin-peg", "funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health", ...PERPS,
+  ];
+  ok(new Set(REF_LISTED).size === 73 && AWS_LISTED.length >= 74, `the lists read are the ones sold today (/ref ${new Set(REF_LISTED).size}, AWS ${AWS_LISTED.length})`);
+  // The server's compute reading, for the pure-CPU tools on the AWS list.
+  const { isComputePayable } = await import("../src/pow.js");
+  const computeOf = (d) => { try { return typeof isComputePayable === "function" ? isComputePayable(d) === true : false; } catch { return false; } };
+  const refusedOf = (list) => list.filter((s) => !defs.has(s) || R.resaleClearanceRefusal(defs.get(s), { compute: computeOf(defs.get(s)) }) !== null);
+  ok(refusedOf(REF_LISTED).length === 0, `every slug on the /ref list is cleared (${refusedOf(REF_LISTED).join(",") || "73 of 73"})`);
+  ok(refusedOf(AWS_LISTED).length === 0, `every slug on the AWS listing is cleared or reaches no upstream (${refusedOf(AWS_LISTED).join(",") || `${AWS_LISTED.length} of ${AWS_LISTED.length}`})`);
+  ok(["whois", "github-repo", "onchain-sql-schema"].every((s) => !REF_LISTED.includes(s) && !AWS_LISTED.includes(s) && defs.get(s)?.resaleCleared !== true), "whois, github-repo and onchain-sql-schema are on neither list and stay uncleared");
 }
 
 // The suite seam: clears named slugs for a test boot, never in production.

@@ -5169,7 +5169,7 @@ const BLOCKED = newAccount();
 // The suite's slugs whose upstream terms are not cleared for resale through a
 // third party (src/resale-terms.js) are cleared here for the gate's own
 // paths; whois and github-repo are not, to prove the boot refusal.
-const CLEARED_FOR_TEST = "v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,http-check,robots-check,sitemap,image-gen,image-gen-premium,attest,qr";
+const CLEARED_FOR_TEST = "v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,http-check,robots-check,sitemap,image-gen,image-gen-premium,attest,qr";
 const REF_ENV = { RESALE_CLEARED_FOR_TEST: CLEARED_FOR_TEST, SANCTIONS_SCREEN_FILE: screenFile, AGENT402_BASE_RPC: `${fac.url}/rpc`, EVM_LOGS_PUBLIC_RPCS_BASE: "", REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT, REFERRAL_RECEIPT_WAIT_MS: "0", REFERRAL_PAY_TO: PAY_TO, REFERRAL_FACILITATOR_URL: fac.url, REFERRAL_SIGNER_KEY: SIGNER_KEY, REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral", REFERRAL_SLUGS: "hash", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_COMMISSION_BPS: "default:1234" };
 const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGNER_KEY: "", REFERRAL_SLUGS: "", REFERRAL_SETUP_URL: "", REFERRAL_COMMISSION_BPS: "" };
 
