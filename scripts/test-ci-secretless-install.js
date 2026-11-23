@@ -242,7 +242,8 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
 
 // THE CI DATA KEYS. The production CoinGecko key is not an Actions secret (CI
 // must never spend it), so no step reads secrets.COINGECKO_API_KEY. CI holds
-// two keys of its own: OPEN_METEO_API_KEY and COINGECKO_CI_API_KEY. Each is
+// three keys of its own: OPEN_METEO_API_KEY, COINGECKO_CI_API_KEY and
+// BLS_API_KEY (the BLS-backed macro tools). Each is
 // handed ONLY to the step that boots the server the strict sweep drives (in
 // the sweep lane) and to the nightly corpus step, at step scope, never at job
 // or workflow scope; every other step, an install included, never sees them.
@@ -253,8 +254,8 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
 // refused 429 (scripts/test-non-metered-examples.js --coingecko-run-check).
 {
   const { CG_RUN_READ_CAP, CG_RUN_MAX_PER_MIN, CG_NIGHTLY_READ_CAP } = await import("./test-non-metered-examples.js");
-  const DATA_KEYS = ["OPEN_METEO_API_KEY", "COINGECKO_CI_API_KEY"];
-  const KEY_VARS = ["OPEN_METEO_API_KEY", "COINGECKO_API_KEY"];
+  const DATA_KEYS = ["OPEN_METEO_API_KEY", "COINGECKO_CI_API_KEY", "BLS_API_KEY"];
+  const KEY_VARS = ["OPEN_METEO_API_KEY", "COINGECKO_API_KEY", "BLS_API_KEY"];
   const wfText = (f) => readFileSync(new URL(`../.github/workflows/${f}`, import.meta.url), "utf8");
   for (const f of ["deploy.yml", "corpus-nightly.yml"]) {
     ok(!/secrets\.COINGECKO_API_KEY\b/.test(wfText(f)), `${f}: no step reads secrets.COINGECKO_API_KEY (the production key is not an Actions secret; CI uses COINGECKO_CI_API_KEY)`);
@@ -283,15 +284,16 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
     const run = String(keyed.run || "");
     ok(/^\$\{\{ secrets\.OPEN_METEO_API_KEY \}\}$/.test(String(env.OPEN_METEO_API_KEY)) && /^\$\{\{ secrets\.COINGECKO_CI_API_KEY \}\}$/.test(String(env.COINGECKO_API_KEY)),
       "the keyed step hands the server OPEN_METEO_API_KEY and the CI CoinGecko key as COINGECKO_API_KEY");
+    ok(/^\$\{\{ secrets\.BLS_API_KEY \}\}$/.test(String(env.BLS_API_KEY)), "the keyed step hands the server BLS_API_KEY (the BLS-backed macro tools)");
     ok(env.COINGECKO_API_TIER === "pro", `the keyed step sets COINGECKO_API_TIER=pro (got ${env.COINGECKO_API_TIER})`);
     ok(String(env.COINGECKO_DAILY_MAX) === String(CG_RUN_READ_CAP), `the server's CoinGecko read ceiling is the sweep's per-run cap (${env.COINGECKO_DAILY_MAX} vs CG_RUN_READ_CAP ${CG_RUN_READ_CAP})`);
     ok(String(env.COINGECKO_MAX_PER_MIN) === String(CG_RUN_MAX_PER_MIN), `the server's CoinGecko minute pacing is the sweep's (${env.COINGECKO_MAX_PER_MIN} vs ${CG_RUN_MAX_PER_MIN})`);
     ok(/src\/server\.js/.test(run), "the keyed step boots the server (the only process that reads the keys)");
     // A key variable is only ever tested for presence, never printed or exported.
     const uses = KEY_VARS.flatMap((v) => [...run.matchAll(new RegExp(`(.{0,6})\\$\\{?${v}\\}?`, "g"))].map((m) => m[1]));
-    ok(uses.length >= 2 && uses.every((pre) => /-[nz] "$/.test(pre)), `the keyed step reads each key variable only in a presence test (${uses.length} use(s))`);
+    ok(uses.length >= 3 && uses.every((pre) => /-[nz] "$/.test(pre)), `the keyed step reads each key variable only in a presence test (${uses.length} use(s))`);
     ok(!KEY_VARS.some((v) => new RegExp(`${v}=`).test(run.split("\n").filter((l) => /GITHUB_ENV|GITHUB_OUTPUT/.test(l)).join("\n"))), "the keyed step never writes a key to GITHUB_ENV or GITHUB_OUTPUT");
-    ok(/NON_METERED_CG_MODE=\$\w+.*GITHUB_ENV/.test(run) && /NON_METERED_OM_MODE=\$\w+.*GITHUB_ENV/.test(run), "the keyed step hands the later steps the words keyed or keyless for each source");
+    ok(/NON_METERED_CG_MODE=\$\w+.*GITHUB_ENV/.test(run) && /NON_METERED_OM_MODE=\$\w+.*GITHUB_ENV/.test(run) && /NON_METERED_BLS_MODE=\$\w+.*GITHUB_ENV/.test(run), "the keyed step hands the later steps the words keyed or keyless for each source");
     ok(/add-mask/.test(run) && /AGENT402_OPERATOR_TOKEN=/.test(run), "the keyed step masks the run's own operator token before the server reads it");
   }
   // The check after the lenient sweep: the cap and a keyed 429 fail the run.

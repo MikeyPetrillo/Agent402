@@ -1030,6 +1030,7 @@ jobs:
           FRED_API_KEY_V2: ""
           SOCKET_API_TOKEN: ""
           OPEN_METEO_API_KEY: ""
+          BLS_API_KEY: ""
           COINGECKO_API_KEY: ""
           TEST_PAYER_STELLAR_SECRET: ""
           CLAWHUB_TOKEN: ""
@@ -2885,6 +2886,9 @@ jobs:
       - name: Start server in free mode (the strict sweep's server; the CI data keys)
         env:
           OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
+          # The BLS-backed macro tools (fred-series, sahm-rule, cpi-yoy,
+          # unemployment-rate, fed-funds) read BLS v2 with it, keyless v1 without.
+          BLS_API_KEY: ${{ secrets.BLS_API_KEY }}
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_CI_API_KEY }}
           COINGECKO_API_TIER: pro
           COINGECKO_DAILY_MAX: "40"
@@ -2892,9 +2896,9 @@ jobs:
         run: |
           cg=keyless; if [ -n "$COINGECKO_API_KEY" ]; then cg=keyed; fi
           om=keyless; if [ -n "$OPEN_METEO_API_KEY" ]; then om=keyed; fi
-          echo "CoinGecko: $cg; Open-Meteo: $om"
-          echo "NON_METERED_CG_MODE=$cg" >> "$GITHUB_ENV"
-          echo "NON_METERED_OM_MODE=$om" >> "$GITHUB_ENV"
+          bls=keyless; if [ -n "$BLS_API_KEY" ]; then bls=keyed; fi
+          echo "CoinGecko: $cg; Open-Meteo: $om; BLS: $bls"
+          { echo "NON_METERED_CG_MODE=$cg"; echo "NON_METERED_OM_MODE=$om"; echo "NON_METERED_BLS_MODE=$bls"; } >> "$GITHUB_ENV"
           # The run's own operator token: the CoinGecko check after the sweeps
           # reads the server's read count from the operator view with it.
           token=$(openssl rand -hex 24)
@@ -3676,6 +3680,7 @@ jobs:
           FRED_API_KEY_V2: ""
           SOCKET_API_TOKEN: ""
           OPEN_METEO_API_KEY: ""
+          BLS_API_KEY: ""
           COINGECKO_API_KEY: ""
           TEST_PAYER_STELLAR_SECRET: ""
           CLAWHUB_TOKEN: ""

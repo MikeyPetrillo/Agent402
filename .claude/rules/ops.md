@@ -168,7 +168,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   default 40000, also its most; half the job's 2-minute limit), it reads its own pushed range; `MARKER_WORKFLOW_FILE` (default
   `deploy.yml`) names the workflow whose runs it lists (`scripts/test-ci-gating.js` runs the
   step on a three-push sequence and evaluates the group for every mode a job reads).
-- **CI's data keys:** `OPEN_METEO_API_KEY` and `COINGECKO_CI_API_KEY` (never the production
+- **CI's data keys:** `OPEN_METEO_API_KEY`, `BLS_API_KEY` (the BLS-backed macro tools; the step
+  logs keyed or keyless and hands `NON_METERED_BLS_MODE` on) and `COINGECKO_CI_API_KEY` (never the production
   CoinGecko key) reach only test-sweeps' strict-sweep server step and the nightly corpus step; the
   server gets `COINGECKO_API_TIER=pro` and `COINGECKO_DAILY_MAX` = `CG_RUN_READ_CAP`
   (`CG_NIGHTLY_READ_CAP` nightly) from `scripts/test-non-metered-examples.js`;
