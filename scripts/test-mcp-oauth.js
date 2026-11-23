@@ -288,11 +288,16 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
     const client = await h.client("198.18.5.1");
     const email = "owner@example.com";
     // Strangers, each on its own address, start sign-ins with the owner's email and guess.
+    let refusedStarts = 0;
+    // Each with an app of its own, so the per-app pending cap (tested apart)
+    // never decides whether a stranger's sign-in, or the owner's, starts.
     for (let i = 0; i < L.failsPerEmail + 2; i++) {
-      const s = await h.start(`198.18.6.${i + 1}`, client);
+      const s = await h.start(`198.18.6.${i + 1}`, await h.client(`198.18.6.${i + 1}`));
+      if (s.status !== 303) refusedStarts++;
       await h.post(s, { action: "email", email });
       for (let k = 0; k < L.emailCodeTries; k++) await (await h.post(s, { action: "code", code: "000000" === h.sent.at(-1).code ? "000001" : "000000" })).text();
     }
+    ok(refusedStarts === 0, `every stranger's sign-in started (${refusedStarts} refused)`);
     const own = await h.start("198.18.7.1", client);
     await h.post(own, { action: "email", email });
     const r = await h.post(own, { action: "code", code: h.sent.at(-1).code });
@@ -844,7 +849,7 @@ try {
   G = await grantFlow({ cap: "3" });
   const T4 = await (await tok({ grant_type: "authorization_code", code: G.code, code_verifier: G.p.v, redirect_uri: REDIRECT, client_id: cr.client_id })).json();
   ok((await fetch(`${B}/oauth/revoke`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `token=${T4.refresh_token}` })).status === 200, "the app revokes its own grant (RFC 7009)");
-  ok((await call(T4.access_token, "sql-guard", { sql: "SELECT 8" })).status === 401, "and its access token stops paying");
+  { const st = (await call(T4.access_token, "sql-guard", { sql: "SELECT 8" })).status; ok(st === 401, `and its access token stops paying (${st})`); }
 
   // ---- a disabled key: its grant refuses with a plain message ----
   G = await grantFlow({ cap: "3" });
