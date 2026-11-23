@@ -9,7 +9,7 @@ Every paid endpoint on Agent402.Tools is **dual-stack**: the same 402 carries an
 | MPP method | Asset | Where it settles | Notes |
 |---|---|---|---|
 | `evm` charge | USDC | Base, Celo | Same EIP-3009 on-chain settlement as x402, translated by the shim; verifiable on Basescan/Celoscan |
-| `tempo` charge | USDC.e, PathUSD | Tempo (chain 4217) | Native TIP-20 settlement, no x402 facilitator involved: through Tempo's hosted MPP relay by default, or checked and broadcast by the server itself (`TEMPO_RELAY=off`), which then screens every party to the payment against OFAC's SDN list before anything settles. The hosted instance offers USDC.e first, then PathUSD (one challenge per currency; a stock mppx client pays the first it can, or `autoSwap` between them) |
+| `tempo` charge | Tempo stablecoins (the 402 lists each) | Tempo (chain 4217) | Native TIP-20 settlement, no x402 facilitator involved: through Tempo's hosted MPP relay by default, or checked and broadcast by the server itself (`TEMPO_RELAY=off`), which then screens every party to the payment against OFAC's SDN list before anything settles. The hosted instance offers one challenge per currency it takes, in its order of preference, and [`/.well-known/x402`](https://agent402.tools/.well-known/x402) lists them under `mpp` (a stock mppx client pays the first it can, or `autoSwap` between them) |
 | `stripe` charge | card (USD) | Stripe | Cards over the MPP wire via Stripe Shared Payment Tokens, offered only on routes priced $0.50 or more (the card minimum); settles a PaymentIntent after the handler, same settle-after-handler discipline. Mounted once `STRIPE_SECRET_KEY` and `STRIPE_PROFILE_ID` are both set |
 
 ### Which routes offer which method, and in what order
@@ -50,7 +50,7 @@ console.log(res.status, res.headers.get("payment-receipt"));
 console.log(await res.json());
 ```
 
-For `evm` you need USDC on Base or Celo in the paying wallet; for `tempo` you need USDC.e (or PathUSD) on Tempo mainnet. No API key, no signup: the wallet is the account.
+For `evm` you need USDC on Base or Celo in the paying wallet; for `tempo` you need one of the Tempo stablecoins the `402` offers, on Tempo mainnet. No API key, no signup: the wallet is the account.
 
 ## MPP on the MCP connector
 

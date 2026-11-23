@@ -108,12 +108,17 @@ try {
 } finally { await rig.stop(); }
 
 // No public surface types the Tempo token list: payment.info, the AgentCore
-// page, /learn, the skill file, the FAQ and the README name the configured
-// tokens (src/mpp-tempo.js tempoCurrencyPhrase) or none at all.
+// page, /learn, the skill file, the FAQ, the README and the wiki name the
+// configured tokens (src/mpp-tempo.js tempoCurrencyPhrase), point at the live
+// list, or name none at all. The wiki is static markdown, so every page of it is read.
 {
-  const { readFileSync } = await import("node:fs");
-  const TYPED = /USDC\.e (or|and|\(and) PathUSD|USDC\.e\/PathUSD|PathUSD (or|and) USDC\.e/;
-  for (const f of ["src/mcp-http.js", "src/agentcore-page.js", "src/learn.js", "src/skill-md.js", "src/agentic-finance.js", "README.md"]) {
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const TYPED = /USDC\.e[\s,)(]{1,4}(?:(?:or|and|then)\s+)?\(?PathUSD|USDC\.e\/PathUSD|PathUSD[\s,)(]{1,4}(?:(?:or|and)\s+)?\(?USDC\.e|USDC\.e first, then PathUSD/;
+  // Control: the forms the wiki used to carry are each caught.
+  for (const t of ["hold USDC.e or PathUSD on Tempo", "| USDC.e, PathUSD |", "you need USDC.e (or PathUSD) on", "offers USDC.e first, then PathUSD", "USDC.e/PathUSD"]) await ok(TYPED.test(t), `control: the guard catches ${JSON.stringify(t)}`);
+  const wiki = readdirSync(new URL("../wiki/", import.meta.url)).filter((f) => f.endsWith(".md")).map((f) => `wiki/${f}`);
+  await ok(wiki.length > 10, `the wiki is read (${wiki.length} pages)`);
+  for (const f of ["src/mcp-http.js", "src/agentcore-page.js", "src/learn.js", "src/skill-md.js", "src/agentic-finance.js", "README.md", ...wiki]) {
     await ok(!TYPED.test(readFileSync(new URL(`../${f}`, import.meta.url), "utf8")), `${f} types no Tempo token list`);
   }
 }
