@@ -22,11 +22,10 @@ process.env.X402_INDEX_CRAWL = "off";
 process.env.ROUTER_WORKERS = "1";
 process.env.ROUTER_WORKER_TEST_HOOKS = "1";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { buildRoutePerfFixture, GOLDEN_QUERIES } from "./lib/route-perf-fixture.js";
 
 const xi = await import("../src/x402-index.js");
@@ -192,20 +191,18 @@ const HOT = ["price", "token", "wallet", "data", "api", "list", "fetch", "get", 
 const burstQueries = Array.from({ length: BURST }, (_, k) => `get the ${HOT[k % HOT.length]} of a ${HOT[(k + 3) % HOT.length]} and the ${HOT[(k + 7) % HOT.length]} for a ${HOT[(k + 11) % HOT.length]} on ${HOT[(k + 13) % HOT.length]} ${k}`);
 
 async function bootAndBurst(routerWorkers) {
-  const port = await getFreePort();
-  const log = [];
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: file, INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: TOKEN, ROUTE_INDEX_WARM_DELAY_MS: "500", X402_INDEX_CRAWL: "on", ROUTER_WORKERS: String(routerWorkers), ROUTER_WORKER_TEST_HOOKS: "", LOOP_LAG_WARN_MS: "250" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 300)); };
-  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-  const base = `http://127.0.0.1:${port}`;
+  let srv = null;
+  const log = () => (srv?.log() || "").split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 300));
+  const bootOpts = {
+    stores: `router-worker-${routerWorkers}`,
+    timeoutMs: 60_000,
+    env: { FREE_MODE: "true", INDEX_CACHE_FILE: file, INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: TOKEN, ROUTE_INDEX_WARM_DELAY_MS: "500", X402_INDEX_CRAWL: "on", ROUTER_WORKERS: String(routerWorkers), ROUTER_WORKER_TEST_HOOKS: "", LOOP_LAG_WARN_MS: "250" },
+  };
+  let base = "";
   const op = (q = "") => fetch(`${base}/__operator/perf.json${q}`, { headers: { authorization: `Bearer ${TOKEN}` } }).then((r) => r.json());
   try {
-    let up = false;
-    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
-    assert.ok(up, `server booted (ROUTER_WORKERS=${routerWorkers})`);
+    srv = await bootServer(bootOpts).catch((e) => { assert.fail(`server booted (ROUTER_WORKERS=${routerWorkers}): ${e.message}`); });
+    base = srv.url;
     let sellers = 0;
     for (let i = 0; i < 60 && sellers < 2900; i++) {
       try { sellers = (await (await fetch(`${base}/api/index?limit=1`)).json()).sellerCount || 0; } catch { /* warming */ }
@@ -239,10 +236,10 @@ async function bootAndBurst(routerWorkers) {
     const after = await op();
     const answered = results.filter((r) => r.status === 200 && Array.isArray(r.body?.results) && r.body.results.length > 0).length;
     const missed = results.filter((r) => !(r.status === 200 && Array.isArray(r.body?.results) && r.body.results.length > 0)).map((r) => `${r.status}${r.body?.error ? ` ${String(r.body.error).slice(0, 60)}` : r.error ? ` ${r.error.slice(0, 60)}` : ""}`);
-    const stallLines = log.filter((l) => l.includes("[loop-lag]")).length;
+    const stallLines = log().filter((l) => l.includes("[loop-lag]")).length;
     return { answered, missed, burstMs, healthN: health.length, p50: Math.round(pct(health, 0.5)), p95: Math.round(pct(health, 0.95)), max: Math.round(Math.max(...health)), worstMs: after.loop.worstMs, stalls: after.loop.stalls, stallLines, routerPool: after.routerPool, lastMinute: after.loop.lastMinute };
   } finally {
-    proc.kill("SIGKILL");
+    srv?.child.kill("SIGKILL");
   }
 }
 
