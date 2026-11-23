@@ -649,6 +649,16 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   ok(top("ID-Validate ")[0] === "id-validate", "the match ignores case and surrounding space");
   ok(top("eth_getbalance")[0] === "wallet-balance", `a query that is a tool's alias ranks it first (${top("eth_getbalance").join(", ")})`);
   ok(top("validate an id")[0] !== undefined, "an ordinary query is ranked as before");
+  // A one-word alias is a word, not an identifier: it keeps normal ranking.
+  const cat2 = Object.fromEntries([
+    mk("fx-rate", { category: "data", description: "currency exchange rate", tags: ["fx", "rate", "currency"] }),
+    mk("feedback", { category: "agent", description: "leave a verdict on a call", tags: ["feedback"], aliases: ["rate", "review", "verdict"] }),
+    mk("x402-audit", { category: "x402", description: "audit an x402 seller", tags: ["audit", "x402"] }),
+    mk("audit-report", { category: "research", description: "a report", tags: ["report"], aliases: ["audit"] }),
+  ].map((t) => [t.route, t]));
+  const top2 = (q) => findTools(cat2, q, { k: 5 }).results.map((x) => x.slug);
+  ok(top2("rate")[0] === "fx-rate", `"rate" (a one-word alias of feedback) still ranks fx-rate first (${top2("rate").join(", ")})`);
+  ok(top2("audit")[0] === "x402-audit", `"audit" (a one-word alias of audit-report) still ranks x402-audit first (${top2("audit").join(", ")})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

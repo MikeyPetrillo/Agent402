@@ -509,10 +509,12 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
   for (const form of nameForm.values()) termSet.add(form);
   // Empty for a query that names no direction, so the passes below cost nothing.
   const pairs = conversionPairs(q, terms);
-  // A query that is exactly a tool's slug or one of its aliases names that
-  // tool: it ranks first ("id-validate", "eth_getbalance"), whatever the
-  // shared words score for its neighbors.
+  // A query that is exactly a tool's slug, or one of its multi-part aliases
+  // (an identifier with - or _), names that tool: it ranks first
+  // ("id-validate", "eth_getbalance"), whatever the shared words score for
+  // its neighbors. A one-word alias ("rate") is a word, ranked as before.
   const wholeQuery = q.trim().toLowerCase();
+  const namesTool = (e) => e.slug === wholeQuery || (/[-_]/.test(wholeQuery) && Array.isArray(e.t.aliases) && e.t.aliases.some((a) => String(a).toLowerCase() === wholeQuery));
   const wayOf = new Map(); // slug -> { way, from, to }, only for tools that state one of the pairs
   const scored = [];
   for (const e of all) {
@@ -568,7 +570,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
       if (hay.includes(term)) s += 1;
       score += s * idf.get(term);           // weight by how much the term narrows things
     }
-    const named = wholeQuery.length > 1 && completeName(e, wholeQuery);
+    const named = wholeQuery.length > 1 && namesTool(e);
     if (score > 0 || named) {
       scored.push([score, t, directionScore(slug), named ? 1 : 0]);
       if (pairs.length) { const d = directionOf(t, pairs, catalog[t.route]); if (d) wayOf.set(t.slug, d); }
