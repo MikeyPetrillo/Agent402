@@ -12,11 +12,10 @@
 //   - each surface module builds from mpp-flagship.js rather than a copy.
 // Boots its own FREE_MODE server on a free port (or reads TARGET_URL).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { MPP_FLAGSHIP, MPP_FLAGSHIP_SLUGS, MPP_FLAGSHIP_SNIPPET_SLUG } from "../src/mpp-flagship.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -52,11 +51,10 @@ ok(/tempoOfferedFor\(def\)/.test(src("src/mpp-flagship.js")), "rows are filtered
 const TREASURY = "0x1111111111111111111111111111111111111111";
 async function boot() {
   if (process.env.TARGET_URL) return { base: process.env.TARGET_URL.replace(/\/$/, ""), child: null };
-  const port = await getFreePort();
-  const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: ROOT,
+  const srv = await bootServer({
+    stores: "mpp-flagship",
     env: {
-      ...process.env, FREE_MODE: "true", PORT: String(port),
+      FREE_MODE: "true",
       // Tempo switched on so /openapi.json publishes the tempo offers the 402 makes.
       MPP_SECRET_KEY: "test-mpp-secret", TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: TREASURY, WALLET_ADDRESS: TREASURY,
       // judge is listed only with its key; a placeholder lists it (nothing here calls it).
@@ -67,16 +65,8 @@ async function boot() {
       X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off",
       FREE_ALERTS: "off", FOLLOWUPS: "off",
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  let log = ""; child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
-  const base = `http://127.0.0.1:${port}`; const t0 = Date.now();
-  while (Date.now() - t0 < 120_000) {
-    try { const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) }); if (r.ok) return { base, child }; } catch { /* booting */ }
-    if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}\n${log.slice(-2000)}`);
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  child.kill("SIGKILL"); throw new Error(`no /health in 120s\n${log.slice(-2000)}`);
+  return { base: srv.url, child: srv.child };
 }
 
 const { base, child } = await boot();

@@ -15,13 +15,11 @@
 // manifest's declared payee for that route and network.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { payToForRoute, SELF_FUNDING_SLUGS, AVM_SELF_FUNDING_SLUGS } from "../src/payments.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const BASE = "eip155:8453";
 const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k";
@@ -47,7 +45,6 @@ const ROUTER_SLUGS = new Set([...SELF_FUNDING_SLUGS, ...AVM_SELF_FUNDING_SLUGS])
 }
 
 // ---- Part 2: booted, every catalog route ------------------------------------
-const [FAC] = await getFreePorts(1);
 const fac = createServer((rq, rs) => {
   rq.on("data", () => {});
   rq.on("end", () => {
@@ -58,15 +55,15 @@ const fac = createServer((rq, rs) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => fac.listen(FAC, "127.0.0.1", r));
+await new Promise((r) => fac.listen(0, "127.0.0.1", r));
+const FAC = fac.address().port;
 
-const procs = [];
-const serverLog = [];
+const servers = [];
+const bootErrors = [];
 const boot = async (extraEnv) => {
-  const [port] = await getFreePorts(1);
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    env: {
-      ...process.env, PORT: String(port), FREE_MODE: "", NODE_ENV: "test",
+  try {
+    const srv = await bootServer({ stores: "payto-by-route", timeoutMs: 60_000, env: {
+      FREE_MODE: "", NODE_ENV: "test",
       WALLET_ADDRESS: TREASURY, NETWORK: "base",
       PAYMENT_NETWORKS: "base,algorand", ALGORAND_WALLET_ADDRESS: ALGO_TREASURY,
       SOLANA_WALLET_ADDRESS: "", STELLAR_WALLET_ADDRESS: "",
@@ -77,19 +74,21 @@ const boot = async (extraEnv) => {
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", SOLANA_LEADERBOARD: "off",
       STATS_ALLOW_EPHEMERAL: "true", UNPAID_QUOTE_BUDGET_PER_HOUR: "off",
       ...extraEnv,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  procs.push(proc);
-  const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(`[${port}] ${l.slice(0, 400)}`); if (serverLog.length > 200) serverLog.splice(0, serverLog.length - 200); };
-  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-  const B = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 240; i++) { try { if ((await fetch(`${B}/health`)).ok) return { B, proc }; } catch { /* booting */ } await sleep(250); }
-  return { B: null, proc };
+    } });
+    servers.push(srv);
+    return { B: srv.url, proc: srv.child };
+  } catch (e) {
+    bootErrors.push(e.message);
+    return { B: null, proc: null };
+  }
 };
 const done = (code) => {
-  for (const p of procs) p.kill("SIGKILL");
+  for (const s of servers) s.child.kill("SIGKILL");
   fac.close();
+  const serverLog = [
+    ...servers.flatMap((s) => s.log().split("\n").filter((l) => l.trim()).map((l) => `[${s.port}] ${l.slice(0, 400)}`)),
+    ...bootErrors.flatMap((m) => m.split("\n")),
+  ];
   if (code) for (const l of serverLog.slice(-30)) console.error("  server:", l);
   console.log(`\n${pass} passed, ${failed} failed`);
   process.exit(code);

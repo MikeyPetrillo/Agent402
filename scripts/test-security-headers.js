@@ -4,14 +4,14 @@
 // and the /mcp CORS stays wildcard-but-credential-free.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const PORT = await getFreePort();
-const base = `http://127.0.0.1:${PORT}`;
+// PORT=0: the kernel picks the port and the child's listening line names it.
+let PORT = 0;
+let base = "";
 // stdio was "ignore", so a boot failure printed "FAIL - server booted" and
 // nothing else - no exit code, no stack, no port. This failed once in CI and
 // PASSED on the same commit in the parallel run, and the log could not say why
@@ -25,7 +25,7 @@ const base = `http://127.0.0.1:${PORT}`;
 let childLog = "";
 const T_SPAWN = Date.now();
 const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MTA_STS_MX: "mx1.example,mx2.example", GA_MEASUREMENT_ID: "G-TEST1234" },
+  env: { ...process.env, FREE_MODE: "true", PORT: "0", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MTA_STS_MX: "mx1.example,mx2.example", GA_MEASUREMENT_ID: "G-TEST1234" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 const stamp = (d) => String(d).split(/\r?\n/).filter(Boolean).map((l) => `[+${((Date.now() - T_SPAWN) / 1000).toFixed(1)}s] ${l}`).join("\n") + "\n";
@@ -46,6 +46,11 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   let last = "no attempt";
   const t0 = Date.now();
   for (let i = 0; i < 240; i++) {
+    if (!PORT) {
+      const m = /listening on :(\d+)/.exec(childLog);
+      if (m) { PORT = Number(m[1]); base = `http://127.0.0.1:${PORT}`; }
+      else { last = "no listening line yet"; await wait(250); continue; }
+    }
     try {
       const r = await fetch(`${base}/health`);
       if (r.ok) { up = true; break; }
@@ -67,7 +72,7 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     console.error(`--- last /health outcome after ${Math.round((Date.now() - t0) / 1000)}s: ${last} ---`);
     // Raw TCP: does the port accept a connection at all? Separates "nothing is
     // listening where the log says" from "listening, but HTTP never answers".
-    try {
+    if (PORT) try {
       const net = await import("node:net");
       const tcp = await new Promise((resolve) => {
         const sock = net.createConnection({ host: "127.0.0.1", port: PORT });
