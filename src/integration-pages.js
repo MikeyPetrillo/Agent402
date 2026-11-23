@@ -14,6 +14,7 @@ import { creditsSalesEnabled } from "./credits-sales.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { connectorWires } from "./connector-pay.js";
 import { stockDataEnabled } from "./tools/stock-provider.js";
+import { firstFit } from "./seo-meta.js";
 // Prepaid credits are only presented as a way to pay while packs are sold.
 const CREDITS_ON = creditsSalesEnabled();
 export const CREDITS_HELD = CREDITS_ON ? "a prepaid credits key" : "a credits key bought earlier";
@@ -191,6 +192,7 @@ const { text } = await generateText({
   },
   {
     slug: "langchain",
+    metaDescription: "LangChain.js and LangGraph tools for Agent402: four meta tools that reach the whole catalog, free tools over proof of work and paid ones over x402 or MPP.",
     meta: "LangChain.js and LangGraph tools for Agent402: four meta tools that reach the whole catalog, with proof-of-work for free tools and x402 or MPP for paid ones.",
     name: "LangChain.js and LangGraph",
     short: "LangChain.js",
@@ -713,7 +715,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
   if (!i) return null;
   const canonical = `${baseUrl}/integrations/${i.slug}`;
   const title = `${i.name} integration (${i.pkg})`;
-  const description = i.meta;
+  const description = firstFit([i.metaDescription, i.meta]) || i.meta;
   const github = repoUrl(`tree/main/${i.dir}`);
   const tools = toolsFor(i, catalog);
   const config = ADAPTER_CONFIG[i.shape] || [];

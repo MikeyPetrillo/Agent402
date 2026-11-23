@@ -77,7 +77,7 @@ const SECTIONS = [
 export function securityPage(baseUrl) {
   const canonical = `${baseUrl}/security`;
   const title = "Security at Agent402";
-  const description = "How the hosted service is built and secured: vulnerability disclosure with safe harbor, what data is held and for how long, non-custodial key handling, the controls in the serving path and on the code, and how availability is measured.";
+  const description = "How the hosted service is built and secured: vulnerability disclosure with safe harbor, data retention, non-custodial key handling and availability.";
   const body = `
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">

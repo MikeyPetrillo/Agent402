@@ -24,7 +24,7 @@ function adapterRow(a, isLast) {
 export function ledgerIntegrationsPage(baseUrl) {
   const canonical = baseUrl + "/integrations";
   const title = "Integrations - Agent402";
-  const description = "Packages that turn the Agent402 catalog into native tools for OpenAI, Anthropic, the Vercel AI SDK, LangChain, LlamaIndex, Google ADK, the OpenAI Agents SDK, Strands, AgentKit, elizaOS and MCP, plus the buyer SDK, the tollbooth and the OpenClaw provider.";
+  const description = "Packages that turn the Agent402 catalog into native tools for the major agent frameworks and MCP, plus the buyer SDK, tollbooth and OpenClaw provider.";
 
   const jsonLd = {
     "@context": "https://schema.org",

@@ -18,6 +18,37 @@ export const META_TITLE_MAX = 70;
 
 const clean = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
 
+/** Descriptions the shell could not cut at a sentence end since boot,
+ *  source -> served. Like clampedTitles, a safety net and not an author: the
+ *  operator surface lists them and scripts/test-title-clamp.js fails when any
+ *  served page needs one. The fix is a description written to fit. */
+export const cutDescriptions = new Map();
+const CUT_DESCRIPTIONS_MAX = 500;
+const TERMINAL = /[.!?]["'\u201d)]?$/;
+// Words a clause cut must not end on ("..., and." reads as a cut).
+const DANGLING = /(\s+(and|or|the|of|to|for|a|an|on|with|from|by|at|in|via|plus|its|their|each|every|that|which|as))+$/i;
+
+/** The longest run of whole sentences from the start of `text` that fits
+ *  `max`, or "" when the first sentence alone is longer. */
+export function sentenceFit(text, max = META_DESCRIPTION_MAX) {
+  const s = clean(text);
+  if (s.length <= max && TERMINAL.test(s)) return s;
+  const head = s.slice(0, max + 1);
+  let cut = -1;
+  for (const m of head.matchAll(/[.!?](?=\s)/g)) cut = m.index + 1;
+  return cut > 0 ? head.slice(0, cut).trim() : "";
+}
+
+/** The first candidate that reads as whole sentences within `max` (each is
+ *  passed through sentenceFit), else "". */
+export function firstFit(candidates, max = META_DESCRIPTION_MAX) {
+  for (const c of (Array.isArray(candidates) ? candidates : [candidates])) {
+    const f = c ? sentenceFit(c, max) : "";
+    if (f) return f;
+  }
+  return "";
+}
+
 export function metaDescription(text, max = META_DESCRIPTION_MAX) {
   const s = clean(text);
   if (s.length <= max) return s;
@@ -25,10 +56,20 @@ export function metaDescription(text, max = META_DESCRIPTION_MAX) {
   // Last sentence end that fits (". " / "! " / "? " or a terminal ". ").
   let cut = -1;
   for (const m of head.matchAll(/[.!?](?=\s)/g)) cut = m.index + 1;
-  if (cut >= Math.floor(max * 0.4)) return head.slice(0, cut).trim();
-  // Else the last word boundary, dropping a dangling comma/colon/dash.
+  // A whole first sentence, however short, beats a cut one.
+  if (cut >= Math.min(40, Math.floor(max * 0.4))) return head.slice(0, cut).trim();
+  // No sentence end fits: the safety net. Cut at the last clause boundary
+  // (", " "; " ": " " - " " (") that keeps a useful length, drop a dangling
+  // joiner and close the sentence, so a result never ends on a cut word; the
+  // source is recorded so the page gets a description written to fit.
+  let clause = -1;
+  for (const m of head.slice(0, max).matchAll(/(?:,|;|:| -| \()\s/g)) clause = m.index;
   const ws = head.lastIndexOf(" ");
-  return (ws > 0 ? head.slice(0, ws) : head.slice(0, max)).replace(/[\s,;:\-·]+$/g, "").trim();
+  let out = clause >= Math.floor(max * 0.4) ? head.slice(0, clause) : (ws > 0 ? head.slice(0, ws) : head.slice(0, max - 1));
+  out = out.replace(/[\s,;:\-·(]+$/g, "").replace(DANGLING, "").replace(/[\s,;:\-·(]+$/g, "").trim();
+  if (!TERMINAL.test(out)) out = `${out.slice(0, max - 1)}.`;
+  if (cutDescriptions.size < CUT_DESCRIPTIONS_MAX && !cutDescriptions.has(s)) cutDescriptions.set(s, out);
+  return out;
 }
 
 /** Title for a search result: the first candidate that fits `max`, else the

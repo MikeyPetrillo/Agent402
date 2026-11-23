@@ -15,7 +15,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
-import { metaTitle, clampedTitles, META_TITLE_MAX } from "../src/seo-meta.js";
+import { metaTitle, clampedTitles, META_TITLE_MAX, metaDescription, cutDescriptions, sentenceFit, META_DESCRIPTION_MAX } from "../src/seo-meta.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -33,6 +33,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   metaTitle(long);
   ok(clampedTitles.size === 1, "the same source is recorded once");
   clampedTitles.clear();
+}
+// The description cut: a sentence end when one fits; otherwise the safety net
+// closes a clause (never a cut word) and records the source.
+{
+  const fits = "The first sentence fits inside the snippet bar on its own terms. Second sentence is long enough that the two together run well past the one hundred and fifty five character limit of a snippet.";
+  ok(metaDescription(fits) === "The first sentence fits inside the snippet bar on its own terms.", "a sentence end that fits is where the cut lands");
+  ok(cutDescriptions.size === 0, "a sentence-end cut is not recorded");
+  const run = "A list of things an agent reads: robots files, sitemaps, manifests, price quotes, receipts, refunds, ledgers, rails, chains, facilitators, settlement logs and more besides";
+  const served = metaDescription(run);
+  ok(served.length <= META_DESCRIPTION_MAX && /[.!?]$/.test(served) && !/\b(and|or|the)\.$/.test(served), `with no sentence end the cut closes a clause ("${served}")`);
+  ok(cutDescriptions.get(run) === served, "a description cut without a sentence end is recorded as source -> served");
+  ok(sentenceFit("One. Two.", 5) === "One.", "sentenceFit keeps whole sentences");
+  ok(sentenceFit("x".repeat(200)) === "", "sentenceFit answers empty when the first sentence does not fit");
+  cutDescriptions.clear();
 }
 
 // --- every sitemap page on a booted server ------------------------------------------
@@ -53,14 +67,17 @@ try {
   const paths = [...new Set([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => new URL(m[1]).pathname + new URL(m[1]).search))].filter((p) => !machine.test(p));
   ok(paths.length >= 400, `sitemap lists the HTML pages to render (${paths.length})`);
   const statuses = new Map();
+  const descs = new Map();
   let next = 0;
   const worker = async () => {
     while (next < paths.length) {
       const p = paths[next++];
       try {
         const r = await fetch(`${BASE}${p}`, { redirect: "manual" });
-        await r.arrayBuffer();
+        const html = await r.text();
         statuses.set(p, r.status);
+        const desc = (html.match(/<meta name="description" content="([^"]*)"/) || [])[1];
+        if (r.status === 200 && desc != null) descs.set(p, desc.replace(/&(?:amp|quot|#39|lt|gt);/g, (m) => ({ "&amp;": "&", "&quot;": '"', "&#39;": "'", "&lt;": "<", "&gt;": ">" })[m]));
       } catch (e) { statuses.set(p, `error ${e.message}`); }
     }
   };
@@ -76,6 +93,16 @@ try {
   ok(clamped.length === 0, clamped.length
     ? `${clamped.length} served title(s) were clamped; shorten the source:\n${clamped.map((c) => `  "${c.source}" (${c.source.length}) -> "${c.served}"`).join("\n")}`
     : `no served title needed the ${META_TITLE_MAX}-character clamp across ${statuses.size} pages`);
+  // Every sitemap page's description is whole sentences within the bar: none
+  // ends mid-sentence, and none needed the shell's clause cut to get there.
+  const unterminated = [...descs].filter(([, d]) => !d || d.length > META_DESCRIPTION_MAX || !/[.!?]["'\u201d)]?$/.test(d.trim()));
+  ok(descs.size >= 400 && unterminated.length === 0, unterminated.length
+    ? `${unterminated.length} description(s) are empty, too long or end mid-sentence:\n${unterminated.slice(0, 20).map(([p, d]) => `  ${p}: "${d}"`).join("\n")}`
+    : `every one of ${descs.size} sitemap descriptions is whole sentences within ${META_DESCRIPTION_MAX} characters`);
+  const cut = (j && j.cutDescriptions) || [];
+  ok(Array.isArray(j?.cutDescriptions) && cut.length === 0, cut.length
+    ? `${cut.length} served description(s) had no sentence end within ${META_DESCRIPTION_MAX}; write one that fits:\n${cut.slice(0, 20).map((c) => `  "${c.source.slice(0, 120)}..." -> "${c.served}"`).join("\n")}`
+    : `no served description needed the clause cut across ${statuses.size} pages`);
 } catch (e) {
   ok(false, e.message);
 } finally {

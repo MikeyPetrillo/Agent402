@@ -2509,7 +2509,7 @@ export function revenuePage(baseUrl, snap) {
   const canonical = baseUrl + "/revenue";
   const title = "Transactions - x402 and MPP settlements on-chain | Agent402";
   const description =
-    `External payments and revenue on the Agent402 rails across both wires (x402 and MPP) and ${RAILS_AMP}, plus Tempo, with every settlement through our rails counted beside them. Each figure links to its on-chain proof.`;
+    "External payments and revenue on the Agent402 rails over x402 and MPP, with every settlement through our rails counted. Each figure links to its proof.";
   const chainKeyByLabel = { ...Object.fromEntries(Object.entries(EVM).map(([k, c]) => [c.label, k])), Solana: "solana", Stellar: "stellar", Algorand: "algorand" };
   const at = snap.allTime || {};
   const perChainOf = (r) => at.perChain?.[chainKeyByLabel[r.rail]];
