@@ -73,7 +73,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 >
 > **Two doors, two price lists.** Agents pay per call in USDC (x402 / MPP) or
 > free via proof-of-work, and a finished **report** costs $0.60 to $2.00 that
-> way. People pay by card: the same reports at
+> way ($0.05 for the IPO digest). People pay by card: the same reports at
 > [agent402.tools/reports](https://agent402.tools/reports) (company dossier, 13F fund
 > report, insider flow, market brief, deep research, FDA recall, domain audit)
 > are $2 to $5, **monitors** that re-run on change at
@@ -89,7 +89,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > Protocol, the IETF-track `Payment` HTTP auth scheme co-authored by Tempo and
 > Stripe): the same 402 carries both, an [`mppx`](https://www.npmjs.com/package/mppx)
 > client pays out of the box, and MPP settles on Base and Celo (USDC), natively
-> on [Tempo](https://tempo.xyz) (USDC.e or PathUSD via Tempo's relay), or by
+> on [Tempo](https://tempo.com) (USDC.e or PathUSD via Tempo's relay), or by
 > card over MPP (Stripe `stripe/charge`, offered on routes priced $0.50 and up
 > when the operator configures it). The
 > [MPP marketplace](https://agent402.tools/mpp-marketplace) lists every MPP
@@ -124,7 +124,7 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 > self-host for free can also be a hosted, monetized one. Free mode is one
 > setting (`FREE_MODE=true`); a paid instance needs a payout wallet.
 
-🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Hosted MCP connector](https://agent402.tools/mcp)**
+🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Hosted MCP connector](https://agent402.tools/integrations/mcp)** (`https://agent402.tools/mcp`)
 
 ## Run it yourself in 30 seconds
 
@@ -164,6 +164,9 @@ curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https%3A%2F%2Fgithub.com%2FMikeyPetrillo%2FAgent402)
 
 The button creates the service from this repository; it adds no database or cache. Set `FREE_MODE=true` to serve every tool free, or the paid-mode variables in [Self-Hosting](https://github.com/MikeyPetrillo/Agent402/wiki/Self-Hosting): without one or the other the server exits at boot. The seller index crawls on a production boot (the image sets `NODE_ENV=production`; a `FREE_MODE` boot needs `X402_INDEX_CRAWL=on`). Redis and Postgres are optional and you add them yourself: `REDIS_URL` enables the upstream response cache (`X-Cache: hit|miss`), and `DATABASE_URL` enables the public `/api/analytics` dashboard.
+
+Every environment variable the server reads, with its purpose and default, is in the generated
+[configuration reference](docs/configuration.md); [`.env.example`](.env.example) is a commented starting file.
 
 ## Pay per call from a wallet
 
@@ -209,7 +212,7 @@ More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-wi
 | **Geo** | `geo-distance` (haversine, pure-CPU), `place-lookup` (place names worldwide), `geo-lookup` (US county and state), `sun-times` |
 | **Weather** | `weather-current`, `weather-daily`, `weather-hourly`, `weather-history`, `weather-air-quality` by coordinates or place name; `weather-probability`, `weather-market-brackets`, `weather-market-board` (ensemble probabilities); `weather-window`, `weather-thresholds`; free calculators `heat-index-calc`, `aqi-calc`, `degree-days-calc`, `wmo-weather-code` |
 | **Live data** | `fx-rate` (ECB), `barcode-lookup` (Open Food Facts), `gov-data` (data.gov), `weather-forecast`/`weather-alerts`, `earthquakes` (USGS) |
-| **Calendars & business days** | `public-holidays`, `bank-holidays`, `school-holidays`, `next-holidays`, `long-weekends` (with bridge days), `country-business-days` (check, add, count, region-aware), `business-day-planner` (first common business day across countries); `settlement-calendar` (ACH, Fedwire, SEPA, SEPA Instant, CHAPS settlement dates from each rail's published operating days); `market-calendar` (NYSE, LSE, Xetra, JPX, HKEX open, close and holidays from each exchange's own calendar). Holiday data by [Nager.Date](https://date.nager.at), used under a sponsorship held for this service |
+| **Calendars & business days** | `public-holidays`, `bank-holidays`, `school-holidays`, `next-holidays`, `long-weekends` (with bridge days), `country-business-days` (check, add, count, region-aware), `business-day-planner` (first common business day across countries); `settlement-calendar` (ACH, Fedwire, SEPA, SEPA Instant, CHAPS settlement dates from each rail's published operating days); `market-calendar` (NYSE, LSE, Xetra, JPX, HKEX open, close and holidays from each exchange's own calendar). Holiday data by [Nager.Date](https://nagerholidays.com), used under a sponsorship held for this service |
 | **Finance & crypto** | `crypto-price`/`crypto-market`/`crypto-history`/`crypto-trending`/`crypto-global` (CoinGecko) |
 | **Crypto derivatives & options** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth); `options-summary`, `crypto-options-chain`, `options-ticker` (options book, IV and greeks) - $0.001 to $0.005 a call, no exchange account |
 | **DeFi, venues & stablecoins (computed answers)** | `lending-rates` (Aave v3 and Compound v3 supply and borrow rates read from the contracts), `funding-screener` (one coin's funding across every listed venue), `stablecoin-depeg-watch` (USD stablecoins off peg now, over 24 hours and 7 days), `exchange-spread` (a coin's price per venue against the median), `dex-pool-health`, `dex-volume-board`, `defi-screener`, `chain-board` - $0.005 a call |
@@ -220,7 +223,7 @@ More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-wi
 | **Site crawling** | `site-map` (enumerate a site's URLs) and `site-crawl` (breadth-first crawl to clean markdown, robots-respecting, hard page/depth/time budgets) - the deterministic pair behind any "read this whole site" task |
 | **Macro (FRED + more)** | yield curve, treasury, fiscal, Fed funds, CPI, unemployment, Sahm rule, ECB FX, World Bank, FRED bulk release observations |
 | **SEC EDGAR** | ticker→CIK, filing list, 10-K/10-Q text, XBRL frames, insider transactions, 13F holdings, IPO calendar, full-text search |
-| **Finished reports (cited)** | `research`/`research-pro`/`research-max` (grounded deep research), `market-brief`, `dossier`/`dossier-max` (company due diligence), `fund-report`/`fund-report-max` (13F portfolio), `domain-audit`/`domain-audit-pro` (graded security + deliverability), `recall-report` (FDA), `insider-report` (Form 4 flow), `token-risk`/`token-risk-pro` (on-chain contract risk), `filing-report` (latest SEC filing), `token-brief` (Solana mint risk evidence, available while its data source answers), `ticker-pack` (dossier + insider flow + holders), `ipo-report` (S-1 + 424B4 digest, deterministic) - $0.05 to $2.00 per report over x402 / MPP, or $2 to $5 by card at [/reports](https://agent402.tools/reports); see the `/v1` table below |
+| **Finished reports (cited)** | `research`/`research-pro`/`research-max` (grounded deep research), `market-brief`, `dossier`/`dossier-max` (company due diligence), `fund-report`/`fund-report-max` (13F portfolio), `domain-audit`/`domain-audit-pro` (graded security + deliverability), `recall-report` (FDA), `insider-report` (Form 4 flow), `token-risk`/`token-risk-pro` (on-chain contract risk), `filing-report` (latest SEC filing), `token-brief` (Solana mint risk evidence, available while its data source answers), `ticker-pack` (dossier + insider flow + holders), `ipo-report` (S-1 + 424B4 digest, deterministic) - $0.60 to $2.00 per report over x402 / MPP ($0.05 for the IPO digest), or $2 to $5 by card at [/reports](https://agent402.tools/reports); see the `/v1` table below |
 | **Network truth** | `dns`, `dns-lookup`, `tls-cert`, `whois`, `http-check`, `robots-check`, `email-validate`, `ip-info` |
 | **Crypto & payments** | `usdc-balance`, `tx-status`, `gas-estimate`, `ens-resolve`, `x402-quote`, `x402-verify`, `transfer-authorization` - non-custodial, multi-chain (Base/Polygon/Arbitrum/Optimism/Ethereum) |
 | **Agent memory** | wallet-keyed KV + TTL, atomic counters, cross-wallet grants, hash-chained audit log, similarity recall |
@@ -279,12 +282,16 @@ price per call whatever the length.
 | `POST /v1/grounded/chat/completions` | $0.03 | the auto router plus a live web search on every call - answers carry OpenAI-wire `url_citation` annotations; never cached |
 | `POST /v1/{nano,auto,pro,premium}/messages`, `POST /v1/messages` | tier price | the **Anthropic Messages wire** on every tier (same allowlist, caps and failover as the chat route); `effort` (low to max) is the depth control on Claude 4.7+, older Claude takes `thinking.budget_tokens` |
 | `POST /v1/{nano,auto,pro,premium}/responses`, `POST /v1/responses` | tier price | the **OpenAI Responses wire** on every tier (function tools only, no server state) |
+| `POST /v1/{nano,auto,pro,premium,metered}/gemini`, `POST /v1/gemini` | tier price | the **Gemini generateContent wire** on every tier (contents, systemInstruction, generationConfig, function declarations); also answers `/v1beta/models/<model>:generateContent` |
 | `POST /v1/embeddings` | $0.002 | OpenAI embeddings, batch up to 64 inputs - an identical repeat from the payer that paid for it is **free** (deterministic output, cache default-on; scope below) |
 | `POST /v1/rerank` | $0.002 | Cohere-compatible rerank (`{query, documents[], top_n}`), up to 50 documents, cache default-on (scope below) |
 | `POST /v1/images/generations` | $0.08 | image generation (FLUX.2 Pro, 1024x1024 PNG) - OpenAI images wire, inline base64 out |
 | `POST /v1/images/fast` | $0.02 | budget text-to-image, same OpenAI images wire, about two seconds a picture |
 | `POST /v1/images/pro` | $0.05 | higher-fidelity text-to-image, one picture a call |
+| `POST /v1/images/edits` | $0.02 | edit an image with a prompt, OpenAI `images.edit` wire: one to four PNG or JPEG references in, one JPEG out |
 | `POST /v1/videos/generations` | $0.20 | text-to-video: one silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16 |
+| `POST /v1/audio/transcriptions` | $0.03 | speech-to-text, OpenAI transcription wire: multipart `file` in, transcript out, recordings up to four minutes |
+| `POST /v1/pro/audio/transcriptions` | $0.10 | the same model for recordings up to ten minutes |
 | `POST /v1/audio/speech` | $0.06 | text-to-speech, OpenAI `audio.speech.create()` wire - up to 2,000 chars in, raw mp3 (default) or pcm bytes out, five-model failover chain |
 
 Streaming (`stream: true`), full tools/function-calling passthrough, an opt-in
@@ -318,6 +325,7 @@ synthesis; `ipo-report` is fully deterministic (no model at all):
 | `POST /v1/filing-report` | $0.85 | latest SEC filing read and summarized with the facts that moved (`{ticker}`) |
 | `POST /v1/token-brief` | $0.60 | Solana token risk evidence from on-chain and market data (`{mint}`), available while its data source answers |
 | `POST /v1/ticker-pack` | $2.00 | one ticker in one report: dossier, insider flow and holders |
+| `POST /v1/linkedin-article` | $1.10 | a publish-ready LinkedIn article package from a topic (`{topic}`): cited research, headline options, the body, a companion post and images at the platform's sizes |
 | `POST /v1/token-risk` · `/v1/token-risk/pro` | $0.60 · $0.85 | token and contract risk report from on-chain evidence (`{address, chain}`) |
 | `POST /v1/ipo-report` | $0.05 | IPO pipeline digest, S-1 + 424B4 from EDGAR full-text search (`{days, keyword}`), deterministic |
 
@@ -368,6 +376,11 @@ curl -X POST https://agent402.tools/api/decide \
   -d '{"task":"Check whether wallet 0xd8dA...6045 is on a sanctions list, then list its recent token transfers on Base","depth":"plan"}'
 ```
 
+Self-hosting: Decide runs as its own service (`npm run start:decide`, `services/decide`, with its own
+Postgres). The main server serves `/api/decide` only when `DECIDE_SERVICE_URL` (the service's address)
+and `DECIDE_INTERNAL_TOKEN` (a shared secret of 24 characters or more) are both set; without them the
+route answers 404. Every variable is in the [configuration reference](docs/configuration.md).
+
 - **Neutral ranking.** One formula scores every candidate (fit, observed reliability, price,
   schema quality, freshness) with no term for who sells the tool, and every step says whether
   the tool is ours (`firstParty`).
@@ -379,7 +392,7 @@ curl -X POST https://agent402.tools/api/decide \
 - **On MCP** the same pair is `decide.plan` and `decide.execute`; `decide.feedback` (free) records
   whether a step worked. Page: [agent402.tools/decide](https://agent402.tools/decide).
 
-## Skill packs - 70+ multi-tool workflows
+## Skill packs - 80+ multi-tool workflows
 
 For jobs that span several tools - "audit a domain", "diagnose deliverability",
 "work up a time-series", "peel an opaque blob" - Agent402 ships curated
@@ -399,14 +412,14 @@ A task-shaped query to `catalog.search` (the hosted connector's search tool; the
 | [`document-intel`](https://agent402.tools/skills/document-intel) | pdf-info · pdf-to-markdown · pdf-extract-pages · image-ocr · barcode-decode · pdf-merge · images-to-pdf | PDF/OCR/barcode pipeline |
 | [`status-snapshot`](https://agent402.tools/skills/status-snapshot) | dns-lookup · http-check · http-headers · tls-cert · robots-check | One-shot service-health sweep |
 
-All 70+ packs at [`/skills`](https://agent402.tools/skills) · JSON index at [`/api/skill-packs.json`](https://agent402.tools/api/skill-packs.json) ·
+All 80+ packs at [`/skills`](https://agent402.tools/skills) · JSON index at [`/api/skill-packs.json`](https://agent402.tools/api/skill-packs.json) ·
 on MCP the packs appear under `prompts/list` so any MCP-aware client picks them up automatically.
 
 ## x402 Index - Find · Route · Leaderboard
 
 Agent402 is also **the open routing + ranking layer for the whole x402
 ecosystem**: it crawls public x402 sellers (the local catalog + an
-auto-discovered set from the [Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar),
+auto-discovered set from the [Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/bazaar),
 refreshed hourly) and exposes them through three free surfaces - same logic as
 `/api/find`: discovery primitives shouldn't cost money.
 
@@ -610,7 +623,7 @@ the same 402 carries a `WWW-Authenticate: Payment` challenge, `Authorization:
 Payment` credentials settle, and settled responses return a `Payment-Receipt`.
 MPP has two methods here: `evm` settles identically to x402 (EIP-3009 USDC,
 same facilitator, same price); `tempo` settles natively via
-[Tempo](https://tempo.xyz)'s own relay (TIP-1034/TIP-20, no x402 facilitator
+[Tempo](https://tempo.com)'s own relay (TIP-1034/TIP-20, no x402 facilitator
 involved) - a genuinely separate settlement path, set `TEMPO_API_KEY` to
 enable it. An [`mppx`](https://www.npmjs.com/package/mppx) client works out
 of the box for either method; set `MPP_SECRET_KEY` to enable the shim on your
@@ -683,7 +696,7 @@ working tools, so you don't have to build the catalog yourself.
   balance for it; prepaid card credits are a held balance and are named as one).
 
 Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)
-and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar).
+and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/bazaar).
 
 **Works with [Amazon Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** - AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 500+ tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: Amazon Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
 

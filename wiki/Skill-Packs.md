@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-**70+ curated multi-tool workflows.** Each pack solves a real job that no single tool covers - auditing a domain, working up a time series, decoding an opaque blob, pulling the macro backdrop - and ships as a single MCP **prompt**. An agent calls `prompts/get { name: "<pack>", arguments: { … } }` and gets back a ready-to-run plan with the right Agent402 tools wired in (in the right order, with the right inputs).
+**80+ curated multi-tool workflows.** Each pack solves a real job that no single tool covers - auditing a domain, working up a time series, decoding an opaque blob, pulling the macro backdrop - and ships as a single MCP **prompt**. An agent calls `prompts/get { name: "<pack>", arguments: { … } }` and gets back a ready-to-run plan with the right Agent402 tools wired in (in the right order, with the right inputs).
 
 - **Browse on the live site:** [`agent402.tools/skills`](https://agent402.tools/skills) (full templates, arguments, examples)
 - **MCP discovery:** every MCP-aware client picks them up via `prompts/list` → `prompts/get`

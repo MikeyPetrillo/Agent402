@@ -55,7 +55,7 @@ For persistent state (stats, memory, PoW replay protection), mount a volume at `
 
 ## Environment variables
 
-Set these on your host. None are committed to the repo.
+Set these on your host. None are committed to the repo. This table is the common set: every variable the server reads, with its purpose and default, is in the generated [configuration reference](https://github.com/MikeyPetrillo/Agent402/blob/main/docs/configuration.md) (see [[Configuration]]), and [`.env.example`](https://github.com/MikeyPetrillo/Agent402/blob/main/.env.example) is a commented starting file.
 
 | Variable | Required? | What it enables |
 |---|---|---|
@@ -66,7 +66,7 @@ Set these on your host. None are committed to the repo.
 | `WALLET_ADDRESS` | For paid mode | Your USDC receiving address (Base) |
 | `WALLET_ENS` | No | ENS or Basename for display (e.g. `agent402.base.eth`) |
 | `NETWORK` | For paid mode | Primary chain (default: `base` = Base mainnet; `base-sepolia` for testnet) |
-| `PAYMENT_NETWORKS` | No | Comma-separated chains to accept (default: the primary network only), e.g. `base,solana,polygon,arbitrum,stellar,algorand,monad,celo,avalanche,sei,optimism,robinhood`; an extra EVM chain is paid to `WALLET_ADDRESS`; Solana, Stellar and Algorand each need their own payTo (the next three rows) |
+| `PAYMENT_NETWORKS` | No | Comma-separated chains to accept (default: the primary network only), e.g. `base,solana,polygon,arbitrum,stellar,algorand,monad,celo,avalanche,sei,optimism,arc,ink,robinhood`; an extra EVM chain is paid to `WALLET_ADDRESS`; `arc` is configured only with `CIRCLE_FACILITATOR_API_KEY` set (which also adds it to a multi-chain list on its own) and `ink` only with `INK_FACILITATOR_URL`; Solana, Stellar and Algorand each need their own payTo (the next three rows) |
 | `SOLANA_WALLET_ADDRESS` | With a Solana network in `PAYMENT_NETWORKS` | Your USDC receiving address on Solana (base58). Unset, the server logs a boot warning and leaves the Solana option out of the 402s it sends |
 | `STELLAR_WALLET_ADDRESS` | With `stellar` in `PAYMENT_NETWORKS` | Your USDC receiving address on Stellar (public key, `G...`). Unset, the server logs a boot warning and leaves the Stellar option out of the 402s it sends |
 | `ALGORAND_WALLET_ADDRESS` | With `algorand` in `PAYMENT_NETWORKS` | Your USDC receiving address on Algorand. Unset, the server logs a boot warning and leaves the Algorand option out of the 402s it sends |
@@ -175,3 +175,5 @@ TARGET_URL=http://localhost:3000 node scripts/test-all.js
 - [[Architecture]]: how the server, paywall, and facilitators fit together
 - [[Security Model]]: SSRF defense, PoW scoping, wallet-only tools
 - [[Operations]]: CI pipeline, heartbeat watchdog, deploys
+- [[Configuration]], [[Troubleshooting]] and [[Upgrading]]
+- Per rail: [[Solana]], [[Stellar]], [[Algorand]], [[Tempo]], [[Card Payments|Card-Payments]], [[Credits]]
