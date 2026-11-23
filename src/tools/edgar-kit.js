@@ -448,7 +448,7 @@ export const EDGAR_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "All US public companies that reported a given XBRL tag for a given period, in one call. Suited to cross-sectional screens, for example: 'every issuer's Revenues for CY2023Q1' or 'every issuer's Assets as of CY2023Q4I (instantaneous)'. Period format: CY{YYYY} (annual), CY{YYYY}Q{1-4} (quarterly), or CY{YYYY}Q{1-4}I (instantaneous balance-sheet items). Source: data.sec.gov/api/xbrl/frames. ?taxonomy=us-gaap&tag=Revenues&unit=USD&period=CY2023Q1",
+      "All US public companies that reported a given XBRL tag for a given period, in one call. Use it for cross-sectional screens, such as: 'every issuer's Revenues for CY2023Q1' or 'every issuer's Assets as of CY2023Q4I (instantaneous)'. Period format: CY{YYYY} (annual), CY{YYYY}Q{1-4} (quarterly), or CY{YYYY}Q{1-4}I (instantaneous balance-sheet items). Source: data.sec.gov/api/xbrl/frames. ?taxonomy=us-gaap&tag=Revenues&unit=USD&period=CY2023Q1",
     tags: ["edgar", "sec", "xbrl", "frames", "screen", "cross-section", "fundamentals", "financials"],
     discovery: {
       input: { taxonomy: "us-gaap", tag: "Revenues", unit: "USD", period: "CY2023Q1" },

@@ -109,7 +109,7 @@ export const WEB_TOOLS = [
     category: "web",
     price: "$0.003",
     description:
-      "Build the Internet Archive Wayback Machine link for a URL: snapshot.url opens the archived capture closest to an optional timestamp (default: the most recent). The link is computed here and the archive is not queried, so available is null and checked is false; opened, the Wayback Machine picks the capture, or says the URL was never archived. Useful for citations, dead-link recovery, and checking what a page said at a point in time.",
+      "Build the Internet Archive Wayback Machine link for a URL: snapshot.url opens the capture closest to an optional timestamp (default: the most recent). The link is computed here without querying the archive, so available is null and checked is false; opened, the Wayback Machine picks the capture or says the URL was never archived. For citations and dead-link recovery.",
     tags: ["web", "archive", "wayback", "snapshot", "history", "citation", "research"],
     discovery: {
       bodyType: "json",

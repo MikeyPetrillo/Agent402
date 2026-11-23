@@ -2441,7 +2441,7 @@ const networkTools = [
     slug: "whois",
     category: "network",
     price: "$0.001",
-    description: "Domain registration facts computed from the registry's RDAP record (the structured WHOIS successor): registered, the domain's age in days, days until it expires, DNSSEC and transfer lock. The record's own fields (registrar, dates, status, nameservers) keep their keys and read null. Lookups to each registry are paced and held to a daily limit.",
+    description: "Domain registration facts computed from the registry's RDAP record: registered, age in days, days to expiry, DNSSEC and transfer lock. The record's own fields read null. Lookups to each registry are paced and held to a daily limit.",
     tags: ["whois", "rdap", "domain", "registration"],
     discovery: {
       bodyType: "json",

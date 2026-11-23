@@ -4,7 +4,7 @@
 // generic cap truncates at a sentence/word boundary, never mid-word "...".
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFile } from "node:fs/promises";
-import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer, x402ServiceName, x402ServiceNames, SERVICE_NAME_MAX, catalogServiceNameFor } from "../src/payments.js";
+import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, INPUT_DESCRIPTION_SHORT, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer, x402ServiceName, x402ServiceNames, SERVICE_NAME_MAX, catalogServiceNameFor } from "../src/payments.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 import { JUDGE_TOOLS, judgeEnabled } from "../src/tools/judge-kit.js";
 import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
@@ -263,13 +263,29 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
     inputSchema: { properties: { values: { type: "array", description: "x".repeat(400) }, horizon: { type: "number", description: "y".repeat(400) } } },
     output: { type: "json", example: { forecast: Array.from({ length: 40 }, (_, i) => ({ step: i, point: i * 1.5 })) }, schema: { type: "object" } },
   };
+  const withShort = (b) => ({ ...b, inputSchema: { properties: Object.fromEntries(Object.entries(b.inputSchema.properties).map(([k, p]) => [k, { ...p, description: p.description.slice(0, INPUT_DESCRIPTION_SHORT) }])) } });
   const roomy = fitChallenge(block, long, declare, 1_000_000);
   ok(roomy.trimmed.length === 0 && roomy.slim === block && roomy.description === long, "budget: a route under it keeps its block and description untouched");
   const one = fitChallenge(block, long, declare, JSON.stringify(declare(block)).length + long.length - 100);
-  ok(one.trimmed[0] === "input-descriptions" && !JSON.stringify(one.slim.inputSchema).includes("xxxx") && one.slim.inputSchema.properties.values.type === "array" && one.slim.output.example === block.output.example && one.description === long,
-    "budget: the input side gives way first; the description, names, types and the sample output stay");
+  ok(one.trimmed.join() === "input-descriptions-short" && one.slim.inputSchema.properties.values.description.length <= INPUT_DESCRIPTION_SHORT && one.slim.inputSchema.properties.values.description.length > 0 && one.slim.inputSchema.properties.values.type === "array" && one.slim.output.example === block.output.example && one.description === long,
+    `budget: the input side gives way first, its descriptions cut short before they go; the description, names, types and the sample output stay (${one.trimmed.join()})`);
+  const two = fitChallenge(block, long, declare, JSON.stringify(declare(withShort(block))).length + long.length - 20);
+  ok(two.trimmed.join() === "input-descriptions-short,input-descriptions" && !JSON.stringify(two.slim.inputSchema).includes("xxxx") && two.slim.output.example === block.output.example && two.description === long,
+    `budget: past the short descriptions they go (${two.trimmed.join()})`);
+  {
+    const bounded = { input: { q: "a" }, inputSchema: { type: "object", properties: { q: { type: "string", maxLength: 81, enum: ["a", "b"], description: "z".repeat(300) } } }, output: { type: "json", example: { ok: true } } };
+    const typesOnlySize = JSON.stringify(declare({ ...bounded, inputSchema: { type: "object", properties: { q: { type: "string", maxLength: 81, enum: ["a", "b"] } } } })).length + 5;
+    const kept = fitChallenge(bounded, "short", declare, typesOnlySize);
+    ok(kept.slim.inputSchema.properties.q.maxLength === 81 && JSON.stringify(kept.slim.inputSchema.properties.q.enum) === '["a","b"]' && kept.slim.inputSchema.type === "object" && !kept.trimmed.includes("input-types-bare"),
+      `budget: past the descriptions a field keeps its bounds (enum, lengths) before they go (${kept.trimmed.join()})`);
+    const noType = fitChallenge({ ...bounded, inputSchema: { properties: bounded.inputSchema.properties } }, "short", declare, 10);
+    ok(!("type" in noType.slim.inputSchema), "budget: the types-only cut adds no type the schema did not have");
+    const { shortInputDescription } = await import("../src/payments.js");
+    ok(shortInputDescription("Optional target time, 4-14 digits (YYYY, YYYYMM, YYYYMMDD, ... up to YYYYMMDDhhmmss) - returns the snapshot closest to it") === "Optional target time, 4-14 digits" && shortInputDescription("Domain to evaluate (e.g. example.com or suspicious-bank-login.com)") === "Domain to evaluate" && shortInputDescription("short one") === "short one",
+      "budget: a short description ends on a clause and never leaves an aside open");
+  }
   const all = fitChallenge(block, long, declare, 200);
-  ok(all.trimmed.join() === "input-descriptions,input-types-only,description,output-example" && all.description.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && isExamplePointer(all.slim.output.example) && all.slim.output.schema === undefined && all.slim.inputSchema.properties.values.type === "array",
+  ok(all.trimmed.join() === "input-descriptions-short,input-descriptions,input-types-only,description,output-example" && all.description.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && isExamplePointer(all.slim.output.example) && all.slim.output.schema === undefined && all.slim.inputSchema.properties.values.type === "array",
     "budget: input detail goes before the description and the sample output, which go last (the pointer takes the output schema with it)");
   // A tool's own sample output can carry a "truncated" field (a paged list): it is still trimmed.
   const paged = { ...block, output: { type: "json", example: { truncated: true, results: Array.from({ length: 60 }, (_, i) => ({ id: i })) } } };
@@ -287,7 +303,7 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
     const enumBlock = { ...block, inputSchema: { properties: { model: { type: "string", enum: ["a", "b"], description: "z".repeat(300) } } } };
     const noOut = JSON.stringify(declare({ ...enumBlock, inputSchema: { properties: { model: { type: "string", enum: ["a", "b"] } } }, output: { type: "json", example: { truncated: true, note: "full example in /openapi.json" } } })).length;
     const df = fitChallenge(enumBlock, long, declare, noOut + long.length, { descriptionFirst: true });
-    ok(df.trimmed.join() === "input-descriptions,output-example" && df.description === long && JSON.stringify(df.slim.inputSchema.properties.model.enum) === '["a","b"]' && isExamplePointer(df.slim.output.example),
+    ok(df.trimmed.join() === "input-descriptions-short,input-descriptions,output-example" && df.description === long && JSON.stringify(df.slim.inputSchema.properties.model.enum) === '["a","b"]' && isExamplePointer(df.slim.output.example),
       `budget: descriptionFirst gives the sample output up before the input enum and the description (got ${df.trimmed.join()})`);
     const plain = fitChallenge(enumBlock, long, declare, noOut + long.length);
     ok(plain.trimmed.includes("input-types-only") || plain.trimmed.includes("description"), "budget: without descriptionFirst the same block cuts the input or the description first");

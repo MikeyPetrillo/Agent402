@@ -896,9 +896,10 @@ export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES
 // the price. Every route carries the same payment offers and MPP challenge, so
 // the part that varies by route (the discovery extension plus the listing
 // description) has a byte budget. A route over it gives up the input side
-// first: property descriptions, then any detail past each property's name and
-// type (required stays), then long strings in the input example (an inline
-// image, say). Only then, if still over, its description shortens and its
+// first: property descriptions cut short (INPUT_DESCRIPTION_SHORT), then
+// dropped, then any detail past each property's name, type and bounds (enum,
+// lengths, range, format), then the bounds (required stays), then long
+// strings in the input example (an inline image, say). Only then, if still over, its description shortens and its
 // sample output becomes a pointer: those are what a buyer reads to decide, so
 // they go last. /openapi.json keeps every full version. A route under the budget keeps
 // everything, and /openapi.json always carries the full versions.
@@ -939,10 +940,50 @@ function shortExampleStrings(v) {
   if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shortExampleStrings(x)]));
   return v;
 }
-function typesOnly(schema) {
+// The bounds a property keeps past its description: what a value must be to
+// be taken (its length, its allowed values, its range, its format).
+const INPUT_CONSTRAINT_KEYS = ["enum", "const", "maxLength", "minLength", "maximum", "minimum", "maxItems", "minItems", "format"];
+function typesOnly(schema, { constraints = false } = {}) {
   if (!schema || typeof schema !== "object" || !schema.properties) return schema;
-  const props = Object.fromEntries(Object.entries(schema.properties).map(([name, p]) => [name, p && typeof p === "object" && p.type ? { type: p.type } : {}]));
-  return { type: schema.type || "object", properties: props, ...(Array.isArray(schema.required) && schema.required.length ? { required: schema.required } : {}) };
+  const props = Object.fromEntries(Object.entries(schema.properties).map(([name, p]) => {
+    if (!p || typeof p !== "object") return [name, {}];
+    const kept = p.type ? { type: p.type } : {};
+    if (constraints) for (const k of INPUT_CONSTRAINT_KEYS) if (p[k] !== undefined) kept[k] = p[k];
+    return [name, kept];
+  }));
+  return { ...(schema.type ? { type: schema.type } : {}), properties: props, ...(Array.isArray(schema.required) && schema.required.length ? { required: schema.required } : {}) };
+}
+// A property description cut to its first INPUT_DESCRIPTION_SHORT characters,
+// at a clause or word end: the field keeps a description at a fraction of the bytes.
+export const INPUT_DESCRIPTION_SHORT = 64;
+/** A property description cut short for the 402 listing (exported for tests). */
+export function shortInputDescription(text) {
+  const t = String(text);
+  if (t.length <= INPUT_DESCRIPTION_SHORT) return t;
+  const head = t.slice(0, INPUT_DESCRIPTION_SHORT + 1);
+  const clause = Math.max(head.lastIndexOf(". "), head.lastIndexOf("; "), head.lastIndexOf(" ("), head.lastIndexOf(" - "), head.lastIndexOf(": "), head.lastIndexOf(", "));
+  const word = head.lastIndexOf(" ");
+  let cut = (clause >= 24 ? head.slice(0, clause) : word >= 24 ? head.slice(0, word) : head.slice(0, INPUT_DESCRIPTION_SHORT)).replace(/[\s,;:(-]+$/, "").trim();
+  // An aside the cut left open is dropped whole.
+  const open = cut.lastIndexOf("(");
+  if (open > cut.lastIndexOf(")")) cut = cut.slice(0, open).replace(/[\s,;:-]+$/, "").trim();
+  return cut || t.slice(0, INPUT_DESCRIPTION_SHORT);
+}
+function withShortPropertyDescriptions(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(withShortPropertyDescriptions);
+  const out = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === "properties" && v && typeof v === "object") {
+      out.properties = Object.fromEntries(Object.entries(v).map(([name, p]) => {
+        if (!p || typeof p !== "object") return [name, p];
+        const next = withShortPropertyDescriptions(p);
+        if (typeof p.description === "string") next.description = shortInputDescription(p.description);
+        return [name, next];
+      }));
+    } else out[k] = withShortPropertyDescriptions(v);
+  }
+  return out;
 }
 function withoutPropertyDescriptions(schema) {
   if (!schema || typeof schema !== "object") return schema;
@@ -979,9 +1020,17 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
       trimmed.push("output-example");
     }
   };
+  if (b?.inputSchema && size(b, d) > max) {
+    const short = withShortPropertyDescriptions(b.inputSchema);
+    if (JSON.stringify(short) !== JSON.stringify(b.inputSchema)) { b = { ...b, inputSchema: short }; trimmed.push("input-descriptions-short"); }
+  }
   if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: withoutPropertyDescriptions(b.inputSchema) }; trimmed.push("input-descriptions"); }
   if (descriptionFirst && !keepListing) toPointer();
-  if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: typesOnly(b.inputSchema) }; trimmed.push("input-types-only"); }
+  if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: typesOnly(b.inputSchema, { constraints: true }) }; trimmed.push("input-types-only"); }
+  if (b?.inputSchema && size(b, d) > max) {
+    const bare = typesOnly(b.inputSchema);
+    if (JSON.stringify(bare) !== JSON.stringify(b.inputSchema)) { b = { ...b, inputSchema: bare }; trimmed.push("input-types-bare"); }
+  }
   if (b?.input !== undefined && size(b, d) > max) {
     const input = shortExampleStrings(b.input);
     if (JSON.stringify(input) !== JSON.stringify(b.input)) { b = { ...b, input }; trimmed.push("input-example-strings"); }

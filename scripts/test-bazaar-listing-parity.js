@@ -1,5 +1,7 @@
 // Every route's 402 listing at this tree keeps what the same route listed at
-// the base: its description is not shorter and its sample output is not
+// the base: its description is not shorter, each input field it listed keeps
+// a description when it had one (shortened is allowed) and every bound
+// (enum, lengths, range, format), and its sample output is not
 // replaced by the /openapi.json pointer nor missing a field it had (the
 // three constant licence fields of src/data-attribution.js aside, which the
 // 402 sample never carries). A route the base listed is still listed, unless
@@ -83,6 +85,14 @@ async function dump(tree, label) {
   return out;
 }
 
+// The input fields a listing declares (a POST body or GET query parameters).
+const inputFieldsOf = (pr) => {
+  const inp = pr?.extensions?.bazaar?.schema?.properties?.input?.properties || {};
+  const block = inp.body || inp.queryParams;
+  return block && typeof block === "object" && block.properties && typeof block.properties === "object" ? block.properties : {};
+};
+// The bounds an input field carries that a buyer's value is held to.
+const INPUT_CONSTRAINTS = ["enum", "const", "maxLength", "minLength", "maximum", "minimum", "maxItems", "minItems", "format"];
 const isPointer = (ex) => !!ex && typeof ex === "object" && ex.truncated === true && /openapi\.json/.test(String(ex.note || ""));
 const exampleOf = (pr) => pr?.extensions?.bazaar?.info?.output?.example;
 
@@ -100,6 +110,17 @@ export function listingLosses(then, now) {
     const gone = Object.keys(withoutLicenseFields(ea)).filter((k) => !(k in eb));
     if (gone.length) lost.push(`sample output lost ${gone.join(", ")}`);
   }
+  // Input fields: each field the base listed is still listed, keeps a
+  // description when it had one (it may be shortened), and keeps every bound.
+  const fa = inputFieldsOf(then.pr), fb = inputFieldsOf(now.pr);
+  for (const [name, pa] of Object.entries(fa)) {
+    const pb = fb[name];
+    if (!pb || typeof pb !== "object") { lost.push(`input field ${name} dropped`); continue; }
+    if (typeof pa?.description === "string" && pa.description.trim() && !(typeof pb.description === "string" && pb.description.trim())) lost.push(`input field ${name} lost its description`);
+    for (const k of INPUT_CONSTRAINTS) {
+      if (pa?.[k] !== undefined && JSON.stringify(pb[k]) !== JSON.stringify(pa[k])) lost.push(`input field ${name} lost ${k} ${JSON.stringify(pa[k])}`);
+    }
+  }
   return lost;
 }
 
@@ -111,6 +132,14 @@ export function listingLosses(then, now) {
   ok(/pointer/.test(listingLosses(pr("a", { a: 1 }), pr("a", { truncated: true, note: "full example in /openapi.json" }))[0] || ""), "control: a sample that became the pointer is a loss");
   ok(/lost a/.test(listingLosses(pr("a", { a: 1, b: 2 }), pr("a", { b: 2 }))[0] || ""), "control: a sample missing a field is a loss");
   ok(listingLosses({ pr: null }, pr("a", {})).length === 0 && /no 402/.test(listingLosses(pr("a", {}), { status: 410 })[0] || ""), "control: a route the base did not list is not compared; one that stopped listing is a loss");
+  const withInput = (props, where = "body") => ({ pr: { resource: { description: "a" }, extensions: { bazaar: { info: {}, schema: { properties: { input: { properties: { [where]: { properties: props } } } } } } } } });
+  const full = { url: { type: "string", maxLength: 2048, description: "The URL to look up" }, mode: { type: "string", enum: ["a", "b"] } };
+  ok(listingLosses(withInput(full), withInput(full)).length === 0, "control: the same input fields lose nothing");
+  ok(listingLosses(withInput(full), withInput({ ...full, url: { type: "string", maxLength: 2048, description: "The URL" } })).length === 0, "control: a shortened field description is not a loss");
+  ok(/url lost its description/.test(listingLosses(withInput(full), withInput({ ...full, url: { type: "string", maxLength: 2048 } })).join()), "control: a field that lost its description is a loss");
+  ok(/url lost maxLength/.test(listingLosses(withInput(full), withInput({ ...full, url: { type: "string", description: "x" } })).join()), "control: a field that lost its maxLength is a loss");
+  ok(/mode lost enum/.test(listingLosses(withInput(full, "queryParams"), withInput({ ...full, mode: { type: "string" } }, "queryParams")).join()), "control: a query parameter that lost its enum is a loss");
+  ok(/mode dropped/.test(listingLosses(withInput(full), withInput({ url: full.url })).join()), "control: a dropped input field is a loss");
 }
 
 const ref = baseRef();
