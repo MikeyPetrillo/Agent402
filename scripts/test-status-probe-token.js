@@ -23,7 +23,6 @@ import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const OP = "operator-root-token-aaaaaaaaaaaaaaaa";
 const PROBE = "status-probe-only-token-bbbbbbbbbbbb";

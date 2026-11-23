@@ -21,7 +21,6 @@ const fail = (m) => {
   srv?.child.kill("SIGKILL"); facilitator?.close(); process.exit(1);
 };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const PAYER = "0x00000000000000000000000000000000000000a1";
 const AGG3 = [{ type: "function", name: "aggregate3", stateMutability: "payable",

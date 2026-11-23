@@ -18,9 +18,8 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
-import { spawn, spawnSync } from "node:child_process";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { spawnSync } from "node:child_process";
+import { bootServer } from "./lib/boot-server.js";
 import { childJson } from "./lib/child-json.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
@@ -29,12 +28,12 @@ const INK = "eip155:57073", BASE_NET = "eip155:8453";
 // v1 named kind, plus a testnet this server never offers.
 const V1_NAMES = { "eip155:8453": "base", "eip155:57073": "ink" };
 const productionKinds = (nets) => [...nets, "eip155:84532"].flatMap((network) => [{ x402Version: 2, scheme: "exact", network }, { x402Version: 1, scheme: "exact", network: V1_NAMES[network] || (network === "eip155:84532" ? "base-sepolia" : network) }]);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
 const check = (cond, msg) => { if (cond) console.log(`ok - ${msg}`); else { failed++; console.log(`FAIL - ${msg}`); } };
 const GRAD = { NODE_ENV: "test", RAILS_TEST_GRADUATE: "ink" };
 const GATED = { NODE_ENV: "test", RAILS_TEST_GRADUATE: "" };
-const cleanEnv = () => { const e = { ...process.env }; for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "INK_FACILITATOR_URL", "NETWORK_PRICE_FLOORS", "FACILITATOR_PUBLIC_INDEX_CHAINS", "ALCHEMY_API_KEY", "RAILS_TEST_GRADUATE"]) delete e[k]; return e; };
+const CLEAN_KEYS = ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "INK_FACILITATOR_URL", "NETWORK_PRICE_FLOORS", "FACILITATOR_PUBLIC_INDEX_CHAINS", "ALCHEMY_API_KEY", "RAILS_TEST_GRADUATE"];
+const cleanEnv = () => { const e = { ...process.env }; for (const k of CLEAN_KEYS) delete e[k]; return e; };
 
 // --- offline: the module tables in each mode (a child per mode: the seam is read at import) ---
 const PROBE = `
@@ -91,19 +90,21 @@ function stubFacilitator(kinds) {
   });
 }
 async function boot(extra) {
-  const [PORT, FAC, INKF] = await getFreePorts(3);
   const fac = stubFacilitator([BASE_NET, INK]), inkFac = stubFacilitator([INK]);
-  await Promise.all([[fac, FAC], [inkFac, INKF]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
-  const proc = spawn(process.execPath, ["--import", "./scripts/lib/loopback-only-preload.js", "src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...cleanEnv(), ...ownStoreEnv("ink-grad"), PORT: String(PORT), FREE_MODE: "",
+  await Promise.all([fac, inkFac].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+  const [FAC, INKF] = [fac, inkFac].map((s) => s.address().port);
+  for (const k of CLEAN_KEYS) delete process.env[k]; // bootServer merges process.env: the child boots on cleanEnv()
+  let srv = null, bootError = "";
+  try { srv = await bootServer({ stores: "ink-grad", args: ["--import", "./scripts/lib/loopback-only-preload.js"], timeoutMs: 80_000, env: { FREE_MODE: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${FAC}`, PAYAI_FACILITATOR_URL: `http://127.0.0.1:${FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,ink", FACILITATOR_GAS_CHECK: "off",
     STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off", REVENUE_LEDGER: "off",
-    ...extra(INKF) } });
-  const log = []; proc.stdout.on("data", (c) => log.push(String(c))); proc.stderr.on("data", (c) => log.push(String(c)));
-  const B = `http://127.0.0.1:${PORT}`;
-  let up = false; for (let i = 0; i < 160 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch {} if (!up) await sleep(500); }
+    ...extra(INKF) } }); } catch (e) { bootError = e.message; }
+  const log = () => (srv ? srv.log() : bootError);
+  const B = srv?.url;
+  const up = Boolean(srv);
   const get = async (p) => { const r = await fetch(`${B}${p}`); return { status: r.status, text: await r.text() }; };
-  return { up, get, log, stop: () => { proc.kill("SIGKILL"); fac.close(); inkFac.close(); } };
+  return { up, get, log, stop: () => { srv?.child.kill("SIGKILL"); fac.close(); inkFac.close(); } };
 }
 const SURFACES = ["/", "/pricing", "/llms.txt", "/llms-full.txt", "/openapi.json", "/.well-known/x402", "/api/pricing", "/sitemap.xml", "/how-to-pay"];
 
@@ -119,7 +120,7 @@ if (!REAL) {
       const m = /\bInk\b|eip155:57073|"ink"|href="\/ink"|\/ink</.exec(r.text);
       check(r.status < 500 && !m, `gated: ${p} does not name Ink (status ${r.status}${m ? `; ${r.text.slice(Math.max(0, m.index - 60), m.index + 30)}` : ""})`);
     }
-  } finally { if (failed > before) console.log(b.log.join("").slice(-2000)); b.stop(); }
+  } finally { if (failed > before) console.log(b.log().slice(-2000)); b.stop(); }
 }
 
 // Graduated and enabled: the seam plus the facilitator list.
@@ -146,7 +147,7 @@ if (!REAL) {
     const ap = JSON.parse((await b.get("/api/pricing")).text);
     check(ap?.payment?.networks?.includes("ink"), `graduated: /api/pricing offers ink (${JSON.stringify(ap?.payment?.networks)})`);
     check((await b.get("/sitemap.xml")).text.includes("/ink</loc>"), "graduated: the sitemap lists /ink");
-  } finally { if (failed > before) console.log(b.log.join("").slice(-2500)); b.stop(); }
+  } finally { if (failed > before) console.log(b.log().slice(-2500)); b.stop(); }
 }
 
 console.log(`test-ink-graduation: ${failed ? `FAILED (${failed})` : "all passed"}`);

@@ -12,9 +12,8 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
-const { getFreePorts } = await import(root + "/scripts/lib/free-port.js");
+const { bootServer } = await import(root + "/scripts/lib/boot-server.js");
 const { createServer } = await import("node:http");
-const { spawn } = await import("node:child_process");
 const { mkdtempSync, rmSync } = await import("node:fs"); const { join } = await import("node:path"); const { tmpdir } = await import("node:os");
 
 const RH = "eip155:4663";
@@ -24,7 +23,6 @@ const json = (res, s, o) => { res.writeHead(s, { "Content-Type": "application/js
 const stub = (h) => createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { let body = {}; try { body = JSON.parse(b || "{}"); } catch {} h(req, res, body); }); });
 const kinds = { kinds: [{ x402Version: 2, scheme: "exact", network: RH }], extensions: [], signers: {} };
 const payerOf = (b) => b?.paymentPayload?.payload?.authorization?.from;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
 const check = (cond, msg) => { if (cond) console.log(`ok - ${msg}`); else { failed++; console.log(`FAIL - ${msg}`); } };
 
@@ -46,26 +44,28 @@ function facilitator(name, st) {
 }
 
 async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
-  const [PORT, BASE_FAC, RH1, RH2] = await getFreePorts(4);
   const st = {};
   const servers = [
-    [stub((q, r) => q.url === "/supported" ? json(r, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }) : q.url === "/rpc" ? json(r, 200, { jsonrpc: "2.0", id: 1, result: "0x0" }) : json(r, 404, {})), BASE_FAC],
-    [facilitator("rh1", st), RH1],
-    [facilitator("rh2", st), RH2],
+    [stub((q, r) => q.url === "/supported" ? json(r, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }) : q.url === "/rpc" ? json(r, 200, { jsonrpc: "2.0", id: 1, result: "0x0" }) : json(r, 404, {}))],
+    [facilitator("rh1", st)],
+    [facilitator("rh2", st)],
   ];
   setup(st);
-  await Promise.all(servers.map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  await Promise.all(servers.map(([s]) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+  const [BASE_FAC, RH1, RH2] = servers.map(([s]) => s.address().port);
   const tmp = mkdtempSync(join(tmpdir(), "a402-rh-boot-"));
-  const env = { ...process.env }; delete env.STATE_DATABASE_URL; delete env.REDIS_URL; delete env.SOLVADOR_KEY; delete env.ROBINHOOD_RELAYER_KEY;
-  const proc = spawn(process.execPath, ["src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...env, PORT: String(PORT), FREE_MODE: "",
+  // bootServer merges process.env: the child boots without these.
+  for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY"]) delete process.env[k];
+  let srv = null, bootError = "";
+  try { srv = await bootServer({ stores: "rh-boot-primary", timeoutMs: 80_000, env: { FREE_MODE: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
     ROBINHOOD_FACILITATOR_URL: `http://${firstHost}:${RH1},http://127.0.0.1:${RH2}`, ROBINHOOD_FALLBACK_RECHECK_MS: "60000", ...extraEnv,
     PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, FACILITATOR_GAS_CHECK: "off",
-    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } });
-  const log = []; proc.stdout.on("data", (c) => log.push(String(c))); proc.stderr.on("data", (c) => log.push(String(c)));
-  const B = `http://127.0.0.1:${PORT}`;
-  let up = false; for (let i = 0; i < 160 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch {} if (!up) await sleep(500); }
+    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } }); } catch (e) { bootError = e.message; }
+  const log = () => (srv ? srv.log() : bootError);
+  const B = srv?.url;
+  const up = Boolean(srv);
   const PATH = "/api/demand-radar?limit=1";
   let accepted = null;
   if (up) {
@@ -79,7 +79,7 @@ async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
     const r = await fetch(`${B}${PATH}`, { headers: { "payment-signature": cred } }); await r.text();
     return r.status;
   };
-  const stop = () => { proc.kill("SIGKILL"); for (const [s] of servers) s.close(); rmSync(tmp, { recursive: true, force: true }); };
+  const stop = () => { srv?.child.kill("SIGKILL"); for (const [s] of servers) s.close(); rmSync(tmp, { recursive: true, force: true }); };
   const get = async (path) => { const r = await fetch(`${B}${path}`); return r.text(); };
   return { up, accepted, pay, st, log, stop, RH2, get, base: B };
 }
@@ -91,7 +91,7 @@ async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
   try {
     check(b.up, "boot 1: the paid-mode server booted with the first listed facilitator down");
     check(!!b.accepted, "boot 1: USDG on eip155:4663 is still offered (the second listed confirmed it)");
-    check(b.log.join("").includes(`127.0.0.1:${b.RH2} settles first`), "boot 1: the boot log names the facilitator that settles first");
+    check(b.log().includes(`127.0.0.1:${b.RH2} settles first`), "boot 1: the boot log names the facilitator that settles first");
     if (b.up) {
       const privacy = await b.get("/privacy");
       const para = (privacy.match(/<li id="public-settlement-index">([\s\S]*?)<\/li>/) || [])[1] || "";
@@ -101,7 +101,7 @@ async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
     }
     const status = b.accepted ? await b.pay() : 0;
     check(status === 200 && b.st.rh2.settles === 1 && b.st.rh1.settles === 0, `boot 1: a paid call settles through the second, once; the first is never asked (status ${status}, rh1 ${b.st.rh1.settles}, rh2 ${b.st.rh2.settles})`);
-  } finally { if (failed) console.log(b.log.join("").slice(-2500)); b.stop(); }
+  } finally { if (failed) console.log(b.log().slice(-2500)); b.stop(); }
 }
 
 // 2. Both up.
@@ -110,7 +110,7 @@ async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
   const b = await boot(() => {});
   try {
     check(b.up && !!b.accepted, "boot 2: both up, USDG on eip155:4663 offered");
-    check(!b.log.join("").includes("settles first, the rest stay"), "boot 2: the list order stands, no reorder logged");
+    check(!b.log().includes("settles first, the rest stay"), "boot 2: the list order stands, no reorder logged");
     let status = b.accepted ? await b.pay() : 0;
     check(status === 200 && b.st.rh1.settles === 1 && b.st.rh2.settles === 0, `boot 2: the first settles, as before (status ${status}, rh1 ${b.st.rh1.settles}, rh2 ${b.st.rh2.settles})`);
     b.st.rh1.mode = "prose";
@@ -119,7 +119,7 @@ async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
     b.st.rh1.mode = "signature";
     status = b.accepted ? await b.pay() : 0;
     check(status === 402 && b.st.rh1.settles === 3 && b.st.rh2.settles === 1, `boot 2: a signature verdict in words -> 402, the second never asked (status ${status}, rh1 ${b.st.rh1.settles}, rh2 ${b.st.rh2.settles})`);
-  } finally { if (failed > before) console.log(b.log.join("").slice(-2500)); b.stop(); }
+  } finally { if (failed > before) console.log(b.log().slice(-2500)); b.stop(); }
 }
 // 3. A Robinhood primary with no ROBINHOOD_FACILITATOR_URL: the drop guard
 // takes eip155:4663 off the offer, and no public surface names robinhood as
@@ -139,7 +139,7 @@ for (const [label, urlSet] of [["boot 3 (robinhood primary, no URL)", false], ["
       const manifest = JSON.parse(await b.get("/.well-known/x402"));
       const pricing = JSON.parse(await b.get("/api/pricing"))?.payment || {};
       const rails = JSON.parse(await b.get("/api/rails"));
-      const warned = b.log.join("").split("\n").filter((l) => l.includes("NETWORK is `robinhood` but `robinhood` is not offered"));
+      const warned = b.log().split("\n").filter((l) => l.includes("NETWORK is `robinhood` but `robinhood` is not offered"));
       const want = urlSet ? "robinhood" : "base";
       check(r402.status === 402 && nets.includes("eip155:8453") && nets.includes(RH) === urlSet, `${label}: the 402 offers Base${urlSet ? " and" : ", not"} eip155:4663 (${r402.status} ${nets.join(",")})`);
       check(manifest?.payment?.x402?.primaryNetwork === want && (manifest?.payment?.x402?.networks || []).includes("robinhood") === urlSet, `${label}: the manifest's primaryNetwork is ${want} (${manifest?.payment?.x402?.primaryNetwork}; ${JSON.stringify(manifest?.payment?.x402?.networks)})`);
@@ -147,7 +147,7 @@ for (const [label, urlSet] of [["boot 3 (robinhood primary, no URL)", false], ["
       check(rails?.primary === want, `${label}: /api/rails names ${want} as the primary (${rails?.primary})`);
       check(warned.length === (urlSet ? 0 : 1) && (urlSet || warned[0].includes("ROBINHOOD_FACILITATOR_URL")), `${label}: ${urlSet ? "no" : "one"} primary-not-offered boot warning (${warned.length})`);
     }
-  } finally { if (failed > before) console.log(b.log.join("").slice(-2500)); b.stop(); }
+  } finally { if (failed > before) console.log(b.log().slice(-2500)); b.stop(); }
 }
 console.log(`test-rh-boot-primary: ${failed ? `FAILED (${failed})` : "all passed"}`);
 process.exit(failed ? 1 : 0);
