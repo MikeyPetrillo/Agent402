@@ -93,7 +93,8 @@ export function awsStartPage({ baseUrl, defs, config, describe = (d) => d?.descr
   const prices = served.map((s) => Number(String(defs.get(s).price).replace(/[^0-9.]/g, ""))).filter((n) => n > 0);
   const lo = prices.length ? Math.min(...prices) : 0;
   const hi = prices.length ? Math.max(...prices) : 0;
-  const usd = (n) => `$${String(Number(n.toFixed(8)))}`;
+  // Dollars as the catalog writes them: at least two decimals ($0.10, $0.001).
+  const usd = (n) => { const [i, d = ""] = String(Number(n.toFixed(8))).split("."); return `$${i}.${d.padEnd(2, "0")}`; };
   const retryMax = Number(config?.retryMax ?? 0);
   const attempts = retryMax + 1;
 

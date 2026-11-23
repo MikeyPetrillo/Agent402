@@ -99,6 +99,10 @@ try {
   ok(pointers(text).length === 0, `the page names nothing past the listing (${pointers(text).join(", ")})`);
   const missing = served.filter((s) => !html.includes(`<code>${s}</code>`) || !html.includes(bySlug.get(s)?.price));
   ok(missing.length === 0, `every served tool is on the page with its catalog price (${missing.join(", ") || "all"})`);
+  {
+    const priced = served.map((s) => bySlug.get(s).price).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+    ok(text.includes(`from ${priced[0]} to ${priced[priced.length - 1]} per call`), `the price span is the catalog's (${priced[0]} to ${priced[priced.length - 1]})`);
+  }
   ok(AWS_LISTING_GROUPS.every((g) => html.includes(g.notice.replace(/'/g, "&#39;")) || html.includes(g.notice)), "each group's notice is printed");
   ok(html.includes(`${origin}/aws/.well-known/jwks.json`) && html.includes(`${origin}/aws/openapi.json`) && html.includes("help@agent402.tools"), "the JWKS, the OpenAPI document and the support mailbox are named");
   ok(/up to 3 attempts/.test(text) && /billing adjustment/.test(text), "the refund rule states the attempts the gate allows and the invoice adjustment");
