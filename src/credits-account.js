@@ -35,7 +35,7 @@ import { SKIP_UPDATE } from "./json-document.js";
 import { escapeHtml, headerText } from "./email-text.js";
 import { creditsGuards } from "./credits-guards.js";
 import { shared, createMemoryLimits } from "./shared-limits.js";
-import { limiterKey } from "./rate-limit.js";
+import { limiterKey, wideNetworkKey } from "./rate-limit.js";
 
 export const ACCOUNT_PATH = "/credits/account";
 export const ACCOUNT_COOKIE = "a402_acct";
@@ -190,8 +190,11 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     // The service-wide total is a ceiling on networks that have already sent
     // this hour: a network's first send goes out whatever others spent, so
     // one requester draining it never stops everyone else's link.
+    // That first send is counted per wider network too (an IPv6 /48, an IPv4
+    // /24), so rotating addresses inside one allocation gets one in all.
     const g = await spend("send-global", "all");
-    if (g > global && n > 1) return g === global + 1 ? "global-first" : "global";
+    const w = await spend("send-wide", wideNetworkKey(String(ip || "?")));
+    if (g > global && (n > 1 || w > 1)) return g === global + 1 ? "global-first" : "global";
     return "ok";
   }
 

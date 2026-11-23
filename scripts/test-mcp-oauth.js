@@ -528,8 +528,15 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
     await send("198.18.61.2", "one@example.com");
     const c = await send("198.18.61.1", "three@example.com");
     ok(c.status === 429 && /Too many requests/.test(c.html) && h.sent.length === 2, `past the service-wide hourly budget a network that already sent today is refused with the same answer (${c.status}, ${h.sent.length} sent)`);
-    const d = await send("198.18.61.4", "four@example.com");
+    const d = await send("198.18.62.4", "four@example.com");
     ok(d.status === 200 && h.sent.length === 3, `a drained service-wide budget still sends a network with no send today one code (${d.status}, ${h.sent.length} sent)`);
+    // That first-send allowance is counted per wider network: an IPv4 /24, an IPv6 /48.
+    const e1 = await send("198.18.61.9", "five@example.com");
+    ok(e1.status === 429 && h.sent.length === 3, `past the budget, another address in a /24 that sent today gets no first send (${e1.status})`);
+    let rotated = 0;
+    for (let n = 1; n <= 6; n++) { const before = h.sent.length; await send(`2001:db8:5:${n}::1`, `rot${n}@example.com`); if (h.sent.length > before) rotated++; }
+    ok(rotated === 1, `past the budget, rotating /64s inside one /48 gets one first send in all (${rotated})`);
+    ok((await send("2001:db8:6:1::1", "other48@example.com")).status === 200, "another /48 has its own first send");
   } finally { h.close(); }
 }
 // Strangers asking for codes to someone's address, from networks of their

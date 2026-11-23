@@ -292,6 +292,11 @@ ok(ipAcct.requestSignIn("a3@x.com", "3.3.3.3").status === 429, "...and per clien
     ok(other.status === 200 && sentTo.length === 3 && sentTo.at(-1) === "someone-else@x.com", "a drained service-wide budget still sends a network's first link of the hour (one requester cannot stop everyone's)");
     const again = g.requestSignIn("someone-else2@x.com", "10.9.9.1"); await again.work;
     ok(sentTo.length === 3, "and that network's next one waits like the rest");
+    const near = g.requestSignIn("near@x.com", "10.9.9.200"); await near.work;
+    ok(near.status === 200 && sentTo.length === 3, "past the budget, another address in the same IPv4 /24 gets no first link");
+    let rotated = 0;
+    for (let k = 1; k <= 5; k++) { const before = sentTo.length; const r = g.requestSignIn(`rot${k}@x.com`, `2001:db8:7:${k}::1`); await r.work; if (sentTo.length > before) rotated++; }
+    ok(rotated === 1, `past the budget, rotating /64s inside one IPv6 /48 gets one first link in all (${rotated})`);
     sentTo.length = 0;
     useGuardsTable({ ...keep, account: { ...keep.account, sendsPerNetHour: 1 } });
     const n = mk();

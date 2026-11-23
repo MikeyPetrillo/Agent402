@@ -54,7 +54,7 @@ import { shared, createMemoryLimits } from "./shared-limits.js";
 import { envPositive } from "./env-num.js";
 import { escapeHtml, headerText } from "./email-text.js";
 import { creditsSalesEnabled, creditsSalesSwitch, creditsBalanceMaxCents, mcpOAuthSwitch, mcpOAuthGuards, CONNECTED_APP_KEEP_DAYS, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
-import { limiterKey } from "./rate-limit.js";
+import { limiterKey, wideNetworkKey } from "./rate-limit.js";
 import { sellablePacks } from "./credits.js";
 import { normEmail, validEmail, sameOriginWrite, readCookie, ACCOUNT_PATH, ACCOUNT_COOKIE } from "./credits-account.js";
 import { consentPage, consentErrorPage, OAUTH_CONSENT_PATH } from "./mcp-oauth-page.js";
@@ -444,7 +444,10 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     //     mailbox gets is bounded however many networks ask;
     //   - the service-wide hourly budget: one network takes at most
     //     GLOBAL_SHARE of it, and once it is spent a network with no send
-    //     today still gets one code, so draining it stops no one else.
+    //     today still gets one code, so draining it stops no one else. That
+    //     first send is counted per wider network too (an IPv6 /48, an IPv4
+    //     /24: wideNetworkKey), so rotating addresses inside one allocation
+    //     gets one in all.
     if (await locked(ip) || await over("send-ip", netKey(ip), cfg.sendsPerIp())) return "limited";
     const mailbox = mailboxKey(email);
     const net = netKey(ip);
@@ -460,13 +463,15 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     }
     const globalMax = cfg.sendsGlobalPerHour();
     if (await read("send-net-hour", net) >= Math.max(1, Math.ceil(globalMax * GLOBAL_SHARE))) return "limited";
-    if (await read("send-global", "all") >= globalMax && await read("send-net-day", net) > 0) return "limited";
+    const wideNet = wideNetworkKey(String(ip || "?"));
+    if (await read("send-global", "all") >= globalMax && (await read("send-net-day", net) > 0 || await read("send-wide-day", wideNet) > 0)) return "limited";
     // The send is admitted: charge every budget it draws on.
     await add("send-email-day", mine, 1, DAY_MS);
     await add("send-mailbox-day", mailbox, 1, DAY_MS);
     if (cold) await add("send-mailbox-cold-day", mailbox, 1, DAY_MS);
     await add("send-net-hour", net, 1, HOUR_MS);
     await add("send-net-day", net, 1, DAY_MS);
+    await add("send-wide-day", wideNet, 1, DAY_MS);
     await add("send-global", "all", 1, HOUR_MS);
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
