@@ -32,8 +32,13 @@
 //     event-stream parser skips it, so a client that JSON-parses each event's
 //     data, as OpenAI-compatible SDKs do, never meets it and finishes the
 //     stream as it would without it), and as an `Agent402-Receipt` HTTP trailer when the
-//     client sent `TE: trailers` on HTTP/1.1. A streamed answer that is
-//     neither (no event stream, no trailers asked for) carries none.
+//     client sent `TE: trailers` on HTTP/1.1. Every streamed answer is
+//     signed, a stream that is neither (no event stream, no trailers asked
+//     for) included: its head names X-Agent402-Receipt-Url (RECEIPT_URL_HEADER,
+//     GET RECEIPT_FETCH_PATH/<key>), and the receipt is kept there once the
+//     answer finished 200 (src/receipt-store.js), the same receipt a trailer
+//     carries. The key is the settlement (receiptFetchKey), or a random token
+//     where a settlement can be shared (a batched payment) or is not read yet.
 // A 4xx/5xx, a failed settle (402), a free or trial answer carries none.
 //
 // Key settings (src/receipt-signing.js is the only reader):
@@ -69,6 +74,25 @@ const RESPONSE_RAILS = Object.freeze(["x402", "gateway-batched", "mpp-evm", "mpp
  *  receipt: `: agent402-receipt <receipt>`. */
 export const RECEIPT_SSE_COMMENT = "agent402-receipt";
 const SSE_FRAME_HEAD = `\n: ${RECEIPT_SSE_COMMENT} `;
+/** The head of a streamed paid answer names where its receipt is kept. */
+export const RECEIPT_URL_HEADER = "X-Agent402-Receipt-Url";
+/** GET RECEIPT_FETCH_PATH/<key>: a kept streamed answer's receipt (free). */
+export const RECEIPT_FETCH_PATH = "/api/receipt";
+const FETCH_KEY_RE = /^[A-Za-z0-9_.:-]{16,200}$/;
+/** Whether `key` reads as a receipt fetch key (a settlement or a token). */
+export function isReceiptFetchKey(key) { return typeof key === "string" && FETCH_KEY_RE.test(key); }
+/**
+ * The key a streamed answer's receipt is kept and fetched by: its settlement
+ * (an on-chain transaction, a Tempo or card payment, a credits debit), which
+ * one call alone names. Null for a batched payment, whose settlement can name
+ * several calls, and for a settlement that is not a usable key: such a
+ * receipt is kept by a random token the answer's head names instead.
+ */
+export function receiptFetchKey(fields) {
+  if (!fields || fields.rail === "gateway-batched") return null;
+  return isReceiptFetchKey(fields.settlement) ? fields.settlement : null;
+}
+
 /** Upper bound on the header value: every string field is capped below. */
 export const RECEIPT_MAX_BYTES = 2048;
 const FIELD_MAX = 160;
@@ -378,7 +402,7 @@ const TE_TRAILERS_RE = /(?:^|,)\s*trailers\s*(?:;|,|$)/i;
  * receipt as it is attached. Never throws into the response: a failure to
  * sign sends the answer without a receipt.
  */
-export function receiptSignerMiddleware({ describe, iss = null, signer = () => receiptKeys().signer, onError = null, onSigned = null } = {}) {
+export function receiptSignerMiddleware({ describe, iss = null, signer = () => receiptKeys().signer, onError = null, onSigned = null, onStreamed = null, fetchUrl = (key) => `${RECEIPT_FETCH_PATH}/${key}` } = {}) {
   return function receiptSignerMw(req, res, next) {
     if (!signer() || req.method === "HEAD" || req.method === "OPTIONS") return next();
     // The method the buyer sent, before the POST/GET alias (src/server.js)
@@ -393,6 +417,11 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
     let hashBroken = false;
     let trailerDeclared = false;
     let eventStream = false;
+    // A one-piece answer: end() sends the head itself, and the receipt rides it.
+    let oneShot = false;
+    // The key a streamed answer's receipt is kept by, named in its head.
+    let fetchKey = null;
+    let lastRecord = null;
     const origWriteHead = res.writeHead;
     const origWrite = res.write;
     const origEnd = res.end;
@@ -410,6 +439,7 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
       });
       const jws = signReceipt(record, s);
       if (jws.length > RECEIPT_MAX_BYTES) return null;
+      lastRecord = record;
       // The issued receipt, for its keeper (src/server.js keeps it for the
       // wallet's audit report once the response finished 200). Never throws.
       if (onSigned) { try { onSigned(jws, record, req, res); } catch (e) { try { onError?.(e); } catch { /* never break the answer */ } } }
@@ -431,6 +461,15 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
         // 200 with no length set, on a request that asked for trailers.
         const hasLength = res.hasHeader("Content-Length") || args.some((a) => a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).some((k) => k.toLowerCase() === "content-length" || k.toLowerCase() === "transfer-encoding"));
         if (wantsTrailer && status === 200 && !hasLength && !res.hasHeader("Transfer-Encoding") && !res.headersSent) { res.setHeader("Trailer", RECEIPT_HEADER); trailerDeclared = true; }
+        // A streamed paid answer names where its receipt will be kept: the
+        // settlement where it is the call's own, else a random token.
+        if (onStreamed && !oneShot && status === 200 && !res.headersSent) {
+          const d = describe(req, res);
+          if (d && RESPONSE_RAILS.includes(d.rail)) {
+            fetchKey = receiptFetchKey(d) || b64u(Buffer.from(randomUUID().replace(/-/g, ""), "hex"));
+            res.setHeader(RECEIPT_URL_HEADER, fetchUrl(fetchKey));
+          }
+        }
       } catch (e) { try { onError?.(e); } catch { /* never break the answer */ } }
       try { return origWriteHead.apply(this, args); }
       catch (e) {
@@ -452,15 +491,20 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
       if (typeof chunk === "function") { cb = chunk; chunk = undefined; encoding = undefined; }
       else if (typeof encoding === "function") { cb = encoding; encoding = undefined; }
       try {
+        if (!wrote && !res.headersSent) oneShot = true;
         if (!wrote && !res.headersSent && res.statusCode === 200) {
           const jws = recordFor(responseDigest(bytesOf(chunk, encoding)));
           if (jws) res.setHeader(RECEIPT_HEADER, jws);
-        } else if ((wrote || res.headersSent) && !hashBroken && res.statusCode === 200 && (eventStream || trailerDeclared)) {
+        } else if ((wrote || res.headersSent) && !hashBroken && res.statusCode === 200 && (eventStream || trailerDeclared || onStreamed)) {
           // Every byte of the answer, written in parts or after its head.
           if (!hash) hash = createHash("sha256");
           if (chunk != null) hash.update(bytesOf(chunk, encoding));
           const jws = recordFor(hash.digest("hex"));
           hash = null;
+          // Kept for GET RECEIPT_FETCH_PATH/<key>, under the key the head named
+          // (or, a credits debit read at the end, its settlement).
+          const key = jws ? fetchKey || receiptFetchKey(lastRecord) : null;
+          if (jws && key && onStreamed) { try { onStreamed(key, jws, lastRecord, req, res); } catch (e) { try { onError?.(e); } catch { /* never break the answer */ } } }
           if (jws) {
             if (trailerDeclared) res.addTrailers({ [RECEIPT_HEADER]: jws });
             if (eventStream) {

@@ -167,12 +167,67 @@ const strictJson = (events) => events.every((e) => e.data === "[DONE]" || (() =>
   await ok(SIGNED_RAILS.join() === "x402,gateway-batched,mpp-evm,mpp-tempo,mpp-stripe,credits,card-checkout,card-subscription,mpp-subscription", "the signed rails include credits and card checkout");
 }
 
+// ---- 1a. a stream that can carry no receipt still gets one, fetchable ----
+// (src/receipt-signing.js onStreamed, src/receipt-store.js): its head names
+// X-Agent402-Receipt-Url, and once it finished 200 the receipt kept there is
+// the one a trailer carries, verifying against the bytes streamed.
+{
+  process.env.RECEIPT_STORE_DB = join(mkdtempSync(join(tmpdir(), "a402-receipt-fetch-")), "receipts.db");
+  const store = await import("../src/receipt-store.js");
+  const { RECEIPT_URL_HEADER, RECEIPT_FETCH_PATH, receiptFetchKey } = await import("../src/receipt-signing.js");
+  let describe = () => SETTLED;
+  const app = express();
+  app.use(express.json());
+  app.use(receiptSignerMiddleware({ describe: (q, s) => describe(q, s), signer: () => signer, onError: (e) => { throw e; }, onStreamed: store.keepStreamedReceiptOnFinalOk, fetchUrl: (k) => `https://x.test${RECEIPT_FETCH_PATH}/${k}` }));
+  app.post("/ndjson", (_req, res) => { res.setHeader("Content-Type", "application/x-ndjson"); res.write('{"a":1}\n'); res.end('{"b":2}\n'); });
+  app.post("/ndjson-500", (_req, res) => { res.writeHead(500, { "Content-Type": "application/x-ndjson" }); res.end('{"e":1}\n'); });
+  app.post("/json", (_req, res) => res.json({ ok: true }));
+  const srv = await listen(app);
+  const port = srv.address().port;
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+  try {
+    const plain = await call(port, "/ndjson");
+    await settle();
+    const url = plain.headers[RECEIPT_URL_HEADER.toLowerCase()];
+    const kept = await store.streamedReceipt(SETTLED.settlement);
+    await ok(plain.status === 200 && plain.body.toString() === '{"a":1}\n{"b":2}\n' && !plain.headers.trailer && url === `https://x.test${RECEIPT_FETCH_PATH}/${SETTLED.settlement}`, `a plain stream (no event stream, no trailers asked for) is untouched and its head names where its receipt is kept (${url})`);
+    await ok(kept && verifyReceipt(kept, { keys, responseBody: plain.body, request: { method: "POST", path: "/ndjson", body: {} } }).valid, "the kept receipt verifies with the published key against the bytes streamed and the request sent");
+    // The same call asking for trailers: the trailer carries the receipt the store keeps for the plain one.
+    const tr = await call(port, "/ndjson", { te: true });
+    const trailer = tr.trailers[RECEIPT_HEADER.toLowerCase()];
+    const strip = (j) => { const r = JSON.parse(Buffer.from(j.split(".")[1], "base64url").toString("utf8")); delete r.iat; return JSON.stringify(r); };
+    await ok(trailer && strip(trailer) === strip(kept) && (await store.streamedReceipt(SETTLED.settlement)) === kept, "the kept receipt is the one a trailer carries (same record but its issue time), and the first kept under a key stays");
+    // A settlement a batched payment can share is never the key: a random token is.
+    describe = () => ({ ...SETTLED, rail: "gateway-batched", settlement: "batch-" + "c".repeat(20) });
+    const gb = await call(port, "/ndjson");
+    await settle();
+    const tok = String(gb.headers[RECEIPT_URL_HEADER.toLowerCase()] || "").split("/").pop();
+    await ok(tok && tok !== "batch-" + "c".repeat(20) && /^[A-Za-z0-9_-]{22}$/.test(tok) && verifyReceipt(await store.streamedReceipt(tok), { keys, responseBody: gb.body }).valid && receiptFetchKey({ rail: "gateway-batched", settlement: "x".repeat(30) }) === null, "a batched payment's stream is kept under a random token its head names, never the shared settlement");
+    // Nothing for a call that is not signed: a failed stream, an unsettled one (a /ref copy, a free or trial call), a one-piece answer.
+    describe = () => ({ ...SETTLED, settlement: "0x" + "de".repeat(32) });
+    const e5 = await call(port, "/ndjson-500");
+    describe = () => null;
+    const un = await call(port, "/ndjson");
+    describe = () => ({ ...SETTLED, settlement: "0x" + "ef".repeat(32) });
+    const one = await call(port, "/json");
+    await settle();
+    await ok(!e5.headers[RECEIPT_URL_HEADER.toLowerCase()] && (await store.streamedReceipt("0x" + "de".repeat(32))) === null, "a failed stream names no receipt address and keeps none");
+    await ok(un.status === 200 && !un.headers[RECEIPT_URL_HEADER.toLowerCase()] && un.body.toString() === '{"a":1}\n{"b":2}\n', "an unsigned stream (a /ref copy, a free or trial call) names no receipt address and is untouched");
+    await ok(!!one.headers[RECEIPT_HEADER.toLowerCase()] && !one.headers[RECEIPT_URL_HEADER.toLowerCase()] && (await store.streamedReceipt("0x" + "ef".repeat(32))) === null, "a one-piece answer carries its receipt in the header and names no fetch address");
+    await ok((await store.streamedReceipt("0x" + "12".repeat(32))) === null && (await store.streamedReceipt("../etc")) === null, "an unknown key or a malformed one finds nothing");
+    const sw = await store.sweepIssuedReceipts({ now: Date.now() + (store.RECEIPT_FETCH_DAYS + 1) * 86_400_000 });
+    await ok(sw.streamedAged >= 2 && (await store.streamedReceipt(SETTLED.settlement, Date.now() + (store.RECEIPT_FETCH_DAYS + 1) * 86_400_000)) === null, `a kept receipt goes after RECEIPT_FETCH_DAYS (${store.RECEIPT_FETCH_DAYS}; swept ${sw.streamedAged})`);
+  } finally { srv.close(); }
+}
+
 // ---- 1b. the MCP connector's relay ----
 {
   const out = { content: [{ type: "text", text: "{}" }] };
   const hdr = (v) => ({ get: (k) => (String(k).toLowerCase() === "agent402-receipt" ? v : null) });
   await ok(withSignedReceipt(out, { status: 200, headers: hdr("a.b.c") })._meta?.[MCP_SIGNED_RECEIPT_META] === "a.b.c", "the connector relays a 200's receipt in _meta");
   await ok(withSignedReceipt(out, { status: 402, headers: hdr("a.b.c") }) === out && withSignedReceipt({ ...out, isError: true }, { status: 200, headers: hdr("a.b.c") })._meta === undefined, "a refusal or an error result carries none");
+  const both = { get: (k) => ({ "agent402-receipt": null, "x-agent402-receipt-url": "https://agent402.tools/api/receipt/0x" + "ab".repeat(32) })[String(k).toLowerCase()] ?? null };
+  await ok(withSignedReceipt(out, { status: 200, headers: both })._meta?.["tools.agent402/receipt-url"] === "https://agent402.tools/api/receipt/0x" + "ab".repeat(32) && withSignedReceipt(out, { status: 500, headers: both }) === out, "a streamed answer's result names its kept receipt's address in _meta; an error names none");
   const broken = { status: 200, headers: { get: () => { throw new Error("header store broke"); } } };
   await ok(withSignedReceipt(out, broken) === out, "a header store that throws leaves the result as it was (the relay never throws)");
 }
@@ -292,11 +347,29 @@ try {
     await ok(cv.record.settlement && cv.record.settlement === settleRef && cv.record.slug && cv.record.priceUsd, `${wire}: rail ${cv.record.rail}, the settlement the wire's own receipt names`);
     const api = await (await fetch(`${rig.url}${RECEIPT_VERIFY_PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ receipt, body: Buffer.from(body).toString("utf8") }) })).json();
     await ok(api.valid === true && api.checks.response === true, `${wire}: POST ${RECEIPT_VERIFY_PATH} agrees on the streamed bytes`);
+    {
+      const url = r.headers.get("x-agent402-receipt-url") || "";
+      let got = null;
+      for (let i = 0; i < 20 && !got; i++) { const g = await fetch(url.replace(/^https?:\/\/[^/]+/, rig.url)); if (g.status === 200) got = await g.json(); else await new Promise((res) => setTimeout(res, 100)); }
+      await ok(url.endsWith(`/api/receipt/${encodeURIComponent(cv.record.settlement)}`) && got?.receipt === receipt && verifyReceipt(got.receipt, { keys: keyDoc.keys, responseBody: body }).valid, `${wire}: the stream's head names GET /api/receipt/<settlement>, which answers the same receipt the stream carried`);
+    }
     // A one-piece paid tool answer on the same wire: signed, and on an EVM
     // wire kept for the audit report (the keeper's finish listener rides a
     // response that already carries the tool path's own).
     const h = await rig.pay(w, HASH);
     await ok(h.status === 200 && verifyReceipt(h.headers.get(RECEIPT_HEADER) || "", { keys: keyDoc.keys, responseBody: h.text }).valid, `${wire}: a paid ${HASH.path} answer carries a receipt that verifies (${h.status})`);
+  }
+  {
+    // Advertised where receipts are described: /openapi.json and /llms-full.txt; /llms.txt is left as it is.
+    const spec = await (await fetch(`${rig.url}/openapi.json`)).json();
+    const full = await (await fetch(`${rig.url}/llms-full.txt`)).text();
+    const short = await (await fetch(`${rig.url}/llms.txt`)).text();
+    await ok(spec.paths?.["/api/receipt/{key}"]?.get?.operationId === "getStreamedReceipt" && /X-Agent402-Receipt-Url/.test(full) && /GET \/api\/receipt\/<settlement>/.test(full) && /tools\.agent402\/receipt-url/.test(full) && !/\/api\/receipt\//.test(short), "the fetch is in /openapi.json and /llms-full.txt (with the MCP _meta key), not /llms.txt");
+  }
+  {
+    const miss = await fetch(`${rig.url}/api/receipt/0x${"34".repeat(32)}`);
+    const bad = await fetch(`${rig.url}/api/receipt/nope`);
+    await ok(miss.status === 404 && bad.status === 400 && miss.headers.get("cache-control") === "no-store", `an unknown transaction answers 404 and a malformed key 400 (${miss.status}, ${bad.status})`);
   }
   // Credits on the booted server: the header on a one-piece answer, the receipt line on a stream.
   {

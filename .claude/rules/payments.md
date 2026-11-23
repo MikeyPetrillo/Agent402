@@ -473,7 +473,15 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `: agent402-receipt <jws>` SSE comment line when it is `text/event-stream` (a comment, never an event: a
   client that JSON-parses every event's data never meets it) and an `Agent402-Receipt` trailer when
   the request sent `TE: trailers` on HTTP/1.1 (declared only on a 200 with no length; a declaration Node
-  refuses is dropped, never the answer). A card-bought report is signed at delivery
+  refuses is dropped, never the answer). Every streamed paid answer (with the signer's
+  `onStreamed` hook: `keepStreamedReceiptOnFinalOk`) is signed, a stream that is neither an event stream
+  nor asked for trailers included: its head names `X-Agent402-Receipt-Url` (`RECEIPT_URL_HEADER`), keyed by
+  `receiptFetchKey` (the settlement; a random token for a batched payment, whose settlement can be shared),
+  and once it finished 200 the receipt is kept in table `streamed_receipts` (same store) for free
+  `GET /api/receipt/<key>` (rate limited 60/min, 1200/hour per address; 404 unknown, 400 malformed),
+  deleted after `RECEIPT_FETCH_DAYS` (30) or past `RECEIPT_FETCH_MAX_ROWS` (500,000) by the hourly sweep,
+  the newest `RECEIPT_FETCH_MEMORY` (2000) also in memory; a credits stream, whose debit lands at the end,
+  is kept under its debit id with no head address. Nothing for a call `receiptFieldsOf` does not sign. A card-bought report is signed at delivery
   (`createCheckoutReceipt`, rail `card-checkout`, stored on the record, shown on `/r/<session>` and in the
   ready email; none on a 100%-off session). A monitor subscription's paid period, the first and every
   renewal, is signed once its payment is final (`createSubscriptionReceipt`: rail `card-subscription` on

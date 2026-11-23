@@ -72,7 +72,7 @@ import { withoutAttributions } from "./data-attribution.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredFromPrice, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
-import { receiptsServed, RECEIPT_HEADER } from "./receipt-signing.js";
+import { receiptsServed, RECEIPT_HEADER, RECEIPT_URL_HEADER } from "./receipt-signing.js";
 import { stockDataEnabled } from "./tools/stock-provider.js";
 
 /** The `_meta` key a paid tools/call result carries the route's signed
@@ -97,11 +97,23 @@ export function lenientMcpAccept(value) {
 /** A settled paid result with the loopback answer's signed receipt in _meta.
  *  Never throws: a header that cannot be read leaves the result as it was. */
 export function withSignedReceipt(out, r) {
-  let jws = null;
-  try { jws = r && r.status === 200 && typeof r.headers?.get === "function" ? r.headers.get(RECEIPT_HEADER) : null; } catch { return out; }
-  if (typeof jws !== "string" || !jws || !out || typeof out !== "object" || Array.isArray(out) || out.isError) return out;
-  return { ...out, _meta: { ...(out._meta && typeof out._meta === "object" ? out._meta : {}), [MCP_SIGNED_RECEIPT_META]: jws } };
+  let jws = null, url = null;
+  try {
+    const ok200 = r && r.status === 200 && typeof r.headers?.get === "function";
+    jws = ok200 ? r.headers.get(RECEIPT_HEADER) : null;
+    url = ok200 ? r.headers.get(RECEIPT_URL_HEADER) : null;
+  } catch { return out; }
+  if (!out || typeof out !== "object" || Array.isArray(out) || out.isError) return out;
+  const meta = out._meta && typeof out._meta === "object" ? out._meta : {};
+  if (typeof jws === "string" && jws) return { ...out, _meta: { ...meta, [MCP_SIGNED_RECEIPT_META]: jws } };
+  // A streamed answer's receipt is kept at the address its head named: the
+  // result names it, where GET answers the same signed receipt.
+  if (typeof url === "string" && /^https?:\/\/[^\s]+\/api\/receipt\/[A-Za-z0-9_.:%-]+$/.test(url)) return { ...out, _meta: { ...meta, [MCP_RECEIPT_URL_META]: url } };
+  return out;
 }
+/** The `_meta` key a paid result whose answer was streamed names its kept
+ *  receipt's address under (GET answers the signed receipt). */
+export const MCP_RECEIPT_URL_META = "tools.agent402/receipt-url";
 import { mppMethodsSummary, mppOfferGateClauseIfOffered } from "./mpp-offers.js";
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
