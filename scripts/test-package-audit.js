@@ -81,8 +81,8 @@ async function main() {
     ok(h.count === 1 && h.names.join() === "ws (high)", `control: a high advisory is counted and named (${h.count}, ${h.names})`);
     ok(highFindings({ metadata: { vulnerabilities: { low: 3, moderate: 1 } } }).count === 0, "control: low and moderate advisories are not counted");
     ok(registryUnreachable("npm error code ENOTFOUND\nnpm error network request to https://registry.npmjs.org/x failed") && registryUnreachable("npm error code E503") && !registryUnreachable("npm error code ERESOLVE") && !registryUnreachable("npm error code E404"), "control: a network failure or registry 5xx reads unreachable; ERESOLVE and 404 do not");
-    const a = readAccepted({ _note: "x", "agent402-mcp@1.2.3:ws": "held by a pinned dependency with no patched release; drop on the next bump", "client:ws": "a reason that is long enough", "x@1.0.0:y": "" });
-    ok(a.accepted.size === 1 && a.accepted.has("agent402-mcp@1.2.3:ws") && a.bad.length === 2, `control: an accepted entry needs an exact version and a reason (${a.accepted.size} kept, ${a.bad.length} refused)`);
+    const a = readAccepted({ _note: "x", "a402-example@1.2.3:ws": "held by a pinned dependency with no patched release; drop on the next bump", "client:ws": "a reason that is long enough", "x@1.0.0:y": "" });
+    ok(a.accepted.size === 1 && a.accepted.has("a402-example@1.2.3:ws") && a.bad.length === 2, `control: an accepted entry needs an exact version and a reason (${a.accepted.size} kept, ${a.bad.length} refused)`);
   }
 
   let accepted = new Map();
