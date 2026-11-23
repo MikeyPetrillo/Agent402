@@ -2978,7 +2978,7 @@ export function skillsIndex(baseUrl) {
       <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Run a pack from your agent</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:520px;">Connect the MCP server or call the route directly: describe the job and the pack runs the sequence.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a class="btn btn-primary on-panel ml-cta" href="/docs#add">Add to your agent →</a>
+        <a class="btn btn-primary on-panel ml-cta" href="/start">Add to your agent →</a>
         <a class="btn btn-secondary on-panel ml-cta" href="/tools">Single tools</a>
       </div>
     </div>

@@ -31,7 +31,12 @@ const H3 = 'style="font-family:var(--font-body);font-weight:600;font-size:var(--
 const P = 'style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:0 0 12px;"';
 const A = 'style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);"';
 const code = (s) => `<code style="font-family:var(--font-mono);font-size:var(--fs-code-inline);">${esc(s)}</code>`;
-const block = (text, name) => codeBlock(`<code>${esc(text)}</code>`, { html: true, name, wrap: true, style: "margin:auto 0 0" });
+// A config step says "add this agent402 entry under mcpServers", so its block is that entry alone.
+const entry = (server) => `"agent402": ${JSON.stringify(server, null, 2)}`;
+// A command wraps at its spaces only: each token is held whole (a browser
+// would otherwise break after a hyphen, splitting --transport or -s), and a
+// token wider than the card scrolls inside its block. The copied text is unchanged.
+const block = (text, name) => codeBlock(`<code>${esc(text).replace(/\S+/g, (t) => `<span class="st-tok">${t}</span>`)}</code>`, { html: true, name, wrap: true, style: "margin:auto 0 0" });
 
 /**
  * The apps this page names, each with its one step, read from the install hints.
@@ -48,7 +53,7 @@ export function startApps(baseUrl, { connector = false } = {}) {
   return [
     { id: "claude-desktop", name: "Claude desktop", step: "In Settings, open Connectors, choose Add custom connector, name it Agent402 and paste this address:", copy: url },
     { id: "claude-code", name: "Claude Code", step: "Run this in a terminal:", copy: connector ? install.claudeCodeHosted.replace(install.hostedUrl, credits) : install.claudeCodeHosted },
-    { id: "cursor", name: "Cursor", step: "In ~/.cursor/mcp.json, add this agent402 entry under mcpServers:", copy: JSON.stringify(connector ? { mcpServers: { agent402: { url: credits } } } : install.cursorMcpJson, null, 2) },
+    { id: "cursor", name: "Cursor", step: "In ~/.cursor/mcp.json, add this agent402 entry under mcpServers:", copy: entry(connector ? { url: credits } : install.cursorMcpJson.mcpServers.agent402) },
   ];
 }
 
@@ -56,7 +61,7 @@ export function startApps(baseUrl, { connector = false } = {}) {
 export function walletSetup(baseUrl) {
   const install = mcpInstallHints(baseUrl);
   const npmServer = install.cursorNpmMcpJson.mcpServers.agent402;
-  const config = JSON.stringify({ mcpServers: { agent402: { command: npmServer.command, args: npmServer.args } } }, null, 2);
+  const config = entry({ command: npmServer.command, args: npmServer.args });
   return {
     setup: `${install.npm} setup`,
     apps: [
@@ -147,6 +152,8 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   </div>
   ${ledgerFooterCompact()}`;
 
-  const extraCss = `@media (max-width:900px){.st-grid{grid-template-columns:minmax(0,1fr)!important}}`;
+  // The copy buttons are this page's only body buttons, and a newcomer taps them
+  // on a phone: each is a 44px target.
+  const extraCss = `main .ml-code-copy{min-height:44px;min-width:44px}.st-tok{white-space:nowrap}@media (max-width:900px){.st-grid{grid-template-columns:minmax(0,1fr)!important}}`;
   return ledgerShell({ title, description, canonical, baseUrl, activePath: START_PATH, jsonLd: [pageLd], extraCss, body });
 }

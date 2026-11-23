@@ -180,7 +180,7 @@ ${startHere}
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">BUY</div>
       <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Pay in either dialect</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">An mppx client and an @x402/fetch client both work unmodified against every paid route on Agent402 - the buyer's client picks.</p>
-      <a class="btn btn-secondary btn-sm" href="/docs#add" style="align-self:flex-start;">Add to your agent →</a>
+      <a class="btn btn-secondary btn-sm" href="/start" style="align-self:flex-start;">Add to your agent →</a>
     </div>
   </div>
 </section>

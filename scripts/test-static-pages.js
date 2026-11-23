@@ -397,7 +397,7 @@ try {
   ok(offered > 0 ? new RegExp(`>${offered} chains( \\+ Tempo)? live<`).test(home.replace(/<span class="ml-dot"><\/span>/g, "")) : !/\d+ chains( \+ Tempo)? live/.test(home), `control: the hero states the offered chain count (${offered}) and no other`);
   // The hero is the agent story: no report button, no card, one primary pill.
   const hero = (home.match(/<header[\s\S]*?<\/header>/) || [""])[0];
-  ok(hero.includes('href="/docs#add"') && /btn-primary" href="\/docs#add">Add to your agent</.test(hero), "hero primary is Add to your agent");
+  ok(hero.includes('href="/start"') && /btn-primary" href="\/start">Add to your agent</.test(hero), "hero primary is Add to your agent, to /start");
   ok(/btn-secondary" href="\/tools">Browse tools</.test(hero), "hero secondary is Browse tools");
   ok(!/Buy a report|by card|agentic finance/i.test(hero.replace(/<div class="hm-obsidian[\s\S]*$/, "")), "hero copy carries no report, card or agentic-finance line");
 }
@@ -423,7 +423,7 @@ try {
     // Reports stay a plain link; the header's one button is the primary action
     // (src/ledger-chrome.js NAV_PRIMARY_ACTION), left to the hero on the home page.
     const navButtons = [...navHtml.matchAll(/<a class="btn btn-primary[^"]*" href="([^"]+)">([^<]*)<\/a>/g)].map((m) => `${m[2]} ${m[1]}`);
-    ok(/href="\/reports"[^>]*>\s*Reports/.test(navHtml) && (p === "/" ? navButtons.length === 0 : new Set(navButtons).size === 1 && navButtons[0] === "Add to your agent /docs#add"), `${p} nav lists Reports as a plain link and its one button is the primary action (${navButtons.join(" | ") || "none"})`);
+    ok(/href="\/reports"[^>]*>\s*Reports/.test(navHtml) && (p === "/" ? navButtons.length === 0 : new Set(navButtons).size === 1 && navButtons[0] === "Add to your agent /start"), `${p} nav lists Reports as a plain link and its one button is the primary action (${navButtons.join(" | ") || "none"})`);
     ok(footHtml.includes('href="/reports"') && footHtml.includes('href="/monitors"'), `${p} footer links reports and monitors`);
   }
   const reports = await (await fetch(`${BASE}/reports`)).text();

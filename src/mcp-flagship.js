@@ -561,7 +561,7 @@ export function mcpInstallHints(baseUrl) {
   const hosted = `${baseUrl}/mcp`;
   return {
     hostedUrl: hosted,
-    claudeCodeHosted: `claude mcp add --transport http agent402 ${hosted}`,
+    claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${hosted}`,
     walletWarning: "Use a new wallet holding only a few dollars of USDC. Never your main wallet.",
     claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
     cursorMcpJson: {

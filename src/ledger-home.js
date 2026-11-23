@@ -285,7 +285,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
         <p class="hm-lede" style="margin:0;text-wrap:pretty;">${leadHtml}</p>
         <p class="hm-support" style="margin:0;font-size:var(--fs-base);line-height:1.55;color:var(--muted);text-wrap:pretty;">Pay over x402${mpp ? ", MPP" : ""} or proof of work: an x402 payment settles after a successful answer, and a charged failure is booked and repaid against the chain record. ${esc(SUPPORT_LINE.replace(/\.$/, ""))}, beside an <a href="/marketplace" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">index of outside x402 sellers</a> and a router that buys from proven ones.</p>
         <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
-          <a class="btn btn-primary" href="/docs#add">Add to your agent</a>
+          <a class="btn btn-primary" href="/start">Add to your agent</a>
           <a class="btn btn-secondary" href="/tools">Browse tools</a>
         </div>
         <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);gap:8px 18px;align-items:center;">

@@ -354,7 +354,7 @@ ok(blocks > 50 && imports > 30 && toolCalls >= 12, `the sweep measured something
     const hints = mod.mcpInstallHints(base);
     const text = JSON.stringify(hints) + "\n" + mod.mcpInitializeInstructions(base) + "\n" + mod.mcpInitializeInstructions(base, { decide: true, mpp: true });
     ok(!DEAD.test(text), `${rel}: server.describe install text has no dead add-server link`);
-    ok(hints.hostedUrl === `${base}/mcp` && text.includes(`claude mcp add --transport http agent402 ${base}/mcp`), `${rel}: server.describe offers the hosted connector`);
+    ok(hints.hostedUrl === `${base}/mcp` && text.includes(`claude mcp add --transport http -s user agent402 ${base}/mcp`), `${rel}: server.describe offers the hosted connector`);
     ok(!DEAD.test(readFileSync(join(ROOT, rel), "utf8")), `${rel}: no dead add-server link anywhere in the module`);
   }
 }

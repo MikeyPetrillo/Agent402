@@ -170,6 +170,40 @@ try {
         }
       }
       await page.setViewportSize({ width: 1280, height: 900 });
+
+      // /start at phone width: a command wraps at its spaces and never splits a
+      // token (a split URL or package name pastes broken), while a code block
+      // that is not a wrap block keeps its phone overflow protection; and every
+      // button in the page body is at least 44px tall (a comfortable tap target).
+      await page.setViewportSize({ width: 375, height: 900 });
+      await page.goto(`${BASE}/start`, { waitUntil: "load" });
+      const wrapCheck = await page.evaluate(() => {
+        const split = [];
+        let tokens = 0;
+        const pres = [...document.querySelectorAll("main .ml-code-wrap > pre")].filter((p) => window.__a11y.visible(p));
+        for (const pre of pres) {
+          const walker = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT);
+          for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            for (const m of n.data.matchAll(/\S+/g)) {
+              tokens++;
+              const r = document.createRange();
+              r.setStart(n, m.index); r.setEnd(n, m.index + m[0].length);
+              const tops = new Set([...r.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top)));
+              if (tops.size > 1) split.push(m[0].slice(0, 40));
+            }
+          }
+        }
+        return { pres: pres.length, tokens, split, anywhere: pres.filter((p) => getComputedStyle(p).overflowWrap === "anywhere" || getComputedStyle(p).wordBreak === "break-all").length };
+      });
+      ok(wrapCheck.pres > 0 && wrapCheck.tokens > 0 && wrapCheck.split.length === 0, `/start at 375px: ${wrapCheck.tokens} tokens in ${wrapCheck.pres} command blocks wrap at spaces only${wrapCheck.split.length ? ` (split inside a token: ${list(wrapCheck.split)})` : ""}`);
+      ok(wrapCheck.pres > 0 && wrapCheck.anywhere === 0, `/start at 375px: no command block may break anywhere (${wrapCheck.anywhere} of ${wrapCheck.pres} do)`);
+      const starts = await page.evaluate(() => [...document.querySelectorAll("main button, main .btn")].filter((e) => window.__a11y.visible(e)).map((e) => ({ t: (e.textContent || e.getAttribute("aria-label") || "").trim().slice(0, 20), h: e.getBoundingClientRect().height })));
+      const short = starts.filter((b) => b.h < 44).map((b) => `"${b.t}" ${Math.round(b.h)}px`);
+      ok(starts.length > 0 && short.length === 0, `/start at 375px: ${starts.length} buttons in the page body are at least 44px tall${short.length ? ` (${list(short)})` : ""}`);
+      await page.goto(`${BASE}${TOOL}`, { waitUntil: "load" });
+      const plain = await page.evaluate(() => [...document.querySelectorAll("main .ml-code:not(.ml-code-wrap) > pre")].filter((p) => window.__a11y.visible(p)).map((p) => getComputedStyle(p).overflowWrap));
+      ok(plain.length > 0 && plain.every((w) => w === "anywhere"), `${TOOL} at 375px: a code block that is not a wrap block keeps overflow-wrap:anywhere (${JSON.stringify(plain)})`);
+      await page.setViewportSize({ width: 1280, height: 900 });
     }
 
     // Code blocks: every <pre> in main sits in the shared component with a copy button.

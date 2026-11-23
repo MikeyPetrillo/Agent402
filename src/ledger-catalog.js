@@ -156,7 +156,7 @@ table{border-collapse:collapse;width:100%}
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">The proof-of-work free tier</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Every pure-CPU tool is payable in compute. Your machine solves a single-use sha256 puzzle - ${esc(powCostPhrase())} - and the call goes through. No wallet, no funding.</p>
       ${codeBlock(`<span style="color:var(--on-panel-faint);"># the MCP connector solves it for you
-</span>claude mcp add --transport http \
+</span>claude mcp add --transport http -s user \
   agent402 https://agent402.tools/mcp`, { name: "the install command", html: true, wrap: true, size: "xs", style: "margin:0 0 16px" })}
       <a href="/playground" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--ok);padding-bottom:1px;">watch it run in the playground →</a>
     </div>
@@ -177,7 +177,7 @@ table{border-collapse:collapse;width:100%}
       <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Find a tool by task</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Paste the MCP URL and describe the job: the hosted connector picks the tool, solves the proof-of-work for the free tools and hands back the result. Install agent402-mcp with a wallet key and it signs the payment for every other tool too.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
+        <a class="btn btn-primary on-panel" href="/start">Add to your agent →</a>
         <a class="btn btn-secondary on-panel" href="/playground">Try the playground</a>
         <a class="btn btn-secondary on-panel" href="/skills">Bigger jobs → skill packs</a>
       </div>

@@ -22,7 +22,7 @@ claude mcp add agent402 -- npx -y agent402-mcp@0.16.0
 To use the hosted server instead of the npm package:
 
 ```bash
-claude mcp add --transport http agent402 https://agent402.tools/mcp
+claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 ```
 
 ## Claude Desktop
