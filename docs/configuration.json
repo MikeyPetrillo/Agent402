@@ -1207,6 +1207,7 @@
     "AWS_MARKETPLACE_QUOTE_KEY": "Private key (PEM, or base64 of the PEM) that signs the quotes of the AWS Marketplace front door under /aws; its presence turns the gate on (a credential, set on the host).",
     "AWS_MARKETPLACE_QUOTE_KEY_ID": "Key id (kid) of that quote key, as published at /aws/.well-known/jwks.json.",
     "AWS_MARKETPLACE_PRODUCT_ID": "The AWS Marketplace product id (prod-...) every quote names; the gate stays off without it.",
+    "AWS_UNANSWERED_FILE": "File that holds the record of AWS Marketplace paid calls that ended without an answer when no state database is configured (default /data/aws-unanswered.json); with one, the record is a state database document.",
     "AWS_MARKETPLACE_SLUGS": "Comma list of catalog slugs sold under /aws/<slug>; the first also answers at /aws (default: the first listing in the gate).",
     "AWS_MARKETPLACE_QUOTE_SECONDS": "How long a quote stays payable, in seconds (30 to 3600).",
     "AWS_MARKETPLACE_RETRY_MAX": "Further attempts one payment buys after a run that ended without an answer (0 to 5).",

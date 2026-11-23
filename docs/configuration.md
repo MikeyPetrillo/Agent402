@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1123 variables in 113 groups.
+1124 variables in 113 groups.
 
 ## Contents
 
@@ -136,6 +136,7 @@ holds it.
 | `AWS_MARKETPLACE_QUOTE_SECONDS` | How long a quote stays payable, in seconds (30 to 3600). |  | `src/aws-marketplace-gate.js` |
 | `AWS_MARKETPLACE_RETRY_MAX` | Further attempts one payment buys after a run that ended without an answer (0 to 5). |  | `src/aws-marketplace-gate.js` |
 | `AWS_MARKETPLACE_SLUGS` | Comma list of catalog slugs sold under /aws/<slug>; the first also answers at /aws (default: the first listing in the gate). |  | `src/aws-marketplace-gate.js` |
+| `AWS_UNANSWERED_FILE` | File that holds the record of AWS Marketplace paid calls that ended without an answer when no state database is configured (default /data/aws-unanswered.json); with one, the record is a state database document. | `/data/aws-unanswered.json` | `src/aws-unanswered.js` |
 
 ## BACKUP
 
