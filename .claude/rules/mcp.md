@@ -102,8 +102,13 @@ Loaded when a connector or front-door file is read.
   is the same connector that answers 401 without a token. A paid tool under a grant is replayed with a
   one-call handle (`openGrantHandle`, `X-Agent402-Via-Grant`, read only beside the genuine marker) and paid
   by the credits gate; free tools stay free. The balance page lists grants (app, key, cap, spend today,
-  created, last use, coarse network) and changes or revokes them. Every threshold is an `MCP_OAUTH_*`
-  variable (docs/configuration.md); a refusal never names its check (`scripts/test-mcp-oauth.js`).
+  created, last use, coarse network) and changes or revokes them. Lifetimes are `MCP_OAUTH_*`
+  variables (docs/configuration.md); every limit (code tries, sends, lockout, per-address rates counted by
+  `limiterKey`, so an IPv6 /64 is one address, the bad-token bound, the pending-request cap and the
+  document size) comes from the private credits table (`mcpOAuth` in `src/credits-guards.js`), and the
+  sign-in stays off without it. Every token is looked up; only failed lookups are slowed (429 past the
+  bound). Authorize errors are shown on this site, never redirected to the app's address. A refusal never
+  names its check (`scripts/test-mcp-oauth.js`).
 - **Answer ceiling:** a free tool answer larger than `AGENT402_MCP_MAX_ANSWER_BYTES` (default 1 MiB of compact JSON)
   is cut in document order to valid JSON and carries `answerBound` (`src/mcp-answer-bound.js`: the partial-answer
   fields in bytes, plus one entry per cut list, string or object). A paid answer is delivered whole.

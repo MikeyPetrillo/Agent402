@@ -144,6 +144,24 @@ try {
   await srv.stop();
 }
 
+// ---- a boot with credits on sale and the connector sign-in off: no connector line ----
+{
+  const srv3 = await bootServer({ stores: "start-page-sales-only", env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", CREDITS_SALES: "on", MCP_OAUTH: "", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999" } });
+  let c3;
+  try {
+    c3 = new Client({ name: "test-start-page", version: "0.0.0" });
+    await c3.connect(new StreamableHTTPClientTransport(new URL(`${srv3.url}/mcp`)));
+    const pi = await c3.callTool({ name: "payment.info", arguments: {} });
+    const info = pi.structuredContent || JSON.parse(pi.content?.[0]?.text || "{}");
+    ok(info.credits?.onSale === true && !("connector" in info.credits), `CREDITS_SALES on, MCP_OAUTH off: payment.info sells credits and names no connector (${JSON.stringify(Object.keys(info.credits || {}))})`);
+    const page = await (await fetch(`${srv3.url}${START_PATH}`)).text();
+    ok(/Credits by card/.test(page) && !/\/mcp\/credits/.test(page), "CREDITS_SALES on, MCP_OAUTH off: /start offers credits and names no connector");
+  } finally {
+    try { await c3?.close(); } catch {}
+    await srv3.stop();
+  }
+}
+
 // ---- a boot with both switches on: payment.info names the credits connector ----
 const srv2 = await bootServer({ stores: "start-page-connector", env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", CREDITS_SALES: "on", MCP_OAUTH: "on", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999" } });
 let client2;

@@ -100,24 +100,43 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`src/mcp-oauth.js`) buys only once signed in by its emailed code, through the same `createCheckout` with that
   email and the client address). Every pack
   and top-up checkout requests card authentication and carries neutral digest tags (`ref_*`) on the
-  payment, never an email, address or key. The purchase checks (`purchaseChecks` in
-  `src/credits-sales.js`: `CREDITS_BUYER_*`, `CREDITS_SOURCE_*`, `CREDITS_FAILED_*`, and
-  `CREDITS_DAILY_MAX_USD`) are counted in the shared store; the service sets its own values, the code
-  ships safe defaults, and a refusal is always `PURCHASE_REFUSED`, which never names the check. A paid
-  session a check refuses (or a flagged charge, `chargeFlagged`) is refunded in full on its own
-  payment with no key (`refused-review`). Copy, comments, commits and tests never state a threshold or
-  which signal a check reads.
+  payment, never an email, address or key. The purchase checks, the card review outcomes a charge is
+  refused on (`chargeFlagged`), the automatic fraud-warning refund day total and the connector sign-in's
+  limits live in a PRIVATE table (`src/credits-guards.js`: `CREDITS_GUARDS_JSON`, raw or base64, or
+  `CREDITS_GUARDS_FILE`; format in `docs/example-credits-guards.json` with placeholders), with no defaults
+  in code: without a complete table credit sales and the connector sign-in stay off
+  (`creditsSalesEnabled` reads it), `creditsGuards` on `/api/gateway-status` reads attention while
+  `CREDITS_SALES` or `MCP_OAUTH` asks for it, and the sign-in's routes answer a generic 503. Counts are
+  kept in the shared store; a refusal is always `PURCHASE_REFUSED`, which never names the check. A
+  paid session a check refuses (or a flagged charge) is refunded in full on its own payment with no key
+  (`refused-review`). `CREDITS_DAILY_MAX_USD` stays a public term (/terms prints it). Copy, comments,
+  commits, docs and tests never state a threshold, window or signal: suites draw a random table
+  (`scripts/lib/credits-guards-table.js`) and read their limits back from it.
 - **Credits freezes:** `charge.dispute.created` and `radar.early_fraud_warning.created` freeze the key
   (a running call's hold is released, not debited). After a fraud warning the unspent balance is
   refunded on the warned payment only, automatically (`CREDITS_EFW_AUTO_REFUND`, on unless off) inside
-  the day total `CREDITS_EFW_AUTO_REFUND_DAY_MAX_USD`; otherwise it is owed for approval
-  (`refundRequestsOwed`, `POST /__operator/credits/fraud-refund`). `fraudReviews` is on
-  `/__operator/credits.json`. Stripe event ids are deduplicated in the shared store as well.
+  the private table's day total; otherwise it is owed for approval (`refundRequestsOwed`,
+  `POST /__operator/credits/fraud-refund`). Only a refund actually sent (refunded or pending) closes
+  the review and counts against the day; any other answer gives the day back. A warning on a payment
+  already disputed keeps `disputed` as the key's cause and holds the review (`disputed` state) until
+  the dispute closes: won, the key stays frozen for the warning and the review is owed again; with no
+  warning, a won dispute lifts the freeze. `fraudReviews` is on `/__operator/credits.json`. Stripe
+  event ids are deduplicated in the shared store as well, and forgotten again when handling throws,
+  so the redelivery is applied.
+- **Stripe webhook events to subscribe** (the endpoint's event list in the Stripe dashboard; an event
+  not subscribed never arrives): `checkout.session.completed`, `payment_intent.payment_failed`,
+  `radar.early_fraud_warning.created`, `charge.dispute.created`, `charge.dispute.closed`,
+  `charge.refunded`, `refund.updated` and the subscription and invoice events the monitors read.
+- **Rollback notes:** before rolling back past this batch, rewrite `TEMPO_CURRENCY` names as
+  addresses (an earlier build reads only addresses: write the OUSD address, or remove `ousd`), and read
+  `fraudReviews` on `/__operator/credits.json` (an earlier build has no fraud-review state: settle owed
+  reviews by hand first). Unset `MCP_OAUTH` and `CREDITS_GUARDS_JSON` before a build without them.
 - **Credits keys:** new keys are `a402_ck_` plus 32 random bytes; `KEY_RE` also matches earlier keys.
   A URL carrying a key is refused before any middleware reads it (`src/credits-key-url.js`);
   `redactSecrets` removes a key from log text. `POST /api/credits/revoke` disables any key presented,
   one answer for every key. Past `CREDITS_BAD_KEY_MAX` failed keys a client's further failed lookups
-  are answered 429 for the window (shared); a valid key is always served. Holders set per-key daily and per-call limits on the balance page
+  are answered 429 for the window (one fixed shared counter per client, written no more once held);
+  a valid key is always served. Holders set per-key daily and per-call limits on the balance page
   (`setLimits`).
 - **Card store directories:** with no state database, `CREDITS_DIR` (default `<data root>/credits`,
   `src/credits.js`) and `HUMAN_CHECKOUT_DIR` (default `<data root>/human-checkout`, `src/human-checkout.js`;
