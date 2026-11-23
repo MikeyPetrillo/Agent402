@@ -981,8 +981,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       save(hash, rec);
       again[sessionId] = hash; writeJsonAtomic(SESSIONS, again);
     }
-    await warnedAfterIssue(paymentIntent);
     try { onLoad?.({ sessionId, pack: packKey, priceUsd: p.cents / 100, keyId, paymentIntent }); } catch { /* accounting never breaks minting */ }
+    await warnedAfterIssue(paymentIntent);
     if (email) {
       sendEmail({ to: email, subject: "Your Agent402 credits key",
         text: `Your prepaid credits are ready: $${(p.cents / 100).toFixed(2)} loaded.\n\nYour key (keep it secret, it is shown only here and on the thanks page):\n\n${key}\n\nUse it on our paid tools (the wallet-scoped routes and the routes that buy from an outside seller take a wallet):\ncurl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com\n\nBalance: GET ${baseUrl}/api/credits/balance with the same header.\nRefund the unspent balance to your card: POST ${baseUrl}/api/credits/refund with the same header (the key is then disabled).\nAnother key: ${baseUrl}/credits${creditsSalesEnabled() ? `\nYour balance, its history, top-ups and a new key if you lose this one: sign in with this email at ${baseUrl}/credits/account` : ""}\n\nAgent402`,
@@ -1055,10 +1055,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       const idx = sessionsIdx();
       if (!idx[sessionId]) { idx[sessionId] = hash; writeJsonAtomic(SESSIONS, idx); }
     }
-    if (!out?.dup) await warnedAfterIssue(paymentIntent);
-    const rec = await readRec(hash);
-    if (out?.dup) return claimedAnswer(rec, sessionId);
+    if (out?.dup) return claimedAnswer(await readRec(hash), sessionId);
     try { onLoad?.({ sessionId, pack: packKey, priceUsd: p.cents / 100, keyId, paymentIntent }); } catch { /* accounting never breaks a top-up */ }
+    await warnedAfterIssue(paymentIntent);
+    const rec = await readRec(hash);
     receipt({ kind: "topup", email: out.email, keyId, cents: p.cents, balanceMicro: out.balanceMicro, paymentIntent, sessionId });
     log(`[credits] topped up key ${keyId} ($${(p.cents / 100).toFixed(2)}) for session ${sessionId}`);
     return claimedAnswer(rec, sessionId);

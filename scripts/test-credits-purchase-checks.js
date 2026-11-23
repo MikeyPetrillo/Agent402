@@ -10,7 +10,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { makeGuardsTable, useGuardsTable, guardsTable } from "./lib/credits-guards-table.js";
-import { rmSync, readFileSync, readdirSync } from "node:fs";
+import { rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
@@ -383,9 +383,10 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   await cr.claim("cs_hB");
   await wh.handleWebhook(ev("evt_dl_c", "charge.dispute.created", { id: "dp_h", charge: "ch_h", payment_intent: "pi_hA", amount: 1000 }), "goodsig");
   ok(cr.authorize(H.key, 0.001).reason === "frozen", "webhook: the dispute freezes the key");
-  await wh.handleWebhook(ev("evt_dl_x", "charge.dispute.closed", { id: "dp_h", charge: "ch_h", payment_intent: "pi_hA", status: "lost", amount: 1000 }), "goodsig");
+  // A dispute for part of the payment: only that part went back to the card.
+  await wh.handleWebhook(ev("evt_dl_x", "charge.dispute.closed", { id: "dp_h", charge: "ch_h", payment_intent: "pi_hA", status: "lost", amount: 400 }), "goodsig");
   const hBal = cr.balance(H.key).balanceUsd, hu = cr.authorize(H.key, 0.001);
-  ok(hu.ok === true && hBal === 10, `webhook: a dispute lost reaches the store, which keeps the other payment's share usable (${hBal})`);
+  ok(hu.ok === true && hBal === 16, `webhook: a dispute lost for part of a payment takes that part off and keeps the rest usable (${hBal})`);
   if (hu.ok) cr.release(hu.hash, hu.heldMicro);
   delete process.env.STRIPE_WEBHOOK_SECRET;
 }
@@ -409,6 +410,18 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   ok((await cr.fraudWarning("pi_ptt")).remembered === true, "guard: the top-up's warning is remembered");
   const tt = await cr.claim("cs_ptt");
   ok(tt.status === "not_completed" && charges.pi_ptt.amount_refunded === 500 && cr.balance(T.key).balanceUsd === 5 && cr.authorize(T.key, 0.001).ok === true, `a warned top-up is refunded in full and the balance it named is unchanged (${tt.status})`);
+  // A warning remembered while the key was being minted (it found no key; the
+  // claim had already looked): the claim looks again once the key exists.
+  // (The file store is one process's: the checks read through the same store.)
+  const warnNow = (pi) => { const f = join(DIR, "_warned.json"); let o = {}; try { o = JSON.parse(readFileSync(f, "utf8")); } catch { /* none yet */ } o[pi] = { at: clock }; writeFileSync(f, JSON.stringify(o)); };
+  const racing = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: () => {}, now: () => clock, tagSecret: Buffer.from("test-tag-secret"), onLoad: (l) => warnNow(l.paymentIntent) });
+  paid("cs_race", "credits-5", "pi_race", "race@x.com");
+  const rc = await racing.claim("cs_race");
+  ok(rc.status === "minted" && racing.authorize(rc.key, 0.001).ok === false && (await racing.fraudReviews()).some((f) => f.keyId === rc.keyId), "a key minted as its payment's warning was remembered is frozen under that warning");
+  paid("cs_race2", "credits-5", "pi_race2", "race2@x.com");
+  const RB = await cr.claim("cs_race2");
+  paid("cs_race2t", "credits-5", "pi_race2t", "race2@x.com", { meta: { credits_topup: RB.keyId, credits_account: "race2@x.com" } });
+  ok((await racing.claim("cs_race2t")).status === "topped_up" && racing.authorize(RB.key, 0.001).ok === false && (await racing.fraudReviews()).some((f) => f.keyId === RB.keyId), "...and so is a balance a top-up landed on as its warning was remembered");
 }
 
 // ---- the webhook: signed, once per event, fixture events --------------------------------------------
