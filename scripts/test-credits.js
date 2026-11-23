@@ -347,10 +347,13 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   const tryKey = (k, ip = "203.0.113.9") => { const r = fakeRes(); let next = false; g({ method: "GET", path: "/api/hash", ip, headers: { authorization: `Bearer ${k}` } }, r, () => { next = true; }); return { r, next }; };
   for (let i = 0; i < 3; i++) tryKey("a402_" + String(i).repeat(40));
   const after = tryKey(KEY);
-  ok(after.r.statusCode === 429 && after.next === false && after.r.body?.reason === "rate_limited", "a client past the failed-key bound is answered 429 on any key until its window ends, so no guess can be checked");
-  ok(!/\d/.test(String(after.r.body?.error)), "the 429 names no count or window");
-  const elsewhere = tryKey(KEY, "198.51.100.7");
-  ok(elsewhere.r.statusCode !== 429 && elsewhere.next === true, "the same key from another client is served");
+  ok(after.r.statusCode !== 429 && after.next === true, "past the failed-key bound a valid key from the same client is still served (a paying customer behind a shared address)");
+  const wrong = tryKey("a402_" + "w".repeat(40)), wrong2 = tryKey("a402_" + "v".repeat(40));
+  ok(wrong.r.statusCode === 429 && wrong.next === false && wrong.r.body?.reason === "rate_limited", "past the bound a wrong key from that client is answered 429");
+  ok(JSON.stringify(wrong.r.body) === JSON.stringify(wrong2.r.body) && wrong2.r.statusCode === 429, "...and every failed key there answers identically");
+  ok(!/\d/.test(String(wrong.r.body?.error)), "the 429 names no count or window");
+  const fresh1 = tryKey("a402_" + "x".repeat(40), "198.51.100.7"), fresh2 = tryKey("a402_" + "y".repeat(40), "198.51.100.7");
+  ok(fresh1.r.statusCode === 402 && JSON.stringify(fresh1.r.body) === JSON.stringify(fresh2.r.body), "under the bound an unknown key and a wrong key answer identically");
   ok(cr.badKeyStats().failures >= 3 && cr.badKeyStats().clientsOverThreshold === 1, "a client past the threshold is counted for the operator view");
   for (let i = 0; i < 3; i++) tryKey("a402_" + String(i + 5).repeat(40), `2001:db8:1:2::${i + 1}`);
   ok(cr.badKeyStats().clientsOverThreshold === 2, "IPv6 addresses in one /64 count as one client");

@@ -5651,9 +5651,9 @@ if (_credits) {
   app.get("/api/credits/balance", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const auth = String(req.headers.authorization || "");
-    if (/^Bearer a402_/.test(auth) && await _credits.badKeyHeld(req.ip)) return res.status(429).json({ error: "Too many requests with a credits key from this client. Try again later.", reason: "rate_limited" });
     const b = /^Bearer a402_/.test(auth) ? await _credits.balance(auth.slice(7).trim()) : null;
-    if (!b && /^Bearer a402_/.test(auth)) _credits.noteBadKey(req.ip);
+    // Only a failed lookup is slowed; a key that works is always answered.
+    if (!b && /^Bearer a402_/.test(auth)) { const busy = await _credits.badKeyHeld(req.ip); _credits.noteBadKey(req.ip); if (busy) return res.status(429).json({ error: "Too many requests with a credits key from this client. Try again later.", reason: "rate_limited" }); }
     if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", ...creditsTopupFields(BASE_URL) });
     res.json(b);
   });
@@ -5669,11 +5669,10 @@ if (_credits) {
     { const rl = creditsRefundLimiter.check(clientIp(req)); if (rl.limited) { res.set("Retry-After", String(Math.max(1, Math.ceil(Number(rl.retryAfterSeconds) || 60)))); return res.status(429).json({ status: "rate_limited", error: "Too many requests, please slow down. Nothing moved." }); } }
     const auth = String(req.headers.authorization || "");
     if (!/^Bearer a402_/.test(auth)) return res.status(401).json({ status: "malformed", error: "Send your credits key as Authorization: Bearer a402_…" });
-    if (await _credits.badKeyHeld(req.ip)) return res.status(429).json({ status: "rate_limited", error: "Too many requests with a credits key from this client. Try again later. Nothing moved." });
     let r;
     try { r = await _credits.requestRefund(auth.slice(7).trim()); }
     catch (e) { console.warn("[credits] refund request failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); return res.status(503).json({ status: "error", error: "Could not take the refund request right now; nothing moved. Retry shortly." }); }
-    if (r.status === "unknown" || r.status === "malformed") _credits.noteBadKey(req.ip);
+    if (r.status === "unknown" || r.status === "malformed") { const busy = await _credits.badKeyHeld(req.ip); _credits.noteBadKey(req.ip); if (busy) return res.status(429).json({ status: "rate_limited", error: "Too many requests with a credits key from this client. Try again later. Nothing moved." }); }
     const said = {
       refunded: `The unspent balance was refunded to the card that bought this key ($${Number(r.refundedUsd || 0).toFixed(2)}); the key is disabled.`,
       nothing_to_refund: "This key holds no unspent balance; nothing was refunded.",

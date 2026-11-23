@@ -105,8 +105,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
 - **Credits keys:** new keys are `a402_ck_` plus 32 random bytes; `KEY_RE` also matches earlier keys.
   A URL carrying a key is refused before any middleware reads it (`src/credits-key-url.js`);
   `redactSecrets` removes a key from log text. `POST /api/credits/revoke` disables any key presented,
-  one answer for every key. Past `CREDITS_BAD_KEY_MAX` failed keys a client is answered 429 on any key
-  for the window (shared). Holders set per-key daily and per-call limits on the balance page
+  one answer for every key. Past `CREDITS_BAD_KEY_MAX` failed keys a client's further failed lookups
+  are answered 429 for the window (shared); a valid key is always served. Holders set per-key daily and per-call limits on the balance page
   (`setLimits`).
 - **Card store directories:** with no state database, `CREDITS_DIR` (default `<data root>/credits`,
   `src/credits.js`) and `HUMAN_CHECKOUT_DIR` (default `<data root>/human-checkout`, `src/human-checkout.js`;

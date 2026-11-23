@@ -1058,7 +1058,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // is written. The file and the database backends apply them the same way.
   function authorizeOn(rec, hash, need, priceUsd, holdId = null) {
     if (!rec) return { result: { ok: false, reason: "unknown" } };
-    if (rec.disabled) return { result: { ok: false, reason: "disabled", balanceUsd: microToUsd(rec.balanceMicro) } };
+    if (rec.disabled) return { result: { ok: false, reason: "disabled", balanceUsd: microToUsd(rec.balanceMicro), ...(rec.disabledReason === "revoked" ? { revoked: true } : {}) } };
     // The holder's own limits (set on the balance page): a most per call, and
     // a most per UTC day counting what is spent and what is held.
     const lim = rec.limits || {};
@@ -1577,13 +1577,16 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
 
   // GUESSING WATCH. A key is 32 random bytes (24 for keys issued before the
   // prefix), so it cannot be guessed, and a key works only when its hash is a
-  // stored record, so it cannot be made up. Failed keys are still bounded: per
-  // client (req.ip, an IPv6 address by its /64), a client that sends
-  // CREDITS_BAD_KEY_MAX unknown or malformed keys within
+  // stored record, so it cannot be made up. Refusing a client after failed
+  // keys would also refuse a paying customer behind the same address, so a
+  // valid key is ALWAYS served: only failed lookups are slowed. Per client
+  // (req.ip, an IPv6 address by its /64), a client that sends
+  // CREDITS_BAD_KEY_MAX unknown, malformed or revoked keys within
   // CREDITS_BAD_KEY_WINDOW_MS is logged once, counted on the operator credits
-  // view, and answered 429 on any credits key until that window ends. The
-  // count is kept in the shared store too, so every server refuses it; this
-  // process's own map (bounded) answers when the store does not.
+  // view, and its further failed lookups are answered 429 until that window
+  // ends (a key that works is answered as usual). The count is kept in the
+  // shared store too; this process's own map (bounded) answers when the store
+  // does not.
   const badKeys = new Map(); // client -> { n, until }
   const badKeyMax = () => { const n = Number(process.env.CREDITS_BAD_KEY_MAX); return Number.isFinite(n) && n > 0 ? n : 20; };
   const badKeyWindowMs = () => { const n = Number(process.env.CREDITS_BAD_KEY_WINDOW_MS); return Number.isFinite(n) && n > 0 ? n : 10 * 60 * 1000; };
@@ -1612,6 +1615,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const r = await shared.flagGet("credits-badkey-hold", tagOf("badkey", limiterKey(String(client || "?"))), { now: at }).catch(() => null);
     return Boolean(r?.ok && r.until > at);
   }
+  // A lookup that found no usable key: unknown, malformed or revoked.
+  const failedLookup = (a) => Boolean(a) && !a.ok && (a.reason === "unknown" || a.reason === "malformed" || a.revoked === true);
   const BAD_KEY_BUSY = { error: "Too many requests with a credits key from this client. Try again later.", reason: "rate_limited" };
 
   // Express gate: mount BEFORE the x402 paywall. `priceFor(method, path)` ->
@@ -1635,11 +1640,6 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       const key = auth.slice(7).trim();
       const item = priceFor(req.method, req.path, req);
       if (!item) return null; // not a priced catalog route - let the site handle it
-      if (badKeyHeldHere(req.ip)) {
-        res.setHeader("X-Credits-Error", "rate_limited");
-        res.status(429).json(BAD_KEY_BUSY);
-        return { done: true };
-      }
       // Identity-bound routes (wallet-keyed memory, my-usage) derive the caller
       // from a SIGNED x402 payer; a credits key carries no verified wallet, so
       // they are refused here (same rule as the Tempo and Stripe gates).
@@ -1659,9 +1659,14 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       return { key, item };
     };
     // After the hold: the refusal, or the settle-on-finish wiring.
-    const arm = (req, res, next, a, item) => {
+    const arm = (req, res, next, a, item, heldShared = false) => {
       if (!a.ok) {
-        if (a.reason === "unknown" || a.reason === "malformed") noteBadKey(req.ip);
+        // Only a failed lookup is slowed; a key that works is never refused here.
+        if (failedLookup(a)) {
+          const busy = heldShared || badKeyHeldHere(req.ip);
+          noteBadKey(req.ip);
+          if (busy) { res.setHeader("X-Credits-Error", "rate_limited"); return res.status(429).json(BAD_KEY_BUSY); }
+        }
         res.setHeader("X-Credits-Error", a.reason);
         return res.status(402).json({ error: a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.` : a.reason === "unknown" ? "Unknown credits key." : a.reason === "disabled" ? "This credits key is disabled." : a.reason === "over_call_limit" ? `This call costs $${item.priceUsd}, above the $${a.limitUsd} per-call limit set on this balance. Change it from the balance page.` : a.reason === "over_daily_limit" ? `This call would pass the $${a.limitUsd} daily limit set on this balance. It resets at 00:00 UTC; change it from the balance page.` : "Malformed credits key.", reason: a.reason, balanceUsd: a.balanceUsd ?? null, priceUsd: item.priceUsd, ...(a.limitUsd != null ? { limitUsd: a.limitUsd } : {}), ...creditsTopupFields(baseUrl) });
       }
@@ -1853,7 +1858,6 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       const b = begin(req, res);
       if (!b) return next();
       if (b.done) return;
-      if (await badKeyHeld(req.ip)) { res.setHeader("X-Credits-Error", "rate_limited"); return res.status(429).json(BAD_KEY_BUSY); }
       let a;
       try { a = await authorize(b.key, b.item.priceUsd); }
       catch (e) {
@@ -1862,7 +1866,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
         res.setHeader("X-Credits-Error", "unavailable");
         return res.status(503).json({ error: "Prepaid credits are unavailable right now; nothing was charged. Retry shortly.", reason: "unavailable" });
       }
-      return arm(req, res, next, a, b.item);
+      return arm(req, res, next, a, b.item, failedLookup(a) ? await badKeyHeld(req.ip) : false);
     };
   }
 
@@ -2100,5 +2104,5 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, fraudWarning, approveFraudRefund, fraudReviews, revokeByKey, revokeFor, setLimits, notePaymentFailed, sourceTag, badKeyHeld, _internals: { boughtInDayCents, refuseAndRefund, refuseSession, purchasesIn }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, fraudWarning, approveFraudRefund, fraudReviews, revokeByKey, revokeFor, setLimits, notePaymentFailed, sourceTag, badKeyHeld, failedLookup, _internals: { boughtInDayCents, refuseAndRefund, refuseSession, purchasesIn }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }
