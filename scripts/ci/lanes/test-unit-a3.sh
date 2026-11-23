@@ -43,6 +43,7 @@ t node scripts/test-llms-txt.js
 t node scripts/test-llms-link.js
 # Copy about paying on the hosted MCP connector names the wires that boot takes in the call and no other: /llms.txt, /agents.md, /how-to-pay, /quickstart, /learn/mcp-payments, /integrations/mcp and the agent-hosts guide against the connector's own instructions, descriptions, payment.info and first ask, on a paid boot with MPP, a paid boot without, and FREE_MODE; static trees name x402 wherever they name MPP on the connector (three boots, stub facilitator)
 t node scripts/test-connector-pay-copy.js
+t node scripts/test-start-page.js
 # No third-party seller host or counterparty name in any tracked file (hashed list)
 t node scripts/test-no-third-party-names.js
 # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module

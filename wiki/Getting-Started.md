@@ -37,7 +37,7 @@ One file, no install for the free run: the demo discovers the catalog, gets quot
 curl -s https://agent402.tools/demo.js -o demo.js && node demo.js
 ```
 
-To settle in real USDC instead, fund a new EVM wallet on Base (**Use a new wallet holding only a few dollars of USDC. Never your main wallet.**), run `npm i @x402/core @x402/evm @x402/fetch viem` in the same folder as `demo.js`, then `AGENT_KEY=0xYOUR_KEY node demo.js`.
+To settle in real USDC instead, fund a new EVM wallet on Base (**Use a new wallet holding only a few dollars of USDC. Never your main wallet.**), run `npm i @x402/core @x402/evm @x402/fetch viem` in the same folder as `demo.js`, then `AGENT_KEY=0xYOUR_KEY node demo.js`. On Base, an x402 exact payment is a signature (EIP-3009): the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.
 
 ## 4. Pick your integration
 

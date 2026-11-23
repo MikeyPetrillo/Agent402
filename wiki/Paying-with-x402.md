@@ -11,6 +11,8 @@
 
 The payer needs **only USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar, or Algorand** - no ETH, no account, no API key. Agent402 also accepts **USDG on Robinhood Chain** (see [[Robinhood Chain (USDG)|Robinhood-Chain]]).
 
+On Base, an x402 exact payment is a signature (EIP-3009): the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.
+
 ## What the 402 carries
 
 The payment requirements ride in the `PAYMENT-REQUIRED` response header (base64 JSON),
