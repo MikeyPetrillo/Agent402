@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1123 variables in 114 groups.
+1125 variables in 114 groups.
 
 ## Contents
 
@@ -127,8 +127,10 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `AWS_MARKETPLACE_JWKS_EXTRA` | JSON public key (or list) published beside the quote key, for a key rotation. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_PAID_PER_MIN` | Paid requests with a payment not yet accepted for a run, per AWS buyer and per client address, per minute under /aws before a 429 that leaves the payment usable (1 to 100000); an accepted payment is never refused. |  | `src/aws-marketplace-gate.js` |
 | `AWS_MARKETPLACE_PAYMENT_JWKS_URL` | Base URL of the payment service's signing keys (an https AWS host, or loopback for a local test); unset reads AWS's own. |  | `src/aws-marketplace-gate.js` |
 | `AWS_MARKETPLACE_PRODUCT_ID` | The AWS Marketplace product id (prod-...) every quote names; the gate stays off without it. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_QUOTES_PER_MIN` | Unpaid requests (quotes and refusals) one client address (an IPv6 /64) may make under /aws per minute before a 429 (1 to 100000). |  | `src/aws-marketplace-gate.js` |
 | `AWS_MARKETPLACE_QUOTE_KEY` | Private key (PEM, or base64 of the PEM) that signs the quotes of the AWS Marketplace front door under /aws; its presence turns the gate on (a credential, set on the host). |  | `src/aws-marketplace-gate.js` |
 | `AWS_MARKETPLACE_QUOTE_KEY_ID` | Key id (kid) of that quote key, as published at /aws/.well-known/jwks.json. |  | `src/aws-marketplace-gate.js` |
 | `AWS_MARKETPLACE_QUOTE_SECONDS` | How long a quote stays payable, in seconds (30 to 3600). |  | `src/aws-marketplace-gate.js` |

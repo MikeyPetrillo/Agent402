@@ -52,6 +52,7 @@ import { binaryTypesOf } from "./tool-media-type.js";
 import { namesOwnHost } from "./referral-gate.js";
 import { withoutChargeSentences } from "./not-charged.js";
 import { resaleBarredReason } from "./resale-terms.js";
+import { createHash } from "node:crypto";
 
 export const AWS_NETWORK = "aws:base";
 export const AWS_RAIL = "aws";
@@ -61,7 +62,7 @@ export const AWS_JWKS_PATH = "/aws/.well-known/jwks.json";
 /** The first listing: own-code tools with a low failure rate and a fixed price,
  *  each computing its answer from the caller's own input or public data. */
 export const AWS_DEFAULT_SLUGS = Object.freeze(["redact", "sql-guard", "email-guard", "sanctions-name", "sanctions-wallet"]);
-export const AWS_DEFAULTS = Object.freeze({ quoteSeconds: 300, retryMax: 2 });
+export const AWS_DEFAULTS = Object.freeze({ quoteSeconds: 300, retryMax: 2, quotesPerMin: 60, paidPerMin: 120 });
 /** The settings without which the gate stays off. */
 export const AWS_REQUIRED_VARS = Object.freeze(["AWS_MARKETPLACE_QUOTE_KEY", "AWS_MARKETPLACE_QUOTE_KEY_ID", "AWS_MARKETPLACE_PRODUCT_ID"]);
 /** A DPoP proof id is kept this long (the SDK's floor(60 + 5) + 6 for a store that records in `has`). */
@@ -120,6 +121,8 @@ export function awsMarketplaceConfigProblem(env = process.env) {
   if (slugs.some((s) => !SLUG.test(s))) return "AWS_MARKETPLACE_SLUGS names a value that is not a slug";
   if (intKnob(env.AWS_MARKETPLACE_QUOTE_SECONDS, 300, 30, 3600) === null) return "AWS_MARKETPLACE_QUOTE_SECONDS is not a whole number of seconds from 30 to 3600";
   if (intKnob(env.AWS_MARKETPLACE_RETRY_MAX, 2, 0, 5) === null) return "AWS_MARKETPLACE_RETRY_MAX is not a whole number from 0 to 5";
+  if (intKnob(env.AWS_MARKETPLACE_QUOTES_PER_MIN, AWS_DEFAULTS.quotesPerMin, 1, 100_000) === null) return "AWS_MARKETPLACE_QUOTES_PER_MIN is not a whole number from 1 to 100000";
+  if (intKnob(env.AWS_MARKETPLACE_PAID_PER_MIN, AWS_DEFAULTS.paidPerMin, 1, 100_000) === null) return "AWS_MARKETPLACE_PAID_PER_MIN is not a whole number from 1 to 100000";
   if (paymentJwksBase(env.AWS_MARKETPLACE_PAYMENT_JWKS_URL) === undefined) return "AWS_MARKETPLACE_PAYMENT_JWKS_URL is not an https AWS host (or loopback)";
   if (String(env.AWS_MARKETPLACE_JWKS_EXTRA || "").trim()) {
     try { JSON.parse(env.AWS_MARKETPLACE_JWKS_EXTRA); } catch { return "AWS_MARKETPLACE_JWKS_EXTRA is not JSON"; }
@@ -146,6 +149,8 @@ export function awsMarketplaceConfig(env = process.env, { baseUrl = "" } = {}) {
     slugs: Object.freeze([...new Set(listed.length ? listed : AWS_DEFAULT_SLUGS)]),
     quoteSeconds: intKnob(env.AWS_MARKETPLACE_QUOTE_SECONDS, 300, 30, 3600),
     retryMax: intKnob(env.AWS_MARKETPLACE_RETRY_MAX, 2, 0, 5),
+    quotesPerMin: intKnob(env.AWS_MARKETPLACE_QUOTES_PER_MIN, AWS_DEFAULTS.quotesPerMin, 1, 100_000),
+    paidPerMin: intKnob(env.AWS_MARKETPLACE_PAID_PER_MIN, AWS_DEFAULTS.paidPerMin, 1, 100_000),
     paymentJwksUrl: paymentJwksBase(env.AWS_MARKETPLACE_PAYMENT_JWKS_URL) || null,
     extraJwks: Object.freeze(extra),
     serviceUrl: `${origin}${AWS_PREFIX}`,
@@ -271,6 +276,41 @@ export function claimUntilMs(paymentToken, nowMs = Date.now()) {
  *   end(id, { served }) -> { retriesLeft }  (an unserved attempt is given back while attempts remain)
  *   seenProof(jti) -> true when the proof id was already recorded (and records it)
  */
+/**
+ * Per-client rate limits on /aws (one fixed minute window each, in this
+ * process; keys are digests, never the address or the buyer id itself):
+ *   - an unpaid request (a quote or a refusal) per client address (an IPv6
+ *     address by its /64): `quotesPerMin`;
+ *   - a paid request whose payment has not been accepted for a run yet, per
+ *     AWS buyer (the verified token's `sub`) and per client address:
+ *     `paidPerMin` each.
+ * A paid call already accepted (its payment claimed for a run once, a
+ * resend after a failed run included) is never counted against or refused.
+ */
+export function createAwsRateLimits({ quotesPerMin = AWS_DEFAULTS.quotesPerMin, paidPerMin = AWS_DEFAULTS.paidPerMin, now = Date.now, maxKeys = 50_000 } = {}) {
+  const windows = new Map(); // digest -> { start, n }
+  const key = (kind, v) => createHash("sha256").update(`${kind}|${String(v)}`).digest("base64url").slice(0, 22);
+  const hit = (kind, v, limit) => {
+    const t = now();
+    const k = key(kind, v);
+    let w = windows.get(k);
+    if (!w || t - w.start >= 60_000) {
+      if (!w && windows.size >= maxKeys) for (const [wk, ww] of windows) { if (t - ww.start >= 60_000) windows.delete(wk); if (windows.size < maxKeys) break; }
+      if (!w && windows.size >= maxKeys) windows.delete(windows.keys().next().value);
+      w = { start: t, n: 0 };
+      windows.set(k, w);
+    }
+    w.n += 1;
+    return w.n > limit ? Math.max(1, Math.ceil((w.start + 60_000 - t) / 1000)) : 0;
+  };
+  return {
+    /** Seconds to wait (0: go on) for an unpaid request from `client`. */
+    quote: (client) => hit("q", client, quotesPerMin),
+    /** Seconds to wait (0: go on) for a paid request not yet accepted. */
+    paid: (client, buyer) => Math.max(hit("pc", client, paidPerMin), buyer ? hit("pb", buyer, paidPerMin) : 0),
+  };
+}
+
 export function createAwsPaymentClaims({ getClient = async () => null, now = Date.now, prefix = "aws-mp:", log = (m) => console.warn(m) } = {}) {
   const local = new Map(); // key -> { value, until }
   let lastLog = 0;
@@ -321,6 +361,13 @@ export function createAwsPaymentClaims({ getClient = async () => null, now = Dat
       if (c) { try { await c.del(lock); } catch (e) { degraded("release", e); } }
       return { retriesLeft: left };
     },
+    /** Whether this payment was accepted before (claimed for a run at least once). */
+    async accepted(id) {
+      const count = `${prefix}n:${String(id)}`;
+      const c = await client();
+      if (c) { try { return Number(await c.get(count)) > 0; } catch (e) { degraded("read", e); } }
+      return Number(lget(count)) > 0;
+    },
     async seenProof(jti) {
       const k = `${prefix}d:${String(jti)}`;
       const c = await client();
@@ -370,7 +417,8 @@ export function awsRouteTable(config, defs) {
 export async function createAwsMarketplaceGate({
   config, defs, claims,
   recordSale, preValidate = () => null, runAsCaller = (_req, fn) => fn(), handlerInputOf = (req) => (req.method === "GET" ? { ...(req.query || {}) } : (req.body && typeof req.body === "object" ? req.body : {})),
-  isSynthetic = () => false, redact = (s) => s, ownHosts = [], onServed = null, onToolError = null,
+  isSynthetic = () => false, redact = (s) => s, ownHosts = [], ownPaths = [], onServed = null, onToolError = null,
+  clientKey = (req) => String(req.ip || ""), rateLimits = null,
   sdk = null, core = null, express = null, now = Date.now, log = (m) => console.warn(m),
 }) {
   if (!config || !defs || !defs.size || !claims || typeof recordSale !== "function") throw new Error("aws gate: missing a dependency");
@@ -401,7 +449,7 @@ export async function createAwsMarketplaceGate({
       if (!req || !result?.isValid) return undefined;
       const id = result.extra?.paymentId;
       if (typeof id !== "string" || !id) return { abort: true, reason: "invalid_payment", message: "The payment carries no payment id." };
-      req.__awsPayment = { paymentId: id, untilMs: claimUntilMs(ctx.paymentPayload?.payload?.paymentToken, now()) };
+      req.__awsPayment = { paymentId: id, buyer: typeof result.payer === "string" && result.payer ? result.payer : null, untilMs: claimUntilMs(ctx.paymentPayload?.payload?.paymentToken, now()) };
     } catch { return { abort: true, reason: "invalid_payment", message: "The payment could not be read." }; }
     return undefined;
   });
@@ -410,17 +458,42 @@ export async function createAwsMarketplaceGate({
   await httpServer.initialize();
   const mw = X.paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false);
 
-  const counters = { quotes: 0, refusedInput: 0, paidRuns: 0, served: 0, replayed: 0, failedAttempts: 0, chargedWithoutAnswer: 0, booked: 0 };
+  const counters = { quotes: 0, refusedInput: 0, paidRuns: 0, served: 0, replayed: 0, failedAttempts: 0, chargedWithoutAnswer: 0, booked: 0, limitedUnpaid: 0, limitedPaid: 0 };
+  const limits = rateLimits || createAwsRateLimits({ quotesPerMin: config.quotesPerMin, paidPerMin: config.paidPerMin, now });
+  const tooMany = (res, slug, wait, paid) => {
+    res.set("Retry-After", String(wait));
+    return res.status(429).json({
+      error: paid ? "Too many paid requests from this client in the last minute." : "Too many requests from this client in the last minute.",
+      errorReason: "rate_limited", tool: slug, retryAfterSeconds: wait,
+      ...(paid ? { paymentUsed: false, note: "This payment was not used. Send the request again with the same payment after Retry-After, while it is valid." } : {}),
+    });
+  };
   const failedLog = [];
-  const notePointers = (s) => typeof s === "string" && ownHosts.some((h) => h && s.toLowerCase().includes(String(h).toLowerCase()));
-  const clean = (value, depth = 0) => {
-    if (typeof value === "string") return notePointers(value) ? undefined : value;
-    if (!value || typeof value !== "object" || depth > 6) return value;
-    if (Array.isArray(value)) return value.map((v) => clean(v, depth + 1)).filter((v) => v !== undefined);
-    const out = {};
-    for (const [k, v] of Object.entries(value)) { if (k === "howToCall") continue; const w = clean(v, depth + 1); if (w !== undefined) out[k] = w; }
+  // A pointer at this server's other surfaces: its host, or a path one of
+  // its direct routes answers on (`POST /api/sql-cert-verify`, `/mcp`). A
+  // path is read as a whole token, so a word that merely starts like one is not.
+  const hostsLc = ownHosts.map((h) => String(h || "").toLowerCase()).filter(Boolean);
+  const pathSet = new Set(ownPaths.map((p) => String(p || "").toLowerCase().replace(/\/+$/, "")).filter((p) => p.startsWith("/")));
+  const PATH_TOKEN = /(?:^|[\s"'`(,;:=])(\/[A-Za-z0-9._~\-/]{1,200})/g;
+  const pointersIn = (s) => {
+    if (typeof s !== "string" || !s) return [];
+    const lc = s.toLowerCase();
+    const out = hostsLc.filter((h) => lc.includes(h));
+    if (pathSet.size) for (const m of lc.matchAll(PATH_TOKEN)) { const p = m[1].replace(/[.,;:]+$/, "").replace(/\/+$/, ""); if (pathSet.has(p)) out.push(p); }
     return out;
   };
+  const notePointers = (s) => pointersIn(s).length > 0;
+  // `given`: the caller's own input as text; a pointer the caller sent (a
+  // path in the text it asked about) is its own content, not ours, and stays.
+  const clean = (value, depth = 0, given = "") => {
+    if (typeof value === "string") return pointersIn(value).some((p) => !given.includes(p)) ? undefined : value;
+    if (!value || typeof value !== "object" || depth > 6) return value;
+    if (Array.isArray(value)) return value.map((v) => clean(v, depth + 1, given)).filter((v) => v !== undefined);
+    const out = {};
+    for (const [k, v] of Object.entries(value)) { if (k === "howToCall") continue; const w = clean(v, depth + 1, given); if (w !== undefined) out[k] = w; }
+    return out;
+  };
+  const inputText = (input) => { try { return JSON.stringify(input ?? null).toLowerCase(); } catch { return ""; } };
   // The payment was taken before the handler ran, so a handler's "nothing was
   // charged" is dropped: the body's paymentUsed and note state the payment.
   const errorText = (msg) => { const t = String(redact(withoutChargeSentences(String(msg || ""))) || "").slice(0, 600); return t && !notePointers(t) ? t : "The request could not be completed."; };
@@ -434,6 +507,13 @@ export async function createAwsMarketplaceGate({
       counters.refusedInput++;
       res.status(bad.status || 400).json({ ...clean(bad.body || {}), error: errorText(bad.body?.error), tool: def.slug, paymentUsed: false, note: "This payment was not used. Correct the input and send the request again with the same payment while it is valid." });
       return;
+    }
+    // A payment not accepted before meets the per-buyer and per-address
+    // limits; one already accepted (a resend after a failed run) never does.
+    const known = await (async () => { try { return typeof claims.accepted === "function" && await claims.accepted(pay.paymentId); } catch { return false; } })();
+    if (!known) {
+      const wait = limits.paid(clientKey(req), pay.buyer);
+      if (wait > 0) { counters.limitedPaid++; tooMany(res, def.slug, wait, true); return; }
     }
     const verdict = await claims.begin(pay.paymentId, pay.untilMs, config.retryMax);
     if (verdict !== "ok") {
@@ -473,7 +553,10 @@ export async function createAwsMarketplaceGate({
       const input = handlerInputOf(req, def);
       result = await runAsCaller(req, () => def.handler(input, req));
       if (result && (result.__binary || typeof result.__sse === "function")) throw Object.assign(new Error("This tool's answer cannot be served on this route."), { statusCode: 500 });
-      const text = JSON.stringify(result === undefined ? null : result);
+      // The answer goes out without a pointer at this server's other surfaces
+      // (a field naming a direct route, such as a verify step, is dropped);
+      // text the caller sent is its own and stays.
+      const text = JSON.stringify(result === undefined ? null : clean(result, 0, inputText(input)));
       if (typeof text !== "string") throw Object.assign(new Error("The answer could not be serialized."), { statusCode: 500 });
       res.status(200).type("application/json").send(text);
     } catch (err) {
@@ -499,6 +582,8 @@ export async function createAwsMarketplaceGate({
     // An unpaid HEAD never reaches the paid route, and no other method does either.
     if (req.method !== method) { res.set("Allow", method); return res.status(405).json({ error: `Use ${method}.`, tool: slug }); }
     if (!carriesPayment(req)) {
+      const wait = limits.quote(clientKey(req));
+      if (wait > 0) { counters.limitedUnpaid++; return tooMany(res, slug, wait, false); }
       // A request that carries an input this server refuses gets the refusal,
       // not a quote: nothing is paid for a call that could not run.
       let input = null;
