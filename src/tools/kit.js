@@ -30,6 +30,7 @@ import QRCode from "qrcode";
 import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE, isTransientLookupError, lookupUnavailable, resolveHostAddress } from "./fetch-guard.js";
 import { assertRobotsAllow } from "./robots-gate.js";
 import { jsonLeafBytes, jsonStringBytes } from "../json-bytes.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 const REGEX_WORKER_DEFAULT = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
 let REGEX_WORKER = REGEX_WORKER_DEFAULT;
@@ -2656,3 +2657,6 @@ const networkTools = [
 markEndsAtCeiling(networkTools, ["http-check", "tls-cert", "whois", "robots-check", "sitemap"]);
 markEndsAtCeiling(validationTools, ["ip-info"]);
 export const KIT = [...encodingTools, ...dataTools, ...textTools, ...timeTools, ...validationTools, ...networkTools];
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(KIT, ["ip-info", "tls-cert"], "DNS and TLS protocol answers");

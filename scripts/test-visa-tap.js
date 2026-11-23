@@ -194,6 +194,50 @@ const check = (v, t) => v.checkTap(t.req, Buffer.from(t.body));
   ok(fetched.length === before + 1 && (await check(v, tap())).verified === true, `after a flood of unknown keys, the known key is still read again and verifies (${fetched.length - before} read)`);
 }
 
+// A forged signature under a real key id never evicts that key or spends a registry read.
+{
+  const { v, fetched } = verifier();
+  await check(v, tap()); await tick();
+  ok((await check(v, tap())).verified === true, "setup: a real key verifies");
+  const reads = fetched.length;
+  clock += 6_000;
+  let forged = 0;
+  for (let i = 0; i < 20; i++) { if ((await check(v, tap({ key: other.privateKey }))).reason === "tap-bad-signature") forged++; await tick(); }
+  const real = await check(v, tap());
+  ok(forged === 20 && real.verified === true && fetched.length === reads, `forged signatures under a real key id leave the key cached: the real agent still verifies at once, with no registry read (${real.reason || "verified"}, ${fetched.length - reads} reads)`);
+}
+// Keys the registry lists but that never verified a signature here share the
+// unknown keys' half of the minute's reads, so they cannot starve the refresh
+// of a key that verified.
+{
+  const listed = Array.from({ length: wba.TAP_FETCH_PER_MIN }, () => generateKeyPairSync("ed25519"));
+  const listedIds = listed.map((k) => wba.ed25519Thumbprint(k.publicKey.export({ format: "jwk" }).x));
+  const listings = { [JKT]: listing() };
+  listed.forEach((k, i) => { listings[listedIds[i]] = listing({ jkt: listedIds[i], key: k.publicKey }); });
+  const { v, fetched } = verifier({ listings });
+  await check(v, tap()); await tick();
+  ok((await check(v, tap())).verified === true, "setup: a key verifies");
+  // First sight of each listed key (spread over minutes so each is read once), then never a good signature.
+  for (let i = 0; i < listedIds.length; i++) { if (i % 10 === 0) clock += 60_001; await check(v, tap({ keyid: listedIds[i], key: other.privateKey })); await tick(); }
+  clock += 60_001; // every entry is stale now, the verified key's too
+  for (let i = 0; i < listedIds.length; i++) { await check(v, tap({ keyid: listedIds[i], key: other.privateKey })); await tick(); }
+  const before = fetched.length;
+  await check(v, tap()); await tick();
+  ok(fetched.length === before + 1 && (await check(v, tap())).verified === true, `listed keys that never verified cannot spend the reads a verified key's refresh needs (${fetched.length - before} read)`);
+}
+// A full key cache gives up an entry that never verified a signature (a miss,
+// or a listed key never used) before it gives up a key that did.
+{
+  const { v } = verifier();
+  await check(v, tap()); await tick();
+  ok((await check(v, tap())).verified === true && v._tapKeys.keys().next().value === JKT, "setup: a verified key, the oldest entry in the cache");
+  for (let i = 0; v._tapKeys.size < 500; i++) v._tapKeys.set(`miss-${i}`, { entry: null, exp: clock + 60_000, at: clock });
+  const fresh = wba.ed25519Thumbprint(generateKeyPairSync("ed25519").publicKey.export({ format: "jwk" }).x);
+  await check(v, tap({ keyid: fresh })); await tick();
+  const r = await check(v, tap());
+  ok(v._tapKeys.size === 500 && v._tapKeys.has(fresh) && r.verified === true, `a full cache takes a new key id without evicting the verified key (${r.reason || "verified"})`);
+}
+
 // --- the middleware: a passive tap on the body, never refusing --------------------
 {
   const express = (await import("express")).default;

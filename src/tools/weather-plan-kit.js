@@ -6,6 +6,7 @@
 import { markEndsAtCeiling } from "../run-ceiling.js";
 import { OPEN_METEO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 import { bad, openMeteoJson, resolveLocation, locationFields, tempUnitOf, LOCATION_PROPERTIES, cacheNote } from "./weather-kit.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 export const PLAN_SOURCE = "computed from Open-Meteo forecast data, api.open-meteo.com (CC BY 4.0)";
 export const MAX_RULES = 8;
@@ -327,3 +328,6 @@ export const WEATHER_PLAN_TOOLS = [
 // its data: every answer of these tools carries them (src/data-attribution.js).
 openMeteoLicensed(WEATHER_PLAN_TOOLS);
 markEndsAtCeiling(WEATHER_PLAN_TOOLS, ["weather-thresholds", "weather-window"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(WEATHER_PLAN_TOOLS, ["weather-window", "weather-thresholds"], "Open-Meteo commercial plan, CC BY 4.0");

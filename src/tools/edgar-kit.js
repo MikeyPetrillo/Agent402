@@ -20,6 +20,7 @@
 import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, currentBudget, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { dataSetsIndex, dataSetHead } from "./edgar-13f-datasets.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 // Hard per-request socket bound for every EDGAR read (undici defaults to 300 s).
 const EDGAR_FETCH_TIMEOUT_MS = Math.max(2_000, parseInt(process.env.EDGAR_FETCH_TIMEOUT_MS || "12000", 10) || 12_000);
@@ -1429,3 +1430,6 @@ export { resolveCompany, eftsSearch, fetchXmlText, edgarGetJson, parse13fInforma
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(EDGAR_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(EDGAR_TOOLS, ["edgar-13f-dataset-head", "edgar-13f-datasets", "edgar-13f-holdings", "edgar-company-concept", "edgar-company-facts", "edgar-company-lookup", "edgar-filings", "edgar-recent-ipos", "edgar-search", "edgar-xbrl-frame", "edgar-insider-trades"], "SEC EDGAR public filings");

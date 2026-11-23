@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1123 variables in 113 groups.
+1126 variables in 113 groups.
 
 ## Contents
 
@@ -530,6 +530,8 @@ holds it.
 | `HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS` | Network reads a day by the multichain wallet transfers tool, one per network a call asks for (default 30000; off disables, 0 refuses all). |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_BRAVE_CALLS` | Hardcap brave calls. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_OPENAI_CALLS` | Hardcap openai calls. |  | `src/upstream-hard-caps.js` |
+| `HARDCAP_REFUSED_RELEASES_PER_CALLER_HOUR` | Units one caller may give back to a ceiling in an hour for calls the upstream refused before any work (a 4xx); past it the refused call counts (default 30). |  | `src/upstream-hard-caps.js` |
+| `HARDCAP_REFUSED_RELEASES_PER_HOUR` | Units an upstream's ceiling gives back in an hour for calls it refused before any work, across callers; past it the refused call counts (default 600). |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_SYNC_MS` | Hardcap sync, in milliseconds. |  | `src/upstream-hard-caps.js` |
 
 ## HTML
@@ -1676,6 +1678,7 @@ holds it.
 | `REPRICE_MAX_PER_CALL` | Reprice maximum per call. | `120` | `src/x402-index.js` |
 | `REPUTATION_RECHECK_GLOBAL_HOUR` | Seller reputation re-check requests accepted per hour across all callers. | `300` | `src/server.js` |
 | `REPUTATION_RECHECK_PER_IP_HOUR` | Seller reputation re-check requests one caller may send per hour. | `10` | `src/server.js` |
+| `RESALE_CLEARED_FOR_TEST` | Test suites only, never read in production: slugs a test boot treats as cleared for resale through a third party (comma list). |  | `src/resale-terms.js` |
 | `RESEARCH_DEBUG` | Research debug. |  | `src/tools/domain-audit-kit.js`, `src/tools/dossier-kit.js`, `src/tools/fund-report-kit.js` and 4 more |
 | `RESEND_API_KEY` | Resend API key (a credential, set on the host). |  | `src/email.js` |
 | `ROUTABLE_SUMMARY_TTL_MS` | Routable summary lifetime, in milliseconds. |  | `src/x402-index.js` |

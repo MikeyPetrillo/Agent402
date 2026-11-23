@@ -51,7 +51,7 @@
 import { binaryTypesOf } from "./tool-media-type.js";
 import { namesOwnHost } from "./referral-gate.js";
 import { withoutChargeSentences } from "./not-charged.js";
-import { resaleBarredReason, refAnswerOf } from "./resale-terms.js";
+import { resaleBarredReason, resaleClearanceRefusal, refAnswerOf } from "./resale-terms.js";
 import { createHash } from "node:crypto";
 import { AWS_LISTING_SLUGS } from "./aws-listing.js";
 import { createAwsUnansweredBook } from "./aws-unanswered.js";
@@ -201,7 +201,7 @@ const hasPriceFn = (def) => typeof def?.quote === "function" || typeof def?.tier
 /**
  * Why a catalog definition cannot be sold here, or null. `flags` are the
  * server's readings: identityBound, lastingEffect, paysThirdParty,
- * longRunning, modelBacked, chatTier.
+ * longRunning, modelBacked, chatTier, compute (reaches no upstream).
  */
 export function awsIneligibility(def, flags = {}, { ownHosts = [] } = {}) {
   if (!def || typeof def !== "object") return "not in the catalog";
@@ -213,6 +213,10 @@ export function awsIneligibility(def, flags = {}, { ownHosts = [] } = {}) {
   if (resaleBarred) return resaleBarred;
   const urlFields = callerUrlFields(def);
   if (urlFields.length) return `fetches third-party content from a URL the caller names (${urlFields.slice(0, 3).join(", ")})`;
+  // Then sold only when its upstream terms are cleared for resale through a
+  // third party, or it reaches none (resaleClearanceRefusal).
+  const resaleRefused = resaleClearanceRefusal(def, { compute: flags.compute === true });
+  if (resaleRefused) return resaleRefused;
   if (typeof def.handler !== "function") return "in the catalog but has no handler";
   const method = String(def.route || "").split(" ")[0];
   if (method !== "GET" && method !== "POST") return "not a GET or POST route";

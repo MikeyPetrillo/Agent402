@@ -17,6 +17,7 @@ import { validateAgentCard, A2A_WELL_KNOWN_PATHS } from "./a2a-card.js";
 import { assertQueryableName, canonicalDnsName } from "./dns-name-filter.js";
 import { dnsLookup, SUPPORTED as DNS_RECORD_TYPES } from "./dns.js";
 import { markEndsAtCeiling } from "../run-ceiling.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -874,3 +875,6 @@ export const NETWORK_TOOLS = [
 // (src/tools/dns.js), and nothing starts after it. A caller that stops
 // waiting at a deadline (the referral gate) can serve it.
 markEndsAtCeiling(NETWORK_TOOLS, ["dns"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(NETWORK_TOOLS, ["dns"], "DNS protocol answers");

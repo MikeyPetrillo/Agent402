@@ -28,6 +28,7 @@ import { attribute, FEMA_NOTICE } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { partialFields, clampFields } from "../partial-answer.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -1420,3 +1421,12 @@ export const GOV_TOOLS = [
 attribute(GOV_TOOLS.find((t) => t.slug === "fema-disasters"), "fema");
 
 markEndsAtCeiling(GOV_TOOLS, ["device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-orange-book", "drug-recalls", "drug-shortages", "earthquakes", "fec-candidates", "federal-awards", "fema-disasters", "food-recalls", "geo-lookup", "vehicle-recalls", "vin-decode", "weather-alerts"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(GOV_TOOLS, ["weather-alerts"], "National Weather Service");
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(GOV_TOOLS, ["drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "device-510k", "device-adverse-events", "device-recalls", "food-recalls"], "openFDA, CC0");
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(GOV_TOOLS, ["vin-decode", "vehicle-recalls", "earthquakes", "fema-disasters", "fec-candidates", "federal-awards", "geo-lookup"], "US government public data");

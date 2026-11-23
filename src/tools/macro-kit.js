@@ -26,6 +26,7 @@ import { attribute, US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION,
 import { notChargedOn } from "../not-charged.js";
 import { useHeldTreasuryYields, usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
 // weather-kit.js too, not just here) — re-exported so this file's own
@@ -1087,3 +1088,6 @@ export function carryCalendarDays(daily, days) {
 // run's ceiling when one is set (src/run-ceiling.js): a caller that stops
 // waiting at a deadline of its own can serve them.
 markEndsAtCeiling(MACRO_TOOLS, ["treasury-avg-rates", "treasury-debt", "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(MACRO_TOOLS, ["treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "treasury-debt", "treasury-avg-rates"], "US Treasury public data");

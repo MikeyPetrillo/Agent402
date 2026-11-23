@@ -23,7 +23,8 @@
 //     would capture buyer-supplied inputs (a render target, a search query),
 //     which is customer data we have no reason to hold
 //   * bounded memory: hosts are capped, and the counter resets daily
-import { hardCapRefusalForHost, hardCapNameForHost, releaseHardCap, neverReachedUpstream, upstreamRefusedBeforeWork } from "./upstream-hard-caps.js";
+import { hardCapRefusalForHost, hardCapNameForHost, releaseHardCap, releaseHardCapRefused, neverReachedUpstream, upstreamRefusedBeforeWork } from "./upstream-hard-caps.js";
+import { currentDispatchCaller } from "./dispatch-caller.js";
 import { CALLER_COUNTED, egressCallerLabel, noteUpstreamCall } from "./upstream-call-days.js";
 
 const MAX_HOSTS = 2000;          // far above the ~1,300 seen in a census run
@@ -191,11 +192,15 @@ export function installEgressMeter() {
       const p = origFetch.apply(this, arguments);
       // The ceiling counts calls the upstream may have served: one that
       // provably never left this process, or that the upstream answered with a
-      // 4xx refusal, gives its unit back. The caller's promise is untouched
+      // 4xx refusal (within the hourly bounds), gives its unit back. The caller's promise is untouched
       // (this branch handles its own rejection).
       if (capName) {
+        // The caller is read now, in the call's own async context; a 4xx
+        // give-back is bounded per caller (releaseHardCapRefused).
+        let caller = null;
+        try { caller = currentDispatchCaller(); } catch { caller = null; }
         p.then((res) => {
-          try { if (upstreamRefusedBeforeWork(res)) releaseHardCap(capName, takenAt); } catch { /* the guard never breaks a call */ }
+          try { if (upstreamRefusedBeforeWork(res)) releaseHardCapRefused(capName, takenAt, { caller }); } catch { /* the guard never breaks a call */ }
         }, (err) => {
           try { if (neverReachedUpstream(err, { abortedAtCall })) releaseHardCap(capName, takenAt); } catch { /* the guard never breaks a call */ }
         });

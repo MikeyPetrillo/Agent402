@@ -99,8 +99,11 @@ const DEFS = {
   "POST /api/binary": { route: "POST /api/binary", slug: "binary", name: "Binary", category: "media", price: "$0.002", mimeType: "image/png", description: "Bytes.", discovery: { input: {} }, handler: async () => ({}) },
   "POST /api/ident": { route: "POST /api/ident", slug: "ident", name: "Ident", category: "memory", price: "$0.002", description: "Wallet memory.", discovery: { input: {} }, handler: async () => ({}) },
 };
+// The stand-in tools are cleared for resale through a third party (src/resale-terms.js).
+for (const d of Object.values(DEFS)) d.resaleCleared = true;
 {
   ok(awsIneligibility(DEFS["POST /api/echo"]) === null, "a fixed-price JSON tool is eligible");
+  ok(/not cleared for resale/.test(awsIneligibility({ ...DEFS["POST /api/echo"], resaleCleared: undefined })) && awsIneligibility({ ...DEFS["POST /api/echo"], resaleCleared: undefined }, { compute: true }) === null, "a tool whose upstream terms are not cleared is refused; one that reaches no upstream needs no clearance");
   ok(/identity-bound/.test(awsIneligibility(DEFS["POST /api/ident"], { identityBound: true })), "an identity-bound route is refused");
   ok(/bytes/.test(awsIneligibility(DEFS["POST /api/binary"])), "a tool that answers bytes is refused");
   ok(/model/.test(awsIneligibility({ ...DEFS["POST /api/echo"], modelBacked: true })), "a model-backed tool is refused");
@@ -141,7 +144,9 @@ const DEFS = {
   // and checked served by scripts/test-aws-start-page.js.
   const guards = ["redact", "sql-guard", "email-guard", "sanctions-name", "sanctions-wallet"];
   ok(guards.every((s) => AWS_DEFAULT_SLUGS.includes(s)), "the default listing holds the five guards");
-  for (const slug of guards) ok(real.has(slug) && awsIneligibility(real.get(slug)) === null, `default ${slug}: its real definition passes the boot checks`);
+  // The server's own compute reading (src/pow.js), as the boot passes it.
+  const { isComputePayable } = await import("../src/pow.js");
+  for (const slug of guards) ok(real.has(slug) && awsIneligibility(real.get(slug), { compute: isComputePayable(real.get(slug)) }) === null, `default ${slug}: its real definition passes the boot checks`);
   ok(/third-party content from a URL the caller names \(url\)/.test(awsIneligibility(real.get("pdf-to-markdown")) || ""), "pdf-to-markdown's real definition is refused: it reads a caller-named URL");
 }
 

@@ -187,6 +187,40 @@ installEgressMeter();
     ok(await settled(0) === 0, `an upstream refusal of ${status} served nothing and is not counted (used ${used()})`);
   }
   ok(hardCapStatus().upstreams.brave.releasedToday === releasedBefore + 9, "each refusal's unit shows as given back on the operator view");
+  // The 4xx give-backs are bounded, per caller and per cap, each per hour: a
+  // caller who sends inputs the upstream refuses cannot make calls the
+  // ceiling never counts. Past a bound the unit is kept.
+  {
+    const { runAsCallerOf } = await import("../src/dispatch-caller.js");
+    const asCaller = (ip, fn) => runAsCallerOf({ ip, headers: {} }, fn);
+    _resetHardCaps();
+    process.env.HARDCAP_REFUSED_RELEASES_PER_CALLER_HOUR = "3";
+    process.env.HARDCAP_REFUSED_RELEASES_PER_HOUR = "5";
+    inner = async () => new Response("{}", { status: 400 });
+    for (let i = 0; i < 5; i++) await asCaller("198.51.100.1", () => call());
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    ok(used() === 2, `one caller's refused calls give back at most its hourly share; the rest are counted (used ${used()} of 5)`);
+    for (let i = 0; i < 3; i++) await asCaller("198.51.100.2", () => call());
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    ok(used() === 3, `the cap's own hourly bound holds across callers (used ${used()}: 2 + 1 of 3)`);
+    inner = async () => { throw fetchFailed("ECONNREFUSED"); };
+    for (let i = 0; i < 4; i++) await asCaller("198.51.100.1", () => call());
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    ok(used() === 3, `a call that never left this process is still given back past the bound (used ${used()})`);
+    ok(hardCapStatus().upstreams.brave.refusedReleasesKept === 3, `the units kept past the bound are counted on the operator view (${hardCapStatus().upstreams.brave.refusedReleasesKept})`);
+    // The direct reading, across the hour.
+    const { releaseHardCapRefused } = await import("../src/upstream-hard-caps.js");
+    _resetHardCaps();
+    const H0 = Date.UTC(2026, 10, 23, 10, 5);
+    for (let i = 0; i < 4; i++) takeHardCap("brave", H0);
+    const got = [0, 1, 2, 3].map(() => releaseHardCapRefused("brave", H0, { caller: "payer:a", now: H0 }));
+    ok(got.join() === "true,true,true,false" && hardCapStatus(H0).upstreams.brave.usedToday === 1, `a caller gives back three in the hour, the fourth keeps its unit (${got.join()})`);
+    takeHardCap("brave", H0 + 3_600_000);
+    ok(releaseHardCapRefused("brave", H0 + 3_600_000, { caller: "payer:a", now: H0 + 3_600_000 }) === true, "the next hour, the same caller gives back again");
+    delete process.env.HARDCAP_REFUSED_RELEASES_PER_CALLER_HOUR;
+    delete process.env.HARDCAP_REFUSED_RELEASES_PER_HOUR;
+    _resetHardCaps();
+  }
   // Everything below MAY have been served: each keeps its unit.
   let want = 0;
   for (const status of [200, 201, 204, 302, 500, 502, 503]) {

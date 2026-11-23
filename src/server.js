@@ -89,7 +89,7 @@ import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst
 import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
 import { admitServedFirst, noteUnsettledRunCost, runUpstreamUsdOf, bindRunScope } from "./settle-first-meter.js";
 import { installSettledFirstBody } from "./settle-first-body.js";
-import { settleFirstPaymentKindOf, settleVerifiedPaymentFirst, exactPaymentRequiredAnswer } from "./payments.js";
+import { settleFirstPaymentKindOf, settleVerifiedPaymentFirst, exactPaymentRequiredAnswer, blockedPayerFromPayload } from "./payments.js";
 import { allowanceOf } from "./allowance-state.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
 // composites (settle-after on SVM/AVM/Tempo is work done, never charged), but
@@ -2860,6 +2860,8 @@ const AWS_ROUTES = AWS_CONFIG ? awsRoutes(AWS_CONFIG, CATALOG, (def) => ({
   longRunning: isLongRunningSlug(def.slug),
   modelBacked: isModelBacked(def),
   chatTier: isChatTierDef(def),
+  // Reaches no upstream: nothing to clear for resale (src/resale-terms.js).
+  compute: isComputePayable(def),
 }), { ownHosts: REFERRAL_OWN_HOSTS }) : null;
 if (AWS_ROUTES) {
   for (const r of AWS_ROUTES.refused) console.warn(`[aws-marketplace] ${r.slug} is not served under /aws: ${r.reason}`);
@@ -11921,7 +11923,8 @@ app.use(async (req, res, next) => {
 // answer, as on a direct route). It calls the tool's handler itself, with
 // the same input object and caller scope as the dispatcher, and uses the
 // direct routes' own machinery where a rule is shared: the payer screen
-// before serving, the refused-credential limiter, the paid-quote trust a settled call earns, the
+// before serving (strict here: no list loaded refuses, and WALLET_BLOCKLIST
+// applies before the handler), the refused-credential limiter, the paid-quote trust a settled call earns, the
 // payment-window clamp and the handler-budget ceiling that end upstream work
 // at its deadline. What it keeps apart: its replay guard is its own
 // instance; a run is marked for the settle breaker's other lane, so the
@@ -11934,7 +11937,10 @@ app.use(async (req, res, next) => {
 // against the chain; its status word (referralSettlement on
 // /api/gateway-status) is paged on by the heartbeat and the status Worker. Operator view:
 // /__operator/referral.json.
-const referralPayerScreen = createX402PayerScreen();
+// The strict screen (src/x402-payer-screen.js): a sale through a third
+// party's marketplace is never served unscreened (no list loaded: 503, nothing
+// runs), and a payer on WALLET_BLOCKLIST is refused before the handler.
+const referralPayerScreen = createX402PayerScreen({ noList: "refuse", blockedPayerOf: blockedPayerFromPayload });
 // A referral sale is a sale of the tool (owner's decision, 2026-11-14): the
 // gate books it once per payment on the private rail "referral" (the sales
 // ledger's public figures count that row at the gross, src/paid-rails.js),

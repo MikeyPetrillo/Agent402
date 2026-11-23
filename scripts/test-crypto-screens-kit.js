@@ -737,5 +737,37 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
 ok(answered.size === SLUGS.length, `every tool answered at least once here (${answered.size}/${SLUGS.length})`);
 ok(uncredited.length === 0, `every answer carried the source credit${uncredited.length ? ` (missing on ${[...new Set(uncredited)].join(", ")})` : ""}`);
 
+// The /ref copy (src/referral-gate.js through refAnswerOf only) drops the
+// source's own figures from three screens and keeps every computed field and
+// the credit; the public route's answer is untouched.
+{
+  const { refAnswerOf } = await import("../src/resale-terms.js");
+  const def = (slug) => CRYPTO_SCREENS_TOOLS.find((t) => t.slug === slug);
+  const ex = (slug) => structuredClone(def(slug).discovery.output.example);
+  const RAW = {
+    "exchange-spread": { top: ["medianPriceUsd", "volumeWeightedPriceUsd"] },
+    "dex-pool-health": { top: ["liquidityUsd", "volume24hUsd", "activity24h"] },
+    "funding-screener": { rows: ["highest", "lowest"], perRow: ["fundingPct", "basisPct"] },
+  };
+  for (const [slug, raw] of Object.entries(RAW)) {
+    const pub = ex(slug);
+    const pubText = JSON.stringify(pub);
+    const ref = refAnswerOf(def(slug), pub);
+    const present = (raw.top || []).every((k) => Object.hasOwn(pub, k)) && (raw.rows || []).every((r) => pub[r].every((row) => raw.perRow.every((k) => Object.hasOwn(row, k))));
+    const gone = (raw.top || []).every((k) => !Object.hasOwn(ref, k)) && (raw.rows || []).every((r) => Array.isArray(ref[r]) && ref[r].length === pub[r].length && ref[r].every((row) => raw.perRow.every((k) => !Object.hasOwn(row, k))));
+    ok(typeof def(slug).refAnswer === "function" && present && gone, `${slug}: the /ref answer drops the source's own figures (${[...(raw.top || []), ...(raw.perRow || [])].join(", ")})`);
+    const kept = Object.keys(pub).filter((k) => !(raw.top || []).includes(k)).every((k) => Object.hasOwn(ref, k)) && ref.credit === COINGECKO_CREDIT;
+    ok(kept && JSON.stringify(pub) === pubText, `${slug}: every other field and the credit are kept, and the answer it was given is unchanged`);
+  }
+  {
+    const pub = ex("funding-screener");
+    const ref = refAnswerOf(def("funding-screener"), pub);
+    ok(ref.highest[0].vsMedianPct === pub.highest[0].vsMedianPct && ref.highest[0].openInterestSharePct === pub.highest[0].openInterestSharePct && ref.funding.medianPct === pub.funding.medianPct && ref.basis.oiWeightedPct === pub.basis.oiWeightedPct, "funding-screener: the computed per-venue and aggregate fields stay");
+    const board = { mode: "board", coins: [{ rank: 1, coin: "BTC", oiWeightedFundingPct: 0.01 }], credit: COINGECKO_CREDIT };
+    ok(JSON.stringify(refAnswerOf(def("funding-screener"), board)) === JSON.stringify(board), "funding-screener: a board answer (aggregates only) passes as it is");
+  }
+  for (const odd of [null, "x", { error: "e" }]) ok(JSON.stringify(refAnswerOf(def("dex-pool-health"), odd)) === JSON.stringify(odd) && JSON.stringify(refAnswerOf(def("funding-screener"), odd)) === JSON.stringify(odd), `an answer of another shape passes as it is (${JSON.stringify(odd)})`);
+}
+
 console.log(`\ntest-crypto-screens-kit: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

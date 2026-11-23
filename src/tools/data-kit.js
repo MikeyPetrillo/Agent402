@@ -21,7 +21,7 @@ import { ratesUrl, latestShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavai
 import { attribute, OPEN_FOOD_FACTS_SOURCE, OPEN_FOOD_FACTS_LICENSE, openFoodFactsProductUrl, COUNTRIES_ODBL_NOTICE, countriesDatabaseUrl } from "../data-attribution.js";
 import { DATA_UA } from "../user-agents.js";
 import { notChargedOn } from "../not-charged.js";
-import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON } from "../resale-terms.js";
+import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON, markResaleCleared } from "../resale-terms.js";
 import { publicHolidaysCompat, HOLIDAY_HOSTS, parseCountry, parseYear, parseSubdivision, parseTypes, appliesIn, hasAnyType } from "./holiday-source.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
@@ -373,3 +373,9 @@ markEndsAtCeiling(DATA_TOOLS, ["fx-rate", "public-holidays", "weather-forecast"]
 // Resale terms (src/resale-terms.js): a whole year's list is not resold through a third party.
 markResaleBarred(DATA_TOOLS, ["public-holidays"], HOLIDAY_PORTAL_RESALE_REASON);
 attribute(DATA_TOOLS.find((t) => t.slug === "public-holidays"), "nager");
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(DATA_TOOLS, ["weather-forecast"], "National Weather Service");
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(DATA_TOOLS, ["fx-rate"], "ECB reference rates");

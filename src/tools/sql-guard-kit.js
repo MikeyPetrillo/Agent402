@@ -17,6 +17,7 @@ import {
   RISK_CATALOGUE, SAMPLE_SQL, SAMPLE_CERTIFICATE, SAMPLE_PUBLIC_KEY,
 } from "./sql-guard.js";
 import { createPublicKey, createPrivateKey } from "node:crypto";
+import { markResaleCleared } from "../resale-terms.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -155,3 +156,6 @@ export const SQL_GUARD_TOOLS = [
     },
   },
 ];
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(SQL_GUARD_TOOLS, ["sql-guard"], "computed here from the caller's input");

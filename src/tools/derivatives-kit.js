@@ -14,6 +14,7 @@
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { hlSharedInfo, labelHlStaleness, HL_HISTORY_TTL_MS, __hlShared } from "./hyperliquid-shared.js";
 import { creditAnswers, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
+import { markResaleCleared } from "../resale-terms.js";
 // The reads answered in 0.1 to 1 s when measured (2026-10-14).
 const TIMEOUT_MS = 10_000;
 const HL_INFO = "https://api.hyperliquid.xyz/info";
@@ -941,3 +942,6 @@ export const __test = {
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(DERIVATIVES_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(DERIVATIVES_TOOLS, ["perp-basis", "perp-dex-limits", "perp-dex-markets", "perp-dexs", "perp-funding", "perp-funding-screener", "perp-klines", "perp-markets", "perp-open-interest", "perp-orderbook"], "Hyperliquid public info API, application use");
