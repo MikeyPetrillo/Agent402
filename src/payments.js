@@ -5200,20 +5200,30 @@ export function isRevertedAuthorizationTransfer(err) {
 
 /**
  * A settler's node refused the transaction before it was sent, and the answer
- * names no transaction: a failed gas estimate ("gas required exceeds
- * allowance", "failed to estimate gas", "gas estimation failed") or a
+ * names no transaction: a failed gas estimate for the settler's own gas
+ * ("gas required exceeds allowance", or "failed to estimate gas" / "gas
+ * estimation failed" with no revert, such as insufficient funds for gas) or a
  * submission refused for its own signer's nonce ("nonce too high"). Nothing
  * reached the chain, so the authorization is unused, like a reverted transfer.
- * "nonce too low" is not this (it can follow the settler's own landed send).
- * Timeouts, transport errors and any answer naming a transaction never are.
+ * Never this: an estimate that REVERTED (the token refuses the transfer, and
+ * a spent nonce is one reason it does, with the reason sometimes stripped),
+ * any wording that the authorization or nonce is used or canceled (an earlier
+ * send, maybe the settler's own, may have landed: the chain read owns those),
+ * "nonce too low" (it can follow the settler's own landed send), timeouts,
+ * transport errors and any answer naming a transaction.
  */
-const NOTHING_SENT_NODE_WORDS = /\bgas required exceeds allowance\b|\b(?:failed|unable|cannot|could not) (?:to )?estimate gas\b|\bgas estimation (?:failed|error)\b|\bestimateGas\b[^.]{0,40}\b(?:failed|reverted|error)\b|\bnonce too high\b/i;
+const NOTHING_SENT_NODE_WORDS = /\bgas required exceeds allowance\b|\b(?:failed|unable|cannot|could not) (?:to )?estimate gas\b|\bgas estimation (?:failed|error)\b|\bestimateGas\b[^.]{0,40}\b(?:failed|error)\b|\bnonce too high\b/i;
+const NOTHING_SENT_SPENT_WORDS = /\brevert(?:ed|s)?\b|\b(?:nonce|authorization)\b[^.]{0,60}\b(?:used|consumed|canceled|cancelled|spent)\b|\balready (?:been )?(?:used|spent)\b/i;
 export function isNothingSentNodeRefusal(err) {
   if (!err || typeof err !== "object") return false;
   if (typeof err.transaction === "string" && err.transaction.trim()) return false;
   if (err.name === "AbortError" || err.name === "TimeoutError" || err.code || err.cause) return false;
   if (isUnreadableSettleAnswer(err)) return false;
-  return NOTHING_SENT_NODE_WORDS.test(`${err.errorReason || ""} ${err.errorMessage || ""} ${err.message || ""}`);
+  const reason = String(err.errorReason || "").trim();
+  if (isUsedAuthorizationReason(reason) || isUsedAuthorizationReason(String(err.errorMessage || ""))) return false;
+  const text = `${reason} ${err.errorMessage || ""} ${err.message || ""}`;
+  if (NOTHING_SENT_SPENT_WORDS.test(text)) return false;
+  return NOTHING_SENT_NODE_WORDS.test(text);
 }
 
 // Networks settled through an operator-listed facilitator list, where the

@@ -796,7 +796,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   settles (`firstConfirmedFacilitator`, logged when it is not the first; none confirms = the first,
   as before); the rest are Robinhood's settle fallback (never routing facilitators), reached after
   a pre-broadcast refusal or, on `eip155:4663` only, a reverted `transferWithAuthorization` or a node refusal
-  before sending with no transaction (a failed gas estimate, "nonce too high": `isNothingSentNodeRefusal`, Ink too)
+  before sending with no transaction (a failed gas estimate that did not revert, "nonce too high": `isNothingSentNodeRefusal`, Ink too; an estimate that reverted or names a used or canceled authorization or nonce is never nothing-sent and is read on chain)
   (`isRetryableSettleRefusal`) or a listed facilitator's graceful HTTP 200 `success:false` with no
   transaction and a reason that is not a verdict about the buyer (`isListedPassOnRefusal`,
   `markGracefulRefusals`; verdicts as codes or prose in `src/settle-verdict.js`): that one goes to

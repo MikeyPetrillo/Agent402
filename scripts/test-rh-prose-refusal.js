@@ -252,7 +252,7 @@ await check("another network keeps its rules: a no-verdict refusal in words ther
 const GAS_EST = "gas required exceeds allowance (0)";
 await check("a failed gas estimate or a nonce-too-high submission with no transaction is nothing-sent, on 4663 and Ink only", async () => {
   const { isRetryableSettleRefusal, isNothingSentNodeRefusal } = await import("../src/payments.js");
-  for (const [reason, msg] of [["unexpected_settle_error", GAS_EST], ["invalid_exact_evm_transaction_failed", "failed to estimate gas: execution reverted"], ["", "Error: nonce too high: address 0xabc, tx: 7 state: 5"], [GAS_EST, ""]]) {
+  for (const [reason, msg] of [["unexpected_settle_error", GAS_EST], ["unexpected_settle_error", "failed to estimate gas: insufficient funds for gas * price + value"], ["", "Error: nonce too high: address 0xabc, tx: 7 state: 5"], [GAS_EST, ""]]) {
     const e = asCoreError({ success: false, errorReason: reason, errorMessage: msg, transaction: "", network: RH });
     assert.equal(isNothingSentNodeRefusal(e), true, `${reason} ${msg}`);
     assert.equal(isRetryableSettleRefusal(e, RH), true, `4663: ${msg}`);
@@ -263,6 +263,28 @@ await check("a failed gas estimate or a nonce-too-high submission with no transa
   assert.equal(isNothingSentNodeRefusal(Object.assign(new Error(GAS_EST), { code: "ETIMEDOUT" })), false, "transport");
   assert.equal(isNothingSentNodeRefusal(asCoreError(graceful(NO_VERDICT))), false, "other words");
   assert.equal(isNothingSentNodeRefusal(asCoreError(graceful("nonce too low"))), false, "nonce too low may follow a landed send");
+});
+await check("an estimate that reverted, or names a used or canceled authorization, is not nothing-sent: the nonce may be spent", async () => {
+  const { isRetryableSettleRefusal, isNothingSentNodeRefusal } = await import("../src/payments.js");
+  for (const [reason, msg] of [
+    ["unexpected_settle_error", `failed to estimate gas: execution reverted: ${FIAT_USED}`],
+    ["invalid_exact_evm_transaction_failed", "failed to estimate gas: execution reverted"],
+    ["unexpected_settle_error", `gas required exceeds allowance (0): ${FIAT_USED}`],
+    ["unexpected_settle_error", "gas estimation failed: authorization already used"],
+    ["unexpected_settle_error", "estimateGas failed: nonce is canceled"],
+    [`failed to estimate gas: ${NONCE_USED}`, ""],
+  ]) {
+    const e = asCoreError({ success: false, errorReason: reason, errorMessage: msg, transaction: "", network: RH });
+    assert.equal(isNothingSentNodeRefusal(e), false, `${reason} ${msg}`);
+    assert.equal(isRetryableSettleRefusal(e, RH), false, `4663: ${reason} ${msg}`);
+  }
+});
+await check("a used authorization in a failed estimate is read on chain: a landed transfer is recovered, never a plain 402", async () => {
+  const USED_EST = { success: false, errorReason: "unexpected_settle_error", errorMessage: `failed to estimate gas: execution reverted: ${FIAT_USED}`, transaction: "", network: RH };
+  const r = await runWith({ primary: () => USED_EST, listed: [["RH2", () => USED_EST]], own: ["own", () => ({ success: true, transaction: txh(`own-${seq}`), network: RH })], outage: served });
+  assert.equal(r.out?.recovered, true, "the chain read recovers the landed transfer");
+  assert.ok(r.asked.includes("outage"), `the chain is read: ${r.asked.join(",")}`);
+  assert.ok(!r.asked.includes("own"), `our relayer never resubmits a spent authorization: ${r.asked.join(",")}`);
 });
 await check("the reported sequence: primary refuses pre-broadcast (nonce too high), the next listed fails its gas estimate, our relayer is under its minimum -> plain 402, never unconfirmed", async () => {
   const p0 = { primary: () => { throw new SettleError(402, { success: false, errorReason: "unexpected_settle_error", errorMessage: "nonce too high", transaction: "", network: RH }); } };
