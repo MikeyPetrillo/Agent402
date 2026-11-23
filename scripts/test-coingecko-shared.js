@@ -6,7 +6,7 @@
 //                                    (used only where no redis-server binary is installed)
 //
 // The key is metered account-wide, so its minute and day caps are for the
-// whole service. Two real servers (src/server.js, FREE_MODE, free ports) run
+// whole service. Two real servers (src/server.js, FREE_MODE, port 0) run
 // against one stub upstream that counts every request it is sent:
 //   1. On one Redis, a burst spread over both servers sends the upstream no
 //      more than the minute cap, and one server can spend the whole cap (the
@@ -21,7 +21,7 @@
 //   3. Without Redis, each server holds its RATE_LIMIT_REPLICAS share of the
 //      caps, so two servers together still send no more than the cap; a
 //      control with RATE_LIMIT_REPLICAS=1 shows one server alone takes it all.
-// Deliberately does not skip: it starts a redis-server on a free port, and with
+// Deliberately does not skip: it starts a redis-server on a unix socket, and with
 // neither the binary nor REDIS_URL it fails.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn, execFileSync } from "node:child_process";
@@ -30,9 +30,8 @@ import { connect } from "node:net";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort, getFreePorts } from "./lib/free-port.js";
-// Each server keeps its own stores (lib/own-stores.js): only Redis is shared.
-import { ownStoreEnv } from "./lib/own-stores.js";
+// Each server keeps its own stores (bootServer's own stores): only Redis is shared.
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -48,9 +47,16 @@ const done = (code) => { cleanup(); process.exit(code); };
 process.on("SIGINT", () => done(130));
 
 // ---- redis ------------------------------------------------------------------------------
-function redisPing(port) {
+// A raw connection to the Redis REDIS_URL names: a unix socket (the one this
+// suite starts) or host:port (the caller's).
+function redisSocket() {
+  if (REDIS_URL.startsWith("unix://")) return connect(REDIS_URL.slice("unix://".length));
+  const u = new URL(REDIS_URL);
+  return connect(Number(u.port || 6379), u.hostname);
+}
+function redisPing() {
   return new Promise((resolve) => {
-    const s = connect(port, "127.0.0.1");
+    const s = redisSocket();
     let buf = "";
     s.setTimeout(500, () => { s.destroy(); resolve(false); });
     s.on("error", () => resolve(false));
@@ -70,14 +76,15 @@ if (!bin) { try { bin = execFileSync("which", ["redis-server"], { encoding: "utf
 let REDIS_URL = bin ? "" : process.env.REDIS_URL || "";
 if (!REDIS_URL) {
   if (!bin) { console.error("FAIL: no REDIS_URL and no redis-server binary. This test needs a real redis; it deliberately does not skip."); process.exit(1); }
-  const port = await getFreePort();
+  // A unix socket, not a TCP port: nothing is reserved before redis binds it.
   redisDir = mkdtempSync(join(tmpdir(), "cg-shared-redis-"));
-  redisChild = spawn(bin, ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no", "--dir", redisDir], { stdio: "ignore" });
+  const sock = join(redisDir, "redis.sock");
+  redisChild = spawn(bin, ["--port", "0", "--unixsocket", sock, "--unixsocketperm", "700", "--save", "", "--appendonly", "no", "--dir", redisDir], { stdio: "ignore" });
+  REDIS_URL = `unix://${sock}`;
   let up = false;
-  for (let i = 0; i < 50 && !up; i++) { await wait(100); up = await redisPing(port); }
+  for (let i = 0; i < 50 && !up; i++) { await wait(100); up = await redisPing(); }
   if (!up) { console.error("FAIL: redis-server did not answer"); done(1); }
-  REDIS_URL = `redis://127.0.0.1:${port}`;
-  console.log(`# started redis-server on ${port}`);
+  console.log(`# started redis-server on ${sock}`);
 }
 
 // ---- stub upstream ------------------------------------------------------------------------
@@ -114,32 +121,26 @@ const STUB_URL = `http://127.0.0.1:${stub.address().port}`;
 // burst on a host whose cores are taken read 12 upstream calls against a cap
 // of 10 with Redis healthy. The fallback itself is checked below (no Redis).
 const OPERATOR_TOKEN = "coingecko-shared-operator-token-0123456789";
+// The servers inherit this process's environment, so these are removed from it
+// (REDIS_URL was read above): a server sees them only where a boot sets them.
 const BASE_ENV = (() => {
-  const e = { ...process.env };
-  for (const k of ["REDIS_URL", "SHARED_LIMITS", "SHARED_LIMITS_PREFIX", "RATE_LIMIT_REPLICAS", "COINGECKO_API_KEY", "COINGECKO_MAX_PER_MIN", "COINGECKO_DAILY_MAX", "COINGECKO_UNSETTLED_SHARE", "COINGECKO_OTHERS_RESERVE"]) delete e[k];
-  return { ...e, AGENT402_OPERATOR_TOKEN: OPERATOR_TOKEN, FREE_MODE: "true", X402_INDEX_CRAWL: "off", COINGECKO_STUB_URL: STUB_URL, SHARED_LIMITS_PROBE_FIRST_MS: "0", SHARED_LIMITS_DEGRADED_HOLD_MS: "1000", SHARED_LIMITS_OP_MS: "10000", COINGECKO_SHARED_DEADLINE_MS: "10000", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999" };
+  for (const k of ["REDIS_URL", "SHARED_LIMITS", "SHARED_LIMITS_PREFIX", "RATE_LIMIT_REPLICAS", "COINGECKO_API_KEY", "COINGECKO_MAX_PER_MIN", "COINGECKO_DAILY_MAX", "COINGECKO_UNSETTLED_SHARE", "COINGECKO_OTHERS_RESERVE"]) delete process.env[k];
+  return { AGENT402_OPERATOR_TOKEN: OPERATOR_TOKEN, FREE_MODE: "true", X402_INDEX_CRAWL: "off", COINGECKO_STUB_URL: STUB_URL, SHARED_LIMITS_PROBE_FIRST_MS: "0", SHARED_LIMITS_DEGRADED_HOLD_MS: "1000", SHARED_LIMITS_OP_MS: "10000", COINGECKO_SHARED_DEADLINE_MS: "10000", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999" };
 })();
 let run = 0;
 async function boot(n, env) {
   const prefix = `cg${process.pid}${Date.now().toString(36)}${++run}`;
-  const ports = await getFreePorts(n);
-  const servers = ports.map((port) => {
-    const c = spawn(process.execPath, ["--import", "./scripts/lib/coingecko-stub-preload.js", "src/server.js"], {
-      env: { ...BASE_ENV, ...ownStoreEnv("coingecko"), ...(env.redis ? { REDIS_URL, SHARED_LIMITS_PREFIX: prefix } : {}), ...env.vars, PORT: String(port) },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    c.log = "";
-    c.stdout.on("data", (d) => { c.log += d; });
-    c.stderr.on("data", (d) => { c.log += d; });
-    children.push(c);
-    return { port, child: c, url: `http://127.0.0.1:${port}` };
-  });
-  const up = async (s) => { for (let i = 0; i < 240; i++) { try { if ((await fetch(`${s.url}/health`)).ok) return true; } catch { /* booting */ } await wait(250); } return false; };
-  const ups = await Promise.all(servers.map(up));
-  if (!ups.every(Boolean)) { for (const s of servers) console.error(s.child.log.slice(-1500)); ok(false, "servers booted"); done(1); }
+  // Each server boots on port 0 with stores of its own (bootServer's).
+  const booted = await Promise.allSettled(Array.from({ length: n }, () => bootServer({
+    stores: "coingecko", args: ["--import", "./scripts/lib/coingecko-stub-preload.js"],
+    env: { ...BASE_ENV, ...(env.redis ? { REDIS_URL, SHARED_LIMITS_PREFIX: prefix } : {}), ...env.vars },
+  })));
+  const servers = booted.filter((b) => b.status === "fulfilled").map((b) => ({ port: b.value.port, child: b.value.child, url: b.value.url, log: b.value.log }));
+  for (const s of servers) children.push(s.child);
+  if (servers.length !== n) { for (const b of booted) if (b.status === "rejected") console.error(String(b.reason?.message || b.reason).slice(-1500)); ok(false, "servers booted"); done(1); }
   if (env.redis) {
     // The store answers before the first request is counted on it.
-    const word = async (s) => { for (let i = 0; i < 80; i++) { const j = await (await fetch(`${s.url}/api/gateway-status`)).json(); if (j.sharedLimits?.status === "on") return "on"; await wait(250); } const d = await (await fetch(`${s.url}/api/gateway-status`, { headers: { "x-operator-token": OPERATOR_TOKEN } })).json().catch(() => ({})); return `not on: ${JSON.stringify(d.sharedLimits)} ${s.child.log.split("\n").filter((l) => /shared-limit/.test(l)).slice(0, 4).join(" | ")}`; };
+    const word = async (s) => { for (let i = 0; i < 80; i++) { const j = await (await fetch(`${s.url}/api/gateway-status`)).json(); if (j.sharedLimits?.status === "on") return "on"; await wait(250); } const d = await (await fetch(`${s.url}/api/gateway-status`, { headers: { "x-operator-token": OPERATOR_TOKEN } })).json().catch(() => ({})); return `not on: ${JSON.stringify(d.sharedLimits)} ${s.log().split("\n").filter((l) => /shared-limit/.test(l)).slice(0, 4).join(" | ")}`; };
     const words = await Promise.all(servers.map(word));
     ok(words.every((w) => w === "on"), `every server reads the shared store (${words.join(", ")})`);
   }
@@ -156,7 +157,7 @@ const okCount = (rs) => rs.filter((r) => r.status === 200).length;
   const { servers: [A, B], stop } = await boot(2, { redis: true, vars: { COINGECKO_MAX_PER_MIN: String(CAP), RATE_LIMIT_REPLICAS: "2" } });
   upstream = 0;
   const rs = await Promise.all(Array.from({ length: 40 }, (_, i) => search(i % 2 ? B : A, `race${i}`)));
-  const misses = () => [A, B].reduce((n, s) => n + (s.child.log.match(/the shared store did not answer/g) || []).length, 0);
+  const misses = () => [A, B].reduce((n, s) => n + (s.log().match(/the shared store did not answer/g) || []).length, 0);
   ok(upstream <= CAP, `a burst of 40 distinct requests over both servers sends the upstream no more than the minute cap (${upstream} of ${CAP}; shared-store misses logged: ${misses()})`);
   ok(upstream === CAP && okCount(rs) === CAP, `and the whole cap is usable (${okCount(rs)} answered)`);
   ok(rs.filter((r) => r.status !== 200).every((r) => r.status === 503 && /not charged/i.test(JSON.stringify(r.body))), "every request past the cap is a 503 that says nobody paid");
@@ -281,9 +282,8 @@ const okCount = (rs) => rs.filter((r) => r.status === 200).length;
   const { servers: [A], stop } = await boot(1, { redis: true, vars: { COINGECKO_MAX_PER_MIN: String(CAP), RATE_LIMIT_REPLICAS: "2", COINGECKO_SHARED_DEADLINE_MS: "", SHARED_LIMITS_OP_MS: "" } });
   // CLIENT PAUSE holds every other client's commands on the server: connected,
   // but not answering.
-  const u = new URL(REDIS_URL);
   const paused = await new Promise((resolve) => {
-    const s = connect(Number(u.port || 6379), u.hostname);
+    const s = redisSocket();
     const arg = (x) => `$${Buffer.byteLength(x)}\r\n${x}\r\n`;
     s.on("error", () => resolve(false));
     s.on("connect", () => s.write(`*4\r\n${arg("CLIENT")}${arg("PAUSE")}${arg("3000")}${arg("ALL")}`));
