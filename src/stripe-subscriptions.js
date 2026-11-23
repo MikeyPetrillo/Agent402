@@ -697,12 +697,14 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
           // The dispute ended. Won, or an inquiry closed without a chargeback
           // (warning_closed): the money stayed, so the hold on fulfillment ends
           // and the credits key the dispute disabled is enabled again (the
-          // hook). Lost: the record stays disputed and the outcome is noted.
+          // hook). Lost: the record stays disputed and the outcome is noted;
+          // the hook takes the disputed amount off a credits balance.
           const obj = event.data.object;
           const pi = idOf(obj?.payment_intent);
           const outcome = typeof obj?.status === "string" ? obj.status.slice(0, 40) : "unknown";
           const won = outcome === "won" || outcome === "warning_closed";
-          if (pi && typeof onDisputeClosed === "function") { try { await onDisputeClosed(pi, { won, status: outcome }); } catch { /* never fail the webhook on a hook */ } }
+          const amountCents = Number.isFinite(Number(obj?.amount)) ? Number(obj.amount) : null;
+          if (pi && typeof onDisputeClosed === "function") { try { await onDisputeClosed(pi, { won, status: outcome, amountCents }); } catch { /* never fail the webhook on a hook */ } }
           const ids = { pi, charge: idOf(obj?.charge), invoiceId: idOf(obj?.invoice) };
           await reload().catch(() => 0);
           for (const [subId, rec] of [...store]) {

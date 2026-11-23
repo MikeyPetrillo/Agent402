@@ -10,7 +10,7 @@
 //   node scripts/test-credits-badkey-redis.js
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-credits-badkey-redis.js
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import "./lib/credits-guards-table.js"; // a random private credits table (see the file)
+import { guardsTable } from "./lib/credits-guards-table.js"; // a random private credits table (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,9 +26,8 @@ const TMP = mkdtempSync(join(tmpdir(), "badkey-"));
 process.on("exit", () => rmSync(TMP, { recursive: true, force: true }));
 process.env.CREDITS_DIR = TMP;
 const BAD = 10_000;
-process.env.CREDITS_BAD_KEY_MAX = String(5 + Math.floor(Math.random() * 20));
-process.env.CREDITS_BAD_KEY_WINDOW_MS = String(10 * 60_000);
-const max = Number(process.env.CREDITS_BAD_KEY_MAX);
+// The bound and its window come from the private table drawn for this run.
+const { failedMax: max, windowMs: WINDOW_MS } = guardsTable().badKey;
 
 const { createCredits } = await import("../src/credits.js");
 const { shared } = await import("../src/shared-limits.js");
@@ -47,7 +46,7 @@ for (const client of [`203.0.${r8()}.${r8()}`, `${V6}:aaaa::1`]) {
   await settle();
   const c = await shared.counterGet("credits-badkey", tag);
   ok(c?.ok && Number(c.value) <= max + 1, `${redisUrl ? "redis" : "memory"}: ${BAD} failed lookups from ${client} leave one counter at the bound (${c?.value}), not one entry each`);
-  const w = await shared.windowRead("credits-badkey", tag, { windowMs: 10 * 60_000 });
+  const w = await shared.windowRead("credits-badkey", tag, { windowMs: WINDOW_MS });
   ok(!w?.ok || Number(w.count) === 0, `${redisUrl ? "redis" : "memory"}: no per-lookup window entries are written (${w?.count ?? "none"})`);
   ok(await cr.badKeyHeld(client), `${redisUrl ? "redis" : "memory"}: the client is held past the bound`);
 }

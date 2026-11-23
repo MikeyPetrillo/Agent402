@@ -117,10 +117,18 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   refunded on the warned payment only, automatically (`CREDITS_EFW_AUTO_REFUND`, on unless off) inside
   the private table's day total; otherwise it is owed for approval (`refundRequestsOwed`,
   `POST /__operator/credits/fraud-refund`). Only a refund actually sent (refunded or pending) closes
-  the review and counts against the day; any other answer gives the day back. A warning on a payment
-  already disputed keeps `disputed` as the key's cause and holds the review (`disputed` state) until
-  the dispute closes: won, the key stays frozen for the warning and the review is owed again; with no
-  warning, a won dispute lifts the freeze. `fraudReviews` is on `/__operator/credits.json`. Stripe
+  the review and counts against the day; any other answer gives the day back (an approval answered
+  `disputed` holds the review in that state). A warning on a payment already disputed keeps `disputed`
+  as the key's cause and holds the review (`disputed` state) until the dispute closes; a dispute on a
+  warned payment keeps `fraud-warning` as the cause. An owed review is listed (`refundRequestsOwed`)
+  except while a dispute is open. Closing a dispute records it whatever the key's cause: won, the key
+  stays frozen for a warning and the review is owed again; with no warning, a won dispute lifts the
+  freeze. Lost (`disputeClosed`, status `lost`): the disputed amount leaves the balance once (the
+  payment's `lostCents`, never refunded again), a key the dispute alone froze is enabled again while
+  another payment on it is left (a fraud warning keeps it frozen, its review owed for what is left),
+  and one whose every payment is gone stays disabled with nothing owed. A warning on a payment with no
+  key yet is remembered in the store (`_warned`); a later claim or top-up on it is refused
+  (`refused-review`) and refunded in full. `fraudReviews` is on `/__operator/credits.json`. Stripe
   event ids are deduplicated in the shared store as well, and forgotten again when handling throws,
   so the redelivery is applied.
 - **Stripe webhook events to subscribe** (the endpoint's event list in the Stripe dashboard; an event
@@ -137,9 +145,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
 - **Credits keys:** new keys are `a402_ck_` plus 32 random bytes; `KEY_RE` also matches earlier keys.
   A URL carrying a key is refused before any middleware reads it (`src/credits-key-url.js`);
   `redactSecrets` removes a key from log text. `POST /api/credits/revoke` disables any key presented,
-  one answer for every key. Past `CREDITS_BAD_KEY_MAX` failed keys a client's further failed lookups
-  are answered 429 for the window (one fixed shared counter per client, written no more once held);
-  a valid key is always served. Holders set per-key daily and per-call limits on the balance page
+  one answer for every key. Past the private table's failed-key bound (`badKey`, `src/credits-guards.js`)
+  a client's further failed lookups are answered 429 for its window (one fixed shared counter per
+  client, written no more once held; without the table nobody is held); a valid key is always served. Holders set per-key daily and per-call limits on the balance page
   (`setLimits`).
 - **Card store directories:** with no state database, `CREDITS_DIR` (default `<data root>/credits`,
   `src/credits.js`) and `HUMAN_CHECKOUT_DIR` (default `<data root>/human-checkout`, `src/human-checkout.js`;

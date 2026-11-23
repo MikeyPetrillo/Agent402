@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1125 variables in 114 groups.
+1123 variables in 114 groups.
 
 ## Contents
 
@@ -290,8 +290,6 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `CREDITS_ABANDONED_HOLD_MS` | Credits abandoned hold, in milliseconds. |  | `src/credits.js` |
-| `CREDITS_BAD_KEY_MAX` | Failed credits key lookups (unknown, malformed or revoked) one client may make within CREDITS_BAD_KEY_WINDOW_MS before its further failed lookups are answered 429; a valid key is always served. |  | `src/credits.js` |
-| `CREDITS_BAD_KEY_WINDOW_MS` | The window CREDITS_BAD_KEY_MAX counts in, and how long a client past it is slowed, in milliseconds. |  | `src/credits.js` |
 | `CREDITS_BALANCE_MAX_USD` | The most one credits key's balance may hold, in USD; a pack or top-up above it is not offered. | `100` | `src/changelog.js`, `src/credits-sales.js` |
 | `CREDITS_DAILY_MAX_USD` | The most one buyer may buy in prepaid credits in any 24 hours, in USD; a pack above it is not offered. | `50` | `src/credits-sales.js` |
 | `CREDITS_DEBIT_WAIT_MS` | Credits debit wait, in milliseconds. | `3000` | `src/credits.js` |
@@ -299,7 +297,7 @@ holds it.
 | `CREDITS_EFW_AUTO_REFUND` | off, false, 0 or no stops the card refund made without review of a key's unspent balance after an early fraud warning (the key is still frozen and the balance listed as owed); on by default, inside the private table's day total (CREDITS_GUARDS_JSON). |  | `src/credits.js` |
 | `CREDITS_EU_UK_REQUIRE_TAX_ID` | Credits eu uk require tax id. |  | `src/credits.js` |
 | `CREDITS_GUARDS_FILE` | A file holding the private credits table, read when CREDITS_GUARDS_JSON is unset. |  | `src/credits-guards.js` |
-| `CREDITS_GUARDS_JSON` | The private credits table (src/credits-guards.js): purchase checks, the card review outcomes a purchase is refused on, the automatic fraud-warning refund day total and the connector sign-in limits, as raw JSON or base64. A credential-like secret set on the host; never committed. Without a complete table credit sales and the connector sign-in stay off. docs/example-credits-guards.json shows the format. |  | `src/credits-guards.js` |
+| `CREDITS_GUARDS_JSON` | The private credits table (src/credits-guards.js): purchase checks, the card review outcomes a purchase is refused on, the automatic fraud-warning refund day total, the failed credits key bound and the connector sign-in limits, as raw JSON or base64. A credential-like secret set on the host; never committed. Without a complete table credit sales and the connector sign-in stay off. docs/example-credits-guards.json shows the format. |  | `src/credits-guards.js` |
 | `CREDITS_HOLD_REFRESH_MAX_MS` | Credits hold refresh maximum, in milliseconds. |  | `src/credits.js` |
 | `CREDITS_INDEXES` | Prepaid credits table indexes built in the background; off leaves them to an operator. | `on` | `src/credits.js` |
 | `CREDITS_INDEX_DELAY_MS` | Delay before the prepaid credits index build starts after the store's first load, in milliseconds. | `60000` | `src/credits.js` |

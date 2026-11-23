@@ -10,7 +10,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { makeGuardsTable, useGuardsTable, guardsTable } from "./lib/credits-guards-table.js";
-import { rmSync, readFileSync, readdirSync } from "node:fs";
+import { rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
@@ -296,6 +296,132 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   cr.disableByPaymentIntent("pi_dl", "disputed");
   cr.enableByPaymentIntent("pi_dl", "disputed");
   ok(cr.authorize(L.key, 0.001).ok, "a dispute won with no fraud warning lifts the freeze");
+}
+
+// ---- a fraud warning, then a dispute on the same payment ---------------------------------------
+{
+  process.env.CREDITS_EFW_AUTO_REFUND = "off";
+  const reasonOf = async (keyId) => (await cr.status()).rows.find((x) => x.keyId === keyId)?.disabledReason;
+  const reviewOf = async (keyId) => (await cr.fraudReviews()).find((f) => f.keyId === keyId)?.state;
+  paid("cs_wd", "credits-10", "pi_wd", "wd@x.com");
+  const K = await cr.claim("cs_wd");
+  ok((await cr.fraudWarning("pi_wd", { warningId: "issfr_wd" })).owed === true && charges.pi_wd.amount_refunded === 0, "guard: the warning's refund is owed for approval");
+  cr.disableByPaymentIntent("pi_wd", "disputed");
+  ok(await reasonOf(K.keyId) === "fraud-warning", "a dispute after the warning keeps the warning as the key's cause");
+  ok(!(await cr.refundRequestsOwed()).includes(K.keyId), "nothing is listed as owed while the dispute runs");
+  const during = await cr.approveFraudRefund(K.keyId);
+  ok(during.status === "disputed" && charges.pi_wd.amount_refunded === 0 && await reviewOf(K.keyId) === "disputed", `an approval during the dispute sends nothing and leaves the review open (${await reviewOf(K.keyId)})`);
+  cr.enableByPaymentIntent("pi_wd", "disputed");
+  ok(cr.authorize(K.key, 0.001).reason === "frozen" && await reasonOf(K.keyId) === "fraud-warning", "the dispute won keeps the key frozen for the warning");
+  ok(await reviewOf(K.keyId) === "owed" && (await cr.refundRequestsOwed()).includes(K.keyId) && (await cr.refundsOwedWord(0)) === "owed", "...and its refund is owed again");
+  const ap = await cr.approveFraudRefund(K.keyId);
+  ok(ap.status === "refunded" && charges.pi_wd.amount_refunded === CREDIT_PACKS["credits-10"].cents && await reviewOf(K.keyId) === "approved" && !(await cr.refundRequestsOwed()).includes(K.keyId), "a person's approval then sends the whole balance and closes the review");
+  // The same order, and the dispute lost: the card network took the payment back; nothing is owed.
+  paid("cs_wl", "credits-5", "pi_wl", "wl@x.com");
+  const KL = await cr.claim("cs_wl");
+  await cr.fraudWarning("pi_wl");
+  cr.disableByPaymentIntent("pi_wl", "disputed");
+  await cr.disputeClosed("pi_wl", { won: false, status: "lost" });
+  ok(cr.balance(KL.key).balanceUsd === 0 && cr.authorize(KL.key, 0.001).ok === false && charges.pi_wl.amount_refunded === 0, "the dispute lost takes the payment off the balance; the key stays frozen and nothing is refunded");
+  ok(!(await cr.refundRequestsOwed()).includes(KL.keyId) && await reviewOf(KL.keyId) !== "owed", "...and nothing is listed as owed");
+  delete process.env.CREDITS_EFW_AUTO_REFUND;
+}
+
+// ---- a dispute lost --------------------------------------------------------------------------------
+{
+  const reasonOf = async (keyId) => (await cr.status()).rows.find((x) => x.keyId === keyId)?.disabledReason;
+  // A balance topped up from a second payment, the top-up disputed and lost:
+  // the purchase's own share is the buyer's to use or to have refunded.
+  paid("cs_lA", "credits-10", "pi_lA", "la@x.com");
+  const A = await cr.claim("cs_lA");
+  paid("cs_lB", "credits-10", "pi_lB", "la@x.com", { meta: { credits_topup: A.keyId, credits_account: "la@x.com" } });
+  ok((await cr.claim("cs_lB")).status === "topped_up", "guard: the balance was topped up from a second payment");
+  const sp = cr.authorize(A.key, 3); cr.settle(sp.hash, sp.heldMicro, "t");
+  cr.disableByPaymentIntent("pi_lB", "disputed");
+  ok(cr.authorize(A.key, 0.001).reason === "frozen", "guard: the dispute froze the key");
+  await cr.disputeClosed("pi_lB", { won: false, status: "lost", amountCents: CREDIT_PACKS["credits-10"].cents });
+  ok(cr.balance(A.key).balanceUsd === 7 && await reasonOf(A.keyId) == null, `a dispute lost takes the disputed payment off the balance and lifts the freeze (${cr.balance(A.key).balanceUsd})`);
+  const use = cr.authorize(A.key, 0.001);
+  ok(use.ok === true, "...so the share the other payment funded is usable again");
+  cr.release(use.hash, use.heldMicro);
+  ok(!(await cr.refundRequestsOwed()).includes(A.keyId), "...and nothing is listed as owed");
+  await cr.disputeClosed("pi_lB", { won: false, status: "lost", amountCents: CREDIT_PACKS["credits-10"].cents });
+  ok(cr.balance(A.key).balanceUsd === 7, "the same outcome delivered again takes nothing more");
+  const rf = await cr.requestRefund(A.key);
+  ok(rf.status === "refunded" && charges.pi_lA.amount_refunded === 700 && charges.pi_lB.amount_refunded === 0, `a refund on request goes to the payment not disputed, never to the one the card network took back (${charges.pi_lA.amount_refunded}/${charges.pi_lB.amount_refunded})`);
+  // One payment, disputed and lost: nothing is left, the key stays disabled, nothing owed.
+  paid("cs_lS", "credits-5", "pi_lS", "ls@x.com");
+  const S = await cr.claim("cs_lS");
+  cr.disableByPaymentIntent("pi_lS", "disputed");
+  await cr.disputeClosed("pi_lS", { won: false, status: "lost" });
+  ok(cr.balance(S.key).balanceUsd === 0 && cr.authorize(S.key, 0.001).ok === false && !(await cr.refundRequestsOwed()).includes(S.keyId), "a dispute lost on a key's only payment leaves it disabled with nothing owed");
+  const before = refunds.length;
+  await cr.requestRefund(S.key);
+  ok(refunds.length === before, "...and a refund request sends nothing");
+  // A fraud warning on the payment the dispute took: the rest is refunded on approval, to the other payment.
+  process.env.CREDITS_EFW_AUTO_REFUND = "off";
+  paid("cs_lW", "credits-10", "pi_lW", "lw@x.com");
+  const WK = await cr.claim("cs_lW");
+  paid("cs_lWt", "credits-10", "pi_lWt", "lw@x.com", { meta: { credits_topup: WK.keyId, credits_account: "lw@x.com" } });
+  await cr.claim("cs_lWt");
+  await cr.fraudWarning("pi_lWt");
+  cr.disableByPaymentIntent("pi_lWt", "disputed");
+  await cr.disputeClosed("pi_lWt", { won: false, status: "lost" });
+  ok(cr.authorize(WK.key, 0.001).reason === "frozen" && await reasonOf(WK.keyId) === "fraud-warning" && cr.balance(WK.key).balanceUsd === 10, "a dispute lost on a warned payment keeps the key frozen for the warning, holding the other payment's share");
+  ok((await cr.refundRequestsOwed()).includes(WK.keyId), "...and that share is owed for approval");
+  const ap = await cr.approveFraudRefund(WK.keyId);
+  ok(ap.status === "refunded" && charges.pi_lW.amount_refunded === 1000 && charges.pi_lWt.amount_refunded === 0, "the approval refunds it to the payment not disputed");
+  delete process.env.CREDITS_EFW_AUTO_REFUND;
+  // Through the webhook, wired as the server wires it (src/server.js onDisputeClosed).
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
+  const wh = createStripeSubscriptions({ stripe: { ...stripe, webhooks: { constructEvent: (body, sig) => { if (sig !== "goodsig") throw new Error("bad signature"); return JSON.parse(body.toString()); } } }, baseUrl: "https://agent402.tools", storePath: join(DIR, "subs-dl.json"),
+    onChargeReversed: (pi, type, reversal) => cr.disableByPaymentIntent(pi, type === "charge.dispute.created" ? "disputed" : "refunded", reversal), onDisputeClosed: (pi, o) => cr.disputeClosed(pi, o) });
+  const ev = (id, type, object) => Buffer.from(JSON.stringify({ id, type, data: { object } }));
+  paid("cs_hA", "credits-10", "pi_hA", "ha@x.com");
+  const H = await cr.claim("cs_hA");
+  paid("cs_hB", "credits-10", "pi_hB", "ha@x.com", { meta: { credits_topup: H.keyId, credits_account: "ha@x.com" } });
+  await cr.claim("cs_hB");
+  await wh.handleWebhook(ev("evt_dl_c", "charge.dispute.created", { id: "dp_h", charge: "ch_h", payment_intent: "pi_hA", amount: 1000 }), "goodsig");
+  ok(cr.authorize(H.key, 0.001).reason === "frozen", "webhook: the dispute freezes the key");
+  // A dispute for part of the payment: only that part went back to the card.
+  await wh.handleWebhook(ev("evt_dl_x", "charge.dispute.closed", { id: "dp_h", charge: "ch_h", payment_intent: "pi_hA", status: "lost", amount: 400 }), "goodsig");
+  const hBal = cr.balance(H.key).balanceUsd, hu = cr.authorize(H.key, 0.001);
+  ok(hu.ok === true && hBal === 16, `webhook: a dispute lost for part of a payment takes that part off and keeps the rest usable (${hBal})`);
+  if (hu.ok) cr.release(hu.hash, hu.heldMicro);
+  delete process.env.STRIPE_WEBHOOK_SECRET;
+}
+
+// ---- a fraud warning before the key is minted -----------------------------------------------------------
+{
+  paid("cs_pre", "credits-5", "pi_pre", "pre@x.com");
+  const w = await cr.fraudWarning("pi_pre", { warningId: "issfr_pre" });
+  ok(w.status === "unknown" && w.remembered === true, "a warning on a payment with no key yet is remembered");
+  // Read by a store opened again on the same directory (a restart).
+  const cr2 = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: () => {}, now: () => clock, tagSecret: Buffer.from("test-tag-secret") });
+  const c = await cr2.claim("cs_pre");
+  ok(c.status === "not_completed" && !c.key && c.error === PURCHASE_REFUSED && charges.pi_pre.amount_refunded === 500, `a later claim on the warned payment issues no key and refunds it in full (${c.status})`);
+  ok((await cr2.balancesForEmail("pre@x.com")).length === 0, "...and no key record exists for it");
+  const r0 = refunds.length;
+  ok((await cr.claim("cs_pre")).status === "not_completed" && refunds.length === r0, "a second claim answers the same and refunds nothing more");
+  // A top-up warned before it lands adds nothing and is refunded.
+  paid("cs_pt", "credits-5", "pi_pt", "pt@x.com");
+  const T = await cr.claim("cs_pt");
+  paid("cs_ptt", "credits-5", "pi_ptt", "pt@x.com", { meta: { credits_topup: T.keyId, credits_account: "pt@x.com" } });
+  ok((await cr.fraudWarning("pi_ptt")).remembered === true, "guard: the top-up's warning is remembered");
+  const tt = await cr.claim("cs_ptt");
+  ok(tt.status === "not_completed" && charges.pi_ptt.amount_refunded === 500 && cr.balance(T.key).balanceUsd === 5 && cr.authorize(T.key, 0.001).ok === true, `a warned top-up is refunded in full and the balance it named is unchanged (${tt.status})`);
+  // A warning remembered while the key was being minted (it found no key; the
+  // claim had already looked): the claim looks again once the key exists.
+  // (The file store is one process's: the checks read through the same store.)
+  const warnNow = (pi) => { const f = join(DIR, "_warned.json"); let o = {}; try { o = JSON.parse(readFileSync(f, "utf8")); } catch { /* none yet */ } o[pi] = { at: clock }; writeFileSync(f, JSON.stringify(o)); };
+  const racing = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: () => {}, now: () => clock, tagSecret: Buffer.from("test-tag-secret"), onLoad: (l) => warnNow(l.paymentIntent) });
+  paid("cs_race", "credits-5", "pi_race", "race@x.com");
+  const rc = await racing.claim("cs_race");
+  ok(rc.status === "minted" && racing.authorize(rc.key, 0.001).ok === false && (await racing.fraudReviews()).some((f) => f.keyId === rc.keyId), "a key minted as its payment's warning was remembered is frozen under that warning");
+  paid("cs_race2", "credits-5", "pi_race2", "race2@x.com");
+  const RB = await cr.claim("cs_race2");
+  paid("cs_race2t", "credits-5", "pi_race2t", "race2@x.com", { meta: { credits_topup: RB.keyId, credits_account: "race2@x.com" } });
+  ok((await racing.claim("cs_race2t")).status === "topped_up" && racing.authorize(RB.key, 0.001).ok === false && (await racing.fraudReviews()).some((f) => f.keyId === RB.keyId), "...and so is a balance a top-up landed on as its warning was remembered");
 }
 
 // ---- the webhook: signed, once per event, fixture events --------------------------------------------

@@ -1,6 +1,6 @@
 // The credits purchase checks, the card review signals a purchase is refused
-// on, the automatic fraud-warning refund total and the connector sign-in's
-// limits are private. They are read from CREDITS_GUARDS_JSON (raw JSON or
+// on, the automatic fraud-warning refund total, the failed-key bound and the
+// connector sign-in's limits are private. They are read from CREDITS_GUARDS_JSON (raw JSON or
 // base64; a host variable in production) or from the file named by
 // CREDITS_GUARDS_FILE, and are never committed, printed or logged.
 //
@@ -9,6 +9,7 @@
 //                 failedMax, failedWindowMs, failedHoldMs },
 //     flagged:  { outcomeTypes: [string], riskLevels: [string] },
 //     efw:      { warningRefundDayMaxUsd },
+//     badKey:   { failedMax, windowMs },
 //     mcpOAuth: { emailCodeTries, sendsPerEmail, sendsPerIp, failsPerEmail,
 //                 lockoutMs, tokenPerIp, authorizePerIp, registerPerIp, windowMs,
 //                 badTokenMax, pendingMax, documentMaxBytes } }
@@ -22,6 +23,7 @@ import { readFileSync } from "node:fs";
 const COUNTS = {
   purchase: ["buyerPerHour", "buyerPerDay", "sourcePerHour", "sourcePerDay", "failedMax", "failedWindowMs", "failedHoldMs"],
   efw: ["warningRefundDayMaxUsd"],
+  badKey: ["failedMax", "windowMs"],
   mcpOAuth: ["emailCodeTries", "sendsPerEmail", "sendsPerIp", "failsPerEmail", "lockoutMs", "tokenPerIp", "authorizePerIp", "registerPerIp", "windowMs", "badTokenMax", "pendingMax", "documentMaxBytes"],
 };
 const LISTS = { flagged: ["outcomeTypes", "riskLevels"] };
