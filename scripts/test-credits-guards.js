@@ -49,7 +49,8 @@ const table = guardsTable();
   delete process.env.CREDITS_GUARDS_JSON;
   ok(G.creditsGuardsState() === "missing" && !S.creditsSalesEnabled() && !S.creditsConnectorOn(), "table missing: CREDITS_SALES=on sells nothing and the connector sign-in is off");
   ok(S.purchaseChecks() === null && S.mcpOAuthGuards() === null, "table missing: no purchase check or sign-in limit is read from anywhere else");
-  ok(G.creditsGuardsWord(true) === "attention" && G.creditsGuardsWord(false) === "off", "the status word reads attention while a switch asks for the table, off otherwise");
+  ok(G.creditsGuardsWord(true) === "attention", "table missing: the status word reads attention while a switch asks for the table");
+  ok(G.creditsGuardsWord(false) === "ok", "table missing, neither switch on: the status word reads ok (a deployment that sells no credits never pages)");
   const partial = structuredClone(table); delete partial.mcpOAuth.badTokenMax;
   process.env.CREDITS_GUARDS_JSON = JSON.stringify(partial);
   ok(G.creditsGuardsState() === "partial" && !S.creditsSalesEnabled() && G.creditsGuardsWord(true) === "attention", "a table missing one key is partial: nothing is sold, the word reads attention");
@@ -65,6 +66,23 @@ const table = guardsTable();
   rmSync(dir, { recursive: true, force: true });
   process.env.CREDITS_GUARDS_JSON = keep;
   delete process.env.CREDITS_SALES; delete process.env.MCP_OAUTH;
+}
+
+// ---- the word on a booted server: ok without the switches, attention with one and no table ----
+{
+  const { bootServer } = await import("./lib/boot-server.js");
+  for (const [label, env, want] of [
+    ["neither switch, no table", { CREDITS_SALES: "", MCP_OAUTH: "", CREDITS_GUARDS_JSON: "", CREDITS_GUARDS_FILE: "" }, "ok"],
+    ["CREDITS_SALES on, no table", { CREDITS_SALES: "on", MCP_OAUTH: "", CREDITS_GUARDS_JSON: "", CREDITS_GUARDS_FILE: "" }, "attention"],
+    ["MCP_OAUTH on, no table", { CREDITS_SALES: "", MCP_OAUTH: "on", CREDITS_GUARDS_JSON: "", CREDITS_GUARDS_FILE: "" }, "attention"],
+    ["CREDITS_SALES on, table complete", { CREDITS_SALES: "on", MCP_OAUTH: "" }, "ok"],
+  ]) {
+    const srv = await bootServer({ stores: `guards-${want}-${label.length}`, env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", ...env } });
+    try {
+      const w = (await (await fetch(`${srv.url}/api/gateway-status`)).json()).creditsGuards?.status;
+      ok(w === want, `${label}: /api/gateway-status creditsGuards reads ${want} (${w})`);
+    } finally { await srv.stop(); }
+  }
 }
 
 // ---- nothing public states what the table holds -----------------------------------------------

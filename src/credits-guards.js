@@ -82,9 +82,10 @@ export const creditsGuardsReady = () => load().table !== null;
 /** "ok", "missing" or "partial" (present but not complete). */
 export const creditsGuardsState = () => load().state;
 /**
- * The status word: "off" while neither switch that needs the table is set,
- * "ok" with a complete table, else "attention" (the switch is set and sales
- * or the connector sign-in stay off until the table is complete).
+ * The status word: "ok" while neither switch that needs the table is set (a
+ * deployment that sells no credits has nothing to page on) or the table is
+ * complete; "attention" only while CREDITS_SALES or MCP_OAUTH is set and the
+ * table is missing or incomplete (sales and the connector sign-in stay off).
  * @param {boolean} wanted  whether CREDITS_SALES or MCP_OAUTH asks for it
  */
-export const creditsGuardsWord = (wanted) => (!wanted ? "off" : creditsGuardsReady() ? "ok" : "attention");
+export const creditsGuardsWord = (wanted) => (!wanted || creditsGuardsReady() ? "ok" : "attention");

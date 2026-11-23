@@ -4709,7 +4709,8 @@ app.get("/api/gateway-status", async (req, res) => {
     upstreamCosts: { status: upstreamCostsStatus() },
     // One word, never a value: whether the private credits table
     // (src/credits-guards.js) is complete while CREDITS_SALES or MCP_OAUTH asks
-    // for it: off / ok / attention (sales and the connector sign-in stay off).
+    // for it: ok, or attention only while a switch is set and the table is
+    // missing or incomplete (sales and the connector sign-in stay off).
     creditsGuards: { status: creditsGuardsWord(creditsSalesSwitch() || mcpOAuthSwitch()) },
     // The ElevenLabs breaker on /api/tts and /api/tts-hd (src/tools/tts-kit.js):
     // ok / cooling (a throttle sent calls to the backups) / probing. One word.

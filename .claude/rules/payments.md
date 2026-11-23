@@ -105,8 +105,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   limits live in a PRIVATE table (`src/credits-guards.js`: `CREDITS_GUARDS_JSON`, raw or base64, or
   `CREDITS_GUARDS_FILE`; format in `docs/example-credits-guards.json` with placeholders), with no defaults
   in code: without a complete table credit sales and the connector sign-in stay off
-  (`creditsSalesEnabled` reads it), `creditsGuards` on `/api/gateway-status` reads attention while
-  `CREDITS_SALES` or `MCP_OAUTH` asks for it, and the sign-in's routes answer a generic 503. Counts are
+  (`creditsSalesEnabled` reads it), `creditsGuards` on `/api/gateway-status` reads attention only while
+  `CREDITS_SALES` or `MCP_OAUTH` is set and the table is missing or incomplete (ok otherwise), and the sign-in's routes answer a generic 503. Counts are
   kept in the shared store; a refusal is always `PURCHASE_REFUSED`, which never names the check. A
   paid session a check refuses (or a flagged charge) is refunded in full on its own payment with no key
   (`refused-review`). `CREDITS_DAILY_MAX_USD` stays a public term (/terms prints it). Copy, comments,
