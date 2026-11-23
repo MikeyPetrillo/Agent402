@@ -10,6 +10,7 @@ import { creditsSalesEnabled, creditsConnectorOn, CREDITS_CONNECTOR_PATH, credit
 import { answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { publicIndexTermsText, withPublicIndexDate } from "./facilitator-public-index.js";
 import { referralOffered } from "./referral-gate.js";
+import { awsMarketplaceOffered } from "./aws-marketplace-gate.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { refundClauseText } from "./refund-terms.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
@@ -32,6 +33,8 @@ export function termsPage(baseUrl) {
   const gatewayBatched = !!gatewayOfferPublic();
   // Sales through a referral network's links (src/referral-gate.js): stated only while this server has them.
   const referralOn = referralOffered();
+  // Purchases through AWS Marketplace (src/aws-marketplace-gate.js): stated only while this server sells there.
+  const awsOn = awsMarketplaceOffered();
   // Shared answer pages exist only while their switch is on, or while pages
   // made under it may still be served (src/answer-share.js): then the
   // paragraph reads in the past tense.
@@ -305,6 +308,13 @@ domain that does not resolve) keeps its free daily check, emails you once about 
 no further paid reports until the subject is readable again; each subscription also has a cap on paid
 re-runs per 30 days, above which it alerts without re-running.</p>
 
+${awsOn ? `<h2 id="aws-marketplace">AWS Marketplace purchases</h2>
+<p>Tools bought through AWS Marketplace are paid through AWS and billed on your AWS invoice. AWS's standard
+contract for AWS Marketplace governs those purchases together with our refund rule for them: an input we refuse
+before running the tool does not use the payment, a call that does not complete can be sent again with the same
+payment while it is valid, and a paid call that ends without an answer is corrected as a billing adjustment on
+your AWS invoice through AWS Marketplace.</p>
+` : ""}
 <h2>Availability & changes</h2>
 <p>The service may change, be rate-limited, or be discontinued at any time. We may update these terms;
 the "last updated" date reflects the current version. Continued use after a change means you accept it.</p>

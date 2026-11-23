@@ -1075,6 +1075,9 @@ import { hangupForgiven, hangupTicketDenial, hangupTicketAbandoned, hangupDebtRe
 import { referralConfig, referralConfigProblem, referralTimingWarnings, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
 import { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsRoutes, awsSlugOfPath, createAwsPaymentClaims, createAwsMarketplaceGate, AWS_JWKS_PATH } from "./aws-marketplace-gate.js";
+import { awsDescriptionOf } from "./aws-listing.js";
+import { awsStartPage, AWS_START_PATH, AWS_OPENAPI_PATH } from "./aws-start-page.js";
+import { awsOpenapi } from "./aws-openapi.js";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { boundedRedisClient } from "./bounded-redis.js";
 import { createReferralChainReader } from "./referral-chain.js";
@@ -2856,6 +2859,24 @@ if (AWS_ROUTES) {
   for (const r of AWS_ROUTES.refused) console.warn(`[aws-marketplace] ${r.slug} is not served under /aws: ${r.reason}`);
   console.log(`AWS Marketplace gate enabled for ${AWS_ROUTES.defs.size} route(s): ${[...AWS_ROUTES.defs.keys()].join(", ") || "none"}`);
 }
+// Every path a direct route answers on, and the agent surfaces: naming one in
+// an /aws description or answer points a buyer off the listing.
+let awsOwnPathsMemo = null;
+// Read on first use (the gate's build, after every route is in the catalog).
+const awsOwnPaths = () => (awsOwnPathsMemo ||= [...new Set([...Object.keys(CATALOG).map((k) => k.split(" ")[1]), "/mcp", "/llms.txt", "/llms-full.txt", "/openapi.json", "/agents.md", "/api/pricing", "/api/find"])]);
+// The description each served tool is sold under on /aws (its 402 listing,
+// /aws/start, /aws/openapi.json): no sentence naming a catalog tool the gate
+// does not serve, one of this server's paths or its host (src/aws-listing.js).
+const AWS_DESCRIBE = (() => {
+  if (!AWS_ROUTES) return (def) => def.description;
+  let ctx = null;
+  const memo = new Map();
+  return (def) => {
+    ctx ||= { servedSlugs: [...AWS_ROUTES.defs.keys()], catalogSlugs: [...new Set(Object.values(CATALOG).map((d) => d.slug).filter(Boolean))], ownPaths: awsOwnPaths(), ownHosts: REFERRAL_OWN_HOSTS };
+    if (!memo.has(def.slug)) memo.set(def.slug, awsDescriptionOf(def, ctx));
+    return memo.get(def.slug);
+  };
+})();
 /** The catalog definition an /aws path serves, or null (gate off, or a path it does not serve). */
 function awsDefOfPath(path) {
   if (!AWS_ROUTES || !AWS_ROUTES.defs.size) return null;
@@ -3890,8 +3911,11 @@ app.all(/^\/e\/(.*)$/, express.raw({ type: () => true, limit: "2mb", inflate: fa
 // limiter and every payment gate - so a browser preflight is answered without
 // spending a limiter token or being asked to pay. See src/cors.js.
 app.use(corsMiddleware());
-// Every HTML page names /llms.txt in its head and a Link header (src/llms-link.js).
-app.use(llmsLinkMiddleware());
+// Every HTML page names /llms.txt in its head and a Link header (src/llms-link.js),
+// except the AWS Marketplace listing's own answers while that gate is mounted:
+// nothing under /aws points a buyer past the listing.
+const AWS_MOUNTED = Boolean(AWS_ROUTES && AWS_ROUTES.defs.size);
+app.use(llmsLinkMiddleware({ skip: (req) => AWS_MOUNTED && (req.path === "/aws" || req.path.startsWith("/aws/")) }));
 
 app.use(compression({
   filter: (req, res) => {
@@ -12053,9 +12077,8 @@ if (AWS_ROUTES && AWS_ROUTES.defs.size) {
     redact: redactSecrets,
     ownHosts: REFERRAL_OWN_HOSTS,
     clientKey: (req) => limiterKey(clientIp(req)),
-    // Every path a direct route answers on, and the agent surfaces: a string
-    // naming one in an /aws answer points a buyer off the listing.
-    ownPaths: [...new Set([...Object.keys(CATALOG).map((k) => k.split(" ")[1]), "/mcp", "/llms.txt", "/llms-full.txt", "/openapi.json", "/agents.md", "/api/pricing", "/api/find"])],
+    ownPaths: awsOwnPaths(),
+    describe: AWS_DESCRIBE,
     onServed: (req) => { try { QUOTE_TRUST.mark(quoteClientKeyOf(req)); } catch { /* trust is best effort */ } },
     onToolError: (slug, status, err) => logToolError(slug, status, redactSecrets(String(err?.message || "")), undefined, false),
   }).then((g) => { AWS_GATE = g; console.log(`AWS Marketplace gate ready: ${g.slugs().join(", ")}`); return g; })
@@ -12071,6 +12094,20 @@ if (AWS_ROUTES && AWS_ROUTES.defs.size) {
     const gate = AWS_GATE || await awsGateReady;
     if (!gate) return next();
     res.set("Cache-Control", "public, max-age=300").json(gate.jwks);
+  });
+  // The buyer setup page (the listing's fulfillment URL) and the listing's
+  // OpenAPI document: both read the served set, and both answer only while
+  // the gate is built.
+  app.get(AWS_START_PATH, async (req, res, next) => {
+    const gate = AWS_GATE || await awsGateReady;
+    if (!gate) return next();
+    res.set("Cache-Control", "public, max-age=300").set("X-Robots-Tag", "noindex, nofollow").type("html")
+      .send(awsStartPage({ baseUrl: BASE_URL, defs: AWS_ROUTES.defs, config: AWS_CONFIG, describe: AWS_DESCRIBE }));
+  });
+  app.get(AWS_OPENAPI_PATH, async (req, res, next) => {
+    const gate = AWS_GATE || await awsGateReady;
+    if (!gate) return next();
+    res.set("Cache-Control", "public, max-age=300").set("X-Robots-Tag", "noindex").json(awsOpenapi({ baseUrl: BASE_URL, defs: AWS_ROUTES.defs, config: AWS_CONFIG, describe: AWS_DESCRIBE }));
   });
   app.all(["/aws", "/aws/:slug"], awsRoute);
 }

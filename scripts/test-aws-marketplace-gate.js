@@ -137,7 +137,11 @@ const DEFS = {
   for (const mod of ["../src/tools/kit2.js", "../src/tools/sql-guard-kit.js", "../src/tools/email-guard-kit.js", "../src/tools/sanctions-kit.js", "../src/tools/demand-kit.js"]) {
     for (const v of Object.values(await import(mod))) if (Array.isArray(v)) for (const t of v) if (t && typeof t === "object" && t.slug && !real.has(t.slug)) real.set(t.slug, t);
   }
-  for (const slug of AWS_DEFAULT_SLUGS) ok(real.has(slug) && awsIneligibility(real.get(slug)) === null, `default ${slug}: its real definition passes the boot checks`);
+  // The guards are read here from their kits; the whole default list is booted
+  // and checked served by scripts/test-aws-start-page.js.
+  const guards = ["redact", "sql-guard", "email-guard", "sanctions-name", "sanctions-wallet"];
+  ok(guards.every((s) => AWS_DEFAULT_SLUGS.includes(s)), "the default listing holds the five guards");
+  for (const slug of guards) ok(real.has(slug) && awsIneligibility(real.get(slug)) === null, `default ${slug}: its real definition passes the boot checks`);
   ok(/third-party content from a URL the caller names \(url\)/.test(awsIneligibility(real.get("pdf-to-markdown")) || ""), "pdf-to-markdown's real definition is refused: it reads a caller-named URL");
 }
 
@@ -421,11 +425,12 @@ async function snapshot(url) {
 const off = await bootPaidServer({ label: "aws-off", env: { ...BLANK, AGENT402_OPERATOR_TOKEN: OP } });
 let on = null;
 try {
-  for (const p of ["/aws", "/aws/redact", "/aws/.well-known/jwks.json"]) {
+  for (const p of ["/aws", "/aws/redact", "/aws/.well-known/jwks.json", "/aws/start", "/aws/openapi.json"]) {
     const r = await fetch(`${off.url}${p}`, { method: p === "/aws/redact" ? "POST" : "GET" });
     const unknown = await fetch(`${off.url}/zz-not-a-route`, { method: p === "/aws/redact" ? "POST" : "GET" });
     ok(r.status === 404 && unknown.status === 404 && (await r.text()).replace(/\/aws[^"]*/g, "") === (await unknown.text()).replace(/\/zz-not-a-route/g, ""), `switch off: ${p} answers as an unknown path`);
   }
+  ok(!/id="aws-marketplace"/.test(await (await fetch(`${off.url}/terms`)).text()), "switch off: /terms has no AWS Marketplace section");
   const offOp = await (await fetch(`${off.url}/__operator/aws.json`, { headers: { "x-operator-token": OP } })).json();
   ok(offOp.enabled === false, "switch off: the operator view says so");
   const snapOff = await snapshot(off.url);
