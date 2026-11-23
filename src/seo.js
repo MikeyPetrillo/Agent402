@@ -1,4 +1,5 @@
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
+import { gatewayProductSentence } from "./gateway-product-copy.js";
 import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_COMMENT } from "./receipt-signing.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { GUIDE_SITE, GUIDE_SITE_NAME } from "./ask402-links.js";
@@ -650,7 +651,7 @@ The settlement rule: on x402 a response of 400 or above is not settled, and each
 **How to read our 402 if you only speak one dialect.** The same response carries BOTH headers${mppMethodsSummary().enabled && mppOfferGateClause() ? ` (except that ${mppOfferGateClause()})` : ", always"} - \`WWW-Authenticate: Payment\` is additive, never a replacement for the real x402 \`PAYMENT-REQUIRED\` header (full \`accepts\` array, \`exact\` scheme, EIP-3009). A client that hard-fails on an unrecognized \`WWW-Authenticate\` scheme instead of also checking for \`PAYMENT-REQUIRED\` will bail with something like "no supported rail" on a 402 it could have paid. If your parser only understands one of the two dialects, check for the header it understands FIRST rather than trusting whichever header happens to be read first; do not treat an unrecognized \`WWW-Authenticate\` scheme as "this server has no payment option for me." The JSON body of every paywall 402 also carries the same PaymentRequired object as the \`PAYMENT-REQUIRED\` header (\`x402Version\`, \`accepts\`, \`resource\`, \`extensions\`), beside our own fields; the header is authoritative. ${smallHeaderLimitText()}
 
 ## Call a model (metered, the default)
-The model gateway's default route is metered: ${meteredRoutesInline()} (OpenAI chat, Anthropic Messages and OpenAI Responses wires), no key and no account, from ${meteredFromPrice()} a call. Model-backed: third-party models answer. ${meteredQuoteSentence()}
+The model gateway's default route is metered: ${meteredRoutesInline()} (OpenAI chat, Anthropic Messages and OpenAI Responses wires), no key and no account, from ${meteredFromPrice()} a call. Model-backed: third-party models answer. ${gatewayProductSentence({ receipts: receiptsServed() })} ${meteredQuoteSentence()}
 
 \`\`\`bash
 ${meteredCurl(baseUrl)}

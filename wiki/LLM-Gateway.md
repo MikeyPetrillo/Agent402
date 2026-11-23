@@ -9,6 +9,8 @@
 
 `POST /v1/metered/chat/completions` is the default way to call a model (the Anthropic Messages and OpenAI Responses wires have twins: `/v1/metered/messages` and `/v1/metered/responses`). No API key and no account; model-backed (third-party models answer). The 402 quotes this exact request from its own body (the input estimated from its tokens with headroom, plus your `max_tokens`, at the model's list price plus a fee). On x402, Tempo and credits, settlement never exceeds that quote: an `exact` payer pays the quote, and an `upto` payer (where the 402 offers it) or a credits key settles what the answer used; a card payment adds the processor fee.
 
+The gateway is an Agent402 service: it prices each call before it runs (a flat tier price, or a quote from the request on the metered routes), routes `auto` chat calls to a model chosen for the task, falls back to the next model on a chat tier when one fails, and signs a receipt for each settled paid answer.
+
 ```bash
 curl -i -X POST https://agent402.tools/v1/metered/chat/completions -H 'content-type: application/json' \
   -d '{"model":"anthropic/claude-haiku-4.5","messages":[{"role":"user","content":"Summarize x402 in one line"}],"max_tokens":200}'
