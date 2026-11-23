@@ -33,7 +33,7 @@ t node scripts/test-ci-apt-sources.js
 # Gateway settle-failure breaker (per-payer + global refusal before any upstream call, finish-listener outcomes, source pins - offline)
 t node scripts/test-gateway-settle-breaker.js
 
-# @step 2: Offline suites (7 scripts, one process each)
+# @step 2: Offline suites (9 scripts, one process each)
 # Economy history unit tests (daily upsert idempotency + week-over-week math — offline)
 t node scripts/test-x402-economy.js
 # The live CDP check excuses a kit failure only when the runner's direct read of CDP fails too (offline, stub reads)
@@ -48,5 +48,7 @@ t node scripts/test-org-same-as.js
 t node scripts/test-canonical-host.js
 # The sitemap lastmod table matches git history (needs the full-depth checkout above)
 t node scripts/test-page-dates.js
+# Every route's 402 listing keeps its description and sample output against the merge base with main (two offline paid boots; needs the full-depth checkout above)
+t node scripts/test-bazaar-listing-parity.js
 # Bing sitemap registration script: lists then submits only the missing feeds (stubbed, offline)
 t node scripts/test-submit-sitemaps.js

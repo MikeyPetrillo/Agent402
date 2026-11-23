@@ -1058,7 +1058,7 @@ jobs:
       - name: Live visualizer outbound guard and per-address stream cap (services/live, offline)
         run: node services/live/test-guard.js
 
-      - name: Offline suites (7 scripts, one process each)
+      - name: Offline suites (9 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a 2
       - name: Runner kills and memory (on failure)
         if: failure()
