@@ -307,7 +307,7 @@ holds it.
 | `CREDITS_HOLD_REFRESH_MAX_MS` | Credits hold refresh maximum, in milliseconds. |  | `src/credits.js` |
 | `CREDITS_INDEXES` | Prepaid credits table indexes built in the background; off leaves them to an operator. | `on` | `src/credits.js` |
 | `CREDITS_INDEX_DELAY_MS` | Delay before the prepaid credits index build starts after the store's first load, in milliseconds. | `60000` | `src/credits.js` |
-| `CREDITS_SALES` | 1, true, on or yes turns prepaid credit sales on; unset keeps them off. |  | `src/credits-sales.js` |
+| `CREDITS_SALES` | 1, true, on or yes turns prepaid credit sales on; unset keeps them off. |  | `src/changelog.js`, `src/credits-sales.js` |
 | `CREDITS_SOURCE_DAY_MAX` | Prepaid credits purchase check: checkouts one client or account may start per day. | `30` | `src/credits-sales.js` |
 | `CREDITS_SOURCE_HOUR_MAX` | Prepaid credits purchase check: checkouts one client or account may start per hour. | `10` | `src/credits-sales.js` |
 
@@ -1384,7 +1384,7 @@ holds it.
 | `TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS` | Tempo access key check timeout, in milliseconds. |  | `src/mpp-tempo.js` |
 | `TEMPO_API_BASE_URL` | Tempo API base URL. | `https://api.tempo.xyz` | `src/mpp-reconcile.js`, `src/mpp-tempo.js`, `src/sanctions-screen.js` and 1 more |
 | `TEMPO_API_KEY` | Turns on the Tempo rail (a credential, set on the host). |  | `src/mpp-tempo.js` |
-| `TEMPO_CURRENCY` | Comma list of Tempo tokens, one tempo/charge challenge each, in order; an address or a name (usdc = USDC.e, pathusd = PathUSD, ousd = OUSD). Put the token most buyers hold first (usdc,ousd keeps USDC.e first for stock clients). |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
+| `TEMPO_CURRENCY` | Comma list of Tempo tokens, one tempo/charge challenge each, in order; an address or a name (usdc = USDC.e, pathusd = PathUSD, ousd = OUSD). Put the token most buyers hold first (usdc,ousd keeps USDC.e first for stock clients). |  | `src/changelog.js`, `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_DATA_API_KEY` | Tempo data API key (a credential, set on the host). |  | `src/sanctions-screen.js`, `src/tempo-transfers.js` |
 | `TEMPO_DECIMALS` | Tempo decimals. |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_EARLY_CONFIRM` | Tempo early confirm. |  | `src/server.js` |

@@ -68,8 +68,8 @@ const ENTRIES = [
     title: "agent402-mcp 0.16.0 and agent402-client 0.12.0",
     items: [
       "Packages: agent402-mcp 0.16.0: `npx agent402-mcp setup` asks for the wallet key once and keeps it in the OS keychain, so the key never sits in a config file or an environment variable.",
-      "Packages: agent402-mcp 0.16.0 reads a key with or without its `0x` prefix, adds daily and monthly spending caps (`AGENT402_MAX_USD_PER_DAY`, `AGENT402_MAX_USD_PER_MONTH`) kept across restarts, and saves media answers as files in `AGENT402_OUTPUT_DIR`, with small images also kept inline.",
-      "Packages: agent402-client 0.12.0: `normalizeEvmKey` reads a private key with or without its `0x` prefix, and a call served under the first-call allowance counts against no spending cap.",
+      "Packages: agent402-mcp 0.16.0 reads a key with or without its `0x` prefix, adds optional daily and monthly spending caps kept across restarts, and saves media answers as files, with small images also kept inline.",
+      "Packages: agent402-client 0.12.0: `normalizeEvmKey` reads a private key with or without its `0x` prefix, and names the setting in its error, never the value.",
       "Site: Every install line on the site and in the docs pins agent402-mcp 0.16.0.",
     ],
   },
