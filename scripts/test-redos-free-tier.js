@@ -373,10 +373,15 @@ try {
   // its example in UTC; any other zone converts every stamp) gets the corpus
   // again under that setting, and a body dense with what it parses.
   // A CSV with one very long column name and a thousand groups.
+  let distinctGroupsCsv = ["g", ...Array.from({ length: 199 }, (_, i) => `c${i}`)].join(",") + "\n";
+  for (let i = 0; distinctGroupsCsv.length < 95_000; i++) distinctGroupsCsv += `k${i}\n`;
   const manyGroupsCsv = `g,${"x".repeat(90_000)}\n` + Array.from({ length: 1000 }, (_, i) => `k${i},1`).join("\n");
   const VARIANTS = {
     "csv-aggregate": [
       { set: { groupBy: "g", limit: 1000 }, dense: { field: "csv", unit: manyGroupsCsv, chars: manyGroupsCsv.length } },
+      // A distinct group on every row over 199 columns: the work, not the
+      // answer, grows past the input.
+      { set: { groupBy: "g", limit: 1 }, dense: { field: "csv", unit: distinctGroupsCsv, chars: distinctGroupsCsv.length } },
     ],
     "log-timestamps": [
       { set: { assumeZone: "America/New_York" }, dense: { field: "text", unit: "2026-11-02 14:03:07 x\n", chars: 95_000 } },

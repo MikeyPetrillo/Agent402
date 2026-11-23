@@ -335,5 +335,23 @@ await refuses("json-lint", { json: { a: 1 } }, "json", "an object");
 // ---- log-timestamps claims the formats it reads ----
 ok(tool("log-timestamps").description.startsWith("Find each timestamp in the formats below in log text"), "log-timestamps: the description claims the listed formats, not every timestamp");
 
+// ---- csv-aggregate bounds its work before it allocates per-group statistics ----
+{
+  const errOf = (fn) => { try { fn(); return null; } catch (e) { return e; } };
+  const header = ["g", ...Array.from({ length: 199 }, (_, i) => `c${i}`)].join(",");
+  let body = header + "\n";
+  for (let i = 0; body.length < 99_000; i++) body += `k${i}\n`;
+  global.gc?.();
+  const h0 = process.memoryUsage().heapUsed, t0 = performance.now();
+  const e = errOf(() => tool("csv-aggregate").handler({ csv: body, groupBy: "g", limit: 1 }));
+  const ms = performance.now() - t0, grew = process.memoryUsage().heapUsed - h0;
+  ok(e && e.statusCode === 413 && ms < 150 && grew < 64 * 1024 * 1024, `csv-aggregate: a distinct group per row over 199 columns answers 413 before it allocates (${e?.statusCode ?? "answered"}, ${ms.toFixed(0)} ms, heap +${Math.round(grew / 1e6)} MB)`);
+  const ragged = header + "\n" + "x,1\n".repeat(24_000);
+  const e2 = errOf(() => tool("csv-aggregate").handler({ csv: ragged }));
+  ok(e2 && e2.statusCode === 413, `csv-aggregate: rows times columns past its cell budget answers 413 (${e2?.statusCode ?? "answered"})`);
+  const fine = tool("csv-aggregate").handler({ csv: "g,a,b\n" + Array.from({ length: 5_000 }, (_, i) => `k${i % 50},${i},x`).join("\n"), groupBy: "g" });
+  ok(fine.rows === 5000 && fine.matched === 50, "csv-aggregate: an ordinary table inside the budget is summarized");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
