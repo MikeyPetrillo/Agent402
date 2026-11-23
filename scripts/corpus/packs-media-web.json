@@ -1343,8 +1343,7 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      },
-      "requires": "FRED_API_KEY"
+      }
     },
     {
       "slug": "skill-macro-dashboard",
@@ -1357,8 +1356,7 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      },
-      "requires": "FRED_API_KEY"
+      }
     },
     {
       "slug": "skill-inflation-check",
@@ -1371,8 +1369,7 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      },
-      "requires": "FRED_API_KEY"
+      }
     },
     {
       "slug": "skill-fred-snapshot",
@@ -1385,8 +1382,7 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      },
-      "requires": "FRED_API_KEY"
+      }
     },
     {
       "slug": "skill-trend-analysis",

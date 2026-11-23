@@ -30,54 +30,6 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   ok(onceCount === 1, `a deterministic 4xx is never retried (called ${onceCount}× of a possible 3)`);
 }
 
-// --- FRED throttling is a retryable 503, never a 422 that blames the input
-// (stubbed fetch; no key spent) ---
-{
-  const realFetch = globalThis.fetch, realKey = process.env.FRED_API_KEY;
-  const undoDns = stubGuardResolver(offlineGuardAnswer); // stubbed fetch: the guard's lookup answers here too
-  process.env.FRED_API_KEY = "fred-test-not-a-key";
-  let calls = 0;
-  try {
-    for (const st of [429, 423]) {
-      calls = 0;
-      globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ error_code: st, error_message: "Too Many Requests.  Exceeded Rate Limit" }), { status: st, headers: { "content-type": "application/json" } }); };
-      let e = null;
-      try { await h("unemployment-rate")({}); } catch (x) { e = x; }
-      ok(e?.statusCode === 503 && /temporarily unavailable/.test(e.message), `FRED ${st} -> 503 temporarily unavailable (got ${e?.statusCode})`);
-      ok(calls === 1, `FRED ${st} is not hammered with retries (calls ${calls})`);
-    }
-    globalThis.fetch = async () => new Response(JSON.stringify({ error_code: 400, error_message: "Bad Request.  The value for variable api_key is not registered." }), { status: 400, headers: { "content-type": "application/json" } });
-    let e = null;
-    try { await h("unemployment-rate")({}); } catch (x) { e = x; }
-    ok(e?.statusCode === 503 && /not configured/.test(e.message) && !/registered|api_key/.test(e.message), "a key refusal says not configured and relays no key detail");
-  } finally {
-    globalThis.fetch = realFetch;
-    undoDns();
-    if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
-  }
-}
-
-// --- FRED's scheduled-maintenance page (HTML, HTTP 200) is an upstream
-// outage: a 503 with a retry hint, never a generic 502 (stubbed fetch) ---
-{
-  const realFetch = globalThis.fetch, realKey = process.env.FRED_API_KEY;
-  const undoDns = stubGuardResolver(offlineGuardAnswer); // stubbed fetch: the guard's lookup answers here too
-  process.env.FRED_API_KEY = "fred-test-not-a-key";
-  const page = '<!doctype html>\n<html lang="en">\n<head>\n    <title>Site Maintenance | St. Louis Fed</title>';
-  try {
-    globalThis.fetch = async () => new Response(page, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
-    for (const slug of ["unemployment-rate"]) {
-      let e = null;
-      try { await h(slug)({}); } catch (x) { e = x; }
-      ok(e?.statusCode === 503 && /scheduled maintenance/.test(e.message) && e.retryAfter === 900 && e.attribution === "upstream", `${slug}: FRED maintenance page -> 503 with retryAfter (got ${e?.statusCode} ${e?.message})`);
-    }
-  } finally {
-    globalThis.fetch = realFetch;
-    undoDns();
-    if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
-  }
-}
-
 // --- the yield-curve tools read the U.S. Treasury's par yield curve CSV
 // (offline: parser and a stubbed fetch) ---
 {
@@ -329,70 +281,6 @@ await live("world-bank-indicator", { country: "US", indicator: "NY.GDP.MKTP.CD",
   (r) => Array.isArray(r.series) && r.series.length > 0 && typeof r.series[0].value === "number", "world-bank-indicator US GDP 2018-2022");
 await live("world-bank-search", { q: "inflation", rows: 5 },
   (r) => Array.isArray(r.indicators) && r.indicators.length > 0 && /^[A-Z0-9.]+$/.test(r.indicators[0].code), "world-bank-search inflation");
-
-// --- keyed FRED tools ------------------------------------------------------
-// Two modes:
-//   (a) FRED_API_KEY set    → live-call every FRED tool, expect real data
-//   (b) FRED_API_KEY unset  → assert each FRED tool returns 503 "not configured"
-// Mode (b) is what CI sees if the secret isn't wired up; it must still pass so
-// the structural change can ship (and operators get a clear signal to add the
-// key on the deployment).
-console.log("\nFRED-keyed tools:");
-if (process.env.FRED_API_KEY) {
-  console.log("  FRED_API_KEY is set — running live calls");
-  // For the "latest reading" tools, assert the returned date is recent (within the
-  // last 18 months). Catches the bug where sort_order=asc + limit=N returned the
-  // *oldest* N observations (1948-vintage data) instead of the newest.
-  const RECENT_FLOOR = new Date(Date.now() - 18 * 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
-  const recent = (d) => typeof d === "string" && d >= RECENT_FLOOR;
-  await live("sahm-rule", {},
-    (r) => typeof r.value === "number" && typeof r.triggered === "boolean" && recent(r.date), "sahm-rule SAHMREALTIME (date must be recent)");
-  await live("cpi-yoy", {},
-    (r) => typeof r.inflationYoYPct === "number" && Array.isArray(r.trailing12mo) && recent(r.date), "cpi-yoy CPIAUCSL pc1 (date must be recent)");
-  await live("unemployment-rate", { months: 6 },
-    (r) => typeof r.current === "number" && Array.isArray(r.history) && r.history.length > 0 && recent(r.date), "unemployment-rate UNRATE 6mo (date must be recent)");
-  await live("fed-funds", { days: 10 },
-    (r) => typeof r.current === "number" && Array.isArray(r.history) && r.history.length > 0 && recent(r.date), "fed-funds DFF 10d (date must be recent)");
-} else {
-  console.log("  FRED_API_KEY is NOT set — verifying each FRED tool returns the documented 503");
-  for (const slug of ["sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds"]) {
-    try {
-      const args = {};
-      await h(slug)(args);
-      ok(false, `${slug} should 503 without FRED_API_KEY`);
-    } catch (e) {
-      ok(e.statusCode === 503, `${slug} returns 503 "not configured" without key (got ${e.statusCode})`);
-    }
-  }
-}
-
-// --- FRED refusing OUR key is our configuration (503), and a "." month is
-// reported, not silently dropped. Stubbed upstream, forced key. ---
-{
-  const realFetch = globalThis.fetch, realKey = process.env.FRED_API_KEY;
-  const undoDns = stubGuardResolver(offlineGuardAnswer); // stubbed fetch: the guard's lookup answers here too
-  process.env.FRED_API_KEY = "0123456789abcdef0123456789abcdef";
-  try {
-    let keyCalls = 0;
-    globalThis.fetch = async () => (keyCalls++, new Response(JSON.stringify({ error_code: 400, error_message: "Bad Request.  The value for variable api_key is not a 32 character alpha-numeric lower-case string." }), { status: 400, headers: { "content-type": "application/json" } }));
-    try { await h("unemployment-rate")({ months: 3 }); ok(false, "a rejected FRED key should throw"); }
-    catch (e) { ok(e.statusCode === 503 && /our configuration/.test(e.message), `a rejected FRED key is a 503 naming our configuration, not a 422 (got ${e.statusCode})`); }
-    ok(keyCalls === 1, `a rejected key is not retried: retrying cannot fix it (upstream calls: ${keyCalls})`);
-    globalThis.fetch = async () => new Response(JSON.stringify({ observations: [
-      { date: "2026-08-01", value: "4.1" }, { date: "2026-07-01", value: "4.1" }, { date: "2025-10-01", value: "." }, { date: "2025-09-01", value: "4.4" },
-    ] }), { status: 200, headers: { "content-type": "application/json" } });
-    const r = await h("unemployment-rate")({ months: 4 });
-    ok(r.months === 3 && r.history[0].date === "2025-09-01" && r.current === 4.1, "unemployment-rate keeps chronological order and the real values");
-    ok(Array.isArray(r.missingDates) && r.missingDates[0] === "2025-10-01" && /3 of the 4 months/.test(r.note || ""), "a month FRED published as \".\" is listed in missingDates with a note");
-    globalThis.fetch = async () => new Response(JSON.stringify({ observations: [{ date: "2026-09-22", value: "3.88" }] }), { status: 200, headers: { "content-type": "application/json" } });
-    const f = await h("fed-funds")({ days: 1 });
-    ok(f.current === 3.88 && f.missingDates === undefined, "no missingDates field when nothing is missing");
-  } finally {
-    globalThis.fetch = realFetch;
-    undoDns();
-    if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
-  }
-}
 
 console.log(`\nvalidation asserts failed: ${assertFail} | live ok: ${liveOk} | live upstream-errors (tolerated): ${liveErr}`);
 if (assertFail > 0 || liveOk === 0) { console.error("macro-kit: FAILED"); process.exit(1); }

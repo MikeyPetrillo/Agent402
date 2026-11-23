@@ -84,6 +84,12 @@ export const CYMRU_ATTRIBUTION = "IP to ASN data from Team Cymru IP to ASN Mappi
 // described with its rates; each answer carries its publisher's full credit
 // (the BLS statement and retrieval date, the New York Fed's notice).
 export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, the New York Fed and the U.S. Treasury. Agent402 is not affiliated with the New York Fed.";
+// The computed macro tools (sahm-rule, cpi-yoy, unemployment-rate, fed-funds
+// in src/tools/macro-kit.js) read the same publishers through
+// src/tools/us-macro-series.js: each answer's `credit` opens with its
+// publisher's source line, then that publisher's own statement or notice.
+export const BLS_ATTRIBUTION = "Source: U.S. Bureau of Labor Statistics (https://www.bls.gov).";
+export const NYFED_ATTRIBUTION = "Source: Federal Reserve Bank of New York (https://www.newyorkfed.org).";
 export const CAMS_ATTRIBUTION = "Contains modified Copernicus Atmosphere Monitoring Service information (CAMS ENSEMBLE data provider).";
 export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
 // GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place

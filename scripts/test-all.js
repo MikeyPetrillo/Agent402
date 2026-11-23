@@ -156,9 +156,9 @@ const NETWORK = new Set([
   "/api/wallet-balances", "/api/testnet-fund", "/api/onramp-link",
   "/api/onchain-sql", "/api/onchain-sql-schema", 
   "/api/x402-quote", "/api/usdc-balance", "/api/tx-status", "/api/gas-estimate", "/api/x402-verify", "/api/ens-resolve",
-  // Macro-kit: all routes hit live upstreams (FRED, Treasury Fiscal Data, ECB,
-  // World Bank). FRED-keyed routes return 503 without FRED_API_KEY — the
-  // 502/503/504 tolerance below covers that.
+  // Macro-kit: all routes hit live upstreams (Treasury Fiscal Data, ECB,
+  // World Bank, BLS, the New York Fed). An upstream outage is a 502/503/504,
+  // which the tolerance below covers.
   "/api/treasury-yield-curve", "/api/treasury-yield-history", "/api/yield-curve-spread",
   "/api/treasury-debt", "/api/treasury-avg-rates",
   "/api/fx-historical", "/api/fx-timeseries", "/api/fx-dashboard",

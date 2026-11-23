@@ -12,11 +12,12 @@
 # (e.g. data.gov downtime) must never mask whether the tools actually work.
 # Ox Alpha tier (locked stealth model, zdr refusal, zero-cost clamp, reasoning floor, vanish gate - offline)
 t node scripts/test-ox-tier.js
-# Macro-kit tests (FRED yield curve, Treasury debt + avg rates, ECB FX series, World Bank — live keyless APIs)
+# Macro-kit tests (Treasury yield curve, debt + avg rates, ECB FX series, World Bank — live keyless APIs)
 t node scripts/test-macro-kit.js
-# FRED terms line on every FRED answer; third-party series screened by their notes (offline)
+# No macro tool serves FRED data; fred-series and the computed tools read BLS, the New York Fed and Treasury; third-party series screened by their notes (offline)
 t node scripts/test-fred-terms.js
 t node scripts/test-fred-series-sources.js
+t node scripts/test-macro-computed-sources.js
 # Open-Meteo answers carry the credit with links to Open-Meteo and the CC BY 4.0 licence; fema-disasters carries the OpenFEMA disclaimer, endpoint and access date (stubbed upstream - offline)
 t node scripts/test-source-credits.js
 # MPP dual-stack shim (real mppx client buys over WWW-Authenticate/Authorization wire; single settle; x402 pass-through; HMAC tamper — offline)
