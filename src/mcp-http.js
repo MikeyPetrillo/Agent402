@@ -412,7 +412,11 @@ export function mcpPaymentMethods() {
 // connector reports at initialize (serverInfo version and title, the wires,
 // the endpoint), so the card and the live server cannot disagree. The card
 // lists no primitives by design; the tool count rides in our own _meta key.
-export const SERVER_CARD_SCHEMA = "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json";
+// The extension publishes no schema document yet (its announced v1 URL
+// answered 404), and a validator that fetches $schema fails on one that does
+// not resolve, so the card names none until a published URL resolves; set
+// this to that URL then (scripts/test-canonical-host.js).
+export const SERVER_CARD_SCHEMA = null;
 export const SERVER_CARD_MEDIA_TYPE = "application/mcp-server-card+json";
 export const SERVER_CARD_META_KEY = "tools.agent402/catalog";
 // The per-request revision /mcp serves beside the 2025-era ones the SDK lists
@@ -421,7 +425,7 @@ export const MODERN_PROTOCOL_VERSION = "2026-07-28";
 export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402", toolCount, mpp = mppMethodsSummary().enabled }) {
   const site = baseUrl || MCP_SERVER_WEBSITE;
   return {
-    $schema: SERVER_CARD_SCHEMA,
+    ...(SERVER_CARD_SCHEMA ? { $schema: SERVER_CARD_SCHEMA } : {}),
     name: `${REPO_NAMESPACE}/${serverName}`,
     version: VERSION,
     title: "Agent402",
