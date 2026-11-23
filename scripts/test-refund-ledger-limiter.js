@@ -16,8 +16,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const dir = mkdtempSync(join(tmpdir(), "refund-limiter-"));
 process.env.REFUND_DB_DIR = dir;
@@ -63,19 +62,17 @@ const ROWS = 40;
 for (let i = 0; i < ROWS; i++) {
   recordRefundOwed({ slug: "limiter-tool", network: "eip155:8453", payer: `0x${"a".repeat(39)}${i % 10}`, priceUsd: 0.01, tx: `0x${(i + 1).toString(16).padStart(64, "0")}`, httpStatus: 502 });
 }
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(port), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", REVENUE_LEDGER_DB: join(dir, "rev.db"), POSTHOG_API_KEY: "" },
-  stdio: ["ignore", "pipe", "pipe"],
+// stores: false - the server reads the ledger rows written above (REFUND_DB_DIR, SALES_LEDGER_DB in process.env).
+const srv = await bootServer({
+  stores: false,
+  timeoutMs: 60_000,
+  env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", REVENUE_LEDGER_DB: join(dir, "rev.db"), POSTHOG_API_KEY: "" },
 });
-let log = ""; proc.stdout.on("data", (d) => { log += d; }); proc.stderr.on("data", (d) => { log += d; });
-const base = `http://127.0.0.1:${port}`;
+const base = srv.url;
 const auth = { Authorization: `Bearer ${TOKEN}` };
 const update = (body) => fetch(`${base}/__operator/refunds/update`, { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify(body) });
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted");
+  ok(true, "server booted");
 
   const list = await fetch(`${base}/__operator/refunds.json?status=owed`, { headers: auth });
   const owed = list.ok ? (await list.json()).refunds : [];
@@ -95,9 +92,8 @@ try {
   for (let i = 0; i < 300 && !limited; i++) { const r = await update({ id: 999999, action: "claim" }); if (r.status === 429) limited = r; }
   ok(limited && limited.headers.get("retry-after") === "60", "the ledger routes are still rate limited, with Retry-After");
 } finally {
-  proc.kill("SIGTERM");
-  await new Promise((r) => setTimeout(r, 300));
-  if (fail) console.log(log.slice(-2000));
+  await srv.stop();
+  if (fail) console.log(srv.log().slice(-2000));
   rmSync(dir, { recursive: true, force: true });
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
