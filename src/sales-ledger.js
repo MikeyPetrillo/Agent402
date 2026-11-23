@@ -441,6 +441,12 @@ async function insertAbsentFileSales(sinceTs) {
   // A table row is known by its uid AND by its whole row, so a file row without
   // a uid (a file-only build's) is matched as it always was.
   for (const x of r.rows) { have.add(rowKeyOf(x)); if (x.sale_uid) have.add(`uid|${x.sale_uid}`); }
+  // A repeat row the correction moved to sales_repeats (src/sale-repeats-correction.js)
+  // is still in the file: it counts as present, so a boot never puts it back.
+  if ((await stateQuery(`SELECT to_regclass($1) AS t`, [T("sales_repeats")])).rows[0]?.t) {
+    const moved = await stateQuery(`SELECT ts, slug, rail, payer, tx, sale_uid FROM ${T("sales_repeats")} WHERE ts >= $1`, [minTs]);
+    for (const x of moved.rows) { have.add(rowKeyOf(x)); if (x.sale_uid) have.add(`uid|${x.sale_uid}`); }
+  }
   const seen = new Set();
   const missing = file.filter((x) => {
     const k = keyOf(x);

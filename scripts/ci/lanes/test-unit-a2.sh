@@ -187,6 +187,8 @@ t node scripts/test-attest-queued-sale-pg.js
 t node scripts/test-sale-repeats-pg.js
 # The operator routes for the same correction, on a ledger file and on the database (REAL postgres).
 t node scripts/test-sale-repeats-routes.js
+# Repeat sales moved out of Postgres stay out after a restart: the boot reconcile from the ledger file skips rows in sales_repeats, for the operator route and scripts/sale-repeats.js --pg --apply alike (REAL Postgres)
+t node scripts/test-sale-repeats-restart.js
 # Buy, then attest the receipt's transaction at once, on a paid boot.
 t node scripts/test-attest-after-buy-pg.js
 # The gateway response cache is shared across replicas (needs this lane's Redis).

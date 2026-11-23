@@ -7441,7 +7441,7 @@ app.post("/__operator/sale-repeats/apply", async (req, res) => {
     if (r.busy) return res.status(409).json({ error: "a correction is already running", reason: r.busy });
     const summary = saleRepeatsSummary(r.plan);
     if (r.refused) return res.status(409).json({ error: `expect ${expect} but the ledger holds ${r.plan.rows} repeat row(s); read the dry run again`, applied: false, ...summary });
-    res.json({ applied: true, moved: r.moved, ...summary, note: "a running server leaves the moved rows out of its own figures already; its in-memory copy drops them at its next restart" });
+    res.json({ applied: true, moved: r.moved, ...summary, note: "a running server leaves the moved rows out of its own figures already; its in-memory copy drops them at its next restart, and they stay out after it (a boot never copies a moved row back from the ledger file)" });
   } catch (e) { saleRepeatsError(res, e); }
 });
 app.get("/__operator/dataset.json", (req, res) => {
