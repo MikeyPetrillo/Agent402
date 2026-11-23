@@ -55,7 +55,7 @@ import { decodePaymentHeader } from "../src/payment-header.js";
 // runs this suite (npm install --no-save, see deploy.yml), never by npm ci, so
 // the production image does not carry it. Missing or another version fails,
 // locally and in CI alike: a skipped interop check is not coverage.
-const MCP_CLIENT_VERSION = "2.30.0";
+const MCP_CLIENT_VERSION = "2.32.0";
 let x402MCPClient;
 try {
   ({ x402MCPClient } = await import("@x402/mcp"));

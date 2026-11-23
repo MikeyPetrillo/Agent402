@@ -94,7 +94,7 @@ jobs:
         if: github.event.inputs.card != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          node-version: 22
+          node-version: 24
       - name: Install deps + Chromium (card render)
         if: github.event.inputs.card != ''
         run: |

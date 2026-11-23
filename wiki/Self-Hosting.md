@@ -13,7 +13,7 @@ Run Agent402 on your own infrastructure for full control over pricing, data, rat
 
 ## Prerequisites
 
-- **Node.js >= 22.22.2** (the `engines` field in `package.json`; the hosted instance runs Node 22)
+- **Node.js >= 24.15.0** (the `engines` field in `package.json`; the hosted instance runs Node 24)
 - **git**
 - **Optional:** Redis (response caching), Postgres (the state database via `STATE_DATABASE_URL`, and analytics/call tracking)
 - **Optional:** Chromium + ffmpeg if you want browser/media tools (Chromium via `npx playwright install --with-deps chromium`, ffmpeg from your OS package manager; the project's own `Dockerfile` installs both). Transcription (`transcribe`, `transcribe-pro`) needs ffmpeg for every file except PCM WAV: without it, such a file answers `503`
@@ -35,7 +35,7 @@ The server starts on port 3000 by default (`PORT` env var overrides).
 
 ### Docker
 
-The repository ships its own `Dockerfile` (Node 22, Chromium, ffmpeg and OCR data, running as a non-root user), so the browser, media and OCR tools work in the container:
+The repository ships its own `Dockerfile` (Node 24, Chromium, ffmpeg and OCR data, running as a non-root user), so the browser, media and OCR tools work in the container:
 
 ```bash
 docker build -t agent402 .

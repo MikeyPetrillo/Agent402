@@ -136,7 +136,7 @@
     "src/tools/image-worker.js": "2026-11-09",
     "src/tools/insider-flow-kit.js": "2026-11-12",
     "src/tools/ipo-report-kit.js": "2026-11-21",
-    "src/tools/judge-kit.js": "2026-11-22",
+    "src/tools/judge-kit.js": "2026-11-23",
     "src/tools/kit.js": "2026-11-23",
     "src/tools/kit2.js": "2026-11-23",
     "src/tools/lazy-deps.js": "2026-11-22",

@@ -31,7 +31,7 @@
 // never parses the whole store, a crash never corrupts every report, and two
 // processes never overwrite each other's records. Tiny side indexes track
 // in-flight claims and owed refunds so the boot sweep / operator view read a
-// few bytes, not every report. A legacy single-file store is imported once.
+// few bytes, not every report.
 // Rollout switch = STRIPE_SECRET_KEY (same key as the MPP gate). The key needs
 // Checkout Sessions + Refunds write; it settles to your Stripe balance only.
 //
@@ -54,7 +54,7 @@
 import Stripe from "stripe";
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, basename, dirname } from "node:path";
+import { join, basename } from "node:path";
 import { sendReportReadyEmail } from "./email.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady, leased, stateStatementOutsideTx, withLease } from "./state-db.js";
 import { READBACK_FIRST_MS, READBACK_INTERVAL_MS, READBACK_PENDING_INTERVAL_MS, READBACK_MAX_PER_PASS, READBACK_CALL_TIMEOUT_MS, READBACK_LEASE_TTL_MS } from "./card-refund-readback.js";
@@ -281,9 +281,8 @@ const SESSION_RE = /^cs_[A-Za-z0-9_]+$/;
 
 const DATA_ROOT = () => (existsSync("/data") ? "/data" : "/tmp");
 // HUMAN_CHECKOUT_DIR points the record files elsewhere (a test server keeps its
-// own); the legacy single-file store is read beside that directory.
+// own).
 const DEFAULT_DIR = () => String(process.env.HUMAN_CHECKOUT_DIR || "").trim() || join(DATA_ROOT(), "human-checkout");
-const LEGACY_FILE = () => join(dirname(DEFAULT_DIR()), "human-checkout.json");
 
 function readJson(path) {
   try { return JSON.parse(readFileSync(path, "utf8")); } catch { return null; }
@@ -463,20 +462,6 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   const inFlight = new Map();       // sessionId -> Promise (generate-once within a process)
   const negative = new Map();       // sessionId -> { status, until }
   const NEG_TTL = { not_found: 60_000, unpaid: 10_000 };
-
-  // One-time import of the legacy single-file store (reports sold before the
-  // per-session layout) so every "yours to keep" link keeps resolving.
-  (function migrateLegacy() {
-    const legacy = readJson(LEGACY_FILE());
-    if (!legacy || typeof legacy !== "object") return;
-    let n = 0;
-    for (const [id, rec] of Object.entries(legacy)) {
-      if (!SESSION_RE.test(id) || existsSync(recPath(id))) continue;
-      if (writeJsonAtomic(recPath(id), rec)) n++;
-    }
-    try { renameSync(LEGACY_FILE(), `${LEGACY_FILE()}.migrated`); } catch { /* keep it; idempotent next boot */ }
-    log(`[human-checkout] migrated ${n} legacy report record(s) into ${dir}`);
-  })();
 
   // ---- the store: files, or rows with the files written through ------------
   // Every primitive answers at once on the files and in a promise on the

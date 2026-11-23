@@ -20,12 +20,14 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const strip = (v) => String(v).replace(/^[\^~]/, "");
 const rootDeps = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).dependencies || {};
-// Every @x402/* package ships at one version, so any @x402 literal (core is
-// transitive here and not in package.json) is held to the root's @x402/express;
-// @solana/kit and @solana-program/* to their own root rows.
+// Every @x402/* package ships at one version, so an @x402 literal is held to
+// its own root row when package.json declares the package (one held back on
+// its own, @x402/stellar on the Stellar SDK major, keeps its row) and to the
+// root's @x402/express otherwise; @solana/kit and @solana-program/* to their
+// own root rows.
 const X402_VERSION = strip(rootDeps["@x402/express"]);
 ok(/^\d+\.\d+\.\d+$/.test(X402_VERSION), `root @x402/express declares an exact-looking version (${X402_VERSION})`);
-const wantFor = (pkg) => pkg.startsWith("@x402/") ? X402_VERSION : (rootDeps[pkg] ? strip(rootDeps[pkg]) : null);
+const wantFor = (pkg) => rootDeps[pkg] ? strip(rootDeps[pkg]) : pkg.startsWith("@x402/") ? X402_VERSION : null;
 const TRACKED = Object.keys(rootDeps).filter((k) => k === "@solana/kit" || k.startsWith("@solana-program/"));
 ok(TRACKED.length >= 2, `tracks @x402/* plus ${TRACKED.length} Solana client packages from package.json (${TRACKED.join(", ")})`);
 

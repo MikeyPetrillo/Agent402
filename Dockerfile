@@ -7,16 +7,16 @@
 # that mounts /data keeps working. See the Security-Model wiki page.
 #
 # Base image pinned by DIGEST for reproducible builds and CVE traceability
-# (audit: "mutable deployment artifacts"). node:22-slim = 22.23.5-slim, the
-# November 2026 security release (re-pinned 2026-11-11); the previous pin was
-# 22.23.4-slim from 2026-10-21. All five slim Dockerfiles share this digest;
+# (audit: "mutable deployment artifacts"). node:24-slim = 24.22.3-slim, the
+# November 2026 security release on the Node 24 LTS line (moved from
+# 22.23.5-slim on 2026-11-23). All five slim Dockerfiles share this digest;
 # the tollbooth image runs the same patch on alpine
 # (scripts/test-dockerfile-node-patch.js keeps every node base on one patch).
 # Re-pin after a deliberate base bump with:
-#   docker pull node:22-slim
-#   docker inspect --format='{{index .RepoDigests 0}}' node:22-slim
-# (or, without docker: registry.hub.docker.com/v2/repositories/library/node/tags/22-slim -> .digest)
-FROM node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+#   docker pull node:24-slim
+#   docker inspect --format='{{index .RepoDigests 0}}' node:24-slim
+# (or, without docker: registry.hub.docker.com/v2/repositories/library/node/tags/24-slim -> .digest)
+FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 
 WORKDIR /app
 ENV NODE_ENV=production

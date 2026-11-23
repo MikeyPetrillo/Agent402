@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1128 variables in 113 groups.
+1127 variables in 113 groups.
 
 ## Contents
 
@@ -286,7 +286,7 @@ holds it.
 | `CREDITS_BALANCE_MAX_USD` | The most one credits key's balance may hold, in USD; a pack or top-up above it is not offered. | `100` | `src/changelog.js`, `src/credits-sales.js` |
 | `CREDITS_DAILY_MAX_USD` | The most one buyer may buy in prepaid credits in any 24 hours, in USD; a pack above it is not offered. | `50` | `src/credits-sales.js` |
 | `CREDITS_DEBIT_WAIT_MS` | Credits debit wait, in milliseconds. | `3000` | `src/credits.js` |
-| `CREDITS_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout; the legacy human-checkout.json is read beside the latter). |  | `src/credits.js` |
+| `CREDITS_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout). |  | `src/credits.js` |
 | `CREDITS_EFW_AUTO_REFUND` | off, false, 0 or no stops the card refund made without review of a key's unspent balance after an early fraud warning (the key is still frozen and the balance listed as owed); on by default, inside the private table's day total (CREDITS_GUARDS_JSON). |  | `src/credits.js` |
 | `CREDITS_EU_UK_REQUIRE_TAX_ID` | Credits eu uk require tax id. |  | `src/credits.js` |
 | `CREDITS_GUARDS_FILE` | A file holding the private credits table, read when CREDITS_GUARDS_JSON is unset. |  | `src/credits-guards.js` |
@@ -558,7 +558,7 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `HUMAN_CHECKOUT_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout; the legacy human-checkout.json is read beside the latter). |  | `src/human-checkout.js` |
+| `HUMAN_CHECKOUT_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout). |  | `src/human-checkout.js` |
 | `HUMAN_CHECKOUT_FAIL_MAX` | Human checkout fail maximum. |  | `src/human-checkout.js` |
 | `HUMAN_CHECKOUT_HEARTBEAT_MS` | Human checkout heartbeat, in milliseconds. |  | `src/human-checkout.js` |
 | `HUMAN_CHECKOUT_REPLAY_MS` | Human checkout replay, in milliseconds. |  | `src/human-checkout.js` |
@@ -904,7 +904,7 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `RAILWAY_DEPLOYMENT_ID` | Railway deployment id. | `local` | `src/boot-profile.js`, `src/state-db.js` |
+| `RAILWAY_DEPLOYMENT_ID` | Railway deployment id. | `local` | `src/state-db.js` |
 | `RAILWAY_ENVIRONMENT` | Railway environment. |  | `src/model-catalog.js`, `src/production-env.js` |
 | `RAILWAY_ENVIRONMENT_NAME` | Railway environment name. |  | `src/mcp-loopback.js`, `src/model-catalog.js`, `src/production-env.js` and 1 more |
 | `RAILWAY_GIT_COMMIT_SHA` | Build id the host platform provides; read for /health, the MCP version and asset URLs. |  | `src/ledger-chrome.js`, `src/mcp-http.js`, `src/server.js` |
@@ -1575,7 +1575,6 @@ holds it.
 | `BING_SITE_URL` | Bing site URL. | `https://agent402.tools/` | `src/search-data.js` |
 | `BING_WEBMASTER_API_KEY` | Bing webmaster API key (a credential, set on the host). |  | `src/search-data.js` |
 | `BLS_API_KEY` | U.S. Bureau of Labor Statistics Public Data API v2 registration key (a credential, set on the host). fred-series reads BLS series keyless (v1, 25 queries a day) without it, 500 a day with it; reads are cached by decade. |  | `src/tools/us-macro-series.js` |
-| `BOOT_CPU_PROFILE` | Boot CPU profile. |  | `src/boot-profile.js` |
 | `BRAVE_ANSWERS_API_KEY` | Brave answers API key (a credential, set on the host). |  | `src/tools/search.js` |
 | `BRAVE_API_KEY` | Key for the web search tools (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/llm-context-kit.js`, `src/tools/search.js` |
 | `BUYER_REFUSAL_WINDOW_MS` | Buyer refusal window, in milliseconds. |  | `src/tool-failure-monitor.js` |

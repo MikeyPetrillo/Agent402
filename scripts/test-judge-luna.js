@@ -204,6 +204,49 @@ for (const [why, input] of [
   ok(r?.statusCode >= 500, "a Luna body with no answers is a failure, not an empty 200");
 }
 
+// ---- input_json parts: structured state, sent to Luna as given -------------
+{
+  const order = { id: "A-1", items: [{ sku: "X", qty: 2 }], paid: true, note: null };
+  const reply = { answers: [{ type: "predicate", name: "angry", probability: 0.1 }], usage: { input_tokens: 60, output_tokens: 0, total_tokens: 60 } };
+  const s = stub({ [OPENAI]: json(200, reply) });
+  const r = await decisions({ input: [{ role: "user", content: [{ type: "input_text", text: "The customer's order:" }, { type: "input_json", data: order }] }], questions: [DEC_IN.questions[1]] }, { fetchImpl: s.fetchImpl });
+  const sent = s.calls[0]?.body.input;
+  ok(Array.isArray(sent) && sent.length === 1 && sent[0].role === "user" && sent[0].content[0].type === "input_text" && sent[0].content[1].type === "input_json" && JSON.stringify(sent[0].content[1].data) === JSON.stringify(order), "an input_json part goes to Luna inside the user message, its data unchanged and in order");
+  ok(r.model === LUNA && r.answers[0].probability === 0.1, "...and Luna's answer comes back as for text");
+  const a = stub({ [OPENAI]: json(200, reply) });
+  await decisions({ input: [{ role: "user", content: [{ type: "input_json", data: [{ a: 1 }, { b: [1, 2] }] }] }], questions: [DEC_IN.questions[1]] }, { fetchImpl: a.fetchImpl });
+  ok(Array.isArray(a.calls[0]?.body.input) && Array.isArray(a.calls[0].body.input[0].content[0].data), "an array of objects is accepted as a JSON part's data");
+  const t = stub({ [OPENAI]: json(200, reply) });
+  await decisions({ input: [{ role: "user", content: [{ type: "input_text", text: "Only text." }] }], questions: [DEC_IN.questions[1]] }, { fetchImpl: t.fetchImpl });
+  ok(t.calls[0]?.body.input === "Only text.", "a request with no JSON part still goes upstream as one text string, as before");
+}
+{
+  const jev = { model: "jev-1.14.0", answers: { angry: { type: "noul", noul: 0.2 } }, usage: { input_tokens: 40 } };
+  const s = stub({ [OPENAI]: json(500, {}), [TYPESAFE]: json(200, jev) });
+  const r = await decisions({ input: [{ role: "user", content: [{ type: "input_text", text: "Order:" }, { type: "input_json", data: { id: "A-1", total: 12.5 } }] }], questions: [DEC_IN.questions[1]] }, { fetchImpl: s.fetchImpl });
+  ok(r.fallback_from === LUNA && s.calls[1]?.body.state === 'Order:\n\n{"id":"A-1","total":12.5}', "a Luna outage falls back to Jev with the JSON part rendered as its compact text");
+}
+{
+  let deep = { v: 1 }; for (let i = 0; i < 40; i++) deep = { d: deep };
+  const wide = { list: Array.from({ length: 10_001 }, () => 0) };
+  for (const [why, data, re] of [
+    ["a string", "not an object", /object or a non-empty array of objects/],
+    ["a number", 5, /object or a non-empty array of objects/],
+    ["null", null, /object or a non-empty array of objects/],
+    ["an empty array", [], /object or a non-empty array of objects/],
+    ["an array of numbers", [1, 2], /object or a non-empty array of objects/],
+    ["nesting past 32 levels", deep, /deeper than 32 levels/],
+    ["more than 10,000 values", wide, /more than 10000 values/],
+    ["a part larger than the state bound", { big: "x".repeat(9_000) }, /characters; this endpoint accepts/],
+  ]) {
+    const s = stub({});
+    let e = null; try { await decisions({ input: [{ role: "user", content: [{ type: "input_json", data }] }], questions: [DEC_IN.questions[1]] }, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+    ok(e?.statusCode === 400 && re.test(e?.message || "") && s.calls.length === 0, `an input_json part with ${why} is refused with a 400 before any upstream call (${e?.message?.slice(0, 80)})`);
+  }
+  const t = JUDGE_TOOLS.find((x) => x.slug === "decisions");
+  ok(/input_json/.test(t.description) && /images are not accepted/.test(t.description) && /input_json/.test(t.discovery.inputSchema.properties.input.description), "the listing names input_json parts and says images are not accepted");
+}
+
 for (const [why, answers] of [
   ["an empty answer list", []],
   ["a refusal", [{ type: "refusal", name: "department" }, { type: "predicate", name: "angry", probability: 0.4 }, { type: "score", name: "urgency", score: 0.7, probabilities: [], confidence: 0.4 }]],

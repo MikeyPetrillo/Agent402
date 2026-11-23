@@ -1,5 +1,5 @@
 import { siteOrgRef, mppOffered } from "./site-org.js";
-import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
+import { heapSamplingReport } from "./boot-profile.js"; // loop-lag monitor and heap sampling - must stay the FIRST import (see the file)
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { SERVER_VERSION } from "./server-version.js";
 import { mtaStsPolicy } from "./mta-sts.js";

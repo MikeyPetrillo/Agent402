@@ -76,7 +76,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: env.HAVE_KEY == 'true'
         with:
-          node-version: 22
+          node-version: 24
       - name: Install production deps
         if: env.HAVE_KEY == 'true'
         run: npm ci --omit=dev --ignore-scripts

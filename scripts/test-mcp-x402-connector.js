@@ -56,7 +56,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { verifyReceipt as verifySignedReceipt } from "../client/receipt.js";
 import { MCP_SIGNED_RECEIPT_META, lenientMcpAccept } from "../src/mcp-http.js";
 
-const MCP_CLIENT_VERSION = "2.30.0";
+const MCP_CLIENT_VERSION = "2.32.0";
 let x402MCPClient;
 try {
   ({ x402MCPClient } = await import("@x402/mcp"));

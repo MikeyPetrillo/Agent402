@@ -235,10 +235,10 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   unobserved runs (the age of the newest paywall row on /api/status) and closes on its next observed
   read. Roll back the server before (or with) the status Worker, never the
   Worker alone: an older Worker reads the unpaid-quote budget's 429 as a paywall failure.
-  The Base unproven cap keys are versioned (`base-unproven-seller-v2`, `-v2-sum`): a rolled-back
-  build books in its own unversioned window, so for as long as it serves the two builds' caps are
-  independent (each seller and the lane can be paid up to one cap per build), and on the next
-  roll-forward each sum's next rebuild (within a day) folds in that window's unexpired entries.
+  The Base unproven cap keys are versioned (`base-unproven-seller-v2`, `-v2-sum`): a build older
+  than the versioned keys books in its own unversioned window, which no current build reads, so
+  a rollback that far makes the two builds' caps independent (each seller and the lane can be paid
+  up to one cap per build) for as long as it serves.
 - **Every status word has a pager:** each word on `/api/gateway-status` is read by a status Worker
   alarm (`scripts/test-status-word-pagers.js` boots the server and fails on a word no verdict reads;
   none is excused). Paged on their alarm values only, by the Worker and `heartbeat.yml` under one

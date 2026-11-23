@@ -5,7 +5,7 @@
   "description": "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. Agent402.Tools is the open-source, self-hostable x402 + MCP server: 500+ ready tools and 80+ skill packs on the same rails, a crawled index and router for outside x402 sellers, plus a pay-per-crawl tollbooth. Run free, or charge per call over x402 (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar & Algorand - plus USDG on Robinhood Chain). 14 chains supported.",
   "main": "src/server.js",
   "engines": {
-    "node": ">=22.22.2"
+    "node": ">=24.15.0"
   },
   "scripts": {
     "test": "node scripts/contributor-checks.js",
@@ -68,12 +68,14 @@
     "@solana-program/compute-budget": "0.19.0",
     "@solana-program/token": "0.17.0",
     "@solana/kit": "8.6.0",
-    "@x402/avm": "^2.30.0",
-    "@x402/evm": "^2.30.0",
-    "@x402/express": "^2.30.0",
-    "@x402/fetch": "^2.30.0",
-    "@x402/stellar": "^2.30.0",
-    "@x402/svm": "^2.30.0",
+    "@x402/avm": "^2.32.0",
+    "@x402/core": "^2.32.0",
+    "@x402/evm": "^2.32.0",
+    "@x402/express": "^2.32.0",
+    "@x402/extensions": "^2.32.0",
+    "@x402/fetch": "^2.32.0",
+    "@x402/stellar": "~2.30.0",
+    "@x402/svm": "^2.32.0",
     "@zxing/library": "^0.21.3",
     "algosdk": "^3.9.0",
     "better-sqlite3": "^12.11.1",

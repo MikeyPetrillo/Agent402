@@ -38,7 +38,7 @@ import { openFacilitatorRefusal, tokenMatches } from "./access-policy.js";
 // the copies equal); it lives here because Dockerfile.facilitator copies an
 // explicit file list. Node's TLS client reads tls.checkServerIdentity at
 // connect time, so replacing it covers node:https, fetch and the SDKs' HTTP
-// clients. REMOVAL: drop it once the pinned node:22-slim base image ships a
+// clients. REMOVAL: drop it once the pinned node:24-slim base image ships a
 // CA store that no longer builds this path.
 const DISTRUSTED_SPKI_SHA256 = new Map([
   ["ebed6475c2c2d80fcb199f3fe8dd6e6b3ce60b77eb15d4e42c3dec0c6f5b5105", "EM DV TLS CA - G3B"],
