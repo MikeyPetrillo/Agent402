@@ -61,7 +61,7 @@ Every variable the server reads (all optional):
 | `AGENT402_BUDGET` | _(unset, no cap)_ | Optional hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. A call it refuses names the setting to raise. Applies to the wallet and the credits path. |
 | `AGENT402_MAX_USD_PER_DAY` | _(unset, no cap)_ | Optional cap on USD spent per UTC day, kept across restarts (and shared by every copy of this server for the same user) in `spend.json` (mode 0600) in the config folder. A call it refuses says what is left and when the day resets. `off` means no cap; a value that is not a USD amount refuses paid calls until fixed. |
 | `AGENT402_MAX_USD_PER_MONTH` | _(unset, no cap)_ | The same per UTC calendar month. |
-| `AGENT402_CONFIG_DIR` | per-user config folder | Where `spend.json` (and, without a keychain, the key file) live: `~/Library/Application Support/agent402` on macOS, `%APPDATA%\agent402` on Windows, `~/.config/agent402` elsewhere. |
+| `AGENT402_CONFIG_DIR` | per-user config folder | Where `spend.json` (and, without a keychain, the key file) live: `~/Library/Application Support/agent402` on macOS, `%APPDATA%\agent402` on Windows, `~/.config/agent402` elsewhere. The key file is kept only in a folder no other user can write to. |
 | `AGENT402_OUTPUT_DIR` | `~/Downloads/agent402` | Where media answers are written (the OS temp folder when `~/Downloads` is absent or cannot be written). |
 | `AGENT402_MEDIA_INLINE` | _(unset)_ | `1` returns media answers inline (an image or audio content block, or base64) instead of as files. |
 | `AGENT402_MEDIA_INLINE_MAX_BYTES` | `1048576` (1 MB) | An image answer up to this size is also returned inline as an image content block, so the model sees it, beside its file. `0` sends every image to the file only. |
@@ -92,8 +92,11 @@ tighter ceiling, or `off` for none.
 
 **One-time free call.** A server may serve a wallet's first paid call on an
 eligible route free (its first-call allowance: the answer carries
-`X-Agent402-Allowance: first-call` and no settlement receipt). Such a call is
-labeled "One-time free call" in the tool result and counts against no cap.
+`X-Agent402-Allowance: first-call` and no settlement receipt). From the
+default host such a call is labeled "One-time free call" in the tool result and
+is not counted as spent; its signed payment stays held against the caps until
+the authorization expires unused. From any other host the header alone is a
+paid call.
 
 **Media answers as files.** An answer that is bytes (an image, audio, video or
 PDF), or a JSON answer with a large base64 media field, is written to a file in

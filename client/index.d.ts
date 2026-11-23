@@ -147,7 +147,7 @@ export interface SpendingSummary {
   heldUsd: number;
   heldCalls: number;
   heldByHost: Record<string, number>;
-  /** Paid calls the server served free under its first-call allowance (counted against no cap). */
+  /** Paid calls the built-in host served under its first-call allowance (not settled spend; the sent payment is held in `heldUsd` until its authorization expires). */
   freeCalls: number;
   limits: { maxPerCallUsd: number | null; dailyLimitUsd: number | null; maxPerHostUsd: number | null };
 }

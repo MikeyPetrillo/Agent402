@@ -591,8 +591,9 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
 
   let res;
   let heldNote = "";
-  // A paid call the server served under its first-call allowance: nothing
-  // was charged, so it counts against no cap (firstCallGrant).
+  // A paid call the default host served under its first-call allowance:
+  // nothing was charged, and the signed payment is held, not spent
+  // (firstCallGrant).
   let freeGrant = false;
   if (!HAS_WALLET && HAS_CREDITS) {
     // Credits key: same budget guards as the wallet path, against the same
@@ -695,10 +696,12 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     if (entry.sent && takenFirst) {
       addSpent(entry.usd);
       if (!res.ok) heldNote = ` The payment of $${entry.usd} was taken before the call ran, so it counts as spent against AGENT402_BUDGET and is owed back, refunded after on-chain proof${resent ? "; the same payment, sent once more, failed too" : "; sending the same payment again runs the call at no further charge"}.`;
-    } else if (entry.sent && firstCallGrant(res)) {
-      // Served under the first-call allowance: the server verified the
-      // payment and did not settle it, so nothing was spent.
+    } else if (entry.sent && firstCallGrant(res, url)) {
+      // The default host served it under the first-call allowance: verified
+      // and not settled, so it is not spent, but the signed authorization
+      // left this process and stays held until it expires unused.
       freeGrant = true;
+      holdPayment(entry.usd, entry.until ?? Date.now() + OWN_HOST_BLIND_HOLD_MS);
     } else if (entry.sent) {
       if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) addSpent(entry.usd);
       else if (res.status >= 400 && url.origin === DEFAULT_ORIGIN) {
@@ -730,11 +733,13 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
 // The server's first-call allowance (src/first-call-allowance.js on the
 // default host): a wallet's first paid call on an eligible route is served
 // with the header X-Agent402-Allowance: first-call and no settlement receipt.
-// Read only on a 2xx answer that carries no PAYMENT-RESPONSE, so a call that
-// was settled is always counted.
-const FIRST_CALL_LABEL = "One-time free call: this wallet's first paid call was served by the first-call allowance, and its x402 payment was verified and never settled, so nothing was charged and it counts against no spending cap.";
-function firstCallGrant(res) {
-  return res.ok
+// Read only from the default host's exact origin (DEFAULT_ORIGIN), on a 2xx
+// answer that carries no PAYMENT-RESPONSE, so a settled call, and any other
+// host's answer, is always counted: a seller holding the payment cannot
+// vouch that it was not taken.
+const FIRST_CALL_LABEL = "One-time free call: this wallet's first paid call was served by the first-call allowance, and its x402 payment was verified and not settled, so nothing was charged. The signed payment stays held against AGENT402_BUDGET until its authorization expires unused.";
+function firstCallGrant(res, url) {
+  return url?.origin === DEFAULT_ORIGIN && res.ok
     && String(res.headers.get("x-agent402-allowance") || "").trim().toLowerCase() === "first-call"
     && !res.headers.get("payment-response") && !res.headers.get("x-payment-response");
 }
