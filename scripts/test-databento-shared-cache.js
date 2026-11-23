@@ -6,7 +6,8 @@
 //   node scripts/test-databento-shared-cache.js
 //
 // REDIS_URL names the Redis when set (CI); otherwise a redis-server on PATH
-// (or /opt/homebrew/bin) is started on a free port and stopped afterwards.
+// (or /opt/homebrew/bin) is started on a unix socket of its own (no TCP port)
+// and stopped afterwards.
 // STATE_DATABASE_URL, when set, adds the warmer-lease half. Under CI a
 // missing Redis or database fails the run.
 //
@@ -30,7 +31,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -51,9 +52,10 @@ if (!REDIS_URL) {
     if (process.env.CI) { console.error(`FAIL - ${msg} (a missing dependency is a failure under CI)`); process.exit(1); }
     console.log(`SKIP - ${msg}`); process.exit(0);
   }
-  const [rp] = await getFreePorts(1);
-  redisProc = spawn(bin, ["--port", String(rp), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no"], { stdio: "ignore" });
-  REDIS_URL = `redis://127.0.0.1:${rp}`;
+  // A unix socket, not a TCP port: nothing is reserved before redis binds it.
+  const sock = join(DIR, "redis.sock");
+  redisProc = spawn(bin, ["--port", "0", "--unixsocket", sock, "--unixsocketperm", "700", "--save", "", "--appendonly", "no"], { stdio: "ignore" });
+  REDIS_URL = `unix://${sock}`;
 }
 const { createClient } = await import("redis");
 const redis = createClient({ url: REDIS_URL });
@@ -87,28 +89,31 @@ stub = createServer((req, res) => {
 await new Promise((r) => stub.listen(0, "127.0.0.1", r));
 const STUB_URL = `http://127.0.0.1:${stub.address().port}`;
 
-function boot(tag, extra = {}) {
+// Boot on port 0 (the port is read back); resolves with `up` false when the
+// server never answered /health. stores: false: the store paths are this
+// suite's own, set below.
+async function boot(tag, extra = {}) {
   mkdirSync(join(DIR, tag), { recursive: true });
-  let log = "";
-  const port = extra.PORT;
-  const child = spawn(process.execPath, ["--import", "./scripts/lib/databento-stub-preload.js", "src/server.js"], {
-    env: {
-      ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", RAILWAY_REPLICA_ID: tag,
-      X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", POSTHOG_API_KEY: "",
-      STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_STUB_URL: STUB_URL, DATABENTO_SHARED_PREFIX: PREFIX, REDIS_URL,
-      DATABENTO_RANGE_TIMEOUT_MS: "800", DATABENTO_COST_TIMEOUT_MS: "800", DATABENTO_DATA_TIMEOUT_MS: "1200",
-      AGENT402_OPERATOR_TOKEN: OP, AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
-      STATS_DB_DIR: join(DIR, tag), MEMORY_DB_FILE: join(DIR, `${tag}-agent402.db`), POW_DB_PATH: join(DIR, `pow-${tag}.db`), STATUS_DB_PATH: join(DIR, `${tag}-status.db`),
-      X402_ECONOMY_DB: join(DIR, `${tag}-economy.db`), SALES_LEDGER_DB: join(DIR, `${tag}-sales.db`), REFUND_DB_DIR: join(DIR, tag), DECIDE_LEDGER_DB: join(DIR, `${tag}-decide.db`),
-      REVENUE_LEDGER_DB: join(DIR, `${tag}-revenue.db`), TRAFFIC_DIR: join(DIR, `${tag}-traffic`), WISH_FILE: join(DIR, `${tag}-wishes.jsonl`), OUTBOUND_LEDGER_FILE: join(DIR, `${tag}-outbound.ndjson`),
-      HANGUP_FORGIVE_FILE: join(DIR, `${tag}-hangup.json`), WALLET_DAILY_LEDGER_FILE: join(DIR, `${tag}-spend.json`), EMAIL_STATUS_FILE: join(DIR, `${tag}-email.json`), MPP_RECONCILE_FILE: join(DIR, `${tag}-reconcile.json`),
-      ...extra, PORT: String(port),
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const o = { child, port, tag, get log() { return log; } };
-  child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
+  const o = { child: null, port: 0, tag, up: false, bootLog: "", get log() { return this.srv ? this.srv.log() : this.bootLog; } };
   procs.push(o);
+  try {
+    o.srv = await bootServer({
+      stores: false, args: ["--import", "./scripts/lib/databento-stub-preload.js"],
+      env: {
+        TRUST_PROXY_HOPS: "1", FREE_MODE: "true", RAILWAY_REPLICA_ID: tag,
+        X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", POSTHOG_API_KEY: "",
+        STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_STUB_URL: STUB_URL, DATABENTO_SHARED_PREFIX: PREFIX, REDIS_URL,
+        DATABENTO_RANGE_TIMEOUT_MS: "800", DATABENTO_COST_TIMEOUT_MS: "800", DATABENTO_DATA_TIMEOUT_MS: "1200",
+        AGENT402_OPERATOR_TOKEN: OP, AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
+        STATS_DB_DIR: join(DIR, tag), MEMORY_DB_FILE: join(DIR, `${tag}-agent402.db`), POW_DB_PATH: join(DIR, `pow-${tag}.db`), STATUS_DB_PATH: join(DIR, `${tag}-status.db`),
+        X402_ECONOMY_DB: join(DIR, `${tag}-economy.db`), SALES_LEDGER_DB: join(DIR, `${tag}-sales.db`), REFUND_DB_DIR: join(DIR, tag), DECIDE_LEDGER_DB: join(DIR, `${tag}-decide.db`),
+        REVENUE_LEDGER_DB: join(DIR, `${tag}-revenue.db`), TRAFFIC_DIR: join(DIR, `${tag}-traffic`), WISH_FILE: join(DIR, `${tag}-wishes.jsonl`), OUTBOUND_LEDGER_FILE: join(DIR, `${tag}-outbound.ndjson`),
+        HANGUP_FORGIVE_FILE: join(DIR, `${tag}-hangup.json`), WALLET_DAILY_LEDGER_FILE: join(DIR, `${tag}-spend.json`), EMAIL_STATUS_FILE: join(DIR, `${tag}-email.json`), MPP_RECONCILE_FILE: join(DIR, `${tag}-reconcile.json`),
+        ...extra,
+      },
+    });
+    o.child = o.srv.child; o.port = o.srv.port; o.up = true;
+  } catch (e) { o.bootLog = String(e?.message || e); }
   return o;
 }
 const call = async (srv, path, ms = 10_000) => {
@@ -119,17 +124,14 @@ const call = async (srv, path, ms = 10_000) => {
   } catch (e) { return { status: 0, body: null, text: String(e?.message || e) }; }
 };
 const perf = (srv) => fetch(`http://127.0.0.1:${srv.port}/__operator/perf.json?top=1`, { headers: { Authorization: `Bearer ${OP}` }, signal: AbortSignal.timeout(5000) }).then((r) => r.json()).then((j) => j.stockQuoteWarmer).catch(() => null);
-const healthy = (srv) => until(async () => (await call(srv, "/health", 2000)).status === 200, 120_000, 500);
 const errText = (r) => r.body?.error || r.body?.message || r.body?.detail || r.text;
 const NOT_CHARGED = /nothing was charged - retry shortly/;
-const kill = (srv) => { try { srv.child.kill("SIGKILL"); } catch { /* gone */ } };
+const kill = (srv) => { try { srv.child?.kill("SIGKILL"); } catch { /* gone */ } };
 
 try {
-  const [PA, PB] = await getFreePorts(2);
   // Warmer off for a and b: every upstream call is a request's own.
-  const A = boot("a", { PORT: PA, DATABENTO_WARM: "off" });
-  const B = boot("b", { PORT: PB, DATABENTO_WARM: "off" });
-  ok(await healthy(A) && await healthy(B), "two servers boot on one Redis with the market-data stub");
+  const [A, B] = await Promise.all([boot("a", { DATABENTO_WARM: "off" }), boot("b", { DATABENTO_WARM: "off" })]);
+  ok(A.up && B.up, "two servers boot on one Redis with the market-data stub");
 
   // ---- a. every stalled read is a 503, never a 500
   up.stall.range = true;
@@ -210,15 +212,13 @@ try {
     process.env.STATE_DB_SCHEMA = schema;
     const sdb = await import("../src/state-db.js");
     const P2 = `${PREFIX}d:`;
-    const [PC, PD] = await getFreePorts(2);
-    const dEnv = (port) => ({ PORT: port, STATE_DATABASE_URL: pgUrl, STATE_DB_SCHEMA: schema, DATABENTO_SHARED_PREFIX: P2,
+    const dEnv = () => ({ STATE_DATABASE_URL: pgUrl, STATE_DB_SCHEMA: schema, DATABENTO_SHARED_PREFIX: P2,
       DATABENTO_RANGE_REFRESH_MS: "1500", DATABENTO_WARM_RETRY_MS: "300", DATABENTO_WARM_TOP_N: "5" });
     up.end = "2026-10-12";
     const d0 = up.calls.length;
-    const C = boot("c", dEnv(PC));
-    const D = boot("d", dEnv(PD));
+    const [C, D] = await Promise.all([boot("c", dEnv()), boot("d", dEnv())]);
     try {
-      ok(await healthy(C) && await healthy(D), "d. two servers boot on one state schema and one Redis, warmer on");
+      ok(C.up && D.up, "d. two servers boot on one state schema and one Redis, warmer on");
       ok(await until(async () => (await perf(C))?.range?.end === "2026-10-12" && (await perf(D))?.range?.end === "2026-10-12", 30_000, 250), "d. both hold the session boundary after their boot ticks");
       const audits1 = count((c, i) => i >= d0 && c.kind === "cost" && c.symbol === "AAPL" && c.end === "2026-10-12");
       ok(audits1 === 1, `d. one price audit for the session across both servers (${audits1})`);
