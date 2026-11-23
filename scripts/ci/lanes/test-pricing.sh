@@ -113,10 +113,6 @@ t node scripts/test-verify-refusal-reason.js
 t node scripts/test-paid-settle-breaker.js
 # onchain-sql queries per call on a booted server
 t node scripts/test-onchain-sql-queries-route.js
-# onchain-sql-range paid on Base: a 31-day walk in one call settled once, as a job settled once on delivery, the uncharged 422 settles nothing, onchain-sql's partial walk names it, the published example answers (paid + FREE_MODE boots, query service stubbed)
-t node scripts/test-onchain-sql-range-paid.js
-# onchain-sql-week paid on Solana with the keyed CDP client at its production URL: a 7-day walk answers inside the Solana budget and settles once, slow days end it on time marked partial, the uncharged 422 settles nothing (paid boot, CDP origin answered by the test, offline)
-t node scripts/test-onchain-sql-week-solana.js
 # onchain-sql paid on Solana with the keyed CDP facilitator client at its production URL: a query leaves within 300 ms of its own verify answer and is served beside other facilitator traffic; an unreadable 200 is an unsettled 502 (paid boot, CDP origin answered by the test, offline)
 t node scripts/test-onchain-sql-paid-path.js
 # Refund debts for sales named by settle tx: dry by default, ledger row decides payer and price, skips named, idempotent, operator only (FREE_MODE boot, seeded ledger)

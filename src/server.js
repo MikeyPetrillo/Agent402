@@ -680,7 +680,6 @@ import { BARCODE_TOOLS } from "./tools/barcode-kit.js";
 import { DATA_TOOLS } from "./tools/data-kit.js";
 import { HOLIDAY_TOOLS } from "./tools/holidays-kit.js";
 import { VALIDATE_MORE_TOOLS } from "./tools/validate-more-kit.js";
-import { SOLANA_RPC_TOOLS } from "./tools/solana-rpc-kit.js";
 import { IMAGE_TOOLS } from "./tools/image-kit.js";
 import { X402_TOOLS } from "./tools/x402-kit.js";
 import { B20_TOOLS } from "./tools/b20-kit.js";
@@ -798,9 +797,6 @@ import { SANCTIONS_TOOLS, startSanctionsRefresh, startSanctionsPayoutStore, sanc
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
 import { SETTLE_FIRST_CATALOG_TOOLS, settleFirstSlugs } from "./settle-first-tools.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";
-import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled } from "./tools/farcaster-social-kit.js";
-// Listed only when a Neynar/Warpcast key is present (same rule as the X data kit).
-const FARCASTER_SOCIAL_TOOLS_ENABLED = farcasterSocialEnabled() ? FARCASTER_SOCIAL_TOOLS : [];
 import { CRYPTO_MARKETS_TOOLS } from "./tools/crypto-markets-kit.js";
 import { ATTEST_TOOLS, setIdentityBoundSlugs } from "./tools/attest-kit.js";
 import { CRYPTO_SCREENS_TOOLS } from "./tools/crypto-screens-kit.js";
@@ -917,12 +913,12 @@ setPaidRecordLedger({ payerHasPaidSale, salesLedgerLoaded });
 
 // Listed only with a key, like every other env-gated kit: a tool we cannot serve
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
-const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePreviewEnabled() ? JUDGE_PREVIEW_TOOLS : [])];
+const JUDGE_TOOLS_ENABLED = judgeEnabled() ? JUDGE_TOOLS : [];
 // Own traffic on a decision or run: a signed probe (heartbeat token, the
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...VALIDATE_MORE_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...DOMAIN_AVAILABILITY_TOOLS, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...PARSE_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...SOLANA_RPC_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...REDACT_CHAT_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...VALIDATE_MORE_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...DOMAIN_AVAILABILITY_TOOLS, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...PARSE_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...REDACT_CHAT_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -937,7 +933,7 @@ const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZ
 // code, and the model-backed ones are named rather than hidden - so the copy
 // now says that and derives its counts from here.
 const MODEL_BACKED_KITS = [
-  ...JUDGE_TOOLS, ...JUDGE_PREVIEW_TOOLS,   // model-backed whether or not the key is set, so the claim is never wrong
+  ...JUDGE_TOOLS,   // model-backed whether or not the key is set, so the claim is never wrong
   ...LOOP_GATE_TOOLS,                       // the loop gate sells the same judgment (its code-only stops are still a model-backed route)
   ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...IMAGE_GEN_TOOLS, ...IMAGES_FAST_TOOLS, ...TTS_TOOLS, ...DUB_TOOLS, ...REDACT_CHAT_TOOLS, ...STT_TOOLS,
   ...EMBED_TOOLS, ...MODERATE_TOOLS, ...PDF_SUMMARIZE_TOOLS,
@@ -1007,7 +1003,6 @@ import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
 import { judgeTimingReport } from "./judge-timing.js";
 import { returningWalletEnabled, returningWalletOfferMiddleware, returningWalletStatus, configureReturningWallet } from "./returning-wallet.js";
-import { JUDGE_PREVIEW_TOOLS, judgePreviewEnabled } from "./tools/judge-preview-kit.js";
 import { LOOP_GATE_TOOLS } from "./tools/loop-gate-kit.js";
 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
@@ -4018,11 +4013,10 @@ if (UNPAID_BUDGET) app.use(UNPAID_BUDGET.middleware);
 const MB = 1024 * 1024;
 const LARGE_BODY_ROUTES = [
   ["/v1/audio/transcriptions", 26 * MB], ["/v1/pro/audio/transcriptions", 26 * MB],
-  ["/v1/judge/vision", 23 * MB], ["/v1/judge/locate", 6 * MB], ["/v1/judge/long", 2 * MB],
   ["/api/html-frames", 12 * MB], ["/v1/images/edits", 34 * MB],
   // onchain-sql takes SQL to 60,000 characters (SQL_MAX_CHARS), which JSON
   // escaping can double on the wire past the global 100 KB parser.
-  ["/api/onchain-sql", 256 * 1024], ["/api/onchain-sql-range", 256 * 1024], ["/api/onchain-sql-week", 256 * 1024],
+  ["/api/onchain-sql", 256 * 1024],
   // The Office builders take 100,000 characters of text or 50,000 cells
   // (OFFICE_LIMITS.requestBytes), past the global parser once JSON-escaped.
   ["/api/xlsx-create", 2 * MB], ["/api/docx-create", 2 * MB], ["/api/pptx-create", 2 * MB],
@@ -4064,19 +4058,13 @@ app.use(["/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"], unlessBody
 app.use("/v1/metered", express.json({ limit: "1mb" }));
 if (REFERRAL_METERED_PATHS.length) app.use(REFERRAL_METERED_PATHS, express.json({ limit: "1mb" }));
 for (const [twin, limit] of REFERRAL_LARGE_BODY_ROUTES) app.use(twin, unlessBodyUnread(express.json({ limit, inflate: false })));
-// The Jev preview routes carry images (base64 in JSON) or a long document, so
-// they take a larger body than the global 100 kb. Each limit is the route's own
-// cap plus the JSON envelope; the handler checks every image and byte again.
-app.use("/v1/judge/vision", unlessBodyUnread(express.json({ limit: "23mb", inflate: false })));
-app.use("/v1/judge/locate", unlessBodyUnread(express.json({ limit: "6mb", inflate: false })));
-app.use("/v1/judge/long", unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
 // html-frames carries a whole HTML document (512 KB cap, checked by the
 // handler) and, for a frame check, up to 8 MB of baseline PNG as base64
 // (the handler's cap); the limit leaves room for the JSON escaping.
 app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", inflate: false })));
 // onchain-sql: a 60,000-character query is up to 120 KB once JSON-escaped;
 // the handler's own cap (SQL_MAX_CHARS) checks the text again.
-app.use(["/api/onchain-sql", "/api/onchain-sql-range", "/api/onchain-sql-week"], unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
+app.use(["/api/onchain-sql"], unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
 // Office builders: the caps in OFFICE_LIMITS are checked again by each handler.
 app.use(["/api/xlsx-create", "/api/docx-create", "/api/pptx-create"], unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
@@ -14733,14 +14721,17 @@ app.use((req, res) => {
     // skill packs in one morning, 2026-08-28): answer with the closest live
     // tools and the find route, and count it (tool_gone) so residual demand
     // for a retired route is visible. Status stays 404 for the route oracle.
-    if (req.path.startsWith("/api/") && !req.path.startsWith("/api/convert/")) {
-      const slug = req.path.replace(/^\/api\/(skill\/)?/, "").split("/")[0].replace(/[-_]+/g, " ").slice(0, 80);
+    // A retired /v1 route (the judge previews) answers the same 410 as a
+    // retired /api route, matched on its whole path (src/retired-tools.js).
+    const retiredV1 = req.path.startsWith("/v1/") ? retiredEntryFor(req.path) : null;
+    if (retiredV1 || (req.path.startsWith("/api/") && !req.path.startsWith("/api/convert/"))) {
+      const slug = (retiredV1 ? retiredV1.slug : req.path.replace(/^\/api\/(skill\/)?/, "").split("/")[0]).replace(/[-_]+/g, " ").slice(0, 80);
       let suggestions = [];
       try { suggestions = (findTools(CATALOG, slug, { k: 3, baseUrl: BASE_URL, powSlugs: POW_SLUGS }).results || []).map((r) => ({ slug: r.slug, route: r.route, price: r.price, name: r.name })); } catch { suggestions = []; }
       // A route we RETIRED is gone on purpose: 410, dated, with the
       // replacement (src/retired-tools.js). A 404 here read to outside probes
       // as a broken seller rather than a retired route.
-      const gone = retiredEntryFor(req.path);
+      const gone = retiredV1 || retiredEntryFor(req.path);
       if (gone) {
         const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
         const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}`, price: rep.price } : null;

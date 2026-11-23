@@ -53,8 +53,6 @@ t node scripts/test-glossary.js
 t node scripts/test-x402-leaderboard.js
 # x402-kit tests (transfer-auth typed data + live Base RPC reads)
 t node scripts/test-x402-kit.js
-# farcaster-social kit (offline)
-t node scripts/test-farcaster-social-kit.js
 # Algorand marketplace page tests (offline, fixture snapshot)
 t node scripts/test-algorand-page.js
 # Homepage tests (offline, fixture snapshot)
@@ -522,7 +520,6 @@ t node scripts/test-judge-kit.js
 t node scripts/test-loop-gate.js
 # Judgment backends: order, the private-table bound on Luna, one answer shape per route, /v1/decisions wire (offline, stubbed)
 t node scripts/test-judge-luna.js
-t node scripts/test-judge-preview.js
 # Judge timing: p50 and p95 per backend read and per walk, outcomes and fallbacks, on the operator view and an hourly log line (offline)
 t node scripts/test-judge-timing.js
 # The returning-wallet price: settings, routes never discounted, price math, the payment signer decides (never the hint), settle check, bounded ledger read (offline)

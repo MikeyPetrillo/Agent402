@@ -206,7 +206,6 @@ export const WALLET_ONLY_SLUGS = new Set([
   // chain-rpc-kit.js: one JSON-RPC read each (Alchemy CU when keyed, a public
   // node otherwise) - egress, so never free-tier.
   "chain-nonce", "chain-storage", "chain-pending", "chain-total-supply", "chain-erc1155-balance",
-  "fc-cast-search", "fc-channel-feed", "fc-trending", "fc-user-casts", "fc-cast", "fc-cast-replies", "fc-channel", "fc-user-search", "fc-cast-metrics",  // farcaster-social-kit.js (egress)
   "coin-price-by-contract", "coin-profile", "coin-history", "coin-ohlc", "coin-market-chart-range", "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search",
   "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer",  // crypto-markets-kit.js (egress)
   "attest",  // attest-kit.js (writes an EAS attestation on Base from the spending wallet: gas, never free)
@@ -220,15 +219,14 @@ export const WALLET_ONLY_SLUGS = new Set([
   "cve-lookup",  // cve-kit.js (egress: NVD, EPSS, CISA KEV)
   "funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health",  // crypto-screens-kit.js (egress, keyed plan budget)
   "lending-rates",  // lending-rates-kit.js (egress: contract reads through chain-kit's transport)
-  "crypto-news", "crypto-indicators", "crypto-market-pulse",  // crypto-signals-kit.js (egress)
+  "crypto-indicators", "crypto-market-pulse",  // crypto-signals-kit.js (egress)
   "site-map", "site-crawl",  // crawl-kit.js (egress)
   "page-change",  // page-change-kit.js (one fetch of a caller URL: egress)
-  // derivatives-kit (Hyperliquid/Deribit egress), x-data-kit (X API), b2b-enrich-kit (Hunter/Apollo) - 2026-08-22
+  // derivatives-kit (Hyperliquid egress), x-data-kit (X API), b2b-enrich-kit (Hunter/Apollo) - 2026-08-22
   "perp-markets", "perp-funding", "perp-funding-screener", "perp-open-interest", "perp-klines", "perp-orderbook", "perp-basis",
   "perp-dexs", "perp-dex-markets", "perp-dex-limits",  // HIP-3 builder-deployed perp dexs (Hyperliquid info egress) - 2026-09-18
-  "options-summary", "crypto-options-chain", "options-ticker",
-  "sol-token-safety", "sol-token-report", "sol-token-holders", "sol-token-pairs", "sol-token-search", "sol-trending", "sol-price", "sol-swap-quote", "sol-token-lookup",
-  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup", "x-post-counts", "x-trends",
+  "sol-token-safety", "sol-token-report", "sol-token-holders", "sol-token-pairs", "sol-token-search", "sol-trending", "sol-price",
+  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
   "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company", "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
   "extract", "meta", "dns", "render", "screenshot", "pdf", "multi-search",
   // Browser pool (a held Chromium slot per call): browser-measure-kit.js.
@@ -265,9 +263,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   "treasury-debt", "treasury-avg-rates",
   "fx-historical", "fx-timeseries", "fx-dashboard",
   "world-bank-indicator", "world-bank-search",
-  "fred-series", "fred-search", "fred-series-info", "fred-release-calendar",
+  "fred-series",
   "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",
-  "fred-release-observations",
   "edgar-company-lookup", "edgar-filings", "edgar-company-concept", "edgar-company-facts", "edgar-xbrl-frame",
   "edgar-insider-trades", "edgar-13f-holdings", "edgar-recent-ipos", "edgar-search",
   "edgar-13f-datasets", "edgar-13f-dataset-head",  // sec.gov bulk 13F data sets (index page + bounded Range reads) - 2026-09-18
@@ -343,20 +340,16 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Named chain-read primitives (2026-07-29): same shared public-RPC pool +
   // Alchemy lane as evm-rpc — PoW would let one client farm the quota.
   "block-number", "chain-info", "block-info", "erc721-owner", "contract-code", "event-logs",
-  // solana-rpc-kit.js: the Solana sibling of evm-rpc, on the shared Solana RPC
-  // list whose keyed lane counts against the provider's daily ceiling.
-  "solana-rpc",
   // Contract-kit: Sourcify (contract-source / contract-abi), openchain.xyz +
   // 4byte.directory signature DBs (selector-lookup, and calldata-decode's
   // no-ABI fallback path), and the shared keyless public RPC pool
   // (tx-simulate — same per-IP quota as evm-rpc). solidity-scan and
   // address-label are pure CPU and stay PoW-eligible.
   "contract-source", "contract-abi", "calldata-decode", "selector-lookup", "tx-simulate",
-  // Enrich-kit: GLEIF (lei-lookup), Wikidata (wikidata-entity), gravatar.com
-  // (gravatar-check — the hash is CPU but the probe is egress), api.github.com
+  // Enrich-kit: GLEIF (lei-lookup), Wikidata (wikidata-entity), api.github.com
   // (github-repo — shared 60/hr per-IP keyless quota PoW must not farm), and
   // arbitrary caller sites (favicon-grab). All egress → wallet-only.
-  "lei-lookup", "wikidata-entity", "gravatar-check", "github-repo", "favicon-grab",
+  "lei-lookup", "wikidata-entity", "github-repo", "favicon-grab",
   // Web-content kit: archive.org availability API (archive-snapshot), arbitrary
   // caller feed URLs (feed-parse), and redirect-chain following against
   // arbitrary caller URLs (unshorten-url). All egress → wallet-only.
@@ -376,10 +369,10 @@ export const WALLET_ONLY_SLUGS = new Set([
   // (compute-unit quota shared with chain-kit/dex-kit). All wallet-only for the same reasons.
   "mev-recent-blocks", "mev-builder-share", "mev-block-payment",
   "l2-gas-comparison",
-  // Onchain-identity-kit: ensideas (keyless), Neynar API (NEYNAR_API_KEY),
-  // EAS GraphQL indexers (keyless). All external HTTP; wallet-only for the
+  // Onchain-identity-kit: ensideas (keyless) and the EAS GraphQL indexers
+  // (keyless). All external HTTP; wallet-only for the
   // same reasons as the other crypto kits.
-  "ens-bulk-resolve", "farcaster-profile", "farcaster-by-address",
+  "ens-bulk-resolve",
   "eas-attestations",
   // NFT-market-kit: Alchemy NFT API v3 (shares ALCHEMY_API_KEY + compute-unit
   // pool with chain-kit / dex-kit / mev-and-l2-kit). 3 net-new market-side
@@ -533,7 +526,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // testnet-fund additionally spends a shared per-account faucet budget —
   // PoW would let one client drain it for free. onchain-sql burns real SQL
   // engine quota (100GB reads / 30s per query).
-  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema", "onchain-sql-range", "onchain-sql-week",
+  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
 ]);
 
 /** Wallet-only slugs that make no network call and read no stored state: they

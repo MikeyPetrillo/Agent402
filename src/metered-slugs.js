@@ -66,17 +66,12 @@ export const METERED_SLUGS = new Set([
   "decisions",       // the same judgment on the OpenAI Decisions wire
   "decide",          // decision service + model calls; CI runs no decide service
   "decide-execute",  // runs plans and pays sellers; CI runs no decide service
-  // FRED keyed (503 without FRED_API_KEY / FRED_API_KEY_V2)
-  "fred-series", "fred-search", "fred-series-info", "fred-release-calendar",
+  // FRED keyed (503 without FRED_API_KEY)
+  "fred-series",
   "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",
-  "fred-release-observations",
-  // Neynar / Farcaster
-  "farcaster-profile", "farcaster-by-address",
-  "fc-cast-search", "fc-channel-feed", "fc-trending", "fc-user-casts", "fc-cast",
-  "fc-cast-replies", "fc-channel", "fc-user-search", "fc-cast-metrics",
   // X API v2 app-only bearer (per-post read billing) and the enrichment
   // providers - each lists only with its own key, and 503s without it.
-  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup", "x-post-counts", "x-trends",
+  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
   "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company",
   "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
   // OpenRouter Image + Video APIs (flat per-image / per-second upstream price).
@@ -90,7 +85,7 @@ export const METERED_SLUGS = new Set([
   "nft-collection", "nft-floor",
   "l2-gas-comparison",
   // CDP (Coinbase Developer Platform keys)
-  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema", "onchain-sql-range", "onchain-sql-week",
+  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
 ]);
 
 /** Pack slugs (the name after "skill-") whose advertised toolSlugs reach a

@@ -30,7 +30,7 @@ export const SHAPE_HAPPY_PATH_ONLY = new Set([
   "/api/x402/seller-trust", // example shows an INDEXED seller in the unproven lane; a never-crawled one (every CI boot, crawler off) is the honest listed:false shape
   "/api/seller-payability", // the live legs differ by seller: a 200-answering endpoint, an unparseable 402 and a settled buy are all valid shapes
   // Model answers: usage is absent when the backend reports none.
-  "/v1/judge", "/v1/judge/long", "/v1/judge/vision", "/v1/judge/locate", "/v1/decisions",
+  "/v1/judge", "/v1/decisions",
 ]);
 
 const MAX_DEPTH = 4;      // deep enough for our shapes, shallow enough to bound the doc

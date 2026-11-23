@@ -1,7 +1,6 @@
 // X data kit - read-only X (Twitter) API v2 lookups with an app-only bearer
 // token: recent tweet search, a user profile, a user's timeline, a single
-// tweet, a bulk username lookup, post counts for a query, and trends for a
-// location.
+// tweet and a bulk username lookup.
 //
 // Env-gated: X_BEARER_TOKEN. `X_DATA_TOOLS` is exported unconditionally;
 // `xDataEnabled()` is the listing predicate the server uses (true iff the
@@ -156,14 +155,8 @@ const EXPANSION_INCLUDES = {
 };
 const INCLUDE_RATE = { users: "userRead", tweets: "postRead" };
 const expansionsOf = (params) => String(params?.expansions || "").split(",").map((s) => s.trim()).filter(Boolean);
-// Post counts and trends are billed per REQUEST on X's card, not per item
-// returned: `vendor.x.countsRequest` and `vendor.x.trendsRequest`.
-const PER_REQUEST = [[/^\/tweets\/counts\/recent$/, "countsRequest"], [/^\/trends\/by\/woeid\/[^/]+$/, "trendsRequest"]];
-const perRequestRate = (path) => { const hit = PER_REQUEST.find(([re]) => re.test(path)); return hit ? xRate(hit[1]) : null; };
 /** Worst-case cost of one read at X's card, from the path and params, expanded objects included. */
 export function estimateXReadUsd(path, params = {}) {
-  const flat = perRequestRate(path);
-  if (flat != null) return flat;
   let items, perItem;
   const timeline = /^\/users\/[^/]+\/tweets$/.test(path);
   if (/^\/tweets\/search\/recent$/.test(path) || timeline) { items = Math.max(1, Number(params.max_results) || 10); perItem = xRate("postRead"); }
@@ -182,8 +175,6 @@ export function estimateXReadUsd(path, params = {}) {
 }
 /** Actual cost of what came back: X bills per item returned, expanded objects included. */
 export function actualXReadUsd(path, data) {
-  const flat = perRequestRate(path);
-  if (flat != null) return flat;
   const n = Array.isArray(data?.data) ? data.data.length : (data?.data ? 1 : 0);
   const perItem = (/^\/tweets/.test(path) || /\/tweets$/.test(path)) ? xRate("postRead") : xRate("userRead");
   let usd = n * perItem;
@@ -221,8 +212,6 @@ export function xToolWorstCases(slug) {
     ];
     case "x-tweet": return [{ body: { id: "1" }, usd: estimateXReadUsd("/tweets/1", { "tweet.fields": TWEET_FIELDS }) }];
     case "x-users-lookup": return [{ body: { usernames: ["u"] }, usd: estimateXReadUsd("/users/by", { usernames: Array.from({ length: X_MAX_USERS_PER_LOOKUP }, (_, i) => `u${i}`).join(","), "user.fields": USER_FIELDS }) }];
-    case "x-post-counts": return [{ body: { query: "q", granularity: "minute" }, usd: estimateXReadUsd("/tweets/counts/recent", { query: "q", granularity: "minute" }) }];
-    case "x-trends": return [{ body: { woeid: 1, max_trends: 50 }, usd: estimateXReadUsd("/trends/by/woeid/1", { max_trends: 50, "trend.fields": TREND_FIELDS }) }];
     default: throw new Error(`no worst case for ${slug}`);
   }
 }
@@ -383,16 +372,6 @@ function shapeTweet(t, authors) {
 }
 
 const nowIso = () => new Date().toISOString();
-const TREND_FIELDS = "trend_name,tweet_count";
-const COUNT_GRANULARITIES = new Set(["minute", "hour", "day"]);
-// An RFC 3339 instant as X accepts it, or null when absent; anything else is a 400.
-function takeTime(raw, field) {
-  if (raw === undefined || raw === null || raw === "") return null;
-  const t = typeof raw === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(raw.trim()) ? Date.parse(raw.trim()) : NaN;
-  if (!Number.isFinite(t)) throw bad(`"${field}" must be an ISO 8601 timestamp with a zone, e.g. 2026-11-20T00:00:00Z`);
-  return new Date(t).toISOString();
-}
-const countOf = (b) => (typeof b?.post_count === "number" ? b.post_count : typeof b?.tweet_count === "number" ? b.tweet_count : null);
 
 // x-tweet and a timeline looked up by id read no author: X bills each object
 // an expansion returns, so they carry authorId, null author fields and an
@@ -702,126 +681,15 @@ export const X_DATA_TOOLS = [
       return { source: "x-api-v2", fetchedAt: nowIso(), count: users.length, users, notFound };
     },
   },
-  {
-    route: "POST /api/x-post-counts",
-    name: "X post counts",
-    slug: "x-post-counts",
-    category: "web",
-    price: "$0.01",
-    description:
-      "Count public posts on X (Twitter) matching a query over the last 7 days, bucketed by day, hour or minute, using X API v2 search operators (keywords, $cashtags, #hashtags, from:, lang:, -is:retweet). Returns the total and each bucket's start, end and count, plus a next_token when the window spans more buckets than one page holds. Counts only: no post text.",
-    tags: [...SHARED_TAGS, "counts", "volume", "mentions", "trend"],
-    discovery: {
-      bodyType: "json",
-      input: { query: "x402 -is:retweet", granularity: "day" },
-      inputSchema: {
-        properties: {
-          query: { type: "string", maxLength: 512, description: "X search query (max 512 chars). Supports X operators: from:user, #tag, $cashtag, lang:en, -is:retweet." },
-          granularity: { type: "string", description: "Bucket size: day (default), hour or minute." },
-          start_time: { type: "string", description: "Window start, ISO 8601 with a zone, within the last 7 days (default: 7 days ago)." },
-          end_time: { type: "string", description: "Window end, ISO 8601 with a zone (default: now)." },
-          next_token: { type: "string", maxLength: 200, description: "Pagination token from a previous response." },
-        },
-        required: ["query"],
-      },
-      output: {
-        example: {
-          source: "x-api-v2",
-          fetchedAt: "2026-11-20T14:10:00.000Z",
-          query: "x402 -is:retweet",
-          granularity: "day",
-          total: 102,
-          count: 2,
-          buckets: [
-            { start: "2026-11-18T00:00:00.000Z", end: "2026-11-19T00:00:00.000Z", count: 40 },
-            { start: "2026-11-19T00:00:00.000Z", end: "2026-11-20T00:00:00.000Z", count: 62 },
-          ],
-          nextToken: null,
-        },
-      },
-    },
-    handler: async (i) => {
-      const query = typeof i.query === "string" ? i.query.trim() : "";
-      if (!query) throw bad('"query" is required - an X search query, e.g. "x402 -is:retweet"');
-      if (query.length > 512) throw bad(`"query" is too long (${query.length} chars, max 512)`);
-      const granularity = i.granularity === undefined || i.granularity === null || i.granularity === "" ? "day" : String(i.granularity).toLowerCase();
-      if (!COUNT_GRANULARITIES.has(granularity)) throw bad('"granularity" must be "day", "hour" or "minute"');
-      const startTime = takeTime(i.start_time, "start_time");
-      const endTime = takeTime(i.end_time, "end_time");
-      if (startTime && endTime && Date.parse(endTime) <= Date.parse(startTime)) throw bad('"end_time" must be after "start_time"');
-      const nextToken = takeToken(i.next_token, "next_token");
-      const data = await xGet("/tweets/counts/recent", { query, granularity, start_time: startTime, end_time: endTime, next_token: nextToken });
-      const buckets = (Array.isArray(data.data) ? data.data : []).map((b) => ({ start: b?.start ?? null, end: b?.end ?? null, count: countOf(b) }));
-      const metaTotal = data.meta?.total_post_count ?? data.meta?.total_tweet_count;
-      return {
-        source: "x-api-v2",
-        fetchedAt: nowIso(),
-        query,
-        granularity,
-        total: typeof metaTotal === "number" ? metaTotal : buckets.reduce((a, b) => a + (b.count || 0), 0),
-        count: buckets.length,
-        buckets,
-        nextToken: data.meta?.next_token ?? null,
-      };
-    },
-  },
-
-  {
-    route: "POST /api/x-trends",
-    name: "X trends by location",
-    slug: "x-trends",
-    category: "web",
-    price: "$0.02",
-    description:
-      "Read the current trending topics on X (Twitter) for one location by its WOEID (1 for worldwide, 23424977 for the United States, 44418 for London): up to 50 trends with each trend's name and its post count where X reports one, plus the location's name, country and place type.",
-    tags: [...SHARED_TAGS, "trends", "trending", "topics", "woeid"],
-    discovery: {
-      bodyType: "json",
-      input: { woeid: 23424977, max_trends: 10 },
-      inputSchema: {
-        properties: {
-          woeid: { type: "number", description: "Yahoo Where On Earth id of the location: 1 worldwide, 23424977 United States, 44418 London." },
-          max_trends: { type: "number", description: "Trends to return, 1-50 (default 20)." },
-        },
-        required: ["woeid"],
-      },
-      output: {
-        example: {
-          source: "x-api-v2",
-          fetchedAt: "2026-11-20T14:10:00.000Z",
-          woeid: 23424977,
-          location: { woeid: 23424977, name: "United States", country: "United States", countryCode: "US", placeType: "country" },
-          count: 2,
-          trends: [{ name: "#Thanksgiving", postCount: 184000 }, { name: "Stablecoins", postCount: null }],
-        },
-      },
-    },
-    handler: async (i) => {
-      const woeid = Number(i.woeid);
-      if (i.woeid === undefined || i.woeid === null || i.woeid === "" || !Number.isInteger(woeid) || woeid < 1 || woeid > 2147483647) throw bad('"woeid" is required - a whole-number location id (1 worldwide, 23424977 United States)');
-      const maxTrends = takeMaxResults(i.max_trends, { min: 1, max: 50, dflt: 20 });
-      const data = await xGet(`/trends/by/woeid/${woeid}`, { max_trends: maxTrends, "trend.fields": TREND_FIELDS });
-      const loc = data.meta?.location || {};
-      const trends = (Array.isArray(data.data) ? data.data : []).map((t) => ({ name: t?.trend_name ?? null, postCount: typeof t?.tweet_count === "number" ? t.tweet_count : typeof t?.post_count === "number" ? t.post_count : null })).filter((t) => t.name);
-      return {
-        source: "x-api-v2",
-        fetchedAt: nowIso(),
-        woeid,
-        location: { woeid: loc.woeid ?? woeid, name: loc.name ?? null, country: loc.country ?? null, countryCode: loc.country_code ?? null, placeType: loc.place_type ?? null },
-        count: trends.length,
-        trends,
-      };
-    },
-  },
 ];
 
-export const __test = { takeTime, takeUsername, takeId, takeMaxResults, takeToken, shapeTweet, shapeUser, X_API, xGet };
+export const __test = { takeUsername, takeId, takeMaxResults, takeToken, shapeTweet, shapeUser, X_API, xGet };
 
 // Free text in these results is written by third parties (headlines, posts,
 // casts, token names and descriptions, page titles). Anyone can mint a token or
 // publish a post, so this is the cheapest prompt-injection delivery vehicle in
 // the catalog: flag it as data, never instructions, the way site-crawl does.
-const UNTRUSTED_TEXT_SLUGS = new Set(["x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup", "x-trends"]);
+const UNTRUSTED_TEXT_SLUGS = new Set(["x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup"]);
 for (const t of X_DATA_TOOLS) {
   if (!UNTRUSTED_TEXT_SLUGS.has(t.slug)) continue;
   const inner = t.handler;

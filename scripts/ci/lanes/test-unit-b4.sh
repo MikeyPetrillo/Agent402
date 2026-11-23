@@ -11,7 +11,7 @@ t node scripts/test-router-sybil.js
 t node scripts/test-data-kit.js
 # Holidays kit: public-holidays v4 contract, cache bounds, business-day math on published calendars, rails, exchanges (offline)
 t node scripts/test-holidays-kit.js
-# id-validate, build-log-triage, json-repair vectors and bounds; solana-rpc allowlist, failover, size caps and the keyed provider's ceiling (offline)
+# id-validate, build-log-triage, json-repair vectors and bounds (offline)
 t node scripts/test-validate-more-kit.js
 # The sweeps' server answers examples naming its own /samples/ and /fixtures/ files from itself, never production (offline)
 t node scripts/test-own-examples-preload.js

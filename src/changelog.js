@@ -10,7 +10,7 @@ import { walletSignInEnabled } from "./wallet-sign-in.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_SECONDS, sttLongEnabled, sttAdditions } from "./tools/stt-kit.js";
 import { speechAdditions } from "./tools/llm-gateway-kit.js";
-import { SQL_WINDOW_MAX_QUERIES, SQL_RANGE_MAX_DAYS, SQL_WEEK_MAX_DAYS, SQL_WALK_CHARGE } from "./tools/cdp-kit.js";
+import { SQL_WINDOW_MAX_QUERIES, SQL_WALK_CHARGE } from "./tools/cdp-kit.js";
 import { CSV_ANSWER_MAX_BYTES } from "./tools/kit.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER, WALLET_PROOF_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
@@ -55,6 +55,16 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 // the feed show it only while that function reads true (CHANGELOG.md scopes
 // the same item to a server that sets the switch).
 const ENTRIES = [
+  {
+    date: "2026-11-23",
+    title: "Thirty retired tools",
+    items: [
+      "Tools: Thirty tools are retired and answer 410 Gone with a Sunset date: solana-rpc, onchain-sql-week, onchain-sql-range, x-post-counts, x-trends, fc-cast-search, fc-cast-metrics, fc-channel-feed, fc-trending, fc-user-casts, fc-cast, fc-cast-replies, fc-channel, fc-user-search, farcaster-profile, farcaster-by-address, options-summary, crypto-options-chain, options-ticker, sol-swap-quote, sol-token-lookup, POST /v1/judge/vision, POST /v1/judge/locate, POST /v1/judge/long, fred-search, fred-series-info, fred-release-calendar, fred-release-observations, crypto-news and gravatar-check. onchain-sql-week and onchain-sql-range name onchain-sql, fred-release-observations names fred-series, the 410 for /v1/judge/long points to /v1/judge, and the rest name none; options-chain, retired earlier, now names none too. A partial onchain-sql walk no longer lists longer routes.",
+      "Tools: sol-price reads each mint's price, 24-hour change and liquidity from the deepest DEX pair that trades it, and its decimals with the slot they were read at from the mint account on chain. Its route and answer fields are unchanged, and `priceFrom` says whether a price came from a pair holding the mint as its base or its quote token.",
+      "Skill packs: macro-economics, macro-dashboard and macro-context read the same series without the release calendar step, and their prices follow.",
+      "Site: /markets lists perpetuals, market signals and DeFi, without an options group.",
+    ],
+  },
   {
     date: "2026-11-23",
     title: "Redact, then chat",
@@ -216,7 +226,7 @@ const ENTRIES = [
     date: "2026-11-22",
     title: "onchain-sql range and week",
     items: [
-      `Tools: New: onchain-sql-range reads up to ${SQL_RANGE_MAX_DAYS} days of a plain row select on solana.instructions in one call (x402 exact on EVM chains, as a job), and onchain-sql-week up to ${SQL_WEEK_MAX_DAYS} days on every payment rail, Solana included; a partial onchain-sql walk lists the routes that cover its range in \`longerRange\`.`,
+      `Tools: New: onchain-sql-range reads up to 31 days of a plain row select on solana.instructions in one call (x402 exact on EVM chains, as a job), and onchain-sql-week up to 7 days on every payment rail, Solana included; a partial onchain-sql walk lists the routes that cover its range in \`longerRange\`.`,
     ],
   },
   {

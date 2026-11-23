@@ -17,8 +17,9 @@
 //                      deliberately NOT called a second time.
 //   sol-token-safety   RugCheck summary + Jupiter audit - the banded risk level
 //   sol-token-pairs    DexScreener - live pairs, liquidity, 24h volume, age
-//   sol-token-lookup   Jupiter token index - profile, organic score, 24h stats
-//   sol-price          Jupiter price v3 - price of record with its block id
+//   token index        Jupiter token index - profile, organic score, 24h stats
+//                      (tokenIndexLookup, an input here, not a catalog route)
+//   sol-price          the deepest DEX pair's price, decimals and slot on chain
 //
 // Same skeleton as token-risk / recall-report: settleWithin() fan-out -> thin-evidence
 // refusal -> grounding-strict Opus synthesis -> numbered sources -> data
@@ -35,7 +36,7 @@ import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf, reportChat, costOf, settleWithin } from "../report-synthesis.js";
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { bad, upstreamUserId } from "./llm-gateway-kit.js";
-import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase } from "./solana-intel-kit.js";
+import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase, tokenIndexLookup } from "./solana-intel-kit.js";
 import { attribute } from "../data-attribution.js";
 import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
@@ -202,7 +203,7 @@ function makeTokenBriefHandlerInner(tierSlug) {
       settleWithin(H("sol-token-report")({ mint, marketLimit: t.markets, holderLimit: 20 }), PROBE_TIMEOUT_MS),
       settleWithin(H("sol-token-safety")({ mint }), PROBE_TIMEOUT_MS),
       settleWithin(H("sol-token-pairs")({ mint, limit: t.pairs }), PROBE_TIMEOUT_MS),
-      settleWithin(H("sol-token-lookup")({ query: mint, limit: 1 }), PROBE_TIMEOUT_MS),
+      settleWithin(tokenIndexLookup(mint, 1), PROBE_TIMEOUT_MS),
       settleWithin(H("sol-price")({ mints: [mint] }), PROBE_TIMEOUT_MS),
     ]);
     const report = reportR.ok ? reportR.data : null;
@@ -266,7 +267,7 @@ function makeTokenBriefHandlerInner(tierSlug) {
       `Holder count ${report?.totalHolders ?? jup?.holderCount ?? "unknown"}`,
       `Jupiter verified: ${jup ? String(jup.isVerified) : "unknown"}; organic score ${jup?.organicScore ?? "unknown"} (${jup?.organicScoreLabel || "no label"}); tags ${(jup?.tags || []).join(", ") || "none"}`,
       `Launchpad ${report?.launchpad ?? jup?.launchpad ?? "none reported"}; first detected ${report?.detectedAt || "unknown"}; first pool ${jup?.firstPool?.id || "unknown"} created ${jup?.firstPool?.createdAt || "unknown"}`,
-      `Price ${priceUsd == null ? "unknown" : `$${readablePrice(priceUsd)}`}${priceRow?.blockId ? ` (Jupiter, block ${priceRow.blockId})` : ""}; 24h change ${readablePct(priceRow?.priceChange24hPct ?? jup?.stats24h?.priceChangePct)}`,
+      `Price ${priceUsd == null ? "unknown" : `$${readablePrice(priceUsd)}`}${priceRow ? " (deepest DEX pair)" : ""}; 24h change ${readablePct(priceRow?.priceChange24hPct ?? jup?.stats24h?.priceChangePct)}`,
       `Market cap ${jup?.marketCapUsd ?? "unknown"}; FDV ${jup?.fdvUsd ?? "unknown"}`,
       `Verification: Jupiter verified ${report?.verification ? String(report.verification.jupVerified) : (jup ? String(jup.isVerified) : "unknown")}, Jupiter strict list ${report?.verification ? String(report.verification.jupStrict) : "unknown"}`,
       `Links: website ${jup?.website || (pairRows.find((p) => p.websites?.length)?.websites?.[0]) || "none listed"}; twitter ${jup?.twitter || "none listed"}; socials on DexScreener ${[...new Set(pairRows.flatMap((p) => p.socials || []))].slice(0, 3).join(", ") || "none listed"}`,
@@ -317,7 +318,7 @@ function makeTokenBriefHandlerInner(tierSlug) {
     if (probes.safety) sources.push({ title: `RugCheck safety summary for ${mint}`, url: `https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary` });
     if (probes.pairs) sources.push({ title: `DexScreener pairs trading ${symbol || mint}`, url: `https://api.dexscreener.com/token-pairs/v1/solana/${mint}` });
     if (probes.lookup) sources.push({ title: `Jupiter token index entry for ${symbol || mint}`, url: `${jupiterBase()}/tokens/v2/search?query=${mint}` });
-    if (probes.price) sources.push({ title: `Jupiter price v3 for ${symbol || mint}`, url: `${jupiterBase()}/price/v3?ids=${mint}` });
+    if (probes.price) sources.push({ title: `DexScreener pairs pricing ${symbol || mint}`, url: `https://api.dexscreener.com/tokens/v1/solana/${mint}` });
     const numbered = sources.map((s, i) => ({ n: i + 1, ...s }));
     const sourceMenu = numbered.map((s) => `[${s.n}] ${s.title}`).join("\n");
 
