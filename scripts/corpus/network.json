@@ -132,12 +132,14 @@
       },
       "expect": {
         "populated": [
-          "registrar",
-          "created",
-          "nameservers"
+          "ageDays",
+          "daysToExpiry",
+          "checkedAt"
         ],
-        "minCount": {
-          "nameservers": 1
+        "equals": {
+          "registered": true,
+          "registrar": null,
+          "nameservers": null
         }
       }
     },

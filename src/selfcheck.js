@@ -78,7 +78,7 @@ export const INVARIANTS = {
   "stock-quote": (r) => typeof r?.price === "number" && r.price > 0 && !!r?.symbol,
   "treasury-debt": (r) => Number(r?.totalPublicDebtOutstanding) > 30e12, // debt only grows; already >$30T
   "crypto-global": (r) => Number(r?.totalMarketCap) > 0 && Number(r?.btcDominancePct) > 0 && Number(r?.btcDominancePct) < 100,
-  "whois": (r) => !!r?.domain && Array.isArray(r?.nameservers), // registered domain resolves with a nameserver list
+  "whois": (r) => !!r?.domain && r?.registered === true && Number.isInteger(r?.ageDays) && r.ageDays > 0, // a registered domain reads its computed age
 };
 
 // Key-gated tools: checked ONLY when their key env var is actually set. This is

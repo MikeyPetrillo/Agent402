@@ -443,7 +443,7 @@ const SKILL_PACKS_ALL = [
       "Resolve A/AAAA/MX/TXT/NS/CAA records on the apex with dns-lookup to baseline what the authoritative answer should be.",
       "Run dns-propagation, which asks Cloudflare, Google, Quad9 and OpenDNS for the same record - divergent answers mean a stale cache somewhere or a botched TTL during a migration.",
       "Look up the ASN and prefix that the apex resolves into with asn-info (a public DNS-based IP-to-ASN lookup - no auth needed). Useful for spotting an unexpected hosting move.",
-      "Pull whois for ownership, expiry, and registrar - catches the 'we forgot to renew' class of outage.",
+      "Pull whois for registration age, days to expiry, DNSSEC and transfer lock - catches the 'we forgot to renew' class of outage.",
       "Run http-check for status code, response time, and final URL after redirects - the fastest 'is it actually up' read.",
       "Spot-check robots.txt with robots-check to make sure a redeploy didn't accidentally Disallow: / the whole site.",
     ],
@@ -837,7 +837,7 @@ const SKILL_PACKS_ALL = [
       "extract",
     ],
     workflow: [
-      "Start with whois - domain age is the single best fraud predictor. Established brands have domains registered years ago; impersonators are usually using domains < 90 days old. Also surfaces the registrar (some - like privacy-shrouded resellers operating out of jurisdictions with slow abuse response - are over-represented in fraud) and registrant info (privacy-protected WHOIS is normal for personal sites, suspicious for a business claiming to be Fortune-500 established).",
+      "Start with whois - domain age is the single best fraud predictor. Established brands have domains registered years ago; impersonators are usually using domains < 90 days old. Also reads days to expiry (a domain registered for one year only is common in throwaway fraud), DNSSEC and transfer lock (an established business usually locks its domain against transfer).",
       "Pull the cert-transparency log. CT logs every TLS cert ever issued for the domain. A legitimate long-running site shows years of cert renewals from major CAs. A classic phishing pattern is a brand-new domain with exactly one Let's Encrypt cert issued in the last few days - there's no history because there's no history. Burst issuance across many subdomains in a short window can indicate a phishing kit operator.",
       "Inspect the live cert with tls-cert. Self-signed = major red flag, period. Wildcard certs across a sprawling subdomain set on a brand-new domain can indicate a phishing kit operator running many landing pages off one cert. Cert validity window matters too - Let's Encrypt's 90-day cert on a domain claiming to be an established bank is anomalous (real banks use OV/EV certs with longer validity and the green-bar / org-name treatment).",
       "Run asn-info on the resolved IP. Cloudflare / AWS / GCP / Azure are neutral - most of the internet runs there. Known abuse-friendly hosters (specific ASNs in Russia, China, and certain Eastern European countries) over-index on fraud. Geographic mismatch matters: a US-targeted brand impersonator hosted in a country with no business presence there is a meaningful signal. Cross-reference the ASN against public abuse databases if the user wants depth.",
@@ -846,7 +846,7 @@ const SKILL_PACKS_ALL = [
       "Pull the page content with extract and scan for fraud-pattern keywords. Phishing kits use predictable language: urgency ('act now', 'limited time'), unsolicited payment requests, crypto-only payment ('USDT only'), dubious testimonials, broken English on a site claiming to be US-headquartered, gift-card payment instructions. Combine all 7 signal sources into a single rollup: low / medium / high fraud likelihood with each piece of cited evidence - let the user see exactly which signals fired, not just a black-box score.",
     ],
     claudePrompt:
-      "Run a fraud-signal check on agent402.tools using Agent402. (1) whois - record the domain creation date and the registrar. If age < 90 days, flag as a strong fraud signal. (2) cert-transparency - pull the cert log. Count entries; first issuance date should match (or predate) the whois creation date by at most a few days. (3) tls-cert - inspect the live cert: issuer (Let's Encrypt is fine, self-signed is a hard red flag), validity window, wildcard scope. (4) asn-info - resolve the A record, pull the ASN: is it a mainstream cloud (Cloudflare/AWS/GCP) or a known abuse-friendly hoster? Surface country. (5) dns-lookup - MX records (a 'business' with no MX is suspicious), CNAMEs (shared-hosting CNAMEs on a brand-impersonator site are a red flag). (6) tech-stack - fingerprint the running stack; flag mismatches with the claimed brand (e.g., a 'bank' on a WordPress restaurant theme). (7) extract - pull the home-page text, scan for urgency language, crypto-only payment requests, gift-card mentions, broken English. Return: {domain, age_days, certHistoryCount, hostingProvider, hostingCountry, hasMX, techStack, redFlags: [{signal, evidence}], fraudLikelihood: \"low\"|\"medium\"|\"high\", oneLineRecommendation}. All seven tools are wallet-only (egress) - budget ≤ $0.05 per domain check.",
+      "Run a fraud-signal check on agent402.tools using Agent402. (1) whois - record the domain age (ageDays) and days to expiry. If age < 90 days, flag as a strong fraud signal. (2) cert-transparency - pull the cert log. Count entries; the first issuance should fall no more than a few days after the registration that ageDays dates. (3) tls-cert - inspect the live cert: issuer (Let's Encrypt is fine, self-signed is a hard red flag), validity window, wildcard scope. (4) asn-info - resolve the A record, pull the ASN: is it a mainstream cloud (Cloudflare/AWS/GCP) or a known abuse-friendly hoster? Surface country. (5) dns-lookup - MX records (a 'business' with no MX is suspicious), CNAMEs (shared-hosting CNAMEs on a brand-impersonator site are a red flag). (6) tech-stack - fingerprint the running stack; flag mismatches with the claimed brand (e.g., a 'bank' on a WordPress restaurant theme). (7) extract - pull the home-page text, scan for urgency language, crypto-only payment requests, gift-card mentions, broken English. Return: {domain, age_days, certHistoryCount, hostingProvider, hostingCountry, hasMX, techStack, redFlags: [{signal, evidence}], fraudLikelihood: \"low\"|\"medium\"|\"high\", oneLineRecommendation}. All seven tools are wallet-only (egress) - budget ≤ $0.05 per domain check.",
   },
   {
     slug: "api-investigation",
@@ -1582,7 +1582,7 @@ const SKILL_PACKS_ALL = [
       "robots-check",
     ],
     workflow: [
-      "Pull WHOIS records - registrar, creation date, expiry, registrant (often privacy-shielded but the age alone is a signal).",
+      "Pull WHOIS registration facts - age in days, days to expiry, DNSSEC and transfer lock (the age alone is a strong signal).",
       "Resolve DNS A records to identify the hosting provider and detect CDN fronting.",
       "Inspect the live TLS certificate - issuer, expiry, SANs, and chain validity.",
       "Fetch HTTP response headers - security posture (HSTS, CSP, XFO), caching, and server fingerprint.",
@@ -1590,7 +1590,7 @@ const SKILL_PACKS_ALL = [
       "Check robots.txt for crawl directives - reveals hidden paths and bot policies.",
     ],
     claudePrompt:
-      "Run a full domain intelligence report on agent402.tools using Agent402's domain-intel skill pack: (1) WHOIS - age, registrar, expiry. (2) DNS A records - hosting/CDN. (3) TLS cert - issuer, expiry, SANs. (4) HTTP headers - security headers score. (5) Tech stack - frameworks, CDN, analytics. (6) robots.txt - hidden paths. Output a structured report with a risk summary.",
+      "Run a full domain intelligence report on agent402.tools using Agent402's domain-intel skill pack: (1) WHOIS - age, days to expiry, transfer lock. (2) DNS A records - hosting/CDN. (3) TLS cert - issuer, expiry, SANs. (4) HTTP headers - security headers score. (5) Tech stack - frameworks, CDN, analytics. (6) robots.txt - hidden paths. Output a structured report with a risk summary.",
   },
 
   {
@@ -1923,13 +1923,13 @@ const SKILL_PACKS_ALL = [
       "http-headers",
     ],
     workflow: [
-      "Pull WHOIS for domain age, registrar, and registrant - very young domains are suspect.",
+      "Pull WHOIS for domain age and days to expiry - very young domains are suspect.",
       "Resolve DNS A records to identify hosting and detect parking pages.",
       "Search for scam/phishing reports mentioning this domain.",
       "Fetch HTTP headers for security posture and server fingerprint.",
     ],
     claudePrompt:
-      "Check the brand footprint of agent402.tools using Agent402's brand-protection skill pack. Get (1) WHOIS - age and registrar, (2) DNS A records, (3) search for scam/phishing reports, (4) HTTP headers. Rate the domain's trustworthiness.",
+      "Check the brand footprint of agent402.tools using Agent402's brand-protection skill pack. Get (1) WHOIS - age and expiry, (2) DNS A records, (3) search for scam/phishing reports, (4) HTTP headers. Rate the domain's trustworthiness.",
   },
 
   {
@@ -1951,7 +1951,7 @@ const SKILL_PACKS_ALL = [
     workflow: [
       "Fingerprint the tech stack - CMS, framework, CDN, analytics, third-party scripts.",
       "Fetch HTTP headers for server info, caching strategy, and security posture.",
-      "Pull WHOIS for domain age, registrar, and hosting provider.",
+      "Pull WHOIS for domain age and days to expiry.",
       "Get page metadata - title, description, OG tags for their positioning.",
     ],
     claudePrompt:
@@ -2169,12 +2169,12 @@ const SKILL_PACKS_ALL = [
     ],
     toolSlugs: ["whois", "dns-lookup", "tls-cert"],
     workflow: [
-      "Call whois to get registration date, registrar, expiry, and age - domains less than 6 months old are higher risk.",
+      "Call whois to get the domain's age in days, days to expiry, DNSSEC and transfer lock - domains less than 6 months old are higher risk.",
       "Call dns-lookup with host=domain and type='A' to verify the domain resolves to a real IP address.",
       "Call tls-cert with host=domain to check the certificate issuer, validity period, and chain trust.",
     ],
     claudePrompt:
-      "Check the age and legitimacy of google.com using Agent402's domain-age skill pack: (1) whois for registration age and registrar, (2) dns-lookup for A record resolution, (3) tls-cert for certificate validity. Report a trust assessment based on age, DNS health, and cert status.",
+      "Check the age and legitimacy of google.com using Agent402's domain-age skill pack: (1) whois for registration age and expiry, (2) dns-lookup for A record resolution, (3) tls-cert for certificate validity. Report a trust assessment based on age, DNS health, and cert status.",
   },
 
 
@@ -2251,7 +2251,7 @@ const SKILL_PACKS_ALL = [
       "Resolve the name to a Wikidata entity with wikidata-entity - the encyclopedic identity: what it is, founding date, headquarters, official website.",
       "Look up the Legal Entity Identifier record with lei-lookup (GLEIF) - the verified legal name, jurisdiction, and registered address.",
       "Find the SEC EDGAR filer with edgar-company-lookup - CIK number and filing history existence (public companies only).",
-      "Pull domain registration with whois - creation date, registrar, and expiry; a week-old domain claiming a decades-old brand is a red flag.",
+      "Pull domain registration with whois - age in days and days to expiry; a week-old domain claiming a decades-old brand is a red flag.",
       "Fingerprint the site's tech-stack - CMS, framework, CDN - the operational footprint.",
       "Grab the favicon with favicon-grab as the brand asset for the dossier card.",
     ],
