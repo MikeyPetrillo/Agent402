@@ -166,7 +166,7 @@ try {
   // ---- onchain-sql's partial walk names the range route ----
   {
     const r = await pay("/api/onchain-sql", walkSql("walk_days"));
-    ok(r.status === 200 && r.json?.complete === false && r.json.longerRange === RANGE && r.queries === 3 && r.settles === 1, `onchain-sql's walk ends at its query limit and names the range route (${r.status}, ${r.json?.longerRange}, ${r.queries} queries, ${r.settles} settle)`);
+    ok(r.status === 200 && r.json?.complete === false && (r.json.longerRange || []).map((x) => x.path).join(",") === RANGE && r.queries === 3 && r.settles === 1, `onchain-sql's walk ends at its query limit and names the range route, the only one whose days cover 31 (${r.status}, ${JSON.stringify(r.json?.longerRange)}, ${r.queries} queries, ${r.settles} settle)`);
   }
 
   // ---- the onchain-sql histogram counts onchain-sql only ----

@@ -56,6 +56,9 @@ export const SLOW_TOOL_SECONDS = {
   "tts": 45, "tts-hd": 45,
   // dub-kit.js: a chat gateway translation, then the same speech walk.
   "dub": 60,
+  // cdp-kit.js: onchain-sql-week walks its days inside a 40 s budget
+  // (SQL_WEEK_BUDGET_MS); onchain-sql-range is EVM-exact only, the belt again.
+  "onchain-sql-week": 45, "onchain-sql-range": 190,
 };
 
 export const requiredSecondsFor = (slug) => SLOW_TOOL_SECONDS[slug] ?? DEFAULT_REQUIRED_SECONDS;

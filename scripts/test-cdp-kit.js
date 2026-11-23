@@ -25,7 +25,7 @@ const rejects = async (fn, status, msg) => {
 };
 
 // --- kit shape ---------------------------------------------------------------
-ok(CDP_TOOLS.length === 6, "kit exports 6 tools");
+ok(CDP_TOOLS.length === 7, "kit exports 7 tools");
 for (const t of CDP_TOOLS) {
   ok(t.route && t.slug && t.price && t.discovery?.inputSchema && typeof t.handler === "function", `${t.slug} has the full tool contract`);
 }

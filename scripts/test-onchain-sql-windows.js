@@ -22,7 +22,7 @@ process.env.CDP_API_KEY_SECRET = privateKey.export({ type: "pkcs8", format: "pem
 delete process.env.CDP_SQL_API_KEY_ID;
 delete process.env.CDP_SQL_API_KEY_SECRET;
 const cdp = await import("../src/tools/cdp-kit.js");
-const { CDP_TOOLS, dayWindowPlan, _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, _resetSqlPacerForTest, SQL_MAX_ROWS, SQL_WINDOW_MAX_DAYS, SQL_WINDOW_MAX_QUERIES, QUERY_HEALTH_SQL, SQL_QUERY_BUDGET, SQL_RANGE_MAX_DAYS, SQL_RANGE_MAX_QUERIES, SQL_RANGE_RUN_SECONDS, SQL_RANGE_PATH } = cdp;
+const { CDP_TOOLS, dayWindowPlan, _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, _resetSqlPacerForTest, SQL_MAX_ROWS, SQL_WINDOW_MAX_DAYS, SQL_WINDOW_MAX_QUERIES, QUERY_HEALTH_SQL, SQL_QUERY_BUDGET, SQL_RANGE_MAX_DAYS, SQL_RANGE_MAX_QUERIES, SQL_RANGE_RUN_SECONDS, SQL_RANGE_PATH, SQL_WEEK_MAX_DAYS, SQL_WEEK_MAX_QUERIES, SQL_WEEK_BUDGET_MS, SQL_WEEK_PATH, SVM_SQL_BUDGET_MS } = cdp;
 const { EVM_RUN_SECONDS } = await import("../src/evm-validity.js");
 const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
 const { asyncProfileOf } = await import("../src/slow-routes.js");
@@ -33,6 +33,8 @@ const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { fai
 const sql = (q, req) => CDP_TOOLS.find((t) => t.slug === "onchain-sql").handler({ sql: q }, req);
 const RANGE = CDP_TOOLS.find((t) => t.slug === "onchain-sql-range");
 const sqlRange = (q, req) => RANGE.handler({ sql: q }, req);
+const WEEK = CDP_TOOLS.find((t) => t.slug === "onchain-sql-week");
+const sqlWeek = (q, req) => WEEK.handler({ sql: q }, req);
 const DAY = 86_400_000;
 
 _resetSqlPacerForTest(0);
@@ -272,8 +274,14 @@ try {
   {
     reset();
     const r = await sql(days(7));
-    ok(r.longerRange === SQL_RANGE_PATH && r.longerRange === "/api/onchain-sql-range" && r.complete === false, `a walk the query limit ended names the range route in a field (${r.longerRange})`);
-    ok(r.note.endsWith(`${SQL_RANGE_PATH} reads up to ${SQL_RANGE_MAX_DAYS} days of such a query in one call.`) && r.note.split(SQL_RANGE_PATH).length === 2, "the note adds one factual sentence naming it");
+    const paths = (r.longerRange || []).map((x) => x.path);
+    ok(r.complete === false && paths.join(",") === "/api/onchain-sql-week,/api/onchain-sql-range" && SQL_WEEK_PATH === paths[0] && SQL_RANGE_PATH === paths[1], `a 7-day walk the query limit ended names both longer routes in a field (${paths.join(", ")})`);
+    const [wk, m] = r.longerRange;
+    ok(wk.maxDays === SQL_WEEK_MAX_DAYS && wk.rails === "all" && wk.async === false && m.maxDays === SQL_RANGE_MAX_DAYS && m.rails === "x402-exact-evm" && m.async === true, `each with its most days and the payment it takes (${JSON.stringify(r.longerRange)})`);
+    ok(r.note.endsWith(`${SQL_WEEK_PATH} reads up to ${SQL_WEEK_MAX_DAYS} days of such a query in one call on every payment rail; ${SQL_RANGE_PATH} reads up to ${SQL_RANGE_MAX_DAYS} days of such a query in one call on x402 exact on EVM chains, as a job (Prefer: respond-async).`) && r.note.split(SQL_WEEK_PATH).length === 2, "the note adds one factual sentence naming them");
+    reset();
+    const r14 = await sql(days(14));
+    ok((r14.longerRange || []).map((x) => x.path).join(",") === SQL_RANGE_PATH, `a 14-day walk names only the route whose days cover it (${JSON.stringify(r14.longerRange)})`);
     reset();
     const c = await sql(await twoDayRange());
     ok(c.complete === true && !("longerRange" in c), "a complete windowed answer names no other route");
@@ -380,6 +388,53 @@ try {
     wholeAnswers = true;
     const w = await sqlRange(days(SQL_RANGE_MAX_DAYS));
     ok(!w.windowed && sent.length === 1, "a long range the service answers whole is sent once and not split");
+  }
+  // ---- onchain-sql-week: a week on every rail, synchronously ----
+  ok(WEEK && WEEK.route === "POST /api/onchain-sql-week" && /^\$\d+\.\d{2}$/.test(WEEK.price), `the week route is listed with a cent price (${WEEK?.price})`);
+  ok(SQL_WEEK_MAX_DAYS === 7 && SQL_WEEK_MAX_QUERIES === 2 + SQL_WEEK_MAX_DAYS + 1, `the week route reads up to ${SQL_WEEK_MAX_DAYS} days in at most ${SQL_WEEK_MAX_QUERIES} queries`);
+  ok(SQL_WEEK_BUDGET_MS === SVM_SQL_BUDGET_MS && WEEK.handler.__budgetMs === SQL_WEEK_BUDGET_MS, `its handler budget is the Solana payment's (${SQL_WEEK_BUDGET_MS} ms) on every rail`);
+  ok(!isLongRunningSlug("onchain-sql-week") && !Object.hasOwn(EVM_RUN_SECONDS, "onchain-sql-week") && asyncProfileOf(WEEK) === null, "it is not long-running and not a job route: every rail, answered on the connection");
+  ok(WALLET_ONLY_SLUGS.has("onchain-sql-week"), "it is wallet-only");
+  ok(/up to 7 days/.test(WEEK.description) && /every payment rail/.test(WEEK.description) && /partial/.test(WEEK.description) && /within 40 seconds/.test(WEEK.description), "its description names the days, the rails, the time and the partial marking");
+  {
+    reset();
+    const q = days(SQL_WEEK_MAX_DAYS);
+    const p = dayWindowPlan(q, Date.now());
+    const r = await sqlWeek(q);
+    ok(r.complete === true && r.rows.length === p.spans.length * 3 && sortedAsc(r.rows) && r.windowed.daysRead === p.spans.length && sent.length === 1 + p.spans.length && sent.length <= SQL_WEEK_MAX_QUERIES && !("longerRange" in r), `${SQL_WEEK_MAX_DAYS} days: every day read and merged in order (${r.rows.length} rows, ${sent.length} queries)`);
+    reset();
+    const d = await sqlWeek(`${q} ORDER BY block_time DESC`);
+    ok(d.complete === true && sortedDesc(d.rows) && d.windowed.order === "desc", "DESC reads newest first");
+    reset();
+    whole503 = 1;
+    const t = await sqlWeek(q);
+    ok(t.complete === true && sent.length === 2 + p.spans.length && sent.length <= SQL_WEEK_MAX_QUERIES, `a retried whole-range send still leaves room for every day (${sent.length} of ${SQL_WEEK_MAX_QUERIES})`);
+  }
+  {
+    reset();
+    const r = await sqlWeek(days(14));
+    ok(r.complete === false && r.windowed.stoppedBy === "query-limit" && r.windowed.daysRead === SQL_WEEK_MAX_QUERIES - 1 && sent.length === SQL_WEEK_MAX_QUERIES && sortedAsc(r.rows), `past a week: the first ${SQL_WEEK_MAX_QUERIES - 1} days, marked partial (${r.windowed.daysRead} days, ${sent.length} queries)`);
+    ok((r.longerRange || []).map((x) => x.path).join(",") === SQL_RANGE_PATH && r.note.endsWith(`${SQL_RANGE_PATH} reads up to ${SQL_RANGE_MAX_DAYS} days of such a query in one call on x402 exact on EVM chains, as a job (Prefer: respond-async).`), `and names the range route, with its payment (${JSON.stringify(r.longerRange)})`);
+  }
+  {
+    reset();
+    dayDelayMs = 1200;
+    process.env.UPSTREAM_HANDLER_BUDGET_MS = "6000";
+    const r = await sqlWeek(days(SQL_WEEK_MAX_DAYS));
+    delete process.env.UPSTREAM_HANDLER_BUDGET_MS;
+    ok(r.complete === false && r.truncated === true && r.windowed.stoppedBy === "time" && r.windowed.daysRead >= 1 && r.windowed.coveredTo && /for the rest/.test(r.note) && (r.longerRange || []).map((x) => x.path).join(",") === SQL_RANGE_PATH, `the call's time ends a slow week early: partial in fields, the range route named (${JSON.stringify(r.windowed)})`);
+  }
+  {
+    const agg = "SELECT executing_account, count() AS n FROM solana.instructions WHERE block_time > now() - INTERVAL 7 DAY GROUP BY executing_account";
+    reset();
+    const a1 = await sql(agg).catch((x) => x);
+    reset();
+    const a2 = await sqlWeek(agg).catch((x) => x);
+    ok(a2?.statusCode === 422 && a1?.message === a2?.message && sent.length === 1, "an aggregate on the week route answers exactly as onchain-sql (one query, the same 422)");
+    reset();
+    const quoted = `SELECT "tx_id", block_time FROM solana.instructions WHERE block_time > now() - INTERVAL 7 DAY ORDER BY 1, block_time`;
+    const e = await sqlWeek(quoted).catch((x) => x);
+    ok(e?.statusCode === 422 && sent.length === 1, "ORDER BY 1, block_time after a quoted column is not walked on the week route");
   }
   // ---- a buyer who hung up gets no more of the range walk ----
   {

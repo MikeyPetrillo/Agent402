@@ -356,6 +356,7 @@
     "onchain-sql",
     "onchain-sql-range",
     "onchain-sql-schema",
+    "onchain-sql-week",
     "onramp-link",
     "openapi-diff",
     "openapi-extract",
