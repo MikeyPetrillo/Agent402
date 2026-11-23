@@ -86,12 +86,13 @@ ok(bazaarCapDescription("Look up a MIME type by file extension (?ext=png) or ext
 ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1 This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data.", "cap: an abbreviation (St.) does not end a sentence, so no fragment is left behind");
 ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data. This product is not endorsed by the Federal Reserve Bank of St. Louis.", "cap: a hint that ends its own sentence goes alone, and the notice after it stays");
 // The FRED terms require their notice on every surface that serves the data.
-// The set of FRED routes is derived from code, not from which text already
-// carries the notice: the macro kit's functions that reach a FRED host,
-// closed over the calls between them, and every tool whose handler calls one.
-// Each must carry attribution "fred", end its catalog text with the notice,
-// and keep it in its listing at the Bazaar cut and at the 402 budget's
-// shorter cut (the most any 402, with any upto networks on, cuts it to).
+// No tool serves FRED data now (fred-series and the computed macro tools read
+// the publishing agencies, src/tools/us-macro-series.js), so the set of FRED
+// routes derived from code must be empty: the macro kit's functions that reach
+// a FRED host, closed over the calls between them, and every tool whose
+// handler calls one. A tool that reaches FRED again must carry attribution
+// "fred", end its catalog text with the notice, and keep it in its listing at
+// the Bazaar cut and at the 402 budget's shorter cut.
 {
   const { FRED_NOTICE, attributionTailOf } = await import("../src/data-attribution.js");
   const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
@@ -111,11 +112,11 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
       if (FRED_HOST.test(body) || [...reached].some((r) => new RegExp(`\\b${r}\\b`).test(body.slice(body.indexOf("{"))))) { reached.add(name); grew = true; }
     }
   }
-  ok(reached.has("fredObservations") && ["fetchTreasuryYields", "fetchLatestYieldCurve", "treasuryYieldYear"].every((n) => !reached.has(n)), `FRED-reaching functions derived from the kit, and the yield-curve reads (U.S. Treasury) are not among them (${[...reached].join(", ")})`);
+  ok(!/stlouisfed\.org/.test(kitSrc) && reached.size === 1 && ["fetchTreasuryYields", "fetchLatestYieldCurve", "treasuryYieldYear"].every((n) => !reached.has(n)), `no macro kit function reaches a FRED host (${[...reached].join(", ")})`);
   const callsFred = (t) => { const h = String(t.handler); return FRED_HOST.test(h) || [...reached].some((r) => new RegExp(`\\b${r}\\b`).test(h)); };
   const derived = MACRO_TOOLS.filter(callsFred).map((t) => t.slug).sort();
   const marked = MACRO_TOOLS.filter((t) => t.attribution === "fred").map((t) => t.slug).sort();
-  ok(derived.length > 0 && JSON.stringify(derived) === JSON.stringify(marked), `every tool whose handler reaches FRED carries attribution "fred", and only those (derived ${derived.join(",")}; marked ${marked.join(",")})`);
+  ok(derived.length === 0 && marked.length === 0, `no tool reaches FRED or carries attribution "fred" (derived ${derived.join(",") || "none"}; marked ${marked.join(",") || "none"})`);
   const otherKits = [];
   for (const file of await readdir(new URL("../src/tools/", import.meta.url))) {
     if (!file.endsWith(".js") || file === "macro-kit.js") continue;
@@ -182,7 +183,8 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   ok(unmarkedTails.length === 0, `text that ends with an attribution belongs to a tool marked with that source (${unmarkedTails.join(", ") || "none unmarked"})`);
   ok(midText.length === 0, `no attribution sentence sits anywhere but the end of a description (${midText.join(", ") || "none"})`);
   const counts = Object.fromEntries(Object.keys(ATTRIBUTIONS).map((k) => [k, (bySource[k] || []).length]));
-  ok(Object.values(counts).every((n) => n > 0) && counts["us-agencies"] >= 1 && counts["us-treasury"] >= 3 && counts.ecb >= 4 && counts.coingecko >= 24, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
+  // "fred" stays a known source with no tool serving it (see the FRED block above).
+  ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0) && counts["us-agencies"] >= 1 && counts["us-treasury"] >= 3 && counts.ecb >= 4 && counts.coingecko >= 24, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
   // Floors read from the catalog, not typed: a tool whose published example
   // answer names a source in its \`source\` field is marked with that source,
   // so a retirement lowers the floor and a lost mark fails.
