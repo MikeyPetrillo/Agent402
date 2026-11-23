@@ -48,7 +48,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MikeyPetrillo/Agent402.git",
+    "url": "git+https://github.com/MikeyPetrillo/Agent402.git",
     "directory": "adapters/llamaindex"
   },
   "homepage": "https://agent402.tools",
