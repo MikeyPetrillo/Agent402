@@ -17,7 +17,7 @@ import { EventEmitter } from "node:events";
 
 delete process.env.CREDITS_SALES;
 delete process.env.CREDITS_EFW_AUTO_REFUND;
-const { createCredits, CREDIT_PACKS, sellablePacks, KEY_RE, KEY_PREFIX, KEY_SCAN_RE, chargeFlagged } = await import("../src/credits.js");
+const { createCredits, CREDIT_PACKS, sellablePacks, KEY_RE, KEY_PREFIX, KEY_SCAN_RE, chargeFlagged, hashKey } = await import("../src/credits.js");
 const { PURCHASE_REFUSED, creditsDailyMaxCents } = await import("../src/credits-sales.js");
 const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");
 const { urlCarriesCreditsKey } = await import("../src/credits-key-url.js");
@@ -456,6 +456,26 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   ok(frAp.status === "refunded" && charges.pi_2fra.amount_refunded === P && charges.pi_2frb.amount_refunded === 0 && !(await owed(FR)), "...and the approval refunds it to the payment not lost");
   delete process.env.CREDITS_EFW_AUTO_REFUND;
   ok((await cr.refundsOwedWord(0)) === "ok", "guard: nothing is owed before the webhook cases");
+
+  // A record an older build wrote: its single dispute slot, or a dispute
+  // freeze that names no payment, is read as one dispute and settled by a close.
+  for (const [tag, legacy] of [["og", () => ({ disputedPaymentIntent: "pi_2oga", disputeAt: new Date(clock).toISOString() })], ["on", () => ({})]]) {
+    const OG = await twoPaid(tag);
+    const file = join(DIR, "two-disputes", `k_${hashKey(OG.key)}.json`);
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    delete rec.disputes;
+    writeFileSync(file, JSON.stringify({ ...rec, ...legacy() }));
+    const fresh = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: join(DIR, "two-disputes"), log: () => {}, now: () => clock, tagSecret: Buffer.from("test-tag-secret") });
+    ok(fresh.authorize(OG.key, 0.001).reason === "frozen", `guard: the older record (${tag}) is frozen`);
+    if (tag === "og") {
+      await fresh.disputeClosed("pi_2ogb", { won: true, status: "won" });
+      ok(fresh.authorize(OG.key, 0.001).reason === "frozen", "an older record's slot names its payment: a close on another payment thaws nothing");
+    }
+    await fresh.disputeClosed(`pi_2${tag}a`, { won: true, status: "won" });
+    const ogUse = fresh.authorize(OG.key, 0.001);
+    ok(ogUse.ok === true, `an older record's dispute (${tag === "og" ? "its single slot" : "a freeze naming no payment"}) closed in our favor thaws the key`);
+    if (ogUse.ok) fresh.release(ogUse.hash, ogUse.heldMicro);
+  }
 
   // Through the webhook, wired as the server wires it, with each dispute's id.
   process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
