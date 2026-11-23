@@ -7,10 +7,9 @@
 // Offline: stub Stripe + generator for the engine; a FREE_MODE boot (no Stripe)
 // for the routes, reading the real default store dir.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync, readFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { createHumanCheckout, readPublicReport, listPublicReports } from "../src/human-checkout.js";
 
@@ -67,11 +66,11 @@ const back = hc.setPublic(SID, true);
 ok(back.publicId === pub.publicId && readPublicReport(pub.publicId, DIR)?.publicId === pub.publicId, "re-publishing brings the SAME link back to life");
 
 // ---- routes on a FREE_MODE boot with no Stripe ----
-const PORT = await getFreePort();
-const B = `http://127.0.0.1:${PORT}`;
-proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, ...STORES, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" }, stdio: "ignore" });
+const srv = await bootServer({ stores: false, env: { ...STORES, FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" } })
+  .catch((e) => fail(`server did not boot: ${e.message}`));
+proc = srv.child;
+const B = srv.url;
 try {
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
   const page = await fetch(`${B}/reports/public/${pub.publicId}`);
   const html = await page.text();
   ok(page.status === 200 && !/noindex/i.test(page.headers.get("x-robots-tag") || "") && !/<meta name="robots" content="noindex/.test(html), "the public page is 200 and indexable");

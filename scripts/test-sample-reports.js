@@ -8,9 +8,8 @@
 // sample only for products that have one. Boots a FREE_MODE server (no Stripe:
 // the sample routes are mounted regardless of checkout).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { SAMPLES, SAMPLE_PRODUCTS, sampleLinkFor, samplePaths, endsMidSentence, midSentence } from "../src/sample-reports.js";
 import { HUMAN_PRODUCTS } from "../src/human-checkout.js";
 
@@ -100,11 +99,11 @@ ok(samplePaths().every((p) => p.startsWith("/reports/sample/")), "sample paths l
 
 // ---- booted server ----
 let drawnPage = null;
-const PORT = await getFreePort();
-const B = `http://127.0.0.1:${PORT}`;
-proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" }, stdio: "ignore" });
+const srv = await bootServer({ stores: "sample-reports", env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" } })
+  .catch((e) => fail(`server did not boot: ${e.message}`));
+proc = srv.child;
+const B = srv.url;
 try {
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
   ok((await fetch(`${B}/health`)).ok, "server booted (FREE_MODE, no Stripe)");
 
   for (const product of SAMPLE_PRODUCTS) {
@@ -113,7 +112,7 @@ try {
     const s = SAMPLES[product];
     ok(page.status === 200 && !/noindex/i.test(page.headers.get("x-robots-tag") || ""), `${product}: page 200 and not noindex`);
     ok(html.includes(`<title>${escapeHtml(s.title)} (free sample)</title>`) || html.includes(`(free sample)</title>`), `${product}: own <title>`);
-    ok(html.includes(`rel="canonical" href="${"http://127.0.0.1:" + PORT}/reports/sample/${product}"`) || html.includes(`/reports/sample/${product}"`), `${product}: canonical is the sample URL`);
+    ok(html.includes(`rel="canonical" href="${B}/reports/sample/${product}"`) || html.includes(`/reports/sample/${product}"`), `${product}: canonical is the sample URL`);
     ok(html.includes('"@type":"Report"') && html.includes('"isAccessibleForFree":true') && html.includes('"@type":"Product"'), `${product}: Report + Product JSON-LD`);
     ok(html.includes('data-api="/api/reports/sample/"') && html.includes("/js/report-view.js"), `${product}: renders through the shared viewer`);
     ok(!/<meta name="robots" content="noindex/.test(html), `${product}: meta robots allows indexing`);

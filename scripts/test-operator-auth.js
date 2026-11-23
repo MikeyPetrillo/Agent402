@@ -4,8 +4,7 @@
 // SameSite=Strict) or a header for curl/API. Boots the real server (the only
 // faithful way to test the route wiring) with a known token.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,8 +14,10 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const TOKEN = "operator-test-secret-123";
-const PORT = await getFreePort();
-const base = `http://127.0.0.1:${PORT}`;
+// The server boots on port 0, so "this site" (the Origin an operator write
+// must carry) is a fixed BASE_URL; `base` is where the server listens.
+const SITE = "http://operator-auth.example";
+let base = "";
 
 // The late-settlement book starts with one UNRESOLVED entry: it pages, the
 // operator action resolves it, and the word reads ok again.
@@ -27,27 +28,21 @@ writeFileSync(LATE_FILE, JSON.stringify({ pending: { [LATE_KEY]: {
   key: LATE_KEY, network: "eip155:4663", tx: `0x${"ab".repeat(32)}`, payer: `0x${"11".repeat(20)}`, payTo: `0x${"22".repeat(20)}`, asset: `0x${"33".repeat(20)}`,
   amount: "2500", validBefore: null, slug: "stock-history", via: "primary", at: 1, nextCheckAt: 1, checks: 9, unreadable: 9, failures: 0, state: "unresolved", unresolvedAt: 2, recheckAt: 9e15,
 } } }));
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), AGENT402_OPERATOR_TOKEN: TOKEN, LATE_SETTLE_FILE: LATE_FILE, LATE_SETTLE_RECONCILE: "off" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+let srv = null;
 let serverLog = "";
-child.stdout.on("data", (d) => { serverLog += d; });
-child.stderr.on("data", (d) => { serverLog += d; });
 
-const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.exit(code); };
+const done = (code) => { try { srv?.child.kill("SIGKILL"); } catch { /* */ } process.exit(code); };
 
 (async () => {
-  let up = false;
-  // 60 s, like the other booted-server tests (test-pricing-margin: 120 x 500 ms).
-  // The old 80 x 250 ms = 20 s bound failed CI run 33093827741 with the server
-  // already at "listening": the documented post-listen boot stall (per-route
-  // Ajv compile) on a loaded runner outlived it. Nothing was broken; the bound
-  // was the tightest in the suite.
-  for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* */ }
-    await wait(500);
-  }
+  // bootServer's own boot bound (120 s): the old 80 x 250 ms = 20 s bound
+  // failed CI run 33093827741 with the server already at "listening": the
+  // documented post-listen boot stall (per-route Ajv compile) on a loaded
+  // runner outlived it. Nothing was broken; the bound was the tightest in the
+  // suite.
+  srv = await bootServer({ stores: false, env: { FREE_MODE: "true", BASE_URL: SITE, AGENT402_OPERATOR_TOKEN: TOKEN, LATE_SETTLE_FILE: LATE_FILE, LATE_SETTLE_RECONCILE: "off" } })
+    .catch((e) => { serverLog = e.message; return null; });
+  const up = Boolean(srv);
+  if (srv) base = srv.url;
   ok(up, "server booted");
   if (!up) { console.error(serverLog.slice(-500)); return done(1); }
 
@@ -104,7 +99,7 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     const noNote = await fetch(`${base}${LS}`, { method: "POST", headers: { ...json, "x-operator-token": TOKEN }, body: body({ action: "resolve", key: LATE_KEY, outcome: "dismissed" }) });
     ok(noNote.status === 400 && /note/.test((await noNote.json()).error || ""), "a resolution without a note is refused");
     ok((await word()) === "unresolved", "...and the entry is still there");
-    const r = await fetch(`${base}${LS}`, { method: "POST", headers: { ...json, cookie, origin: base, "sec-fetch-site": "same-origin" }, body: body({ action: "resolve", key: LATE_KEY, outcome: "dismissed", note: "explorer: the transaction never mined" }) });
+    const r = await fetch(`${base}${LS}`, { method: "POST", headers: { ...json, cookie, origin: SITE, "sec-fetch-site": "same-origin" }, body: body({ action: "resolve", key: LATE_KEY, outcome: "dismissed", note: "explorer: the transaction never mined" }) });
     const rb = await r.json().catch(() => ({}));
     ok(r.status === 200 && rb.ok === true && rb.status === "ok" && /no-store/.test(r.headers.get("cache-control") || ""), `a same-origin session resolves the entry (${r.status} ${JSON.stringify(rb)})`);
     ok((await word()) === "ok", "the word returns to ok once the entry is resolved");
@@ -135,23 +130,23 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     ok(hdrOnly !== 403 && hdrOnly !== 404, `a header-token POST with no cookie and no Origin reaches the action (${hdrOnly})`);
     const bearerOnly = await status("/__operator/monitors/run", { method: "POST", headers: { authorization: `Bearer ${TOKEN}` } });
     ok(bearerOnly !== 403 && bearerOnly !== 404, `an Authorization: Bearer POST with no Origin reaches the action (${bearerOnly})`);
-    const sameOrigin = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: base, "sec-fetch-site": "same-origin", "content-type": "text/plain" }, body: "x" });
+    const sameOrigin = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: SITE, "sec-fetch-site": "same-origin", "content-type": "text/plain" }, body: "x" });
     ok(sameOrigin === hdrOnly, `a same-origin cookie POST reaches the action like the header token (${sameOrigin})`);
-    const originOnly = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: base, "content-type": "text/plain" }, body: "x" });
+    const originOnly = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: SITE, "content-type": "text/plain" }, body: "x" });
     ok(originOnly === hdrOnly, `a cookie POST whose Origin is this site (no Sec-Fetch-Site) reaches the action (${originOnly})`);
     // Only a VALID header token skips the origin check: a wrong one beside the
     // session cookie is held to it like the cookie alone, so a cross-site write
     // carrying junk in the header is refused.
     const wrongHdr = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", origin: "https://evil.example", "sec-fetch-site": "cross-site", "content-type": "text/plain" }, body: "x" });
     ok(wrongHdr === 403, `a wrong header token with a live cookie from another site is refused by the origin check (${wrongHdr})`);
-    const wrongHdrSame = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", origin: base, "sec-fetch-site": "same-origin", "content-type": "text/plain" }, body: "x" });
+    const wrongHdrSame = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", origin: SITE, "sec-fetch-site": "same-origin", "content-type": "text/plain" }, body: "x" });
     ok(wrongHdrSame !== 403 && wrongHdrSame !== 404, `a wrong header token with a live cookie from this site goes to the gate (${wrongHdrSame})`);
     const goodHdr = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": TOKEN, origin: "https://evil.example", "content-type": "text/plain" }, body: "x" });
     ok(goodHdr === hdrOnly, `a valid header token skips the origin check (${goodHdr})`);
     ok((await status("/__operator/monitors/run", { method: "POST" })) === 404, "with no credential at all the route's own gate answers (404)");
     ok((await status("/__operator", { headers: { cookie, origin: "https://evil.example", "sec-fetch-site": "cross-site" } })) === 200, "a read (GET) is not an operator write and keeps working");
   }
-  const logoutRes = await fetch(`${base}/__operator/logout`, { method: "POST", headers: { cookie, "sec-fetch-site": "same-origin", origin: base }, redirect: "manual" });
+  const logoutRes = await fetch(`${base}/__operator/logout`, { method: "POST", headers: { cookie, "sec-fetch-site": "same-origin", origin: SITE }, redirect: "manual" });
   ok(/a402_op=;/.test(logoutRes.headers.get("set-cookie") || ""), "POST logout clears the cookie");
   ok(logoutRes.status === 303, "POST logout redirects (303) back to login");
   // The revoked session id must no longer authenticate — even presenting the
@@ -253,7 +248,7 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     "the heavy-route limiter does not spill onto the cheap operator endpoints");
 
   // 7. No token ever appeared in a request-line the server logged.
-  ok(!serverLog.includes(TOKEN), "the operator token never appears in server logs");
+  ok(!srv.log().includes(TOKEN), "the operator token never appears in server logs");
 
   // Aggregate guessing alarm (2026-08-28): wrong credentials are counted
   // globally and exposed as a status word on the public gateway-status.
@@ -377,15 +372,10 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   //    staying live past the window and an unused one ending after it.
   {
     const IDLE_S = 3;
-    const port2 = await getFreePort();
-    const base2 = `http://127.0.0.1:${port2}`;
-    const child2 = spawn(process.execPath, ["src/server.js"], {
-      env: { ...process.env, FREE_MODE: "true", PORT: String(port2), AGENT402_OPERATOR_TOKEN: TOKEN, OPERATOR_SESSION_IDLE_SECONDS: String(IDLE_S) },
-      stdio: ["ignore", "ignore", "ignore"],
-    });
+    const srv2 = await bootServer({ stores: false, env: { FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN, OPERATOR_SESSION_IDLE_SECONDS: String(IDLE_S) } }).catch(() => null);
+    const base2 = srv2?.url;
     try {
-      let up2 = false;
-      for (let i = 0; i < 120; i++) { try { if ((await fetch(`${base2}/health`)).ok) { up2 = true; break; } } catch { /* */ } await wait(500); }
+      const up2 = Boolean(srv2);
       ok(up2, "the short-idle server booted");
       const login2 = await fetch(`${base2}/__operator/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN }) });
       const c2 = (login2.headers.get("set-cookie") || "").split(";")[0];
@@ -408,21 +398,16 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
       ok(tlsLogin.status === 200 && /;\s*Secure(;|$)/i.test(tlsCookie) && /HttpOnly/i.test(tlsCookie) && /SameSite=Strict/i.test(tlsCookie), "a login over HTTPS sets a Secure, HttpOnly, SameSite=Strict cookie");
       const tlsOut = await fetch(`${base2}/__operator/logout`, { method: "POST", headers: { cookie: tlsCookie.split(";")[0], "x-forwarded-proto": "https", "sec-fetch-site": "same-origin", origin: base2 }, redirect: "manual" });
       ok(tlsOut.status === 303 && /;\s*Secure(;|$)/i.test(tlsOut.headers.get("set-cookie") || "") && /Max-Age=0/.test(tlsOut.headers.get("set-cookie") || ""), "the logout over HTTPS clears the cookie with the same Secure attribute");
-    } finally { try { child2.kill("SIGKILL"); } catch { /* */ } }
+    } finally { try { srv2?.child.kill("SIGKILL"); } catch { /* */ } }
   }
 
   // Junk operator writes from one address past its attempt budget do not move
   // the global wrong-credential counter: a write is charged only while the
   // address's budget accepts it, and once per request.
   {
-    const port3 = await getFreePort();
-    const child3 = spawn(process.execPath, ["src/server.js"], {
-      env: { ...process.env, FREE_MODE: "true", PORT: String(port3), AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "1", LATE_SETTLE_RECONCILE: "off" },
-      stdio: ["ignore", "ignore", "ignore"],
-    });
+    const srv3 = await bootServer({ stores: false, env: { FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "1", LATE_SETTLE_RECONCILE: "off" } }).catch(() => null);
     try {
-      const base3 = `http://127.0.0.1:${port3}`;
-      for (let i = 0; i < 120; i++) { try { if ((await fetch(`${base3}/health`)).ok) break; } catch { /* booting */ } await new Promise((r) => setTimeout(r, 500)); }
+      const base3 = srv3?.url;
       const failures = async () => (await (await fetch(`${base3}/api/gateway-status`, { headers: { "x-operator-token": TOKEN, "x-forwarded-for": "10.8.8.8" } })).json())?.operatorAuth?.failures1h;
       const before = await failures();
       for (let i = 0; i < 80; i++) {
@@ -430,7 +415,7 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
       }
       const after = await failures();
       ok(Number.isFinite(before) && Number.isFinite(after) && after - before <= 12, `80 junk writes from one address move the global counter by at most its budget (${before} -> ${after})`);
-    } finally { try { child3.kill("SIGKILL"); } catch { /* */ } }
+    } finally { try { srv3?.child.kill("SIGKILL"); } catch { /* */ } }
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

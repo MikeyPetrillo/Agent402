@@ -16,8 +16,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const dir = mkdtempSync(join(tmpdir(), "refund-lookup-"));
 process.env.REFUND_DB_DIR = dir;
@@ -151,17 +150,16 @@ ok(outB.refunds.count === 3 && outB.refunds.rows.every((r) => r.tx === TX_B || r
 try { await myUsage.handler({}, { header: () => undefined }); ok(false, "an unsigned caller is refused"); } catch (e) { ok(e?.statusCode === 400, "an unsigned caller is refused (no refunds without the payment identity)"); }
 
 // ---- the route, booted: free, same shape, rate limited
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(port), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", REVENUE_LEDGER_DB: join(dir, "rev.db"), POSTHOG_API_KEY: "" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let log = ""; proc.stdout.on("data", (d) => { log += d; }); proc.stderr.on("data", (d) => { log += d; });
-const base = `http://127.0.0.1:${port}`;
+// stores: false: the server reads the ledger this process wrote above.
+let log = "";
+const srv = await bootServer({
+  stores: false,
+  env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", REVENUE_LEDGER_DB: join(dir, "rev.db"), POSTHOG_API_KEY: "" },
+}).catch((e) => { log = e.message; return null; });
+const proc = srv?.child;
+const base = srv?.url;
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted");
+  ok(Boolean(srv), "server booted");
   const g = await fetch(`${base}/api/refunds/lookup?tx=${TX_PAID}`);
   const gj = await g.json();
   ok(g.status === 200 && gj.status === "paid" && gj.refundTx === RF_PAID && /no-store/.test(g.headers.get("cache-control") || ""), "GET /api/refunds/lookup answers free, uncached");
@@ -196,9 +194,9 @@ try {
   for (let i = 0; i < 40 && !limited; i++) { const r = await fetch(`${base}/api/refunds${i % 2 ? "/lookup" : ""}?tx=0x${"98".repeat(32)}`); n++; if (r.status === 429) limited = r; }
   ok(limited && limited.headers.get("retry-after") === "60", `a spray is rate limited with Retry-After, both names in one bucket (429 after ${n})`);
 } finally {
-  proc.kill("SIGTERM");
+  proc?.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 300));
-  if (fail) console.log(log.slice(-2000));
+  if (fail) console.log((srv ? srv.log() : log).slice(-2000));
   rmSync(dir, { recursive: true, force: true });
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

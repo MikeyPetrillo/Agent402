@@ -18,9 +18,7 @@
 //
 //   node scripts/test-seo-structure.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { insiderPage, fundPage, dossierPage, loadTeaser, teaserLastmod, entityLastmod } from "../src/programmatic-pages.js";
 import { sitemapXml, sitemapReports } from "../src/seo.js";
 import { SEED_TICKERS, SEED_MANAGERS } from "../src/programmatic-seeds.js";
@@ -30,7 +28,6 @@ import { MCP_REGISTRY_ENTRY_URL } from "../src/org-profiles.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const stripTags = (s) => { let out = String(s), prev; do { prev = out; out = out.replace(/<[^>]*>/g, ""); } while (out !== prev); return out; };
 // &amp; decodes last, so an escaped entity such as &amp;lt; reads as the text "&lt;".
@@ -153,32 +150,30 @@ function pageProblems(base, path, html, { selfCanonical = true } = {}) {
 }
 
 // --- 1-3 on a booted server -----------------------------------------------------
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, ...ownStoreEnv("seo-structure"), FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false" },
-  stdio: ["ignore", "ignore", "pipe"],
-});
+// The server boots on port 0, so the site address its pages print (canonical,
+// sitemap <loc>, entity @id) is a fixed BASE_URL; HOST is where it listens.
+const BASE = "http://seo-structure.example";
 let errLog = "";
-child.stderr.on("data", (d) => { errLog = (errLog + d).slice(-4000); });
-const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.exit(code); };
+const srv = await bootServer({ stores: "seo-structure", env: { FREE_MODE: "true", BASE_URL: BASE, X402_SYNC_ON_START: "false" } })
+  .catch((e) => { errLog = String(e.message).slice(-4000); return null; });
+const HOST = srv?.url;
+const done = (code) => { try { srv?.child.kill("SIGKILL"); } catch { /* */ } process.exit(code); };
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${BASE}/health`)).ok; } catch { /* */ } if (!up) await sleep(500); }
+  const up = Boolean(srv);
   ok(up, "server booted");
   if (!up) { console.error(errLog); done(1); }
 
-  const xml = await (await fetch(`${BASE}/sitemap.xml`)).text();
+  const xml = await (await fetch(`${HOST}/sitemap.xml`)).text();
   const paths = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].slice(BASE.length) || "/");
   ok(paths.length >= 400, `the sitemap lists ${paths.length} URLs`);
   ok(!paths.some((p) => p.startsWith("/tools/skill-")), "no /tools/skill-* alias is in the sitemap");
   for (const sub of ["sitemap-tools.xml", "sitemap-pages.xml"]) {
-    const t = await (await fetch(`${BASE}/${sub}`)).text();
+    const t = await (await fetch(`${HOST}/${sub}`)).text();
     ok(!/\/tools\/skill-/.test(t), `${sub} lists no skill alias`);
   }
   // An alias page still answers, canonical to its pack page (the reason it is left out).
   {
-    const html = await (await fetch(`${BASE}/tools/skill-sec-filings-deep-dive`)).text();
+    const html = await (await fetch(`${HOST}/tools/skill-sec-filings-deep-dive`)).text();
     ok(html.includes(`<link rel="canonical" href="${BASE}/skills/sec-filings-deep-dive">`), "control: /tools/skill-sec-filings-deep-dive is canonical to /skills/sec-filings-deep-dive");
   }
 
@@ -201,7 +196,7 @@ try {
   await Promise.all(Array.from({ length: 6 }, async () => {
     while (i < sample.length) {
       const p = sample[i++];
-      const r = await fetch(`${BASE}${p}`, { redirect: "manual" });
+      const r = await fetch(`${HOST}${p}`, { redirect: "manual" });
       if (!(r.headers.get("content-type") || "").includes("html")) { await r.arrayBuffer(); continue; }
       const html = await r.text();
       seen.html++;
@@ -213,11 +208,11 @@ try {
   ok(seen.html >= 600 && seen.crumbs >= 600, `read ${seen.html} sitemap pages (${seen.crumbs} with a BreadcrumbList) across ${byType.size} page types`);
   ok(bad.length === 0, `every page read is its own canonical, its trail matches its BreadcrumbList, and it names one site entity${bad.length ? `:\n  ${bad.slice(0, 15).join("\n  ")}${bad.length > 15 ? `\n  ... ${bad.length - 15} more` : ""}` : ""}`);
   for (const p of ["/skills/sec-filings-deep-dive", "/blog", "/guides", "/tools/category/crypto", "/reports/sample/dossier", "/docs/webhooks", "/base"]) {
-    const html = await (await fetch(`${BASE}${p}`)).text();
+    const html = await (await fetch(`${HOST}${p}`)).text();
     if (p === "/blog" || p === "/guides") {
       // An index page: its first post or guide carries the trail.
       const first = (html.match(new RegExp(`href="(${p}/[a-z0-9-]+)"`)) || [])[1];
-      const sub = first ? await (await fetch(`${BASE}${first}`)).text() : "";
+      const sub = first ? await (await fetch(`${HOST}${first}`)).text() : "";
       ok(first && /"BreadcrumbList"/.test(sub) && /aria-label="Breadcrumb"/.test(sub), `${first || p + "/*"} carries a BreadcrumbList and a visible trail`);
     } else {
       ok(/"BreadcrumbList"/.test(html) && /aria-label="Breadcrumb"/.test(html), `${p} carries a BreadcrumbList and a visible trail`);
@@ -225,7 +220,7 @@ try {
   }
   // /company defines the company entity the site entity points at.
   {
-    const nodes = ldNodes(await (await fetch(`${BASE}/company`)).text());
+    const nodes = ldNodes(await (await fetch(`${HOST}/company`)).text());
     ok(nodes.some((n) => n["@id"] === `${BASE}/#org` && n.name === "Havok Holdings LLC"), "/company defines #org, the site entity's parent");
   }
 } catch (e) {

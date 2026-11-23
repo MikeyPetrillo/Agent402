@@ -10,15 +10,12 @@
 //     and the partial-answer fields, so the 503s above are the deadline and
 //     not a broken stub.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { __test } from "../src/tools/solana-intel-kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PRELOAD = fileURLToPath(new URL("./lib/stub-rugcheck-fetch.mjs", import.meta.url));
 const D = __test.DEADLINES;
 const STALL = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
@@ -27,24 +24,18 @@ const SERVED = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
 // plumbing on a loaded CI box.
 const SLACK_MS = 3000;
 
-const [port] = await getFreePorts(1);
-const child = spawn(process.execPath, ["--import", PRELOAD, "src/server.js"], {
-  cwd: ROOT,
-  env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", STATE_DATABASE_URL: "", JUPITER_API_BASE: "", POSTHOG_API_KEY: "", SOLANA_RPC_URL: "", RUGCHECK_TOOLS: "on" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let log = "";
-child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
-const base = `http://127.0.0.1:${port}`;
+let srv = null;
+const bootEnv = { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", STATE_DATABASE_URL: "", JUPITER_API_BASE: "", POSTHOG_API_KEY: "", SOLANA_RPC_URL: "", RUGCHECK_TOOLS: "on" };
+let base = "";
 const post = async (path, body) => {
   const t0 = Date.now();
   const res = await fetch(`${base}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(D.HANDLER_BUDGET_MS + 15_000) });
   return { status: res.status, body: await res.json().catch(() => null), ms: Date.now() - t0 };
 };
 try {
-  let up = false;
-  for (let i = 0; i < 240; i++) { try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ } await sleep(250); }
-  if (!up) throw new Error(`server did not boot:\n${log.slice(-2000)}`);
+  srv = await bootServer({ stores: "solana-intel-deadline", args: ["--import", PRELOAD], env: bootEnv })
+    .catch((e) => { throw new Error(`server did not boot: ${e.message}`); });
+  base = srv.url;
 
   // The two stalls run together: each is its own request with its own budget.
   const [safety, holders, control, controlSafety] = await Promise.all([
@@ -68,13 +59,12 @@ try {
   ok(controlSafety.status === 200 && controlSafety.body?.riskLevel === "good" && controlSafety.body?.token?.symbol === "FIX", `control: the safety route serves through the stub (${controlSafety.status}, ${controlSafety.body?.riskLevel}, ${controlSafety.body?.token?.symbol})`);
   // "504" as a status, not inside another number: the boot log can carry it
   // in a millisecond timestamp or a count. The offending lines are printed.
-  const offending = log.split("\n").filter((l) => /upstream timed out|(?<![\d.:])504(?![\d])/.test(l));
+  const offending = srv.log().split("\n").filter((l) => /upstream timed out|(?<![\d.:])504(?![\d])/.test(l));
   ok(offending.length === 0, `the server log carries no 504 or 'timed out' wording for these reads${offending.length ? `: ${offending.slice(0, 3).join(" | ")}` : ""}`);
 } catch (e) {
   fail++; console.error(`FAIL - ${e?.message || e}`);
 } finally {
-  child.kill("SIGTERM");
-  await new Promise((r) => { child.once("exit", r); setTimeout(r, 5000); });
+  await srv?.stop();
 }
 console.log(`\ntest-solana-intel-deadline: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
