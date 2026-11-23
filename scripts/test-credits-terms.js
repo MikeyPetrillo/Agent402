@@ -335,6 +335,17 @@ ok(tOnText.includes(`no key holds more than $${creditsBalanceMaxCents() / 100}`)
 ok(/Credits never expire and carry no fees/.test(tOnText) && /Routes that buy from an outside seller with our wallet are paid with a wallet, not with credits/.test(tOnText), "/terms (on) states no expiry, no fees and own services only");
 ok(!tOnText.includes("unspent balance under $10") && !/non-refundable/.test(tOnText.slice(tOnText.indexOf("Prepaid credits are consumed"), tOnText.indexOf("Prepaid credits are consumed") + 300)), "/terms (on) drops the $10 exception and the non-refundable rule");
 ok(tOffText.includes("non-refundable except where required by law, with one exception: an unspent balance under $10") && !tOffText.includes("/api/credits/refund") && !/no key holds more than/.test(tOffText), "/terms (off) keeps the sentence issued keys were sold under and offers no refund route");
+// A fraud warning (src/credits.js fraudWarning, approveFraudRefund): the key
+// is frozen; the refund is automatic only to the warned payment's own card
+// and only when that payment can take the whole balance back; otherwise a
+// person approves the ordinary refund, which goes to the cards that paid,
+// newest first (scripts/test-credits-purchase-checks.js drives both). Both
+// branches say so; with sales off the freezes are stated beside the sentence
+// issued keys were sold under.
+const FRAUD_RULE = /possibly fraudulent[^.]*frozen, and its unspent balance is refunded automatically to that payment's card when that payment can take all of it back, otherwise after our review to the cards that paid for the key, newest payment first/;
+ok(FRAUD_RULE.test(tOnText) && !/refunded to that payment's card, automatically or after our review/.test(tOnText), "/terms (on) states where a fraud-warning refund goes on each path the code takes");
+ok(/A disputed purchase or top-up freezes the key it loaded until the dispute's outcome/.test(tOnText) && /a fraud warning on one freezes the key, and its unspent balance is refunded automatically to that payment's card when that payment can take all of it back, otherwise after our review to the cards that paid for the key, newest payment first/.test(tOnText), "/terms (on) refund paragraph states the same rule");
+ok(FRAUD_RULE.test(tOffText) && /A disputed purchase freezes the key it loaded until the dispute's outcome, decided by the card network and reported by Stripe/.test(tOffText) && tOffText.includes("A refunded or disputed purchase disables the key that purchase issued"), "/terms (off) states the dispute and fraud-warning freezes beside the sentence keys were sold under");
 // Each page has a date of its own (/terms is TERMS_VERSION; /privacy the date
 // its source prints), and the on-sale date moves either only when it is later.
 const PRIVACY_OWN = (readFileSync(new URL("../src/privacy.js", import.meta.url), "utf8").match(/last updated (\d{4}-\d{2}-\d{2})\./) || [])[1];
