@@ -19,11 +19,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The unit: what the cache keeps for a listing with non-text fields.
 const { _cleanSellerEntryForTests: clean } = await import("../src/x402-index.js");
-const raw = { manifest: { name: { en: "Odd" }, homepage: 7 }, tools: [{ route: 12, name: ["ocr"], slug: 3, description: { t: 1 }, category: true, tags: "ocr", aliases: [{ a: 1 }, "alt", 5], networks: "eip155:8453", method: "POST" }, null, "not a tool"], fetchedAt: 1 };
+const raw = { manifest: { name: { en: "Odd" }, homepage: 7 }, tools: [{ route: "/ocr", name: ["ocr"], slug: 3, description: { t: 1 }, category: true, tags: "ocr", aliases: [{ a: 1 }, "alt", 5], networks: "eip155:8453", method: "POST" }, null, "not a tool", { route: 12, method: "POST" }, { route: { u: 1 }, method: "POST" }], fetchedAt: 1 };
 const c = clean(raw);
 const t0 = c.tools[0];
-ok(c !== raw && c.tools.length === 1, `non-object tools are dropped (${c.tools.length} kept of ${raw.tools.length})`);
-ok(t0.route === "12" && t0.slug === "3" && t0.category === "true" && !("name" in t0) && !("description" in t0),
+ok(c !== raw && c.tools.length === 1, `non-object tools and tools whose route is not a path are dropped (${c.tools.length} kept of ${raw.tools.length})`);
+ok(t0.route === "/ocr" && t0.slug === "3" && t0.category === "true" && !("name" in t0) && !("description" in t0),
   `numbers and booleans become their text, objects and arrays are dropped (${JSON.stringify({ route: t0.route, slug: t0.slug, category: t0.category, name: t0.name, description: t0.description })})`);
 ok(JSON.stringify(t0.tags) === '["ocr"]' && JSON.stringify(t0.aliases) === '["alt","5"]' && JSON.stringify(t0.networks) === '["eip155:8453"]',
   `lists become lists of text (${JSON.stringify([t0.tags, t0.aliases, t0.networks])})`);
