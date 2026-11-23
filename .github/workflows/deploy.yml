@@ -5232,6 +5232,9 @@ jobs:
           ck "robots welcomes AI crawlers" 'has "$PROD/robots.txt" GPTBot'
           ck "MCP connector on landing"  'has "$PROD/" agent402-mcp'
           ck "MCP connector in llms.txt" 'has "$PROD/llms.txt" agent402-mcp'
+          # The short index's bound (scripts/test-front-door.js measures the tree under test).
+          LLMS_BYTES=$(curl -sf --max-time 20 "$PROD/llms.txt" | wc -c | tr -d ' ')
+          ck "llms.txt under 16,384 bytes ($LLMS_BYTES)" '[ "${LLMS_BYTES:-0}" -gt 1000 ] && [ "${LLMS_BYTES:-0}" -lt 16384 ]'
           ck "unit-convert tool page"    'has "$PROD/tools/unit-convert" "Unit convert"'
           ck "guides with TechArticle JSON-LD" 'has "$PROD/guides/x402-in-5-minutes" TechArticle'
           [ "$FAILS" -eq 0 ] || { echo "$FAILS production surface(s) regressed"; exit 1; }
