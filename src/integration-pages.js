@@ -7,6 +7,7 @@
 // update the entry here in the same change. Tool links are resolved against
 // the live catalog at render time, so a retired slug drops off the page
 // instead of linking to a 404.
+import { getWalletHtml } from "./get-a-wallet.js";
 import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { repoUrl } from "./repo-link.js";
@@ -776,6 +777,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
       <h2 ${H2}>How payment works</h2>
       <ul style="padding-left:20px;margin:0 0 16px;">${i.payment.map((e) => `<li ${LI}>${inline(e)}</li>`).join("")}</ul>
       ${i.walletExample ? `${pre(esc(i.walletExample))}` : ""}
+      ${/AGENT_KEY/.test(`${i.example || ""}\n${i.walletExample || ""}`) ? `<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${getWalletHtml({ link: (href, label) => `<a href="${esc(href)}" ${A}>${esc(label)}</a>` })}</p>` : ""}
       <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${esc(i.settleNote || failedCallFootnote())} Background: ${learnLinks}.</p>
     </section>
 

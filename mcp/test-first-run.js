@@ -1,7 +1,7 @@
 // First-run tests for agent402-mcp: keys with or without 0x, daily and
 // monthly caps that hold across restarts, the first-call allowance, media
-// answers written to files, and `npx agent402-mcp setup` with the OS key
-// store. Offline: stub HTTP hosts on port 0, temp folders, and stub keychain
+// answers written to files, `npx agent402-mcp setup` and `wallet new` with
+// the OS key store. Offline: stub HTTP hosts on port 0, temp folders, and stub keychain
 // commands (a fake `security` first on PATH); nothing is written to a real
 // keychain and nothing is paid.
 //
@@ -212,6 +212,66 @@ const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20_000, 3)]);
   console.log("setup.js: hidden input, normalized key, snippets, file fallback ✓");
 }
 
+
+// ---------------------------------------------------------------------------
+// 5b) `npx agent402-mcp wallet new`: a fresh key made here, stored, never printed.
+{
+  const { runWalletNew } = await import("./wallet-new.js");
+  const { configSnippets } = await import("./setup.js");
+  const sn = configSnippets();
+  const drive = async (run, env = {}) => {
+    const output = new PassThrough();
+    let out = "";
+    output.on("data", (d) => (out += d));
+    const code = await runWalletNew({ output, env: { AGENT402_CONFIG_DIR: tmp("wnew"), AGENT402_KEY_STORE: "macos", ...env }, run, platform: "darwin" });
+    return { code, out };
+  };
+  const stored = [];
+  const keychain = (cmd, args, { input = "" } = {}) => {
+    if (args[0] === "-i") { stored.push(input); return { status: 0, stdout: "" }; }
+    if (args[0] === "find-generic-password") return stored.length ? { status: 0, stdout: `${/-w (\S+)/.exec(stored.at(-1))?.[1] || ""}\n` } : { status: 44, stdout: "" };
+    return { status: 1, stdout: "" };
+  };
+  const made = await drive(keychain);
+  const key = /-w (0x[0-9a-f]{64})/.exec(stored[0] || "")?.[1];
+  ok(made.code === 0 && key && stored.length === 1, `wallet new stores a fresh 32-byte key in the keychain: ${made.out}`);
+  const addr = privateKeyToAccount(key).address;
+  ok(!made.out.includes(key) && !made.out.includes(key.slice(2)) && made.out.includes(addr) && made.out.includes("macOS Keychain"), `wallet new prints the address and the store, never the key: ${made.out}`);
+  ok(/Fund it with USDC on Base/.test(made.out) && /no ETH/.test(made.out) && made.out.includes(sn.claudeCode) && made.out.includes('"agent402-mcp@'), `wallet new says how to fund it (USDC on Base, no ETH) and prints the ready config: ${made.out}`);
+  // A key already stored is never replaced: its funds would be lost.
+  const again = await drive(keychain);
+  ok(again.code === 1 && stored.length === 1 && again.out.includes(addr) && /nothing was changed/i.test(again.out) && !again.out.includes(key.slice(2)), `wallet new refuses to replace a stored key: ${again.out}`);
+  // Two runs make two different keys.
+  const stored2 = [];
+  const k2 = (cmd, args, o = {}) => { if (args[0] === "-i") { stored2.push(o.input); return { status: 0, stdout: "" }; } if (args[0] === "find-generic-password") return stored2.length ? { status: 0, stdout: `${/-w (\S+)/.exec(stored2.at(-1))[1]}\n` } : { status: 44, stdout: "" }; return { status: 1, stdout: "" }; };
+  await drive(k2);
+  ok(/-w (0x[0-9a-f]{64})/.exec(stored2[0])?.[1] !== key, "each run makes its own key");
+  // No keychain: the 0600 file, with a warning.
+  const dir = tmp("wnew-file");
+  const filed = await drive(() => ({ status: 1, stdout: "" }), { AGENT402_CONFIG_DIR: dir });
+  const fileKey = readFileSync(join(dir, "wallet-key"), "utf8").trim();
+  ok(filed.code === 0 && /^0x[0-9a-f]{64}$/.test(fileKey) && /Warning: the key is stored in a plain file/.test(filed.out) && !filed.out.includes(fileKey.slice(2)) && (!POSIX || mode(join(dir, "wallet-key")) === 0o600), `a refused keychain falls back to the 0600 file with a warning: ${filed.out}`);
+  const off = await drive(keychain, { AGENT402_KEY_STORE: "off" });
+  ok(off.code === 1 && /AGENT402_KEY_STORE=off/.test(off.out), "with every key store off nothing is made");
+  // As a command: dispatched before the server starts.
+  const cfg = tmp("wnew-cmd");
+  const r = await new Promise((resolve) => {
+    const p = spawn(process.execPath, [INDEX, "wallet", "new"], { env: { PATH: process.env.PATH, AGENT402_KEY_STORE: "file", AGENT402_CONFIG_DIR: cfg }, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d)); p.stderr.on("data", (d) => (out += d));
+    p.on("exit", (code) => resolve({ code, out }));
+  });
+  const cmdKey = readFileSync(join(cfg, "wallet-key"), "utf8").trim();
+  ok(r.code === 0 && !r.out.includes(cmdKey.slice(2)) && r.out.includes(privateKeyToAccount(cmdKey).address) && !/catalog:/.test(r.out), `wallet new runs as a command and never starts the server: ${r.out}`);
+  const usage = await new Promise((resolve) => {
+    const p = spawn(process.execPath, [INDEX, "wallet"], { env: { PATH: process.env.PATH, AGENT402_KEY_STORE: "file", AGENT402_CONFIG_DIR: tmp("wnew-u") }, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d)); p.stderr.on("data", (d) => (out += d));
+    p.on("exit", (code) => resolve({ code, out }));
+  });
+  ok(usage.code === 1 && /npx agent402-mcp wallet new/.test(usage.out), `a bare "wallet" prints the usage: ${usage.out}`);
+  console.log("wallet-new.js: fresh key stored, never printed, never replaces a stored key ✓");
+}
 // ---------------------------------------------------------------------------
 // 6) The real server against a stub host.
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";

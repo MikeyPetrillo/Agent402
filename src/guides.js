@@ -1,6 +1,7 @@
 // Server-rendered technical guides — the prose layer for organic search.
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
+import { getWalletMarkdown } from "./get-a-wallet.js";
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgRef } from "./site-org.js";
@@ -502,6 +503,8 @@ export AGENT402_BUDGET=20             # USD for the whole session
 export AGENT402_NETWORKS=solana       # pay only on these chains, in this order
 npx -y agent402-mcp@${AGENT402_MCP_VERSION}
 \`\`\`
+
+${getWalletMarkdown()}
 
 **agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
 \`AGENT402_MAX_PER_CALL_USD\`, defaults to $5; \`0\` or \`off\` turns it off.
@@ -2042,6 +2045,8 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.16.0
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
+
+${getWalletMarkdown()}
 
 Or in \`.mcp.json\` at the project root:
 

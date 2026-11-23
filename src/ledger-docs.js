@@ -9,8 +9,10 @@
 // layout with a real navigation tree - the opposite of what a GitBook-style
 // docs hub should feel like.
 
+import { getWalletHtml } from "./get-a-wallet.js";
+import { startApps } from "./start-page.js";
 import { siteOrgRef } from "./site-org.js";
-import { ledgerShell, ledgerFooterCompact, fmtNum, codeBlock } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, fmtNum, codeBlock, esc } from "./ledger-chrome.js";
 import { docsLayoutHtml, DOCS_LAYOUT_CSS, docPrevNextHtml, DOCS_SEARCH_SCRIPT } from "./docs.js";
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
@@ -20,6 +22,8 @@ import { whyDocsSectionHtml, whyJsonLd, WHY_SECTION_CSS } from "./why.js";
 import { examplesSectionHtml, examplesJsonLd, EXAMPLES_SECTION_CSS } from "./use-cases.js";
 import { badgesSectionHtml, BADGES_SECTION_CSS } from "./badges.js";
 
+// A link in the docs page's own style (the get-a-wallet step).
+const DOC_LINK = (href, label) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">${esc(label)}</a>`;
 
 // One price format for every figure this page quotes: at least two decimals,
 // three below a cent ("$0.003", "$0.08", "$3.30").
@@ -67,6 +71,8 @@ function gatewayHtml(catalog) {
 }
 
 export function ledgerDocsPage(baseUrl, catalog) {
+  // The no-terminal path first: the custom connector step /start gives Claude desktop.
+  const CONNECTOR_APP = startApps(baseUrl).find((a) => a.id === "claude-desktop");
   const tools = toolList(catalog);
   const totalCount = tools.length;
   const freeCount = tools.filter(isComputePayable).length;
@@ -104,6 +110,7 @@ node demo.js
 </span>npm i @x402/core @x402/evm @x402/fetch viem
 <span style="color:var(--on-panel-faint);"># Use a new wallet holding only a few dollars of USDC. Never your main wallet.
 </span>AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js`, { label: "terminal", name: "the terminal commands", html: true, wrap: true, style: "margin-bottom:14px" })}</div>
+      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 14px;">${getWalletHtml({ link: DOC_LINK })}</p>
       <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 14px;">// an autonomous buyer discovers the catalog, gets quoted over HTTP 402, settles, and uses the result - zero humans.</p>
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 44px;">The demo signs on the EVM rails. To pay on Solana, Stellar or Algorand, see <a href="/docs/Paying-with-x402" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Paying with x402</a>.</p>
       </section>
@@ -123,6 +130,7 @@ node demo.js
       <h2 id="add" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">Three ways in.</h2>
 
       <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>A / MCP</span><span>Claude &amp; any MCP client</span></div>
+      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 14px;"><strong style="color:var(--ink);">No terminal, in Claude desktop or claude.ai:</strong> ${esc(CONNECTOR_APP.step)} <code style="font-family:var(--font-mono);font-size:var(--fs-code-inline);">${esc(CONNECTOR_APP.copy)}</code>. Then ask for a task; the free tools run at once. <a href="/start" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Start here</a> has each app's one step.</p>
       ${codeBlock(`<span style="color:var(--on-panel-faint);"># Claude Code - hosted connector (no install; free proof-of-work tools, paid tools need a wallet client)
 </span>claude mcp add --transport http agent402 https://agent402.tools/mcp
 
@@ -136,6 +144,7 @@ node demo.js
     "agent402": { "url": "https://agent402.tools/mcp" }
   }
 }`, { name: "the MCP setup", html: true, wrap: true, style: "margin-bottom:22px" })}
+      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:-12px 0 22px;">${getWalletHtml({ link: DOC_LINK })}</p>
       <p style="font-size:var(--fs-md);color:var(--muted);margin:-12px 0 22px;">Every other host, each block read from its own docs: <a href="/guides/agent-hosts" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK</a>. Shortlinks: <span style="font-family:var(--font-mono);">agent402.sh/cursor</span>, <span style="font-family:var(--font-mono);">agent402.sh/vscode</span>, <span style="font-family:var(--font-mono);">agent402.sh/codex</span>; one-shot install <span style="font-family:var(--font-mono);">curl -fsSL agent402.sh/install | sh</span>.</p>
 
       <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>B / x402 client</span><span>pay in code</span></div>

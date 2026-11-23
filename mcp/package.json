@@ -28,6 +28,7 @@
     "key-store.js",
     "media-output.js",
     "setup.js",
+    "wallet-new.js",
     "README.md",
     "pow-solver.js"
   ],

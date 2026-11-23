@@ -21,6 +21,7 @@ import { creditsSalesEnabled, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from 
 import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
 import { cardReportPriceRange } from "./report-tiers.js";
 import { BASE_NO_GAS_SENTENCE } from "./base-no-gas.js";
+import { WALLET_NEW_COMMAND } from "./get-a-wallet.js";
 import { CHAIN_PAGES } from "./market-page.js";
 
 export const START_PATH = "/start";
@@ -93,6 +94,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
 
     <section id="fund" style="margin-bottom:24px;">
       <h2 ${H2}>Fund a first wallet</h2>
+      <p class="ml-measure" ${P}>No wallet yet? Run ${code(WALLET_NEW_COMMAND)} on your computer: it makes one, stores the key (never shown) and prints the address to fund.</p>
       <ol class="ml-measure" style="padding-left:22px;margin:0 0 16px;color:var(--ink);font-size:var(--fs-base);line-height:1.6;">
         <li style="margin:0 0 8px;">Buy USDC on Base. Where you buy it, choose Base as the network.</li>
         <li style="margin:0 0 8px;">Send it to your wallet address. Use a new wallet for your agent and keep only a few dollars in it.</li>

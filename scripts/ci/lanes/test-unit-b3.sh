@@ -22,11 +22,13 @@ t node scripts/test-tool-page-mpp.js
 # Every tool category is a CATEGORIES key (breadcrumb + category page), decide included (offline + booted)
 TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 
-# @step 2: Offline suites (19 scripts, one process each)
+# @step 2: Offline suites (20 scripts, one process each)
 # Static page renders smoke (every HTML surface returns 200 with the right page-specific title)
 t node scripts/test-static-pages.js
 # A failed-call not-charged claim on a served page carries the settle-first sentence beside it, read from the rendered text (boots FREE_MODE, offline)
 t node scripts/test-not-charged-rendered.js
+# Every served page with an AGENT_KEY placeholder shows where to get a wallet (/start#fund and `agent402-mcp wallet new`), read from the sitemap (boots FREE_MODE, offline)
+t node scripts/test-get-a-wallet.js
 # The brand mark: /logo.png serves the committed PNG, /logo.svg the vector of the same art (shapes only, its colors and dot read from the PNG), /favicon.svg, the nav and footer mark and the live brand.svg its crop; only versioned icon URLs are immutable (boots FREE_MODE, offline)
 t node scripts/test-logo-png.js
 # Page weight: each site page's first-visit transfer inside its budget, the font set inside one budget, and no committed media over its kind's budget or 2 MB (boots a real server, offline)

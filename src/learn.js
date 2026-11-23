@@ -4,6 +4,7 @@
 // from a local boot of this server (Base USDC entry kept, the payTo address
 // replaced with a placeholder); the live 402 lists one accepts entry per
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
+import { getWalletHtml } from "./get-a-wallet.js";
 import { siteOrgRef } from "./site-org.js";
 import { GUIDE_SITE, GUIDE_SITE_NAME, GUIDE_EXPLAINERS, guideLink } from "./ask402-links.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -332,7 +333,7 @@ export const LEARN = [
     }
   }
 }` },
-        P(`<strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong>`),
+        P(`<strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong> ${getWalletHtml({ code: C })}`),
       ]],
       ["The hosted connector", [
         P(`On the hosted connector the pure-CPU tools run free (rate-limited). A wallet-only tool called without payment returns a readable tool result, so a host that pays neither wire still shows the user something useful.${CONNECTOR.names.length ? "" : ` ${connectorPayText({ code: C })}`}`),

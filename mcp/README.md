@@ -22,6 +22,14 @@ npx -y agent402-mcp@0.16.0 setup
 
 It asks for the wallet's private key (the input is hidden), stores it in your OS keychain (the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux through `secret-tool`; elsewhere a file readable only by your user, with a warning), and prints the config for Claude Code, Claude Desktop and Cursor. That config needs no `AGENT_KEY`: the server reads the stored key whenever `AGENT_KEY` is not set. Fund the wallet with USDC on Base. A Base payment needs no ETH: you sign an authorization and the facilitator pays the network fee.
 
+No wallet yet? Make one on this computer:
+
+```
+npx -y agent402-mcp@0.16.0 wallet new
+```
+
+It makes a new wallet key, stores it the same way (the key is never shown), and prints the wallet's address and the same config. Send a few dollars of USDC on Base to that address, no ETH needed. It never replaces a key already stored.
+
 Or put the key in the config instead (with or without the `0x` prefix):
 
 ```json

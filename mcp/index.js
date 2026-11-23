@@ -81,6 +81,15 @@ if (process.argv[2] === "setup") {
   const { runSetup } = await import("./setup.js");
   process.exit(await runSetup());
 }
+// `npx agent402-mcp wallet new` makes a fresh wallet key here, stores it the
+// same way and prints the address and config (./wallet-new.js); the key is
+// never printed and the server below never starts.
+if (process.argv[2] === "wallet") {
+  const { runWalletNew, WALLET_USAGE } = await import("./wallet-new.js");
+  if (process.argv[3] === "new") process.exit(await runWalletNew());
+  process.stderr.write(`${WALLET_USAGE}\n`);
+  process.exit(1);
+}
 
 const DEFAULT_URL = "https://agent402.tools";
 const BASE = (process.env.AGENT402_URL || DEFAULT_URL).replace(/\/$/, "");
