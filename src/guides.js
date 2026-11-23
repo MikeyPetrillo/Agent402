@@ -14,7 +14,7 @@ import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { marked, headingId } from "./tools/markdown-render.js";
 export { headingId };
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail, wrapCodeBlocks } from "./ledger-chrome.js";
-import { fitTitle } from "./seo-meta.js";
+import { fitTitle, firstFit } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
 import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens, chainDisplayName } from "./rails.js";
 import { routerPayChains } from "./tools/route-execute.js";
@@ -69,6 +69,7 @@ const LARGE_BODY_UNPAID_PER_HOUR = LARGE_BODY_UNPAID.PER_HOUR;
 // The content-pipeline guide reads the speech and transcription caps from their kits.
 import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS as TTS_LITE_FORMATS } from "./tools/tts-kit.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, sttLongEnabled } from "./tools/stt-kit.js";
+import { articleDates } from "./page-dates.js";
 /** Where the buying-at-volume guide lives (the metered quote limiter's 429 links it). */
 export const BUYING_AT_VOLUME_PATH = "/guides/buying-at-volume";
 
@@ -175,6 +176,7 @@ const FLAT_TIER_TABLE = "| tier | baseUrl path | per call | max output tokens |\
 const GUIDES = [
   {
     slug: "x402-in-5-minutes",
+    metaDescription: "A working x402 example: your agent calls an API, gets an HTTP 402 quote, pays in USDC from its own wallet and gets the result, with no signup or API key.",
     title: "Make your AI agent pay for what it needs: x402 in 5 minutes",
     description:
       `A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays ${RAILS_COUNT} from its own wallet, and gets the result - no signup, no API key.`,
@@ -324,6 +326,7 @@ at a [public wallet](https://agent402.tools/api/stats).
   },
   {
     slug: "buying-at-volume",
+    metaDescription: "How to run hundreds or thousands of paid calls in a burst: rate limits and Retry-After, retries that never pay twice, spend caps and job links.",
     title: "Buying at volume: limits, retries and spend caps for AI agents",
     seoTitle: "Buying at volume from an AI agent",
     description:
@@ -644,6 +647,7 @@ chain of paid stages, from research to subtitles, is in
   },
   {
     slug: "content-pipeline",
+    metaDescription: "A recipe for podcast, short-video and voiceover pipelines where every stage, from research and script to speech and subtitles, is one paid call.",
     title: "Content pipelines: research, script, voice, images and subtitles from one wallet",
     seoTitle: "A content pipeline for AI agents, paid per call",
     description:
@@ -991,6 +995,7 @@ itself is in [x402 and MPP](/guides/x402-and-mpp).
   },
   {
     slug: "durable-memory-for-agents",
+    metaDescription: "How agents keep state across sessions and share it across owners with wallet-keyed memory: writes, cross-wallet grants, audit logs and recall.",
     title: "Durable memory for AI agents - no accounts, the wallet is the identity",
     seoTitle: "Durable memory for AI agents, keyed to the wallet",
     description:
@@ -1063,6 +1068,7 @@ for the full API.
   },
   {
     slug: "sell-your-api-over-x402",
+    metaDescription: "Put a per-call USDC paywall in front of any HTTP endpoint with x402: quote over HTTP 402, settle through a facilitator and get found by agents.",
     title: "Sell your API to AI agents over x402 - no billing system required",
     seoTitle: "Sell your API to AI agents over x402",
     description:
@@ -1144,6 +1150,7 @@ on-chain customer detector - is in
   },
   {
     slug: "x402-payments-toolkit",
+    metaDescription: "Read a 402 quote, check balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on chain.",
     title: "Let your agent pay anyone: the non-custodial x402 payments toolkit",
     seoTitle: "The non-custodial x402 payments toolkit",
     description:
@@ -1235,6 +1242,7 @@ USDC; these tools are wallet-only (no proof-of-work tier).
   },
   {
     slug: "usdg-payments-robinhood-chain",
+    metaDescription: "How AI agents pay in USDG on Robinhood Chain over x402, and how a seller accepts it: chain parameters, gasless settlement and buyer code.",
     title: "Accept USDG payments on Robinhood Chain over x402",
     description:
       "How AI agents pay in USDG (Global Dollar) on Robinhood Chain via the x402 protocol - and how to accept it as a seller: chain parameters, gasless EIP-3009 settlement, buyer code, and how to verify a settlement on-chain.",
@@ -1332,6 +1340,7 @@ agent can verify its own settlement for a fraction of a cent without an RPC key.
   },
   {
     slug: "create-agent-wallet",
+    metaDescription: "Create and fund a wallet for an AI agent safely: generate the key locally, rehearse the x402 payment loop with test USDC, then fund it for real calls.",
     title: "Give your agent a wallet - non-custodial, from zero to first x402 payment",
     seoTitle: "Give your agent a non-custodial wallet",
     description:
@@ -1433,6 +1442,7 @@ addresses out.
   },
   {
     slug: "smart-order-router",
+    metaDescription: "Describe a task and pay once: the router picks the best tool from this catalog or a proven outside x402 seller, buys the result and returns it.",
     title: "One payment, any proven seller: the x402 Smart Order Router",
     description:
       "Describe a task, pay once, and the router resolves the best tool - from Agent402's own 500+ catalog or from an external x402 seller in the open economy, proven sellers first - buys the result from that seller on the chain you paid on and sells it to you with an on-chain receipt.",
@@ -1949,6 +1959,7 @@ its normal schedule.
   },
   {
     slug: "agent-hosts",
+    metaDescription: "Connect the agent host you already run to Agent402: models through an OpenAI-compatible base URL and tools over MCP, paid per call from a wallet.",
     title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter, AgentCore and any OpenAI SDK",
     seoTitle: "Use Agent402 from Claude Code, Cursor and more",
     description:
@@ -2490,6 +2501,7 @@ result, proven sellers first. Why pay here, with the proof links:
   },
   {
     slug: "openclaw-model-provider",
+    metaDescription: "Point OpenClaw at Agent402's OpenAI-compatible gateway and pay per call in USDC from a wallet over x402, with a plugin that sets up the provider.",
     title: CREDITS_ON ? "Use Agent402 as your OpenClaw model provider - pay by card, no wallet" : "Use Agent402 as your OpenClaw model provider - pay per call",
     seoTitle: "Agent402 as your OpenClaw model provider",
     description:
@@ -2755,7 +2767,7 @@ export function guidePage(baseUrl, slug, catalog = null) {
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description: g.description, canonical, baseUrl, activePath: "__none__", jsonLd: [jsonLd, crumbs.ld], extraCss: GUIDE_PAGE_CSS, body });
+  return ledgerShell({ title, description: firstFit([g.metaDescription, g.description]) || g.description, canonical, baseUrl, activePath: "__none__", jsonLd: [jsonLd, crumbs.ld], extraCss: GUIDE_PAGE_CSS, body, article: articleDates(`/guides/${g.slug}`) });
 }
 
 export const guideSlugs = () => GUIDES.map((g) => g.slug);

@@ -21,6 +21,8 @@ import { meteredTimeoutSentence } from "./metered-lead.js";
 import { whyDocsSectionHtml, whyJsonLd, WHY_SECTION_CSS } from "./why.js";
 import { examplesSectionHtml, examplesJsonLd, EXAMPLES_SECTION_CSS } from "./use-cases.js";
 import { badgesSectionHtml, BADGES_SECTION_CSS } from "./badges.js";
+import { articleDates } from "./page-dates.js";
+import { RAILS_OR } from "./rails.js";
 
 // A link in the docs page's own style (the get-a-wallet step).
 const DOC_LINK = (href, label) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">${esc(label)}</a>`;
@@ -86,6 +88,7 @@ export function ledgerDocsPage(baseUrl, catalog) {
     "@context": "https://schema.org",
     "@type": "TechArticle",
     name: "Agent402.Tools Documentation",
+    headline: "Agent402.Tools Documentation",
     url: canonical,
     description,
     publisher: siteOrgRef(baseUrl),
@@ -112,7 +115,7 @@ node demo.js
 </span>AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js`, { label: "terminal", name: "the terminal commands", html: true, wrap: true, style: "margin-bottom:14px" })}</div>
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 14px;">${getWalletHtml({ link: DOC_LINK })}</p>
       <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 14px;">// an autonomous buyer discovers the catalog, gets quoted over HTTP 402, settles, and uses the result - zero humans.</p>
-      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 44px;">The demo signs on the EVM rails. To pay on Solana, Stellar or Algorand, see <a href="/docs/Paying-with-x402" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Paying with x402</a>.</p>
+      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 44px;">x402 settles in ${esc(RAILS_OR)}. The demo signs on the EVM rails. To pay on Solana, Stellar or Algorand, see <a href="/docs/Paying-with-x402" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Paying with x402</a>.</p>
       </section>
 
       <!-- HOW -->
@@ -230,6 +233,7 @@ ${gateway.rows}
     canonical,
     baseUrl,
     activePath: "/docs",
+    article: articleDates("/docs"),
     jsonLd,
     extraCss,
     body,

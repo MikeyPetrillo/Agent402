@@ -67,7 +67,7 @@ export function howToPayPage(baseUrl, catalog = null, { networks = null } = {}) 
   const canonical = `${baseUrl}/how-to-pay`;
   const title = "How to pay for a call: x402, MPP or proof-of-work";
   const description =
-    "From nothing to a paid call on every rail Agent402 takes: a stablecoin over x402 on each listed chain, MPP over Tempo, EVM or card, or the free proof-of-work tier. What you need, the 402 flow, a snippet to paste, what the receipt looks like, and what happens when a call fails.";
+    "How to make a first paid call on every rail Agent402 takes: x402 on each listed chain, MPP, or the free proof-of-work tier, with a snippet to paste.";
 
   // ---- derived facts -------------------------------------------------------
   const usdcRails = rails.filter((r) => r.asset === "USDC");

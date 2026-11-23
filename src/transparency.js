@@ -51,7 +51,7 @@ export function transparencyPage(baseUrl, traffic = null) {
   const updated = pageLastmod("/transparency");
   const title = "Transparency - Agent402";
   const description =
-    "Public disclosures with on-chain receipts: the community-launched $AGENT402 token on Robinhood Chain, the contract address, the claiming wallet, and our commitments.";
+    "Public disclosures with on-chain receipts: the community-launched $AGENT402 token on Robinhood Chain, its contract, claiming wallet and our commitments.";
   const canonical = `${baseUrl}/transparency`;
 
   const extraCss = `

@@ -24,14 +24,14 @@ ok(metaDescription("Short and sweet.") === "Short and sweet.", "a description un
 const long = "Agent402 is the applied layer of Agentic Finance: the open index, Smart Order Router and on-chain ranking for agents that pay and get paid over x402 and MPP. Sell your API for USDC per call, or give your AI agent 585 pay-per-call tools. No signup, no API keys - the wallet is the identity.";
 const d = metaDescription(long);
 ok(d.length <= META_DESCRIPTION_MAX, `a long description is cut to <= ${META_DESCRIPTION_MAX} (got ${d.length})`);
-ok(!d.endsWith(".") && /\w$/.test(d), "when the first sentence end sits past the limit the cut lands on a word, never mid-word");
+ok(/[.!?]$/.test(d) && !/\b(and|or|the|of)\.$/.test(d), `when the first sentence end sits past the limit the cut closes a clause, never a cut word ("${d}")`);
 const twoSentences = "Every paid call returns a receipt and a failed call is never charged. The metered gateway quotes each request from its own body and settles the actual usage under that ceiling with a receipt on every response.";
 const d1 = metaDescription(twoSentences);
 ok(d1 === "Every paid call returns a receipt and a failed call is never charged.", "the cut lands on a sentence end when one fits");
 ok(!/\.\.\.$|…$/.test(d), "no ellipsis is added (search engines add their own)");
 const noSentence = "word ".repeat(60).trim();
 const d2 = metaDescription(noSentence);
-ok(d2.length <= META_DESCRIPTION_MAX && !d2.endsWith(" ") && /word$/.test(d2), "with no sentence end the cut lands on a word boundary");
+ok(d2.length <= META_DESCRIPTION_MAX && /word\.$/.test(d2), "with no sentence end or clause the cut lands on a word boundary and closes the sentence");
 ok(metaDescription("  spaced   out\n\ntext  ") === "spaced out text", "whitespace is normalised");
 const priced = "Cited reports, $2 to $5 by card and $0.60 to $1.10 for an agent paying per call: deep research, company dossier, fund 13F, insider flow, market brief, SEC filings, domain security, Solana token risk evidence, FDA recalls.";
 ok(/\$2 to \$5/.test(metaDescription(priced)), "the reports description keeps its prices after the cut (test-price-prose depends on it)");

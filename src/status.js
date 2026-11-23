@@ -594,7 +594,7 @@ ${ledgerFooterCompact()}`;
   return ledgerShell({
     title: "Status - Agent402 x402 + MCP server uptime",
     description:
-      "Availability for Agent402.Tools, measured every few minutes by two independent observers outside production: per-component uptime history, incidents derived from real probes, and daily real-money payment checks.",
+      "Availability for Agent402.Tools, measured every few minutes by two independent observers outside production, with uptime history and incidents.",
     canonical: `${baseUrl}/status`,
     baseUrl,
     activePath: "/status",

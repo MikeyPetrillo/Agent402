@@ -13,6 +13,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { marked } from "./tools/markdown-render.js"; // the one renderer configuration
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail, wrapCodeBlocks } from "./ledger-chrome.js";
+import { sentenceFit } from "./seo-meta.js";
+import { REPO_SLUG } from "./repo-link.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIKI_DIR = join(__dirname, "..", "wiki");
@@ -339,8 +341,11 @@ function shell(baseUrl, title, description, path, body, currentSlug) {
   });
 }
 
+// A bare repository URL in the wiki (autolinked) is shown as words on the
+// site: the page links the repository and never prints its path as text.
+const REPO_PATH_TEXT = new RegExp(`(<a [^>]*href="(https://github\\.com/${REPO_SLUG.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^"]*)"[^>]*>)\\2</a>`, "gi");
 function renderMarkdown(md) {
-  return wrapCodeBlocks(marked.parse(transformWikilinks(md)))
+  return wrapCodeBlocks(marked.parse(transformWikilinks(md)).replace(REPO_PATH_TEXT, "$1the repository</a>"))
     .replace(/<table>/g, '<div class="ml-docs-tw"><table>')
     .replace(/<\/table>/g, "</table></div>")
     // A row of related-page links wraps balanced, so it never ends on one stray link.
@@ -349,7 +354,16 @@ function renderMarkdown(md) {
 
 /** Meta description from a page's first real prose paragraph: skips headings,
  * blockquote banners, tables, lists, code and HTML, then strips markdown. */
-export function docDescription(md, title) {
+// A page whose opening paragraphs have no sentence that fits a snippet gets
+// one written for it here (the wiki text stays as it is on GitHub).
+const DOC_DESCRIPTIONS = {
+  Home: "Agent402 documentation: the payment and trust layer for agentic commerce, with x402 and MPP payments, a signed receipt per call and 500+ tools.",
+  "Agentic-Finance": "Agentic Finance is software agents transacting on their own: finding a service, reading its price, paying per request and keeping a receipt.",
+  Operations: "How Agent402 is deployed and watched in production: the deploy and heartbeat workflows, the production probes and the hosting setup.",
+};
+
+export function docDescription(md, title, slug = "") {
+  if (slug && Object.hasOwn(DOC_DESCRIPTIONS, slug)) return DOC_DESCRIPTIONS[slug];
   const paras = String(md).replace(/```[\s\S]*?```/g, "").split(/\n\s*\n/);
   for (const raw of paras) {
     const t = raw.trim();
@@ -359,7 +373,10 @@ export function docDescription(md, title) {
       .replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
     for (let prev = ""; prev !== text; ) { prev = text; text = text.replace(/<[^<>]*>/g, ""); }
     text = text.replace(/[<>*_`]+/g, "").replace(/\s+/g, " ").trim();
-    if (text.length >= 40) return text; // the shell trims to snippet length
+    // Whole sentences that fit a snippet; a paragraph whose first sentence
+    // runs past it gives way to the next one rather than being cut.
+    const fit = text.length >= 40 ? sentenceFit(text) : "";
+    if (fit.length >= 40) return fit;
   }
   return `Agent402 documentation: ${title}.`;
 }
@@ -368,7 +385,7 @@ export function docsPage(baseUrl, slug) {
   const md = Object.hasOwn(WIKI, slug) ? WIKI[slug] : null;
   if (!md) return null;
   const title = slug === "API-Reference" ? "API Reference Guide" : slug.replace(/-/g, " ");
-  const description = docDescription(md, title);
+  const description = docDescription(md, title, slug);
   return shell(
     baseUrl,
     title,

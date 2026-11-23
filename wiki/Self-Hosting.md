@@ -23,8 +23,9 @@ Run Agent402 on your own infrastructure for full control over pricing, data, rat
 
 ### Manual (recommended)
 
+Clone [the repository](https://github.com/MikeyPetrillo/Agent402), then:
+
 ```bash
-git clone https://github.com/MikeyPetrillo/Agent402.git
 cd Agent402
 npm install
 FREE_MODE=true npm start        # everything runs free, no wallet needed

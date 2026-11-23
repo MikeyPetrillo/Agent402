@@ -579,7 +579,7 @@ import { x402101Page } from "./x402-101.js";
 import { aifiCardSvg } from "./aifi-card.js";
 import { sectionCardSvg, ogSectionIds, toolCardSvg } from "./og-cards.js";
 import { robotsTxt, sitemapXml, llmsTxt, llmsFullTxt, sitemapIndex, sitemapPages, sitemapTools, sitemapGuides, sitemapSkills, sitemapReports, sitemapCategories, sitemapLearn } from "./seo.js";
-import { clampedTitles, META_TITLE_MAX } from "./seo-meta.js";
+import { clampedTitles, cutDescriptions, META_TITLE_MAX, META_DESCRIPTION_MAX } from "./seo-meta.js";
 import { integrationPage } from "./integration-pages.js";
 import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
@@ -853,6 +853,8 @@ import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PAC
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { playgroundPage } from "./playground.js";
+import { payPerCallApiPage, paidMcpToolsPage, comparePage } from "./search-landings.js";
+import { categoryMarkdown, categoriesMarkdownIndex } from "./category-markdown.js";
 import { apiExplorerPage } from "./api-explorer.js";
 import { sdkPlaygroundPage } from "./sdk-playground.js";
 import { blogIndex, blogPost } from "./blog.js";
@@ -4361,7 +4363,7 @@ function notFoundPage(res, { what = "Page", href = "/", label = "Home" } = {}) {
         <a class="btn btn-secondary" href="/">Home</a>
       </div>
     </div>${ledgerFooterCompact()}`;
-  return res.status(404).type("html").send(ledgerShell({ title: `${what} not found - Agent402`, description: `${what} not found`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
+  return res.status(404).type("html").send(ledgerShell({ title: `${what} not found - Agent402`, description: `${what} not found`, canonical: null, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
 }
 // The page of a tool or skill pack we retired: 410 with the retirement date and
 // the replacement's page, the same answer its API route gives
@@ -4381,7 +4383,7 @@ function retiredPage(res, gone) {
       </div>
     </div>${ledgerFooterCompact()}`;
   res.set(retirementHeaders(gone.retiredAt, repHref ? `${BASE_URL}${repHref}` : null));
-  return res.status(410).type("html").send(ledgerShell({ title: `${what} retired - Agent402`, description: `${what} ${gone.slug} was retired on ${gone.retiredAt}`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
+  return res.status(410).type("html").send(ledgerShell({ title: `${what} retired - Agent402`, description: `${what} ${gone.slug} was retired on ${gone.retiredAt}`, canonical: null, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
 }
 const htmlCache = (res, maxAge, swr) =>
   res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
@@ -6530,7 +6532,7 @@ app.get("/x402-economy", (_req, res) => {
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
 // The use cases page became the Examples section of /docs (same live prices).
 app.get("/use-cases", (_req, res) => res.redirect(301, "/docs#examples"));
-app.get("/playground", (_req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL, CATALOG)));
+app.get("/playground", (req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL, CATALOG, { variant: Object.keys(req.query || {}).length > 0 })));
 app.get("/sdk-playground", (_req, res) => htmlCache(res, 300, 900).send(sdkPlaygroundPage(BASE_URL)));
 // Capitalised wiki URLs whose page the site serves at a lowercase route: 301
 // there (exact-case match; Express string routes are case-insensitive).
@@ -6548,7 +6550,9 @@ app.get("/blog/1000-tools-milestone", (_req, res) => res.redirect(301, "/blog/ca
 app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.params.slug); if (!html) return notFoundPage(res, { what: "Post", href: "/blog", label: "All posts" }); htmlCache(res, 300, 900).send(html); });
 // /compare folded into the side-by-side table of the /docs #why section; /community's
 // adapters, packages and sample reports live on /integrations and /reports.
-app.get("/compare", (_req, res) => res.redirect(301, "/docs#why-compare"));
+app.get("/compare", (_req, res) => htmlCache(res, 300, 900).send(comparePage(BASE_URL)));
+app.get("/pay-per-call-api", (_req, res) => htmlCache(res, 300, 900).send(payPerCallApiPage(BASE_URL, CATALOG)));
+app.get("/paid-mcp-tools", (_req, res) => htmlCache(res, 300, 900).send(paidMcpToolsPage(BASE_URL, CATALOG)));
 app.get("/community", (_req, res) => res.redirect(301, "/integrations"));
 app.get("/contribute", (_req, res) => htmlCache(res, 300, 900).send(contributePage(BASE_URL)));
 app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL, CATALOG)));
@@ -7290,7 +7294,7 @@ app.get("/__operator/routes.json", (req, res) => {
 });
 app.get("/__operator/seo-meta.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
-  res.set("Cache-Control", "no-store").json({ titleMax: META_TITLE_MAX, clampedTitles: [...clampedTitles].map(([source, served]) => ({ source, served })) });
+  res.set("Cache-Control", "no-store").json({ titleMax: META_TITLE_MAX, clampedTitles: [...clampedTitles].map(([source, served]) => ({ source, served })), descriptionMax: META_DESCRIPTION_MAX, cutDescriptions: [...cutDescriptions].map(([source, served]) => ({ source, served })) });
 });
 app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
@@ -11019,13 +11023,60 @@ const openapiDocument = () => {
 // (src/rail-recheck.js): the surfaces built once from the offer are built
 // again, so they name the networks the 402 now carries.
 onRailRestored(() => { MANIFEST = buildManifest(); OPENAPI_CACHE = null; navChainsMemo = { snapshot: null, board: null, value: null }; });
+// A subset of the document for an agent that needs one part of the catalog:
+// ?category=<key> (a catalog category, the operation tag) or ?tag=<word> (the
+// category or any of a tool's own tags). Only values the catalog uses are
+// accepted, so the cache below holds at most one entry per real value; any
+// other value answers 404 with the categories to pick from.
+const OPENAPI_SUBSETS = new Map();
+const OPENAPI_SUBSETS_MAX = 400;
+function openapiSubset(kind, value) {
+  const key = `${kind}:${value}`;
+  if (OPENAPI_SUBSETS.has(key)) return OPENAPI_SUBSETS.get(key);
+  const keep = Object.entries(CATALOG).filter(([, d]) => d && (kind === "category"
+    ? d.category === value
+    : d.category === value || (Array.isArray(d.tags) && d.tags.some((t) => String(t).toLowerCase() === value))));
+  if (!keep.length) return null;
+  const spec = openapiSpec(BASE_URL, Object.fromEntries(keep));
+  spec.info = { ...spec.info, "x-subset": { [kind]: value, operations: keep.length, full: `${BASE_URL}/openapi.json` } };
+  const json = JSON.stringify(spec);
+  const out = { json, etag: `"${createHash("sha256").update(json).digest("hex").slice(0, 32)}"` };
+  if (OPENAPI_SUBSETS.size < OPENAPI_SUBSETS_MAX) OPENAPI_SUBSETS.set(key, out);
+  return out;
+}
+onRailRestored(() => OPENAPI_SUBSETS.clear());
 app.get("/openapi.json", (req, res) => {
+  const category = typeof req.query.category === "string" ? req.query.category.trim().slice(0, 60) : "";
+  const tag = typeof req.query.tag === "string" ? req.query.tag.trim().toLowerCase().slice(0, 60) : "";
+  if (category || tag) {
+    const kind = category ? "category" : "tag";
+    const value = category || tag;
+    const valid = /^[a-z0-9][a-z0-9 _.-]*$/i.test(value);
+    const sub = valid ? openapiSubset(kind, value) : null;
+    if (!sub) {
+      const used = [...new Set(Object.values(CATALOG).map((d) => d && d.category).filter(Boolean))].sort();
+      return res.status(404).set("Cache-Control", "public, max-age=600").json({ error: `no tools match ${kind} "${value}"`, categories: used, full: `${BASE_URL}/openapi.json` });
+    }
+    res.set("Cache-Control", "public, max-age=3600").set("ETag", sub.etag);
+    if (String(req.headers["if-none-match"] || "").includes(sub.etag)) return res.status(304).end();
+    return res.type("application/json").send(sub.json);
+  }
   const { json, etag } = openapiDocument();
   res.set("Cache-Control", "public, max-age=3600").set("ETag", etag);
   if (String(req.headers["if-none-match"] || "").includes(etag)) return res.status(304).end();
   res.type("application/json").send(json);
 });
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(ledgerCatalogPage(BASE_URL, CATALOG, SKILL_PACKS)));
+// One markdown catalog per category (/tools/<category>.md): each tool's route,
+// price, description and page, small enough to load whole. /tools.md is the
+// index of them. Registered before /tools/:slug so the .md name is never read
+// as a tool slug.
+app.get("/tools.md", (_req, res) => res.type("text/markdown").set("Cache-Control", "public, max-age=3600").send(categoriesMarkdownIndex(BASE_URL, CATALOG)));
+app.get(/^\/tools\/([a-z0-9-]+)\.md$/, (req, res) => {
+  const md = categoryMarkdown(BASE_URL, CATALOG, req.params[0]);
+  if (!md) return res.status(404).type("text/plain").send(`No category "${req.params[0]}". The list: ${BASE_URL}/tools.md\n`);
+  res.type("text/markdown").set("Cache-Control", "public, max-age=3600").send(md);
+});
 // The task-indexed shop page retired into the catalog; /api/find answers a task.
 app.get("/shop", (_req, res) => res.redirect(301, "/tools"));
 // The standalone economy dashboard folded into the marketplace's "The economy,
@@ -14804,7 +14855,7 @@ app.use((req, res) => {
         <a class="btn btn-secondary" href="/api/find">Find a tool</a>
       </div>
     </div>${ledgerFooterCompact()}`;
-  res.status(404).type("html").send(ledgerShell({ title: "Page not found - Agent402", description: "Page not found", canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
+  res.status(404).type("html").send(ledgerShell({ title: "Page not found - Agent402", description: "Page not found", canonical: null, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
 });
 app.use((err, req, res, _next) => {
   if (res.headersSent) return; // already started streaming — let it go

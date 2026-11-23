@@ -67,7 +67,7 @@ const hh = (h) => `${String(h).padStart(2, "0")}:00 UTC`;
 export function trustPage(baseUrl) {
   const canonical = `${baseUrl}/trust`;
   const title = "Trust at Agent402";
-  const description = "How to verify a paid call end to end, and how the hosted service handles data and incidents: the subprocessors that receive buyer data, what is stored and where, encryption, nightly backups and restore tests, status, paging, refunds and security reports.";
+  const description = "How to verify a paid call end to end, and how the hosted service handles buyer data, backups, incidents, refunds and security reports.";
   const keep = backupKeepDays(), hour = backupUtcHour(), stale = backupStaleHours();
   const cacheMin = Math.round(IDEM_TTL_MS / 60000);
   const years = hstsYears();

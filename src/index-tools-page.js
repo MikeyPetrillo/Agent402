@@ -26,6 +26,7 @@
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { SELLER_TOOL_CAP } from "./seller-tool-cap.js";
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
+import { CATEGORIES } from "./pages.js";
 
 const PAGE_SIZE = 100;
 const fmtPrice = (p) => (typeof p === "number" && p > 0 ? `$${p < 0.01 ? p.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : p.toFixed(2)}` : "-");
@@ -152,8 +153,19 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
   const chips = categories.filter((c) => chipWorthy(c.category) || c.category === category).slice(0, 18).map((c) =>
     `<a href="${esc(qs({ category: c.category === category ? "" : c.category, page: 1 }))}" class="${c.category === category ? "on" : ""}">${esc(c.category)} ${fmtNum(c.count)}</a>`).join("");
 
+  // Only a category we define ourselves (the catalog's own list) makes a page
+  // worth indexing: any other value is seller-supplied text, an unbounded URL
+  // space that would put a stranger's string in our titles. A filtered view
+  // (search, source), a later page or an empty result is kept out of the index
+  // and its links are still followed.
+  const ownCategory = category && Object.hasOwn(CATEGORIES, category) ? CATEGORIES[category] : null;
+  const indexable = !search && !source && page === 1 && data.results.length > 0 && (!category || ownCategory);
+  const catLabel = ownCategory ? ownCategory.label : category;
+  const pageSuffix = page > 1 ? ` (page ${fmtNum(page)})` : "";
+  const h1 = ownCategory ? `${catLabel} tools, indexed${pageSuffix}` : `Every tool, indexed${pageSuffix}`;
+
   const body = `<div class="ix-wrap">
-<h1 class="ix-h1">Every tool, indexed</h1>
+<h1 class="ix-h1">${esc(h1)}</h1>
 <p class="ix-sub">${fmtNum(data.total)} endpoints in one searchable list, one row per distinct endpoint from sellers whose last crawl over https succeeded: <b>${fmtNum(data.ours)} we build and operate ourselves</b>, and ${fmtNum(data.thirdParty)} run by other people. Every row says which is which. Ours are badged <span class="ix-badge ours">OURS</span> and tinted; everything else belongs to a third party. The tool listings on <a href="/marketplace">/marketplace</a> sum the tool count each indexed seller advertises, including sellers this list leaves out, so the two figures differ. A seller listing more than ${fmtNum(SELLER_TOOL_CAP)} tools is indexed with ${fmtNum(SELLER_TOOL_CAP)} of them, described tools first.</p>
 
 <div class="ix-note">
@@ -205,11 +217,17 @@ ${data.results.map(row).join("\n")}
 </div>
 ${ledgerFooterCompact()}`;
 
-  const canonical = `${baseUrl}/marketplace/tools${page > 1 || search || category ? qs().replace("/marketplace/tools", "") : ""}`;
+  // The canonical never carries `source`: the ours / third-party split is a
+  // view of the same list, not a page of its own.
+  const canonical = `${baseUrl}${qs({ source: "" })}`;
+  const description = ownCategory
+    ? `${fmtNum(data.matched)} x402 endpoints in ${catLabel}, ours and third-party, each labeled with who operates it.${pageSuffix ? ` Page ${fmtNum(page)} of ${fmtNum(pages)}.` : ""}`
+    : `${fmtNum(data.total)} x402 endpoints in one searchable index: ${fmtNum(data.ours)} built and operated by Agent402, ${fmtNum(data.thirdParty)} run by third parties, each labeled with who operates it.${pageSuffix ? ` Page ${fmtNum(page)} of ${fmtNum(pages)}.` : ""}`;
   return ledgerShell({
-    title: `Every x402 tool indexed${category ? `: ${category}` : ""}${page > 1 ? ` (page ${page})` : ""} - Agent402`,
-    description: `${fmtNum(data.total)} x402 endpoints in one searchable index: ${fmtNum(data.ours)} built and operated by Agent402, ${fmtNum(data.thirdParty)} run by third parties. Every row is labeled with who operates it. Third-party listings are not tested or endorsed by Agent402.`,
+    title: `${ownCategory ? `${catLabel} x402 tools indexed` : "Every x402 tool indexed"}${pageSuffix} - Agent402`,
+    description,
     canonical,
+    ...(indexable ? {} : { robots: "noindex, follow" }),
     baseUrl,
     activePath: "/marketplace",
     extraCss: CSS,

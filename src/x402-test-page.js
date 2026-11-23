@@ -16,6 +16,7 @@ import { COMPACT_REQUEST_EXAMPLE, paymentRequiredCompactEnabled } from "./paymen
 
 import { repoUrl } from "./repo-link.js";
 import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
+import { articleDates } from "./page-dates.js";
 // The cheapest real route we sell: pure CPU, a fraction of a cent, no upstream
 // to burn. A conformance probe should cost the buyer nothing to get wrong and
 // almost nothing to get right.
@@ -26,7 +27,7 @@ export function x402TestPage(baseUrl) {
   const canonical = `${baseUrl}/x402-test`;
   const title = "Test your x402 client";
   const description =
-    "Point any x402 or MPP client at a real paid endpoint and get told exactly why it was refused: which field differs, which scheme and network are offered, whether the signature recovered. Free, because a refused payment is never settled on x402.";
+    "Point any x402 or MPP client at a real paid endpoint and see exactly why its payment was refused. Free, since a refused x402 payment never settles.";
 
   const mono = "font-family:var(--font-mono);font-size:var(--fs-sm);";
   const pre = (s) => codeBlock(s, { style: "margin:0 0 18px" });
@@ -109,5 +110,5 @@ ${ledgerFooterCompact()}`;
     { "@type": "TechArticle", "@id": canonical, headline: title, description, author: siteOrgRef(baseUrl), publisher: siteOrgRef(baseUrl) },
   ];
   const extraCss = `@media (max-width:900px){h1{font-size:var(--fs-3xl)!important}}`;
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/x402-test", extraCss, jsonLd, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/x402-test", extraCss, jsonLd, body, article: articleDates("/x402-test") });
 }
