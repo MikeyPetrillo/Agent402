@@ -16,13 +16,12 @@
 // the same pure helpers the route calls, so no chain is read.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
-import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { JSDOM } from "jsdom";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import {
   parseRevenueRange, revenuePageRange, rangedRevenueDaily, revenueWindowTotals, rangeQueryString,
   addDays, spanDays, utcToday, REVENUE_DEFAULT_RANGE, REVENUE_RANGE_MAX_SPAN_DAYS,
@@ -311,24 +310,21 @@ const seedFirst = addDays(today, -59);
   }
   db.close();
 }
-const PORT = await getFreePort();
-const B = `http://127.0.0.1:${PORT}`;
-const proc = spawn(process.execPath, ["src/server.js"], {
+// stores: false: the server reads the ledgers seeded above, as the caller's
+// environment names everything else.
+const srv = await bootServer({
+  stores: false,
   env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "true", WALLET_ADDRESS: WALLET,
+    FREE_MODE: "true", WALLET_ADDRESS: WALLET,
     REVENUE_LEDGER_DB: join(dir, "revenue.db"), SALES_LEDGER_DB: join(dir, "sales.db"), STATS_DB_DIR: dir,
     STATE_DATABASE_URL: "", OUR_WALLETS: OURS, REVENUE_DAILY_START: seedFirst, X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
     X402_SYNC_ON_START: "false", FREE_ALERTS: "off", MPP_SECRET_KEY: "",
   },
-  stdio: "ignore",
-});
-const stop = () => { try { proc.kill("SIGKILL"); } catch {} try { rmSync(dir, { recursive: true, force: true }); } catch {} };
+}).catch(() => null);
+const B = srv?.url;
+const stop = () => { try { srv?.child.kill("SIGKILL"); } catch {} try { rmSync(dir, { recursive: true, force: true }); } catch {} };
 process.on("exit", stop);
-let up = false;
-for (let i = 0; i < 120 && !up; i++) {
-  try { up = (await fetch(`${B}/health`)).ok; } catch {}
-  if (!up) await new Promise((r) => setTimeout(r, 500));
-}
+const up = Boolean(srv);
 const get = async (path) => { const r = await fetch(B + path); return { status: r.status, body: await r.json(), cc: r.headers.get("cache-control") }; };
 if (!up) { fail++; console.log("FAIL - server did not come up"); }
 else {
