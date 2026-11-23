@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 // The heap readings need gc(); re-run under --expose-gc when it is absent.
 if (typeof globalThis.gc !== "function") {
@@ -118,23 +118,25 @@ async function main() {
   }
   writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: lines.length }), ...lines].join("\n") + "\n");
   const TOKEN = "seller-view-operator-token-0123456789";
-  const port = await getFreePort();
-  const proc = spawn(process.execPath, ["--expose-gc", "src/server.js"], {
+  let srv = null;
+  const bootOpts = {
+    stores: "chain-seller-view-memo",
+    args: ["--expose-gc"],
+    timeoutMs: 60_000,
     env: {
-      ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
+      FREE_MODE: "true", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
       X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"),
       ROUTER_WORKERS: "0", AGENT402_OPERATOR_TOKEN: TOKEN, CHAIN_SELLER_VIEW_MEMO_MAX: String(MEMO_MAX), LOAD_SHED: "off",
     },
-    stdio: ["ignore", "ignore", "inherit"],
-  });
-  const base = `http://127.0.0.1:${port}`;
+  };
+  let base = "";
   const op = { headers: { authorization: `Bearer ${TOKEN}` } };
   const views = async () => (await (await fetch(`${base}/__operator/perf.json?top=1`, op)).json()).chainSellerViews;
   const heap = async () => (await (await fetch(`${base}/__operator/heap.json?gc=1`, op)).json()).heapUsedMb;
   try {
-    let up = false;
-    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
-    ok(up, "server booted");
+    srv = await bootServer(bootOpts);
+    base = srv.url;
+    ok(true, "server booted");
     let sellers = 0;
     for (let i = 0; i < 60 && sellers < SELLERS; i++) {
       try { sellers = (await (await fetch(`${base}/api/index?limit=1`)).json()).sellerCount || 0; } catch { /* warming */ }
@@ -203,7 +205,10 @@ async function main() {
     ok(/admit: \(\) => chainSellerViewsInFlight\.live\(\) < CHAIN_SELLER_VIEW_MAX_INFLIGHT/.test(memoCall), "admission to a build reads the build cap");
     ok(memoCall.indexOf("chainSellerViewsInFlight.enter(") < memoCall.indexOf("buildChainPage(") && /finally \{ releaseView\(\); \}/.test(memoCall), "only a build enters the gauge, and always leaves it");
     ok(/if \(html === SHED\) \{ noteShed\("chain-seller-view"\); return shedResponse\(res, 5, \{ reason: "chain-seller-view" \}\); \}/.test(loop), "a refused miss is shed and counted as a chain-seller-view shed");
-  } finally { proc.kill("SIGKILL"); }
+  } finally {
+    if (fail && srv) console.error(srv.log().slice(-3000)); // the server's stderr, which this suite used to inherit
+    srv?.child.kill("SIGKILL");
+  }
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
