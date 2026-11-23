@@ -531,7 +531,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // testnet-fund additionally spends a shared per-account faucet budget —
   // PoW would let one client drain it for free. onchain-sql burns real SQL
   // engine quota (100GB reads / 30s per query).
-  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
+  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema", "onchain-sql-range", "onchain-sql-week",
 ]);
 
 /** Wallet-only slugs that make no network call and read no stored state: they

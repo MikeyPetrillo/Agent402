@@ -428,6 +428,24 @@
     {
       "q": "solana json rpc getaccountinfo read",
       "top": "solana-rpc"
+    },
+    {
+      "q": "query a month of solana instructions",
+      "top": [
+        "onchain-sql-range"
+      ]
+    },
+    {
+      "q": "backfill solana instructions with sql",
+      "top": [
+        "onchain-sql-range"
+      ]
+    },
+    {
+      "q": "query a week of solana instructions",
+      "top": [
+        "onchain-sql-week"
+      ]
     }
   ],
   "gaps": [

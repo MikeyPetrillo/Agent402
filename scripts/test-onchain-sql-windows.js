@@ -22,11 +22,20 @@ process.env.CDP_API_KEY_SECRET = privateKey.export({ type: "pkcs8", format: "pem
 delete process.env.CDP_SQL_API_KEY_ID;
 delete process.env.CDP_SQL_API_KEY_SECRET;
 const cdp = await import("../src/tools/cdp-kit.js");
-const { CDP_TOOLS, dayWindowPlan, _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, _resetSqlPacerForTest, SQL_MAX_ROWS, SQL_WINDOW_MAX_DAYS, SQL_WINDOW_MAX_QUERIES, QUERY_HEALTH_SQL } = cdp;
+const { CDP_TOOLS, dayWindowPlan, _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, _resetSqlPacerForTest, SQL_MAX_ROWS, SQL_WINDOW_MAX_DAYS, SQL_WINDOW_MAX_QUERIES, QUERY_HEALTH_SQL, SQL_QUERY_BUDGET, SQL_RANGE_MAX_DAYS, SQL_RANGE_MAX_QUERIES, SQL_RANGE_RUN_SECONDS, SQL_RANGE_PATH, SQL_WEEK_MAX_DAYS, SQL_WEEK_MAX_QUERIES, SQL_WEEK_BUDGET_MS, SQL_WEEK_PATH, SVM_SQL_BUDGET_MS } = cdp;
+const { EVM_RUN_SECONDS } = await import("../src/evm-validity.js");
+const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
+const { asyncProfileOf } = await import("../src/slow-routes.js");
+const { WALLET_ONLY_SLUGS } = await import("../src/pow.js");
+const { SLOW_TOOL_SECONDS } = await import("../src/avm-validity.js");
 
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
 const sql = (q, req) => CDP_TOOLS.find((t) => t.slug === "onchain-sql").handler({ sql: q }, req);
+const RANGE = CDP_TOOLS.find((t) => t.slug === "onchain-sql-range");
+const sqlRange = (q, req) => RANGE.handler({ sql: q }, req);
+const WEEK = CDP_TOOLS.find((t) => t.slug === "onchain-sql-week");
+const sqlWeek = (q, req) => WEEK.handler({ sql: q }, req);
 const DAY = 86_400_000;
 
 _resetSqlPacerForTest(0);
@@ -42,6 +51,7 @@ let dayDelayMs = 5;
 let failDay = null;
 let onDaySent = null; // called after each day query is received // ISO date (YYYY-MM-DD) whose query answers the slow 502
 let wholeAnswers = false;
+let whole503 = 0; // whole-range sends that answer 503 before the slow 502
 const J = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init = {}) => {
@@ -52,6 +62,7 @@ globalThis.fetch = async (url, init = {}) => {
   const ge = /block_time >= toDateTime\('([^']+)', 'UTC'\)/.exec(q);
   const lt = /block_time < toDateTime\('([^']+)', 'UTC'\)/.exec(q);
   if (!ge && !lt) {
+    if (whole503 > 0) { whole503--; return J(503, { errorMessage: "unavailable" }); }
     if (wholeAnswers) return J(200, { result: [{ n: 1 }] });
     return new Promise((r) => setTimeout(() => r(J(502, { errorMessage: "Bad Gateway" })), 60));
   }
@@ -59,7 +70,7 @@ globalThis.fetch = async (url, init = {}) => {
   const day = new Date(from).toISOString().slice(0, 10);
   if (onDaySent) onDaySent(day);
   if (failDay === day) return new Promise((r) => setTimeout(() => r(J(502, { errorMessage: "Bad Gateway" })), 60));
-  const desc = /ORDER BY block_time DESC/i.test(q);
+  const desc = /ORDER BY "?block_time"? DESC/i.test(q);
   const limits = [...q.matchAll(/\bLIMIT (\d+)/g)].map((m) => Number(m[1]));
   const cap = limits.length ? Math.min(...limits) : Infinity;
   const rows = [];
@@ -67,7 +78,7 @@ globalThis.fetch = async (url, init = {}) => {
   if (desc) rows.reverse();
   return new Promise((r) => setTimeout(() => r(J(200, { result: rows.slice(0, cap) })), dayDelayMs));
 };
-const reset = () => { sent = []; rowsPerDay = 3; dayDelayMs = 5; failDay = null; wholeAnswers = false; onDaySent = null; };
+const reset = () => { sent = []; rowsPerDay = 3; dayDelayMs = 5; failDay = null; wholeAnswers = false; whole503 = 0; onDaySent = null; };
 const days = (n) => `SELECT tx_id, block_time FROM solana.instructions WHERE block_time > now() - INTERVAL ${n} DAY AND executing_account = 'x'`;
 // Day queries one windowed call can send after its whole-range send.
 const D = SQL_WINDOW_MAX_QUERIES - 1;
@@ -258,6 +269,223 @@ try {
     reset();
     const other = await sql("SELECT tx_id FROM solana.instructions WHERE block_time > now() - INTERVAL 7 DAY ORDER BY tx_id").catch((x) => x);
     ok(other?.statusCode === 422 && sent.length === 1, "an ORDER BY on another column is answered as before");
+  }
+
+  // ---- onchain-sql points a walk its limit ended to the range route ----
+  {
+    reset();
+    const r = await sql(days(7));
+    const paths = (r.longerRange || []).map((x) => x.path);
+    ok(r.complete === false && paths.join(",") === "/api/onchain-sql-week,/api/onchain-sql-range" && SQL_WEEK_PATH === paths[0] && SQL_RANGE_PATH === paths[1], `a 7-day walk the query limit ended names both longer routes in a field (${paths.join(", ")})`);
+    const [wk, m] = r.longerRange;
+    ok(wk.maxDays === SQL_WEEK_MAX_DAYS && wk.rails === "all" && wk.async === false && m.maxDays === SQL_RANGE_MAX_DAYS && m.rails === "x402-exact-evm" && m.async === true, `each with its most days and the payment it takes (${JSON.stringify(r.longerRange)})`);
+    ok(r.note.endsWith(`${SQL_WEEK_PATH} reads up to ${SQL_WEEK_MAX_DAYS} days of such a query in one call on every payment rail; ${SQL_RANGE_PATH} reads up to ${SQL_RANGE_MAX_DAYS} days of such a query in one call on x402 exact on EVM chains, as a job (Prefer: respond-async).`) && r.note.split(SQL_WEEK_PATH).length === 2, "the note adds one factual sentence naming them");
+    reset();
+    const r14 = await sql(days(14));
+    ok((r14.longerRange || []).map((x) => x.path).join(",") === SQL_RANGE_PATH, `a 14-day walk names only the route whose days cover it (${JSON.stringify(r14.longerRange)})`);
+    reset();
+    const c = await sql(await twoDayRange());
+    ok(c.complete === true && !("longerRange" in c), "a complete windowed answer names no other route");
+    reset();
+    rowsPerDay = SQL_MAX_ROWS;
+    const cut = await sql(days(7));
+    ok(cut.truncated === true && !("longerRange" in cut), "a walk the row cap ended names no other route (the range route has the same cap)");
+    reset();
+    failDay = new Date(dayWindowPlan(days(7), Date.now()).spans[1].from).toISOString().slice(0, 10);
+    const f = await sql(days(7));
+    ok(f.windowed.stoppedBy === "day-past-window" && !("longerRange" in f), "a walk a slow day ended names no other route");
+    reset();
+    wholeAnswers = true;
+    const w = await sql(days(7));
+    ok(!("longerRange" in w), "an answer read whole names no other route");
+  }
+
+  // ---- onchain-sql-range: its limits, wiring and price basis ----
+  ok(RANGE && RANGE.route === "POST /api/onchain-sql-range" && /^\$\d+\.\d{2}$/.test(RANGE.price), `the range route is listed with a cent price (${RANGE?.price})`);
+  ok(SQL_RANGE_MAX_DAYS === SQL_WINDOW_MAX_DAYS && SQL_RANGE_MAX_DAYS === 31, `the range route reads up to ${SQL_RANGE_MAX_DAYS} days`);
+  ok(SQL_RANGE_MAX_QUERIES === 2 + SQL_RANGE_MAX_DAYS + 1 && SQL_RANGE_MAX_QUERIES >= SQL_QUERY_BUDGET, `its query limit is the whole-range send and its retry plus one query a day (${SQL_RANGE_MAX_QUERIES})`);
+  ok(EVM_RUN_SECONDS["onchain-sql-range"] === SQL_RANGE_RUN_SECONDS && RANGE.handler.__budgetMs === SQL_RANGE_RUN_SECONDS * 1000, `its handler budget is its run budget (${SQL_RANGE_RUN_SECONDS} s)`);
+  const prof = asyncProfileOf(RANGE);
+  ok(prof?.slow === true && prof.maxSeconds === SQL_RANGE_RUN_SECONDS && isLongRunningSlug("onchain-sql-range"), "it runs as a job (slow route) and is EVM exact only (long-running)");
+  ok(WALLET_ONLY_SLUGS.has("onchain-sql-range"), "it is wallet-only");
+  ok(new RegExp(`up to ${SQL_RANGE_MAX_DAYS} days`).test(RANGE.description) && /partial/.test(RANGE.description) && /one UTC day at a time/.test(RANGE.description), "its description names the day reading, the most days and the partial marking");
+
+  // ---- a 31-day walk in one call, merged in order ----
+  {
+    reset();
+    const q = days(SQL_RANGE_MAX_DAYS);
+    const p = dayWindowPlan(q, Date.now());
+    const r = await sqlRange(q);
+    ok(p.spans.length >= SQL_RANGE_MAX_DAYS && r.rows.length === p.spans.length * 3 && sortedAsc(r.rows), `${SQL_RANGE_MAX_DAYS} days: every day read, ${r.rows.length} rows merged oldest first`);
+    ok(r.complete === true && r.truncated === false && r.windowed.daysRead === p.spans.length && r.windowed.days === p.spans.length && !r.windowed.stoppedBy && !("longerRange" in r), `complete, the days read in fields (${JSON.stringify(r.windowed)})`);
+    ok(sent.length === 1 + p.spans.length && sent.length <= SQL_RANGE_MAX_QUERIES && !/toDateTime/.test(sent[0]), `one whole-range query, then one a day (${sent.length} queries, limit ${SQL_RANGE_MAX_QUERIES})`);
+    const daysSeen = r.rows.map((x) => x.day).filter((d, i, a) => i === 0 || a[i - 1] !== d);
+    ok(daysSeen.length === p.spans.length && new Set(daysSeen).size === daysSeen.length, "each day's rows appear once, in day order");
+  }
+  {
+    reset();
+    const r = await sqlRange(`${days(SQL_RANGE_MAX_DAYS)} ORDER BY block_time DESC`);
+    ok(r.complete === true && sortedDesc(r.rows) && r.windowed.order === "desc" && r.rows.length === r.windowed.days * 3, `DESC over ${SQL_RANGE_MAX_DAYS} days reads newest first and merges in order (${r.rows.length})`);
+  }
+  {
+    reset();
+    whole503 = 1;
+    const p = dayWindowPlan(days(SQL_RANGE_MAX_DAYS), Date.now());
+    const r = await sqlRange(days(SQL_RANGE_MAX_DAYS));
+    ok(r.complete === true && sent.length === 2 + p.spans.length && sent.length <= SQL_RANGE_MAX_QUERIES, `a whole-range send retried once still leaves room for every day (${sent.length} queries of ${SQL_RANGE_MAX_QUERIES})`);
+  }
+  // ---- partial answers say so in fields ----
+  {
+    reset();
+    dayDelayMs = 1200;
+    process.env.UPSTREAM_HANDLER_BUDGET_MS = "6000";
+    const r = await sqlRange(days(SQL_RANGE_MAX_DAYS));
+    delete process.env.UPSTREAM_HANDLER_BUDGET_MS;
+    ok(r.complete === false && r.truncated === true && r.matchedIsLowerBound === true && r.windowed.stoppedBy === "time" && r.windowed.daysRead >= 1 && r.windowed.daysRead < r.windowed.days && r.windowed.coveredFrom && r.windowed.coveredTo, `the call's time ends the walk: partial in fields (${JSON.stringify(r.windowed)})`);
+    ok(sortedAsc(r.rows) && /for the rest/.test(r.note) && !("longerRange" in r), "the rows read so far, in order, with the range left to read and no pointer");
+  }
+  {
+    reset();
+    rowsPerDay = 100;
+    const r = await sqlRange(days(SQL_RANGE_MAX_DAYS));
+    ok(r.rows.length === SQL_MAX_ROWS && r.truncated === true && r.complete === false && r.matchedIsLowerBound === true && sent.length === 1 + 11 && sortedAsc(r.rows), `the row cap ends the walk: the first ${SQL_MAX_ROWS} rows, marked truncated (${sent.length} queries)`);
+  }
+  {
+    reset();
+    const p = dayWindowPlan(days(SQL_RANGE_MAX_DAYS), Date.now());
+    failDay = new Date(p.spans[20].from).toISOString().slice(0, 10);
+    const r = await sqlRange(days(SQL_RANGE_MAX_DAYS));
+    ok(r.complete === false && r.windowed.daysRead === 20 && r.windowed.stoppedBy === "day-past-window" && r.windowed.coveredTo === new Date(p.spans[20].from).toISOString(), `a slow day ends the walk with the 20 days before it, partial in fields (${JSON.stringify(r.windowed)})`);
+  }
+  {
+    reset();
+    rowsPerDay = 0;
+    const r = await sqlRange(days(SQL_RANGE_MAX_DAYS));
+    const n = dayWindowPlan(days(SQL_RANGE_MAX_DAYS), Date.now()).spans.length;
+    ok(Array.isArray(r.rows) && r.rows.length === 0 && r.complete === true && r.windowed.daysRead === n && sent.length === 1 + n, `every day read and none matched: a complete answer with no rows (${sent.length} queries)`);
+  }
+  {
+    reset();
+    const e = await sqlRange(days(SQL_RANGE_MAX_DAYS + 1)).catch((x) => x);
+    ok(e?.statusCode === 422 && e?.charged === false && sent.length === 1, `more than ${SQL_RANGE_MAX_DAYS} days is not split: one query, the uncharged 422 (${e?.statusCode}, ${sent.length})`);
+  }
+  // ---- aggregates and other queries answer exactly as onchain-sql ----
+  {
+    const agg = "SELECT executing_account, count() AS n FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY GROUP BY executing_account";
+    reset();
+    const a1 = await sql(agg).catch((x) => x);
+    const n1 = sent.length;
+    reset();
+    const a2 = await sqlRange(agg).catch((x) => x);
+    ok(a2?.statusCode === 422 && a1?.statusCode === a2.statusCode && a1.message === a2.message && sent.length === n1 && n1 === 1, `an aggregate past the window: the same uncharged 422 on both routes, one query (${a2?.statusCode})`);
+    reset();
+    wholeAnswers = true;
+    const b1 = await sql(agg);
+    reset();
+    wholeAnswers = true;
+    const b2 = await sqlRange(agg);
+    ok(JSON.stringify(b1) === JSON.stringify(b2) && sent.length === 1, "an aggregate the service answers: the same answer on both routes");
+    reset();
+    wholeAnswers = true;
+    const w = await sqlRange(days(SQL_RANGE_MAX_DAYS));
+    ok(!w.windowed && sent.length === 1, "a long range the service answers whole is sent once and not split");
+  }
+  // ---- onchain-sql-week: a week on every rail, synchronously ----
+  ok(WEEK && WEEK.route === "POST /api/onchain-sql-week" && /^\$\d+\.\d{2}$/.test(WEEK.price), `the week route is listed with a cent price (${WEEK?.price})`);
+  ok(SQL_WEEK_MAX_DAYS === 7 && SQL_WEEK_MAX_QUERIES === 2 + SQL_WEEK_MAX_DAYS + 1, `the week route reads up to ${SQL_WEEK_MAX_DAYS} days in at most ${SQL_WEEK_MAX_QUERIES} queries`);
+  ok(SQL_WEEK_BUDGET_MS === SVM_SQL_BUDGET_MS && WEEK.handler.__budgetMs === SQL_WEEK_BUDGET_MS, `its handler budget is the Solana payment's (${SQL_WEEK_BUDGET_MS} ms) on every rail`);
+  ok(!isLongRunningSlug("onchain-sql-week") && !Object.hasOwn(EVM_RUN_SECONDS, "onchain-sql-week") && asyncProfileOf(WEEK) === null, "it is not long-running and not a job route: every rail, answered on the connection");
+  ok(WALLET_ONLY_SLUGS.has("onchain-sql-week"), "it is wallet-only");
+  ok(SLOW_TOOL_SECONDS["onchain-sql-week"] * 1000 > SQL_WEEK_BUDGET_MS && SLOW_TOOL_SECONDS["onchain-sql-range"] > SQL_RANGE_RUN_SECONDS, "an Algorand payment must outlive each route's budget, or it is refused before any query");
+  ok(/up to 7 days/.test(WEEK.description) && /every payment rail/.test(WEEK.description) && /partial/.test(WEEK.description) && /within 40 seconds/.test(WEEK.description), "its description names the days, the rails, the time and the partial marking");
+  {
+    reset();
+    const q = days(SQL_WEEK_MAX_DAYS);
+    const p = dayWindowPlan(q, Date.now());
+    const r = await sqlWeek(q);
+    ok(r.complete === true && r.rows.length === p.spans.length * 3 && sortedAsc(r.rows) && r.windowed.daysRead === p.spans.length && sent.length === 1 + p.spans.length && sent.length <= SQL_WEEK_MAX_QUERIES && !("longerRange" in r), `${SQL_WEEK_MAX_DAYS} days: every day read and merged in order (${r.rows.length} rows, ${sent.length} queries)`);
+    reset();
+    const d = await sqlWeek(`${q} ORDER BY block_time DESC`);
+    ok(d.complete === true && sortedDesc(d.rows) && d.windowed.order === "desc", "DESC reads newest first");
+    reset();
+    whole503 = 1;
+    const t = await sqlWeek(q);
+    ok(t.complete === true && sent.length === 2 + p.spans.length && sent.length <= SQL_WEEK_MAX_QUERIES, `a retried whole-range send still leaves room for every day (${sent.length} of ${SQL_WEEK_MAX_QUERIES})`);
+  }
+  {
+    reset();
+    const r = await sqlWeek(days(14));
+    ok(r.complete === false && r.windowed.stoppedBy === "query-limit" && r.windowed.daysRead === SQL_WEEK_MAX_QUERIES - 1 && sent.length === SQL_WEEK_MAX_QUERIES && sortedAsc(r.rows), `past a week: the first ${SQL_WEEK_MAX_QUERIES - 1} days, marked partial (${r.windowed.daysRead} days, ${sent.length} queries)`);
+    ok((r.longerRange || []).map((x) => x.path).join(",") === SQL_RANGE_PATH && r.note.endsWith(`${SQL_RANGE_PATH} reads up to ${SQL_RANGE_MAX_DAYS} days of such a query in one call on x402 exact on EVM chains, as a job (Prefer: respond-async).`), `and names the range route, with its payment (${JSON.stringify(r.longerRange)})`);
+  }
+  {
+    reset();
+    dayDelayMs = 1200;
+    process.env.UPSTREAM_HANDLER_BUDGET_MS = "6000";
+    const r = await sqlWeek(days(SQL_WEEK_MAX_DAYS));
+    delete process.env.UPSTREAM_HANDLER_BUDGET_MS;
+    ok(r.complete === false && r.truncated === true && r.windowed.stoppedBy === "time" && r.windowed.daysRead >= 1 && r.windowed.coveredTo && /for the rest/.test(r.note) && (r.longerRange || []).map((x) => x.path).join(",") === SQL_RANGE_PATH, `the call's time ends a slow week early: partial in fields, the range route named (${JSON.stringify(r.windowed)})`);
+  }
+  {
+    const agg = "SELECT executing_account, count() AS n FROM solana.instructions WHERE block_time > now() - INTERVAL 7 DAY GROUP BY executing_account";
+    reset();
+    const a1 = await sql(agg).catch((x) => x);
+    reset();
+    const a2 = await sqlWeek(agg).catch((x) => x);
+    ok(a2?.statusCode === 422 && a1?.message === a2?.message && sent.length === 1, "an aggregate on the week route answers exactly as onchain-sql (one query, the same 422)");
+    reset();
+    const quoted = `SELECT "tx_id", block_time FROM solana.instructions WHERE block_time > now() - INTERVAL 7 DAY ORDER BY 1, block_time`;
+    const e = await sqlWeek(quoted).catch((x) => x);
+    ok(e?.statusCode === 422 && sent.length === 1, "ORDER BY 1, block_time after a quoted column is not walked on the week route");
+  }
+  // ---- a buyer who hung up gets no more of the range walk ----
+  {
+    reset();
+    const req = {};
+    let n = 0;
+    onDaySent = () => { if (++n === 3) req.__a402ClientGoneAt = Date.now(); };
+    const e = await sqlRange(days(SQL_RANGE_MAX_DAYS), req).catch((x) => x);
+    ok(e instanceof Error && (e.clientGone || e.statusCode === 499) && sent.length === 1 + 3, `a caller gone during the ${SQL_RANGE_MAX_DAYS}-day walk stops it: no further day query, nothing delivered (${e?.statusCode}, ${sent.length} queries)`);
+  }
+  // ---- hostile and quoted queries on the range route ----
+  {
+    reset();
+    const longName = `SELECT ${"a".repeat(59_000)}test(tx_id) FROM solana.instructions WHERE block_time > now() - INTERVAL ${SQL_RANGE_MAX_DAYS} DAY`;
+    const t0 = performance.now();
+    const p = dayWindowPlan(longName, Date.now());
+    const planMs = performance.now() - t0;
+    ok(planMs < 250, `a 59,000-character identifier is read in bounded time (${planMs.toFixed(1)} ms)`);
+    const t1 = performance.now();
+    const r = await sqlRange(longName).catch((x) => x);
+    ok(performance.now() - t1 < 5_000 && (p === null ? sent.length === 1 && r?.statusCode === 422 : true), `the range route answers it promptly (${(performance.now() - t1).toFixed(0)} ms, ${sent.length} queries, plan ${p ? "split" : "not split"})`);
+    // The plan's hostile identifiers, over the range route's longest walk.
+    const id = "test".repeat(14_500);
+    for (const q of [
+      `SELECT ${id} FROM solana.instructions WHERE block_time > now() - INTERVAL ${SQL_RANGE_MAX_DAYS} DAY`,
+      `SELECT x AS ${id}test FROM solana.instructions WHERE block_time > now() - INTERVAL ${SQL_RANGE_MAX_DAYS} DAY`,
+      `SELECT ${id}( FROM solana.instructions WHERE block_time > now() - INTERVAL ${SQL_RANGE_MAX_DAYS} DAY`,
+    ]) {
+      reset();
+      const t = performance.now();
+      const plan = dayWindowPlan(q);
+      const planMs = performance.now() - t;
+      const out = await sqlRange(q).catch((x) => x);
+      const walked = !!out?.windowed;
+      ok(planMs < 50 && (walked ? out.complete === true && sent.length === 1 + plan.spans.length && sortedAsc(out.rows) : out?.statusCode === 422 && sent.length === 1), `a ${id.length.toLocaleString("en-US")}-character identifier on the range route: planned in ${planMs.toFixed(1)} ms, ${walked ? `walked ${out.windowed.daysRead} days in order` : "answered as onchain-sql"} (${sent.length} queries)`);
+    }
+    reset();
+    const qDesc = `SELECT "program_id", "block_time" FROM solana.instructions WHERE block_time >= now() - INTERVAL ${SQL_RANGE_MAX_DAYS} DAY ORDER BY "block_time" DESC LIMIT 1000`;
+    const rd = await sqlRange(qDesc);
+    ok(rd.windowed?.order === "desc" && rd.complete === true && sortedDesc(rd.rows) && rd.windowed.daysRead === rd.windowed.days, `ORDER BY "block_time" DESC after quoted columns walks ${SQL_RANGE_MAX_DAYS} days newest first (${rd.windowed?.daysRead})`);
+    reset();
+    const quoted = `SELECT "tx_id", 'x' AS "block_time_label", block_time FROM solana.instructions WHERE block_time > now() - INTERVAL ${SQL_RANGE_MAX_DAYS} DAY ORDER BY 1, block_time`;
+    ok(dayWindowPlan(quoted, Date.now()) === null, "quoted columns with ORDER BY 1, block_time are not windowed");
+    const e = await sqlRange(quoted).catch((x) => x);
+    ok(e?.statusCode === 422 && e?.charged === false && sent.length === 1, `the range route answers it as onchain-sql: one query, the uncharged 422 (${e?.statusCode}, ${sent.length})`);
+    reset();
+    const quotedOk = `SELECT "tx_id", block_time FROM solana.instructions WHERE block_time > now() - INTERVAL ${SQL_RANGE_MAX_DAYS} DAY AND tx_signer = 'it''s ORDER BY 1' ORDER BY block_time`;
+    const r2 = await sqlRange(quotedOk);
+    ok(r2.complete === true && r2.windowed?.days >= SQL_RANGE_MAX_DAYS && sortedAsc(r2.rows), `quoted columns and a quoted ORDER BY inside a string still walk ${SQL_RANGE_MAX_DAYS} days in order (${r2.windowed?.daysRead})`);
   }
 } finally {
   globalThis.fetch = realFetch;

@@ -50,6 +50,12 @@ const TOP1 = [
   ["block number",                  "block-number"],
   ["latest block",                  "block-number"],
   ["event logs",                    "event-logs"],
+  // A month of Solana instructions is the range route's; SQL over Base stays
+  // onchain-sql's (2026-11-22).
+  ["query a month of solana instructions", "onchain-sql-range"],
+  ["query a week of solana instructions", "onchain-sql-week"],
+  ["run sql on solana",             "onchain-sql"],
+  ["query base with sql",           "onchain-sql"],
   ["nft owner",                     "erc721-owner"],
   // Discovery probe (2026-07-29): 20 alias task phrases
   // tested against live find; 17 ranked right, these 3 were the misses,

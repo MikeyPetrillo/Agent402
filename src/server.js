@@ -3983,7 +3983,7 @@ const LARGE_BODY_ROUTES = [
   ["/api/html-frames", 12 * MB], ["/v1/images/edits", 34 * MB],
   // onchain-sql takes SQL to 60,000 characters (SQL_MAX_CHARS), which JSON
   // escaping can double on the wire past the global 100 KB parser.
-  ["/api/onchain-sql", 256 * 1024],
+  ["/api/onchain-sql", 256 * 1024], ["/api/onchain-sql-range", 256 * 1024], ["/api/onchain-sql-week", 256 * 1024],
   // The Office builders take 100,000 characters of text or 50,000 cells
   // (OFFICE_LIMITS.requestBytes), past the global parser once JSON-escaped.
   ["/api/xlsx-create", 2 * MB], ["/api/docx-create", 2 * MB], ["/api/pptx-create", 2 * MB],
@@ -4037,7 +4037,7 @@ app.use("/v1/judge/long", unlessBodyUnread(express.json({ limit: "2mb", inflate:
 app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", inflate: false })));
 // onchain-sql: a 60,000-character query is up to 120 KB once JSON-escaped;
 // the handler's own cap (SQL_MAX_CHARS) checks the text again.
-app.use("/api/onchain-sql", unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
+app.use(["/api/onchain-sql", "/api/onchain-sql-range", "/api/onchain-sql-week"], unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
 // Office builders: the caps in OFFICE_LIMITS are checked again by each handler.
 app.use(["/api/xlsx-create", "/api/docx-create", "/api/pptx-create"], unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
@@ -11594,7 +11594,7 @@ const asyncProfileBySlug = (slug) => {
 };
 const asyncRouteOf = (req) => { const def = CATALOG[`POST ${req.path}`]; return def && def.asyncProfile ? def : null; };
 const asyncJobs = createAsyncJobs({
-  port: PORT, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
+  port: () => loopbackPort, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
   asyncRouteOf,
   profileOfSlug: (slug) => asyncProfileBySlug(slug),
   // A job's debt books what the buyer paid: the gated price (list or the
