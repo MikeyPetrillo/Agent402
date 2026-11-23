@@ -23,6 +23,24 @@ throws(() => assertRetiredRegistryConsistent(new Set([...liveSet, "skill-market-
 throws(() => assertRetiredRegistryConsistent(new Set([...liveSet].filter((s) => s !== "coin-search"))), /names replacement "coin-search", which is not a live/, "a replacement that is not live fails the boot");
 ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retiredAt)) && Object.values(RETIRED_PACKS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retiredAt)), "every entry carries a retirement date");
 
+// A retired capability is not offered in prose either: code execution
+// (code-run, code-run-pro, retired 2026-11-23) is named in no page module,
+// tool text, README, wiki, docs or package README, except the changelog and
+// the retirement registry that record its retirement.
+{
+  const { readdirSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const root = new URL("..", import.meta.url).pathname;
+  const OFFER = /\bcode sandbox\b|\bcode[- ]execution sandbox\b|\brun (?:your )?(?:python|javascript|code) (?:in|on) a sandbox\b|\bsandboxed (?:python|code)\b/i;
+  const SKIP = new Set(["src/changelog.js", "src/retired-tools.js", "CHANGELOG.md"]);
+  const files = [];
+  const walk = (dir) => { for (const f of readdirSync(join(root, dir))) { const rel = `${dir}/${f}`; if (/node_modules|\/generated\//.test(rel)) continue; const st = statSync(join(root, rel)); if (st.isDirectory()) walk(rel); else if (/\.(js|md|json|txt)$/.test(f)) files.push(rel); } };
+  for (const d of ["src", "wiki", "docs"]) walk(d);
+  for (const f of ["README.md", "mcp/README.md", "client/README.md", "tollbooth/README.md", "openclaw/README.md"]) files.push(f);
+  const offers = files.filter((f) => !SKIP.has(f)).filter((f) => { try { return OFFER.test(readTextSync(join(root, f), "utf8")); } catch { return false; } });
+  ok(offers.length === 0, `no surface offers code execution after its retirement (${offers.join(", ") || "none"})`);
+}
+
 // A replacement answers the SAME question as the retired route; a tool that
 // answers a neighboring one is no pointer. The 2026-11-16 and 2026-11-17
 // retirements are pinned whole, so a pointer added back is a decision made here.

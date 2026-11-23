@@ -2647,7 +2647,7 @@ receipt shape:
   transcription, and a grounded tier that cites the web on every answer.
 - **500+ tools** over MCP or HTTP: web search, news, cited
   answers, browser render, market quotes, SEC filings, crypto and DeFi data,
-  PDFs, OCR, DNS and TLS checks, a code sandbox, wallet-keyed memory.
+  PDFs, OCR, DNS and TLS checks, wallet-keyed memory.
 - **Finished reports and monitors**: dossiers, insider flow, 13F holdings,
   domain audits, token risk, deep research, market briefs, a LinkedIn article
   package; monitors that re-run a report only when the facts change.
