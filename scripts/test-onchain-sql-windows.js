@@ -27,6 +27,7 @@ const { EVM_RUN_SECONDS } = await import("../src/evm-validity.js");
 const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
 const { asyncProfileOf } = await import("../src/slow-routes.js");
 const { WALLET_ONLY_SLUGS } = await import("../src/pow.js");
+const { SLOW_TOOL_SECONDS } = await import("../src/avm-validity.js");
 
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -395,6 +396,7 @@ try {
   ok(SQL_WEEK_BUDGET_MS === SVM_SQL_BUDGET_MS && WEEK.handler.__budgetMs === SQL_WEEK_BUDGET_MS, `its handler budget is the Solana payment's (${SQL_WEEK_BUDGET_MS} ms) on every rail`);
   ok(!isLongRunningSlug("onchain-sql-week") && !Object.hasOwn(EVM_RUN_SECONDS, "onchain-sql-week") && asyncProfileOf(WEEK) === null, "it is not long-running and not a job route: every rail, answered on the connection");
   ok(WALLET_ONLY_SLUGS.has("onchain-sql-week"), "it is wallet-only");
+  ok(SLOW_TOOL_SECONDS["onchain-sql-week"] * 1000 > SQL_WEEK_BUDGET_MS && SLOW_TOOL_SECONDS["onchain-sql-range"] > SQL_RANGE_RUN_SECONDS, "an Algorand payment must outlive each route's budget, or it is refused before any query");
   ok(/up to 7 days/.test(WEEK.description) && /every payment rail/.test(WEEK.description) && /partial/.test(WEEK.description) && /within 40 seconds/.test(WEEK.description), "its description names the days, the rails, the time and the partial marking");
   {
     reset();
