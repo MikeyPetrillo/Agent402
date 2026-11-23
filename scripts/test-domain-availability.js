@@ -175,6 +175,13 @@ try {
     await Promise.all(Array.from({ length: 5 }, (_, i) => d.check({ domain: `pace${i}.slow` })));
     const gaps = bTimes.slice(1).map((t, i) => t - bTimes[i]);
     ok(bTimes.length === 5 && gaps.every((g) => g >= 45), `five lookups at once reach the registry at least the pace apart (${gaps.join(", ")} ms)`);
+    // A lookup whose turn is too far off is not sent, and says so in its own words.
+    const slow = make({ paceMs: 2_000 });
+    await slow.check({ domain: "warm2.test" }).catch(() => {});
+    bTimes.length = 0;
+    const got = await Promise.all(["p-a.slow", "p-b.slow", "p-c.slow"].map((n) => errOf(slow.check({ domain: n }))));
+    const refused = got.find((e) => e && e.statusCode === 503);
+    ok(refused && refused.retryAfter >= 1 && /paced/.test(refused.message) && /not sent/.test(refused.message) && !/HTTP 429|rate-limited/.test(refused.message) && bTimes.length === 2, `a lookup past the pacing queue answers its own retryable 503, never a registry 429 (${refused?.message}; ${bTimes.length} sent)`);
   }
 
   // ---- the answer cache ----

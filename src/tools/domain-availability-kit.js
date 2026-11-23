@@ -124,7 +124,11 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
     if (!(paceMs > 0)) return;
     const t = Date.now();
     const slot = Math.max(t, nextSlot.get(host) || 0);
-    if (slot - t > PACE_MAX_WAIT_MS) throw upstreamFailure(429, { retryAfter: Math.ceil((slot - t) / 1000), host });
+    if (slot - t > PACE_MAX_WAIT_MS) {
+      // Our own pacing, not the registry's: nothing was sent.
+      const retryAfter = Math.ceil((slot - t) / 1000);
+      throw Object.assign(new Error(`Lookups to this registry's RDAP service (${host}) are paced, and this one would wait more than ${PACE_MAX_WAIT_MS / 1000} s, so it was not sent; retry in ${retryAfter}s`), { statusCode: 503, retryAfter, attribution: "upstream" });
+    }
     nextSlot.set(host, slot + paceMs);
     if (nextSlot.size > 500) for (const [h, at] of nextSlot) { if (at < t) nextSlot.delete(h); }
     if (slot > t) await new Promise((r) => setTimeout(r, slot - t));

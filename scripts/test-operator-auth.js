@@ -210,6 +210,14 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     if ((await status("/__operator", { headers: bearer })) === 404) { writeLocked = true; break; }
   }
   ok(writeLocked, "guesses sent as operator writes with a cookie exhaust the same budget");
+  // Past the limit the write check no longer reads the header token: with a
+  // junk cookie and no Origin, the right token and a wrong one answer alike.
+  {
+    const junk = "a402_op=junk-session-value";
+    const right = await status("/__operator/monitors/run", { method: "POST", headers: { cookie: junk, "x-operator-token": TOKEN, "content-type": "text/plain" }, body: "x" });
+    const wrong = await status("/__operator/monitors/run", { method: "POST", headers: { cookie: junk, "x-operator-token": "wrong-past-limit", "content-type": "text/plain" }, body: "x" });
+    ok(right === wrong, `past the limit a right and a wrong header token answer the same status (${right}, ${wrong})`);
+  }
   const reLogin2 = await fetch(`${base}/__operator/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN }) });
   ok(reLogin2.status === 200 && (await status("/__operator", { headers: bearer })) === 200, "...and a login clears that lockout too");
 

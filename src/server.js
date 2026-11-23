@@ -6769,7 +6769,9 @@ function operatorWriteRefused(req) {
   // a cookie alone (the gate still counts the wrong token as a guess).
   const headerToken = getOperatorToken(req);
   if (headerToken) {
-    if (operatorTokenOk(headerToken)) return false;
+    // The budget is read before the token, as at the gate: past it the token
+    // is not evaluated, so a right and a wrong one answer alike.
+    if (!operatorAttemptLimiter.peek(operatorAttemptIp(req)).limited && operatorTokenOk(headerToken)) return false;
     // A wrong header token is a guess wherever it is read, so it spends the
     // same per-address budget here as at the gate (operatorAuthed).
     operatorAttemptLimiter.check(operatorAttemptIp(req));
