@@ -3,7 +3,7 @@
 // web tools) to any MCP client (Claude, ChatGPT, custom agents) and settles
 // payment underneath, so the model never sees the 402 dance:
 //
-//   • AGENT_KEY=0x…          pay in USDC via x402 on the EVM chains (Base/Polygon/Arbitrum)
+//   • AGENT_KEY=0x…          pay in USDC via x402 on the EVM chains (Base and the others in known-assets.js)
 //   • SOLANA_AGENT_KEY=base58 pay in USDC via x402 on Solana
 //   • no key                  pay with compute (proof-of-work) on the eligible tools
 //
@@ -13,7 +13,7 @@
 //
 // Config (env):
 //   AGENT402_URL          target service (default https://agent402.tools)
-//   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base/Polygon/Arbitrum), optional;
+//   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base or another EVM chain in known-assets.js), optional;
 //                         with or without 0x. Unset, the key `npx agent402-mcp setup` stored is read
 //                         from the OS keychain (./key-store.js; AGENT402_KEY_STORE=off skips it)
 //   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana), optional

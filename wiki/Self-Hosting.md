@@ -126,7 +126,7 @@ Set these on your host. None are committed to the repo.
 | `EMAIL_FROM` | For emails | Verified sender address; with a provider key below, report links, monitor reports and credits keys are emailed |
 | `ZEPTOMAIL_TOKEN` | No | Zoho ZeptoMail send-mail token (with or without the `Zoho-enczapikey` prefix); `ZEPTOMAIL_URL` overrides the regional API base |
 | `RESEND_API_KEY` | No | Resend API key, the alternative email provider (ZeptoMail wins when both are set) |
-| `MONITOR_SCHEDULER` | No | `off` disarms the monitor fulfilment timer (manual operator runs still work) |
+| `MONITOR_SCHEDULER` | No | `off` disarms the monitor fulfillment timer (manual operator runs still work) |
 
 ## Free mode vs paid mode
 

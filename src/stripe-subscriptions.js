@@ -732,7 +732,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
 
   // Re-read a subscription's CURRENT status from Stripe and store it. The
   // scheduler calls this before every PAID run so a cancellation/card failure
-  // the webhook has not (yet) delivered still stops fulfilment. Returns the
+  // the webhook has not (yet) delivered still stops fulfillment. Returns the
   // status, or null when Stripe could not be read (caller decides).
   async function refreshStatus(subId) {
     if (!subId) return null;

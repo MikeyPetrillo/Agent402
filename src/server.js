@@ -837,7 +837,7 @@ import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, rel
 import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-media-type.js";
 import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe, RESEND_SERVED_NOTE } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
-import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
+import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH, MOVED_GUIDES } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
@@ -5927,7 +5927,7 @@ if (_subs) {
 }
 // Recurring monitors paid with a WALLET over MPP (src/mpp-subscriptions.js) -
 // the crypto-native counterpart of the Stripe checkout above. Same products,
-// same fulfilment engine, different rail. Registered ONLY when the engine is
+// same fulfillment engine, different rail. Registered ONLY when the engine is
 // up: no engine, no route, no challenge, exactly like the tempo/charge gate.
 if (_mppSubs) {
   // Free discovery surface: what an agent can subscribe to, in what currency,
@@ -5986,10 +5986,10 @@ if (_mppSubs) {
     }
   });
 }
-// Monitor scheduler: the recurring fulfilment engine. Runs only when
+// Monitor scheduler: the recurring fulfillment engine. Runs only when
 // subscriptions are enabled (Stripe key) - it reuses the premium pipeline.
 let _monitors = null;
-// One fulfilment engine, two subscriber sources. The scheduler asks for exactly
+// One fulfillment engine, two subscriber sources. The scheduler asks for exactly
 // three things - listActive(kind), get(id) and refreshStatus(id) - so a facade
 // that dispatches on the id namespace is the whole integration: monitor-
 // scheduler.js is unchanged, and a card subscriber and a wallet subscriber are
@@ -8003,6 +8003,8 @@ for (const alias of ["/router", "/sor", "/smart-order-router"]) {
 }
 app.get("/guides", (_req, res) => htmlCache(res, 300, 900).send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
+  const moved = Object.hasOwn(MOVED_GUIDES, req.params.slug) ? MOVED_GUIDES[req.params.slug] : null;
+  if (moved) { const q = req.originalUrl.indexOf("?"); return res.redirect(301, `/guides/${moved}${q >= 0 ? req.originalUrl.slice(q) : ""}`); }
   const html = guidePage(BASE_URL, req.params.slug, CATALOG);
   if (!html) return notFoundPage(res, { what: "Guide", href: "/guides", label: "All guides" });
   htmlCache(res, 300, 900).send(html);
@@ -15069,7 +15071,7 @@ activeStockAdapter().then((a) => {
   if (a?.start && bootStep("startStockProvider", () => a.start())) console.log(`[stock-provider] ${selectedStockProvider()} background reads on`);
 }).catch((e) => console.warn(`[stock-provider] start failed: ${String(e?.message || e).slice(0, 120)}`));
 
-// Monitor scheduler timer (recurring report fulfilment). MONITOR_SCHEDULER=off
+// Monitor scheduler timer (recurring report fulfillment). MONITOR_SCHEDULER=off
 // keeps the manual operator run available while disarming the timer.
 if (_monitors && process.env.MONITOR_SCHEDULER !== "off") bootStep("monitors.start", () => _monitors.start());
 

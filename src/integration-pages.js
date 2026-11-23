@@ -313,7 +313,7 @@ const tools = await agent402Tools({ fetch: payFetch });`,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
     tools: ["search", "answer", "hash", "crypto-market-pulse", "route-execute"],
-    guides: ["x402-in-5-minutes", "why-twelve-chains"],
+    guides: ["x402-in-5-minutes", "why-many-chains"],
   },
   {
     slug: "openai-agents",

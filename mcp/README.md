@@ -169,6 +169,7 @@ to the keychain on stdin, never on a command line.
   | ≤ $0.04 | $0.05 | `POST /api/route/execute-plus` |
   | ≤ $0.10 | $0.12 | `POST /api/route/execute-mid` |
   | ≤ $0.50 | $0.55 | `POST /api/route/execute-max` |
+  | ≤ $3.00 | $3.30 | `POST /api/route/execute-pro` |
 
   A tool priced above the tier's ceiling returns a self-correcting 409 naming its direct route.
 - **Report products** are catalog slugs like any other, so `catalog.call` runs them with a wallet or a credits key: `research` ($0.60), `research-pro` ($0.85), `research-max` ($1.10), `market-brief` ($0.85), `dossier` ($0.85), `dossier-max` ($1.10), `fund-report` ($0.60), `fund-report-max` ($0.85), `domain-audit` ($0.60), `domain-audit-pro` ($0.85), `token-risk` ($0.60), `token-risk-pro` ($0.85), `token-brief` ($0.60), `recall-report` ($0.60), `insider-report` ($0.60), `filing-report` ($0.85), `ticker-pack` ($2.00); the live figures are always at https://agent402.tools/api/pricing. The same reports are sold to people by card at https://agent402.tools/reports for $2 to $5 depending on depth: the card price includes payment processing, and an agent paying per call pays the lower tool price for the same report. The recurring monitors (domain, SEC filing, token, fund, recall, insider, IPO, research - $5/month) are at https://agent402.tools/monitors.

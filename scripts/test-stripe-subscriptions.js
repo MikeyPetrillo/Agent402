@@ -125,7 +125,7 @@ ok(!(await subs.createCheckout("constructor", "x").catch((e) => e)).url, "an inh
 
 // refreshStatus: the scheduler's pre-run check reads Stripe's current status.
 stripe.subscriptions.retrieve = async (id) => ({ id, status: "past_due", items: { data: [{ id: "si_1", current_period_end: 1900000000 }] } });
-ok((await subs.refreshStatus("sub_1")) === "past_due" && subs.get("sub_1")?.status === "past_due" && subs.get("sub_1")?.currentPeriodEnd === 1900000000, "refreshStatus stores Stripe's current status and period (a lapsed card stops fulfilment even without a webhook)");
+ok((await subs.refreshStatus("sub_1")) === "past_due" && subs.get("sub_1")?.status === "past_due" && subs.get("sub_1")?.currentPeriodEnd === 1900000000, "refreshStatus stores Stripe's current status and period (a lapsed card stops fulfillment even without a webhook)");
 stripe.subscriptions.retrieve = async () => { throw new Error("down"); };
 ok((await subs.refreshStatus("sub_1")) === null, "refreshStatus returns null when Stripe is unreadable (caller decides)");
 

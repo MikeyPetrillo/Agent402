@@ -297,6 +297,14 @@ try {
   }
 }
 
+// --- A renamed guide answers 301 to its new slug (the chain count is not in a slug) ---
+{
+  const res = await fetch(`${BASE}/guides/why-twelve-chains?ref=x`, { redirect: "manual" });
+  ok(res.status === 301 && res.headers.get("location") === "/guides/why-many-chains?ref=x", `/guides/why-twelve-chains -> 301 /guides/why-many-chains (got ${res.status} ${res.headers.get("location")})`);
+  const now = await fetch(`${BASE}/guides/why-many-chains`);
+  ok(now.status === 200 && /<link rel="canonical" href="[^"]*\/guides\/why-many-chains"/.test(await now.text()), "/guides/why-many-chains serves the guide under its own canonical");
+}
+
 // --- "Why pay here": three short claims on the home page (#why), the seven
 // full rows and the side-by-side table on /docs#why; /why redirects there ---
 {

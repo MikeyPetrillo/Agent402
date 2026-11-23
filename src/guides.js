@@ -71,6 +71,9 @@ import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS a
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, sttLongEnabled } from "./tools/stt-kit.js";
 /** Where the buying-at-volume guide lives (the metered quote limiter's 429 links it). */
 export const BUYING_AT_VOLUME_PATH = "/guides/buying-at-volume";
+
+/** Guides published under an earlier slug: old slug -> current slug (served as a 301). */
+export const MOVED_GUIDES = Object.freeze({ "why-twelve-chains": "why-many-chains" });
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -1642,7 +1645,7 @@ work today.
 `,
   },
   {
-    slug: "why-twelve-chains",
+    slug: "why-many-chains",
     title: "Why Agent402 settles on {{railCount}} chains instead of just Base",
     description:
       "Base is where x402 volume actually is today. Agent402 also settles on {{usdcRailsButBase}}, and Robinhood Chain (USDG) anyway - here's the actual reason, chain by chain.",
