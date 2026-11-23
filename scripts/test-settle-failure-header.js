@@ -12,12 +12,11 @@
 //     the receipt read the same verdict);
 //   - control: a settled 200 receipt is untouched.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { sanitizeSettleReceiptHeader, GENERIC_SETTLE_FAILURE_MESSAGE } from "../src/facilitator-diagnostics.js";
 
 let pass = 0, fail = 0, proc = null, facilitator = null;
@@ -43,8 +42,6 @@ const dec = (h) => { try { return JSON.parse(Buffer.from(String(h), "base64").to
   ok(sanitizeSettleReceiptHeader(c).value === c, "unit: a receipt that is all code is untouched");
 }
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
 const fac = { mode: "ok", settle: 0 };
 facilitator = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
@@ -69,18 +66,23 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
-proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+// The boot gives up inside the suite's own 120 s timer, killing its child.
+const srv = await bootServer({
+  stores: "settle-failure-header", timeoutMs: 110_000,
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENAI_API_KEY: "", OPENROUTER_API_KEY: "", STATE_DATABASE_URL: "", REDIS_URL: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json") },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+}).catch((e) => { console.error(`FAIL - server did not boot: ${e.message}`); facilitator.close(); process.exit(1); });
+proc = srv.child;
+const B = srv.url;
 const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 800)); };
+keep(srv.log());
 proc.stdout.on("data", keep); proc.stderr.on("data", keep);
 
 const PATH = "/api/hash";
@@ -93,7 +95,6 @@ const wallet = (n) => `0x${n.toString(16).padStart(40, "0")}`;
 const buy = (payer) => fetch(`${B}${PATH}`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": `10.8.0.${payer}`, "payment-signature": credential(wallet(payer)) }, body: JSON.stringify({ text: "hello" }) });
 
 try {
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch { /* booting */ } await sleep(500); }
   const r0 = await fetch(`${B}${PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "hello" }) });
   const req402 = JSON.parse(Buffer.from(r0.headers.get("payment-required"), "base64").toString("utf8"));
   accepted = (req402.accepts || []).find((a) => a.network === "eip155:8453" && a.scheme === "exact");
