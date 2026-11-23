@@ -29,7 +29,7 @@ const H3 = 'style="font-family:var(--font-body);font-weight:600;font-size:var(--
 const P = 'style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:0 0 12px;"';
 const A = 'style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);"';
 const code = (s) => `<code style="font-family:var(--font-mono);font-size:var(--fs-code-inline);">${esc(s)}</code>`;
-const block = (text, name) => codeBlock(`<code>${esc(text)}</code>`, { html: true, name, style: "margin:auto 0 0" });
+const block = (text, name) => codeBlock(`<code>${esc(text)}</code>`, { html: true, name, wrap: true, style: "margin:auto 0 0" });
 
 /** The apps this page names, each with its one step, read from the install hints. */
 export function startApps(baseUrl) {
