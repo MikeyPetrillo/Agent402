@@ -1288,7 +1288,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
           npm: "npx -y agent402-mcp@0.16.0",
           maintainer: "Havok Holdings LLC",
         },
-        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Flagship search/answer first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
+        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with signed receipts on its direct routes. 500+ ready tools on the same rails. Flagship search/answer first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
         ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog.",
       });
     }
@@ -1297,7 +1297,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
         service: BASE,
         connector: "stdio npm package (agent402-mcp)",
         maintainer: "Havok Holdings LLC",
-        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, over x402 or MPP (Machine Payments Protocol) - both answered on the same 402. ${BASE}/agentic-finance, ${BASE}/glossary.`,
+        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with signed receipts on its direct routes. 500+ ready tools on the same rails. It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, over x402 or MPP (Machine Payments Protocol) - both answered on the same 402. ${BASE}/agentic-finance, ${BASE}/glossary.`,
         startHere: {
           firstJob: "Search the web and answer questions. Call web.search or web.answer directly, or catalog.find with your task.",
           mode: HAS_WALLET ? "usdc" : HAS_CREDITS ? "credits" : "proof-of-work",
