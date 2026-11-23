@@ -319,9 +319,8 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
 // the stored list at once even when the source is down.
 {
   globalThis.fetch = realFetch;
-  const { spawn } = await import("node:child_process");
   const { createServer } = await import("node:http");
-  const { getFreePort } = await import("./lib/free-port.js");
+  const { bootServer } = await import("./lib/boot-server.js");
   let listUp = false;
   const src = createServer((req, res) => {
     if (req.url === "/supported") { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} })); }
@@ -333,18 +332,19 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
   const TOKEN = "screen-test-operator-token-0123456789";
   let proc = null;
   process.on("exit", () => { try { proc?.kill("SIGKILL"); } catch { /* gone */ } });
+  // Port 0, read back. stores: false: both boots read the caller's stores, so
+  // the restart is over the same files.
   const boot = async () => {
-    const port = await getFreePort();
-    proc = spawn(process.execPath, ["src/server.js"], {
-      env: { ...process.env, PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base", FACILITATOR_URL: SRC, MPP_SECRET_KEY: "boot-secret",
+    const srv = await bootServer({
+      stores: false,
+      env: { FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base", FACILITATOR_URL: SRC, MPP_SECRET_KEY: "boot-secret",
         CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", X402_INDEX_CRAWL: "off",
         TEMPO_RELAY: "off", TEMPO_API_KEY: "", TEMPO_DATA_API_KEY: "", TEMPO_RECIPIENT_ADDRESS: TREASURY, AGENT402_OPERATOR_TOKEN: TOKEN,
         SANCTIONS_LIST_URL: `${SRC}/SDN.XML`, SANCTIONS_SCREEN_FILE: join(dir, "boot-screen.json"), SANCTIONS_LIST_RETRY_MS: "1000" },
-      stdio: process.env.DEBUG_SCREEN ? "inherit" : "ignore",
     });
-    const base = `http://127.0.0.1:${port}`;
-    for (let i = 0; i < 120; i++) { try { if ((await realFetch(`${base}/health`)).ok) break; } catch {} await new Promise((r) => setTimeout(r, 500)); }
-    return base;
+    proc = srv.child;
+    if (process.env.DEBUG_SCREEN) { proc.stdout.pipe(process.stdout); proc.stderr.pipe(process.stderr); }
+    return srv.url;
   };
   const tempoOffered = async (base) => { const r = await realFetch(`${base}/api/uuid`); const h = r.headers.get("www-authenticate") || ""; if (process.env.DEBUG_SCREEN) console.log("WWW", r.status, h.slice(0, 300)); return /method="tempo"/.test(h); };
   const status = async (base, auth) => (await (await realFetch(`${base}/api/gateway-status`, auth ? { headers: { "X-Operator-Token": TOKEN } } : {})).json()).sanctionsScreen;
