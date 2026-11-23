@@ -86,6 +86,8 @@ if (process.argv[2] === "setup") {
 // never printed and the server below never starts.
 if (process.argv[2] === "wallet") {
   const { runWalletNew, WALLET_USAGE } = await import("./wallet-new.js");
+  // --help (or -h) anywhere after the command prints the usage and makes nothing.
+  if (process.argv.slice(3).some((a) => a === "--help" || a === "-h")) { process.stdout.write(`${WALLET_USAGE}\n`); process.exit(0); }
   if (process.argv[3] === "new") process.exit(await runWalletNew());
   process.stderr.write(`${WALLET_USAGE}\n`);
   process.exit(1);

@@ -303,6 +303,16 @@ const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(20_000, 3)]);
     p.on("exit", (code) => resolve({ code, out }));
   });
   ok(usage.code === 1 && /npx agent402-mcp wallet new/.test(usage.out), `a bare "wallet" prints the usage: ${usage.out}`);
+  for (const flag of ["--help", "-h"]) {
+    const hcfg = tmp(`wnew-h${flag.length}`);
+    const help = await new Promise((resolve) => {
+      const p = spawn(process.execPath, [INDEX, "wallet", "new", flag], { env: { PATH: process.env.PATH, AGENT402_KEY_STORE: "file", AGENT402_CONFIG_DIR: hcfg }, stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      p.stdout.on("data", (d) => (out += d)); p.stderr.on("data", (d) => (out += d));
+      p.on("exit", (code) => resolve({ code, out }));
+    });
+    ok(help.code === 0 && /npx agent402-mcp wallet new/.test(help.out) && !existsSync(join(hcfg, "wallet-key")) && !/Wallet address/.test(help.out), `"wallet new ${flag}" prints the usage and makes no key: ${help.out}`);
+  }
   console.log("wallet-new.js: fresh key stored, never printed, never replaces a stored key ✓");
 }
 // ---------------------------------------------------------------------------
