@@ -765,15 +765,24 @@ export function llmsTxt(baseUrl, catalog) {
   const title = full[0];
   // The short index says each fact once: the explainer link and /api/pricing
   // are in the paragraph under the summary, access (no account or key, the
-  // quote in the 402) in the front door's lines, the card method in the MPP
-  // methods, and the per-request quote and the metered wires in the metered
-  // section below. /llms-full.txt keeps the summary whole.
+  // quote in the 402, what proof-of-work skips) in the front door's lines, the
+  // card method in the MPP methods, and the per-request quote and the metered
+  // routes in the metered section below. /llms-full.txt keeps the summary whole.
   const summary = full.find((l) => l.startsWith("> "))
     .replace(" (explainer: /agentic-finance)", "")
-    .replace(" (a card payment token over MPP's `stripe` charge method - no wallet, no stablecoin)", "")
+    .replace(/; for example `POST \/v1\/metered\/chat\/completions`, `POST \/v1\/metered\/messages`\)/, ")")
+    .replace(/, or by \*\*card\*\* on premium tools >= \$[\d.]+ \(a card payment token over MPP's `stripe` charge method - no wallet, no stablecoin\)/, "")
+    .replace(" (CPU) and skip the wallet entirely.", ".")
     .replace(" No human, no signup, no API key: the payment is the identity.", "")
     .replace(" (the metered gateway quotes each request from its body)", "")
     .replace("; every price is in /api/pricing and quoted in the 402.", ".");
+  // Settlement chains: the fields /api/pricing lists for the chain prices
+  // are named in /llms-full.txt; an adapter keeps the clause before its first
+  // colon (each package page says the rest); the host guide link keeps its
+  // list and shortlinks in the guide.
+  const shortChains = (text) => text.replace(/(\nPrices by chain: [^\n]*?\.) \/api\/pricing lists [^\n]*\./, "$1");
+  const shortAdapters = (text) => text.split("\n").map((l) => l.replace(/^(- \[[^\]]+\]\([^)\s]+\)): ([^:]+): .+$/, "$1: $2")).join("\n");
+  const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
   const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
   // Key machine surfaces: the short index names each surface in one clause
@@ -816,8 +825,11 @@ export function llmsTxt(baseUrl, catalog) {
     let end = start + 1;
     while (end < full.length && !full[end].startsWith("## ")) end += 1;
     if (name === "Call a model (metered, the default)") return full.slice(start, end).join("\n").replace(" (OpenAI chat, Anthropic Messages and OpenAI Responses wires)", "").trimEnd();
+    if (name === "Settlement chains") return shortChains(full.slice(start, end).join("\n").trimEnd());
+    if (name === "Framework adapters (zero-dependency npm)") return shortAdapters(full.slice(start, end).join("\n").trimEnd());
+    if (name === "Connect via MCP") return shortHosts(full.slice(start, end).join("\n").trimEnd());
     if (name !== "Key machine surfaces") return full.slice(start, end).join("\n").trimEnd();
-    return [full[start], `Each in one clause; in full, with parameters and limits: ${baseUrl}/llms-full.txt`, ...full.slice(start + 1, end).map(surfaceBrief)].join("\n").trimEnd();
+    return [full[start], `Each in one clause; in full: ${baseUrl}/llms-full.txt`, ...full.slice(start + 1, end).map(surfaceBrief)].join("\n").trimEnd();
   }).filter(Boolean);
   const identity = `## Identity and receiving wallet
 - Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.
@@ -838,11 +850,13 @@ Base URL: ${baseUrl}
 The full text, every skill pack and tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP in plain language, for people: ${GUIDE_SITE}.
 
 ${[
-    frontDoorMarkdown(catalog, baseUrl),
+    // The Tempo currencies are named in the MPP methods line just below.
+    frontDoorMarkdown(catalog, baseUrl).replace(" (Tempo settles in its own stablecoins)", ""),
     mppMethodsProse(),
     mppMethodsSummary().enabled ? mppOfferGateSentence() : "",
     visaCliMppSentence(),
-    mppFlagshipLlmsBlock(catalog, { compact: true }),
+    // Each price beside its route says where it comes from.
+    mppFlagshipLlmsBlock(catalog, { compact: true }).replace(" Prices are the catalog's; what each answers", " What each answers"),
     gatewayNanopaymentsLine(),
     paymentChannelsLine(),
     ...sections,
