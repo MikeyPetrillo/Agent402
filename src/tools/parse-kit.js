@@ -7,7 +7,7 @@
 // All pure CPU: no network, no key, no model -> proof-of-work eligible
 // (src/free-tier.js). Every reader is one pass over a capped input.
 import { gunzipSync, inflateSync } from "node:zlib";
-import { parseCsv, csvDelimiterOf } from "./kit.js";
+import { parseCsv, csvDelimiterOf, csvAnswerTooLarge } from "./kit.js";
 import { partialFields } from "../partial-answer.js";
 
 function bad(message, statusCode = 400) {
@@ -554,6 +554,15 @@ function csvAggregate(input) {
       if (bucket) addStat(bucket.stats[k], v);
     });
   }
+  // Each summary names every column again: estimate the answer from the
+  // names and the groups it would list, and refuse a larger one before it
+  // is built (a long column name over many groups grew far past its input).
+  let perSummary = 2;
+  for (const c of cols) perSummary += header[c].length + 160;
+  let shownGroups = 0, keyBytes = 0;
+  if (g >= 0) { shownGroups = Math.min(limit, groups.size); for (const b of groups.values()) keyBytes += b.key.length + 40; }
+  const tooLarge = csvAnswerTooLarge((1 + shownGroups) * perSummary + keyBytes, "summarize fewer columns (columns), list fewer groups (limit), or shorten the column names.");
+  if (tooLarge) throw tooLarge;
   const statsOf = (list) => Object.fromEntries(cols.map((c, k) => [header[c], finishStats(list[k])]));
   const out = { rows: rows.length, delimiter, ...(delimiterNote ? { delimiterNote } : {}), columns: statsOf(overall) };
   if (g >= 0) {

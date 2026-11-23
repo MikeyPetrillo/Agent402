@@ -105,6 +105,10 @@ function structuredCorpus() {
     farPast: "-271821-04-20",
     yearOne: "0001-01-01",
     lastInstant: 8.64e15,
+    // A CSV whose header names thousands of columns over thousands of short
+    // rows: an answer that repeats each column name per row grows far past
+    // its input.
+    wideCsv: Array.from({ length: 2000 }, (_, i) => `column_name_${i}`).join(",") + "\n" + "1\n".repeat(2000),
   };
 }
 // Above the largest answer a tool may write (16 MB of resolved spec or of CSV, plus its envelope).
@@ -366,7 +370,12 @@ try {
   // with a setting the example leaves at its cheapest (log-timestamps reads
   // its example in UTC; any other zone converts every stamp) gets the corpus
   // again under that setting, and a body dense with what it parses.
+  // A CSV with one very long column name and a thousand groups.
+  const manyGroupsCsv = `g,${"x".repeat(90_000)}\n` + Array.from({ length: 1000 }, (_, i) => `k${i},1`).join("\n");
   const VARIANTS = {
+    "csv-aggregate": [
+      { set: { groupBy: "g", limit: 1000 }, dense: { field: "csv", unit: manyGroupsCsv, chars: manyGroupsCsv.length } },
+    ],
     "log-timestamps": [
       { set: { assumeZone: "America/New_York" }, dense: { field: "text", unit: "2026-11-02 14:03:07 x\n", chars: 95_000 } },
       { set: { assumeZone: "Asia/Kolkata" }, dense: { field: "text", unit: "Nov  2 14:05:11 host a\n", chars: 95_000 } },

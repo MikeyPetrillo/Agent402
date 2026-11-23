@@ -583,6 +583,17 @@ function csvEscape(v) {
 // answer says so (`note`) rather than refusing a call that used to be served.
 const CSV_DELIMITER_NAMES = { comma: ",", semicolon: ";", tab: "\t", pipe: "|", space: " ", "\\t": "\t" };
 export const CSV_DELIMITER_NOTE = "unrecognized delimiter value; comma used (use comma, semicolon, tab, pipe, or one character other than a quote or a line break)";
+// The largest JSON answer a CSV tool builds. An answer that repeats each
+// column name per row (or per group) can grow far past its input, so its
+// size is estimated from the parsed grid first and a larger one is refused
+// 413 before it is built.
+export const CSV_ANSWER_MAX_BYTES = 5_000_000;
+export function csvAnswerTooLarge(estimate, hint) {
+  if (!(estimate > CSV_ANSWER_MAX_BYTES)) return null;
+  const err = new Error(`The answer would be about ${Math.ceil(estimate / 1e6)} MB, over the ${CSV_ANSWER_MAX_BYTES / 1e6} MB limit for this tool; ${hint}`);
+  err.statusCode = 413;
+  return err;
+}
 export function csvDelimiterOf(raw) {
   if (raw === undefined || raw === null || raw === "") return { delimiter: "," };
   if (typeof raw === "string") {
@@ -781,6 +792,11 @@ const dataTools = [
       const header = input.header !== false && input.header !== "false";
       if (!header) return { rows: grid, count: grid.length, ...fellBack };
       const cols = grid[0];
+      // Each row object repeats every column name: estimate before building.
+      let perRow = 2;
+      for (const c of cols) perRow += c.length + 6;
+      const tooLarge = csvAnswerTooLarge((grid.length - 1) * perRow + text.length, "send fewer rows or columns, or header=false for arrays.");
+      if (tooLarge) throw tooLarge;
       const rows = grid.slice(1).map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i] ?? ""])));
       return { rows, count: rows.length, ...fellBack };
     },

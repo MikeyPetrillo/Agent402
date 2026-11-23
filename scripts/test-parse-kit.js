@@ -302,5 +302,27 @@ await refuses("json-lint", { json: { a: 1 } }, "json", "an object");
   ok(!/\btimezones?\b(?!,)/i.test(prose.replace(/with tz, timezone,/, "")), "the new descriptions write time zone(s), never timezone(s)");
 }
 
+// ---- CSV answers are bounded before they are built --------------------------
+{
+  const errOf = (fn) => { try { fn(); return null; } catch (e) { return e; } };
+  const many = `g,${"x".repeat(90_000)}\n` + Array.from({ length: 1000 }, (_, i) => `k${i},1`).join("\n");
+  const t0 = performance.now();
+  const e1 = errOf(() => tool("csv-aggregate").handler({ csv: many, groupBy: "g", limit: 1000 }));
+  ok(e1 && e1.statusCode === 413 && /answer would be/.test(e1.message) && performance.now() - t0 < 200, `csv-aggregate: a long column name over 1,000 groups answers 413 before it is built (${e1?.statusCode}: ${e1?.message?.slice(0, 120)})`);
+  const small = tool("csv-aggregate").handler({ csv: `g,${"x".repeat(2_000)}\n` + Array.from({ length: 50 }, (_, i) => `k${i},1`).join("\n"), groupBy: "g", limit: 1000 });
+  ok(small.groups.length === 50, "csv-aggregate: the same shape at a modest size is answered");
+  const wide = Array.from({ length: 2000 }, (_, i) => `column_name_${i}`).join(",") + "\n" + "1\n".repeat(2000);
+  const t1 = performance.now();
+  const e2 = errOf(() => tool("csv-to-json").handler({ csv: wide }));
+  ok(e2 && e2.statusCode === 413 && /answer would be/.test(e2.message) && performance.now() - t1 < 200, `csv-to-json: a wide header over many rows answers 413 before it is built (${e2?.statusCode}: ${e2?.message?.slice(0, 120)})`);
+  const rows = tool("csv-to-json").handler({ csv: wide, header: false });
+  ok(rows.count === 2001, "csv-to-json: the same CSV without header objects is answered");
+  for (const slug of ["csv-to-json", "csv-aggregate"]) {
+    const t = tool(slug);
+    const r = t.handler({ ...t.discovery.input });
+    ok(r && !(r instanceof Error), `${slug}: its published example is still answered`);
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
