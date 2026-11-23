@@ -458,6 +458,20 @@ export async function run({ ok, parts, setRig }) {
         await ok(r2.status >= 400 && r2.status < 500 && orderOf(bad, from2) === "nothing", `dub: its own input refusal answers before any settle call (${r2.status})`);
       }
 
+      // ---- redact-chat: masks, then the chat gateway's call, behind the same point --
+      {
+        const RC = { method: "POST", path: "/api/redact-chat", body: { text: "Reach me at ada@example.com.", instruction: "Write a one-line reply." } };
+        const { w } = await fresh("evm", 3, RC);
+        const from = mark();
+        const r = await rig.pay(w, RC);
+        await ok(orderOf(w, from) === "settle-first" && rig.outcomesOf(w).attempts === 1, `redact-chat: a new wallet's payment settles before the chat step's model call (${orderOf(w, from)}, ${r.status})`);
+        const bad = await rig.wallet("evm");
+        rig.fund(bad, 10n ** 9n);
+        const from2 = mark();
+        const r2 = await rig.send({ ...RC, body: { text: "Reach me at ada@example.com." } }, await rig.credentialFor(bad, RC));
+        await ok(r2.status >= 400 && r2.status < 500 && orderOf(bad, from2) === "nothing", `redact-chat: its own input refusal answers before any settle call (${r2.status})`);
+      }
+
       // ---- through the hosted connector (/mcp), paid over x402 --------------------
       // (The connector replays the payment to the route; its line about the
       // charge is read from the route's answer.)

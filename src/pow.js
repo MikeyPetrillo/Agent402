@@ -521,6 +521,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   "tts", "tts-hd", "tts-lite",
   // Dub: runs a chat gateway tier and a tts tier in-process (both above).
   "dub",
+  // Redact, then chat: runs the v1-chat gateway tier in-process on the masked text.
+  "redact-chat",
   // STT kit: fetches external audio + burns OpenAI transcription credit.
   "transcribe", "transcribe-pro",
   // Embeddings kit: every call burns OpenAI embedding credit.

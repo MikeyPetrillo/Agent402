@@ -7,6 +7,7 @@ import zlib from "node:zlib";
 import { convertAnyUnit, UNIT_CATEGORIES } from "./convert-gen.js";
 import { countSentenceEnds } from "./sentence-ends.js";
 import { csvCellsTooMany, CSV_CELL_MAX } from "./kit.js";
+import { redactText } from "./pii-redact.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -387,20 +388,9 @@ const text = [
     tags: ["redact", "pii", "mask", "privacy"],
     discovery: { bodyType: "json", input: { text: "reach me at ada@x.com or 555-123-4567" }, inputSchema: { properties: { text: { type: "string" } }, required: ["text"] }, output: { example: { result: "reach me at [EMAIL] or [PHONE]", counts: { email: 1, phone: 1 } } } },
     handler: (i) => {
-      let t = cap(need(i, "text"), 500_000);
-      const counts = {};
-      const sub = (re, label) => {
-        t = t.replace(re, () => {
-          counts[label] = (counts[label] || 0) + 1;
-          return `[${label.toUpperCase()}]`;
-        });
-      };
-      sub(/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}/g, "email");
-      sub(/\b(?:\d[ -]*?){13,16}\b/g, "card");
-      sub(/\b\d{3}-\d{2}-\d{4}\b/g, "ssn");
-      sub(/\b(?:\+?\d{1,2}[ .-]?)?\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}\b/g, "phone");
-      sub(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "ip");
-      return { result: t, counts };
+      // The patterns live in pii-redact.js, shared with redact-chat.
+      const { text, counts } = redactText(cap(need(i, "text"), 500_000));
+      return { result: text, counts };
     },
   },
   {

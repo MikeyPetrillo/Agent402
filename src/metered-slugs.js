@@ -23,6 +23,7 @@ export const METERED_SLUGS = new Set([
   "image-gen", "image-gen-hd", "image-gen-premium",
   "tts", "tts-hd", "tts-lite", "transcribe", "transcribe-pro", "transcribe-long",
   "dub", // dub-kit.js: the v1-chat gateway tier, then a tts tier, both in-process
+  "redact-chat", // redact-chat-kit.js: redact's patterns, then the v1-chat gateway tier in-process
   "embed", "embed-large", "moderate",
   // OpenRouter gateway
   "v1-chat-nano", "v1-chat-auto", "v1-chat-grounded", "v1-chat-ox", "v1-chat", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered",
