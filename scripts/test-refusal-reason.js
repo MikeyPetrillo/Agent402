@@ -35,6 +35,13 @@ const CASES = [
   ['"safetySettings" is not supported on this route - this wire cannot honour a safety threshold it does not control upstream.', "unsupported_field"],
   ['"generationConfig.responseMimeType" must be "text/plain" or "application/json" (got text/csv)', "unknown_field_value"],
 ];
+// The robots gate's 403 (src/tools/robots-gate.js) quotes the caller's URL
+// before its fixed words; a URL that reads like another class does not move it.
+{
+  const msg = "This site's robots.txt (https://a.example/robots.txt) does not allow Agent402-Fetch to read this URL (Disallow: /x-must-be-one-of-is-required), so it was not fetched";
+  ok(refusalReason(msg, 403) === "robots_disallowed", "the robots refusal classifies as robots_disallowed from its text alone");
+  ok(refusalReason("x", 403, { robotsDisallowed: true }) === "robots_disallowed", "and from the error it carries");
+}
 let hit = 0;
 for (const [msg, want] of CASES) { const got = refusalReason(msg, 400); if (got === want) hit++; else console.log(`   MISS ${want} != ${got}: ${msg.slice(0, 70)}`); }
 ok(hit === CASES.length, `every real refusal message classifies as expected (${hit}/${CASES.length})`);

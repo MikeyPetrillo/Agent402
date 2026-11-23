@@ -159,7 +159,17 @@ fetched = [];
 const map = await h("site-map")({ url: SITE });
 ok(map.url === "https://example.com/" && map.host === "example.com", "site-map: url + host echoed");
 ok(map.fetches === 5 && map.fetches <= 6, `site-map: home + robots + index + 2 children = 5 fetches (got ${map.fetches})`);
-ok(fetchedPaths()[0] === "/" && fetchedPaths()[1] === "/robots.txt", "site-map: start page first, robots second");
+// The robots gate (src/tools/robots-gate.js) reads robots.txt for the start
+// URL first, outside the map's own budget; then the start page, then robots.txt
+// again for its sitemaps.
+ok(fetchedPaths()[0] === "/robots.txt" && fetchedPaths()[1] === "/" && fetchedPaths()[2] === "/robots.txt", "site-map: the robots gate's read, then the start page, then robots for the sitemaps");
+fetched = [];
+{
+  let refused = null;
+  try { await h("site-map")({ url: SITE + "/bot-only/x" }); } catch (e) { refused = e; }
+  ok(refused?.statusCode === 403 && refused?.robotsRule === "Disallow: /bot-only/", `site-map: a start URL robots.txt disallows for Agent402Bot answers 403 with the rule (${refused?.statusCode} ${refused?.robotsRule})`);
+  ok(!fetchedPaths().includes("/bot-only/x"), "site-map: the disallowed start page is never fetched");
+}
 ok(map.sitemapsRead === 3, `site-map: index + gz child + plain child read (got ${map.sitemapsRead})`);
 ok(map.urls.some((u) => u === "https://example.com/blog/2") && map.urls.some((u) => u === "https://example.com/docs"), "site-map: gzipped child sitemap URLs present");
 ok(map.urls.some((u) => u === "https://example.com/about") && !map.urls.some((u) => u === "https://example.com/target"), "site-map: link + sitemap URLs merged (redirect target not fetched here)");

@@ -12,6 +12,7 @@
 // than browser/PDF tooling. PoW-eligible (pure CPU, no network in the hot path).
 import { loadTesseract } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { admissionCallerOf } from "../dispatch-caller.js";
 import { createCallerTurns, TurnRefused } from "../caller-turns.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
@@ -787,6 +788,7 @@ async function readImageText(i, req) {
   } else if (i.url) {
     const url = String(i.url).trim();
     if (!/^https?:\/\//i.test(url)) throw bad('"url" must be http(s)');
+    await assertRobotsAllow(url);
     const { buffer } = await safeFetch(url, { binary: true, maxBytes: MAX_FETCH });
     if (!buffer || buffer.length < 8) throw bad("fetched image too small or empty", 502);
     buf = buffer;

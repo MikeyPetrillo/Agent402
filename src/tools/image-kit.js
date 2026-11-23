@@ -15,6 +15,7 @@
 // inline. Shared primitives live in image-ops.js so both sides run one
 // implementation.
 import { safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import {
   bad, MAX_SRC_PIXELS, declaredDimensions, sniffFormat, MIME,
 } from "./image-ops.js";
@@ -60,6 +61,7 @@ function transformOffThread(op, image, params) {
 // original tools. URL capability = egress, so these slugs are wallet-only.
 async function inputBuffer(i) {
   if (typeof i.url === "string" && i.url.trim()) {
+    await assertRobotsAllow(i.url.trim());
     const { buffer } = await safeFetch(i.url.trim(), { binary: true });
     if (buffer.length < 8) throw bad("fetched resource is too small to be an image");
     return buffer;
