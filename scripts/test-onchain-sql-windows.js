@@ -244,8 +244,14 @@ try {
     reset();
     const req = {};
     onDaySent = () => { req.__a402ClientGoneAt = Date.now(); };
-    const e = await sql(days(7), req).catch((x) => x);
-    ok(e instanceof Error && (e.clientGone || e.statusCode === 499) && sent.length === 2, `a caller gone after the first day stops the walk: no further day query is sent (${e?.statusCode}, ${sent.length} queries)`);
+    const r = await sql(days(7), req).catch((x) => x);
+    ok(!(r instanceof Error) && r.windowed?.stoppedBy === "caller-gone" && r.windowed.daysRead === 1 && r.complete === false && sent.length === 2, `a caller gone after the first day stops the walk: no further day query, and the days read are answered for the settlement and hang-up rules to decide (${r?.statusCode ?? r?.windowed?.stoppedBy}, ${sent.length} queries)`);
+    reset();
+    const req2 = {};
+    onDaySent = () => { req2.__a402ClientGoneAt = Date.now(); };
+    failDay = new Date(Date.now() - 7 * DAY).toISOString().slice(0, 10);
+    const e = await sql(days(7), req2).catch((x) => x);
+    ok(e?.statusCode === 422 && e?.charged === false, `a caller gone before any day was read: the uncharged 422 (${e?.statusCode})`);
   }
   // ---- the description states the per-call limit ----
   {
@@ -457,8 +463,8 @@ try {
     const req = {};
     let n = 0;
     onDaySent = () => { if (++n === 3) req.__a402ClientGoneAt = Date.now(); };
-    const e = await sqlRange(days(SQL_RANGE_MAX_DAYS), req).catch((x) => x);
-    ok(e instanceof Error && (e.clientGone || e.statusCode === 499) && sent.length === 1 + 3, `a caller gone during the ${SQL_RANGE_MAX_DAYS}-day walk stops it: no further day query, nothing delivered (${e?.statusCode}, ${sent.length} queries)`);
+    const r = await sqlRange(days(SQL_RANGE_MAX_DAYS), req).catch((x) => x);
+    ok(!(r instanceof Error) && r.windowed?.stoppedBy === "caller-gone" && r.windowed.daysRead === 3 && sent.length === 1 + 3, `a caller gone during the ${SQL_RANGE_MAX_DAYS}-day walk stops it: no further day query; the days read are answered for the settlement and hang-up rules to decide (${r?.statusCode ?? r?.windowed?.stoppedBy}, ${sent.length} queries)`);
   }
   // ---- hostile and quoted queries on the range route ----
   {
