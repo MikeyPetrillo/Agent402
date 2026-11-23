@@ -2,23 +2,22 @@
 // Dev shortlinks (/claude, /cursor, ... -> the page that answers "how do I use
 // this from X") and the /install script. Boots a free server. In CI.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { SHORTLINKS, installScript } from "../src/shortlinks.js";
 import { headingId } from "../src/guides.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL: ${m}`); } };
-const port = await getFreePort();
-const base = `http://127.0.0.1:${port}`;
-const proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(port), BASE_URL: "http://agent402.test", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" }, stdio: ["ignore", "ignore", "inherit"] });
+const srv = await bootServer({ stores: "shortlinks", env: { FREE_MODE: "true", BASE_URL: "http://agent402.test", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } })
+  .catch((e) => { console.log(e.message); return null; });
+const port = srv?.port;
+const base = srv?.url;
+const proc = srv?.child;
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted");
+  ok(Boolean(srv), "server booted");
   // Every shortlink 302s to its target, and the target page answers 200.
   for (const [path, target] of Object.entries(SHORTLINKS)) {
     const r = await fetch(base + path, { redirect: "manual" });
@@ -183,7 +182,7 @@ try {
   const alias = await fetch(`${base}/install.sh`, { redirect: "manual" });
   ok(alias.status === 302 && alias.headers.get("location") === "/install", "/install.sh redirects to /install");
   ok(/^MCP_URL="https:\/\/x\.test\/mcp"$/m.test(installScript("https://x.test/")) && !/x\.test\/\//.test(installScript("https://x.test/")), "base URL trailing slash handled");
-} finally { proc.kill("SIGTERM"); }
+} finally { proc?.kill("SIGTERM"); }
 // isSelfSellerQuery is reached from ?seller= on a public endpoint, so its
 // trailing-slash trim must be linear: a regex there was flagged high-severity
 // polynomial ReDoS (CodeQL js/polynomial-redos, 2026-08-28). 120k slashes must
