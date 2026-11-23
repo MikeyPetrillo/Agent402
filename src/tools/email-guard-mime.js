@@ -12,7 +12,14 @@
 // the depth cap) is listed with the reason, so the caller can mark the answer
 // partial instead of reading an empty part as a clean one.
 
-export const MAX_RAW_BYTES = 1024 * 1024;
+// A request reaches the tool through the server's global JSON parser, which
+// takes a body of at most 100 KB (src/server.js, `express.json({ limit:
+// "100kb" })`): that bound keeps every unpaid and proof-of-work read small, and
+// this pure-CPU tool is on the free tier. A field's cap leaves room for the
+// JSON around it (quotes, escaped line ends), so the stated limit is one a
+// caller can reach.
+export const REQUEST_BODY_MAX_BYTES = 100 * 1024;
+export const MAX_RAW_BYTES = 90_000;
 export const MAX_DISPLAY_NAME_CHARS = 1000;
 const MAX_DEPTH = 8;
 const MAX_PARTS = 64;

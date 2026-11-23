@@ -11,7 +11,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { leastOurs, leastWall } from "./lib/ours-clock.js";
 import { EMAIL_GUARD_TOOLS, siteOf } from "../src/tools/email-guard-kit.js";
-import { parseMessage, parseMailbox, decodeEncodedWords, parseContentType, MAX_RAW_BYTES } from "../src/tools/email-guard-mime.js";
+import { parseMessage, parseMailbox, decodeEncodedWords, parseContentType, MAX_RAW_BYTES, REQUEST_BODY_MAX_BYTES } from "../src/tools/email-guard-mime.js";
 import { readableBase64 } from "../src/tools/email-guard-html.js";
 import { HTML_TOOLS } from "../src/tools/html-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
@@ -238,12 +238,37 @@ ok(/no score and no verdict/.test(tool.description), "copy says there is no scor
 }
 
 // ----------------------------------------------------------------------------
+// The stated size is the real one: every surface states the cap the handler
+// enforces and the request bound the server's parser enforces, and a message
+// at the cap fits in a request under that bound.
+// ----------------------------------------------------------------------------
+{
+  const { readFileSync } = await import("node:fs");
+  const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(REQUEST_BODY_MAX_BYTES === 100 * 1024 && /app\.use\(unlessBodyUnread\(express\.json\(\{ limit: "100kb" \}\)\)\);/.test(serverSrc) && !/\/api\/email-guard/.test(serverSrc.slice(serverSrc.indexOf("const LARGE_BODY_ROUTES"), serverSrc.indexOf("LARGE_BODY_ROUTES.push"))), "the request bound is the global 100 KB JSON parser's, and email-guard takes no larger parser");
+  const def = EMAIL_GUARD_TOOLS[0];
+  const cap = `${MAX_RAW_BYTES.toLocaleString("en-US")} bytes`;
+  const props = def.discovery.inputSchema.properties;
+  ok(!/\b1 MB\b/.test(JSON.stringify(def)), "no surface of the tool states the old 1 MB");
+  ok(def.description.slice(0, 1000).includes(cap) && def.description.slice(0, 1000).includes("100 KB"), "the description states both bounds inside the first 1,000 characters (the length a 402 listing carries)");
+  ok(["raw", "html", "text"].every((k) => props[k].maxLength === MAX_RAW_BYTES && props[k].description.includes(cap) && props[k].description.includes("100 KB")), "raw, html and text carry the cap as maxLength and in their descriptions");
+  // A message at the cap, in ordinary 76-character lines, sent as JSON.
+  const line = "y".repeat(74) + "\r\n";
+  const head = "From: a@example.com\r\nTo: b@example.com\r\nSubject: size\r\n\r\n";
+  const atCap = (head + line.repeat(Math.ceil(MAX_RAW_BYTES / line.length))).slice(0, MAX_RAW_BYTES);
+  const wire = Buffer.byteLength(JSON.stringify({ raw: atCap }));
+  ok(Buffer.byteLength(atCap) === MAX_RAW_BYTES && wire <= REQUEST_BODY_MAX_BYTES, `a message at the cap fits in the request bound as JSON (${wire} of ${REQUEST_BODY_MAX_BYTES} bytes)`);
+  const served = await run({ raw: atCap });
+  ok(served && served.source === "raw", "and the handler reads it");
+}
+
+// ----------------------------------------------------------------------------
 // Input validation, oversize, bad MIME
 // ----------------------------------------------------------------------------
 {
   await throws(run({}), 400, "empty input");
-  await throws(run({ raw: "x".repeat(MAX_RAW_BYTES + 1) }), 413, "raw over 1 MB");
-  await throws(run({ html: "<p>" + "y".repeat(MAX_RAW_BYTES) + "</p>" }), 413, "html part over 1 MB");
+  await throws(run({ raw: "x".repeat(MAX_RAW_BYTES + 1) }), 413, "raw over the stated cap");
+  await throws(run({ html: "<p>" + "y".repeat(MAX_RAW_BYTES) + "</p>" }), 413, "html part over the stated cap");
   await throws(run({ raw: "From: a@example.com\r\n\r\nhi", text: "hi" }), 400, "raw and parts together");
   await throws(run({ raw: "just some words with no header line" }), 400, "raw that is not a message");
   await throws(run({ raw: "   " }), 400, "blank raw");
