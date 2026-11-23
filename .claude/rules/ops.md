@@ -167,7 +167,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   run, the API unreadable, or no answer inside the lookup's one deadline (`MARKER_BASE_DEADLINE_MS`,
   default 40000, also its most; half the job's 2-minute limit), it reads its own pushed range; `MARKER_WORKFLOW_FILE` (default
   `deploy.yml`) names the workflow whose runs it lists (`scripts/test-ci-gating.js` runs the
-  step on a three-push sequence and evaluates the group for every mode a job reads).
+  step on a three-push sequence and evaluates the group for every mode a job reads). Every
+  subject is read through `scripts/marker-subjects.js`, which leaves out an outside
+  contributor's commits: a merge of another account's pull request ("Merge pull request #N from
+  <owner>/...", owner not this repository's) with everything it brings in, and a squash merge's
+  "(#N)" title on the first-parent line; each one left out is named in the job log. A rebase
+  merge of an outside pull request cannot be told apart from our own commits, so outside pull
+  requests are merged with a merge commit.
 - **CI's data keys:** `OPEN_METEO_API_KEY` and `COINGECKO_CI_API_KEY` (never the production
   CoinGecko key) reach only test-sweeps' strict-sweep server step and the nightly corpus step; the
   server gets `COINGECKO_API_TIER=pro` and `COINGECKO_DAILY_MAX` = `CG_RUN_READ_CAP`

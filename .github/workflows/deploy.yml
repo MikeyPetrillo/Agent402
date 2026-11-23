@@ -166,13 +166,16 @@ jobs:
             done
             exit 0
           fi
-          # Collect subject lines for every commit in this push range.
+          # Collect subject lines for every commit in this push range, less an
+          # outside contributor's commits (scripts/marker-subjects.js: a merge
+          # of another account's pull request and what it brings in, and a
+          # squash merge's title), so outside text never starts a job.
           # Fall back to the head commit alone if BEFORE is empty/zero
           # (new branch or force-push with no shared ancestor) or unreachable.
           if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            TITLES=$(git log -1 --format='%s' "$AFTER")
+            TITLES=$(node scripts/marker-subjects.js "$AFTER^!" || true)
           else
-            TITLES=$(git log --format='%s' "$BEFORE..$AFTER" 2>/dev/null || git log -1 --format='%s' "$AFTER")
+            TITLES=$(node scripts/marker-subjects.js "$BEFORE..$AFTER" || node scripts/marker-subjects.js "$AFTER^!" || true)
           fi
           # On main a pending run can be replaced by a newer push before it
           # starts (one pending run per concurrency group), and the pushed range
@@ -185,7 +188,7 @@ jobs:
             LAST=$(node scripts/marker-base.js || true)
             if printf '%s' "$LAST" | grep -qE '^[0-9a-f]{40}$' && git cat-file -e "$LAST^{commit}" 2>/dev/null && git merge-base --is-ancestor "$LAST" "$AFTER" 2>/dev/null; then
               echo "Reading subjects since the last run that read its markers: $LAST"
-              SINCE=$(git log --format='%s' "$LAST..$AFTER")
+              SINCE=$(node scripts/marker-subjects.js "$LAST..$AFTER")
               TITLES=$(printf '%s\n%s\n' "$TITLES" "$SINCE" | awk 'NF && !seen[$0]++')
             else
               echo "No earlier run to read from; the pushed range stands."
@@ -713,16 +716,22 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
     steps:
-      - name: Install Stripe purl
+      # The burner key is handed to this binary below, so it is one pinned
+      # release checked against its published SHA-256, never a tap or a clone
+      # of whatever the default branch holds that day. A new release is a
+      # version and checksum change here, read before it is taken.
+      - name: Install Stripe purl (pinned release, checksum verified)
+        env:
+          PURL_VERSION: v0.2.13
+          PURL_SHA256: cf3b393d53fca419ba48b08a5443312e914625f9786a596a6cf72a83a95a4ab6
         run: |
-          if brew install stripe/purl/purl 2>&1; then
-            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
-          else
-            echo "brew install failed — building from source"
-            git clone --depth 1 https://github.com/stripe/purl /tmp/purl
-            cargo install --locked --path /tmp/purl/cli
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
+          set -euo pipefail
+          dir="$RUNNER_TEMP/purl-bin"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/purl" "https://github.com/stripe/purl/releases/download/${PURL_VERSION}/purl-linux-amd64"
+          echo "${PURL_SHA256}  $dir/purl" | sha256sum -c -
+          chmod 0755 "$dir/purl"
+          echo "$dir" >> "$GITHUB_PATH"
       - name: Show purl CLI surface (for the logs)
         run: |
           purl --version || true
