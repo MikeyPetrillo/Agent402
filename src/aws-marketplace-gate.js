@@ -50,14 +50,16 @@
 // registered for the listing.
 import { binaryTypesOf } from "./tool-media-type.js";
 import { namesOwnHost } from "./referral-gate.js";
+import { resaleBarredReason } from "./resale-terms.js";
 
 export const AWS_NETWORK = "aws:base";
 export const AWS_RAIL = "aws";
 export const AWS_WIRE = "aws";
 export const AWS_PREFIX = "/aws";
 export const AWS_JWKS_PATH = "/aws/.well-known/jwks.json";
-/** The first listing: own-code tools with a low failure rate and a fixed price. */
-export const AWS_DEFAULT_SLUGS = Object.freeze(["extract", "render", "pdf-to-markdown", "redact", "sql-guard", "email-guard", "sanctions-name", "sanctions-wallet"]);
+/** The first listing: own-code tools with a low failure rate and a fixed price,
+ *  each computing its answer from the caller's own input or public data. */
+export const AWS_DEFAULT_SLUGS = Object.freeze(["redact", "sql-guard", "email-guard", "sanctions-name", "sanctions-wallet"]);
 export const AWS_DEFAULTS = Object.freeze({ quoteSeconds: 300, retryMax: 2 });
 /** The settings without which the gate stays off. */
 export const AWS_REQUIRED_VARS = Object.freeze(["AWS_MARKETPLACE_QUOTE_KEY", "AWS_MARKETPLACE_QUOTE_KEY_ID", "AWS_MARKETPLACE_PRODUCT_ID"]);
@@ -149,6 +151,37 @@ export function awsMarketplaceConfig(env = process.env, { baseUrl = "" } = {}) {
   });
 }
 
+// An input field that names a URL for the tool to read: a name ending in url or
+// uri (url, urls, imageUrl, feed_url), a link-like name, or a schema format of
+// uri. A tool with one fetches content a third party owns, which this listing
+// does not resell.
+const URL_FIELD_NAME = /(?:url|uri)s?$/;
+const LINK_FIELD_NAMES = new Set(["href", "src", "link", "website", "page"]);
+const URL_FORMATS = new Set(["uri", "url", "iri", "uri-reference"]);
+const HTTP_VALUE = /^\s*https?:\/\//i;
+
+/** The input fields of `def` that name a URL for the tool to fetch, in order (empty when none). */
+export function callerUrlFields(def) {
+  const found = new Set();
+  const props = def?.discovery?.inputSchema?.properties;
+  if (props && typeof props === "object") {
+    for (const [name, schema] of Object.entries(props)) {
+      const key = String(name).toLowerCase().replace(/[^a-z]/g, "");
+      const format = String(schema?.format ?? schema?.items?.format ?? "").toLowerCase();
+      if (URL_FIELD_NAME.test(key) || LINK_FIELD_NAMES.has(key) || URL_FORMATS.has(format)) found.add(name);
+    }
+  }
+  for (const input of [def?.discovery?.input, def?.discovery?.startingInput]) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) continue;
+    for (const [name, value] of Object.entries(input)) {
+      const key = String(name).toLowerCase().replace(/[^a-z]/g, "");
+      const values = Array.isArray(value) ? value : [value];
+      if (URL_FIELD_NAME.test(key) || LINK_FIELD_NAMES.has(key) || values.some((v) => typeof v === "string" && HTTP_VALUE.test(v) && !/\s/.test(v.trim()))) found.add(name);
+    }
+  }
+  return [...found];
+}
+
 const flatUsdOf = (def) => Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
 const hasPriceFn = (def) => typeof def?.quote === "function" || typeof def?.tierQuote === "function";
 
@@ -159,6 +192,14 @@ const hasPriceFn = (def) => typeof def?.quote === "function" || typeof def?.tier
  */
 export function awsIneligibility(def, flags = {}, { ownHosts = [] } = {}) {
   if (!def || typeof def !== "object") return "not in the catalog";
+  // Resold through AWS Marketplace, a third party: a raw pass-through of a
+  // source whose terms bar that is never served here (src/resale-terms.js),
+  // nor is a tool that fetches a page, file or feed the caller names. Checked
+  // first, so the boot line names this reason whatever else the tool lacks.
+  const resaleBarred = resaleBarredReason(def);
+  if (resaleBarred) return resaleBarred;
+  const urlFields = callerUrlFields(def);
+  if (urlFields.length) return `fetches third-party content from a URL the caller names (${urlFields.slice(0, 3).join(", ")})`;
   if (typeof def.handler !== "function") return "in the catalog but has no handler";
   const method = String(def.route || "").split(" ")[0];
   if (method !== "GET" && method !== "POST") return "not a GET or POST route";

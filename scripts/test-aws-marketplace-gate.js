@@ -24,7 +24,8 @@ import express from "express";
 import { bootPaidServer } from "./lib/paid-boot.js";
 
 const gateMod = await import("../src/aws-marketplace-gate.js");
-const { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsIneligibility, awsRoutes, createAwsPaymentClaims, createAwsMarketplaceGate, paymentJwksBase, AWS_DEFAULT_SLUGS } = gateMod;
+const { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsIneligibility, awsRoutes, createAwsPaymentClaims, createAwsMarketplaceGate, paymentJwksBase, callerUrlFields, AWS_DEFAULT_SLUGS } = gateMod;
+const { markResaleBarred, markResaleComputed } = await import("../src/resale-terms.js");
 const { PRIVATE_RAILS, COUNTED_RAILS, isCountedRail, isPaidRail, UNCOUNTED_PRIVATE_RAILS } = await import("../src/paid-rails.js");
 
 let pass = 0, fail = 0;
@@ -104,7 +105,38 @@ const DEFS = {
   ok(/model tier/.test(awsIneligibility({ ...DEFS["POST /api/echo"], category: "llm" })), "a model tier is refused");
   ok(/priced per request/.test(awsIneligibility({ ...DEFS["POST /api/echo"], quote: () => 0.01 })), "a tool priced per request is refused");
   ok(/outlives/.test(awsIneligibility(DEFS["POST /api/echo"], { lastingEffect: true })) && /outside seller/.test(awsIneligibility(DEFS["POST /api/echo"], { paysThirdParty: true })) && /long-running/.test(awsIneligibility(DEFS["POST /api/echo"], { longRunning: true })), "lasting effect, outside seller and long-running are refused");
-  ok(/own host/.test(awsIneligibility({ ...DEFS["POST /api/echo"], discovery: { input: { url: "https://agent402.tools/x" } } }, {}, { ownHosts: ["agent402.tools"] })), "a tool whose example names this host is refused");
+  ok(/own host/.test(awsIneligibility({ ...DEFS["POST /api/echo"], discovery: { input: { domain: "agent402.tools" } } }, {}, { ownHosts: ["agent402.tools"] })), "a tool whose example names this host is refused");
+
+  // Resold through a third party: a source whose terms bar it, or content a third party owns.
+  const [barred] = markResaleBarred([{ ...DEFS["POST /api/echo"], slug: "barred" }], ["barred"], "raw pass-through of a source that bars resale");
+  ok(awsIneligibility(barred) === "raw pass-through of a source that bars resale", "a resale-barred tool is refused, quoting its reason");
+  const [computed] = markResaleComputed([{ ...DEFS["POST /api/echo"], slug: "computed" }], ["computed"]);
+  ok(awsIneligibility(computed) === null, "control: a tool computed from such a source stays eligible");
+  const withInput = (inputSchema, input) => ({ ...DEFS["POST /api/echo"], discovery: { inputSchema: { properties: inputSchema }, input } });
+  const cases = [
+    ["a url field", withInput({ url: { type: "string" } }, { url: "https://example.com/a" }), ["url"]],
+    ["a urls list", withInput({ urls: { type: "array", items: { type: "string" } } }, { urls: ["https://example.com/a"] }), ["urls"]],
+    ["an imageUrl field", withInput({ imageUrl: { type: "string" } }, {}), ["imageUrl"]],
+    ["a feed_url field", withInput({ feed_url: { type: "string" } }, {}), ["feed_url"]],
+    ["a uri-format field", withInput({ target: { type: "string", format: "uri" } }, {}), ["target"]],
+    ["an href field", withInput({ href: { type: "string" } }, {}), ["href"]],
+    ["an example value that is a web address", withInput({ text: { type: "string" } }, { source: "https://example.com/a.pdf" }), ["source"]],
+  ];
+  for (const [label, def, fields] of cases) {
+    ok(JSON.stringify(callerUrlFields(def)) === JSON.stringify(fields) && /third-party content from a URL the caller names/.test(awsIneligibility(def)), `a tool with ${label} is refused, naming the field`);
+  }
+  ok(callerUrlFields(withInput({ text: { type: "string" }, links: { type: "array" } }, { text: "see https://example.com/a for more" })).length === 0, "control: prose that mentions an address and a list of links to inspect are not URL inputs");
+}
+
+// ---- the default listing, on the real tool definitions ------------------------------
+{
+  ok(!AWS_DEFAULT_SLUGS.some((s) => ["extract", "render", "pdf-to-markdown"].includes(s)), "the default listing holds no tool that reads a caller-named page or document");
+  const real = new Map();
+  for (const mod of ["../src/tools/kit2.js", "../src/tools/sql-guard-kit.js", "../src/tools/email-guard-kit.js", "../src/tools/sanctions-kit.js", "../src/tools/demand-kit.js"]) {
+    for (const v of Object.values(await import(mod))) if (Array.isArray(v)) for (const t of v) if (t && typeof t === "object" && t.slug && !real.has(t.slug)) real.set(t.slug, t);
+  }
+  for (const slug of AWS_DEFAULT_SLUGS) ok(real.has(slug) && awsIneligibility(real.get(slug)) === null, `default ${slug}: its real definition passes the boot checks`);
+  ok(/third-party content from a URL the caller names \(url\)/.test(awsIneligibility(real.get("pdf-to-markdown")) || ""), "pdf-to-markdown's real definition is refused: it reads a caller-named URL");
 }
 
 // ---- the rail ------------------------------------------------------------------
@@ -278,7 +310,7 @@ await new Promise((r) => srv.close(r));
 // ===============================================================================
 // Part 2: booted servers
 // ===============================================================================
-const SERVER_ENV = { AWS_MARKETPLACE_QUOTE_KEY: ENV.AWS_MARKETPLACE_QUOTE_KEY, AWS_MARKETPLACE_QUOTE_KEY_ID: "quote-test-1", AWS_MARKETPLACE_PRODUCT_ID: PRODUCT, AWS_MARKETPLACE_SLUGS: "redact,sql-guard", AWS_MARKETPLACE_PAYMENT_JWKS_URL: JWKS_BASE };
+const SERVER_ENV = { AWS_MARKETPLACE_QUOTE_KEY: ENV.AWS_MARKETPLACE_QUOTE_KEY, AWS_MARKETPLACE_QUOTE_KEY_ID: "quote-test-1", AWS_MARKETPLACE_PRODUCT_ID: PRODUCT, AWS_MARKETPLACE_SLUGS: "redact,sql-guard,extract,render,pdf-to-markdown,public-holidays", AWS_MARKETPLACE_PAYMENT_JWKS_URL: JWKS_BASE };
 const BLANK = Object.fromEntries(Object.keys(SERVER_ENV).map((k) => [k, ""]));
 const OP = "test-operator-token-aws-gate-0001";
 // The direct routes compared with the switch off and on: unpaid, bare and with input, both verbs.
@@ -329,6 +361,10 @@ try {
   ok(again.status === 409, "the same payment again: 409");
   await new Promise((r) => setTimeout(r, 200));
   const opv = await (await fetch(`${on.url}/__operator/aws.json`, { headers: { "x-operator-token": OP } })).json();
+  const notServed = new Map((opv.notServed || []).map((r) => [r.slug, r.reason]));
+  ok(["extract", "render", "pdf-to-markdown"].every((s) => /third-party content from a URL the caller names/.test(notServed.get(s) || "")), "boot: extract, render and pdf-to-markdown are refused with the reason");
+  ok(/holiday/.test(notServed.get("public-holidays") || ""), "boot: a resale-barred tool is refused with its terms reason");
+  ok(JSON.stringify(opv.routes) === JSON.stringify(["redact", "sql-guard"]), "boot: only the eligible listed tools are served");
   ok(opv.enabled === true && opv.sinceBoot.booked === 1 && opv.sinceBoot.served === 1 && opv.sinceBoot.replayed === 1, "booked once, served once, the replay counted");
   const opNo = await fetch(`${on.url}/__operator/aws.json`);
   ok(opNo.status === 404, "the operator view without the token: 404");
