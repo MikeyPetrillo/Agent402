@@ -119,6 +119,34 @@ const ENTRIES = [
   },
   {
     date: "2026-11-22",
+    title: "Directory network filter",
+    items: [
+      "Index: The tool directory's network filter (`/api/index/tools?network=`) now matches a chain ID exactly, so eip155:10 no longer also returns eip155:100 listings.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Identifier checks, build logs, JSON repair, Solana RPC",
+    items: [
+      "Tools: New tools: id-validate checks the format and check digits of BIC, NINO, CPF, CNPJ, ABN, SEDOL, ISIN, LEI and Norwegian organization numbers. build-log-triage finds the first real error in a CI log and classifies it. json-repair fixes broken JSON and lists every fix. solana-rpc offers read-only Solana mainnet JSON-RPC.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "onchain-sql range and week",
+    items: [
+      "Tools: New: onchain-sql-range reads up to 31 days of a plain row select on solana.instructions in one call (x402 exact on EVM chains, as a job), and onchain-sql-week up to 7 days on every payment rail, Solana included; onchain-sql's partial walks list both in `longerRange`.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Solana fee payer status",
+    items: [
+      "Operations: `/api/gateway-status` adds `solanaFeePayer` (ok, low, empty, unknown or off): how much Solana settlement capacity is left on the fee payers of the Solana facilitators that take quotes.",
+    ],
+  },
+  {
+    date: "2026-11-22",
     title: "Agentic commerce",
     items: [
       "Site: The lead line now reads: Agent402 is the payment and trust layer for agentic commerce, and the glossary defines agentic commerce, with Agentic Finance (AIFI) as its applied finance layer.",

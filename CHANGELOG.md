@@ -72,6 +72,33 @@ Tools:
   server no longer times out an ordinary pattern; a catastrophic pattern is
   still stopped and not charged.
 
+### 2026-11-22 (directory network filter)
+Index:
+- The tool directory's network filter (`/api/index/tools?network=`) now
+  matches a chain ID exactly, so eip155:10 no longer also returns eip155:100
+  listings.
+
+### 2026-11-22 (identifier checks, build logs, JSON repair, Solana RPC)
+Tools:
+- New tools: id-validate checks the format and check digits of BIC, NINO,
+  CPF, CNPJ, ABN, SEDOL, ISIN, LEI and Norwegian organization numbers.
+  build-log-triage finds the first real error in a CI log and classifies it.
+  json-repair fixes broken JSON and lists every fix. solana-rpc offers
+  read-only Solana mainnet JSON-RPC.
+
+### 2026-11-22 (onchain-sql range and week)
+Tools:
+- New: onchain-sql-range reads up to 31 days of a plain row select on
+  solana.instructions in one call (x402 exact on EVM chains, as a job), and
+  onchain-sql-week up to 7 days on every payment rail, Solana included;
+  onchain-sql's partial walks list both in `longerRange`.
+
+### 2026-11-22 (Solana fee payer status)
+Operations:
+- `/api/gateway-status` adds `solanaFeePayer` (ok, low, empty, unknown or
+  off): how much Solana settlement capacity is left on the fee payers of the
+  Solana facilitators that take quotes.
+
 ## v2.12.1 - 2026-11-22
 
 ### 2026-11-22 (agentic commerce)
