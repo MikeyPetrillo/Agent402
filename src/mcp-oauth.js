@@ -39,7 +39,8 @@ import { SKIP_UPDATE } from "./json-document.js";
 import { shared, createMemoryLimits } from "./shared-limits.js";
 import { envPositive } from "./env-num.js";
 import { escapeHtml, headerText } from "./email-text.js";
-import { creditsSalesEnabled, creditsBalanceMaxCents, mcpOAuthSwitch, CONNECTED_APP_KEEP_DAYS, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsSalesSwitch, creditsBalanceMaxCents, mcpOAuthSwitch, mcpOAuthGuards, CONNECTED_APP_KEEP_DAYS, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
+import { limiterKey } from "./rate-limit.js";
 import { sellablePacks } from "./credits.js";
 import { normEmail, validEmail, sameOriginWrite, readCookie, ACCOUNT_PATH, ACCOUNT_COOKIE } from "./credits-account.js";
 import { consentPage, consentErrorPage, OAUTH_CONSENT_PATH } from "./mcp-oauth-page.js";
@@ -58,24 +59,38 @@ const COOKIE_RE = /^[A-Za-z0-9_-]{43}$/;
 
 export { mcpOAuthSwitch };
 
-// ---- thresholds (call-time reads; defaults are safe for a self-host) --------
+// ---- lifetimes (call-time reads) and limits ---------------------------------
+// The sign-in's limits (code tries, sends, lockout, per-address rates, the
+// bad-token bound, the pending-request cap and the store's size) come from
+// the private table (src/credits-guards.js mcpOAuth); without it the sign-in
+// is off, so a limit is only read while the table is complete.
+const guard = (k) => {
+  const v = mcpOAuthGuards()?.[k];
+  if (!(Number(v) > 0)) throw Object.assign(new Error("connector sign-in limits are not set"), { statusCode: 503 });
+  return Number(v);
+};
 const cfg = {
   accessTtlMs: () => envPositive("MCP_OAUTH_ACCESS_TTL_SECONDS", 3600) * 1000,
   refreshTtlMs: () => envPositive("MCP_OAUTH_REFRESH_TTL_DAYS", 30) * 86_400_000,
   codeTtlMs: () => Math.min(envPositive("MCP_OAUTH_AUTH_CODE_TTL_SECONDS", 60), 600) * 1000,
   emailCodeTtlMs: () => envPositive("MCP_OAUTH_EMAIL_CODE_TTL_SECONDS", 600) * 1000,
-  emailCodeTries: () => envPositive("MCP_OAUTH_EMAIL_CODE_TRIES", 5),
   requestTtlMs: () => envPositive("MCP_OAUTH_REQUEST_TTL_MINUTES", 60) * 60_000,
   defaultCapUsd: () => envPositive("MCP_OAUTH_DEFAULT_CAP_USD", 5),
-  sendsPerEmail: () => envPositive("MCP_OAUTH_CODE_SENDS_PER_EMAIL", 5),
-  sendsPerIp: () => envPositive("MCP_OAUTH_CODE_SENDS_PER_IP", 10),
-  failsPerEmail: () => envPositive("MCP_OAUTH_CODE_FAILS_PER_EMAIL", 10),
-  lockoutMs: () => envPositive("MCP_OAUTH_LOCKOUT_MINUTES", 60) * 60_000,
-  tokenPerIp: () => envPositive("MCP_OAUTH_TOKEN_PER_IP", 60),
-  authorizePerIp: () => envPositive("MCP_OAUTH_AUTHORIZE_PER_IP", 30),
-  registerPerIp: () => envPositive("MCP_OAUTH_REGISTER_PER_IP", 10),
-  windowMs: () => envPositive("MCP_OAUTH_LIMIT_WINDOW_MINUTES", 60) * 60_000,
+  emailCodeTries: () => guard("emailCodeTries"),
+  sendsPerEmail: () => guard("sendsPerEmail"),
+  sendsPerIp: () => guard("sendsPerIp"),
+  failsPerEmail: () => guard("failsPerEmail"),
+  lockoutMs: () => guard("lockoutMs"),
+  tokenPerIp: () => guard("tokenPerIp"),
+  authorizePerIp: () => guard("authorizePerIp"),
+  registerPerIp: () => guard("registerPerIp"),
+  windowMs: () => guard("windowMs"),
+  badTokenMax: () => guard("badTokenMax"),
+  pendingMax: () => guard("pendingMax"),
+  documentMaxBytes: () => guard("documentMaxBytes"),
 };
+// A client address is counted by its limiter key (an IPv6 address by its /64).
+const netKey = (ip) => limiterKey(String(ip || "?"));
 const GRANTS_PER_EMAIL = 20;
 const CLIENTS_MAX = 20_000;
 const CLIENT_IDLE_MS = 30 * 86_400_000;
@@ -141,6 +156,9 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
   const mac = (purpose, body) => createHmac("sha256", own).update(`${purpose}|${body}`).digest("base64url");
   const resources = new Set([`${baseUrl}/mcp`, `${baseUrl}${AUTH_MCP_PATH}`]);
   const enabled = () => mcpOAuthSwitch() && creditsSalesEnabled() && Boolean(secret);
+  // Both switches set but the private table missing or incomplete: the
+  // sign-in does not start, and its routes answer a generic 503.
+  const waiting = () => mcpOAuthSwitch() && creditsSalesSwitch() && !creditsSalesEnabled();
 
   // ---- limits: one hit on a shared fixed-window counter (local on a miss) ----
   async function over(name, key, limit, windowMs = cfg.windowMs()) {
@@ -176,16 +194,21 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
     for (const [k, c] of Object.entries(b.clients)) if (!inUse.has(k) && t - (Number(c.usedAt) || Number(c.at) || 0) > CLIENT_IDLE_MS) delete b.clients[k];
     return b;
   };
-  async function change(fn) {
+  // `grows`: a change that adds a record (a client, a pending request) is
+  // refused (503) once the document would pass its size cap.
+  const FULL = Symbol("full");
+  async function change(fn, { grows = false } = {}) {
     let out;
     const r = await store.update((raw) => {
       const b = prune(shape(raw), now());
       const v = fn(b);
       if (v === SKIP_UPDATE) { out = undefined; return SKIP_UPDATE; }
+      if (v === FULL) { out = FULL; return SKIP_UPDATE; }
+      if (grows && Buffer.byteLength(JSON.stringify(b)) > cfg.documentMaxBytes()) { out = FULL; return SKIP_UPDATE; }
       out = v;
       return b;
     }, { fallback: {} });
-    if (!r?.ok) throw Object.assign(new Error("connector sign-in store unavailable"), { statusCode: 503 });
+    if (!r?.ok || out === FULL) throw Object.assign(new Error("connector sign-in store unavailable"), { statusCode: 503 });
     return out;
   }
   async function view() {
@@ -229,20 +252,18 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
     const t = now();
     if (hit && hit.until > t && hit.exp > t) return { grant: hit.grant };
     accessCache.delete(key);
-    // A client address that keeps presenting tokens that do not verify is
-    // answered without a store read once it passes the token limit.
-    const ipKey = digest(`bad|${req.ip || "?"}`).slice(0, 40);
-    let bad = await limits.counterGet("mcpo-bearer-bad", ipKey).catch(() => ({ ok: false }));
-    if (!bad?.ok) bad = await local.counterGet("mcpo-bearer-bad", ipKey);
-    if (Number(bad.value) >= cfg.tokenPerIp()) return { invalid: true };
     let b;
     try { b = await view(); } catch { return { unavailable: true }; }
     const x = b.tokens[key];
     const g = x && x.k === "a" && x.exp > t ? b.grants[x.g] : null;
     if (!g || g.revokedAt) {
-      const r = await limits.counterAdd("mcpo-bearer-bad", ipKey, 1, cfg.windowMs()).catch(() => ({ ok: false }));
-      if (!r?.ok) await local.counterAdd("mcpo-bearer-bad", ipKey, 1, cfg.windowMs());
-      return { invalid: true };
+      // Every token is looked up; only a failed lookup is counted, and a
+      // client address past the bound gets its failed lookups answered 429
+      // (a valid token is never refused here).
+      const ipKey = digest(`bad|${netKey(req.ip)}`).slice(0, 40);
+      let r = await limits.counterAdd("mcpo-bearer-bad", ipKey, 1, cfg.windowMs()).catch(() => ({ ok: false }));
+      if (!r?.ok) r = await local.counterAdd("mcpo-bearer-bad", ipKey, 1, cfg.windowMs());
+      return Number(r.value) > cfg.badTokenMax() ? { invalid: true, busy: true } : { invalid: true };
     }
     const grant = grantView(g, x.g);
     if (accessCache.size > 5000) accessCache.delete(accessCache.keys().next().value);
@@ -293,7 +314,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
     // Every address gets a code, as every address gets a sign-in link on the
     // balance page: a purchase is made signed in, so a first purchase starts
     // here the same way. The answer is the same for every address.
-    if (await over("send-ip", ip, cfg.sendsPerIp()) || await over("send-email", email, cfg.sendsPerEmail()) || await locked(email)) return false;
+    if (await over("send-ip", netKey(ip), cfg.sendsPerIp()) || await over("send-email", email, cfg.sendsPerEmail()) || await locked(email)) return false;
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
     const set = await change((b) => {
@@ -310,6 +331,14 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
   }
 
   function mount(app, { express, clientIp }) {
+    // Switches set, private table missing: the sign-in's own routes answer a
+    // generic 503 (nothing names what is missing); /mcp itself is untouched.
+    const OWN = /^\/(oauth\/|\.well-known\/oauth-|mcp\/credits(\/|$))/;
+    app.use((req, res, next) => {
+      if (!OWN.test(req.path) || !waiting()) return next();
+      res.set("Cache-Control", "no-store").set("Retry-After", "300");
+      return res.status(503).json({ error: "temporarily_unavailable", error_description: "Connecting an app to credits is unavailable right now. Try again later." });
+    });
     const form = express.urlencoded({ extended: false, limit: "8kb" });
     const json = express.json({ limit: "16kb" });
     const secure = /^https:/i.test(baseUrl);
@@ -370,7 +399,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
     app.post("/oauth/register", json, async (req, res, next) => {
       if (!enabled()) return next();
       cors(res);
-      if (await over("register", clientIp(req), cfg.registerPerIp())) return busy(res);
+      if (await over("register", netKey(clientIp(req)), cfg.registerPerIp())) return busy(res);
       const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
       const uris = Array.isArray(b.redirect_uris) ? b.redirect_uris : null;
       if (!uris || !uris.length || uris.length > 5 || !uris.every(redirectUriAllowed)) return oauthErr(res, 400, "invalid_redirect_uri", "redirect_uris: one to five https addresses, or http on localhost, with no fragment.");
@@ -388,7 +417,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
           if (ids.length >= CLIENTS_MAX) delete s.clients[ids.sort((x, y) => (s.clients[x].usedAt || s.clients[x].at) - (s.clients[y].usedAt || s.clients[y].at))[0]];
           s.clients[id] = { name, redirectUris: [...uris], at: t };
           return true;
-        });
+        }, { grows: true });
       } catch { return oauthErr(res, 503, "temporarily_unavailable"); }
       noStore(res).status(201).json({ client_id: id, client_id_issued_at: Math.floor(t / 1000), client_name: name, redirect_uris: uris, token_endpoint_auth_method: "none", grant_types: gts, response_types: ["code"], scope: SCOPE });
     });
@@ -396,7 +425,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
     // ---- authorize ----
     app.get("/oauth/authorize", async (req, res, next) => {
       if (!enabled()) return next();
-      if (await over("authorize", clientIp(req), cfg.authorizePerIp())) return errPage(res, 429, "Too many requests", "Try again later.");
+      if (await over("authorize", netKey(clientIp(req)), cfg.authorizePerIp())) return errPage(res, 429, "Too many requests", "Try again later.");
       const q = req.query || {};
       const clientId = str(q.client_id, 40), redirectUri = str(q.redirect_uri, 500);
       let s;
@@ -405,7 +434,10 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       if (!client) return errPage(res, 400, "Unknown app", "This app is not registered here. Remove the connector and add it again.");
       if (!redirectUri || !client.redirectUris.includes(redirectUri)) return errPage(res, 400, "Unknown return address", "This app asked to return to an address it did not register, so nothing was sent to it.");
       const state = str(q.state, 500);
-      const bad = (error, description) => redirectWith(res, redirectUri, { error, error_description: description, state, iss: baseUrl });
+      // A request this server will not start is answered here, never by a
+      // redirect: any app can register a return address, so an error sent
+      // there would make this site a redirector for it.
+      const bad = (error, description) => errPage(res, 400, "This sign-in request is not valid", `${description} (${error})`);
       if (q.response_type !== "code") return bad("unsupported_response_type", "response_type must be code.");
       if (!state) return bad("invalid_request", "state is required.");
       if (q.code_challenge_method !== "S256") return bad("invalid_request", "PKCE with code_challenge_method S256 is required.");
@@ -416,11 +448,13 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       const rid = hex(16);
       const cookie = b64url(randomBytes(32));
       try {
+        // Pending requests are capped: past the cap no new one starts (503).
         await change((b) => {
+          if (Object.keys(b.reqs).length >= cfg.pendingMax()) return FULL;
           b.reqs[rid] = { clientId, redirectUri, challenge: q.code_challenge, state, resource, cookie: digest(cookie), at: now(), exp: now() + cfg.requestTtlMs() };
           if (b.clients[clientId]) b.clients[clientId].usedAt = now();
           return true;
-        });
+        }, { grows: true });
       } catch { return errPage(res, 503, "Sign-in is unavailable", "Try again in a moment."); }
       res.setHeader("Set-Cookie", cookieOut(cookie, Math.floor(cfg.requestTtlMs() / 1000)));
       noStore(res).redirect(303, `${OAUTH_CONSENT_PATH}?rid=${rid}`);
@@ -544,7 +578,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
         // through the same checkout the balance page starts: the purchase
         // checks, card authentication and limits in credits.createCheckout.
         if (!r.email) return render(res, rid, p, { error: "Sign in with your email first.", status: 400 });
-        if (await over("buy", ip, cfg.sendsPerIp())) return render(res, rid, p, { error: "Too many requests. Try again later.", status: 429 });
+        if (await over("buy", netKey(ip), cfg.sendsPerIp())) return render(res, rid, p, { error: "Too many requests. Try again later.", status: 429 });
         try {
           const co = await credits.createCheckout(String(req.body?.pack || ""), { email: r.email, ip, returnTo: { success: `${baseUrl}${OAUTH_CONSENT_PATH}/bought?rid=${rid}&session={CHECKOUT_SESSION_ID}`, cancel: `${baseUrl}${OAUTH_CONSENT_PATH}?rid=${rid}` } });
           return noStore(res).redirect(303, co.url);
@@ -594,7 +628,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       cors(res);
       const b = req.body && typeof req.body === "object" ? req.body : {};
       const clientId = str(b.client_id, 40);
-      if (await over("token", clientIp(req), cfg.tokenPerIp()) || (clientId && await over("token-client", clientId, cfg.tokenPerIp()))) return busy(res);
+      if (await over("token", netKey(clientIp(req)), cfg.tokenPerIp()) || (clientId && await over("token-client", clientId, cfg.tokenPerIp()))) return busy(res);
       if (!clientId || !CLIENT_RE.test(clientId)) return oauthErr(res, 401, "invalid_client", "client_id is required.");
       const gt = b.grant_type;
       let out = null;
@@ -649,7 +683,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
     app.post("/oauth/revoke", form, json, async (req, res, next) => {
       if (!enabled()) return next();
       cors(res);
-      if (await over("token", clientIp(req), cfg.tokenPerIp())) return busy(res);
+      if (await over("token", netKey(clientIp(req)), cfg.tokenPerIp())) return busy(res);
       const tok = str(req.body?.token, 200);
       if (tok && TOKEN_RE.test(tok)) {
         const gid = await change((s) => { const x = s.tokens[digest(tok)]; if (!x) return SKIP_UPDATE; revokeIn(s, x.g, "client"); return x.g; }).catch(() => null);
@@ -664,6 +698,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       const r = await resolveBearer(req);
       if (!r) return next();
       if (r.unavailable) return noStore(res).status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "Sign-in is unavailable right now; retry shortly. Nothing was charged." }, id: req.body?.id ?? null });
+      if (r.busy) { noStore(res).set("Retry-After", "60"); return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests. Try again later." }, id: req.body?.id ?? null }); }
       if (r.invalid) return unauthorized(res, "/mcp", true);
       req.mcpCreditsGrant = r.grant;
       next();
@@ -673,6 +708,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       const rest = req.url.slice(AUTH_MCP_PATH.length);
       if (req.method !== "OPTIONS") {
         const r = await resolveBearer(req);
+        if (r?.busy) { noStore(res).set("Retry-After", "60"); return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests. Try again later." }, id: req.body?.id ?? null }); }
         if (!r || r.invalid) return unauthorized(res, AUTH_MCP_PATH, Boolean(r?.invalid));
         if (r.unavailable) return noStore(res).status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "Sign-in is unavailable right now; retry shortly. Nothing was charged." }, id: req.body?.id ?? null });
         req.mcpCreditsGrant = r.grant;

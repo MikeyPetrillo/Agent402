@@ -38,6 +38,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootPaidServer } from "./lib/paid-boot.js";
+import { guardsTable, useGuardsTable } from "./lib/credits-guards-table.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -80,6 +81,17 @@ process.on("exit", () => rmSync(TMP, { recursive: true, force: true }));
   clock += 86_400_000;
   ok(await cr.grantSpentToday(K.keyId, "g1") === 0, "a new UTC day starts from zero");
   ok((await cr.authorizeGrant(K.keyId, 0.009, g)).ok, "and takes a full cap again");
+  // A grant hold and a key's own hold of the same size in flight on the file
+  // backend: the key's unnamed settle takes its own hold, never the grant's.
+  {
+    const gh = await cr.authorizeGrant(K.keyId, 0.002, { id: "g-same", capUsd: 1 });
+    const kh = cr.authorize(K.key, 0.002);
+    const before = cr.balance(K.key);
+    cr.settle(kh.hash, kh.heldMicro, "x", null, kh.holdId ?? null);
+    const c = cr.settle(gh.hash, gh.heldMicro, "x", null, gh.holdId);
+    const after = cr.balance(K.key);
+    ok(c.chargedUsd === 0.002 && Math.abs(before.heldUsd - after.heldUsd - 0.004) < 1e-9 && Math.abs(before.balanceUsd - after.balanceUsd) < 1e-9 && await cr.grantSpentToday(K.keyId, "g-same") === 0.002, `a key's unnamed settle never takes a grant's hold of the same size (grant charged ${c.chargedUsd}, held after ${after.heldUsd})`);
+  }
   // A key frozen while a payment that loaded it is reviewed spends nothing:
   // frozen the way the payment webhooks freeze it (fraudWarning, a dispute).
   const fw = await cr.fraudWarning("pi_cs_capone");
@@ -97,6 +109,72 @@ process.on("exit", () => rmSync(TMP, { recursive: true, force: true }));
   ok(!dz.ok && dz.reason === "frozen", "a key frozen by a dispute refuses a grant's call (reason frozen)");
   ok((await cr.authorizeGrant("000000000000", 0.001, g)).reason === "unknown", "a grant naming no key is refused");
   delete process.env.CREDITS_DIR;
+}
+
+// ---- offline: a grant handle is read only beside the genuine marker ---------------------
+{
+  const { openGrantHandle, loopbackGrantOf, mcpLoopbackHeaders, MCP_GRANT_HEADER } = await import("../src/mcp-loopback.js");
+  const lower = (h) => Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), v]));
+  const req = (headers, addr = "127.0.0.1") => ({ headers: lower(headers), socket: { remoteAddress: addr } });
+  const grant = { id: "g-handle", keyId: "0123456789ab", capUsd: 1 };
+  const h = openGrantHandle(grant);
+  ok(loopbackGrantOf(req({ [MCP_GRANT_HEADER]: h })) === null, "a grant handle without the marker names no grant");
+  ok(loopbackGrantOf(req({ ...mcpLoopbackHeaders({ grantHandle: h }), "x-agent402-via": "mcp;k=" + "0".repeat(48) })) === null, "a grant handle beside a wrong marker names no grant");
+  ok(loopbackGrantOf(req(mcpLoopbackHeaders({ grantHandle: h }), "203.0.113.9")) === null, "a grant handle beside the marker from another host names no grant");
+  const genuine = loopbackGrantOf(req(mcpLoopbackHeaders({ grantHandle: h })));
+  ok(genuine?.id === grant.id, "a handle the forged requests carried is still whole for the genuine replay (they could not spend it)");
+  ok(loopbackGrantOf(req(mcpLoopbackHeaders({ grantHandle: h }))) === null, "and it pays for one replay only");
+}
+
+// ---- offline: connector tokens are credentials in logs and URLs ---------------------------
+{
+  const { redactSecrets } = await import("../src/tools/redact.js");
+  const { urlCarriesCreditsKey } = await import("../src/credits-key-url.js");
+  const at = "a402m_" + randomBytes(32).toString("base64url"), rt = "a402r_" + randomBytes(32).toString("base64url");
+  const red = redactSecrets(`Bearer ${at} refresh=${rt}`);
+  ok(!red.includes(at.slice(6)) && !red.includes(rt.slice(6)) && red.includes("a402m_[redacted]") && red.includes("a402r_[redacted]"), "log redaction removes a connector access or refresh token");
+  for (const u of [`/mcp?token=${at}`, `/oauth/token?refresh_token=${rt}`, `/x?t=${encodeURIComponent(at).replace(/_/g, "%5F")}`]) ok(urlCarriesCreditsKey(u), `a URL carrying a connector token is caught (${u.slice(0, 22)}...)`);
+}
+
+// ---- offline: per-address limits fold IPv6 by /64; pending requests and the document are capped ----
+{
+  process.env.CREDITS_SALES = "on"; process.env.MCP_OAUTH = "on";
+  const base = guardsTable();
+  const { createMcpOAuth } = await import("../src/mcp-oauth.js");
+  const { SKIP_UPDATE } = await import("../src/json-document.js");
+  const { default: express } = await import("express");
+  let body = {};
+  const store = {
+    read: async () => ({ ok: true, body: structuredClone(body) }),
+    update: async (fn) => { const r = fn(structuredClone(body)); if (r !== SKIP_UPDATE) body = r; return { ok: true }; },
+  };
+  const credits = { balancesForEmail: async () => [], grantSpentToday: async () => 0 };
+  const oa = createMcpOAuth({ credits, store, secret: "s".repeat(32), baseUrl: "https://agent402.tools", sendEmail: async () => true, log: () => {} });
+  const app = express();
+  oa.mount(app, { express, clientIp: (r) => String(r.headers["x-test-ip"] || "127.0.0.1") });
+  const server = await new Promise((r) => { const x = app.listen(0, "127.0.0.1", () => r(x)); });
+  const U = `http://127.0.0.1:${server.address().port}`;
+  const regFrom = (ip) => fetch(`${U}/oauth/register`, { method: "POST", headers: { "content-type": "application/json", "x-test-ip": ip }, body: JSON.stringify({ redirect_uris: ["https://claude.ai/cb"] }) });
+  try {
+    const n = base.mcpOAuth.registerPerIp;
+    const codes = [];
+    for (let i = 0; i <= n; i++) codes.push((await regFrom(`2001:db8:5:6:${(i + 1).toString(16)}::${i + 1}`)).status);
+    ok(codes.slice(0, n).every((c) => c === 201) && codes[n] === 429, `addresses in one IPv6 /64 share one registration count (${codes.join(",")})`);
+    ok((await regFrom("2001:db8:5:7::1")).status === 201, "another /64 has its own count");
+    // Pending sign-ins: past the cap no new one starts.
+    const client = Object.keys(body.clients)[0];
+    useGuardsTable({ ...base, mcpOAuth: { ...base.mcpOAuth, pendingMax: Object.keys(body.reqs || {}).length + 1 } });
+    const auth = (ip) => fetch(`${U}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: client, redirect_uri: "https://claude.ai/cb", state: "s", code_challenge_method: "S256", code_challenge: "A".repeat(43) })}`, { redirect: "manual", headers: { "x-test-ip": ip } });
+    const a1 = await auth("198.51.100.1"), a2 = await auth("198.51.100.2");
+    ok(a1.status === 303 && a2.status === 503 && !a2.headers.get("location"), `past the pending cap a new sign-in answers 503 (${a1.status}, ${a2.status})`);
+    // The document's size: a registration that would pass it answers 503.
+    useGuardsTable({ ...base, mcpOAuth: { ...base.mcpOAuth, documentMaxBytes: Buffer.byteLength(JSON.stringify(body)) + 10 } });
+    ok((await regFrom("192.0.2.200")).status === 503, "a registration that would pass the document's size cap answers 503");
+  } finally {
+    server.close();
+    useGuardsTable(base);
+    delete process.env.CREDITS_SALES; delete process.env.MCP_OAUTH;
+  }
 }
 
 // ---- stubs: Stripe and mail ------------------------------------------------------------
@@ -133,15 +211,14 @@ const isCode = (m) => /sign-in code/.test(m.subject || "");
 const codeMails = (to) => mails.filter((m) => m.to === to && isCode(m));
 const waitMail = async (to, n, which = isCode) => { for (let i = 0; i < 100; i++) { const got = mails.filter((m) => m.to === to && which(m)); if (got.length >= n) return got[n - 1]; await new Promise((r) => setTimeout(r, 50)); } return null; };
 
-const LIMITS = {
-  MCP_OAUTH_AUTH_CODE_TTL_SECONDS: "3", MCP_OAUTH_ACCESS_TTL_SECONDS: "1800", MCP_OAUTH_EMAIL_CODE_TRIES: "3",
-  MCP_OAUTH_CODE_FAILS_PER_EMAIL: "5", MCP_OAUTH_CODE_SENDS_PER_EMAIL: "30", MCP_OAUTH_CODE_SENDS_PER_IP: "40",
-  MCP_OAUTH_TOKEN_PER_IP: "30", MCP_OAUTH_AUTHORIZE_PER_IP: "40", MCP_OAUTH_REGISTER_PER_IP: "8",
-};
+// Lifetimes from the environment; the limits from this run's private table
+// (scripts/lib/credits-guards-table.js), read back from it, never typed.
+const LIMITS = { MCP_OAUTH_AUTH_CODE_TTL_SECONDS: "3", MCP_OAUTH_ACCESS_TTL_SECONDS: "1800" };
+const OL = guardsTable().mcpOAuth;
 const OPERATOR = randomBytes(16).toString("hex");
 const envFor = (on) => ({
   STRIPE_SECRET_KEY: "sk_test_stub", STRIPE_STUB_PORT: String(stripeStub.address().port), STRIPE_WEBHOOK_SECRET: "",
-  CREDITS_SALES: "on", MCP_OAUTH: on ? "on" : "", ...LIMITS,
+  CREDITS_SALES: "on", MCP_OAUTH: on ? "on" : "", ...LIMITS, CREDITS_GUARDS_JSON: process.env.CREDITS_GUARDS_JSON,
   ZEPTOMAIL_URL: `http://127.0.0.1:${mailSink.address().port}/send`, ZEPTOMAIL_TOKEN: "t", RESEND_API_KEY: "", EMAIL_FROM: "credits@agent402.tools", COMPANY_POSTAL_ADDRESS: "PO Box 1, Test Town, NC 00000",
   BASE_URL: "https://agent402.tools", AGENT402_OPERATOR_TOKEN: OPERATOR, AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
 });
@@ -180,6 +257,24 @@ try {
   const foreign = await mcp(off.url, UNAUTH_PROBES[2], { token: "a402m_" + "x".repeat(43) });
   ok(foreign.status === 200 && normalize(foreign.text) === normalize(offAnswers[2].text), "switch off: a token of ours is not read (the unpaid answer)");
 } finally { await off.stop(); }
+
+// ---- switches on, private table missing: nothing starts; a generic 503 ------------------------
+{
+  const miss = await bootPaidServer({ label: "mcp-oauth-notable", env: { ...envFor(true), CREDITS_GUARDS_JSON: "", CREDITS_GUARDS_FILE: "" }, args: ARGS });
+  try {
+    for (const p of ["/.well-known/oauth-authorization-server", "/oauth/authorize?client_id=x"]) {
+      const x = await fetch(miss.url + p, { redirect: "manual" });
+      const body = await x.text();
+      ok(x.status === 503 && !/table|guard|CREDITS_GUARDS|threshold/i.test(body), `table missing: GET ${p.split("?")[0]} answers a generic 503`);
+    }
+    ok((await fetch(`${miss.url}/oauth/register`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status === 503, "table missing: registration answers 503");
+    const gs = await (await fetch(`${miss.url}/api/gateway-status`)).json();
+    ok(gs.creditsGuards?.status === "attention", `table missing: the status word reads attention (${gs.creditsGuards?.status})`);
+    const pi = await mcp(miss.url, rpc(5, "tools/call", { name: "payment.info", arguments: {} }));
+    const info = JSON.parse(pi.json?.result?.content?.[0]?.text || "{}");
+    ok(info.credits?.onSale === false && !("connector" in (info.credits || {})), "table missing: credits are not on sale and payment.info names no connector");
+  } finally { await miss.stop(); }
+}
 
 // ---- switch on ----------------------------------------------------------------------------
 const srv = await bootPaidServer({ label: "mcp-oauth-on", env: envFor(true), args: ARGS });
@@ -222,18 +317,23 @@ try {
   const authUrl = (o) => `${B}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: cr.client_id, redirect_uri: REDIRECT, state: "st-1", code_challenge_method: "S256", resource: `${SITE}/mcp/credits`, scope: "credits:spend", ...o })}`;
   const get = (u, h = {}) => fetch(u, { redirect: "manual", headers: h });
   const p1 = pkce();
+  // A request this server will not start is answered on this site, never by
+  // a redirect to the app's registered address (any app can register one).
+  const refusedHere = (x) => x.status === 400 && !x.headers.get("location");
   let r = await get(authUrl({ code_challenge: p1.c, code_challenge_method: "plain" }));
-  ok(r.status === 303 && /error=invalid_request/.test(r.headers.get("location")) && r.headers.get("location").startsWith(REDIRECT), "code_challenge_method plain is refused");
+  ok(refusedHere(r) && /invalid_request/.test(await r.text()), "code_challenge_method plain is refused on an error page, never redirected");
   r = await get(authUrl({ code_challenge: p1.c, code_challenge_method: "" }));
-  ok(r.status === 303 && /error=invalid_request/.test(r.headers.get("location")), "a missing PKCE method is refused");
+  ok(refusedHere(r), "a missing PKCE method is refused on an error page");
   r = await get(authUrl({ code_challenge: p1.c, state: "" }));
-  ok(r.status === 303 && /error=invalid_request/.test(r.headers.get("location")) && /state\+is\+required|state%20is%20required|state is required/.test(decodeURIComponent(r.headers.get("location"))), "a missing state is refused");
+  ok(refusedHere(r) && /state is required/.test(await r.text()), "a missing state is refused on an error page, never redirected");
+  r = await get(authUrl({ code_challenge: p1.c, response_type: "token" }));
+  ok(refusedHere(r), "an unsupported response_type is refused on an error page");
   r = await get(authUrl({ code_challenge: p1.c, redirect_uri: "https://claude.ai/api/mcp/auth_callback/extra" }));
   ok(r.status === 400 && !r.headers.get("location"), "a redirect_uri that is not an exact registered match is never redirected to");
   r = await get(authUrl({ code_challenge: p1.c, client_id: "c_" + "0".repeat(32) }));
   ok(r.status === 400 && !r.headers.get("location"), "an unknown client is never redirected to");
   r = await get(authUrl({ code_challenge: p1.c, resource: "https://other.example/mcp" }));
-  ok(r.status === 303 && /error=invalid_target/.test(r.headers.get("location")), "a resource that is not this connector is refused");
+  ok(refusedHere(r) && /invalid_target/.test(await r.text()), "a resource that is not this connector is refused on an error page");
 
   // A started sign-in: cookie, consent page, CSRF token.
   async function start(p, extra = {}) {
@@ -426,6 +526,16 @@ try {
   c = await call(T5.access_token, "sql-guard", { sql: "SELECT 9" });
   ok(c.json?.result?.isError && /disabled/.test(c.json.result.content[0].text) && /Nothing was charged/.test(c.json.result.content[0].text), "a switched-off key's grant answers a plain tool error");
 
+  // Every token is looked up; only failed lookups are slowed, never a valid token.
+  {
+    const Tb = T5; // a grant still in force (its key is switched off; listing tools pays nothing)
+    let last = null;
+    for (let i = 0; i < OL.badTokenMax + 60; i++) last = await mcp(B, rpc(1, "tools/list", {}), { token: "a402m_" + randomBytes(32).toString("base64url") });
+    ok(last.status === 429, `past the bound, failed token lookups from one client are answered 429 (${last.status})`);
+    const good = await mcp(B, rpc(1, "tools/list", {}), { token: Tb.access_token });
+    ok(good.status === 200 && Array.isArray(good.json?.result?.tools), `a valid token from the same client is still served after ${OL.badTokenMax + 60} bad ones`);
+  }
+
   // ---- code tries, lockout, send and token limits (thresholds from the environment) ----
   {
     const s = await start(pkce());
@@ -433,19 +543,20 @@ try {
     const email = "buyer@example.com";
     h = await (await post(s, { action: "email", email, csrf: csrfIn(h) })).text();
     let last = "";
-    for (let i = 0; i < Number(LIMITS.MCP_OAUTH_EMAIL_CODE_TRIES); i++) last = await (await post(s, { action: "code", code: "999999" === "x" ? "0" : String(100000 + i), csrf: csrfIn(h) })).text();
+    for (let i = 0; i < OL.emailCodeTries; i++) last = await (await post(s, { action: "code", code: "999999" === "x" ? "0" : String(100000 + i), csrf: csrfIn(h) })).text();
     ok(/no longer works|Email me a code/.test(last), "a code is void after its tries run out");
     let locked = "";
-    for (let i = 0; i < Number(LIMITS.MCP_OAUTH_CODE_FAILS_PER_EMAIL) + 2; i++) {
+    for (let i = 0; i < OL.failsPerEmail + 2; i++) {
       h = await (await post(s, { action: "email", email, csrf: csrfIn(last || h) })).text();
       locked = await (await post(s, { action: "code", code: "123450", csrf: csrfIn(h) })).text();
       last = locked;
     }
-    ok(/Too many requests/.test(locked), "repeated wrong codes lock the email out with a generic refusal");
+    // Locked either at the code (wrong codes past the count) or already at the send.
+    ok(/Too many requests/.test(locked) || /Too many requests/.test(h), "repeated wrong codes lock the email out with a generic refusal");
   }
   {
     let limited = false;
-    for (let i = 0; i < Number(LIMITS.MCP_OAUTH_TOKEN_PER_IP) + 2 && !limited; i++) {
+    for (let i = 0; i < OL.tokenPerIp + 2 && !limited; i++) {
       const x = await tok({ grant_type: "refresh_token", refresh_token: "a402r_" + "z".repeat(43), client_id: cr.client_id });
       if (x.status === 429) { const j = await x.json(); limited = j.error === "invalid_request" && !/per|limit|minute|hour|\d/.test(j.error_description); }
     }
@@ -453,7 +564,7 @@ try {
   }
   {
     let refused = 0;
-    for (let i = 0; i < Number(LIMITS.MCP_OAUTH_REGISTER_PER_IP) + 2; i++) if ((await reg({ redirect_uris: [REDIRECT] })).status === 429) refused++;
+    for (let i = 0; i < OL.registerPerIp + 2; i++) if ((await reg({ redirect_uris: [REDIRECT] })).status === 429) refused++;
     ok(refused > 0, "registration is limited per client address");
   }
 } catch (e) {

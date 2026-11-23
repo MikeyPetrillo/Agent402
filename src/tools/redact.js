@@ -367,6 +367,8 @@ export function redactSecrets(text) {
   if (!out) return out;
   // A prepaid credits key (src/credits.js KEY_SCAN_RE): its prefix stays, the secret goes.
   if (out.includes("a402_")) out = out.replace(/a402_(?:ck_)?[A-Za-z0-9_-]{29,64}/g, "a402_[redacted]");
+  // A connector sign-in token (src/mcp-oauth.js): access a402m_, refresh a402r_.
+  if (out.includes("a402m_") || out.includes("a402r_")) out = out.replace(/a402([mr])_[A-Za-z0-9_-]{20,64}/g, "a402$1_[redacted]");
   if (/basic/i.test(out)) out = out.replace(BASIC_IN_TEXT_RE, (m, head, token) => (looksLikeBase64Token(token) ? `${head}[redacted]` : m));
   const { values, prefixes } = secretState();
   for (const [value, isBase64] of values) {

@@ -2,13 +2,15 @@
 // header. A URL is kept in browser history, proxy logs and referrers, so a
 // request whose path or query holds a key (raw or percent-encoded) is refused
 // before any other middleware reads the URL, and the answer never repeats it.
+// A connector sign-in token (src/mcp-oauth.js: a402m_ access, a402r_ refresh)
+// is a bearer credential too, refused the same way.
 // Leaf module: no imports from the server.
-const KEY_IN_TEXT = /a402_[A-Za-z0-9_-]{32,64}/;
+const KEY_IN_TEXT = /a402_[A-Za-z0-9_-]{32,64}|a402[mr]_[A-Za-z0-9_-]{43}/;
 
 /** Whether a request URL carries a credits key anywhere (path or query). */
 export function urlCarriesCreditsKey(url) {
   const raw = String(url || "");
-  if (!/a402(_|%5f)/i.test(raw)) return false;
+  if (!/a402[mr]?(_|%5f)/i.test(raw)) return false;
   if (KEY_IN_TEXT.test(raw)) return true;
   let decoded = raw;
   for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(decoded); i++) {
