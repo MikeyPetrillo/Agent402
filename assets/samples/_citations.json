@@ -1,0 +1,35 @@
+{
+  "about": "Citation check of the sample report fixtures (src/sample-reports.js applies it; scripts/test-sample-citations.js holds every served fixture to it). Each cited URL was fetched on the date given; a source that no longer answers at its address is shown as an archived copy when one exists, else marked unavailable. The fixtures themselves stay as they were run.",
+  "checked": {
+    "domain-audit": "2026-11-23",
+    "dossier": "2026-11-23",
+    "filing-report": "2026-11-23",
+    "fund-report": "2026-11-23",
+    "insider-report": "2026-11-23",
+    "linkedin-article": "2026-11-23",
+    "market-brief": "2026-11-23",
+    "recall-report": "2026-11-23",
+    "research": "2026-11-23",
+    "ticker-pack": "2026-11-23",
+    "token-brief": "2026-11-23"
+  },
+  "sources": {
+    "fund-report": [
+      { "url": "https://13fwhale.assettrendreports.com/en/whale/berkshire", "status": "gone" }
+    ],
+    "linkedin-article": [
+      { "url": "https://hub.causo.ai/guides/h1-2026-saas-pricing-report", "status": "archived", "archived": "https://web.archive.org/web/20260710233944/https://hub.causo.ai/guides/h1-2026-saas-pricing-report" }
+    ],
+    "market-brief": [
+      { "url": "https://recharged.com/articles/tesla-supercharger-subscription-plan", "status": "archived", "archived": "https://web.archive.org/web/20260712032613/https://recharged.com/articles/tesla-supercharger-subscription-plan" },
+      { "url": "https://www.precedenceresearch.com/us-electric-vehicle-charging-station-market", "status": "gone" }
+    ],
+    "research": [
+      { "url": "https://stockwirex.com/analysis/airline-stocks-jet-fuel-price-sensitivity/", "status": "gone" }
+    ],
+    "recall-report": [
+      { "url": "https://api.fda.gov/food/enforcement.json?search=product_description%3A%22losartan%22&sort=recall_initiation_date:desc&limit=20", "status": "no-records", "note": "openFDA answers this query with its no-matching-records response" },
+      { "url": "https://api.fda.gov/device/enforcement.json?search=product_description%3A%22losartan%22&sort=recall_initiation_date:desc&limit=20", "status": "no-records", "note": "openFDA answers this query with its no-matching-records response" }
+    ]
+  }
+}
