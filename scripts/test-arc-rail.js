@@ -21,18 +21,16 @@
 // leg asserts the key and the upstream body never appear in a response or a
 // log line.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { parseSignature, signatureToCompactSignature, serializeCompactSignature, hashTypedData, RawContractError } from "viem";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { createMemoryLimits } from "../src/shared-limits.js";
 import {
   ARC_CAIP2, ARC_USDC, CIRCLE_FACILITATOR_BASE, CircleFacilitatorClient,
@@ -930,7 +928,6 @@ await check("paid canary: the Arc leg is a peer leg (absent from the 402 = a rai
 // ---------------------------------------------------------------- part 2
 console.log("part 2: the paid server");
 
-const [P_PAYAI, P_CIRCLE, ...SERVER_PORTS] = await getFreePorts(14);
 const st = { payai: "ok", circle: "full", circleHits: [], payaiHits: [], rpcHits: [] };
 const rawJson = (res, status, obj) => { res.writeHead(status, { "Content-Type": "application/json", Connection: "close" }); res.end(JSON.stringify(obj)); };
 const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { try { r(JSON.parse(b || "{}")); } catch { r({}); } }); });
@@ -967,7 +964,8 @@ const circleStub = createServer(async (req, res) => {
   }
   return rawJson(res, 404, {});
 });
-await Promise.all([[payaiStub, P_PAYAI], [circleStub, P_CIRCLE]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+await Promise.all([payaiStub, circleStub].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+const [P_PAYAI, P_CIRCLE] = [payaiStub, circleStub].map((s) => s.address().port);
 
 const tmp = mkdtempSync(join(tmpdir(), "a402-arc-rail-"));
 const preload = join(tmp, "circle-redirect.mjs");
@@ -985,37 +983,34 @@ globalThis.fetch = function (input, init) {
 };
 `);
 
-let portIdx = 0;
+let bootN = 0;
 async function boot(extraEnv) {
-  const port = SERVER_PORTS[portIdx++];
-  const env = { ...process.env };
-  delete env.STATE_DATABASE_URL;
-  delete env.CIRCLE_FACILITATOR_API_KEY;
-  const proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: {
-      ...env, PORT: String(port), FREE_MODE: "",
-      WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,arc",
-      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", FACILITATOR_URL: "",
-      PAYAI_FACILITATOR_URL: `http://127.0.0.1:${P_PAYAI}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
-      ARC_TEST_CIRCLE_STUB: `http://127.0.0.1:${P_CIRCLE}`,
-      SOLVADOR_KEY: "", PAYMENT_SETTLE_FALLBACK: "", X402_UPTO_NETWORKS: "", POSTHOG_API_KEY: "", MPP_SECRET_KEY: "",
-      SALES_LEDGER_DB: join(tmp, `sales-${port}.db`), INFLIGHT_COVER: "off", CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${port}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-history-${port}.json`),
-      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-      ...extraEnv,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const log = { text: "" };
-  proc.stdout.on("data", (c) => { log.text += c; });
-  proc.stderr.on("data", (c) => { log.text += c; });
-  const base = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) return { base, log, proc }; } catch { /* booting */ }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  proc.kill("SIGKILL");
-  throw new Error(`server never became healthy: ${log.text.slice(-600)}`);
+  const n = ++bootN; // names this boot's own files
+  // bootServer spreads process.env into the child when it spawns, before its
+  // first await: these keys are lifted out of process.env for that call only.
+  const lifted = ["STATE_DATABASE_URL", "CIRCLE_FACILITATOR_API_KEY"].filter((k) => k in process.env).map((k) => [k, process.env[k]]);
+  for (const [k] of lifted) delete process.env[k];
+  let booting;
+  try {
+    booting = bootServer({
+      stores: false,
+      args: ["--import", preload],
+      timeoutMs: 60_000,
+      env: {
+        FREE_MODE: "",
+        WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,arc",
+        CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", FACILITATOR_URL: "",
+        PAYAI_FACILITATOR_URL: `http://127.0.0.1:${P_PAYAI}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
+        ARC_TEST_CIRCLE_STUB: `http://127.0.0.1:${P_CIRCLE}`,
+        SOLVADOR_KEY: "", PAYMENT_SETTLE_FALLBACK: "", X402_UPTO_NETWORKS: "", POSTHOG_API_KEY: "", MPP_SECRET_KEY: "",
+        SALES_LEDGER_DB: join(tmp, `sales-${n}.db`), INFLIGHT_COVER: "off", CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${n}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-history-${n}.json`),
+        X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+        ...extraEnv,
+      },
+    });
+  } finally { for (const [k, v] of lifted) process.env[k] = v; }
+  const srv = await booting.catch((e) => { throw new Error(`server never became healthy: ${e.message.slice(-600)}`); });
+  return { base: srv.url, log: { get text() { return srv.log(); } }, proc: srv.child };
 }
 const PATH = "/api/demand-radar?limit=1";
 const decode = (h) => JSON.parse(Buffer.from(h, "base64").toString("utf8"));
