@@ -752,7 +752,7 @@ export const VALIDATE_MORE_TOOLS = [
     price: "$0.001",
     description:
       "Check the format and check digits of a financial or national identifier: BIC/SWIFT code, UK National Insurance number, Brazil CPF and CNPJ (numeric and alphanumeric), Australian ABN, SEDOL, ISIN, LEI (ISO 17442, MOD 97-10) and Norwegian organization number. Pass type, or omit it and the tool tries every type and lists the candidates. Answers type, valid, normalized and the reason. Offline: format and check digits only, with no registry lookup, so a valid answer does not mean the number is issued or active.",
-    tags: ["validate", "verify", "check-digit", "checksum", "bic", "swift", "isin", "lei", "sedol", "cpf", "cnpj", "abn", "nino", "national-insurance", "organization-number", "identifier", "finance"],
+    tags: ["validate", "verify", "check-digit", "checksum", "bic", "swift", "isin", "lei", "sedol", "cpf", "cnpj", "abn", "nino", "national-insurance", "organization-number", "norwegian", "identifier", "finance"],
     discovery: {
       bodyType: "json",
       input: { value: "US0378331005" },
