@@ -10,6 +10,8 @@ import { creditsSalesEnabled } from "./credits-sales.js";
 import { LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { connectorWires, connectorPayText, connectorLongCallText, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY } from "./connector-pay.js";
 import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
+import { articleDates } from "./page-dates.js";
+import { firstFit } from "./seo-meta.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
@@ -257,6 +259,7 @@ export const LEARN = [
   },
   {
     slug: "agent-payments",
+    metaDescription: "How an AI agent pays for a tool or an API on its own: read the price from a 402, pay from its own wallet, keep the receipt and stay inside spend limits.",
     term: "Agent payments",
     alt: ["agentic payments", "machine payments", "AI agent payments"],
     glossary: "agentic-payments",
@@ -310,6 +313,7 @@ export const LEARN = [
   },
   {
     slug: "mcp-payments",
+    metaDescription: "How paid tools work over the Model Context Protocol: a local MCP server that pays underneath, or a hosted connector that takes payment in the call.",
     term: "MCP payments",
     alt: ["paid MCP tools", "MCP tool payments"],
     glossary: "mcp",
@@ -424,13 +428,13 @@ ${sections}
     </div>
   </article>
   ${ledgerFooterCompact()}`;
-  return ledgerShell({ title: l.title, description: l.description, canonical, baseUrl, activePath: "/agentic-finance", extraCss: LEARN_CSS, jsonLd: [breadcrumbLd, termLd, articleLd], body });
+  return ledgerShell({ title: l.title, description: firstFit([l.metaDescription, l.description]) || l.description, canonical, baseUrl, activePath: "/agentic-finance", extraCss: LEARN_CSS, jsonLd: [breadcrumbLd, termLd, articleLd], body, article: articleDates(`/learn/${l.slug}`) });
 }
 
 export function learnIndex(baseUrl) {
   const canonical = `${baseUrl}/learn`;
   const title = "Learn: how AI agents pay for APIs over x402 and MPP";
-  const description = "Explainers for the protocols behind pay-per-request APIs for AI agents: x402, HTTP 402 Payment Required, MPP, agent payments, pay-per-call pricing and payments over MCP, each with the headers this server actually sends.";
+  const description = "Explainers for the protocols behind pay-per-request APIs for AI agents: x402, HTTP 402, MPP, agent payments, pay-per-call pricing and MCP payments.";
   const breadcrumbLd = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",

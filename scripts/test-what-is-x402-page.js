@@ -17,7 +17,7 @@ const board = [
 const leaderboardSnapshot = { leaderboard: board, windowLabel: "7d", totalSellers: 824 };
 let html = whatIsX402Page("https://agent402.tools", { stats, leaderboardSnapshot });
 
-ok(html.includes("What are <span") && html.includes(">x402</span>"), "hero H1 renders");
+ok(html.includes("How <span") && html.includes(">x402</span> settles a paid request</h1>"), "hero H1 renders, titled for x402");
 ok(html.includes("7,619") && html.includes(">Base<"), "rails table shows real per-network settled counts");
 ok(html.includes("114") && html.includes(">Robinhood Chain<") && html.includes(">USDG<"), "Robinhood Chain rendered with its real count and USDG asset, not USDC");
 ok(html.includes(">·<"), "a rail with zero recorded settlements renders as a dash placeholder, never a fabricated 0");

@@ -19,6 +19,7 @@ import { powCostPhrase } from "./pow.js";
 
 import { leaderboardCadence } from "./refresh-cadence.js";
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
+import { articleDates } from "./page-dates.js";
 const fmtUsd = (n) =>
   `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -110,9 +111,9 @@ export function whatIsX402Page(baseUrl, { stats, leaderboardSnapshot } = {}) {
   // Titled for how the two protocols run here: the general questions ("what
   // is x402", "what is MPP") belong to the plain-language guide this page
   // links in its opening (src/ask402-links.js).
-  const title = "x402 and MPP on Agent402: how a paid request works";
+  const title = "x402 on Agent402: how an x402 paid request settles";
   const description =
-    "How x402 and MPP run on Agent402: the 402 quote, the signed payment and the receipt on each protocol, the chains that settle them, and who uses them today.";
+    "How x402 runs on Agent402: the 402 quote, the signed payment, the receipt and the chains that settle it, with MPP compared beside it.";
 
   const rails = railsByVolume(stats);
   const board = adoptionRows(leaderboardSnapshot);
@@ -175,7 +176,7 @@ table{border-collapse:collapse;width:100%}
     </nav>
     <div class="wx-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>
-        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">What are <span style="color:var(--accent);">x402</span> and <span style="color:var(--accent);">MPP</span>?</h1>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">How <span style="color:var(--accent);">x402</span> settles a paid request</h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">x402 is an open protocol that lets software pay for a single HTTP request in stablecoins.</strong> The server answers <span style="font-family:var(--font-mono);font-size:var(--fs-lg);">402 Payment Required</span> with a price, the client signs a payment, and the same request completes. <strong style="color:var(--ink);font-weight:700;">MPP, the Machine Payments Protocol, is a second protocol for that same handshake</strong>, carried in standard HTTP authentication headers.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No subscription, no checkout page, no account. That matters because an AI agent cannot open one: paying per call is the only purchase an autonomous program can actually make on its own. Both protocols are the wire underneath <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>, agents that pay and get paid on their own; every term on this page is defined in the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>. New to all of it? Start with the <a href="/101" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">ten-minute 101</a>. For each protocol in plain language, read ${guideLink(GUIDE_EXPLAINERS.x402, "What is x402?")} and ${guideLink(GUIDE_EXPLAINERS.mpp, "What is MPP?")} on ${GUIDE_SITE_NAME}.</p>
       </div>
@@ -313,6 +314,7 @@ ${ledgerFooterCompact()}`;
     canonical,
     baseUrl,
     activePath: "/what-is-x402",
+    article: articleDates("/what-is-x402"),
     jsonLd: [orgLd, breadcrumbLd, articleLd, termsLd, faqLd],
     extraCss,
     body,

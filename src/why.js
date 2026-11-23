@@ -91,8 +91,8 @@ export const WHY_POINTS = [
   },
 ];
 
-/** The other ways to give an agent tools, side by side (the old /compare
- * page, folded in here; /compare answers a 301 to /docs#why-compare). Category labels
+/** The other ways to give an agent tools, side by side: rendered in
+ * /docs#why-compare and on /compare (src/search-landings.js). Category labels
  * only: no product or vendor is named. */
 export const WHY_COMPARE = {
   cols: ["Here", "Building it yourself", "Calling each provider directly"],

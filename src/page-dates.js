@@ -26,7 +26,7 @@
 // src/generated/page-dates.json by `node scripts/gen-page-dates.js --write`;
 // scripts/test-page-dates.js fails CI when that table is stale. A path the
 // table does not know gets no lastmod rather than a guessed one.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { CHAIN_PAGES } from "./market-page.js";
 import { termsPage } from "./terms.js";
 import { privacyPage } from "./privacy.js";
@@ -89,6 +89,12 @@ export const PAGE_SOURCES = {
   "/guides": ["src/guides.js"],
   "/skills": ["src/skills.js"],
   "/learn": ["src/learn.js"],
+  "/reports/insider": ["src/programmatic-pages.js", "src/programmatic-seeds.js"],
+  "/reports/fund": ["src/programmatic-pages.js", "src/programmatic-seeds.js"],
+  "/reports/dossier": ["src/programmatic-pages.js", "src/programmatic-seeds.js"],
+  "/pay-per-call-api": ["src/search-landings.js"],
+  "/paid-mcp-tools": ["src/search-landings.js"],
+  "/compare": ["src/search-landings.js"],
   ...Object.fromEntries(Object.keys(CHAIN_PAGES).map((key) => [`/${key}`, ["src/market-page.js"]])),
 };
 
@@ -101,13 +107,29 @@ export const FAMILY_SOURCES = [
   ["/skills/", ["src/skills.js"]],
 ];
 
+/** Pages that carry Article JSON-LD and are rendered by one module: their
+ *  published date is that module's first commit, their modified date the
+ *  page's lastmod. Family entries (blog, guides, learn, integrations, skill
+ *  packs) are dated one by one in the table's `entries`. */
+export const ARTICLE_PAGES = ["/what-is-x402", "/what-is-mpp", "/agentic-finance", "/x402-test", "/docs", "/integrations/agentcore", "/pay-per-call-api", "/paid-mcp-tools", "/compare"];
+/** The module whose first commit dates each article page. */
+export function articleSourceFiles() {
+  return [...new Set(ARTICLE_PAGES.map((p) => (PAGE_SOURCES[p] || [])[0]).filter(Boolean))].sort();
+}
+
 /** Every module the generator must date: the page sources above (the tool
  *  kits are globbed by the generator itself). */
 export function pageSourceFiles() {
-  const out = new Set();
+  const out = new Set(wikiSourceFiles());
   for (const files of Object.values(PAGE_SOURCES)) for (const f of files) out.add(f);
   for (const [, files] of FAMILY_SOURCES) for (const f of files) out.add(f);
   return [...out].sort();
+}
+
+/** The wiki pages /docs renders (wiki/<Page>.md; underscore files are
+ *  chrome), each dating its own /docs/<Page>. */
+export function wikiSourceFiles() {
+  try { return readdirSync(new URL("../wiki/", import.meta.url)).filter((n) => n.endsWith(".md") && !n.startsWith("_")).map((n) => `wiki/${n}`).sort(); } catch { return []; }
 }
 
 let table = null;
@@ -116,14 +138,14 @@ function loadTable() {
   try {
     const j = JSON.parse(readFileSync(new URL("./generated/page-dates.json", import.meta.url), "utf8"));
     const map = (m) => (m && typeof m === "object" ? m : {});
-    table = { files: map(j.files), toolSources: map(j.toolSources), toolPatterns: map(j.toolPatterns), packSources: map(j.packSources) };
+    table = { files: map(j.files), filesFirst: map(j.filesFirst), entries: map(j.entries), toolSources: map(j.toolSources), toolPatterns: map(j.toolPatterns), packSources: map(j.packSources) };
   } catch {
-    table = { files: {}, toolSources: {}, toolPatterns: {}, packSources: {} };
+    table = { files: {}, filesFirst: {}, entries: {}, toolSources: {}, toolPatterns: {}, packSources: {} };
   }
   return table;
 }
 /** Test seam: replace the table (a test proves the lookup, not the file). */
-export function _setPageDatesTable(t) { table = t ? { files: t.files || {}, toolSources: t.toolSources || {}, toolPatterns: t.toolPatterns || {}, packSources: t.packSources || {} } : null; }
+export function _setPageDatesTable(t) { table = t ? { files: t.files || {}, filesFirst: t.filesFirst || {}, entries: t.entries || {}, toolSources: t.toolSources || {}, toolPatterns: t.toolPatterns || {}, packSources: t.packSources || {} } : null; }
 
 const validDay = (d) => (typeof d === "string" && ISO_DAY.test(d) ? d : null);
 
@@ -192,12 +214,46 @@ export function pageLastmod(path) {
   if (p === "/terms" || p === "/privacy") return legalLastmod(p);
   if (PAGE_SOURCES[p]) return filesLastmod(PAGE_SOURCES[p]);
   if (p.startsWith("/tools/category/")) return null;
+  // A wiki page under /docs is dated by its own markdown file.
+  if (/^\/docs\/[A-Za-z0-9][A-Za-z0-9-]*$/.test(p)) return filesLastmod([`wiki/${p.slice("/docs/".length)}.md`]);
   if (p.startsWith("/tools/")) return toolLastmod(p.slice("/tools/".length));
+  // A family entry (a guide, a pack, a post) is dated by its own text, so one
+  // edit to one guide moves that guide's date and no other.
+  const entry = entryDates(p);
+  if (entry) return entry.modified;
   // A listed pack is dated by the module that defines it; any other page
   // under /skills/ falls to the family below (the module that renders them).
   if (p.startsWith("/skills/") && packLastmod(p.slice("/skills/".length))) return packLastmod(p.slice("/skills/".length));
   for (const [prefix, files] of FAMILY_SOURCES) if (p.startsWith(prefix)) return filesLastmod(files);
   return null;
+}
+
+/** { published, modified } for a family entry's path, or null. */
+export function entryDates(path) {
+  const { entries } = loadTable();
+  const e = Object.hasOwn(entries, path) ? entries[path] : null;
+  const modified = validDay(e?.modified), published = validDay(e?.published);
+  return modified ? { modified, published: published && published <= modified ? published : modified } : null;
+}
+
+/** The dates an article page states (JSON-LD datePublished/dateModified and
+ *  article:published_time/modified_time): a family entry's own dates, else
+ *  the page module's first commit and the page's lastmod. `published`, when
+ *  the page prints its own date (a blog post), wins. {} when nothing is known. */
+export function articleDates(path, { published: printed = null } = {}) {
+  const p = String(path || "").split("?")[0];
+  const entry = entryDates(p);
+  let modified = entry ? entry.modified : pageLastmod(p);
+  // A printed date later than the source's last change (a post committed
+  // before its publication day) is the newest truthful date for both.
+  if (validDay(printed) && (!modified || validDay(printed) > modified)) modified = validDay(printed);
+  let published = validDay(printed) || (entry ? entry.published : null);
+  if (!published && PAGE_SOURCES[p]) published = validDay(loadTable().filesFirst[PAGE_SOURCES[p][0]]);
+  if (published && modified && published > modified) published = modified;
+  const out = {};
+  if (published || modified) out.datePublished = published || modified;
+  if (modified) out.dateModified = modified;
+  return out;
 }
 
 /** An ISO timestamp or date -> YYYY-MM-DD, or null when it does not parse. */

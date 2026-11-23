@@ -32,7 +32,8 @@ import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
 import { seededProgrammaticPaths } from "./programmatic-seeds.js";
-import { entityLastmod } from "./programmatic-pages.js";
+import { entityLastmod, entityDegraded } from "./programmatic-pages.js";
+import { docsSlugs, DOCS_SITE_ROUTES } from "./docs.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { samplePaths, SAMPLES } from "./sample-reports.js";
@@ -112,7 +113,12 @@ const publicReportUrls = (baseUrl) => { try { return listPublicReports().map((r)
 const programmaticUrls = (baseUrl) => [
   ...samplePaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: "0.8", lastmod: dayOf(SAMPLES[p.split("/").pop()]?.at) })),
   ...publicReportUrls(baseUrl),
-  ...seededProgrammaticPaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: p.split("/").length === 3 ? "0.8" : "0.6", lastmod: entityLastmod(p) })),
+  // A hub is dated by the modules that render it; an entity page by its
+  // newest filing once built. A page whose last render was degraded (EDGAR
+  // unread, noindex) is left out until a complete build brings it back.
+  ...seededProgrammaticPaths().filter((p) => !entityDegraded(p)).map((p) => (p.split("/").length === 3
+    ? { loc: `${baseUrl}${p}`, priority: "0.8" }
+    : { loc: `${baseUrl}${p}`, priority: "0.6", lastmod: entityLastmod(p) })),
 ];
 
 export function robotsTxt(baseUrl) {
@@ -121,8 +127,8 @@ export function robotsTxt(baseUrl) {
   // the token-gated operator dashboard (already 404 without the token - this
   // just keeps well-behaved crawlers from probing the path at all).
   const agents = [
-    "GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-Web", "anthropic-ai",
-    "PerplexityBot", "Google-Extended", "Googlebot", "Bingbot", "Applebot", "Applebot-Extended",
+    "GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-SearchBot", "Claude-User", "Claude-Web", "anthropic-ai",
+    "PerplexityBot", "Perplexity-User", "Google-Extended", "Googlebot", "Bingbot", "Applebot", "Applebot-Extended",
     "CCBot", "Bytespider", "Amazonbot", "cohere-ai", "Meta-ExternalAgent", "DuckDuckBot",
     // Smithery registry scanner (User-Agent SmitheryBot/1.0) - needs to read
     // homepage + /llms.txt for the listing backlink check; never Disallow it.
@@ -219,14 +225,19 @@ export function robotsTxt(baseUrl) {
     "Disallow: /api/index?seller=",
     "Disallow: /api/index?*seller=",
   ];
+  // CRAWL TRAPS: one URL per tool that renders the same page. The playground
+  // with a preselected tool (/playground?slug=<tool>) is the whole playground,
+  // catalog included, once per tool: hundreds of copies of one large page
+  // whose canonical is /playground. The bare /playground stays open.
+  const traps = ["Disallow: /playground?"];
   const priced = ["Disallow: /api/"];
   // Only the search engines and the unnamed crawler get the /api close: a
   // search index has no use for a 402 body, and that is where the crawl
   // errors are filed. The AI agents named above keep reading per-route
   // quotes as before; a paying client never consults this file.
   const SEARCH_ENGINES = new Set(["Googlebot", "Bingbot", "Applebot", "DuckDuckBot"]);
-  const rules = [...catalog, ...priv, ...costly, ...sellerScoped].join("\n");
-  const searchRules = [...catalog, ...priv, ...costly, ...sellerScoped, ...priced].join("\n");
+  const rules = [...catalog, ...priv, ...costly, ...sellerScoped, ...traps].join("\n");
+  const searchRules = [...catalog, ...priv, ...costly, ...sellerScoped, ...traps, ...priced].join("\n");
   const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${SEARCH_ENGINES.has(a) ? searchRules : rules}`).join("\n\n");
   return `${blocks}
 
@@ -241,85 +252,11 @@ Sitemap: ${baseUrl}/sitemapindex.xml
 `;
 }
 
+// ONE list of pages feeds both /sitemap.xml and sitemap-pages.xml (they were
+// two hand lists that drifted: /proof and the machine-readable documents sat
+// in one only). The machine documents are listed in both, from one list.
 export function sitemapXml(baseUrl, catalog) {
-  const staticUrls = [
-    { loc: `${baseUrl}/`, priority: "1.0" },
-    { loc: `${baseUrl}/tools`, priority: "0.9" },
-    { loc: `${baseUrl}/reports`, priority: "0.9" },
-    { loc: `${baseUrl}/monitors`, priority: "0.8" },
-    // A closed product takes no crawl slot: listed only while packs are on sale.
-    ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
-    // Every x402 marketplace page (one per CHAIN_PAGES entry) - new chain
-    // page = new sitemap entry, zero edits here.
-    ...Object.keys(CHAIN_PAGES).map((key) => ({ loc: `${baseUrl}/${key}`, priority: "0.8" })),
-    { loc: `${baseUrl}/faq`, priority: "0.8" },
-    { loc: `${baseUrl}/docs`, priority: "0.8" },
-    { loc: `${baseUrl}/transparency`, priority: "0.4" },
-    { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
-    { loc: `${baseUrl}${AGENTS_MD_PATH}`, priority: "0.8" },
-    { loc: `${baseUrl}/SKILL.md`, priority: "0.8" },
-    { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
-    { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
-    // A worked query, not the bare endpoint: without ?q= it answers an empty list.
-    { loc: `${baseUrl}/api/find?q=search+the+web`, priority: "0.7" },
-    { loc: `${baseUrl}/.well-known/x402`, priority: "0.7" },
-    { loc: `${baseUrl}/api/reliability`, priority: "0.6" },
-    { loc: `${baseUrl}/api/stats`, priority: "0.6" },
-    // Unified marketplace surface (the old /index and /marketplaces 301 here -
-    // a sitemap must never list URLs that redirect).
-    { loc: `${baseUrl}/marketplace`, priority: "0.9" },
-    { loc: `${baseUrl}/mpp-marketplace`, priority: "0.9" },
-    // Third-party tool index. Listed at a lower priority than our own catalog
-    // on purpose: it is other people's endpoints reproduced with their own
-    // descriptions, so it should never outrank the tools we actually operate.
-    { loc: `${baseUrl}/marketplace/tools`, priority: "0.6" },
-    { loc: `${baseUrl}/api/index`, priority: "0.6" },
-    { loc: `${baseUrl}/sell`, priority: "0.8" },
-    { loc: `${baseUrl}/api/route?q=ocr+image`, priority: "0.7" },
-    { loc: `${baseUrl}/leaderboard`, priority: "0.8" },
-    { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
-    { loc: `${baseUrl}/api/cacheable`, priority: "0.6" },
-    { loc: `${baseUrl}/api/cache-stats`, priority: "0.5" },
-    { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
-    { loc: `${baseUrl}/integrations`, priority: "0.8" },
-    { loc: `${baseUrl}/pricing`, priority: "0.8" },
-    { loc: `${baseUrl}/changelog`, priority: "0.7" },
-    { loc: `${baseUrl}/start`, priority: "0.9" },
-    { loc: `${baseUrl}/quickstart`, priority: "0.9" },
-    { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
-    { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
-    { loc: `${baseUrl}/how-to-pay`, priority: "0.9" },
-    { loc: `${baseUrl}/speech`, priority: "0.8" },
-    { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
-    { loc: `${baseUrl}/x402-test`, priority: "0.7" },
-    { loc: `${baseUrl}/markets`, priority: "0.8" },
-    ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
-    { loc: `${baseUrl}/security`, priority: "0.7" },
-    { loc: `${baseUrl}/wholesale`, priority: "0.6" },
-    { loc: `${baseUrl}/trust`, priority: "0.6" },
-    { loc: `${baseUrl}/crawler`, priority: "0.5" },
-    { loc: `${baseUrl}/company`, priority: "0.7" },
-    { loc: `${baseUrl}/press`, priority: "0.5" },
-    { loc: `${baseUrl}/proof`, priority: "0.7" },
-    { loc: `${baseUrl}/scorecard`, priority: "0.7" },
-    { loc: `${baseUrl}/terms`, priority: "0.3" },
-    { loc: `${baseUrl}/privacy`, priority: "0.3" },
-    { loc: `${baseUrl}/glossary`, priority: "0.8" },
-    { loc: `${baseUrl}/101`, priority: "0.9" },
-    { loc: `${baseUrl}/revenue`, priority: "0.6" },
-    { loc: `${baseUrl}/blog`, priority: "0.8" },
-    { loc: `${baseUrl}/contribute`, priority: "0.7" },
-    { loc: `${baseUrl}/workflows`, priority: "0.8" },
-    { loc: `${baseUrl}/status`, priority: "0.7" },
-    { loc: `${baseUrl}/sdk-playground`, priority: "0.7" },
-    { loc: `${baseUrl}/docs/api/explorer`, priority: "0.8" },
-    { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
-    { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
-    { loc: `${baseUrl}/playground`, priority: "0.8" },
-    ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
-    ...learnIntegrationUrls(baseUrl),
-  ];
-  const entries = [...staticUrls, ...programmaticUrls(baseUrl), ...guideUrls(baseUrl), ...skillUrls(baseUrl), ...categoryUrls(baseUrl, catalog), ...toolUrls(baseUrl, catalog)]
+  const entries = [...pageUrls(baseUrl, catalog), ...learnIntegrationUrls(baseUrl), ...programmaticUrls(baseUrl), ...guideUrls(baseUrl), ...skillUrls(baseUrl), ...categoryUrls(baseUrl, catalog), ...toolUrls(baseUrl, catalog)]
     .map((u) => urlTag(dated(baseUrl, u)))
     .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -420,9 +357,45 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
     { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
     ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
+    { loc: `${baseUrl}/proof`, priority: "0.7" },
+    ...machineUrls(baseUrl),
+    { loc: `${baseUrl}/pay-per-call-api`, priority: "0.9" },
+    { loc: `${baseUrl}/paid-mcp-tools`, priority: "0.9" },
+    { loc: `${baseUrl}/compare`, priority: "0.8" },
+    ...docsUrls(baseUrl),
     { loc: `${baseUrl}/privacy`, priority: "0.4" },
     { loc: `${baseUrl}/terms`, priority: "0.4" },
     { loc: `${baseUrl}/transparency`, priority: "0.4" },
+  ];
+}
+/** The machine-readable documents an agent or indexer reads first. */
+function machineUrls(baseUrl) {
+  return [
+    { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
+    { loc: `${baseUrl}${AGENTS_MD_PATH}`, priority: "0.8" },
+    { loc: `${baseUrl}/SKILL.md`, priority: "0.8" },
+    { loc: `${baseUrl}/tools.md`, priority: "0.7" },
+    { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
+    { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
+    // A worked query, not the bare endpoint: without ?q= it answers an empty list.
+    { loc: `${baseUrl}/api/find?q=search+the+web`, priority: "0.7" },
+    { loc: `${baseUrl}/.well-known/x402`, priority: "0.7" },
+    { loc: `${baseUrl}/api/reliability`, priority: "0.6" },
+    { loc: `${baseUrl}/api/stats`, priority: "0.6" },
+    { loc: `${baseUrl}/api/index`, priority: "0.6" },
+    { loc: `${baseUrl}/api/route?q=ocr+image`, priority: "0.7" },
+    { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
+    { loc: `${baseUrl}/api/cacheable`, priority: "0.6" },
+    { loc: `${baseUrl}/api/cache-stats`, priority: "0.5" },
+  ];
+}
+/** Every /docs/<Page> rendered from the wiki that is its own canonical (the
+ *  home page is /docs and a page with a site route redirects there), plus
+ *  the generated API reference. */
+function docsUrls(baseUrl) {
+  return [
+    ...docsSlugs().filter((slug) => slug !== "Home" && !Object.hasOwn(DOCS_SITE_ROUTES, slug)).sort().map((slug) => ({ loc: `${baseUrl}/docs/${slug}`, priority: "0.7" })),
+    { loc: `${baseUrl}/docs/api`, priority: "0.7" },
   ];
 }
 export function sitemapPages(baseUrl, catalog) {
@@ -682,7 +655,7 @@ ${flatTiersLine()}
 - [/api/scorecard](${baseUrl}/api/scorecard): buyer scorecard per UTC month from our sales ledger: outside paying wallets, returning and multi-day wallets, settled paid calls and USD by network; our own wallets and test traffic left out, counts of 1 or 2 read "<3" (page: [/scorecard](${baseUrl}/scorecard))
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
 - [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments, keyed by its own on-chain payment transaction (\`?tx=\`, 0x plus 64 hex on EVM chains, a signature on Solana, a transaction id on Stellar or Algorand): \`found\`, \`status\` (owed, sending, paid, void or none), \`priceUsd\`, \`network\`, explorer links, our \`refundTx\` once sent, and \`refunds\` (every refund recorded for that transaction, where more than one payment settled in it). It answers that one transaction only, never a wallet's list, and an unknown transaction answers \`none\` in the same shape (also at /api/refunds/lookup)
-- [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool
+- [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool (\`?category=\` or \`?tag=\` for a part; markdown by category: /tools.md)
 - [/api/wishes](${baseUrl}/api/wishes): the demand board, aggregated; request a tool we do not have yet with \`POST /api/wish\` (clustered by demand; repeated asks get built)
 - [/terms](${baseUrl}/terms): terms of service + acceptable-use policy - using the service (including programmatically) constitutes acceptance
 - [/health](${baseUrl}/health): health check

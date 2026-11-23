@@ -431,17 +431,19 @@ try {
 }
 
 // --- the footer's "more" row is gone; its pages moved or retired -----------
-// /faq stays (linked from the home FAQ, listed in the sitemap); /compare,
-// /use-cases and /badges became sections of /docs; /community, /shop and the
-// weekly digest page redirect. The agent row still links SKILL.md and webhooks.
-const MOVED = { "/compare": "/docs#why-compare", "/use-cases": "/docs#examples", "/badges": "/docs#badges", "/community": "/integrations", "/shop": "/tools", "/digest": "/docs" };
+// /faq stays (linked from the home FAQ, listed in the sitemap); /use-cases
+// and /badges became sections of /docs; /community, /shop and the weekly
+// digest page redirect. /compare is a page of its own again (it answers 200,
+// checked in scripts/test-crawl-signals.js) and still stays off the footer.
+// The agent row still links SKILL.md and webhooks.
+const MOVED = { "/use-cases": "/docs#examples", "/badges": "/docs#badges", "/community": "/integrations", "/shop": "/tools", "/digest": "/docs" };
 {
   for (const p of ["/", "/pricing", "/docs"]) {
     const html = await (await fetch(`${BASE}${p}`)).text();
     const foot = (html.match(/<footer[\s\S]*?<\/footer>/) || [""])[0];
     ok(foot.length > 500, `${p} renders the footer`);
     ok(!/>more<\/span>/.test(foot), `${p} footer has no "more" row`);
-    for (const old of [...Object.keys(MOVED), "/faq"]) ok(!foot.includes(`href="${old}"`), `${p} footer does not link ${old}`);
+    for (const old of [...Object.keys(MOVED), "/faq", "/compare"]) ok(!foot.includes(`href="${old}"`), `${p} footer does not link ${old}`);
     for (const keep of ["/SKILL.md", "/docs/webhooks"]) ok(foot.includes(`href="${keep}"`), `${p} footer still links ${keep}`);
   }
   for (const [from, to] of Object.entries(MOVED)) {

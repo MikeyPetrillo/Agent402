@@ -15,6 +15,7 @@
 import { siteOrgLd, mppOffered } from "./site-org.js";
 import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
+import { firstFit } from "./seo-meta.js";
 import { RAILS_SHORT } from "./rails.js";
 import { isComputePayable } from "./pow.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -3159,9 +3160,16 @@ ${codeBlock(pack.claudePrompt, { name: "the prompt", wrap: true, style: "margin:
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({
-    title: `${pack.title} -- Agent402 skill pack`,
-    // Leads with the pack name so it differs from the /tools/skill-<pack> copy.
-    description: `${pack.title} skill pack, ${pack.toolSlugs.length} tools in one call: ${pack.tagline}`,
+    title: `${pack.title} | Agent402 skill pack`,
+    // Leads with the pack name so it differs from the /tools/skill-<pack> copy,
+    // and is whole sentences: the tagline when its opening sentence fits,
+    // else what one call of the pack is.
+    description: firstFit([
+      `${pack.title} skill pack: ${pack.tagline}`,
+      packTool
+        ? `${pack.title} skill pack: ${pack.toolSlugs.length} tools run in one call, paid once, with each step's result in one response.`
+        : `${pack.title} skill pack: one workflow over ${pack.toolSlugs.length} Agent402 tools.`,
+    ]),
     canonical: `${baseUrl}/skills/${pack.slug}`,
     baseUrl,
     activePath: "/skills",

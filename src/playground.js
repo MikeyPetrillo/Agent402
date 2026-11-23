@@ -14,7 +14,10 @@ import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 
 
-export function playgroundPage(baseUrl, catalog) {
+/** `variant`: the request carried a query (a preselected tool, ?slug=...).
+ *  Such a URL is the same page as /playground, so it is kept out of the
+ *  index (robots.txt also disallows it) while its links are still followed. */
+export function playgroundPage(baseUrl, catalog, { variant = false } = {}) {
   const freeCount = fmtNum(toolList(catalog).filter(isComputePayable).length);
   const title = "Playground - try Agent402 tools for free";
   const description = `Try any of Agent402's ${freeCount} free-tier tools directly in your browser. No signup, no wallet - proof-of-work pays automatically.`;
@@ -127,5 +130,6 @@ ${jsonScriptTag("pg-tools-data", toolsPayload)}
     activePath: "__none__",
     extraCss,
     body: pageBody,
+    ...(variant ? { robots: "noindex, follow" } : {}),
   });
 }

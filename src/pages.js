@@ -17,6 +17,7 @@ import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
 import { captureNote } from "./tool-output-examples.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
+import { firstFit } from "./seo-meta.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
@@ -536,7 +537,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   <p class="tp-lead">${summary}</p>
   ${restShown ? `<p class="tp-sub">${e(restShown)}</p>` : ""}
   <div class="tp-meta"><span>Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a></span>${tagsLine ? `<span class="tp-tags"><span>Tags:</span> ${tagsLine}</span>` : ""}${aliases.length ? `<span class="tp-tags"><span>Also found as:</span> ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}</span>` : ""}${isPack ? `<span><a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a></span>` : ""}</div>
-  <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" style="display:inline-block;">Try in playground →</a></p>
+  <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" rel="nofollow" style="display:inline-block;">Try in playground →</a></p>
 
   <h2 class="tp-h2">Parameters</h2>
   ${paramRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>${paramRows}</table></div>` : `<p class="tp-sub">${e(tool.name)} takes no parameters.</p>`}
@@ -632,7 +633,7 @@ export function categoryPage(baseUrl, catalog, catKey) {
   const canonical = `${baseUrl}/tools/category/${catKey}`;
   const nTools = `${tools.length} ${tools.length === 1 ? "tool" : "tools"}`;
   const title = `${cat.label} - ${nTools} | Agent402`;
-  const description = `${cat.blurb} ${nTools}, ${freeCount} free via proof-of-work.`;
+  const description = firstFit([`${cat.blurb} ${nTools}, ${freeCount} free via proof-of-work.`, `${cat.label}: ${nTools} Agent402 tools priced per call, ${freeCount} free via proof-of-work.`]);
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "ItemList",
@@ -648,7 +649,7 @@ export function categoryPage(baseUrl, catalog, catKey) {
   <h3 style="font-size:var(--fs-base);margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
   ${ledgerPriceLine(t)}
   <p style="color:var(--muted);font-size:var(--fs-sm);margin:0;line-height:1.5;flex:1;">${e(desc)}</p>
-  <a href="/playground?slug=${e(t.slug)}" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);text-decoration:none;font-weight:700;">try in playground →</a>
+  <a href="/playground?slug=${e(t.slug)}" rel="nofollow" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);text-decoration:none;font-weight:700;">try in playground →</a>
 </div>`;
   }).join("\n");
 
@@ -725,7 +726,7 @@ export function faqPage(baseUrl) {
   const canonical = `${baseUrl}/faq`;
   const title = "Agent402 FAQ - x402 + MPP + MCP server for AI agents";
   const description =
-    `Frequently asked questions about Agent402: pricing, proof-of-work, x402 and ${RAILS_SHORT}, the OpenAI-compatible /v1 gateway, self-serve listing, MCP, data handling, and self-hosting the open-source server.`;
+    "Answers about Agent402: pricing, proof-of-work, x402 and MPP payments, the /v1 model gateway, MCP, data handling and self-hosting the open-source server.";
   const FAQ_ITEMS = faqItems();
   const jsonLd = {
     "@context": "https://schema.org",

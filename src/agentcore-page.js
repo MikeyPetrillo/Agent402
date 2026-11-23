@@ -24,6 +24,7 @@ import { displayPrice } from "./integration-pages.js";
 import { withheldUserAgentPrefixes, OFFER_REQUEST_HEADER } from "./mpp-offer-gate.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { PLATFORM_INTEGRATIONS } from "./platform-integrations.js";
+import { articleDates } from "./page-dates.js";
 
 const PLATFORM = PLATFORM_INTEGRATIONS.find((p) => p.slug === "agentcore");
 export const AGENTCORE_SLUG = PLATFORM.slug;
@@ -58,7 +59,7 @@ const pre = (text) => codeBlock(`<code>${esc(text)}</code>`, { html: true, style
 export function agentcorePage(baseUrl, catalog = {}, { tempo = tempoEnabled(), env = process.env } = {}) {
   const canonical = `${baseUrl}/integrations/${AGENTCORE_SLUG}`;
   const title = `Agent402 with ${AGENTCORE_NAME}`;
-  const description = "Use Agent402 tools from an Amazon Bedrock AgentCore agent: add an AgentCore Gateway target from openapi.json or the hosted MCP connector, and pay per call through AgentCore Payments over x402.";
+  const description = "Use Agent402 tools from an Amazon Bedrock AgentCore agent: add a Gateway target from openapi.json or the MCP connector, and pay per call over x402.";
   const sample = repoUrl(`tree/main/${SAMPLE_DIR}`);
   const gatewaySample = repoUrl(`tree/main/${GATEWAY_DIR}`);
   const x402Alone = pluginGetsX402Alone(env);
@@ -156,5 +157,5 @@ ${toolCards}
   ${ledgerFooterCompact()}`;
 
   const extraCss = `@media (max-width:720px){.ip-tools{grid-template-columns:minmax(0,1fr)!important}}`;
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd: [breadcrumbLd, pageLd], extraCss, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd: [breadcrumbLd, pageLd], extraCss, body, article: articleDates("/integrations/agentcore") });
 }

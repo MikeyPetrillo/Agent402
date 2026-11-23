@@ -1,5 +1,5 @@
 import { siteOrgRef } from "./site-org.js";
-import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
+import { fitTitle, META_TITLE_MAX, firstFit } from "./seo-meta.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { ledgerShell, ledgerFooterCompact, esc, decideLive, breadcrumbTrail, wrapCodeBlocks } from "./ledger-chrome.js";
 import { powCostPhrase } from "./pow.js";
@@ -7,9 +7,11 @@ import { powCostPhrase } from "./pow.js";
 import { REPO_URL } from "./repo-link.js";
 import { stockDataEnabled } from "./tools/stock-provider.js";
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
+import { articleDates } from "./page-dates.js";
 export const BLOG_POSTS = [
   {
     slug: "pay-per-call-tools-on-arc",
+    metaDescription: "Agent402 now settles on Arc mainnet: an agent pays for one tool call at a time in USDC on Arc, settled through Circle's facilitator.",
     date: "2026-10-21",
     title: "Pay-per-call tools for agents, now on Arc",
     excerpt: "Agent402 now settles on Arc mainnet. An agent pays for one tool call at a time in USDC on Arc, settled through Circle's facilitator, with gas paid in USDC too. What Agent402 is, how a paid call works, and one real Arc payment, end to end.",
@@ -48,6 +50,7 @@ export const BLOG_POSTS = [
   },
   {
     slug: "decide-plans-for-agents",
+    metaDescription: "One call turns a plain-language job into a call-ready plan over this catalog and outside x402 sellers, with tools in order, inputs filled and backups.",
     date: "2026-10-01",
     title: "Decide: describe the job, get a plan your agent can run",
     excerpt: "One call turns a plain-language job into a call-ready plan over this catalog and outside x402 sellers: which tools, in what order, with inputs filled in, backups for each step, and steps wired to each other. Run it yourself or have Agent402 run it. A real two-step run on mainnet, end to end.",
@@ -91,6 +94,7 @@ export const BLOG_POSTS = [
   },
   {
     slug: "what-is-agentic-finance-aifi",
+    metaDescription: "Agentic payments are the wire; Agentic Finance is what forms on top: agents that find services, pay per request over x402 or MPP and keep receipts.",
     date: "2026-08-18",
     title: "Agentic Finance (AIFI): the economy that forms once agents can pay",
     excerpt: "Agentic payments are the wire. Agentic Finance is what forms on top of it: agents discovering services, paying per request from their own wallets over x402 or MPP, receiving receipts, and earning per request in return. What the term means, what one purchase looks like, and where Agent402 sits.",
@@ -346,8 +350,9 @@ export function blogIndex(baseUrl) {
     blogPost: BLOG_POSTS.map((p) => ({
       "@type": "BlogPosting",
       headline: p.title,
-      datePublished: p.date,
+      ...articleDates(`/blog/${p.slug}`, { published: p.date }),
       url: `${baseUrl}/blog/${p.slug}`,
+      image: `${baseUrl}/card.png`,
       description: p.excerpt,
     })),
   };
@@ -446,5 +451,5 @@ export function blogPost(baseUrl, slug) {
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title: pageTitle, description: post.excerpt, canonical, baseUrl, activePath: "__none__", jsonLd: [jsonLd, crumbs.ld], extraCss, body });
+  return ledgerShell({ title: pageTitle, description: firstFit([post.metaDescription, post.excerpt]) || post.excerpt, canonical, baseUrl, activePath: "__none__", jsonLd: [jsonLd, crumbs.ld], extraCss, body, article: articleDates(`/blog/${post.slug}`, { published: post.date }) });
 }

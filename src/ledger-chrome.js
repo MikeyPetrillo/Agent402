@@ -1261,7 +1261,18 @@ export function breadcrumbLd(baseUrl, crumbs) {
   };
 }
 
-export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large", mpp = mppOffered() }) {
+/** The site path a canonical names ("/" for the home page), or null. */
+function canonicalPath(canonical, baseUrl) {
+  const c = String(canonical || "");
+  if (!c) return null;
+  if (baseUrl && c.startsWith(baseUrl)) return c.slice(baseUrl.length).split(/[?#]/)[0] || "/";
+  try { return new URL(c).pathname || "/"; } catch { return null; }
+}
+/** Paths that carry the "Agent402 on Base" application node: the home page
+ *  and the Base marketplace page, the two pages it describes. */
+export const BASE_APP_LD_PATHS = new Set(["/", "/base"]);
+
+export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large", mpp = mppOffered(), article = null }) {
   // The snippet is derived here, once, for every page (see seo-meta.js): a
   // page author writes the paragraph, the shell serves what a search result
   // and a link preview can actually show.
@@ -1275,10 +1286,11 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
   // reason it rides on /card.png: social crawlers cache by exact image URL.
   const section = ogImage ? null : ogSectionFor(canonical);
   const og = ogImage || (baseUrl + (section ? `/og/${section}.png` : "/card.png") + (ogImageVersion ? `?v=${ogImageVersion}` : ""));
-  // Base ecosystem JSON-LD - every page rendered through the ledger shell
-  // carries this so crawlers and discovery agents see Base chain support
-  // regardless of which page they land on.
-  const baseEcosystemLd = {
+  // Base ecosystem JSON-LD, on the home page and /base only: a
+  // SoftwareApplication node with no offers repeated on every page read as one
+  // invalid rich-result item per page, and the two pages it describes are
+  // where a crawler looks for it.
+  const baseEcosystemLd = BASE_APP_LD_PATHS.has(canonicalPath(canonical, baseUrl)) ? {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "@id": `${baseUrl}/#base-app`,
@@ -1287,6 +1299,28 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
     operatingSystem: RAILS_OS,
     description: `x402 pay-per-call agent tools settling in ${RAILS_AMP}. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains - callers need only the stablecoin.`,
     url: baseUrl,
+  } : null;
+  // An article page (blog, guides, learn) names its dates: og:type article and
+  // article:published_time / modified_time, read from the same dates its
+  // JSON-LD carries.
+  // `article` takes the shape articleDates() returns ({ datePublished,
+  // dateModified }); an Article node on the page that lacks a date, a
+  // headline or an image gets them here, so every article states the same
+  // dates its meta tags do.
+  const art = article && typeof article === "object" ? article : null;
+  const isoDay = (d) => (/^\d{4}-\d{2}-\d{2}/.test(String(d || "")) ? String(d) : "");
+  const artPublished = art ? isoDay(art.datePublished || art.published) : "";
+  const artModified = art ? isoDay(art.dateModified || art.modified) : "";
+  const ARTICLE_TYPES = /^(Article|TechArticle|BlogPosting|NewsArticle)$/;
+  const fillArticle = (n) => {
+    if (!art || !n || typeof n !== "object" || !ARTICLE_TYPES.test(String(n["@type"] || ""))) return n;
+    return {
+      ...n,
+      ...(n.headline ? {} : { headline: n.name || title }),
+      ...(n.image ? {} : { image: og }),
+      ...(n.datePublished || !(artPublished || artModified) ? {} : { datePublished: artPublished || artModified }),
+      ...(n.dateModified || !artModified ? {} : { dateModified: artModified }),
+    };
   };
   // Each block is its own script tag, so each needs its own @context.
   // The site entity (src/site-org.js) rides on every page, defined once: a
@@ -1295,10 +1329,10 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
   const orgId = siteOrgId(baseUrl);
   const pageLd = (jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])
     .filter((j) => !(j && typeof j === "object" && j["@id"] === orgId))
-    .map((j) => (j && typeof j === "object" && Array.isArray(j["@graph"]) ? { ...j, "@graph": j["@graph"].filter((n) => !(n && n["@id"] === orgId)) } : j));
+    .map((j) => (j && typeof j === "object" && Array.isArray(j["@graph"]) ? { ...j, "@graph": j["@graph"].filter((n) => !(n && n["@id"] === orgId)).map(fillArticle) } : fillArticle(j)));
   // `mpp` is the server's MPP switch (mppOffered, src/site-org.js) unless a
   // page passes its own, so the site entity names MPP only where the page may.
-  const allLd = [baseEcosystemLd, siteOrgLd(baseUrl, { mpp }), ...pageLd]
+  const allLd = [baseEcosystemLd, siteOrgLd(baseUrl, { mpp }), ...pageLd].filter(Boolean)
     .map((j) => (j && typeof j === "object" && !j["@context"] ? { "@context": "https://schema.org", ...j } : j));
   // Every "<" is escaped as \u003c, exactly as jsonScriptTag does and for the
   // same reason: JSON.stringify never escapes it, so a string field carrying
@@ -1321,9 +1355,8 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
 <meta name="description" content="${esc(description)}">
 <meta name="robots" content="${esc(robots)}">
 ${process.env.GOOGLE_SITE_VERIFICATION ? `<meta name="google-site-verification" content="${esc(process.env.GOOGLE_SITE_VERIFICATION)}">\n` : ""}
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta property="og:url" content="${esc(canonical)}">
+${canonical ? `<link rel="canonical" href="${esc(canonical)}">\n` : ""}<meta property="og:type" content="${art ? "article" : "website"}">
+${artPublished ? `<meta property="article:published_time" content="${esc(artPublished)}">\n` : ""}${artModified ? `<meta property="article:modified_time" content="${esc(artModified)}">\n` : ""}${canonical ? `<meta property="og:url" content="${esc(canonical)}">` : ""}
 <meta property="og:site_name" content="Agent402">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">

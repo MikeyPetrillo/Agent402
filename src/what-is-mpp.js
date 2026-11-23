@@ -15,6 +15,7 @@ import { ledgerShell, ledgerFooterCompact, codeBlock, esc } from "./ledger-chrom
 
 import { mppFlagshipRows, mppFlagshipSnippet, mppFlagshipOffersPhrase, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
 import { mppOfferGateSentenceIfOffered, visaCliMppSentence } from "./mpp-offers.js";
+import { articleDates } from "./page-dates.js";
 const STEPS = [
   ["01", "The client requests a paid resource", "A plain HTTP request, no credentials attached. The server answers 402 Payment Required with a WWW-Authenticate: Payment challenge naming the price, the asset, the chain, and a one-time challenge id."],
   ["02", "The client signs and retries", "It signs a payment authorization for exactly that amount with its own wallet key and repeats the identical request, carrying the signed credential in an Authorization: Payment header. The key never leaves the client."],
@@ -79,7 +80,7 @@ export function whatIsMppPage(baseUrl, catalog = null) {
   // (src/ask402-links.js).
   const title = "MPP on Agent402: how a Machine Payments Protocol payment works";
   const description =
-    "How MPP, the Machine Payments Protocol, runs on Agent402: the Payment challenge, the credential and the signed receipt, how it compares to x402, and where it is live.";
+    "How MPP, the Machine Payments Protocol, runs on Agent402: the Payment challenge, the credential, the signed receipt and how it compares to x402.";
 
   const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -200,6 +201,7 @@ ${ledgerFooterCompact()}`;
     baseUrl,
     activePath: "/what-is-x402",
     extraCss,
+    article: articleDates("/what-is-mpp"),
     jsonLd: [orgLd, breadcrumbLd, articleLd, faqLd],
     body,
   });
