@@ -538,7 +538,7 @@ function xMarginVerdict(slug, { usd, usdWithoutExpansions }, price) {
 console.log("\n# X data tools: worst-case reads, expansions included, vs price");
 {
   const { X_DATA_TOOLS, xToolWorstCases } = await import("../src/tools/x-data-kit.js");
-  if (["postRead", "userRead", "countsRequest", "trendsRequest"].some((k) => upstreamCosts().vendor?.x?.[k] == null)) {
+  if (["postRead", "userRead"].some((k) => upstreamCosts().vendor?.x?.[k] == null)) {
     if (process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1") ok(false, "x data: the private table has no vendor.x rates (required under CI)");
     else console.log("SKIP - x data margin: the private table has no vendor.x rates");
   } else {

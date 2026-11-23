@@ -11,7 +11,7 @@
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { isHost, urlMatches } from "./lib/url-host.js";
-import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders } from "../src/tools/solana-intel-kit.js";
+import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders, tokenIndexLookup, priceOfMint, SOL_PRICE_MAX_MINTS } from "../src/tools/solana-intel-kit.js";
 
 const realFetch = globalThis.fetch;
 let pass = 0, fail = 0;
@@ -105,19 +105,22 @@ const DS_PROFILES = [
   { url: "https://dexscreener.com/ethereum/0x1", chainId: "ethereum", tokenAddress: "0x1" },
 ];
 
-const JUP_PRICE = {
-  [JUP]: { createdAt: "2024-06-07T10:56:42.584Z", liquidity: 3092234.5859758323, usdPrice: 0.2034850272618111, blockId: 440919030, decimals: 6, priceChange24h: -2.398697059945383 },
-  [SOL]: { createdAt: "2024-06-05T08:55:25.527Z", liquidity: 748142746.9005799, usdPrice: 93.70851135305588, blockId: 440919037, decimals: 9, priceChange24h: 3.925281243329954 },
-};
-
-const JUP_QUOTE = {
-  inputMint: SOL, inAmount: "1000000000", outputMint: USDC, outAmount: "93708783", otherAmountThreshold: "93240240", swapMode: "ExactIn", slippageBps: 50, platformFee: null, priceImpactPct: "0.0012",
-  routePlan: [
-    { swapInfo: { ammKey: "F", label: "BisonFi", inputMint: SOL, outputMint: "Es9v", inAmount: "1000000000", outAmount: "93720054" }, percent: 100 },
-    { swapInfo: { ammKey: "G", label: "SolFi V2", inputMint: "Es9v", outputMint: USDC, inAmount: "93720054", outAmount: "93708783" }, percent: 100 },
-  ],
-  contextSlot: 440919041, timeTaken: 0.001, swapUsdValue: "93.6989308707019",
-};
+// The pair index's answer for a batch of mints: each pair names its base and
+// quote token, a USD price for the base, the base's price in the quote token,
+// liquidity and the 24h change (shapes as read live 2026-11-23).
+const PRICE_PAIR = (pairAddress, base, quote, priceUsd, priceNative, liq, h24, chainId = "solana") => ({
+  chainId, pairAddress, baseToken: { address: base }, quoteToken: { address: quote },
+  priceUsd: String(priceUsd), priceNative: String(priceNative), liquidity: { usd: liq }, priceChange: { h24 },
+});
+const DS_PRICES = [
+  PRICE_PAIR("sol-deep", SOL, USDC, 93.7085, 93.7, 48_000_000, 3.93),
+  PRICE_PAIR("sol-thin", SOL, USDC, 95, 95, 1_000, 9),
+  PRICE_PAIR("jup-sol", JUP, SOL, 0.2035, 0.00217, 3_000_000, -2.4),
+  // USDC appears only as a quote token: its price is the base's USD price over its price in USDC.
+  PRICE_PAIR("sol-deep-dup", SOL, USDC, 93.7085, 93.7, 48_000_000, 3.93, "bsc"),
+];
+// One RPC answer for the mint accounts: each parsed mint carries its decimals.
+const RPC_MINTS = (decimals, slot = 440919037) => ({ jsonrpc: "2.0", id: 1, result: { context: { slot }, value: decimals.map((d) => (d == null ? null : { data: { parsed: { info: { decimals: d } } } })) } });
 
 const JUP_TOKEN = {
   id: JUP, name: "Jupiter", symbol: "JUP", decimals: 6, dev: "JUPh", circSupply: 3320312968.08, totalSupply: 6862431164.927844, tokenProgram: "Tokenkeg",
@@ -135,7 +138,8 @@ try {
   // --------------------------------------------------------------------------
   // Catalog envelope
   // --------------------------------------------------------------------------
-  ok(SOLANA_INTEL_TOOLS.length === 9, `9 tools exported (got ${SOLANA_INTEL_TOOLS.length})`);
+  ok(SOLANA_INTEL_TOOLS.length === 7, `7 tools exported (got ${SOLANA_INTEL_TOOLS.length})`);
+  ok(!SOLANA_INTEL_TOOLS.some((t) => t.slug === "sol-swap-quote" || t.slug === "sol-token-lookup"), "the swap quote and the token lookup are retired (src/retired-tools.js), not served");
   const slugs = new Set();
   for (const t of SOLANA_INTEL_TOOLS) {
     ok(typeof t.slug === "string" && t.slug.startsWith("sol-") && !slugs.has(t.slug), `${t.slug}: unique sol- slug`);
@@ -176,14 +180,9 @@ try {
   await throws(h("sol-trending")({ limit: "abc" }), 400, "trending: non-numeric limit");
   await throws(h("sol-price")({}), 400, "price: missing mints");
   await throws(h("sol-price")({ mints: [] }), 400, "price: empty mints");
-  await throws(h("sol-price")({ mints: Array.from({ length: 51 }, () => JUP) }), 400, "price: 51 mints");
+  await throws(h("sol-price")({ mints: Array.from({ length: SOL_PRICE_MAX_MINTS + 1 }, () => JUP) }), 400, `price: ${SOL_PRICE_MAX_MINTS + 1} mints`);
   await throws(h("sol-price")({ mints: [JUP, "bad"] }), 400, "price: one bad mint fails the batch");
-  await throws(h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC }), 400, "quote: missing amount");
-  await throws(h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "1.5" }), 400, "quote: non-integer amount");
-  await throws(h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "-5" }), 400, "quote: negative amount");
-  await throws(h("sol-swap-quote")({ inputMint: SOL, outputMint: SOL, amount: "1000" }), 400, "quote: same mint both sides");
-  await throws(h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "1000", slippageBps: 9999 }), 400, "quote: slippage over 5000");
-  await throws(h("sol-token-lookup")({ query: "" }), 400, "lookup: empty query");
+  await throws(tokenIndexLookup(""), 400, "token index lookup: empty query");
   ok(calls.length === 0, "no egress happened during validation failures");
 
   // --------------------------------------------------------------------------
@@ -504,43 +503,54 @@ try {
   ok(calls.length === 1 && r.boosts.length === 1 && r.profiles === null, "trending: list=boosts fetches one endpoint, profiles null");
 
   // --------------------------------------------------------------------------
-  // sol-price
+  // sol-price: the deepest pair per mint; decimals and slot on chain
   // --------------------------------------------------------------------------
-  stub((url) => url === `https://lite-api.jup.ag/price/v3?ids=${SOL},${JUP},${PUMP}` ? Promise.resolve(jsonRes(JUP_PRICE)) : Promise.reject(new Error("bad url " + url)));
-  r = await h("sol-price")({ mints: [SOL, JUP, PUMP, JUP] });
-  ok(r.count === 2 && r.missing.length === 1 && r.missing[0] === PUMP, "price: duplicates collapsed, unknown mint listed as missing");
-  ok(r.prices[SOL].priceUsd === 93.70851135305588 && r.prices[SOL].decimals === 9 && r.prices[JUP].priceChange24hPct === -2.3987, "price: fields shaped");
-  stub((url) => url.endsWith(`?ids=${SOL}`) ? Promise.resolve(jsonRes(JUP_PRICE)) : Promise.reject(new Error("bad url " + url)));
-  r = await h("sol-price")({ mints: SOL });
-  ok(r.count === 1 && Object.keys(r.prices)[0] === SOL, "price: comma-string input accepted");
+  {
+    const RPC = "https://rpc.test.invalid/solana";
+    const prevRpc = process.env.SOLANA_RPC_URL;
+    // Without an RPC configured: one pair read, decimals and slot null.
+    delete process.env.SOLANA_RPC_URL;
+    stub((url) => url === `https://api.dexscreener.com/tokens/v1/solana/${SOL},${JUP},${PUMP},${USDC}` ? Promise.resolve(jsonRes(DS_PRICES)) : Promise.reject(new Error("bad url " + url)));
+    r = await h("sol-price")({ mints: [SOL, JUP, PUMP, JUP, USDC] });
+    ok(calls.length === 1 && r.count === 3 && r.missing.length === 1 && r.missing[0] === PUMP, `price: one read for the batch, duplicates collapsed, an unpriced mint under missing (${calls.length} reads)`);
+    ok(r.prices[SOL].priceUsd === 93.7085 && r.prices[SOL].priceChange24hPct === 3.93 && r.priceFrom[SOL] === "base", "price: the deepest base-side pair sets price and 24h change, not a thinner pair");
+    ok(r.prices[SOL].liquidityUsd === 51_001_000, `price: liquidity sums every Solana pair read that holds the mint, base or quote, each once (${r.prices[SOL].liquidityUsd})`);
+    ok(Math.abs(r.prices[USDC].priceUsd - 93.7085 / 93.7) < 1e-9 && r.prices[USDC].priceChange24hPct === null && r.priceFrom[USDC] === "quote", `price: a quote-only mint is priced from its pair, with no change figure (${r.prices[USDC].priceUsd})`);
+    ok(r.prices[SOL].decimals === null && r.prices[SOL].blockId === null && r.source === "dexscreener", "price: no RPC configured, decimals and slot stay null");
+    // With an RPC: the mint accounts are read once, in input order, beside the pair read.
+    process.env.SOLANA_RPC_URL = RPC;
+    stub((url, opts) => {
+      if (url === RPC) { const b = JSON.parse(opts.body); ok(b.method === "getMultipleAccounts" && b.params[0].join(",") === [SOL, JUP].join(",") && b.params[1].encoding === "jsonParsed", "price: one getMultipleAccounts read for the mints, jsonParsed"); return Promise.resolve(jsonRes(RPC_MINTS([9, 6]))); }
+      return url.startsWith("https://api.dexscreener.com/tokens/v1/solana/") ? Promise.resolve(jsonRes(DS_PRICES)) : Promise.reject(new Error("bad url " + url));
+    });
+    r = await h("sol-price")({ mints: `${SOL},${JUP}` });
+    ok(r.count === 2 && r.prices[SOL].decimals === 9 && r.prices[JUP].decimals === 6 && r.prices[JUP].blockId === 440919037, "price: comma-string input; decimals and the slot come from the chain");
+    // The chain read failing leaves the prices whole.
+    stub((url) => (url === RPC ? Promise.resolve(textRes("x", 500)) : Promise.resolve(jsonRes(DS_PRICES))));
+    r = await h("sol-price")({ mints: [SOL] });
+    ok(r.count === 1 && r.prices[SOL].priceUsd === 93.7085 && r.prices[SOL].decimals === null && r.prices[SOL].blockId === null, "price: an RPC failure leaves decimals and slot null, never the call");
+    // Past the pair index's 30 addresses a request, the batch is read in two.
+    const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    const many = Array.from({ length: 31 }, (_, k) => `${"So1".padEnd(42, "1")}${B58[k]}`);
+    stub((url) => (url === RPC ? Promise.resolve(jsonRes(RPC_MINTS([]))) : Promise.resolve(jsonRes([]))));
+    r = await h("sol-price")({ mints: many });
+    ok(calls.filter((c) => c.url.startsWith("https://api.dexscreener.com/")).length === 2 && r.missing.length === 31, `price: ${many.length} mints are read in two pair requests`);
+    if (prevRpc === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL = prevRpc;
+    // The pricing rule, offline.
+    ok(priceOfMint(PUMP, DS_PRICES) === null, "priceOfMint: no pair holds the mint, null");
+    ok(priceOfMint(SOL, [PRICE_PAIR("z", SOL, USDC, 0, 0, 9e9, 1)]) === null, "priceOfMint: a pair with no price never prices the mint");
+  }
 
   // --------------------------------------------------------------------------
-  // sol-swap-quote
-  // --------------------------------------------------------------------------
-  stub((url) => url === `https://lite-api.jup.ag/swap/v1/quote?inputMint=${SOL}&outputMint=${USDC}&amount=1000000000&slippageBps=50`
-    ? Promise.resolve(jsonRes(JUP_QUOTE)) : Promise.reject(new Error("bad url " + url)));
-  r = await h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "1000000000" });
-  ok(r.outAmount === "93708783" && r.minOutAmount === "93240240" && r.slippageBps === 50, "quote: default slippage 50, amounts as strings");
-  ok(r.priceImpactPct === 0.0012 && r.swapUsdValue === 93.6989 && r.hops === 2, "quote: price impact, usd value, hop count");
-  ok(r.route[0].label === "BisonFi" && r.route[1].label === "SolFi V2" && r.route[1].outputMint === USDC && r.route[0].percent === 100, "quote: route labels in hop order");
-  ok(r.contextSlot === 440919041 && r.source === "jupiter", "quote: contextSlot + source");
-  stub((url) => url.includes("amount=5000&slippageBps=100") ? Promise.resolve(jsonRes(JUP_QUOTE)) : Promise.reject(new Error("bad url " + url)));
-  r = await h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: 5000, slippageBps: 100 });
-  ok(r.slippageBps === 100, "quote: numeric amount + custom slippage ride the URL");
-
-  // --------------------------------------------------------------------------
-  // sol-token-lookup
+  // The token index lookup the token brief reads (not a catalog route)
   // --------------------------------------------------------------------------
   stub((url) => url === `https://lite-api.jup.ag/tokens/v2/search?query=${JUP}` ? Promise.resolve(jsonRes([JUP_TOKEN_OTHER, JUP_TOKEN])) : Promise.reject(new Error("bad url " + url)));
-  r = await h("sol-token-lookup")({ query: JUP, limit: 5 });
+  r = await tokenIndexLookup(JUP, 5);
   ok(r.count === 2 && r.tokens[0].mint === JUP && r.tokens[1].symbol === "jlUSDC", "lookup: exact mint match sorted first");
   const t0 = r.tokens[0];
   ok(t0.holderCount === 835540 && t0.marketCapUsd === 675335464.9800633 && t0.organicScore === 99.31 && t0.isVerified === true, "lookup: profile fields");
   ok(t0.audit.mintAuthorityDisabled === true && t0.audit.topHoldersPct === 15.28 && t0.firstPool.id === "2psp", "lookup: audit + first pool");
   ok(t0.stats24h.numTraders === 1191 && t0.stats24h.priceChangePct === -2.4, "lookup: 24h stats");
-  stub((url) => url.includes("query=cat%20season") ? Promise.resolve(jsonRes([JUP_TOKEN_OTHER, JUP_TOKEN])) : Promise.reject(new Error("bad url " + url)));
-  r = await h("sol-token-lookup")({ query: "cat season", limit: 1 });
-  ok(r.count === 1 && r.tokens.length === 1 && r.tokens[0].symbol === "jlUSDC", "lookup: name query keeps upstream order, limit honoured");
 
   // --------------------------------------------------------------------------
   // Upstream error mapping (every class, no body relayed)
@@ -556,12 +566,10 @@ try {
   await throws(h("sol-trending")({}), 502, "502 -> 502");
   stub(() => Promise.resolve(jsonRes({ error: SECRET_BODY }, 400)));
   await throws(h("sol-token-holders")({ mint: JUP }), 422, "upstream 400 (invalid mint) -> 422");
-  stub(() => Promise.resolve(jsonRes({ error: SECRET_BODY, errorCode: "TOKEN_NOT_TRADABLE" }, 400)));
-  await throws(h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "1" }), 422, "quote upstream 400 -> 422");
   stub(() => Promise.resolve(textRes("Route not found", 404)));
   await throws(h("sol-price")({ mints: [SOL] }), 422, "404 -> 422");
   stub(() => Promise.resolve(textRes(SECRET_BODY, 403)));
-  await throws(h("sol-token-lookup")({ query: "x" }), 502, "403 -> 502");
+  await throws(tokenIndexLookup("x"), 502, "403 -> 502");
   stub(() => Promise.resolve(textRes("<html>cloudflare</html>", 200)));
   await throws(h("sol-token-search")({ query: "x" }), 502, "non-JSON 200 -> 502");
   // Deadline expiry (AbortSignal.timeout rejects with TimeoutError) is our own
@@ -572,8 +580,8 @@ try {
   try { await h("sol-token-safety")({ mint: JUP }); ok(false, "deadline expiry resolved"); }
   catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "our-deadline" && /^(RugCheck did not answer the report summary|Jupiter did not answer the token search) read within our \d+ s limit/.test(e.message), `deadline expiry -> 503 naming upstream and step, attributed to our own limit (got ${e.statusCode} "${e.message}")`); }
   stub(() => Promise.reject(Object.assign(new Error("fetch failed"), { code: "ECONNRESET" })));
-  try { await h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "1" }); ok(false, "connection reset resolved"); }
-  catch (e) { ok(e.statusCode === 503 && e.attribution === "unknown" && e.hint === "connect-failed" && /^Jupiter is unreachable from here \(swap quote read/.test(e.message), `connection reset -> 503 naming upstream and step, attribution unknown (got ${e.statusCode} "${e.message}")`); }
+  try { await tokenIndexLookup(JUP); ok(false, "connection reset resolved"); }
+  catch (e) { ok(e.statusCode === 503 && e.attribution === "unknown" && e.hint === "connect-failed" && /^Jupiter is unreachable from here \(token search read/.test(e.message), `connection reset -> 503 naming upstream and step, attribution unknown (got ${e.statusCode} "${e.message}")`); }
   // One leg failing fails the parallel tool (no half answers billed as whole).
   stub((url) => url.includes("rugcheck") ? Promise.resolve(jsonRes(RC_SUMMARY)) : Promise.resolve(textRes("x", 500)));
   await throws(h("sol-token-safety")({ mint: JUP }), 502, "safety: Jupiter leg 500 -> whole call 502");
@@ -587,7 +595,7 @@ try {
   ok(errs.length === 4 && errs.every((m) => !m.includes(SECRET_BODY) && !m.includes("xyz")), "no upstream error body is relayed in any error message");
 
   // The timeout signal is an AbortSignal with a bounded deadline on every call.
-  stub((url, opts) => { ok(opts.signal instanceof AbortSignal, "request carries an AbortSignal (timeout)"); return Promise.resolve(jsonRes(JUP_PRICE)); });
+  stub((url, opts) => { ok(opts.signal instanceof AbortSignal, "request carries an AbortSignal (timeout)"); return Promise.resolve(jsonRes(DS_PRICES)); });
   await h("sol-price")({ mints: [SOL] });
 
   // A STALLED upstream, through the real signal: the stub never answers and

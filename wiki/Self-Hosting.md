@@ -77,9 +77,7 @@ Set these on your host. None are committed to the repo.
 | `BRAVE_API_KEY` | No | Enables search-kit tools (Web, News, Images) |
 | `BRAVE_ANSWERS_API_KEY` | No | Distinct Brave subscription token for the `answer` tool; falls back to `BRAVE_API_KEY` |
 | `BRAVE_SUGGEST_API_KEY` | No | Distinct Brave subscription token for `search-suggest`; falls back to `BRAVE_API_KEY` |
-| `NEYNAR_API_KEY` | No | Enables Farcaster tools (Neynar API); falls back to `WARPCAST_API_KEY` |
 | `FRED_API_KEY` | No | Enables macro-kit v1 (FRED economic data) |
-| `FRED_API_KEY_V2` | No | Distinct key for macro-kit v2 bulk endpoints |
 | `OPENROUTER_API_KEY` | No | Enables the `/v1` LLM gateway tiers (chat, metered, embeddings, rerank, images, speech); the routes answer `503` without it |
 | `OPENAI_API_KEY` | No | Enables the older `/api/llm*`, `/api/image-gen*`, `/api/transcribe*` and `/api/embed*` proxies |
 | `E2B_API_KEY` | No | Enables the `/api/code-run*` sandbox tools |

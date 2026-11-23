@@ -249,19 +249,6 @@
       }
     },
     {
-      "slug": "farcaster-by-address",
-      "name": "an address with no farcaster account is found:false",
-      "input": {
-        "address": "0x000000000000000000000000000000000000dEaD"
-      },
-      "requires": "NEYNAR_API_KEY",
-      "expect": {
-        "equals": {
-          "found": false
-        }
-      }
-    },
-    {
       "slug": "nft-holdings",
       "name": "a wallet with nfts on ethereum",
       "input": {
@@ -348,25 +335,6 @@
         "gt": {
           "blockNumber": 50000000
         }
-      }
-    },
-    {
-      "slug": "fred-release-observations",
-      "name": "a different release",
-      "input": {
-        "releaseId": 10,
-        "startDate": "2026-01-01",
-        "endDate": "2026-03-01"
-      },
-      "requires": "FRED_API_KEY",
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "releaseName",
-          "series[0]"
-        ]
       }
     },
     {

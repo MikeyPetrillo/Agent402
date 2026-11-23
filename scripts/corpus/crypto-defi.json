@@ -355,65 +355,6 @@
    }
   },
   {
-   "slug": "crypto-news",
-   "name": "the keyword filter finds the best-covered asset in a two-day window",
-   "input": {
-    "query": "bitcoin",
-    "hours": 48,
-    "limit": 5
-   },
-   "expect": {
-    "gte": {
-     "count": 1
-    },
-    "populated": [
-     "items[0].title",
-     "items[0].url"
-    ]
-   },
-   "why": "bitcoin, not a narrower coin: these are live news feeds and the assertion has to hold on a quiet day. Measured 2026-09-12 - 104 items in 48 h across the eight sources, 39 matching bitcoin and ZERO matching ethereum, which is what this case used to ask for and why it failed. The window is kept at 48 h so the time filter is still exercised."
-  },
-  {
-   "slug": "crypto-news",
-   "name": "gibberish is an honest zero",
-   "input": {
-    "query": "zzqxnothingmatches",
-    "limit": 5
-   },
-   "expect": {
-    "equals": {
-     "count": 0
-    },
-    "empty": [
-     "items"
-    ]
-   }
-  },
-  {
-   "slug": "crypto-options-chain",
-   "name": "ETH puts",
-   "input": {
-    "currency": "ETH",
-    "type": "put",
-    "limit": 5
-   },
-   "expect": {
-    "equals": {
-     "currency": "ETH"
-    },
-    "gte": {
-     "count": 1
-    },
-    "gt": {
-     "underlyingPrice": 100
-    },
-    "populated": [
-     "options[0]",
-     "expiries"
-    ]
-   }
-  },
-  {
    "slug": "eas-attestations",
    "name": "our own attester on base",
    "input": {
@@ -588,38 +529,6 @@
    },
    "paceKey": "coingecko",
    "pace": 5000
-  },
-  {
-   "slug": "options-summary",
-   "name": "ETH summary",
-   "input": {
-    "currency": "ETH"
-   },
-   "expect": {
-    "equals": {
-     "currency": "ETH"
-    },
-    "gt": {
-     "indexPrice": 100
-    },
-    "populated": [
-     "options",
-     "perpetual"
-    ]
-   }
-  },
-  {
-   "slug": "options-ticker",
-   "name": "ETH resolved from currency",
-   "input": {
-    "currency": "ETH"
-   },
-   "expect": {
-    "populated": [
-     "ticker",
-     "resolvedFrom"
-    ]
-   }
   },
   {
    "slug": "perp-basis",
@@ -935,25 +844,6 @@
    }
   },
   {
-   "slug": "sol-swap-quote",
-   "name": "USDC to SOL",
-   "input": {
-    "inputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "outputMint": "So11111111111111111111111111111111111111112",
-    "amount": "10000000",
-    "slippageBps": 50
-   },
-   "expect": {
-    "populated": [
-     "outAmount",
-     "route"
-    ],
-    "gt": {
-     "outAmount": 0
-    }
-   }
-  },
-  {
    "slug": "sol-token-holders",
    "requires": "RUGCHECK_TOOLS",
    "name": "a mint RugCheck does not track is filled from our own RPC",
@@ -993,22 +883,6 @@
     ]
    },
    "requires": "SOLANA_RPC_URL"
-  },
-  {
-   "slug": "sol-token-lookup",
-   "name": "lookup by symbol",
-   "input": {
-    "query": "BONK",
-    "limit": 2
-   },
-   "expect": {
-    "gte": {
-     "count": 1
-    },
-    "populated": [
-     "tokens[0]"
-    ]
-   }
   },
   {
    "slug": "sol-token-pairs",
