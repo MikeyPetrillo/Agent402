@@ -141,7 +141,7 @@ const KNOWN_NON_CATALOG = new Set([
   "/v1/audio/speech",
   // Same class: the judgment routes are listed only when TYPESAFE_API_KEY (or
   // an OpenAI/Decision-1 backend) is configured, which a CI boot never has.
-  "/v1/judge", "/v1/decisions", "/v1/judge/vision", "/v1/judge/locate", "/v1/judge/long",
+  "/v1/judge", "/v1/decisions",
   "/api/pricing", "/api/find", "/api/index", "/api/route", "/api/stats", "/api/wishes",
   "/api/sales", "/api/revenue", "/api/revenue/daily", "/api/revenue/mpp", "/api/calls/daily",
   "/api/reliability", "/api/rails", "/api/status", "/api/status/probe", "/api/leaderboard", "/api/analytics",

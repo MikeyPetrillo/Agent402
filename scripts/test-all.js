@@ -70,7 +70,7 @@ const skipE2b = process.env.E2B_LIVE_TEST !== "1";
 const NETWORK = new Set([
   "/v1/images/fast", "/v1/images/pro", "/v1/images/edits", "/v1/videos/generations",  // llm-images-fast-kit.js
   "/api/asset-transfers", "/api/token-balances", "/api/token-allowance", "/api/tx-receipt", "/api/block-receipts", "/api/token-price-history", "/api/wallet-transfers-multichain",  // alchemy-data-kit.js
-  "/api/fc-cast-search", "/api/fc-channel-feed", "/api/fc-trending", "/api/fc-user-casts", "/api/fc-cast", "/api/fc-cast-replies", "/api/fc-channel", "/api/fc-user-search", "/api/fc-cast-metrics",  // farcaster-social-kit.js
+   // farcaster-social-kit.js
   "/api/coin-price-by-contract", "/api/coin-profile", "/api/coin-history", "/api/coin-ohlc", "/api/coin-market-chart-range", "/api/coin-categories", "/api/global-defi", "/api/exchanges", "/api/exchange-tickers", "/api/exchange-rates", "/api/coin-search",
   "/api/rwa-list", "/api/rwa-markets", "/api/rwa-asset", "/api/rwa-issuers", "/api/rwa-issuer",  // crypto-markets-kit.js
   "/api/attest",  // attest-kit.js (needs the spending wallet + Base gas; keyless CI answers 503)
@@ -86,13 +86,13 @@ const NETWORK = new Set([
   // the two pool tools read endpoints that answer only to a key (503 without).
   "/api/funding-screener", "/api/stablecoin-depeg-watch", "/api/exchange-spread", "/api/defi-screener", "/api/chain-board", "/api/dex-volume-board", "/api/dex-pool-health",
   "/api/lending-rates",  // lending-rates-kit.js (contract reads over keyless public nodes)
-  "/api/crypto-news", "/api/crypto-indicators", "/api/crypto-market-pulse",  // crypto-signals-kit.js
+  "/api/crypto-indicators", "/api/crypto-market-pulse",  // crypto-signals-kit.js
   "/api/site-map", "/api/site-crawl",  // crawl-kit.js
   "/api/perp-markets", "/api/perp-funding", "/api/perp-funding-screener", "/api/perp-open-interest", "/api/perp-klines", "/api/perp-orderbook", "/api/perp-basis",
   "/api/perp-dexs", "/api/perp-dex-markets", "/api/perp-dex-limits",
-  "/api/options-summary", "/api/crypto-options-chain", "/api/options-ticker",
-  "/api/token-safety", "/api/sol-token-safety", "/api/sol-token-report", "/api/sol-token-holders", "/api/sol-token-pairs", "/api/sol-token-search", "/api/sol-trending", "/api/sol-price", "/api/sol-swap-quote", "/api/sol-token-lookup",
-  "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup", "/api/x-post-counts", "/api/x-trends",
+  
+  "/api/token-safety", "/api/sol-token-safety", "/api/sol-token-report", "/api/sol-token-holders", "/api/sol-token-pairs", "/api/sol-token-search", "/api/sol-trending", "/api/sol-price", 
+  "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup", 
   "/api/hunter-domain-search", "/api/hunter-email-finder", "/api/hunter-email-verify", "/api/hunter-company", "/api/apollo-people-search", "/api/apollo-org-enrich", "/api/apollo-person-match",
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/domain-availability", "/api/robots-check", "/api/sitemap",
@@ -139,8 +139,7 @@ const NETWORK = new Set([
   "/api/image-exif", "/api/image-dominant-color", "/api/image-crop",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
   "/api/public-holidays",
-  // solana-rpc-kit.js: live Solana mainnet JSON-RPC, the same upstream class as evm-rpc.
-  "/api/solana-rpc",
+  
   // Holidays kit: the same holiday-source egress as public-holidays.
   "/api/bank-holidays", "/api/school-holidays", "/api/next-holidays", "/api/long-weekends",
   "/api/country-business-days", "/api/business-day-planner", "/api/settlement-calendar",
@@ -165,7 +164,7 @@ const NETWORK = new Set([
   // (503 without them — the CI test env has none; scripts/test-cdp-live.js
   // covers the real calls where the secrets exist).
   "/api/wallet-balances", "/api/testnet-fund", "/api/onramp-link",
-  "/api/onchain-sql", "/api/onchain-sql-schema", "/api/onchain-sql-range", "/api/onchain-sql-week",
+  "/api/onchain-sql", "/api/onchain-sql-schema", 
   "/api/x402-quote", "/api/usdc-balance", "/api/tx-status", "/api/gas-estimate", "/api/x402-verify", "/api/ens-resolve",
   // Macro-kit: all routes hit live upstreams (FRED, Treasury Fiscal Data, ECB,
   // World Bank). FRED-keyed routes return 503 without FRED_API_KEY — the
@@ -174,9 +173,9 @@ const NETWORK = new Set([
   "/api/treasury-debt", "/api/treasury-avg-rates",
   "/api/fx-historical", "/api/fx-timeseries", "/api/fx-dashboard",
   "/api/world-bank-indicator", "/api/world-bank-search",
-  "/api/fred-series", "/api/fred-search", "/api/fred-series-info", "/api/fred-release-calendar",
+  "/api/fred-series", 
   "/api/sahm-rule", "/api/cpi-yoy", "/api/unemployment-rate", "/api/fed-funds",
-  "/api/fred-release-observations",
+  
   // EDGAR-kit: every route hits data.sec.gov, www.sec.gov, or efts.sec.gov.
   "/api/edgar-company-lookup", "/api/edgar-filings", "/api/edgar-company-concept",
   "/api/edgar-company-facts", "/api/edgar-xbrl-frame",
@@ -222,10 +221,9 @@ const NETWORK = new Set([
   // (tx-simulate). solidity-scan + address-label are pure CPU and stay strict.
   "/api/contract-source", "/api/contract-abi", "/api/calldata-decode",
   "/api/selector-lookup", "/api/tx-simulate",
-  // Enrich-kit: GLEIF (lei-lookup), Wikidata (wikidata-entity), gravatar.com
-  // (gravatar-check), api.github.com (github-repo — 60/hr per-IP keyless quota
+  // Enrich-kit: GLEIF (lei-lookup), Wikidata (wikidata-entity), api.github.com (github-repo — 60/hr per-IP keyless quota
   // can 403→503 in CI), favicon fetch against a live site (favicon-grab).
-  "/api/lei-lookup", "/api/wikidata-entity", "/api/gravatar-check",
+  "/api/lei-lookup", "/api/wikidata-entity", 
   "/api/github-repo", "/api/favicon-grab",
   // Price-feed-kit: a keyless public upstream (CoinGecko).
   // CoinGecko's free tier shares a per-IP ~30 rpm limit; tolerate 429/502/503/504.
@@ -244,7 +242,7 @@ const NETWORK = new Set([
   // Onchain-identity-kit: keyless public APIs (ensideas, Warpcast, EAS
   // indexers). Tolerate transient upstream errors + 4xx from placeholder
   // example inputs (0x000…0 may return null/empty).
-  "/api/ens-bulk-resolve", "/api/farcaster-profile", "/api/farcaster-by-address",
+  "/api/ens-bulk-resolve", 
   "/api/eas-attestations",
   // NFT-market-kit: Alchemy NFT v3 (503 without key in CI without secrets;
   // 4xx on placeholder contracts that don't exist on a given chain).

@@ -1331,7 +1331,7 @@ export const SOLANA_INTEL_TOOLS = [
     tags: ["solana", "price", "token", "spl", "batch"],
     discovery: {
       bodyType: "json",
-      input: { mints: [MINTS.SOL, MINTS.JUP, MINTS.USDC] },
+      input: { mints: [MINTS.SOL, MINTS.JUP] },
       inputSchema: {
         properties: {
           mints: { type: "array", items: { type: "string" }, description: `1-${SOL_PRICE_MAX_MINTS} base58 mint addresses (array, or a comma-separated string).` },
@@ -1340,9 +1340,9 @@ export const SOLANA_INTEL_TOOLS = [
       },
       output: {
         example: {
-          count: 3, missing: [],
-          prices: { [MINTS.SOL]: { priceUsd: 93.7085, priceChange24hPct: 3.93, liquidityUsd: 48142746.9, decimals: 9, blockId: 440919037 }, [MINTS.JUP]: { priceUsd: 0.2035, priceChange24hPct: -2.4, liquidityUsd: 3092234.59, decimals: 6, blockId: 440919037 }, [MINTS.USDC]: { priceUsd: 0.9998, priceChange24hPct: 0.01, liquidityUsd: 52018833.12, decimals: 6, blockId: 440919037 } },
-          priceFrom: { [MINTS.SOL]: "base", [MINTS.JUP]: "base", [MINTS.USDC]: "base" },
+          count: 2, missing: [],
+          prices: { [MINTS.SOL]: { priceUsd: 93.7085, priceChange24hPct: 3.93, liquidityUsd: 48142746.9, decimals: 9, blockId: 440919037 }, [MINTS.JUP]: { priceUsd: 0.2035, priceChange24hPct: -2.4, liquidityUsd: 3092234.59, decimals: 6, blockId: 440919037 } },
+          priceFrom: { [MINTS.SOL]: "base", [MINTS.JUP]: "base" },
           source: "dexscreener", fetchedAt: "2026-11-23T12:00:00.000Z",
         },
       },
@@ -1353,7 +1353,8 @@ export const SOLANA_INTEL_TOOLS = [
       if (!Array.isArray(raw) || raw.length === 0) throw bad(`"mints" is required: 1-${SOL_PRICE_MAX_MINTS} base58 mint addresses`);
       if (raw.length > SOL_PRICE_MAX_MINTS) throw bad(`"mints" must contain at most ${SOL_PRICE_MAX_MINTS} entries (got ${raw.length})`);
       const mints = [...new Set(raw.map((m) => takeMint(m, "mints[]")))];
-      const budget = budgetOf();
+      // The handler's own budget: every read here ends inside it.
+      const budget = currentBudget() || undefined;
       const chunks = [];
       for (let k = 0; k < mints.length; k += PAIR_READ_MAX_MINTS) chunks.push(mints.slice(k, k + PAIR_READ_MAX_MINTS));
       // The pair reads decide the answer; the on-chain read only fills

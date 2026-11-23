@@ -47,7 +47,7 @@ export async function kitTools() {
 
 // Keys and switches a kit reads before it reads its input. Each gets a
 // placeholder (nothing leaves the process, so none is ever presented).
-const PLACEHOLDER_KEYS = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "BRAVE_API_KEY", "BRAVE_ANSWERS_API_KEY", "APOLLO_API_KEY", "ALCHEMY_API_KEY", "FRED_API_KEY", "FRED_API_KEY_V2", "NEYNAR_API_KEY", "TYPESAFE_API_KEY", "X_BEARER_TOKEN"];
+const PLACEHOLDER_KEYS = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "BRAVE_API_KEY", "BRAVE_ANSWERS_API_KEY", "APOLLO_API_KEY", "ALCHEMY_API_KEY", "FRED_API_KEY", "TYPESAFE_API_KEY", "X_BEARER_TOKEN"];
 // Switches that put a tool on, and the day's spend alarms set out of reach:
 // the measurement's own calls book estimates in this process, and a day
 // ceiling met halfway through would answer the rest before their checks.

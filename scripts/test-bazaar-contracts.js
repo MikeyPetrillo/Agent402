@@ -31,7 +31,7 @@ const openapiOutputExample = (openapi, endpoint) => {
   const ok = openapiOperation(openapi, endpoint.method || "GET", endpoint.path)?.responses?.["200"]?.content?.["application/json"];
   return ok?.example ?? ok?.examples?.default?.value;
 };
-const WHOLE_LISTING_ROUTES = new Set(["POST /v1/judge", "POST /v1/decisions", "POST /v1/judge/vision", "POST /api/loop-gate"]);
+const WHOLE_LISTING_ROUTES = new Set(["POST /v1/judge", "POST /v1/decisions", "POST /api/loop-gate"]);
 // The encoded challenge header a buyer echoes back stays under this.
 const MAX_HEADER_CHARS = 12_000;
 // The JSON body mirrors the header's PaymentRequired object (see

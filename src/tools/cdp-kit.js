@@ -1682,7 +1682,7 @@ export const CDP_TOOLS = [
     price: "$0.030",
     description:
       `Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions (filter it by block_time). ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). ${SQL_WINDOW_SENTENCE} ${SQL_WALK_CHARGE} Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.`,
-    tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],
+    tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science", "solana", "instructions"],
     discovery: {
       bodyType: "json",
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },

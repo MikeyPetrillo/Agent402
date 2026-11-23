@@ -116,7 +116,6 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-          FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
         run: |
           FREE_MODE=true OPENROUTER_TTS_ENABLED=true PORT=3000 node src/server.js > /tmp/server.log 2>&1 &
           for i in $(seq 1 60); do curl -sf localhost:3000/health >/dev/null && break; sleep 1; done
@@ -139,15 +138,6 @@ jobs:
             -H 'content-type: application/json' -d '{"input":"Native voice test.","voice":"en_paul_cheerful"}')
           echo "en_paul_cheerful → $CODE ($(wc -c < /tmp/e2e2.mp3) bytes)"
           [ "$CODE" = "200" ] && [ "$(wc -c < /tmp/e2e2.mp3)" -gt 1000 ] || { echo "::error::E2E native-voice buy failed"; exit 1; }
-
-          echo "--- FRED release-calendar with the real v2 key (retry + timeout path):"
-          if [ -n "$FRED_API_KEY_V2" ]; then
-            CODE=$(curl -sS --max-time 60 -o /tmp/fred.json -w '%{http_code}' "localhost:3000/api/fred-release-calendar?days=7")
-            echo "fred-release-calendar → $CODE ($(head -c 120 /tmp/fred.json))"
-            [ "$CODE" = "200" ] || { echo "::error::fred-release-calendar failed live"; exit 1; }
-          else
-            echo "(no FRED_API_KEY_V2 secret — skipped)"
-          fi
 
           echo "--- treasury endpoints x10 each (FISCAL_FETCH retry wiring):"
           FAILS=0
