@@ -26,7 +26,7 @@ const caught = async (p) => { try { await p; return null; } catch (e) { return e
 
 // --- the tool definition --------------------------------------------------------
 ok(tool.attribution === "us-agencies" && ATTRIBUTIONS["us-agencies"] === US_AGENCIES_ATTRIBUTION && tool.description.endsWith(US_AGENCIES_ATTRIBUTION), "fred-series credits the agencies and its description ends with that sentence");
-ok(!/FRED\(R\) API|St\. Louis|stlouisfed/.test(tool.description) && !("terms" in tool.discovery.output.example), "fred-series makes no FRED API claim and carries no FRED terms line");
+ok(!/FRED\(R\) API|St\. Louis|stlouisfed/.test(tool.description) && /bls\.gov/.test(tool.discovery.output.example.terms), "fred-series makes no FRED API claim, and its example links the publisher's terms, not FRED's");
 ok(JSON.stringify(tool.upstreamHosts) === JSON.stringify(["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov"]), "fred-series declares the hosts it reads through its source module");
 ok(!METERED_SLUGS.has("fred-series"), "fred-series is keyless, so the catalog sweeps drive it");
 ok(SERIES[tool.discovery.input.seriesId], `the published example's series (${tool.discovery.input.seriesId}) is served`);
@@ -79,7 +79,7 @@ try {
   _resetUsMacroForTest();
   const a = await run({ seriesId: "unrate", startDate: "2024-01-01", endDate: "2024-12-31" });
   ok(a.seriesId === "UNRATE" && a.units === "lin" && a.count === 12 && a.observations[0].date === "2024-01-01" && a.observations[11].date === "2024-12-01", `UNRATE answers fred-series' shape, one row a month (${a.count})`);
-  ok(a.source === "U.S. Bureau of Labor Statistics" && a.sourceSeries === "LNS14000000" && a.credit === BLS_VOUCH && /^\d{4}-\d{2}-\d{2}T/.test(a.retrievedAt) && !a.derived, "UNRATE credits BLS, its series, the retrieval date and the statement the BLS terms require");
+  ok(a.source === "U.S. Bureau of Labor Statistics" && a.sourceSeries === "LNS14000000" && a.credit === BLS_VOUCH && /^\d{4}-\d{2}-\d{2}T/.test(a.retrievedAt) && /termsOfService/.test(a.terms) && !a.derived, "UNRATE credits BLS, its series, the retrieval date and the statement the BLS terms require");
   ok(blsBodies.length === 1 && blsBodies[0].seriesid[0] === "LNS14000000" && blsBodies[0].startyear === "2020" && blsBodies[0].endyear === "2029" && !("registrationkey" in blsBodies[0]), "BLS is read one calendar decade per query, keyless without BLS_API_KEY");
   await run({ seriesId: "UNRATE", startDate: "2021-01-01", endDate: "2022-12-31" });
   ok(blsBodies.length === 1, "a second window in the same decade is served from the cache");
@@ -105,7 +105,7 @@ try {
   // NY Fed
   _resetUsMacroForTest();
   const f = await run({ seriesId: "DFF", startDate: "2026-01-01", endDate: "2026-01-31" });
-  ok(f.source === "Federal Reserve Bank of New York" && f.sourceSeries === "EFFR" && f.note && /not affiliated with the New York Fed/.test(f.credit) && /subject to the Terms of Use posted at newyorkfed.org/.test(f.credit) && /© \d{4} Federal Reserve Bank of New York/.test(f.credit), "DFF credits the New York Fed with its notice and disclaimer, and notes business days only");
+  ok(f.source === "Federal Reserve Bank of New York" && f.sourceSeries === "EFFR" && f.note && /not affiliated with the New York Fed/.test(f.credit) && /subject to the Terms of Use posted at newyorkfed.org/.test(f.credit) && /© \d{4} Federal Reserve Bank of New York/.test(f.credit) && /newyorkfed\.org\/privacy\/termsofuse/.test(f.terms), "DFF credits the New York Fed with its notice and disclaimer, and notes business days only");
   ok(f.observations.every((o) => ![0, 6].includes(new Date(`${o.date}T00:00:00Z`).getUTCDay())), "DFF carries the published business days only");
   const ff = await run({ seriesId: "FEDFUNDS" });
   ok(ff.derived === true && ff.count === 2 && ff.observations[0].date === "2026-01-01" && ff.observations[1].date === "2026-02-01", `FEDFUNDS carries whole months through the latest rate's month, none after it (${JSON.stringify(ff.observations)})`);

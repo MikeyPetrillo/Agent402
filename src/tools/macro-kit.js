@@ -25,7 +25,7 @@ import { markEndsAtCeiling, capByCeiling, assertBeforeCeiling, ceilingLeftMs } f
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { FRED_TERMS, FRED_TERMS_URL, termsAnswers, US_AGENCIES_ATTRIBUTION } from "../data-attribution.js";
-import { usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, BLS_VOUCH as US_MACRO_BLS_VOUCH } from "./us-macro-series.js";
+import { usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
@@ -980,7 +980,7 @@ MACRO_TOOLS.push(
     route: "GET /api/fred-series", name: "US economic time series by FRED series ID", slug: "fred-series", category: "data", attribution: "us-agencies", price: "$0.001",
     upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov"],
     description:
-      `Fetch a US economic time series by its FRED series ID, read from the agency that publishes it: unemployment and labor (UNRATE, UNRATENSA, U6RATE, CIVPART, EMRATIO, PAYEMS, CES0500000003, JTSJOL) and prices (CPIAUCSL, CPIAUCNS, CPILFESL, PPIACO) from the Bureau of Labor Statistics; the federal funds rate (DFF, FEDFUNDS) and the other New York Fed overnight reference rates; and total public debt (GFDEBTN) from Treasury Fiscal Data. Supports date windowing, FRED's units transformations (lin, chg, ch1, pch, pc1, pca, cca, log) and averaging to a lower frequency (w, m, q, sa, a), computed here and marked derived. ?seriesId=UNRATE&startDate=2024-01-01&units=pc1. Any other ID answers 404 with the list of supported IDs; nothing is charged. ${US_AGENCIES_ATTRIBUTION}`,
+      `US economic time series by FRED series ID, read from the agency that publishes it: labor and price series (UNRATE, CPIAUCSL), overnight rates (DFF, FEDFUNDS) and total public debt (GFDEBTN). Date windows, units and lower frequencies; other IDs answer 404 with the list. ${US_AGENCIES_ATTRIBUTION}`,
     tags: ["fred", "series", "time-series", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "bls", "macro", "economic-data", "treasury"],
     discovery: {
       input: { seriesId: "UNRATE", startDate: "2024-01-01", endDate: "2024-12-31" },
@@ -995,13 +995,7 @@ MACRO_TOOLS.push(
         },
         required: ["seriesId"],
       },
-      output: { example: {
-        seriesId: "UNRATE", units: "lin", count: 12,
-        observations: [{ date: "2024-01-01", value: 3.7 }, { date: "2024-02-01", value: 3.9 }],
-        source: "U.S. Bureau of Labor Statistics", sourceSeries: "LNS14000000",
-        title: "Unemployment Rate (percent, seasonally adjusted)", retrievedAt: "2026-11-23T19:00:00.000Z",
-        credit: US_MACRO_BLS_VOUCH,
-      } },
+      output: { example: { seriesId: "UNRATE", count: 12, observations: [{ date: "2024-01-01", value: 3.7 }], source: "U.S. Bureau of Labor Statistics", sourceSeries: "LNS14000000", terms: US_MACRO_TERMS.bls } },
     },
     handler: async (i) => {
       const seriesId = String(i.seriesId ?? "").trim().toUpperCase();

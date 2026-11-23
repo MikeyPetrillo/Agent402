@@ -33,6 +33,14 @@ export const BLS_VOUCH = "BLS.gov cannot vouch for the data or analyses derived 
 export const NYFED_NOTICE = (name) =>
   `The ${name} is subject to the Terms of Use posted at newyorkfed.org. The New York Fed is not responsible for publication of the ${name} by Agent402, does not sanction or endorse any particular republication, and has no liability for your use. Agent402 is not affiliated with the New York Fed. The New York Fed does not sanction, endorse, or recommend any products or services offered by Agent402.`;
 export const SOFR_DTCC_NOTICE = "The Secured Overnight Financing Rate (SOFR) Data are calculated using data provided under a license granted to the New York Fed by DTCC Solutions LLC (\"Solutions\"), an affiliate of The Depository Trust & Clearing Corporation. Solutions, its affiliates, and third parties from which they obtained data have no liability for the content of this material.";
+// Each answer links the terms its publisher's data is served under (the New
+// York Fed's ask that its content be passed on with the same permissions,
+// conditions and restrictions is met by naming them).
+export const TERMS = Object.freeze({
+  bls: "BLS Public Data API terms of service: https://www.bls.gov/developers/termsOfService.htm",
+  nyfed: "New York Fed Terms of Use, which apply to this data as passed on here: https://www.newyorkfed.org/privacy/termsofuse",
+  treasury: "U.S. Treasury Fiscal Data: https://fiscaldata.treasury.gov/about-us/",
+});
 export const TREASURY_FISCAL_CREDIT = "Source: U.S. Department of the Treasury, Fiscal Data (fiscaldata.treasury.gov).";
 
 const BLS = (id, title) => ({ source: "bls", id, freq: "m", title });
@@ -364,6 +372,7 @@ export async function usMacroSeries({ seriesId, startDate, endDate, limit = 1000
     title: s.title,
     retrievedAt,
     credit,
+    terms: TERMS[s.source],
     ...(derived ? { derived: true } : {}),
     ...(s.note ? { note: s.note } : {}),
     ...(windowNote ? { window: windowNote } : {}),

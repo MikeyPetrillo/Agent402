@@ -59,7 +59,7 @@ const ENTRIES = [
     date: "2026-11-23",
     title: "fred-series from its publishers; code execution retired",
     items: [
-      "Tools: POST /api/code-run and /api/code-run-pro are retired and answer 410 Gone: code execution is no longer offered.",
+      "Tools: code-run and code-run-pro are retired and answer 410 and name none: code execution is no longer offered.",
       "Tools: fred-series now reads each series from the agency that publishes it: labor and price series (UNRATE, U6RATE, CIVPART, EMRATIO, PAYEMS, CES0500000003, JTSJOL, CPIAUCSL, CPIAUCNS, CPILFESL, PPIACO) from the Bureau of Labor Statistics, DFF, EFFR, FEDFUNDS, SOFR and OBFR from the Federal Reserve Bank of New York, and GFDEBTN from Treasury Fiscal Data, with each publisher's credit in the answer. The route, inputs, answer shape and price are unchanged; units and frequency are computed here and marked derived. Other series IDs answer 404 with the supported list, and the published example is now UNRATE.",
     ],
   },

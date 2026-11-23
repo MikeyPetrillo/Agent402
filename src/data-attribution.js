@@ -70,9 +70,10 @@ export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or 
 export const ECB_ATTRIBUTION = "Source: European Central Bank.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
 // fred-series (src/tools/us-macro-series.js, which cites each publisher's
-// terms): the publishers named, the statement the BLS API terms require, and
-// the New York Fed's disclaimer for a product described with its rates.
-export const US_AGENCIES_ATTRIBUTION = "Data from the U.S. Bureau of Labor Statistics, the Federal Reserve Bank of New York and the U.S. Treasury. BLS.gov cannot vouch for the data or analyses derived from these data after the data have been retrieved from BLS.gov. Agent402 is not affiliated with the New York Fed.";
+// terms): the publishers named and the New York Fed's disclaimer for a product
+// described with its rates; each answer carries its publisher's full credit
+// (the BLS statement and retrieval date, the New York Fed's notice).
+export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, the New York Fed and the U.S. Treasury. Agent402 is not affiliated with the New York Fed.";
 export const CAMS_ATTRIBUTION = "Contains modified Copernicus Atmosphere Monitoring Service information (CAMS ENSEMBLE data provider).";
 export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
 // GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place

@@ -8,8 +8,8 @@ carries its own version on npm.
 
 ### 2026-11-23 (fred-series from its publishers; code execution retired)
 Tools:
-- POST /api/code-run and /api/code-run-pro are retired and answer 410 Gone:
-  code execution is no longer offered.
+- code-run and code-run-pro are retired and answer 410 and name none: code
+  execution is no longer offered.
 - fred-series now reads each series from the agency that publishes it: labor
   and price series (UNRATE, U6RATE, CIVPART, EMRATIO, PAYEMS, CES0500000003,
   JTSJOL, CPIAUCSL, CPIAUCNS, CPILFESL, PPIACO) from the Bureau of Labor
