@@ -317,6 +317,14 @@ await refuses("json-lint", { json: { a: 1 } }, "json", "an object");
   ok(e2 && e2.statusCode === 413 && /answer would be/.test(e2.message) && performance.now() - t1 < 200, `csv-to-json: a wide header over many rows answers 413 before it is built (${e2?.statusCode}: ${e2?.message?.slice(0, 120)})`);
   const rows = tool("csv-to-json").handler({ csv: wide, header: false });
   ok(rows.count === 2001, "csv-to-json: the same CSV without header objects is answered");
+  // Names are measured as they are written in JSON: a control character
+  // takes six bytes there, so a 6 KB input with such a header is refused too.
+  const ctl = "\u0001".repeat(4_000) + "\n" + "1\n".repeat(1_200);
+  const e3 = errOf(() => tool("csv-to-json").handler({ csv: ctl }));
+  ok(e3 && e3.statusCode === 413, `csv-to-json: a control-character header over 1,200 rows answers 413 (${e3?.statusCode ?? "answered"})`);
+  const ctlAgg = `g,${"\u0001".repeat(15_000)}\n` + Array.from({ length: 1000 }, (_, i) => `k${i},1`).join("\n");
+  const e4 = errOf(() => tool("csv-aggregate").handler({ csv: ctlAgg, groupBy: "g", limit: 1000 }));
+  ok(e4 && e4.statusCode === 413, `csv-aggregate: a control-character column name over 1,000 groups answers 413 (${e4?.statusCode ?? "answered"})`);
   for (const slug of ["csv-to-json", "csv-aggregate"]) {
     const t = tool(slug);
     const r = t.handler({ ...t.discovery.input });

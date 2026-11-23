@@ -793,9 +793,13 @@ const dataTools = [
       if (!header) return { rows: grid, count: grid.length, ...fellBack };
       const cols = grid[0];
       // Each row object repeats every column name: estimate before building.
+      // Names and cells are measured as JSON writes them (a control character
+      // is six bytes there), each name once.
       let perRow = 2;
-      for (const c of cols) perRow += c.length + 6;
-      const tooLarge = csvAnswerTooLarge((grid.length - 1) * perRow + text.length, "send fewer rows or columns, or header=false for arrays.");
+      for (const c of cols) perRow += JSON.stringify(c).length + 4;
+      let cells = 0;
+      for (let i = 1; i < grid.length; i++) for (const v of grid[i]) cells += JSON.stringify(v).length;
+      const tooLarge = csvAnswerTooLarge((grid.length - 1) * perRow + cells, "send fewer rows or columns, or header=false for arrays.");
       if (tooLarge) throw tooLarge;
       const rows = grid.slice(1).map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i] ?? ""])));
       return { rows, count: rows.length, ...fellBack };

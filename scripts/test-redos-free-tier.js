@@ -109,6 +109,8 @@ function structuredCorpus() {
     // rows: an answer that repeats each column name per row grows far past
     // its input.
     wideCsv: Array.from({ length: 2000 }, (_, i) => `column_name_${i}`).join(",") + "\n" + "1\n".repeat(2000),
+    // A header of control characters, each six bytes once written as JSON.
+    controlHeaderCsv: "\u0001".repeat(4000) + "\n" + "1\n".repeat(1200),
   };
 }
 // Above the largest answer a tool may write (16 MB of resolved spec or of CSV, plus its envelope).

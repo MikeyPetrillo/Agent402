@@ -558,9 +558,9 @@ function csvAggregate(input) {
   // names and the groups it would list, and refuse a larger one before it
   // is built (a long column name over many groups grew far past its input).
   let perSummary = 2;
-  for (const c of cols) perSummary += header[c].length + 160;
+  for (const c of cols) perSummary += JSON.stringify(header[c]).length + 160;
   let shownGroups = 0, keyBytes = 0;
-  if (g >= 0) { shownGroups = Math.min(limit, groups.size); for (const b of groups.values()) keyBytes += b.key.length + 40; }
+  if (g >= 0) { shownGroups = Math.min(limit, groups.size); for (const b of groups.values()) keyBytes += JSON.stringify(b.key).length + 40; }
   const tooLarge = csvAnswerTooLarge((1 + shownGroups) * perSummary + keyBytes, "summarize fewer columns (columns), list fewer groups (limit), or shorten the column names.");
   if (tooLarge) throw tooLarge;
   const statsOf = (list) => Object.fromEntries(cols.map((c, k) => [header[c], finishStats(list[k])]));
