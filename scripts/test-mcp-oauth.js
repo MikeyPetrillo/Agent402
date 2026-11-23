@@ -339,7 +339,9 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
     ok((await h.page(firsts[0])).status === 400 && (await h.page(lasts[0])).status === 200, "a browser past its cap loses its own oldest pending sign-in, never its newest");
     const fresh = await h.start("198.18.11.1", await h.client("198.18.11.1"));
     ok(fresh.status === 303 && fresh.pageStatus === 200, `${A} addresses cannot fill the pending cap for anyone else (${fresh.status})`);
-    useGuardsTable({ ...guardsTable(), mcpOAuth: { ...guardsTable().mcpOAuth, pendingMax: BASE_TABLE.mcpOAuth.pendingMax } });
+    // Room for every request this phase holds, so the per-app cap is what is
+    // read here (a full map lets the heaviest app's oldest go, tested below).
+    useGuardsTable({ ...guardsTable(), mcpOAuth: { ...guardsTable().mcpOAuth, pendingMax: Math.max(BASE_TABLE.mcpOAuth.pendingMax, A * L.pendingPerAddress + 2 * L.pendingPerClient + 10) } });
     const shared = await h.client("198.18.12.1");
     const early = await h.start("198.18.13.1", shared);
     for (let i = 1; i < L.pendingPerClient + 2; i++) await h.start(`198.18.13.${i + 1}`, shared);
@@ -677,9 +679,10 @@ try {
       if (g.status !== 400) bad.push(`GET ${rid}: ${g.status}`);
     }
     ok(bad.length === 0, `prototype keys as the request id are an expired sign-in on every action (${bad.join(", ") || "all 400"})`);
-    const fresh = await start(p1);
-    const fp = await page(fresh);
-    ok(fp.res.status === 200 && /Email me a code/.test(fp.html) && !/name="code"/.test(fp.html), "and a new sign-in still opens on the email step");
+    // A pending sign-in that asked for no code still reads on the email step
+    // (a new sign-in from this address may meet the address cap, by design).
+    const fp = await page(S);
+    ok(fp.res.status === 200 && /Email me a code/.test(fp.html) && !/name="code"/.test(fp.html), "and the open sign-in still reads on the email step");
   }
 
   // Any address gets a code (a first purchase is made signed in), with the same answer.
