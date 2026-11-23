@@ -329,6 +329,7 @@ await new Promise((r) => srv.close(r));
   const defs2 = new Map([
     ["echo", DEFS["POST /api/echo"]],
     ["pointer", { route: "POST /api/pointer", slug: "pointer", name: "Pointer", category: "text", price: "$0.002", description: "Answers with a verify step.", discovery: { inputSchema: { properties: { text: { type: "string" } } }, input: { text: "x" } }, handler: async (i) => ({ verdict: "allow", echo: i.text, certificate: { token: "t.k.n", verifyWith: "POST /api/sql-cert-verify { sql, certificate }" }, link: "https://agent402.tools/docs", steps: ["read /mcp for more", "keep this"], note: "a path that is not a route: /api/sql-cert-verify-not" }) }],
+    ["trimmed", { route: "POST /api/trimmed", slug: "trimmed", name: "Trimmed", category: "crypto", price: "$0.002", description: "Answers a figure a third party owns.", discovery: { inputSchema: { properties: { text: { type: "string" } } }, input: { text: "x" } }, handler: async () => ({ coins: [{ symbol: "USDX", price: 0.999, deviationBps: -10 }], source: "s" }), refAnswer: (a) => ({ ...a, coins: a.coins.map(({ price, ...rest }) => rest) }) }],
     ["flaky2", { route: "POST /api/flaky2", slug: "flaky2", name: "Flaky", category: "text", price: "$0.002", description: "Fails on demand.", discovery: { input: { text: "x" } }, handler: async () => { if (flaky2 > 0) { flaky2--; throw Object.assign(new Error("upstream unavailable"), { statusCode: 502 }); } return { fine: true }; } }],
   ]);
   const sold = [];
@@ -369,6 +370,20 @@ await new Promise((r) => srv.close(r));
     const own = await freshPay("/aws/pointer", "198.51.100.11");
     const oj = await (await send("/aws/pointer", { text: "my text names POST /api/echo" }, "198.51.100.11", { "payment-signature": own.hdr })).json();
     ok(oj.echo === "my text names POST /api/echo" && !("verifyWith" in (oj.certificate || {})), "a route the caller's own text names comes back whole; the answer's own pointer is still dropped");
+
+    // A tool that declares its third-party-resale answer (refAnswer) serves
+    // that answer here too, as on /ref.
+    clock.t += 61_000;
+    const tp = await freshPay("/aws/trimmed", "198.51.100.12");
+    const tr = await send("/aws/trimmed", { text: "x" }, "198.51.100.12", { "payment-signature": tp.hdr });
+    const tj = await tr.json();
+    ok(tr.status === 200 && tj.coins?.[0]?.deviationBps === -10 && !("price" in (tj.coins?.[0] || {})), `/aws serves a tool's declared resale answer (${JSON.stringify(tj)})`);
+    {
+      const { CRYPTO_TOOLS } = await import("../src/tools/crypto-kit.js");
+      const peg = CRYPTO_TOOLS.find((t) => t.slug === "stablecoin-peg");
+      const declared = AWS_DEFAULT_SLUGS.filter((sl) => sl === "stablecoin-peg");
+      ok(declared.length === 0 || typeof peg?.refAnswer === "function", "stablecoin-peg, in the default listing, declares its resale answer");
+    }
 
     // Paid, per client address and per buyer; a refused payment stays usable.
     clock.t += 61_000;

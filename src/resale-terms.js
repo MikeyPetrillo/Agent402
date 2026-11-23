@@ -56,7 +56,8 @@ export function resaleBarredReason(def) {
   return why.slice(0, 200);
 }
 
-/** Declare, beside a tool's handler, what its answer becomes on a /ref copy:
+/** Declare, beside a tool's handler, what its answer becomes on a /ref copy
+ *  and on /aws (both resell through a third party):
  *  `transform(answer)` returns the answer the referral gate serves (a new
  *  value; it never changes the one it is given). The public route serves the
  *  handler's own answer, untouched. */
@@ -65,8 +66,9 @@ export function markRefAnswer(tools, slugs, transform) {
   return mark(tools, slugs, { refAnswer: transform });
 }
 
-/** The answer a /ref copy serves for `def`: its declared transform applied
- *  (src/referral-gate.js is the one caller), or the answer as it came. */
+/** The answer a /ref copy (src/referral-gate.js) and an /aws sale
+ *  (src/aws-marketplace-gate.js) serve for `def`: its declared transform
+ *  applied, or the answer as it came. */
 export function refAnswerOf(def, answer) {
   return def && typeof def.refAnswer === "function" ? def.refAnswer(answer) : answer;
 }

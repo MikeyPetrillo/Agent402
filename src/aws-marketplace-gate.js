@@ -51,7 +51,7 @@
 import { binaryTypesOf } from "./tool-media-type.js";
 import { namesOwnHost } from "./referral-gate.js";
 import { withoutChargeSentences } from "./not-charged.js";
-import { resaleBarredReason } from "./resale-terms.js";
+import { resaleBarredReason, refAnswerOf } from "./resale-terms.js";
 import { createHash } from "node:crypto";
 import { AWS_LISTING_SLUGS } from "./aws-listing.js";
 
@@ -564,6 +564,12 @@ export async function createAwsMarketplaceGate({
       const input = handlerInputOf(req, def);
       result = await runAsCaller(req, () => def.handler(input, req));
       if (result && (result.__binary || typeof result.__sse === "function")) throw Object.assign(new Error("This tool's answer cannot be served on this route."), { statusCode: 500 });
+      // A tool's declared answer for third-party resale (src/resale-terms.js
+      // refAnswerOf, the one /ref serves) is the answer sold here too.
+      if (typeof def.refAnswer === "function") {
+        result = refAnswerOf(def, result);
+        if (result === undefined) throw Object.assign(new Error("This tool's answer could not be prepared for this route."), { statusCode: 500 });
+      }
       // The answer goes out without a pointer at this server's other surfaces
       // (a field naming a direct route, such as a verify step, is dropped);
       // text the caller sent is its own and stays.

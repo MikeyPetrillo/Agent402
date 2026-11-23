@@ -782,7 +782,7 @@ for (const t of CRYPTO_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO
 // a deviation and a band computed here.
 markResaleBarred(CRYPTO_TOOLS, ["crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global"], MARKET_DATA_RESALE_REASON);
 markResaleComputed(CRYPTO_TOOLS, ["stablecoin-peg"]);
-// On a /ref copy (src/referral-gate.js only) stablecoin-peg serves what it
+// On a /ref copy and on /aws (both resold through a third party) stablecoin-peg serves what it
 // computes and the credit, without the source's own figures per coin (price,
 // 24h high and low, market cap). The public route's answer is unchanged.
 export const STABLECOIN_PEG_REF_RAW_FIELDS = Object.freeze(["price", "high24h", "low24h", "marketCap"]);
