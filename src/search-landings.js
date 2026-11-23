@@ -15,6 +15,7 @@ import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { receiptsServed } from "./receipt-signing.js";
 import { connectorWires, connectorPayText } from "./connector-pay.js";
 import { FLAGSHIP_MCP_NAMES, AGENT402_MCP_VERSION } from "./mcp-flagship.js";
+import { getWalletHtml } from "./get-a-wallet.js";
 import { WHY_COMPARE, WHY_POINTS } from "./why.js";
 import { siteOrgRef, mppOffered } from "./site-org.js";
 
@@ -119,6 +120,7 @@ ${pre(`claude mcp add --transport http agent402 ${baseUrl}/mcp`)}
 ${pre(`{ "mcpServers": { "agent402": { "url": "${baseUrl}/mcp" } } }`)}
 <p>The local server pays from a wallet you give it. Use a new wallet holding a few dollars of USDC, never your main wallet:</p>
 ${pre(`claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`)}
+<p>${getWalletHtml()}</p>
 <h2>What the agent sees</h2>
 <p>${c("catalog.search")}, ${c("catalog.find")} and ${c("catalog.call")} reach every tool by task or slug, and ${c("payment.info")} says how to pay.${named.length ? ` Common tools also have their own names: ${named.map(c).join(", ")}.` : ""}</p>
 <h2>How a paid tool is paid</h2>

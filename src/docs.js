@@ -15,6 +15,7 @@ import { marked } from "./tools/markdown-render.js"; // the one renderer configu
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail, wrapCodeBlocks } from "./ledger-chrome.js";
 import { sentenceFit } from "./seo-meta.js";
 import { REPO_SLUG } from "./repo-link.js";
+import { getWalletHtml } from "./get-a-wallet.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIKI_DIR = join(__dirname, "..", "wiki");
@@ -381,6 +382,9 @@ export function docDescription(md, title, slug = "") {
   return `Agent402 documentation: ${title}.`;
 }
 
+// A page that shows an AGENT_KEY placeholder ends with the shared get-a-wallet
+// step (src/get-a-wallet.js): the wiki text stays as GitHub shows it.
+const KEY_PLACEHOLDER = /AGENT_KEY(?:=|"?\s*:\s*")0x(?:[A-Z_]{3,}|\.\.\.|<[^>]*>)/;
 export function docsPage(baseUrl, slug) {
   const md = Object.hasOwn(WIKI, slug) ? WIKI[slug] : null;
   if (!md) return null;
@@ -391,7 +395,7 @@ export function docsPage(baseUrl, slug) {
     title,
     description,
     `/docs/${slug}`,
-    `${renderMarkdown(md)}${docPrevNextHtml(slug)}`,
+    `${renderMarkdown(md)}${KEY_PLACEHOLDER.test(md) ? `<p>${getWalletHtml()}</p>` : ""}${docPrevNextHtml(slug)}`,
     slug
   );
 }
