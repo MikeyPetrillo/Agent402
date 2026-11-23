@@ -343,6 +343,9 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Named chain-read primitives (2026-07-29): same shared public-RPC pool +
   // Alchemy lane as evm-rpc — PoW would let one client farm the quota.
   "block-number", "chain-info", "block-info", "erc721-owner", "contract-code", "event-logs",
+  // solana-rpc-kit.js: the Solana sibling of evm-rpc, on the shared Solana RPC
+  // list whose keyed lane counts against the provider's daily ceiling.
+  "solana-rpc",
   // Contract-kit: Sourcify (contract-source / contract-abi), openchain.xyz +
   // 4byte.directory signature DBs (selector-lookup, and calldata-decode's
   // no-ABI fallback path), and the shared keyless public RPC pool

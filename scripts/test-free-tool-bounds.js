@@ -21,6 +21,7 @@ import { KIT2 } from "../src/tools/kit2.js";
 import { KIT, JSON_TO_CSV_MAX_CELLS, JSON_TO_CSV_MAX_BYTES } from "../src/tools/kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "../src/tools/text-analysis-kit.js";
 import { emailGuard } from "../src/tools/email-guard-kit.js";
+import { VALIDATE_MORE_TOOLS } from "../src/tools/validate-more-kit.js";
 import { readFileSync } from "node:fs";
 import { callerInputError, withCallerInputErrors, holdsUncoercible, uncoercibleAt, readableAsText } from "../src/caller-input-errors.js";
 import { toolClassOf } from "../src/tool-failure-monitor.js";
@@ -865,7 +866,7 @@ function rng(seed) {
   const shapes = [{ toString: 1, valueOf: "x" }, [{ toString: 1 }]];
   let bareCount = 0, calls = 0, named = 0, mapped = 0;
   const unmapped = [];
-  for (const tool of [...KIT, ...KIT2, ...TEXT_ANALYSIS_TOOLS, ...API_TOOLS]) {
+  for (const tool of [...KIT, ...KIT2, ...TEXT_ANALYSIS_TOOLS, ...API_TOOLS, ...VALIDATE_MORE_TOOLS]) {
     if (!FREE_TIER_SLUGS.has(tool.slug) || !tool.discovery?.input || typeof tool.discovery.input !== "object") continue;
     const wrapped = withCallerInputErrors(tool.handler);
     for (const key of Object.keys(tool.discovery.input)) for (const shape of shapes) {
