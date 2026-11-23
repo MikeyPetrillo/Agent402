@@ -22,8 +22,8 @@ const PINS = {
   // The refund sentences /terms prints live in src/refund-terms.js (the
   // conformance document reads them too), so that file is hashed with it.
   // Both print the credits figures (src/credits-figures.js), so it is hashed with them.
-  "src/terms.js": { date: "2026-11-23", sha: "6f7a81e4566dba1e", with: ["src/refund-terms.js", "src/credits-figures.js"] },
-  "src/privacy.js": { date: "2026-11-23", sha: "5eed0ca22dfdf1a5", with: ["src/credits-figures.js"] },
+  "src/terms.js": { date: "2026-11-24", sha: "afa0f48ee2da131c", with: ["src/refund-terms.js", "src/credits-figures.js"] },
+  "src/privacy.js": { date: "2026-11-24", sha: "29f8d8fb41ba9178", with: ["src/credits-figures.js"] },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -52,8 +52,8 @@ for (const [file, pin] of Object.entries(PINS)) {
 // main branch is at hand the test also reads main's history and fails when a
 // row main already has was rewritten (a changed hash under an old date).
 const RENDERED = {
-  terms: { off: [["2026-11-23", "64501aaaf746cb55"]], on: [["2026-11-23", "446606dbdb90e38a"]] },
-  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"]], on: [["2026-11-23", "3554b6aa8e5e5916"]] },
+  terms: { off: [["2026-11-23", "dedbcbe56eb589b9"], ["2026-11-24", "64501aaaf746cb55"]], on: [["2026-11-23", "6907ed67b19327fe"], ["2026-11-24", "446606dbdb90e38a"]] },
+  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"], ["2026-11-24", "42ed187a89a2e812"]], on: [["2026-11-23", "3554b6aa8e5e5916"], ["2026-11-24", "5f613b8aafee2d65"]] },
 };
 {
   const { termsPage } = await import("../src/terms.js");
