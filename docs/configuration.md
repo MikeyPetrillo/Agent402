@@ -911,7 +911,7 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `RECEIPT_FETCH_DAYS` | Days a streamed paid answer's signed receipt stays fetchable at /api/receipt/<settlement>. | `30` | `src/receipt-store.js` |
+| `RECEIPT_FETCH_DAYS` | Days a streamed paid answer's signed receipt stays fetchable at /api/receipt/<token> (the token its head names). | `30` | `src/receipt-store.js` |
 | `RECEIPT_FETCH_MAX_ROWS` | Row bound of the streamed-receipt store; past it the oldest go first. | `500000` | `src/receipt-store.js` |
 | `RECEIPT_FETCH_MEMORY` | How many recent streamed receipts are also held in memory (served before a queued database write lands). | `2000` | `src/receipt-store.js` |
 | `RECEIPT_RETIRED_KEYS` | Optional JSON array of earlier public keys still published: [{"kid","x","validFrom","validUntil"}], x the raw 32-byte public key in base64url. |  | `src/receipt-signing.js` |

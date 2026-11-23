@@ -143,7 +143,7 @@ function signedCell(L, rail, header) {
     : NOT_SIGNED(header);
 }
 // How a streamed answer's receipt is delivered (src/receipt-signing.js).
-const STREAM_DELIVERY = `An event-stream answer (text/event-stream) gets the receipt after its last byte, over every byte streamed, as a final \`: ${RECEIPT_SSE_COMMENT} <receipt>\` server-sent comment line, which event-stream parsers skip; a streamed answer to a request that sent TE: trailers on HTTP/1.1 gets it as an ${RECEIPT_HEADER} trailer. Every streamed answer's head names ${RECEIPT_URL_HEADER}, and GET ${RECEIPT_FETCH_PATH}/<settlement> answers the same receipt once the answer finished, so a stream that is neither still gets it.`;
+const STREAM_DELIVERY = `An event-stream answer (text/event-stream) gets the receipt after its last byte, over every byte streamed, as a final \`: ${RECEIPT_SSE_COMMENT} <receipt>\` server-sent comment line, which event-stream parsers skip; a streamed answer to a request that sent TE: trailers on HTTP/1.1 gets it as an ${RECEIPT_HEADER} trailer. Every streamed answer's head names ${RECEIPT_URL_HEADER}, and GET ${RECEIPT_FETCH_PATH}/<token>, the token that header names, answers the same receipt once the answer finished, so a stream that is neither still gets it.`;
 
 function x402ScreenCell(L, key, evm) {
   if (!L.payerScreen) return screenCell(false, "The x402 payer screen is not mounted on this server.", key);

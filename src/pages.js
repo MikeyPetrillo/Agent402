@@ -1157,8 +1157,8 @@ export function openapiSpec(baseUrl, catalog) {
     get: {
       operationId: "getStreamedReceipt",
       security: [],
-      summary: "The signed receipt of a streamed paid answer, by its settlement",
-      description: `Free. A paid answer written in parts names ${RECEIPT_URL_HEADER} in its head; once it finished 200, this answers the same ${RECEIPT_HEADER} receipt a trailer carries (a compact JWS, checked against /.well-known/agent402-receipt-key.json or at POST /api/receipts/verify with the bytes received), for ${RECEIPT_FETCH_DAYS} days. The key is the call's settlement (its transaction, a Tempo or card payment, a credits debit) or the token the head named for a batched payment. A failed, free or trial call and a referral copy are never signed, so they have none. Rate limited per client address (429 with Retry-After).`,
+      summary: "The signed receipt of a streamed paid answer, by the token its head named",
+      description: `Free. A paid answer written in parts names ${RECEIPT_URL_HEADER} in its head; once it finished 200, this answers the same ${RECEIPT_HEADER} receipt a trailer carries (a compact JWS, checked against /.well-known/agent402-receipt-key.json or at POST /api/receipts/verify with the bytes received), for ${RECEIPT_FETCH_DAYS} days. The key is the random token the head named, never the call's settlement, so only the buyer can fetch it. A failed, free or trial call and a referral copy are never signed, so they have none. Rate limited per client address (429 with Retry-After).`,
       tags: ["receipts"],
       parameters: [{ name: "key", in: "path", required: true, description: "The settlement or token the answer's head named.", schema: { type: "string", pattern: "^[A-Za-z0-9_.:-]{16,200}$" } }],
       responses: {

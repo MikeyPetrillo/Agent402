@@ -727,7 +727,7 @@
     "RECEIPT_SIGNING_KEY": "Ed25519 private key (base64 of a PKCS8 PEM) that signs paid-answer receipts; unset leaves receipts off.",
     "RECEIPT_SIGNING_KEY_ID": "Key id published with the receipt key; required with RECEIPT_SIGNING_KEY.",
     "RECEIPT_SIGNING_KEY_VALID_FROM": "Optional ISO date the key signs from (published as validFrom).",
-    "RECEIPT_FETCH_DAYS": "Days a streamed paid answer's signed receipt stays fetchable at /api/receipt/<settlement>.",
+    "RECEIPT_FETCH_DAYS": "Days a streamed paid answer's signed receipt stays fetchable at /api/receipt/<token> (the token its head names).",
     "RECEIPT_FETCH_MAX_ROWS": "Row bound of the streamed-receipt store; past it the oldest go first.",
     "RECEIPT_FETCH_MEMORY": "How many recent streamed receipts are also held in memory (served before a queued database write lands).",
     "RECEIPT_STORE_DAYS": "Days a kept signed receipt is held before it is deleted.",

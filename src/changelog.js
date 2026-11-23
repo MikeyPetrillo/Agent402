@@ -57,13 +57,13 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 const ENTRIES = [
   {
     date: "2026-11-24",
-    title: "Chain reads, source credits, caller URLs, receipts by settlement",
+    title: "Chain reads, source credits, caller URLs, receipts by token",
     items: [
       "Tools: evm-rpc, eth-call, chain-storage and event-logs read Base, and other chains answer 400; the x402 toolkit's chain reads answer 400 on Monad. wallet-balances reads this server's own RPC lanes, onchain-sql-schema is served from the schema kept here, and the signature lookups read Sourcify's signature database.",
       "Tools: whois answers registration facts computed from the registry record, domain-availability returns no record fields and holds a daily cap per registry, archive-snapshot answers a computed Wayback Machine link without asking the archive, and cert-transparency makes its second search only with its key. search-suggest reads Wikipedia's opensearch.",
       "Tools: Answers carry their source's credit where the source asks for one (crt.sh, Team Cymru, Hyperliquid, RugCheck, EAS, GoPlus and Wikipedia), and contract source answers carry each file's license; the catalog text and the 402 samples are unchanged.",
       "Tools: A tool that reads a URL the caller names sends the Agent402-Fetch token in its User-Agent and honors robots.txt for that token; site-crawl matches robots groups on the exact token.",
-      "Payments: The report products settle first under the same plan as the /v1 routes. A streamed answer's signed receipt is kept and fetched by its settlement at /api/receipt/<tx>, and a credits stream names its receipt address in the response head.",
+      "Payments: The report products settle first under the same plan as the /v1 routes. A streamed answer's signed receipt is kept and fetched at /api/receipt/<token>, by the random token its response head names, never by its settlement.",
       "Site: /terms adds a model outputs section and a clause on caller-named URLs, and /crawler describes those reads. The lead sentence scopes signed receipts to successful direct calls. /start shows the wallet new command for a first wallet.",
       "MCP: The connector sign-in answers every token it cannot accept with 401 invalid_token.",
     ],

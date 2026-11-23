@@ -174,7 +174,7 @@ const strictJson = (events) => events.every((e) => e.data === "[DONE]" || (() =>
 {
   process.env.RECEIPT_STORE_DB = join(mkdtempSync(join(tmpdir(), "a402-receipt-fetch-")), "receipts.db");
   const store = await import("../src/receipt-store.js");
-  const { RECEIPT_URL_HEADER, RECEIPT_FETCH_PATH, receiptFetchKey } = await import("../src/receipt-signing.js");
+  const { RECEIPT_URL_HEADER, RECEIPT_FETCH_PATH, receiptFetchKey, isReceiptFetchKey } = await import("../src/receipt-signing.js");
   let describe = () => SETTLED;
   const app = express();
   app.use(express.json());
@@ -189,14 +189,16 @@ const strictJson = (events) => events.every((e) => e.data === "[DONE]" || (() =>
     const plain = await call(port, "/ndjson");
     await settle();
     const url = plain.headers[RECEIPT_URL_HEADER.toLowerCase()];
-    const kept = await store.streamedReceipt(SETTLED.settlement);
-    await ok(plain.status === 200 && plain.body.toString() === '{"a":1}\n{"b":2}\n' && !plain.headers.trailer && url === `https://x.test${RECEIPT_FETCH_PATH}/${SETTLED.settlement}`, `a plain stream (no event stream, no trailers asked for) is untouched and its head names where its receipt is kept (${url})`);
+    const plainTok = String(url || "").split("/").pop();
+    const kept = await store.streamedReceipt(plainTok);
+    await ok(plain.status === 200 && plain.body.toString() === '{"a":1}\n{"b":2}\n' && !plain.headers.trailer && /^[A-Za-z0-9_-]{22}$/.test(plainTok) && url === `https://x.test${RECEIPT_FETCH_PATH}/${plainTok}`, `a plain stream (no event stream, no trailers asked for) is untouched and its head names where its receipt is kept, under a random token (${url})`);
+    await ok((await store.streamedReceipt(SETTLED.settlement)) === null && receiptFetchKey(SETTLED) === null && !isReceiptFetchKey(SETTLED.settlement), "the settlement, which is public on chain, is never a key the receipt is kept or fetched by");
     await ok(kept && verifyReceipt(kept, { keys, responseBody: plain.body, request: { method: "POST", path: "/ndjson", body: {} } }).valid, "the kept receipt verifies with the published key against the bytes streamed and the request sent");
     // The same call asking for trailers: the trailer carries the receipt the store keeps for the plain one.
     const tr = await call(port, "/ndjson", { te: true });
     const trailer = tr.trailers[RECEIPT_HEADER.toLowerCase()];
     const strip = (j) => { const r = JSON.parse(Buffer.from(j.split(".")[1], "base64url").toString("utf8")); delete r.iat; return JSON.stringify(r); };
-    await ok(trailer && strip(trailer) === strip(kept) && (await store.streamedReceipt(SETTLED.settlement)) === kept, "the kept receipt is the one a trailer carries (same record but its issue time), and the first kept under a key stays");
+    await ok(trailer && strip(trailer) === strip(kept) && (await store.streamedReceipt(plainTok)) === kept && String(tr.headers[RECEIPT_URL_HEADER.toLowerCase()] || "").split("/").pop() !== plainTok, "the kept receipt is the one a trailer carries (same record but its issue time), and each call gets a token of its own");
     // A settlement a batched payment can share is never the key: a random token is.
     describe = () => ({ ...SETTLED, rail: "gateway-batched", settlement: "batch-" + "c".repeat(20) });
     const gb = await call(port, "/ndjson");
@@ -285,7 +287,7 @@ const strictJson = (events) => events.every((e) => e.data === "[DONE]" || (() =>
       const kept = await store.streamedReceipt(tok);
       const { receipt } = splitStreamedReceipt(s.body);
       await ok(kept && kept === receipt && verifyReceipt(kept, { keys, responseBody: splitStreamedReceipt(s.body).body }).valid, "the token answers the receipt the stream carried");
-      await ok((await store.streamedReceipt(sv.record.settlement)) === kept, "and the debit id the receipt names answers it too");
+      await ok((await store.streamedReceipt(sv.record.settlement)) === null, "and only the token: the debit id the receipt names is not a fetch key");
     }
     {
       await ok(!(await call(port, "/stream")).headers[RECEIPT_URL_HEADER.toLowerCase()], "a stream with no credits key names no receipt address");
@@ -368,7 +370,9 @@ try {
       const url = r.headers.get("x-agent402-receipt-url") || "";
       let got = null;
       for (let i = 0; i < 20 && !got; i++) { const g = await fetch(url.replace(/^https?:\/\/[^/]+/, rig.url)); if (g.status === 200) got = await g.json(); else await new Promise((res) => setTimeout(res, 100)); }
-      await ok(url.endsWith(`/api/receipt/${encodeURIComponent(cv.record.settlement)}`) && got?.receipt === receipt && verifyReceipt(got.receipt, { keys: keyDoc.keys, responseBody: body }).valid, `${wire}: the stream's head names GET /api/receipt/<settlement>, which answers the same receipt the stream carried`);
+      const bySettlement = await fetch(`${rig.url}/api/receipt/${encodeURIComponent(cv.record.settlement)}`);
+      await ok(/\/api\/receipt\/[A-Za-z0-9_-]{22}$/.test(url) && got?.receipt === receipt && verifyReceipt(got.receipt, { keys: keyDoc.keys, responseBody: body }).valid, `${wire}: the stream's head names GET /api/receipt/<token>, which answers the same receipt the stream carried`);
+      await ok(bySettlement.status === 400, `${wire}: the receipt is not read by the call's public settlement (${bySettlement.status})`);
     }
     // A one-piece paid tool answer on the same wire: signed, and on an EVM
     // wire kept for the audit report (the keeper's finish listener rides a
@@ -381,12 +385,13 @@ try {
     const spec = await (await fetch(`${rig.url}/openapi.json`)).json();
     const full = await (await fetch(`${rig.url}/llms-full.txt`)).text();
     const short = await (await fetch(`${rig.url}/llms.txt`)).text();
-    await ok(spec.paths?.["/api/receipt/{key}"]?.get?.operationId === "getStreamedReceipt" && /X-Agent402-Receipt-Url/.test(full) && /GET \/api\/receipt\/<settlement>/.test(full) && /tools\.agent402\/receipt-url/.test(full) && !/\/api\/receipt\//.test(short), "the fetch is in /openapi.json and /llms-full.txt (with the MCP _meta key), not /llms.txt");
+    await ok(spec.paths?.["/api/receipt/{key}"]?.get?.operationId === "getStreamedReceipt" && /X-Agent402-Receipt-Url/.test(full) && /GET \/api\/receipt\/<token>/.test(full) && !/\/api\/receipt\/<settlement>/.test(full) && /tools\.agent402\/receipt-url/.test(full) && !/\/api\/receipt\//.test(short), "the fetch is in /openapi.json and /llms-full.txt (with the MCP _meta key), not /llms.txt");
   }
   {
-    const miss = await fetch(`${rig.url}/api/receipt/0x${"34".repeat(32)}`);
+    const miss = await fetch(`${rig.url}/api/receipt/${"Q".repeat(22)}`);
+    const tx = await fetch(`${rig.url}/api/receipt/0x${"34".repeat(32)}`);
     const bad = await fetch(`${rig.url}/api/receipt/nope`);
-    await ok(miss.status === 404 && bad.status === 400 && miss.headers.get("cache-control") === "no-store", `an unknown transaction answers 404 and a malformed key 400 (${miss.status}, ${bad.status})`);
+    await ok(miss.status === 404 && tx.status === 400 && bad.status === 400 && miss.headers.get("cache-control") === "no-store", `an unknown token answers 404, a transaction hash or a malformed key 400 (${miss.status}, ${tx.status}, ${bad.status})`);
   }
   // Credits on the booted server: the header on a one-piece answer, the receipt line on a stream.
   {

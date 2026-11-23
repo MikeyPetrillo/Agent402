@@ -16,7 +16,7 @@
 // (src/server.js receiptFieldsOf: a tool bought through a referral link is
 // that network's sale). A streamed answer that can carry no receipt (neither
 // an event stream nor sent with TE: trailers) is still signed: the receipt is
-// kept for GET /api/receipt/<settlement> (src/receipt-store.js), and the
+// kept for GET /api/receipt/<token> (src/receipt-store.js), and the
 // answer's X-Agent402-Receipt-Url header names it.
 //
 // The catalog's size is a supporting line, never the lead: SUPPORT_LINE.

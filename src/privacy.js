@@ -206,8 +206,9 @@ so every claim below is verifiable in code.</p>
     SHA-256 hashes of the request and the response, never their content) so the paying wallet can
     export it in its <code>/api/audit-report</code>; only a payment from that wallet opens the report.
     Each kept receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued;</li>
-    <li>when a paid answer is streamed, we keep its signed receipt (the same fields) under its settlement,
-    so it can be fetched at <code>/api/receipt/</code> by anyone who holds that settlement; it is deleted
+    <li>when a paid answer is streamed, we keep its signed receipt (the same fields) under a random
+    token that only that answer's response head names, never under its settlement (a transaction is
+    public), so it can be fetched at <code>/api/receipt/</code> only with that token; it is deleted
     ${RECEIPT_FETCH_DAYS} days after it was issued;</li>
     <li>to count how many separate operators pay us, we look up public records about a paying wallet:
     its primary name on Ethereum or Base when the name's own address record is that wallet, or the

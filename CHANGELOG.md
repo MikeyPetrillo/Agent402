@@ -6,7 +6,7 @@ carries its own version on npm.
 
 ## v2.15.0 - 2026-11-24
 
-### 2026-11-24 (chain reads, source credits, caller URLs, receipts by settlement)
+### 2026-11-24 (chain reads, source credits, caller URLs, receipts by token)
 Tools:
 - evm-rpc, eth-call, chain-storage and event-logs read Base, and other chains
   answer 400; the x402 toolkit's chain reads answer 400 on Monad.
@@ -27,9 +27,8 @@ Tools:
   robots groups on the exact token.
 Payments:
 - The report products settle first under the same plan as the /v1 routes. A
-  streamed answer's signed receipt is kept and fetched by its settlement at
-  /api/receipt/<tx>, and a credits stream names its receipt address in the
-  response head.
+  streamed answer's signed receipt is kept and fetched at /api/receipt/<token>,
+  by the random token its response head names, never by its settlement.
 Site:
 - /terms adds a model outputs section and a clause on caller-named URLs, and
   /crawler describes those reads. The lead sentence scopes signed receipts to

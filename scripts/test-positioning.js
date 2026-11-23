@@ -35,7 +35,7 @@ ok(LEAD_SENTENCE === APPROVED, "the published lead sentence is the approved line
 // The receipt clause claims only what is signed (src/receipt-signing.js): a
 // settled 200 (so not a failed or charged-failed call, a free or trial answer)
 // on a direct route (not a /ref/ copy); a stream that cannot carry its receipt
-// gets it fetchable at GET /api/receipt/<settlement>. No "every" over calls.
+// gets it fetchable at GET /api/receipt/<token>. No "every" over calls.
 ok(/\bsigned receipts on successful direct calls\.$/.test(LEAD_SENTENCE) && !/\bevery\b|\beach one\b/.test(LEAD_SENTENCE), "the receipt clause is scoped to successful direct calls");
 ok(!/\d/.test(LEAD_SENTENCE.replace(/x402|Agent402/g, "")) && !/tools|catalog/i.test(LEAD_SENTENCE), "the lead sentence carries no catalog size and no tool count");
 ok(SUPPORT_LINE === "500+ ready tools on the same rails.", "the catalog is the supporting line, evergreen 500+");

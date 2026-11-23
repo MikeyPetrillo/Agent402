@@ -5039,7 +5039,7 @@ app.post(RECEIPT_VERIFY_PATH, express.json({ limit: "256kb" }), (req, res) => {
 });
 // A streamed paid answer's receipt, kept where its head said
 // (X-Agent402-Receipt-Url): the same receipt a trailer would carry. Keyed by
-// the call's settlement or the token its head named; nothing is listed, and
+// the random token its head named (never the public settlement); nothing is listed, and
 // a failed, free, trial or /ref call is never signed, so it has none here.
 const receiptFetchLimiter = createRateLimiter("receipt-fetch", { perMin: 60, perHour: 1200 });
 app.get(`${RECEIPT_FETCH_PATH}/:key`, async (req, res) => {
@@ -5049,7 +5049,7 @@ app.get(`${RECEIPT_FETCH_PATH}/:key`, async (req, res) => {
     return res.status(429).json({ error: "Too many receipt reads from this address; retry in a minute.", retryAfterSeconds: 60 });
   }
   const key = String(req.params.key || "");
-  if (!isReceiptFetchKey(key)) return res.status(400).json({ error: "Send the address a streamed answer's X-Agent402-Receipt-Url header named: GET /api/receipt/<settlement or token>." });
+  if (!isReceiptFetchKey(key)) return res.status(400).json({ error: "Send the address a streamed answer's X-Agent402-Receipt-Url header named: GET /api/receipt/<token>." });
   let jws = null;
   try { jws = await streamedReceipt(key); } catch { return res.status(503).json({ error: "The receipt store did not answer; retry shortly.", retryAfterSeconds: 5 }); }
   if (!jws) return res.status(404).json({ error: `No receipt is kept under that key. A streamed paid answer's receipt is kept for ${RECEIPT_FETCH_DAYS} days once the answer finished; a failed, free or trial call has none.` });

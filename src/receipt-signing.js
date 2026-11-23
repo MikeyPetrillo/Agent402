@@ -37,8 +37,8 @@
 //     for) included: its head names X-Agent402-Receipt-Url (RECEIPT_URL_HEADER,
 //     GET RECEIPT_FETCH_PATH/<key>), and the receipt is kept there once the
 //     answer finished 200 (src/receipt-store.js), the same receipt a trailer
-//     carries. The key is the settlement (receiptFetchKey), or a random token
-//     where a settlement can be shared (a batched payment) or is not read yet.
+//     carries. The key is a random token the head names (never the
+//     settlement, which is public on chain), so only the buyer can fetch it.
 // A 4xx/5xx, a failed settle (402), a free or trial answer carries none.
 //
 // Key settings (src/receipt-signing.js is the only reader):
@@ -54,7 +54,7 @@
 //                             32-byte Ed25519 public key, base64url), kept
 //                             published so receipts they signed still verify.
 //                             A list that does not read refuses signing.
-import { createHash, createPrivateKey, createPublicKey, sign as edSign, verify as edVerify, randomUUID } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign as edSign, verify as edVerify, randomUUID, randomBytes } from "node:crypto";
 import { gateMounted } from "./gate-mounts.js";
 
 export const RECEIPT_HEADER = "Agent402-Receipt";
@@ -78,19 +78,23 @@ const SSE_FRAME_HEAD = `\n: ${RECEIPT_SSE_COMMENT} `;
 export const RECEIPT_URL_HEADER = "X-Agent402-Receipt-Url";
 /** GET RECEIPT_FETCH_PATH/<key>: a kept streamed answer's receipt (free). */
 export const RECEIPT_FETCH_PATH = "/api/receipt";
-const FETCH_KEY_RE = /^[A-Za-z0-9_.:-]{16,200}$/;
-/** Whether `key` reads as a receipt fetch key (a settlement or a token). */
+// A fetch key is a random 128-bit token (base64url, 22 characters) that only
+// the answer's head names, so only the buyer holds it. A settlement is never
+// a key: an on-chain transaction is public, and a key anyone can read off the
+// chain would make every streamed receipt (route, price, payer, digests) a
+// feed of what a wallet bought.
+const FETCH_KEY_RE = /^[A-Za-z0-9_-]{22}$/;
+/** Whether `key` reads as a receipt fetch key (a token a streamed answer's head named). */
 export function isReceiptFetchKey(key) { return typeof key === "string" && FETCH_KEY_RE.test(key); }
+/** A new fetch key. */
+export function newReceiptFetchKey() { return randomBytes(16).toString("base64url"); }
 /**
- * The key a streamed answer's receipt is kept and fetched by: its settlement
- * (an on-chain transaction, a Tempo or card payment, a credits debit), which
- * one call alone names. Null for a batched payment, whose settlement can name
- * several calls, and for a settlement that is not a usable key: such a
- * receipt is kept by a random token the answer's head names instead.
+ * The key a call's settlement fields give its streamed receipt: always null.
+ * A streamed receipt is kept only under the random token its head names
+ * (newReceiptFetchKey), whatever the rail. Kept for callers that ask.
  */
-export function receiptFetchKey(fields) {
-  if (!fields || fields.rail === "gateway-batched") return null;
-  return isReceiptFetchKey(fields.settlement) ? fields.settlement : null;
+export function receiptFetchKey(_fields) {
+  return null;
 }
 
 /** Upper bound on the header value: every string field is capped below. */
@@ -461,8 +465,8 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
         // 200 with no length set, on a request that asked for trailers.
         const hasLength = res.hasHeader("Content-Length") || args.some((a) => a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).some((k) => k.toLowerCase() === "content-length" || k.toLowerCase() === "transfer-encoding"));
         if (wantsTrailer && status === 200 && !hasLength && !res.hasHeader("Transfer-Encoding") && !res.headersSent) { res.setHeader("Trailer", RECEIPT_HEADER); trailerDeclared = true; }
-        // A streamed paid answer names where its receipt will be kept: the
-        // settlement where it is the call's own, else a random token.
+        // A streamed paid answer names where its receipt will be kept: a
+        // random token only this answer's head carries.
         if (onStreamed && !oneShot && status === 200 && !res.headersSent) {
           const d = describe(req, res);
           // A paid answer whose settlement is read only as it ends (a credits
@@ -471,7 +475,7 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
           let pending = null;
           if (!d && typeof pendingRail === "function") { try { pending = pendingRail(req, res); } catch { pending = null; } }
           if ((d && RESPONSE_RAILS.includes(d.rail)) || RESPONSE_RAILS.includes(pending)) {
-            fetchKey = (d && receiptFetchKey(d)) || b64u(Buffer.from(randomUUID().replace(/-/g, ""), "hex"));
+            fetchKey = newReceiptFetchKey();
             res.setHeader(RECEIPT_URL_HEADER, fetchUrl(fetchKey));
           }
         }
@@ -506,11 +510,8 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
           if (chunk != null) hash.update(bytesOf(chunk, encoding));
           const jws = recordFor(hash.digest("hex"));
           hash = null;
-          // Kept for GET RECEIPT_FETCH_PATH/<key>, under the key the head named
-          // (or, a credits debit read at the end, its settlement).
-          // A token the head named for a settlement read at the end (a credits
-          // debit) keeps it under that settlement too.
-          const keys = jws ? [...new Set([fetchKey, receiptFetchKey(lastRecord)].filter(Boolean))] : [];
+          // Kept for GET RECEIPT_FETCH_PATH/<key>, under the token the head named.
+          const keys = jws && fetchKey ? [fetchKey] : [];
           if (onStreamed) for (const key of keys) { try { onStreamed(key, jws, lastRecord, req, res); } catch (e) { try { onError?.(e); } catch { /* never break the answer */ } } }
           if (jws) {
             if (trailerDeclared) res.addTrailers({ [RECEIPT_HEADER]: jws });
