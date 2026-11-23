@@ -114,5 +114,30 @@ for (const [status, want] of [[429, 503], [500, 502], [403, 502]]) {
   } finally { globalThis.fetch = realFetch; src._setSuggestClockForTest(); }
 }
 
+// --- a bounded wait for the reads ahead ---
+// No caller waits longer than the queue bound for the reads ahead of it: past
+// it (or when the reads ahead would take longer, by the recent read time) it
+// is answered busy, 503 with a retry time, before the settle point and with
+// no read; the reads still run one at a time.
+{
+  ok(Number.isFinite(src.SUGGEST_MAX_QUEUE_WAIT_MS) && src.SUGGEST_MAX_QUEUE_WAIT_MS > 0 && src.SUGGEST_MAX_QUEUE_WAIT_MS <= 5000, `the wait for the reads ahead is bounded (${src.SUGGEST_MAX_QUEUE_WAIT_MS} ms)`);
+  src._setSuggestQueueWaitForTest(450);
+  let inFlight = 0, maxInFlight = 0, reads = 0;
+  globalThis.fetch = async () => { reads++; inFlight++; maxInFlight = Math.max(maxInFlight, inFlight); await new Promise((r) => setTimeout(r, 200)); inFlight--; return opensearch("a", ["A"]); };
+  try {
+    const t0 = Date.now();
+    const outs = await Promise.all(Array.from({ length: 8 }, (_, k) => tool.handler({ q: `w${k}` }).then((x) => ({ ok: x, at: Date.now() - t0 }), (e) => ({ e, at: Date.now() - t0 }))));
+    const served = outs.filter((o) => o.ok), refused = outs.filter((o) => o.e);
+    ok(served.length >= 1 && refused.length >= 1 && refused.every((o) => o.e.statusCode === 503 && Number.isInteger(o.e.retryAfter) && o.e.retryAfter >= 1), `callers past the bound are answered 503 with a retry time (${served.length} served, ${refused.length} busy)`);
+    ok(refused.every((o) => o.at < 450 + 300) && reads === served.length && maxInFlight === 1, `no refused caller waited past the bound, none of them read, and reads stayed one at a time (${refused.map((o) => o.at).join(",")} ms; ${reads} reads)`);
+    // The recent read time now predicts the wait: a line that would take too
+    // long is refused at once.
+    const t1 = Date.now();
+    const again = await Promise.all(Array.from({ length: 6 }, (_, k) => tool.handler({ q: `v${k}` }).then(() => null, (e) => ({ e, at: Date.now() - t1 }))));
+    const early = again.filter((o) => o && o.at < 50);
+    ok(early.length >= 1 && early.every((o) => o.e.statusCode === 503), `with reads taking ~200 ms, callers whose turn would come past the bound are refused at once (${early.length})`);
+  } finally { globalThis.fetch = realFetch; src._setSuggestQueueWaitForTest(); src._setSuggestClockForTest(); }
+}
+
 console.log(`\ntest-search-suggest-source: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

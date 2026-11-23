@@ -9,6 +9,10 @@
 //   - a per-minute ceiling under that limit for this process, so a burst
 //     waits briefly or is answered busy (503, before any payment is taken),
 //     and never reaches the source as a spike;
+//   - a bound on the wait for the reads ahead (SUGGEST_MAX_QUEUE_WAIT_MS): a
+//     caller whose turn would come later, by the recent read time, or has
+//     not come by then, is answered busy (503 with a retry time) before the
+//     settle point, and the reads still run one at a time;
 //   - the source is named on every answer (the tool's credit).
 import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
 import { settleBeforeUpstream } from "../settle-first.js";
@@ -21,13 +25,16 @@ export const SUGGEST_MAX_PER_MINUTE = 150;
 export const SUGGEST_MAX_WAITING = 20;
 /** The longest a caller waits for room in the minute before it is answered busy. */
 export const SUGGEST_MAX_WAIT_MS = 2000;
+/** The longest a caller waits for the reads ahead of it before it is answered busy. */
+export const SUGGEST_MAX_QUEUE_WAIT_MS = 3000;
+let maxQueueWaitMs = SUGGEST_MAX_QUEUE_WAIT_MS;
 const TIMEOUT_MS = 8000;
 const WINDOW_MS = 60_000;
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
-const busy = () => bad("Search suggestions are busy - retry shortly", 503);
+const busy = (retryAfter = 1) => Object.assign(bad("Search suggestions are busy - retry shortly", 503), { retryAfter: Math.max(1, Math.ceil(retryAfter)) });
 
 // One read at a time: each caller's turn starts when the previous read ends.
 let tail = Promise.resolve();
@@ -35,6 +42,14 @@ let waiting = 0;
 const sent = []; // send times inside the rolling minute
 let now = () => Date.now();
 let sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The recent read time (a moving average, wall clock), to predict a turn.
+let readMs = 0;
+
+/** Test hook: the queue wait bound (default SUGGEST_MAX_QUEUE_WAIT_MS). */
+export function _setSuggestQueueWaitForTest(ms) {
+  maxQueueWaitMs = Number(ms) > 0 ? Number(ms) : SUGGEST_MAX_QUEUE_WAIT_MS;
+  readMs = 0;
+}
 
 /** Test hook: a clock and a sleep of the caller's, and an empty window. */
 export function _setSuggestClockForTest(clock, sleeper) {
@@ -49,20 +64,37 @@ function roomAfterMs() {
   return sent.length < SUGGEST_MAX_PER_MINUTE ? 0 : sent[0] + WINDOW_MS - t;
 }
 
-/** Run `read` in this process's turn order, under the per-minute ceiling. */
+/** Run `read` in this process's turn order, under the per-minute ceiling
+ *  and the bound on the wait for the reads ahead. */
 async function inTurn(read) {
   if (waiting >= SUGGEST_MAX_WAITING) throw busy();
+  // The reads ahead would take longer than the bound: busy at once.
+  if (readMs > 0 && waiting * readMs > maxQueueWaitMs) throw busy((waiting * readMs) / 1000);
   waiting++;
   let release;
   const prev = tail;
   tail = new Promise((r) => { release = r; });
+  let timer = null;
+  const late = Symbol("late");
+  const turn = await Promise.race([
+    prev.then(() => true),
+    new Promise((r) => { timer = setTimeout(() => r(late), maxQueueWaitMs); timer.unref?.(); }),
+  ]);
+  clearTimeout(timer);
+  if (turn === late) {
+    // Out of line, but the next caller's turn still starts only when the
+    // read ahead of this one ends, so reads never overlap.
+    prev.then(() => { waiting--; release(); });
+    throw busy((waiting * Math.max(readMs, 100)) / 1000);
+  }
   try {
-    await prev;
     const wait = roomAfterMs();
-    if (wait > SUGGEST_MAX_WAIT_MS) throw busy();
+    if (wait > SUGGEST_MAX_WAIT_MS) throw busy(wait / 1000);
     if (wait > 0) await sleep(wait);
     sent.push(now());
-    return await read();
+    const t0 = Date.now();
+    try { return await read(); }
+    finally { const took = Date.now() - t0; readMs = readMs ? readMs * 0.7 + took * 0.3 : took; }
   } finally {
     waiting--;
     release();
