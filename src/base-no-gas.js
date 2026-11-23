@@ -12,6 +12,8 @@
 // It is said of Base alone; each other rail states its own fee handling.
 export const BASE_NO_GAS_SENTENCE = "On Base, an x402 exact payment is a signature (EIP-3009): the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.";
 
-// The same fact in a few words, for the one place size is held tight: the
-// Base line of /llms.txt (scripts/test-front-door.js holds the file's size).
-export const BASE_NO_GAS_SHORT = "An x402 exact payment needs no ETH.";
+// The same fact in a few words, for the one place size is held tight: its own
+// line under the settlement chains of /llms.txt (scripts/test-front-door.js
+// holds the file's size; each chain line stays chain, asset and CAIP-2 id,
+// scripts/test-legal-claims.js).
+export const BASE_NO_GAS_SHORT = "Base: an x402 exact payment needs no ETH.";

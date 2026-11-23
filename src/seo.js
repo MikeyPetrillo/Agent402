@@ -601,7 +601,7 @@ function llmsFullBody(baseUrl, catalog) {
   // public index (FACILITATOR_PUBLIC_INDEX_CHAINS) says so on its line.
   const indexed = new Set(publicIndexChains());
   const chainItems = Object.entries(CHAIN_PAGES)
-    .map(([key, c]) => `- [${c.chainName}](${baseUrl}/${key}): ${c.asset} (\`${c.caip2}\`)${indexed.has(key) ? `; the facilitator that settles it publishes each settlement on its public index (${baseUrl}/privacy#${PUBLIC_INDEX_ANCHOR})` : ""}${key === "base" ? `. ${BASE_NO_GAS_SHORT}` : ""}`)
+    .map(([key, c]) => `- [${c.chainName}](${baseUrl}/${key}): ${c.asset} (\`${c.caip2}\`)${indexed.has(key) ? `; the facilitator that settles it publishes each settlement on its public index (${baseUrl}/privacy#${PUBLIC_INDEX_ANCHOR})` : ""}`)
     .join("\n");
 
   return `# Agent402.Tools
@@ -712,6 +712,7 @@ ${packItems}
 
 ## Settlement chains
 ${chainItems}
+${BASE_NO_GAS_SHORT}
 ${chainClauses()}
 ${toolSections}
 

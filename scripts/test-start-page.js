@@ -143,8 +143,10 @@ try {
 
   const llms = await get("/llms.txt");
   const baseLine = llms.text.split("\n").find((l) => l.startsWith("- [Base](")) || "";
-  ok(baseLine.endsWith(BASE_NO_GAS_SHORT), `the Base line of /llms.txt ends with the short gas sentence (${baseLine.slice(0, 80)})`);
-  ok(llms.text.split("\n").filter((l) => l.includes(BASE_NO_GAS_SHORT)).length === 1, "only the Base line of /llms.txt carries it");
+  const llmsLines = llms.text.split("\n");
+  const gasAt = llmsLines.indexOf(BASE_NO_GAS_SHORT);
+  ok(gasAt > 0 && /^- \[[^\]]+\]\([^)]+\): /.test(llmsLines[gasAt - 1]) && llmsLines.slice(llmsLines.indexOf("## Settlement chains"), gasAt).includes(baseLine), `/llms.txt states the short Base gas sentence on its own line after the settlement chains (line ${gasAt})`);
+  ok(baseLine && !baseLine.includes("ETH") && llmsLines.filter((l) => l.includes(BASE_NO_GAS_SHORT)).length === 1, "the Base chain line stays chain, asset and id; the sentence appears once");
   ok(/^- \[Start here\]\(\S+\/start\): /m.test(llms.text), "/llms.txt links /start under Connect via MCP");
 
   const pages = await get("/sitemap-pages.xml");
