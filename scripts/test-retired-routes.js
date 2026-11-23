@@ -62,10 +62,12 @@ ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retire
     "judge-vision": null, "judge-locate": null, "judge-long": null,
     "fred-release-calendar": null, "fred-search": null, "fred-series-info": null, "fred-release-observations": "fred-series",
     "crypto-news": null, "gravatar-check": null,
+    // Code execution, retired the same day with no successor.
+    "code-run": null, "code-run-pro": null,
   };
   const batch = Object.entries(RETIRED_TOOLS).filter(([, e]) => e.retiredAt === "2026-11-23");
   const wrong = batch.filter(([slug, e]) => !(slug in POINTERS_2026_11_23) || e.replacement !== POINTERS_2026_11_23[slug]).map(([slug, e]) => `${slug} -> ${e.replacement}`);
-  ok(batch.length === 30 && Object.keys(POINTERS_2026_11_23).length === 30 && wrong.length === 0, `the 30 routes retired on 2026-11-23 name exactly the reviewed replacements (${batch.length}; ${wrong.join(", ") || "all match"})`);
+  ok(batch.length === 32 && Object.keys(POINTERS_2026_11_23).length === 32 && wrong.length === 0, `the 32 routes retired on 2026-11-23 name exactly the reviewed replacements (${batch.length}; ${wrong.join(", ") || "all match"})`);
   ok(/\/v1\/judge/.test(RETIRED_TOOLS["judge-long"].note || ""), "judge-long names no replacement (judge is listed only with a backend) and its note points to /v1/judge");
   ok(RETIRED_TOOLS["options-chain"].replacement === null, "options-chain no longer points at the retired crypto options chain");
 }
