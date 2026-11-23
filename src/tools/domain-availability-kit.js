@@ -40,6 +40,18 @@ const CACHE_MAX = 2000;
 const LOOKUP_TIMEOUT_MS = 10_000;
 const BODY_MAX_BYTES = 256 * 1024;
 const DEFAULT_RETRY_AFTER_S = 30;
+// A registry's Retry-After is honored up to this long: one caller's flood
+// cannot close a registry to every buyer for a day.
+const MAX_RETRY_AFTER_S = 300;
+// Lookups to one registry host leave at least this far apart, queued in
+// order; a lookup whose turn is further off than PACE_MAX_WAIT_MS answers a
+// retryable 503 instead of waiting.
+export const PACE_MS = 100;
+const PACE_MAX_WAIT_MS = 3000;
+// Parents asked above a name that is not registered itself, from the
+// registrable level down: enough for a registry-run second level (co.uk)
+// and the registration under it.
+const MAX_PARENT_LOOKUPS = 3;
 
 export const AVAILABILITY_NOTE = "Read from the registry's RDAP service at checkedAt. Availability can change at any moment, and a name the registry reserves or blocks can read as not registered; registration itself happens at a registrar.";
 
@@ -47,10 +59,15 @@ const bad = (msg) => Object.assign(new Error(msg), { statusCode: 400 });
 
 /** The bootstrap entry for a name: the longest label suffix the file lists. */
 export function rdapBaseFor(map, domain) {
+  return rdapEntryFor(map, domain)?.base ?? null;
+}
+/** The bootstrap suffix that names a name's registry, and its base URL. */
+export function rdapEntryFor(map, domain) {
   const labels = domain.split(".");
   for (let i = 1; i < labels.length; i++) {
-    const base = map.get(labels.slice(i).join("."));
-    if (base) return base;
+    const suffix = labels.slice(i).join(".");
+    const base = map.get(suffix);
+    if (base) return { suffix, base };
   }
   return null;
 }
@@ -96,11 +113,22 @@ async function readBodyCapped(res, max) {
  * test seams (a stub RDAP server); production uses the global fetch through
  * the SSRF dispatcher.
  */
-export function createDomainAvailability({ fetchImpl = null, now = () => Date.now(), bootstrapUrl = RDAP_BOOTSTRAP_URL } = {}) {
+export function createDomainAvailability({ fetchImpl = null, now = () => Date.now(), bootstrapUrl = RDAP_BOOTSTRAP_URL, paceMs = PACE_MS } = {}) {
   const doFetch = fetchImpl || ((url, init) => fetch(url, { ...init, dispatcher: ssrfDispatcher }));
   let bootstrap = { at: 0, map: null, retryAt: 0 };
   const answers = new Map(); // domain -> { at, answer }
   const backoff = new Map(); // RDAP host -> epoch ms until which it is not asked
+  const nextSlot = new Map(); // RDAP host -> wall-clock ms its next lookup may leave
+  // A place in the host's queue (wall clock, so a test clock never stalls it).
+  async function paceFor(host) {
+    if (!(paceMs > 0)) return;
+    const t = Date.now();
+    const slot = Math.max(t, nextSlot.get(host) || 0);
+    if (slot - t > PACE_MAX_WAIT_MS) throw upstreamFailure(429, { retryAfter: Math.ceil((slot - t) / 1000), host });
+    nextSlot.set(host, slot + paceMs);
+    if (nextSlot.size > 500) for (const [h, at] of nextSlot) { if (at < t) nextSlot.delete(h); }
+    if (slot > t) await new Promise((r) => setTimeout(r, slot - t));
+  }
 
   async function bootstrapMap() {
     const t = now();
@@ -135,6 +163,7 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
       const retryAfter = Math.max(1, Math.ceil((until - now()) / 1000));
       throw upstreamFailure(429, { retryAfter, host });
     }
+    await paceFor(host);
     assertBeforeCeiling();
     let res;
     try {
@@ -146,7 +175,7 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
       throw Object.assign(new Error(timedOut ? `The registry's RDAP service (${host}) did not answer in time; retry shortly` : `The registry's RDAP service (${host}) could not be reached; retry shortly`), { statusCode: 502, attribution: "upstream" });
     }
     if (res.status === 429) {
-      const secs = retryAfterSeconds(res.headers.get("retry-after")) || DEFAULT_RETRY_AFTER_S;
+      const secs = Math.min(MAX_RETRY_AFTER_S, retryAfterSeconds(res.headers.get("retry-after")) || DEFAULT_RETRY_AFTER_S);
       backoff.set(host, now() + secs * 1000);
       try { await res.body?.cancel(); } catch { /* closed */ }
       throw upstreamFailure(429, { retryAfter: secs, host });
@@ -189,6 +218,19 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
     const remarks = [...(Array.isArray(data.remarks) ? data.remarks : []), ...(Array.isArray(data.notices) ? data.notices : [])];
     return !remarks.some((r) => /public suffix/i.test(String(r?.title ?? "")) || (Array.isArray(r?.description) && r.description.some((d) => /^this is a public suffix/i.test(String(d)))));
   };
+  // The registry's own notices (its terms of use among them), passed through
+  // as titles and https links only; their text is the registry's to show.
+  const noticesOf = (data) => {
+    const list = Array.isArray(data?.notices) ? data.notices : [];
+    const out = [];
+    for (const n of list.slice(0, 5)) {
+      const links = (Array.isArray(n?.links) ? n.links : []).map((l) => (typeof l?.href === "string" ? l.href.trim() : "")).filter((h) => h.length <= 300 && /^https:\/\/[^\s]+$/i.test(h)).slice(0, 3);
+      if (!links.length) continue;
+      const title = typeof n?.title === "string" ? n.title.trim().slice(0, 120) : "";
+      out.push({ ...(title ? { title } : {}), links });
+    }
+    return out.length ? { registryNotices: out } : {};
+  };
   const statusOf = (data) => (Array.isArray(data.status) ? data.status.filter((s) => typeof s === "string").slice(0, 20).map((s) => s.slice(0, 80)) : []);
 
   async function check(input) {
@@ -200,7 +242,8 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
     if (!map) {
       throw Object.assign(new Error("The registry list (IANA's RDAP bootstrap) could not be read just now; retry shortly"), { statusCode: 503, retryAfter: 30, attribution: "upstream" });
     }
-    const base = rdapBaseFor(map, domain);
+    const entry = rdapEntryFor(map, domain);
+    const base = entry?.base ?? null;
     if (!base) {
       const tld = domain.slice(domain.lastIndexOf(".") + 1);
       throw Object.assign(new Error(`The .${tld} registry lists no RDAP service in IANA's bootstrap file, so its registrations cannot be read here.`), { statusCode: 422, attribution: "caller" });
@@ -209,13 +252,23 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
     let answer;
     const got = await rdapLookup(base, domain);
     if (got.found) {
-      answer = { domain, registered: true, status: statusOf(got.data), registrar: registrarOf(got.data), source: "RDAP", checkedAt, note: AVAILABILITY_NOTE };
+      answer = { domain, registered: true, status: statusOf(got.data), registrar: registrarOf(got.data), source: "RDAP", checkedAt, note: AVAILABILITY_NOTE, ...noticesOf(got.data) };
     } else {
+      // The names above it, from the registrable level (one label under the
+      // registry's suffix) down to its own parent: the first that is a
+      // registration holds it. A registry-run second level (co.uk) answers
+      // without being one, so the walk goes one level further.
       const labels = domain.split(".");
-      const parent = labels.length >= 3 ? labels.slice(1).join(".") : null;
-      const parentGot = parent && rdapBaseFor(map, parent) === base ? await rdapLookup(base, parent) : null;
-      answer = parentGot?.found && isRegistration(parentGot.data)
-        ? { domain, registered: null, status: [], registeredParent: parent, source: "RDAP", checkedAt, note: `${domain} is a name under ${parent}, which is registered; only ${parent} itself is held at the registry. ${AVAILABILITY_NOTE}` }
+      const suffixLabels = entry.suffix.split(".").length;
+      let holder = null;
+      for (let keep = suffixLabels + 1, asked = 0; keep < labels.length && asked < MAX_PARENT_LOOKUPS; keep++, asked++) {
+        const parent = labels.slice(labels.length - keep).join(".");
+        const parentGot = await rdapLookup(base, parent);
+        if (parentGot.found && isRegistration(parentGot.data)) { holder = { parent, data: parentGot.data }; break; }
+        if (!parentGot.found) break; // nothing registered here, so nothing deeper is
+      }
+      answer = holder
+        ? { domain, registered: null, status: [], registeredParent: holder.parent, source: "RDAP", checkedAt, note: `${domain} is a name under ${holder.parent}, which is registered; only ${holder.parent} itself is held at the registry. ${AVAILABILITY_NOTE}`, ...noticesOf(holder.data) }
         : { domain, registered: false, status: [], source: "RDAP", checkedAt, note: AVAILABILITY_NOTE };
     }
     if (answers.size >= CACHE_MAX) {
@@ -239,7 +292,7 @@ export const DOMAIN_AVAILABILITY_TOOLS = [
     aliases: ["domain-available", "domain-name-availability", "is-domain-registered"],
     category: "network",
     price: "$0.001",
-    description: "Is a domain name registered? Asks the TLD's own registry over RDAP, the IETF registration data protocol (IANA's bootstrap names the registry): registered true, false, or null for a name under a registered domain (registeredParent names it), the registry status codes and the registrar when it is taken, and when the registry was read. Availability can change at any moment; registration happens at a registrar.",
+    description: "Is a domain name registered? Asks the TLD's own registry over RDAP, the IETF registration data protocol (IANA's bootstrap names the registry): registered true, false, or null for a name under a registered domain (registeredParent names it), the registry status codes and the registrar when it is taken, the registry's notices as links (registryNotices, its terms among them) when it gives them, and when the registry was read. Availability can change at any moment; registration happens at a registrar.",
     tags: ["domain", "availability", "rdap", "registration", "available", "whois"],
     discovery: {
       bodyType: "json",

@@ -26,7 +26,11 @@ let bootstrapStatus = 200;
 const registries = {
   // registry A serves .test and .co.test
   "/a/domain/taken.test": [200, { objectClassName: "domain", ldhName: "taken.test", status: ["client transfer prohibited"], events: [{ eventAction: "registration", eventDate: "2020-01-01T00:00:00Z" }], entities: [{ roles: ["registrar"], vcardArray: ["vcard", [["version", {}, "text", "4.0"], ["fn", {}, "text", "Example Registrar"]]] }] }],
-  "/a/domain/parent.test": [200, { objectClassName: "domain", ldhName: "parent.test", status: ["active"], events: [{ eventAction: "registration", eventDate: "2019-01-01T00:00:00Z" }], entities: [] }],
+  "/a/domain/parent.test": [200, { objectClassName: "domain", ldhName: "parent.test", status: ["active"], events: [{ eventAction: "registration", eventDate: "2019-01-01T00:00:00Z" }], entities: [], notices: [{ title: "Terms of Use", description: ["Service subject to terms."], links: [{ rel: "terms-of-service", href: "https://registry.test/terms", type: "text/html" }, { href: "http://plain.test/x" }, { href: "javascript:alert(1)" }] }] }],
+  // a second level the registry runs, not marked a public suffix, and a registration under it
+  "/a/domain/co2.test": [200, { objectClassName: "domain", ldhName: "co2.test", status: ["active"], events: [{ eventAction: "last changed", eventDate: "2019-01-01T00:00:00Z" }] }],
+  "/a/domain/b.co2.test": [200, { objectClassName: "domain", ldhName: "b.co2.test", status: ["active"], events: [{ eventAction: "registration", eventDate: "2021-01-01T00:00:00Z" }] }],
+  "/a/domain/brand.co.test": [200, { objectClassName: "domain", ldhName: "brand.co.test", status: ["active"], events: [{ eventAction: "registration", eventDate: "2021-01-01T00:00:00Z" }] }],
   // a second level the registry runs: answered, but nobody's registration
   "/a/domain/co.test": [200, { objectClassName: "domain", ldhName: "co.test", status: ["server delete prohibited"], remarks: [{ title: "Public suffix", description: ["This is a public suffix"] }], events: [{ eventAction: "last changed", eventDate: "2019-01-01T00:00:00Z" }] }],
   "/a/domain/outage.test": [404, "<html>Not Found</html>", "text/html"],
@@ -34,6 +38,8 @@ const registries = {
   "/a/domain/odd.test": [200, "[1,2,3]"],
 };
 let throttleNext = 0; // answer this many lookups on registry B with 429
+let throttleAfter = "20"; // the Retry-After those 429s carry
+const bTimes = []; // when each registry B lookup arrived (ms)
 let hangB = false;
 const srv = http.createServer((req, res) => {
   hits.push(req.url);
@@ -47,8 +53,9 @@ const srv = http.createServer((req, res) => {
   if (req.url === "/a/domain/hop.test") { res.writeHead(302, { location: `http://127.0.0.1:${port}/elsewhere/domain/hop.test` }); return res.end(); }
   if (req.url.startsWith("/elsewhere/")) { res.writeHead(200, { "content-type": "application/rdap+json" }); return res.end(JSON.stringify({ objectClassName: "domain", ldhName: "hop.test", events: [{ eventAction: "registration" }] })); }
   if (req.url.startsWith("/b/")) {
+    bTimes.push(Date.now());
     if (hangB) return; // never answers
-    if (throttleNext > 0) { throttleNext--; res.writeHead(429, { "retry-after": "20" }); return res.end(); }
+    if (throttleNext > 0) { throttleNext--; res.writeHead(429, { "retry-after": throttleAfter }); return res.end(); }
     res.writeHead(404, { "content-type": "application/rdap+json" });
     return res.end(JSON.stringify({ errorCode: 404, title: "Not Found" }));
   }
@@ -71,7 +78,7 @@ const stubFetch = (url, init) => {
 };
 let clock = Date.parse("2026-11-22T12:00:00Z");
 const now = () => clock;
-const make = () => createDomainAvailability({ fetchImpl: stubFetch, now, bootstrapUrl: "https://data.iana.test/dns.json" });
+const make = (opts = {}) => createDomainAvailability({ fetchImpl: stubFetch, now, bootstrapUrl: "https://data.iana.test/dns.json", paceMs: 0, ...opts });
 
 try {
   // ---- input ----
@@ -124,6 +131,50 @@ try {
     ok(s.registered === null && s.registeredParent === "parent.test" && /parent\.test/.test(s.note), `a name under a registered domain is registered null with the parent named (${JSON.stringify(s).slice(0, 100)})`);
     const c = await d.check({ domain: "fresh.co.test" });
     ok(c.registered === false && !("registeredParent" in c), "a name under a public-suffix second level reads not registered");
+  }
+
+  // ---- a name several labels under a registration ----
+  {
+    const d = make();
+    for (const [name, parent] of [["a.www.parent.test", "parent.test"], ["x.y.z.parent.test", "parent.test"], ["a.brand.co.test", "brand.co.test"], ["a.b.co2.test", "b.co2.test"], ["deep.x.b.co2.test", "b.co2.test"]]) {
+      const r = await d.check({ domain: name });
+      ok(r.registered === null && r.registeredParent === parent, `${name} is a name under ${parent} (${r.registered}, ${r.registeredParent})`);
+    }
+    const free = await d.check({ domain: "a.www.unknown-free.test" });
+    ok(free.registered === false && !("registeredParent" in free), "a deep name with no registration above it reads not registered");
+    hits.length = 0;
+    await d.check({ domain: "a.b.c.d.e.f.g.free2.test" });
+    ok(hits.filter((h) => h.startsWith("/a/")).length <= 4, `a deep name asks the registry a bounded number of times (${hits.filter((h) => h.startsWith("/a/")).length})`);
+  }
+
+  // ---- the registry's notices are passed through, links only ----
+  {
+    const d = make();
+    const r = await d.check({ domain: "www.parent.test" });
+    const links = (r.registryNotices || []).flatMap((n) => n.links || []);
+    ok(r.registryNotices?.[0]?.title === "Terms of Use" && links.length === 1 && links[0] === "https://registry.test/terms", `the registry's terms link is passed through, https links only (${JSON.stringify(r.registryNotices)})`);
+    ok(!JSON.stringify(r.registryNotices).includes("subject to terms"), "the notice's text is not copied, only its title and links");
+  }
+
+  // ---- one registry's Retry-After is held to a bound ----
+  {
+    const d = make();
+    throttleNext = 1; throttleAfter = "86400";
+    const e = await errOf(d.check({ domain: "long.slow" }));
+    throttleAfter = "20";
+    ok(e?.statusCode === 503 && e.retryAfter === 300, `a Retry-After of a day is held to 300 seconds (${e?.retryAfter})`);
+    clock += 301_000;
+    ok((await d.check({ domain: "later.slow" })).registered === false, "after the bounded window the registry is asked again");
+  }
+
+  // ---- lookups to one registry are paced ----
+  {
+    const d = make({ paceMs: 60 });
+    await d.check({ domain: "warm.test" }).catch(() => {}); // bootstrap
+    bTimes.length = 0;
+    await Promise.all(Array.from({ length: 5 }, (_, i) => d.check({ domain: `pace${i}.slow` })));
+    const gaps = bTimes.slice(1).map((t, i) => t - bTimes[i]);
+    ok(bTimes.length === 5 && gaps.every((g) => g >= 45), `five lookups at once reach the registry at least the pace apart (${gaps.join(", ")} ms)`);
   }
 
   // ---- the answer cache ----
