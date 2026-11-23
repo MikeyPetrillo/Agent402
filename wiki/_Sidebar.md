@@ -7,16 +7,21 @@
 - [[Reports and Monitors|Reports-and-Monitors]]
 - [[Paying with x402]]
 - [[Paying with MPP]]
+- [[Solana (USDC)|Solana]]
+- [[Stellar (USDC)|Stellar]]
+- [[Algorand (USDC)|Algorand]]
 - [[Robinhood Chain (USDG)|Robinhood-Chain]]
 - [[Arc (USDC)|Arc]]
 - [[Ink (USDC)|Ink]]
 - [[Circle Gateway (batched USDC)|Circle-Gateway]]
 - [[Sessions and Channels|Sessions-and-Channels]]
+- [[Credits keys|Credits]]
 - [[Paying with Compute]]
 - [[Buying at Volume|Buying-at-Volume]]
 - [[Content Pipeline|Content-Pipeline]]
 - [[MCP Connector]]
 - [[Adapters]]
+- [[agent402-client]] - the buyer SDK
 - [[Amazon Bedrock AgentCore|AWS-Bedrock-AgentCore]]
 - [[Decide]] - describe a job, get a plan
 - [[Tool Catalog]]
@@ -55,6 +60,12 @@
 - [[Security Model]]
 - [[Operations]]
 - [[Self-Hosting]]
+- [[Configuration]] - every setting
+- [[Tempo (operator setup)|Tempo]]
+- [[Card Payments (operator setup)|Card-Payments]]
+- [[Troubleshooting]]
+- [[Upgrading]]
+- [[Contributing]]
 - [[API guide|API-Reference]]
 
 **[[FAQ]]**
