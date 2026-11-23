@@ -25,15 +25,13 @@
 // The cross-replica half (a mark on one process read on another through
 // Redis) is in scripts/test-shared-limits-crossprocess.js.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const POW_SECRET = "test-paid-quote-trust-secret";
 process.env.POW_SECRET = POW_SECRET;
@@ -316,7 +314,6 @@ function fakeStore() {
 }
 
 // ---- booted half ---------------------------------------------------------------
-const [PORT, FAC, ORP] = await getFreePorts(3);
 let settles = 0;
 const settledNonces = new Set();
 facilitator = createServer((req, res) => {
@@ -338,7 +335,8 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC = facilitator.address().port;
 // A stub OpenRouter (scripts/lib/openrouter-stub-preload.js sends openrouter.ai
 // here), so a paid /v1/metered call completes offline and spends nothing.
 let orChats = 0;
@@ -352,14 +350,17 @@ orStub = createServer((req, res) => {
     res.end(JSON.stringify({ data: [] }));
   });
 });
-await new Promise((r) => orStub.listen(ORP, "127.0.0.1", r));
+await new Promise((r) => orStub.listen(0, "127.0.0.1", r));
+const ORP = orStub.address().port;
 
 const OP = "test-paid-quote-trust-operator";
 const dir = mkdtempSync(join(tmpdir(), "a402-quote-trust-"));
 dirs.push(dir);
-const proc = spawn(process.execPath, ["--import", fileURLToPath(new URL("./lib/openrouter-stub-preload.js", import.meta.url)), "src/server.js"], {
+const booting = bootServer({
+  stores: "paid-quote-trust",
+  args: ["--import", fileURLToPath(new URL("./lib/openrouter-stub-preload.js", import.meta.url))],
+  timeoutMs: 90_000,
   env: {
-    ...process.env, ...ownStoreEnv("paid-quote-trust"),
     FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC}/rpc`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
     X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", SOLANA_LEADERBOARD: "off",
@@ -372,20 +373,15 @@ const proc = spawn(process.execPath, ["--import", fileURLToPath(new URL("./lib/o
     RATE_LIMIT_REPLICAS: "1", TRUST_PROXY_HOPS: "1", POW_SECRET, POW_DIFFICULTY: "8",
     // The free-tier defaults, whatever the caller exports (the redemption limit below reads them).
     AGENT402_MCP_MAX_PER_MIN: "20", AGENT402_MCP_MAX_PER_HOUR: "120",
-    AGENT402_OPERATOR_TOKEN: OP, PORT: String(PORT),
+    AGENT402_OPERATOR_TOKEN: OP,
   },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-proc.__log = "";
-const keep = (b) => { proc.__log = (proc.__log + b.toString()).slice(-6000); };
-proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-procs.push(proc);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 
 try {
-  let up = false;
-  for (let i = 0; i < 180 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!up) await sleep(500); }
-  if (!up) fail("server never answered /health");
+  const srv = await booting.catch((e) => fail(`server never answered /health: ${e.message}`));
+  procs.push({ kill: (sig) => srv.child.kill(sig), get __log() { return srv.log().slice(-6000); } });
+  B = srv.url;
 
   const from = (ip, headers = {}) => ({ "x-forwarded-for": ip, "user-agent": "trust-test/1.0", ...headers });
   const QUOTE_BODY = JSON.stringify({ model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 });

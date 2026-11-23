@@ -13,6 +13,7 @@ import { embedTexts, _resetEmbedBudget } from "../services/decide/embed.js";
 import { MemoryDecisionStore, makeDecisionCache } from "../services/decide/decision-store.js";
 import { ToolIndex } from "../services/decide/tool-index.js";
 import { localToolRow } from "../src/decide/tool-rows.js";
+import { urlMatches } from "./lib/url-host.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -70,7 +71,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
   process.env.OPENAI_API_KEY = "stub";
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (u, init) => {
-    if (!String(u).includes("api.openai.com/v1/embeddings")) return realFetch(u, init);
+    if (!urlMatches(u, "api.openai.com", "/v1/embeddings")) return realFetch(u, init);
     const input = JSON.parse(init.body).input;
     return { ok: true, status: 200, json: async () => ({ data: input.map((_, i) => ({ index: i, embedding: Array.from({ length: 512 }, (_, k) => ((k + i) % 7) / 7) })), usage: { total_tokens: 5 * input.length } }) };
   };

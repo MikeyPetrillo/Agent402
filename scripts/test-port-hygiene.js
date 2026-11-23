@@ -18,6 +18,9 @@ const DIR = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
 
+// `x.port` where this file assigns x from `await bootServer(...)`: the port the child bound.
+const bootedReadBack = (expr, src) => { const b = expr.match(/^([A-Za-z_$][\w$]*)\.port$/); return !!b && new RegExp(`\\b${b[1]}\\s*=\\s*await\\s+bootServer\\(`).test(src); };
+
 const files = readdirSync(DIR).filter((f) => /^test-.*\.js$/.test(f) && f !== "test-port-hygiene.js");
 const offenders = [];
 let assignments = 0;
@@ -31,6 +34,7 @@ for (const f of files) {
     assignments++;
     if (/getFreePorts?\(/.test(expr)) continue;
     if (/\.address\(\)\.port\b/.test(expr)) continue; // read back from a server the test itself bound (port 0)
+    if (bootedReadBack(expr, src)) continue; // read back from a bootServer() child (PORT=0)
     if (/process\.env\./.test(expr)) {
       // env-provided with a literal fallback: the fallback must be sane too
       const lit = expr.match(/\|\|\s*(\d+)/);
@@ -64,7 +68,11 @@ const added = reserving.filter((f) => !baseline.has(f));
 const stale = [...baseline].filter((f) => !reserving.includes(f));
 ok(added.length === 0, `no new test boots src/server.js on a reserved port (use bootServer from scripts/lib/boot-server.js)${added.length ? `:\n  ${added.join("\n  ")}` : ""}`);
 ok(stale.length === 0, `the port-reservation baseline lists only files that still reserve (delete moved ones)${stale.length ? `:\n  ${stale.join("\n  ")}` : ""}`);
-ok(baseline.size <= 130, `the port-reservation baseline never grows past its frozen size (${baseline.size} of 130)`);
+ok(baseline.size <= 20, `the port-reservation baseline never grows past its frozen size (${baseline.size} of 20)`);
+{
+  const accepts = bootedReadBack;
+  ok(accepts("srv.port", "const srv = await bootServer({});") && !accepts("srv.port", "const srv = { port: 40000 };") && !accepts("cfg.port", "const srv = await bootServer({});"), "control: a .port read is accepted only from a bootServer() result");
+}
 ok(BOOTS_SERVER.test('spawn(process.execPath, ["src/server.js"])') && RESERVES.test("const [PORT] = await getFreePorts(1);"), "control: a planted reserved-port boot would be seen");
 
 // The scan must be able to see an offender at all.

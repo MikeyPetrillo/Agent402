@@ -41,11 +41,10 @@
 //   (no TARGET_URL: boots its own FREE_MODE server on a free port)
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createWriteStream, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { METERED_SLUGS } from "./test-non-metered-examples.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/rugcheck-switch.js";
 import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
 import { STOCK_CORE_PACK_SLUGS } from "../src/skills.js";
@@ -206,27 +205,16 @@ function loadCorpus() {
   return cases;
 }
 
-async function bootServer() {
-  const port = await getFreePort();
-  const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: path.join(HERE, ".."),
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let log = "";
-  const sink = SERVER_LOG ? createWriteStream(SERVER_LOG, { flags: "a" }) : null;
-  const onData = (d) => { log += d; if (sink) sink.write(d); };
-  child.stdout.on("data", onData);
-  child.stderr.on("data", onData);
-  const base = `http://127.0.0.1:${port}`;
-  const t0 = Date.now();
-  while (Date.now() - t0 < 120_000) {
-    try { const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) }); if (r.ok) return { base, child }; } catch { /* booting */ }
-    if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}\n${log.slice(-2000)}`);
-    await new Promise((r) => setTimeout(r, 500));
+async function boot() {
+  const srv = await bootServer({ stores: false, env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } });
+  if (SERVER_LOG) {
+    // The boot output so far, then everything after it, appended live.
+    const sink = createWriteStream(SERVER_LOG, { flags: "a" });
+    sink.write(srv.log());
+    srv.child.stdout.on("data", (d) => sink.write(d));
+    srv.child.stderr.on("data", (d) => sink.write(d));
   }
-  child.kill("SIGKILL");
-  throw new Error(`server did not answer /health in 120s\n${log.slice(-2000)}`);
+  return { base: srv.url, child: srv.child };
 }
 
 // ---------------------------------------------------------------- driving
@@ -256,7 +244,7 @@ async function main() {
   const cases = loadCorpus();
   let base = process.env.TARGET_URL?.replace(/\/+$/, "") || "";
   let child = null;
-  if (!base) ({ base, child } = await bootServer());
+  if (!base) ({ base, child } = await boot());
   try {
     const pricing = await (await fetch(`${base}/api/pricing`)).json();
     const eps = new Map(pricing.endpoints.map((e) => [e.slug, e]));

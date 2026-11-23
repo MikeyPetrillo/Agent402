@@ -10,6 +10,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { TIERS, canonicalModel, PREFIX_CANONICAL, meteredQuoteUsd, METERED_MAX_QUOTE_USD, tierAllows, tierFor, validateRequest, modelsList, LLM_GATEWAY_TOOLS, stableStringify, promptCacheKey, promptCacheGet, promptCacheStore, GATEWAY_TIER_BY_PATH, AUTO_RANKINGS, classifyPrompt, validateEmbeddingsRequest, embeddingsCacheKey, EMBEDDINGS_PATH, isEmptyRefusal, tokenizerFactor, NEW_TOKENIZER_FACTOR, costFor, modelCostRows } from "../src/tools/llm-gateway-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { urlMatches } from "./lib/url-host.js";
 requireUpstreamCosts("test-llm-gateway");
 // The private table's own row for an exact prefix (never a literal rate here).
 const ROW = (prefix) => modelCostRows().find(([p]) => p === prefix)?.[1];
@@ -975,7 +976,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   globalThis.fetch = async (url, init) => {
     upstreamBody = JSON.parse(init.body);
     authHeader = init.headers.Authorization;
-    ok(String(url).includes("api.openai.com/v1/embeddings"), "embeddings go to the OpenAI upstream");
+    ok(urlMatches(url, "api.openai.com", "/v1/embeddings"), "embeddings go to the OpenAI upstream");
     return { ok: true, status: 200, text: async () => JSON.stringify({ object: "list", data: [{ object: "embedding", index: 0, embedding: [0.1, 0.2] }], model: upstreamBody.model, usage: { prompt_tokens: 2, total_tokens: 2 } }) };
   };
   const out = await embed.handler({ input: "cache me by default" });
@@ -1065,7 +1066,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const realFetch = globalThis.fetch;
   const PNG_B64 = Buffer.from("fake-png-bytes".repeat(4)).toString("base64");
   let seen = [];
-  const listing = (u) => u.includes("flux.2-pro")
+  const listing = (u) => new URL(u).pathname.split("/").includes("flux.2-pro")
     ? { data: { endpoints: [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: 0.03 }] }] } }
     : { data: { endpoints: [{ provider_tag: "openai", pricing: [{ billable: "output_image", unit: "token", cost_usd: 0.000008 }] }] } };
   let reply = () => ({ status: 200, json: { created: 1, data: [{ b64_json: PNG_B64, media_type: "image/png" }], usage: { prompt_tokens: 14, completion_tokens: 4096, total_tokens: 4110, cost: 0.03, cost_details: {}, is_byok: false } } });

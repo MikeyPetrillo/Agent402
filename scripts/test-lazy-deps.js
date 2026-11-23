@@ -27,11 +27,10 @@
 // (scripts/lib/own-examples-preload.js) after a name lookup answered in
 // process (scripts/lib/guard-dns-offline.js).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { LAZY_PACKAGES, MAIN_THREAD_PACKAGES } from "../src/tools/lazy-deps.js";
 import { bound } from "./lib/ours-clock.js";
 
@@ -49,17 +48,22 @@ const WORKER_ONLY = ["jsdom", "@mozilla/readability", "turndown", "pdf-lib", "@z
 const FIRST_CALL = bound(100, 5);
 
 async function boot(extraEnv) {
-  const port = await getFreePort();
   const graphFile = join(mkdtempSync(join(tmpdir(), "a402-lazy-")), "boot-graph.json");
-  const proc = spawn(process.execPath, ["--import", "./scripts/lib/boot-graph-hook.mjs", "--import", "./scripts/lib/loop-gap-preload.js", "--import", "./scripts/lib/main-thread-packages-preload.js", "--import", "./scripts/lib/guard-dns-offline.js", "--import", "./scripts/lib/own-examples-preload.js", "src/server.js"], {
+  // The listening line is enough (readyPath null): the boot graph is waited for below.
+  const b = await bootServer({
+    stores: false,
+    args: ["--import", "./scripts/lib/boot-graph-hook.mjs", "--import", "./scripts/lib/loop-gap-preload.js", "--import", "./scripts/lib/main-thread-packages-preload.js", "--import", "./scripts/lib/guard-dns-offline.js", "--import", "./scripts/lib/own-examples-preload.js"],
+    ipc: true,
+    readyPath: null,
+    timeoutMs: 60_000,
     env: {
-      ...process.env, FREE_MODE: "true", PORT: String(port), BOOT_GRAPH_OUT: graphFile,
+      FREE_MODE: "true", BOOT_GRAPH_OUT: graphFile,
       INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_SYNC_ON_START: "false",
       MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", ...extraEnv,
     },
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
-  const s = { proc, port, graphFile, log: "", base: `http://127.0.0.1:${port}` };
+  const proc = b.child;
+  const s = { proc, port: b.port, graphFile, get log() { return b.log(); }, base: b.url };
   // The preloads answer over the IPC channel: the loop meter and the packages
   // the main thread has resolved.
   let seq = 0;
@@ -79,8 +83,6 @@ async function boot(extraEnv) {
     const g = await ask({ loopGap: "stop" }, "result");
     return { out, worst: g.worst };
   };
-  proc.stdout.on("data", (d) => { s.log += d; });
-  proc.stderr.on("data", (d) => { s.log += d; });
   s.until = (re, ms) => new Promise((res, rej) => {
     const t0 = Date.now();
     const tick = () => { if (re.test(s.log)) return res(); if (Date.now() - t0 > ms || proc.exitCode !== null) return rej(new Error(`waited ${ms}ms for ${re}; exit ${proc.exitCode}\n${s.log.slice(-2000)}`)); setTimeout(tick, 50); };
@@ -91,8 +93,7 @@ async function boot(extraEnv) {
     await r.arrayBuffer();
     return r.status;
   };
-  s.stop = async () => { proc.kill("SIGTERM"); await new Promise((res) => { proc.once("exit", res); setTimeout(res, 5000); }); };
-  await s.until(/Agent402 listening on/, 60_000);
+  s.stop = b.stop;
   // The hook writes the graph from a timer armed during the entry module's
   // evaluation; under a loaded runner that timer can fire after the listen
   // line, so wait for the file itself rather than assume the order.

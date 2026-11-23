@@ -30,17 +30,13 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { fileURLToPath } from "node:url";
 import "./lib/file-mode.js";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
-let pass = 0, facilitator = null, proc = null;
-const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of serverLog.slice(-25)) console.error("  server:", l); proc?.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
+let B = "";
+let pass = 0, facilitator = null, srv = null;
+const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of serverLog().slice(-25)) console.error("  server:", l); srv?.child.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX = 3; // GATEWAY_SETTLE_BREAKER_MAX below
 const OP_TOKEN = "settle-breaker-test-operator-token-0123456789";
 
@@ -73,11 +69,15 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
-proc = spawn(process.execPath, ["--import", "./scripts/lib/upstream-stub-preload.js", "src/server.js"], {
+const bootOpts = {
+  stores: "settle-breaker",
+  args: ["--import", "./scripts/lib/upstream-stub-preload.js"],
+  timeoutMs: 60_000,
   env: {
-    ...process.env, ...ownStoreEnv("settle-breaker"), PORT: String(PORT), FREE_MODE: "", OPENAI_API_KEY: "test-key-never-used",
+    FREE_MODE: "", OPENAI_API_KEY: "test-key-never-used",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     // Two networks, so both facilitator clients a multi-chain boot builds are
     // pointed at the stub: nothing here reaches a real facilitator.
@@ -93,12 +93,9 @@ proc = spawn(process.execPath, ["--import", "./scripts/lib/upstream-stub-preload
     // the secret (a fork PR, a local shell) and never depends on a real rate.
     UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url)),
   },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+};
 const OP_HEADERS = { Authorization: `Bearer ${OP_TOKEN}` };
-const serverLog = [];
-const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 400)); } if (serverLog.length > 80) serverLog.splice(0, serverLog.length - 80); };
-proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
+const serverLog = () => (srv?.log() || "").split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 400)).slice(-80);
 
 let nonceN = 0;
 const credential = (accepted, payer) => Buffer.from(JSON.stringify({
@@ -124,7 +121,8 @@ const acceptFor = async (t, network = BASE) => {
 const pay = async (t, payer, network = BASE) => fetch(`${B}${t.path}`, { method: t.method, headers: { "content-type": "application/json", "payment-signature": credential(await acceptFor(t, network), payer) }, body: t.body });
 
 try {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch { /* booting */ } await sleep(500); }
+  srv = await bootServer(bootOpts);
+  B = srv.url;
 
   settleMode = "fail";
 
@@ -386,7 +384,7 @@ try {
     ok(!txt.includes(PAYER_A) && !txt.includes(PAYER_B), "/api/gateway-status never carries a wallet address");
   }
   console.log(`\nPASS - ${pass} checks (settle-failure breaker on every paid tool)`);
-  proc.kill("SIGKILL"); facilitator.close(); process.exit(0);
+  srv.child.kill("SIGKILL"); facilitator.close(); process.exit(0);
 } catch (e) {
   fail(`threw: ${e?.stack || e}`);
 }

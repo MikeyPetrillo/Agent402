@@ -11,18 +11,15 @@
 // validation instead of the global 100 KB parser's 413 - while a flat tier
 // keeps the 100 KB limit (its price does not grow with the body).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 let pass = 0;
 let proc = null;
 let facilitator = null;
 const fail = (m) => { console.error("FAIL:", m); proc?.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Stub facilitator: /supported only - the test never pays, it only needs the
 // paywall able to mint 402 challenges.
@@ -30,19 +27,21 @@ facilitator = createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }));
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
-proc = spawn(process.execPath, ["src/server.js"], {
+const bootOpts = {
+  stores: "messages-sdk-alias",
+  timeoutMs: 80_000,
   env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "",
+    FREE_MODE: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     OPENROUTER_API_KEY: "test-key-never-used",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
   },
-  stdio: "ignore",
-});
+};
 
 const decode402 = (res) => {
   const h = res.headers.get("payment-required");
@@ -69,7 +68,9 @@ const ccBody = (chars) => ({
 });
 
 try {
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
+  const srv = await bootServer(bootOpts);
+  proc = srv.child;
+  B = srv.url;
   ok((await fetch(`${B}/health`)).ok, "server booted (paid mode, stub facilitator)");
 
   // 1. The alias answers the same 402 as the real metered route, quote included.

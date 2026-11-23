@@ -29,16 +29,14 @@
 //   node scripts/test-settle-onchain-proof.js
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-settle-onchain-proof.js
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const REDIS_URL = (process.env.REDIS_URL || "").trim();
-const [PORT_A, PORT_B, FAC_PORT] = await getFreePorts(3);
 const PAY_TO = "0x000000000000000000000000000000000000dEaD";
 const OTHER = "0x00000000000000000000000000000000000000ee";
 const AUTH_USED = "0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5";
@@ -48,10 +46,12 @@ const DIR = mkdtempSync(join(tmpdir(), "a402-onchain-"));
 const LEDGER = join(DIR, "sales.db");
 
 let pass = 0, facilitator = null;
-const procs = new Map(); // port -> child
-const serverLog = [];
-const cleanup = () => { for (const p of procs.values()) p.kill("SIGKILL"); facilitator?.close(); try { rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } };
-const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of serverLog.slice(-30)) console.error("  server:", l); cleanup(); process.exit(1); };
+const procs = new Map(); // name -> booted server
+// Every boot's output, the stopped ones' included (a restart is a new boot).
+const boots = [];
+const serverLog = () => boots.flatMap(({ name, srv }) => srv.log().split("\n").filter((l) => l.trim()).map((l) => `[${name}] ${l.slice(0, 400)}`)).slice(-120);
+const cleanup = () => { for (const p of procs.values()) p.child.kill("SIGKILL"); facilitator?.close(); try { rmSync(DIR, { recursive: true, force: true }); } catch { /* */ } };
+const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of serverLog().slice(-30)) console.error("  server:", l); cleanup(); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const topic = (a) => "0x" + "0".repeat(24) + a.slice(2).toLowerCase();
@@ -329,12 +329,16 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
-async function boot(port) {
-  const proc = spawn(process.execPath, ["src/server.js"], {
+// Boots the server `name` on port 0 and returns its base URL (a restart gets a new port).
+async function boot(name) {
+  const srv = await bootServer({
+    stores: false,
+    timeoutMs: 60_000,
     env: {
-      ...process.env, PORT: String(port), FREE_MODE: "",
+      FREE_MODE: "",
       WALLET_ADDRESS: PAY_TO, NETWORK: "base", PAYMENT_NETWORKS: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
       EVM_RPC_8453: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_SETTLE_FALLBACK: "",
@@ -342,20 +346,17 @@ async function boot(port) {
       REDIS_URL, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(`[${port}] ${line.slice(0, 400)}`); } if (serverLog.length > 120) serverLog.splice(0, serverLog.length - 120); };
-  proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
-  procs.set(port, proc);
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return; } catch { /* booting */ } await sleep(500); }
-  fail(`server on ${port} did not boot`);
+  }).catch((e) => fail(`server ${name} did not boot: ${e.message}`));
+  procs.set(name, srv);
+  boots.push({ name, srv });
+  return srv.url;
 }
-async function stop(port) {
-  const p = procs.get(port);
+async function stop(name) {
+  const p = procs.get(name)?.child;
   if (!p) return;
   p.kill("SIGTERM");
-  await new Promise((r) => { p.once("exit", r); setTimeout(r, 8000); });
-  procs.delete(port);
+  await new Promise((r) => { if (p.exitCode !== null || p.signalCode !== null) return r(); p.once("exit", r); setTimeout(r, 8000); });
+  procs.delete(name);
 }
 
 const TOOL = { path: "/api/hash", body: JSON.stringify({ text: "x" }) };
@@ -395,15 +396,15 @@ async function one(base, label, opts) {
   return { ...r, p };
 }
 
-const A = `http://127.0.0.1:${PORT_A}`, Bsrv = `http://127.0.0.1:${PORT_B}`;
+let A = "", Bsrv = "";
 try {
-  await boot(PORT_A);
+  A = await boot("A");
 
   // --- The genuine case and the proof rules ------------------------------
   settleMode = "on-chain"; rpcMode = "proof"; minedMode = "now";
   let r = await one(A, "proof");
   ok(r.status === 200 && r.receipt?.success === true && r.receipt?.transaction === r.p.tx, `proof found -> 200 with PAYMENT-RESPONSE naming the tx (status ${r.status}, tx ${String(r.receipt?.transaction).slice(0, 12)})`);
-  ok(serverLog.some((l) => l.includes(`recovered eip155:8453 settlement from chain proof: tx ${r.p.tx}`)), "the recovery is logged with its tx");
+  ok(serverLog().some((l) => l.includes(`recovered eip155:8453 settlement from chain proof: tx ${r.p.tx}`)), "the recovery is logged with its tx");
   const soldTx = r.p.tx;
 
   settleMode = "on-chain-thrown";
@@ -433,7 +434,7 @@ try {
   // --- Replays -------------------------------------------------------------
   settleMode = "on-chain"; rpcMode = "proof"; minedMode = "before";
   r = await one(A, "mined before");
-  ok(r.status === 402 && serverLog.some((l) => l.includes("mined before this request's payment was first seen")), `a tx mined before the request's payment was first seen -> 402 (status ${r.status})`);
+  ok(r.status === 402 && serverLog().some((l) => l.includes("mined before this request's payment was first seen")), `a tx mined before the request's payment was first seen -> 402 (status ${r.status})`);
   minedMode = "now";
 
   // The production shape: a payload that settled normally, sent again.
@@ -466,7 +467,7 @@ try {
 
   // --- Cross-replica, over the shared Redis ------------------------------
   if (REDIS_URL) {
-    await boot(PORT_B);
+    Bsrv = await boot("B");
     await concurrent("two concurrent replays on two servers", A, Bsrv, "on-chain");
     await concurrent("a replay on server B racing an original on server A", A, Bsrv, "first-wins");
     settleMode = "ok";
@@ -479,7 +480,7 @@ try {
     // never asked again.
     const crossReplay = again.status === 200 && again.replayed && again.body === first.body;
     ok(first.status === 200 && (again.status !== 200 || crossReplay) && settles === before, `a payload settled on A, replayed on B -> refused or replayed from A's first answer, before the facilitator (statuses ${first.status}, ${again.status}, replayed ${again.replayed}, settles +${settles - before})`);
-    await stop(PORT_B);
+    await stop("B");
   } else {
     console.log("# REDIS_URL unset: the cross-replica cases run in CI's redis step");
   }
@@ -487,17 +488,17 @@ try {
   // --- The sales ledger -----------------------------------------------------
   // A fresh boot holds no claims, so only the ledger can refuse: a new
   // payload whose proof points at a tx already recorded as a sale.
-  await stop(PORT_A);
+  await stop("A");
   if (REDIS_URL) {
     const { createClient } = await import("redis");
     const c = createClient({ url: REDIS_URL }); await c.connect();
     for await (const keys of c.scanIterator({ MATCH: "settle-claim:*", COUNT: 500 })) { for (const k of [].concat(keys)) await c.del(k); }
     await c.quit();
   }
-  await boot(PORT_A);
+  A = await boot("A");
   settleMode = "on-chain"; rpcMode = "proof"; minedMode = "now";
   r = await one(A, "already a sale", { tx: soldTx });
-  ok(r.status === 402 && serverLog.some((l) => l.includes("the transaction is already a recorded sale")), `a tx already in the sales ledger -> 402 (status ${r.status})`);
+  ok(r.status === 402 && serverLog().some((l) => l.includes("the transaction is already a recorded sale")), `a tx already in the sales ledger -> 402 (status ${r.status})`);
 
   // --- A Redis that stops answering never holds a settle ----------------------
   {

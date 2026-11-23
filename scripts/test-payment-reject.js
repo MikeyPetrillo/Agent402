@@ -11,16 +11,14 @@
 // better answer once a payment gets that far), and the wire behaviour through
 // the real server: a bare 402 is untouched, a refused one carries reason/hint.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { classifyPaymentRejection, unclassifiedPaymentShape, pendingSettleRefusal, withPendingSettleRefusal, PENDING_REFUSAL_MAX_TXS, REJECTION_REASONS } from "../src/payment-reject.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
-let pass = 0, proc = null;
+let pass = 0, srv = null;
 let facilitator = null;
-const fail = (m) => { console.error("FAIL:", m); proc?.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
+const fail = (m) => { console.error("FAIL:", m); srv?.child.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
 
 const PAY_TO = "0x000000000000000000000000000000000000dEaD";
@@ -182,8 +180,7 @@ for (const junk of [undefined, "", "e30=", b64({}), b64([1, 2]), b64({ payload: 
 ok(true, "every junk shape either names a reason or returns null - never throws");
 
 // ---- the wire ----
-const [PORT, FAC_PORT] = await (async () => [await getFreePort(), await getFreePort()])();
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 // A stub facilitator, so the paywall actually mounts. It is never reached by
 // these cases - that is the whole point: they are refused before it.
 facilitator = createServer((req, res) => {
@@ -194,16 +191,19 @@ facilitator = createServer((req, res) => {
     res.end(JSON.stringify({ isValid: true, success: true }));
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, r));
-const done = (code) => { proc?.kill("SIGKILL"); facilitator.close(); process.exit(code); };
-proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: PAY_TO, NETWORK: "base",
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
+const done = (code) => { srv?.child.kill("SIGKILL"); facilitator.close(); process.exit(code); };
+const bootOpts = {
+  stores: "payment-reject",
+  timeoutMs: 60_000,
+  env: { FREE_MODE: "", WALLET_ADDRESS: PAY_TO, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     PAYMENT_NETWORKS: "base", CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", X402_INDEX_CRAWL: "off" },
-  stdio: "ignore",
-});
+};
 try {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
+  srv = await bootServer(bootOpts);
+  B = srv.url;
 
   const bare = await fetch(`${B}/api/uuid`);
   const bareBody = await bare.json().catch(() => ({}));

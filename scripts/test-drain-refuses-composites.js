@@ -10,12 +10,10 @@
 // Proven on a real keep-alive socket against a real server: warm the socket,
 // SIGTERM, send a composite POST down the same connection, expect the 503.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import http from "node:http";
 
-const [PORT, PORT2] = await getFreePorts(2);
-const BASE = `http://127.0.0.1:${PORT}`;
+let PORT = 0; // read back from the server's listening line (port 0)
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -29,18 +27,15 @@ const call = (opts, body) => new Promise((resolve) => {
   req.end();
 });
 
-const srv = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let out = "";
-srv.stdout.on("data", (d) => { out += d; });
-srv.stderr.on("data", (d) => { out += d; });
-
-let up = false;
-for (let i = 0; i < 90; i++) { if ((await call({ method: "GET", path: "/health" })).status === 200) { up = true; break; } await sleep(500); }
+const booted = await bootServer({ stores: "drain-composites", env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" } })
+  .catch((e) => { console.log(String(e.message).slice(-800)); return null; });
+if (booted) PORT = booted.port;
+// The keep-alive agent's socket is warmed on /health, as before.
+const up = Boolean(booted) && (await call({ method: "GET", path: "/health" })).status === 200;
 ok(up, `server booted on :${PORT}`);
-if (!up) { srv.kill("SIGKILL"); console.log(out.slice(-800)); process.exit(1); }
+if (!up) { booted?.child.kill("SIGKILL"); process.exit(1); }
+const srv = booted.child;
+const out = () => booted.log();
 
 const { EXPENSIVE_COMPOSITE_SLUGS } = await import("../src/composite-spend-guard.js");
 const pricing = JSON.parse((await call({ method: "GET", path: "/api/pricing" })).data);
@@ -68,7 +63,7 @@ srv.kill("SIGTERM");
 const first = await inflight;
 ok(first.status === 200, `the request busy at SIGTERM completed (got ${first.status})`);
 const r = await call({ method: "POST", path: ep.path, headers: { "content-type": "application/json" } }, JSON.stringify({ query: "drain probe", ticker: "AAPL", domain: "example.com", token: "x" }));
-if (process.env.DEBUG_DRAIN) { console.log("--- server out tail ---"); console.log(out.split("\n").filter((l) => /SIGTERM|drain|\[boot\]|research|listening/i.test(l)).slice(-12).join("\n")); }
+if (process.env.DEBUG_DRAIN) { console.log("--- server out tail ---"); console.log(out().split("\n").filter((l) => /SIGTERM|drain|\[boot\]|research|listening/i.test(l)).slice(-12).join("\n")); }
 ok(r.status === 503, `composite POST during the drain answers 503 (got ${r.status}: ${String(r.data).slice(0, 200)})`);
 ok(/redeploying/i.test(r.data), "refusal names the redeploy and says not charged");
 
@@ -79,17 +74,12 @@ ok(/redeploying/i.test(r.data), "refusal names the redeploy and says not charged
 agent.destroy();
 srv.kill("SIGKILL");
 await sleep(300);
-const srv2 = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT2), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let up2 = false;
-for (let i = 0; i < 90; i++) { try { if ((await fetch(`http://127.0.0.1:${PORT2}/health`)).status === 200) { up2 = true; break; } } catch {} await sleep(500); }
-if (up2) {
-  const c = await fetch(`http://127.0.0.1:${PORT2}${ep.path}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}", signal: AbortSignal.timeout(8000) }).then(async (x) => ({ status: x.status, data: await x.text() })).catch((e) => ({ status: 0, data: String(e) }));
+const srv2 = await bootServer({ stores: "drain-composites-control", env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" } }).catch(() => null);
+if (srv2) {
+  const c = await fetch(`${srv2.url}${ep.path}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}", signal: AbortSignal.timeout(8000) }).then(async (x) => ({ status: x.status, data: await x.text() })).catch((e) => ({ status: 0, data: String(e) }));
   ok(!/redeploying/i.test(c.data), `control: a live server does not give the drain refusal (got ${c.status})`);
 } else ok(false, "control server did not boot");
-srv2.kill("SIGKILL");
+srv2?.child.kill("SIGKILL");
 await sleep(300);
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

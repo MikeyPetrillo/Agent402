@@ -18,9 +18,8 @@ import { oursMs } from "./lib/ours-clock.js";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { createOutboundDestinationStore, destinationKey, destinationWord, DEFAULT_WINDOW_HOURS, DEFAULT_BURST_OVER } from "../src/outbound-destinations.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -164,20 +163,15 @@ const file = join(dir, "outbound-destinations.json");
     [`solana:${SOL}`]: { firstAt: recent, chain: "solana", origin: "seller-b.example", slug: null },
     [`base:0x${"8".repeat(40)}`]: { firstAt: old, chain: "base", origin: null, slug: null },
   } }));
-  const PORT = await getFreePort();
   const TOKEN = "outbound-test-operator-token-0123456789";
-  const child = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
+  const srv = await bootServer({
+    stores: false,
+    timeoutMs: 60_000,
+    env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
            AGENT402_OPERATOR_TOKEN: TOKEN, OUTBOUND_LEDGER_FILE: join(sdir, "outbound-spend.ndjson"), OUTBOUND_NEW_DEST_BURST: "1", OUTBOUND_NEW_DEST_WINDOW_H: "24" },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  const base = `http://127.0.0.1:${PORT}`;
-  let up = false;
-  for (let i = 0; i < 120; i++) {
-    try { const r = await fetch(`${base}/health`); if (r.ok) { up = true; break; } } catch {}
-    await sleep(500);
-  }
-  ok(up, "the server booted");
+  const base = srv.url;
+  ok(true, "the server booted");
   try {
     const pub = await (await fetch(`${base}/api/gateway-status`)).json();
     ok(JSON.stringify(pub.outboundDestinations) === JSON.stringify({ status: "burst" }), `the public field is the word alone, read from the stored body at boot (${JSON.stringify(pub.outboundDestinations)})`);
@@ -194,7 +188,7 @@ const file = join(dir, "outbound-destinations.json");
     const full = await (await fetch(`${base}/__operator/outbound-destinations.json`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
     ok(full.earlier.length === 1 && full.earlier[0].payTo === "0x" + "8".repeat(40) && full.truncated === false, "the earlier sightings follow the recent ones");
   } finally {
-    child.kill();
+    await srv.stop();
     rmSync(sdir, { recursive: true, force: true });
   }
 }

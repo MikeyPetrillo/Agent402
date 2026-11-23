@@ -65,7 +65,7 @@ ok(priceUsd(500) === "$5" && priceUsd(1250) === "$12.50" && priceUsd(300) === "$
 
 // ------------------------------------------------------------- 2. prefill URL
 const url = monitorPrefillUrl("domain-monitor", HOSTILE, "https://agent402.tools");
-ok(url.startsWith("https://agent402.tools/monitors?"), "prefill URL points at the storefront");
+ok(new URL(url).origin === "https://agent402.tools" && new URL(url).pathname === "/monitors" && new URL(url).search.length > 1, "prefill URL points at the storefront");
 ok(!/["'<>]/.test(url), "a hostile target is percent-encoded in the URL (no raw quote or angle bracket)");
 ok(new URL(url).searchParams.get("target") === HOSTILE.slice(0, 200) && new URL(url).searchParams.get("product") === "domain-monitor",
   "the URL round-trips product + target exactly");

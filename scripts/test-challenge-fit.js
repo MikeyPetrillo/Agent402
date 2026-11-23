@@ -30,16 +30,12 @@
 //     extension are untouched.
 //   node scripts/test-challenge-fit.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import { createServer, request } from "node:http";
-import { spawn } from "node:child_process";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { CORS_EXPOSE_HEADERS } from "../src/cors.js";
 import { splitChallenges, evmChainOf, mergeEvmChallenges } from "./lib/mpp-challenge-merge.js";
 import { Challenge, PaymentRequest } from "mppx";
 
-const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 // The ceiling test-challenge-size enforces, and the headroom a rail change
 // must leave under it on the worst route.
 const MAX_TOTAL_HEADER_BYTES = 16_200;
@@ -74,7 +70,6 @@ const check = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { 
   check(mergeEvmChallenges("", localBase) === "", "no MPP challenge on production projects none");
 }
 
-const [PORT, FAC] = await getFreePorts(2);
 const fac = createServer((req, res) => {
   req.resume();
   req.on("end", () => {
@@ -84,12 +79,13 @@ const fac = createServer((req, res) => {
     res.end("{}");
   });
 });
-await new Promise((r) => fac.listen(FAC, "127.0.0.1", r));
+await new Promise((r) => fac.listen(0, "127.0.0.1", r));
+const FAC = fac.address().port;
 const F = `http://127.0.0.1:${FAC}`;
-const env = { ...process.env };
-for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "TARGET_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "NETWORK_PRICE_FLOORS", "NETWORK_PRICE_PREMIUMS", "MPP_CHALLENGE_NETWORKS", "ACCEPT_OUTPUT_SCHEMA", "X402_UPTO_NETWORKS", "TEMPO_API_KEY", "CIRCLE_FACILITATOR_API_KEY"]) delete env[k];
-const proc = spawn(process.execPath, ["--import", "./scripts/lib/loopback-only-preload.js", "src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: {
-  ...env, ...ownStoreEnv("challenge-fit"), PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test", RAILS_TEST_GRADUATE: "ink",
+// bootServer merges process.env: the child boots without these.
+for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "TARGET_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "NETWORK_PRICE_FLOORS", "NETWORK_PRICE_PREMIUMS", "MPP_CHALLENGE_NETWORKS", "ACCEPT_OUTPUT_SCHEMA", "X402_UPTO_NETWORKS", "TEMPO_API_KEY", "CIRCLE_FACILITATOR_API_KEY"]) delete process.env[k];
+const bootOpts = { stores: "challenge-fit", args: ["--import", "./scripts/lib/loopback-only-preload.js"], timeoutMs: 120_000, env: {
+  FREE_MODE: "", NODE_ENV: "test", RAILS_TEST_GRADUATE: "ink",
   WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
   PAYMENT_NETWORKS: "base,polygon,arbitrum,monad,celo,avalanche,sei,optimism,ink,robinhood",
   FACILITATOR_URL: F, PAYAI_FACILITATOR_URL: F, INK_FACILITATOR_URL: F, CELO_FACILITATOR_URL: F, MONAD_FACILITATOR_URL: F, ROBINHOOD_FACILITATOR_URL: F, AGENT402_BASE_RPC: `${F}/rpc`,
@@ -97,12 +93,16 @@ const proc = spawn(process.execPath, ["--import", "./scripts/lib/loopback-only-p
   STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off", REVENUE_LEDGER: "off",
   // Key-gated routes mount with placeholders (only the unpaid 402 is read).
   X_BEARER_TOKEN: "challenge-fit-placeholder", NEYNAR_API_KEY: "challenge-fit-placeholder", EXA_API_KEY: "challenge-fit-placeholder", TYPESAFE_API_KEY: "challenge-fit-placeholder", RUGCHECK_TOOLS: "on", OPENROUTER_TTS_ENABLED: "true",
-} });
-let log = ""; proc.stdout.on("data", (d) => (log += d)); proc.stderr.on("data", (d) => (log += d));
-const stop = () => { try { proc.kill("SIGKILL"); } catch {} try { fac.close(); } catch {} };
+} };
+let srv = null, bootError = "";
+try { srv = await bootServer(bootOpts); } catch (e) { bootError = e.message; }
+const stop = () => { try { srv?.child.kill("SIGKILL"); } catch {} try { fac.close(); } catch {} };
 process.on("exit", stop);
-const B = `http://127.0.0.1:${PORT}`;
-const LOCAL_HOST = `127.0.0.1:${PORT}`;
+const B = srv?.url;
+// The local host as the 402 spells it: the bound port where the request's own
+// host is read, and ":0" where the server's BASE_URL (built from PORT=0) is.
+const LOCAL_HOSTS = [`127.0.0.1:${srv?.port}`, "127.0.0.1:0"];
+const asProd = (s) => LOCAL_HOSTS.reduce((t, h) => t.split(h).join(PROD_HOST), s);
 
 // A raised header limit: an oversized 402 is what this suite measures.
 const read = (path, { method = "GET", body } = {}) => new Promise((resolve, reject) => {
@@ -120,8 +120,8 @@ function headerBytes(r) {
     const k = r.rawHeaders[i];
     let v = r.rawHeaders[i + 1];
     if (/^payment-required$/i.test(k)) {
-      try { v = Buffer.from(Buffer.from(v, "base64").toString("utf8").split(LOCAL_HOST).join(PROD_HOST), "utf8").toString("base64"); } catch { /* measured as sent */ }
-    } else v = v.split(LOCAL_HOST).join(PROD_HOST);
+      try { v = Buffer.from(asProd(Buffer.from(v, "base64").toString("utf8")), "utf8").toString("base64"); } catch { /* measured as sent */ }
+    } else v = asProd(v);
     n += k.length + v.length + 4;
   }
   return n;
@@ -129,10 +129,9 @@ function headerBytes(r) {
 const exposeOf = (r) => String(r.headers["access-control-expose-headers"] || "").split(",").map((s) => s.trim()).filter(Boolean);
 
 try {
-  let up = false;
-  for (let i = 0; i < 240 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch {} if (!up) await new Promise((r) => setTimeout(r, 500)); }
+  const up = Boolean(srv);
   check(up, "paid-mode server booted with Ink graduated and MPP on");
-  if (!up) { console.log(log.slice(-1500)); process.exit(1); }
+  if (!up) { console.log(bootError.slice(-1500)); process.exit(1); }
   const pricing = await (await fetch(`${B}/api/pricing`)).json();
   const endpoints = Array.isArray(pricing.endpoints) ? pricing.endpoints : [];
   check(endpoints.length >= 400, `the catalog lists ${endpoints.length} endpoints`);

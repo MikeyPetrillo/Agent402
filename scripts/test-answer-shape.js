@@ -18,9 +18,8 @@
 //   booted   a paid-mode server (stub facilitator) counts a paid empty answer
 //            and a paid ok answer by class on the operator endpoint.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, writeFile, chmod, readFile, rm } from "node:fs/promises";
@@ -30,7 +29,7 @@ import express from "express";
 import { load as yamlLoad } from "js-yaml";
 import { answerContractOf, classifyAnswer, observeJsonAnswer, identicalAnswerFlags, EMPTY_RESULT_OK, populatedArrayKeys } from "../src/answer-shape.js";
 import { createToolFailureMonitor, BUCKET_MS } from "../src/tool-failure-monitor.js";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { OPEN_BODY_RE } from "./lib/monitor-issue-text.js";
 
 let pass = 0, fail = 0;
@@ -333,7 +332,6 @@ await check("the status Worker maps toolAnswers under the same title", async () 
 // ---- booted: a paid-mode server classifies paid answers ------------------------------
 await check("booted (paid mode, stub facilitator): a paid empty answer and a paid ok answer are counted by class", async () => {
   const { createServer } = await import("node:http");
-  const [PORT, FAC_PORT] = await getFreePorts(2);
   const TMP = await mkdtemp(join(tmpdir(), "answer-shape-boot-"));
   const TOKEN = "answer-shape-test-operator-token-0123456789";
   const facilitator = createServer((req, res) => {
@@ -349,20 +347,23 @@ await check("booted (paid mode, stub facilitator): a paid empty answer and a pai
       reply({});
     });
   });
-  await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
-  const log = [];
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+  await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+  const FAC_PORT = facilitator.address().port;
+  // The listening line is enough: paidPost waits for each route's 402.
+  const srv = await bootServer({
+    stores: false,
+    readyPath: null,
+    timeoutMs: 60_000,
+    env: { FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "", REDIS_URL: "",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATE_DATABASE_URL: "",
       LEADERBOARD_FIRST_REFRESH_DELAY_MS: "600000", AGENT402_OPERATOR_TOKEN: TOKEN,
       AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json") },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  for (const s of [proc.stdout, proc.stderr]) s.on("data", (d) => { for (const l of String(d).split("\n")) if (l.trim()) log.push(l.slice(0, 300)); });
-  const B = `http://127.0.0.1:${PORT}`;
+  }).catch(async (e) => { facilitator.close(); await rm(TMP, { recursive: true, force: true }).catch(() => {}); throw e; });
+  const proc = srv.child;
+  const log = () => srv.log().split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 300));
+  const B = srv.url;
   const wallet = (n) => `0x${n.toString(16).padStart(40, "0")}`;
   const paidPost = async (route, body, payer) => {
     let unpaid;
@@ -382,7 +383,7 @@ await check("booted (paid mode, stub facilitator): a paid empty answer and a pai
     // A fresh sales ledger holds no external sale, so the bestsellers board
     // the example shows populated answers empty: a live-data empty 200.
     const r1 = await paidPost("/api/bestsellers", {}, wallet(0x5151));
-    assert.equal(r1.status, 200, `bestsellers paid (${r1.status}) ${log.slice(-5).join(" | ")}`);
+    assert.equal(r1.status, 200, `bestsellers paid (${r1.status}) ${log().slice(-5).join(" | ")}`);
     const j1 = await r1.json();
     assert.ok(Array.isArray(j1.bestsellers) && j1.bestsellers.length === 0, "the board is empty on a fresh ledger");
     const r2 = await paidPost("/api/hash", { text: "hello world" }, wallet(0x5152));

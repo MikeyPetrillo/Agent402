@@ -4,8 +4,7 @@
 //
 //   node scripts/test-retired-routes.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { RETIRED_TOOLS, RETIRED_PACKS, RETIRED_CONVERTERS_AT, retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders } from "../src/retired-tools.js";
 import { execFileSync } from "node:child_process";
 import { readFileSync as readTextSync } from "node:fs";
@@ -286,13 +285,14 @@ for (const slug of [...Object.keys(RETIRED_PACKS)]) ok(snapshot.packs.has(slug),
 const gated = await envGatedSegments();
 
 // --- the wire, on a free boot ------------------------------------------------------
-const port = await getFreePort();
-const base = `http://127.0.0.1:${port}`;
-proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(port), BASE_URL: "http://agent402.test", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", KALSHI_TOOLS: "" }, stdio: ["ignore", "ignore", "inherit"] });
+const booting = bootServer({ stores: false, timeoutMs: 90_000, env: { FREE_MODE: "true", BASE_URL: "http://agent402.test", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", KALSHI_TOOLS: "" } })
+  .catch((e) => { console.error(e.message); return null; });
+let base = "";
 try {
-  let up = false;
-  for (let i = 0; i < 180 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted (the boot guard accepted the registry against the real catalog)");
+  const srv = await booting;
+  proc = srv?.child ?? null;
+  base = srv?.url ?? "";
+  ok(Boolean(srv), "server booted (the boot guard accepted the registry against the real catalog)");
   // Every machine surface and listing page we serve names live routes only.
   {
     const found = [];
@@ -483,5 +483,5 @@ try {
   // A converter call we can serve is untouched: it is served (free boot), never a 410.
   const served = await fetch(`${base}/api/convert-miles-to-kilometers?value=2`);
   ok(served.status === 200 && served.headers.get("sunset") === null, `a servable converter call is still served, with no Sunset (got ${served.status})`);
-} finally { proc.kill("SIGTERM"); }
+} finally { proc?.kill("SIGTERM"); }
 console.log(`OK: ${pass} passed`);

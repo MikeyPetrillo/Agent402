@@ -26,14 +26,12 @@
 // Deliberately does not skip without REDIS_URL: the hold is only observable
 // on the shared store, and a skipped integration test is not coverage.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 
 if (!process.env.REDIS_URL) {
   console.error("FAIL: REDIS_URL is not set. This test needs a real redis (CI provides a service container).");
@@ -43,8 +41,6 @@ if (!process.env.REDIS_URL) {
 const { createClient } = await import("redis");
 const { CONSUMED_VALIDITY_MARGIN_MS, MAX_SETTLED_VALIDITY_HOLD_MS, MAX_SETTLED_MARK_HOLD_MS, SETTLED_HOLD_MS } = await import("../src/replay-guard.js");
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
 const PAYER = "0x" + "7".repeat(40);
 const TMP = mkdtempSync(join(tmpdir(), "replay-hold-"));
 let pass = 0, failed = 0;
@@ -63,11 +59,15 @@ const facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 const serverLog = [];
-const proc = spawn(process.execPath, ["--import", "./scripts/lib/hold-json-preload.js", "src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("replay-hold"), PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+// Booted with a deadline (bootServer's) in place of the /health loop; a boot
+// that fails is the same failed check.
+const srv = await bootServer({
+  stores: "replay-hold", args: ["--import", "./scripts/lib/hold-json-preload.js"],
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "",
     // X402_INDEX_CRAWL=off also keeps the revenue warm-up (a public-RPC scan)
@@ -75,10 +75,11 @@ const proc = spawn(process.execPath, ["--import", "./scripts/lib/hold-json-prelo
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     STATS_ALLOW_EPHEMERAL: "true", SHARED_LIMITS_PREFIX: `replay-hold-${process.pid}-${randomBytes(4).toString("hex")}`,
     HANGUP_FORGIVE: "", HANGUP_FORGIVE_SALT: "replay-hold-salt", HANGUP_TEST_HOLD_JSON: "1" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+}).catch((e) => { serverLog.push(String(e.message).slice(-2000)); return null; });
+const proc = srv?.child;
+const B = srv?.url;
 const keep = (d) => { for (const l of String(d).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 400)); };
-proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+if (srv) { keep(srv.log()); proc.stdout.on("data", keep); proc.stderr.on("data", keep); }
 const logSince = (i) => serverLog.slice(i).join("\n");
 
 const redis = createClient({ url: process.env.REDIS_URL });
@@ -105,8 +106,7 @@ const hangUp = (url, { headers = {}, abortWhen } = {}) => new Promise((resolve) 
 });
 
 try {
-  let up = false;
-  for (let i = 0; i < 240; i++) { try { if ((await fetch(`${B}/health`)).ok) { up = true; break; } } catch { /* booting */ } await sleep(500); }
+  const up = Boolean(srv);
   ok(up, "paid server booted on the shared store with the hold-json preload");
   if (!up) throw new Error("the server did not boot");
   const unpaid = await fetch(`${B}/api/uuid`);
@@ -183,7 +183,7 @@ try {
     ok(again.status === 409 && settles === s0, `forgiven: re-sending the same authorization is refused as consumed and settles nothing (${again.status}, settle +${settles - s0})`);
   }
 } finally {
-  try { proc.kill("SIGKILL"); } catch { /* gone */ }
+  try { proc?.kill("SIGKILL"); } catch { /* gone */ }
   facilitator.close();
   try { await redis.quit(); } catch { /* closed */ }
   try { rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ }

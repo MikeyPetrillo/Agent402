@@ -16,18 +16,17 @@
 //   d. the summary is operator-only (404 without the token) and the log line
 //      carries no payer address and no transaction hash.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
-let pass = 0, proc = null, facilitator = null, dbStub = null;
-const serverLog = [];
+let pass = 0, srv = null, facilitator = null, dbStub = null;
+const serverLog = () => (srv?.log() || "").split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 600));
 const TMP = mkdtempSync(join(tmpdir(), "phase-timing-"));
-const cleanup = () => { proc?.kill("SIGKILL"); facilitator?.close(); dbStub?.close(); rmSync(TMP, { recursive: true, force: true }); };
-const fail = (m) => { console.error("FAIL:", m); for (const l of serverLog.slice(-25)) console.error("  server:", l); cleanup(); process.exit(1); };
+const cleanup = () => { srv?.child.kill("SIGKILL"); facilitator?.close(); dbStub?.close(); rmSync(TMP, { recursive: true, force: true }); };
+const fail = (m) => { console.error("FAIL:", m); for (const l of serverLog().slice(-25)) console.error("  server:", l); cleanup(); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitFor = async (cond, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (cond()) return true; await sleep(20); } return cond(); };
@@ -118,8 +117,7 @@ const waitFor = async (cond, ms = 8000) => { const t0 = Date.now(); while (Date.
   }
 }
 
-const [PORT, FAC_PORT, DB_PORT] = await getFreePorts(3);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const TX = `0x${"7c".repeat(32)}`;
 const OP = "test-phase-timing-operator-token-0123456789";
@@ -145,7 +143,8 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 // Stub market data: the boundary answers at once, the data read after DATA_MS
 // (or `slowDataMs` when a case needs a long handler).
@@ -162,20 +161,21 @@ dbStub = createServer((req, res) => {
     send(404, "{}");
   });
 });
-await new Promise((r) => dbStub.listen(DB_PORT, "127.0.0.1", r));
+await new Promise((r) => dbStub.listen(0, "127.0.0.1", r));
+const DB_PORT = dbStub.address().port;
 
-proc = spawn(process.execPath, ["--import", "./scripts/lib/databento-stub-preload.js", "src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+const booting = bootServer({
+  stores: false,
+  args: ["--import", "./scripts/lib/databento-stub-preload.js"],
+  timeoutMs: 60_000,
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: SECRET, TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_STUB_URL: `http://127.0.0.1:${DB_PORT}`, PAID_TIMING_LOG: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json") },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 600)); } };
-proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
-const timingLines = () => serverLog.filter((l) => l.startsWith("[paid-timing]"));
+const timingLines = () => serverLog().filter((l) => l.startsWith("[paid-timing]"));
 const field = (line, k) => { const m = line.match(new RegExp(`\\b${k}=(\\S+)`)); return m ? m[1] : null; };
 const msOf = (line, k) => { const v = field(line, k); return v && v !== "-" ? Number(v.replace(/ms$/, "")) : null; };
 const near = (v, target, slack = 250) => v != null && v >= target - 20 && v <= target + slack;
@@ -190,9 +190,9 @@ const credential = (accepted, payer) => Buffer.from(JSON.stringify({
 const PAYER = "0x00000000000000000000000000000000000abc01";
 
 try {
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) { up = true; break; } } catch { /* booting */ } await sleep(500); }
-  ok(up, "paid server booted with the market-data stub preload");
+  srv = await booting.catch((e) => fail(`paid server did not boot: ${e.message}`));
+  B = srv.url;
+  ok(true, "paid server booted with the market-data stub preload");
   // The first tick runs at boot; on a busy CI runner (the boot revenue snapshot
   // reaches public RPCs) it can land well after /health answers.
   const warmed = await waitFor(() => db.range >= 1, 30_000);

@@ -7,11 +7,10 @@
 //
 //   node scripts/test-captured-examples-render.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -31,25 +30,18 @@ writeFileSync(file, J({
   [HAND.slug]: { capturedAt: "2026-10-12", example: { capturedMarker: "must-not-render" }, modelBacked: false },
 }));
 
-const port = await getFreePort();
-const base = `http://127.0.0.1:${port}`;
-const proc = spawn(process.execPath, ["src/server.js"], {
-  cwd: new URL("..", import.meta.url),
-  env: { ...process.env, PORT: String(port), FREE_MODE: "true", TOOL_OUTPUT_EXAMPLES_FILE: file, TOOL_OUTPUT_EXAMPLES_TEST_BARE: BARE.slug, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let log = "";
-proc.stdout.on("data", (d) => { log += d; });
-proc.stderr.on("data", (d) => { log += d; });
-const stop = () => { try { proc.kill("SIGKILL"); } catch {} };
+let srv;
+try {
+  srv = await bootServer({
+    stores: "captured-examples",
+    timeoutMs: 240_000,
+    env: { FREE_MODE: "true", TOOL_OUTPUT_EXAMPLES_FILE: file, TOOL_OUTPUT_EXAMPLES_TEST_BARE: BARE.slug, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
+  });
+} catch (e) { console.error(`FAIL - the server did not come up\n${e.message}`); process.exit(1); }
+const base = srv.url;
+const log = srv.log();
+const stop = () => { try { srv.child.kill("SIGKILL"); } catch {} };
 process.on("exit", stop);
-
-let up = false;
-for (let i = 0; i < 480 && !up; i++) {
-  try { up = (await fetch(`${base}/health`)).ok; } catch {}
-  if (!up) await new Promise((r) => setTimeout(r, 500));
-}
-if (!up) { console.error(`FAIL - the server did not come up\n${log.slice(-3000)}`); process.exit(1); }
 
 ok(/\[examples\] 1 captured output example\(s\) applied/.test(log), "boot applied exactly one captured example (the hand-written one is kept)");
 

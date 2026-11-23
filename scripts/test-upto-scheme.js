@@ -20,9 +20,8 @@
 // Each server here runs against a LOCAL STUB facilitator, so nothing is settled
 // and no network is required.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -32,7 +31,7 @@ const BASE_CAIP2 = "eip155:8453";
 const kind = (scheme) => ({ x402Version: 2, scheme, network: BASE_CAIP2 });
 
 /** A stub facilitator advertising exactly the kinds it is told to. */
-function stubFacilitator(port, kinds, signers = {}) {
+function stubFacilitator(kinds, signers = {}) {
   const srv = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => { body += c; });
@@ -44,32 +43,39 @@ function stubFacilitator(port, kinds, signers = {}) {
       res.writeHead(404); res.end();
     });
   });
-  return new Promise((r) => srv.listen(port, () => r(srv)));
+  return new Promise((r) => srv.listen(0, "127.0.0.1", () => r(srv)));
 }
 
-/** Boot a paid-mode server and return the decoded accepts for one route. */
-async function acceptsFor(env, port, facPort, kinds, signers) {
-  const fac = await stubFacilitator(facPort, kinds, signers);
-  let log = "";
-  const child = spawn(process.execPath, ["src/server.js"], {
-    env: {
-      ...process.env, PORT: String(port), FREE_MODE: "", NETWORK: "base",
-      PAYMENT_NETWORKS: "base", FACILITATOR_URL: `http://127.0.0.1:${facPort}`,
-      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
-      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
-      X402_INDEX_CRAWL: "off", STATS_ALLOW_EPHEMERAL: "true",
-      ...env,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", (d) => { log += d; });
-  child.stderr.on("data", (d) => { log += d; });
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 240; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-    await wait(250);
+/**
+ * Boot a paid-mode server on port 0 against the stub on `facPort`. Resolves
+ * { up, base, child, log() }; a boot that fails is `up: false` with its log.
+ */
+async function bootPaid(facPort, env) {
+  try {
+    const srv = await bootServer({
+      stores: "upto-scheme",
+      env: {
+        FREE_MODE: "", NETWORK: "base",
+        PAYMENT_NETWORKS: "base", FACILITATOR_URL: `http://127.0.0.1:${facPort}`,
+        CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
+        WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
+        X402_INDEX_CRAWL: "off", STATS_ALLOW_EPHEMERAL: "true",
+        ...env,
+      },
+    });
+    return { up: true, base: srv.url, child: srv.child, log: () => srv.log() };
+  } catch (e) {
+    return { up: false, base: "", child: null, log: () => String(e?.message || e) };
   }
+}
+
+/** Boot a paid-mode server and return the decoded accepts for one route.
+ *  `env` may be a function of the stub facilitator's port. */
+async function acceptsFor(env, kinds, signers) {
+  const fac = await stubFacilitator(kinds, signers);
+  const facPort = fac.address().port;
+  const booted = await bootPaid(facPort, typeof env === "function" ? env(facPort) : env);
+  const { up, base, child } = booted;
   let accepts = null, status = 0;
   if (up) {
     const r = await fetch(`${base}/api/uuid`);
@@ -77,19 +83,15 @@ async function acceptsFor(env, port, facPort, kinds, signers) {
     const hdr = r.headers.get("payment-required");
     if (hdr) { try { accepts = JSON.parse(Buffer.from(hdr, "base64").toString("utf8")).accepts || []; } catch { /* */ } }
   }
-  try { child.kill("SIGKILL"); } catch { /* */ }
+  try { child?.kill("SIGKILL"); } catch { /* */ }
   try { fac.close(); } catch { /* */ }
   await wait(200);
-  return { up, status, accepts, log };
+  return { up, status, accepts, log: booted.log() };
 }
-
-// Distinct OS-assigned ports, addressed by slot: slot(n).
-const PORTS = await getFreePorts(52);
-const slot = (n) => PORTS[n];
 
 // --- 1. DEFAULT: unset means byte-identical to today -------------------------
 {
-  const { up, status, accepts, log } = await acceptsFor({}, slot(0), slot(40), [kind("exact"), kind("upto")]);
+  const { up, status, accepts, log } = await acceptsFor({}, [kind("exact"), kind("upto")]);
   ok(up, "server booted with upto unset");
   if (!up) console.error(log.slice(-1200));
   ok(status === 402, `paywall active (got ${status})`);
@@ -105,7 +107,7 @@ const slot = (n) => PORTS[n];
 // amount rather than replaced.
 {
   const { up, status, accepts } = await acceptsFor(
-    { X402_UPTO_NETWORKS: BASE_CAIP2 }, slot(1), slot(41), [kind("exact"), kind("upto")]);
+    { X402_UPTO_NETWORKS: BASE_CAIP2 }, [kind("exact"), kind("upto")]);
   ok(up && status === 402, "server booted with upto opted in");
   const schemes = (accepts || []).map((a) => a.scheme);
   ok(schemes.includes("upto"), `upto is offered when opted in (got ${schemes.join(",")})`);
@@ -129,7 +131,7 @@ const slot = (n) => PORTS[n];
   const rotating = () => { calls++; return [kind("exact"), { ...kind("upto"), extra: { facilitatorAddress: SIGNERS[(calls + process.pid) % SIGNERS.length] } }]; };
   const named = [];
   for (const i of [0, 1, 2]) {
-    const { up, accepts } = await acceptsFor({ X402_UPTO_NETWORKS: BASE_CAIP2 }, slot(6 + i), slot(46 + i), rotating, { "eip155:*": SIGNERS });
+    const { up, accepts } = await acceptsFor({ X402_UPTO_NETWORKS: BASE_CAIP2 }, rotating, { "eip155:*": SIGNERS });
     ok(up, `replica ${i + 1} booted against a facilitator that rotates its signer`);
     named.push((accepts || []).find((a) => a.scheme === "upto")?.extra?.facilitatorAddress || null);
   }
@@ -148,9 +150,9 @@ const slot = (n) => PORTS[n];
   const rotating = () => { calls++; return [kind("exact"), { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: PAYERS[(calls + process.pid) % PAYERS.length] } }]; };
   const named = [];
   for (const i of [0, 1, 2]) {
-    const { up, accepts, log } = await acceptsFor({ PAYMENT_NETWORKS: "base,solana", SOLANA_WALLET_ADDRESS: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg",
-        PAYAI_FACILITATOR_URL: `http://127.0.0.1:${slot(49 + i)}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "" },
-      slot(9 + i), slot(49 + i), rotating, { "eip155:*": [], "solana:*": PAYERS });
+    const { up, accepts, log } = await acceptsFor((facPort) => ({ PAYMENT_NETWORKS: "base,solana", SOLANA_WALLET_ADDRESS: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg",
+        PAYAI_FACILITATOR_URL: `http://127.0.0.1:${facPort}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "" }),
+      rotating, { "eip155:*": [], "solana:*": PAYERS });
     ok(up, `replica ${i + 1} booted against a facilitator that rotates its Solana fee payer`);
     if (!up) console.error(log.slice(-1200));
     named.push((accepts || []).find((a) => a.network === SOL)?.extra?.feePayer || null);
@@ -182,7 +184,7 @@ const slot = (n) => PORTS[n];
 // Offering it here would take a signature and then fail the buyer.
 {
   const { up, status, accepts, log } = await acceptsFor(
-    { X402_UPTO_NETWORKS: BASE_CAIP2 }, slot(2), slot(42), [kind("exact")]);
+    { X402_UPTO_NETWORKS: BASE_CAIP2 }, [kind("exact")]);
   ok(up, "server booted when the facilitator lacks upto");
   ok(status === 402, `and the paywall still builds a 402 rather than 500ing (got ${status})`);
   const schemes = [...new Set((accepts || []).map((a) => a.scheme))];
@@ -195,7 +197,7 @@ const slot = (n) => PORTS[n];
 // --- 4. An unserved network in the opt-in list is ignored --------------------
 {
   const { up, status, accepts } = await acceptsFor(
-    { X402_UPTO_NETWORKS: "eip155:999999" }, slot(3), slot(43), [kind("exact"), kind("upto")]);
+    { X402_UPTO_NETWORKS: "eip155:999999" }, [kind("exact"), kind("upto")]);
   ok(up && status === 402, "server booted with an unserved network opted in");
   const schemes = [...new Set((accepts || []).map((a) => a.scheme))];
   ok(!schemes.includes("upto"), "a network we do not serve never gains a scheme");
@@ -208,25 +210,8 @@ const slot = (n) => PORTS[n];
 // The first version of this feature broke that invariant precisely because this
 // suite only ever probed /api/uuid.
 {
-  const fac = await stubFacilitator(slot(45), [kind("exact"), kind("upto")]);
-  const port = slot(5);
-  const child = spawn(process.execPath, ["src/server.js"], {
-    env: {
-      ...process.env, PORT: String(port), FREE_MODE: "", NETWORK: "base",
-      PAYMENT_NETWORKS: "base", FACILITATOR_URL: `http://127.0.0.1:${slot(45)}`,
-      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
-      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
-      X402_INDEX_CRAWL: "off", STATS_ALLOW_EPHEMERAL: "true",
-      X402_UPTO_NETWORKS: BASE_CAIP2,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 240; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-    await wait(250);
-  }
+  const fac = await stubFacilitator([kind("exact"), kind("upto")]);
+  const { up, base, child } = await bootPaid(fac.address().port, { X402_UPTO_NETWORKS: BASE_CAIP2 });
   ok(up, "server booted for the identity-bound check");
   const schemesOn = async (path) => {
     const r = await fetch(`${base}${path}`);
@@ -242,7 +227,7 @@ const slot = (n) => PORTS[n];
   ok(mem.schemes.includes("exact"), "and still offers exact, so it remains payable");
   const norm = await schemesOn("/api/uuid");
   ok(norm.schemes.includes("upto"), "while an ordinary tool on the same server does offer upto");
-  try { child.kill("SIGKILL"); } catch { /* */ }
+  try { child?.kill("SIGKILL"); } catch { /* */ }
   try { fac.close(); } catch { /* */ }
   await wait(200);
 }
@@ -255,40 +240,23 @@ const slot = (n) => PORTS[n];
 // every chain, not just the offending one. The gate must prove pricing, not
 // trust the advertisement.
 {
-  const facPort = slot(46);
-  const fac = await stubFacilitator(facPort, [
+  const fac = await stubFacilitator([
     kind("exact"), kind("upto"),
     { x402Version: 2, scheme: "exact", network: "eip155:42220" },
     { x402Version: 2, scheme: "upto", network: "eip155:42220" }, // Celo: unpriceable by the stock scheme
   ]);
-  const port = slot(6);
-  let log = "";
-  const child = spawn(process.execPath, ["src/server.js"], {
-    env: {
-      ...process.env, PORT: String(port), FREE_MODE: "", NETWORK: "base",
-      PAYMENT_NETWORKS: "base,celo", FACILITATOR_URL: `http://127.0.0.1:${facPort}`,
-      CELO_FACILITATOR_URL: `http://127.0.0.1:${facPort}`, CELO_FACILITATOR_KEY: "test",
-      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
-      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
-      X402_INDEX_CRAWL: "off", STATS_ALLOW_EPHEMERAL: "true",
-      X402_UPTO_NETWORKS: "all",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
+  const facPort = fac.address().port;
+  const { up, base, child } = await bootPaid(facPort, {
+    PAYMENT_NETWORKS: "base,celo",
+    CELO_FACILITATOR_URL: `http://127.0.0.1:${facPort}`, CELO_FACILITATOR_KEY: "test",
+    X402_UPTO_NETWORKS: "all",
   });
-  child.stdout.on("data", (d) => { log += d; });
-  child.stderr.on("data", (d) => { log += d; });
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 240; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-    await wait(250);
-  }
   ok(up, "server booted with an unpriceable chain opted in");
   const r = await fetch(`${base}/api/uuid`);
   ok(r.status === 402,
     `THE SITE-WIDE GUARD: a Base route still returns 402, not 500, when an unpriceable chain was opted in (got ${r.status})`);
   ok(Boolean(r.headers.get("payment-required")), "and the 402 still carries a payable quote");
-  try { child.kill("SIGKILL"); } catch { /* */ }
+  try { child?.kill("SIGKILL"); } catch { /* */ }
   try { fac.close(); } catch { /* */ }
   await wait(200);
 }
@@ -298,7 +266,7 @@ const slot = (n) => PORTS[n];
 // chain's premium, so upto is refused there exactly as on a floored chain.
 {
   const { up, status, accepts, log } = await acceptsFor(
-    { X402_UPTO_NETWORKS: BASE_CAIP2, NETWORK_PRICE_PREMIUMS: `${BASE_CAIP2}=0.001` }, slot(7), slot(47), [kind("exact"), kind("upto")]);
+    { X402_UPTO_NETWORKS: BASE_CAIP2, NETWORK_PRICE_PREMIUMS: `${BASE_CAIP2}=0.001` }, [kind("exact"), kind("upto")]);
   ok(up && status === 402, "server booted with upto opted in on a premium network");
   const schemes = [...new Set((accepts || []).map((a) => a.scheme))];
   ok(!schemes.includes("upto"), `upto is REFUSED on a network with a settlement premium (got ${schemes.join(",")})`);

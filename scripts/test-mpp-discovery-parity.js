@@ -14,18 +14,15 @@
 // currency per method while the 402 offered two. A buyer (or an index) that
 // reads the document and then meets a different 402 learns not to trust it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Challenge } from "mppx";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { mppMethodsProse } from "../src/mpp-offers.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 
 const facilitator = createServer((req, res) => {
@@ -38,7 +35,8 @@ const facilitator = createServer((req, res) => {
   }
   res.writeHead(404); res.end();
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 const MPP_ENV = {
   MPP_SECRET_KEY: "test-mpp-secret",
@@ -47,23 +45,17 @@ const MPP_ENV = {
   MPP_CHALLENGE_NETWORKS: "",
 };
 const baseEnv = {
-  ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+  FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
   FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
   STRIPE_SECRET_KEY: "", STRIPE_PROFILE_ID: "", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
   UNPAID_QUOTE_BUDGET_PER_HOUR: "off", POSTHOG_API_KEY: "",
 };
 
 async function boot(extra) {
-  const proc = spawn(process.execPath, ["src/server.js"], { env: { ...baseEnv, ...extra }, stdio: ["ignore", "ignore", "pipe"] });
-  let err = "";
-  proc.stderr.on("data", (d) => { err = (err + d).slice(-4000); });
-  for (let i = 0; i < 180; i++) {
-    try { if ((await fetch(`${B}/health`)).ok) return proc; } catch {}
-    if (proc.exitCode !== null) break;
-    await sleep(500);
-  }
-  proc.kill("SIGKILL");
-  throw new Error(`server never became healthy: ${err}`);
+  const srv = await bootServer({ stores: false, timeoutMs: 90_000, env: { ...baseEnv, ...extra } })
+    .catch((e) => { throw new Error(`server never became healthy: ${e.message}`); });
+  B = srv.url;
+  return srv.child;
 }
 
 const pathOf = (p) => p.replace(/\{[^}]+\}/g, "x");

@@ -810,6 +810,31 @@ jobs:
           name: demo-output
           path: demo-output.txt
 
+  # CycloneDX SBOMs of the server and every published package
+  # (scripts/sbom-release.js), uploaded as a workflow artifact on every push to
+  # main. No job waits on it and it gates nothing; it holds no secret and
+  # installs nothing (lockfiles only). scripts/test-sbom-ci.js pins it.
+  sbom:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Build the SBOMs
+        run: node scripts/sbom-release.js --out sbom
+      - name: Upload the SBOMs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom/*.cdx.json
+          if-no-files-found: error
+          retention-days: 90
+
   # LANE TRIGGER RULE (2026-08-25). Every push to the dev branch runs every lane,
   # marker or not: a lane that is SKIPPED still satisfies a required status check
   # on GitHub, so a marker-less push used to produce a mergeable-looking PR whose

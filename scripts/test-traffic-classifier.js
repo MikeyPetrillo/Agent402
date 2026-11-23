@@ -3,11 +3,10 @@
 //
 //   node scripts/test-traffic-classifier.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { classify, templatePath, createTrafficStore, indexerFor, CLASSES, DEFAULTS } from "../src/traffic-classifier.js";
 
 let pass = 0;
@@ -112,14 +111,11 @@ ok(typeof store.summaryLine("2026-09-22") === "string" && /total=13/.test(store.
 }
 
 // --- the wire: a free boot, a walk, the operator read -------------------------------------
-const port = await getFreePort();
-const base2 = `http://127.0.0.1:${port}`;
 const tdir = mkdtempSync(join(tmpdir(), "a402-traffic-boot-"));
-const proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(port), BASE_URL: "http://agent402.test", AGENT402_OPERATOR_TOKEN: "test-operator-token", TRAFFIC_DIR: tdir, TRAFFIC_CRAWLER_PATHS: "6", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" }, stdio: ["ignore", "ignore", "inherit"] });
+const srv = await bootServer({ stores: false, timeoutMs: 90_000, env: { FREE_MODE: "true", BASE_URL: "http://agent402.test", AGENT402_OPERATOR_TOKEN: "test-operator-token", TRAFFIC_DIR: tdir, TRAFFIC_CRAWLER_PATHS: "6", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } });
+const base2 = srv.url;
 try {
-  let up = false;
-  for (let i = 0; i < 180 && !up; i++) { try { up = (await fetch(`${base2}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted with the classifier mounted");
+  ok(true, "server booted with the classifier mounted");
   const noauth = await fetch(`${base2}/__operator/traffic.json`);
   ok(noauth.status === 404, "the report is operator-only (404 without the token)");
   // The browser read goes FIRST: every request here shares one ip, and once
@@ -135,5 +131,5 @@ try {
   ok(today.classes["known-indexer"] >= 1 && today.indexers.some((x) => x.key === "x402scan"), "a named indexer is counted by name");
   ok(today.classes.human >= 1, "a browser on /docs is human");
   ok(!JSON.stringify(rep).includes("127.0.0.1"), "no raw ip in the served report");
-} finally { proc.kill("SIGTERM"); }
+} finally { await srv.stop(); }
 console.log(`OK: ${pass} passed`);

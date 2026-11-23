@@ -22,13 +22,9 @@
 //     Ink's check does not erase Robinhood's.
 //   node scripts/test-ink-rail.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 
-const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const INK = "eip155:57073", BASE_NET = "eip155:8453";
 const INK_USDC = "0x2D270e6886d130D724215A266106e6832161EAEd";
 const SIGNATURE = 'Signature does not authorize this transfer for 0x0000000000000000000000000000000000000e01 (EIP-712 domain "USDC" v2 on chain 57073)';
@@ -41,7 +37,6 @@ const payerOf = (b) => b?.paymentPayload?.payload?.authorization?.from;
 // v1 named kind, plus a testnet this server never offers.
 const V1_NAMES = { "eip155:8453": "base", "eip155:57073": "ink" };
 const productionKinds = (nets) => [...nets, "eip155:84532"].flatMap((network) => [{ x402Version: 2, scheme: "exact", network }, { x402Version: 1, scheme: "exact", network: V1_NAMES[network] || (network === "eip155:84532" ? "base-sepolia" : network) }]);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
 const check = (cond, msg) => { if (cond) console.log(`ok - ${msg}`); else { failed++; console.log(`FAIL - ${msg}`); } };
 // After graduation (Ink moved from GATED_RAILS to RAILS, for real or through
@@ -83,29 +78,35 @@ function facilitator(name, st, kindsFor) {
 }
 
 async function boot({ inkUrls = (p) => `http://127.0.0.1:${p.INK1},http://127.0.0.1:${p.INK2}`, setup = () => {}, extraEnv = {}, networks = "base,ink" } = {}) {
-  const [PORT, BASE_FAC, INK1, INK2] = await getFreePorts(4);
   const st = {};
   // The generic facilitator (PayAI's client, pointed here so no request
   // leaves 127.0.0.1, registered first) also lists Ink: it must never take
   // an Ink payment.
   const servers = [
-    [facilitator("base", st, () => [BASE_NET, INK]), BASE_FAC],
-    [facilitator("ink1", st, () => [INK, BASE_NET]), INK1],
-    [facilitator("ink2", st, () => [INK]), INK2],
+    [facilitator("base", st, () => [BASE_NET, INK])],
+    [facilitator("ink1", st, () => [INK, BASE_NET])],
+    [facilitator("ink2", st, () => [INK])],
   ];
   setup(st);
-  await Promise.all(servers.map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  await Promise.all(servers.map(([s]) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+  const [BASE_FAC, INK1, INK2] = servers.map(([s]) => s.address().port);
   const urls = inkUrls({ INK1, INK2 });
-  const env = { ...process.env }; delete env.STATE_DATABASE_URL; delete env.REDIS_URL; delete env.SOLVADOR_KEY; delete env.ROBINHOOD_RELAYER_KEY; delete env.INK_FACILITATOR_URL; delete env.NETWORK_PRICE_FLOORS; delete env.FACILITATOR_PUBLIC_INDEX_CHAINS;
-  const proc = spawn(process.execPath, ["--import", "./scripts/lib/loopback-only-preload.js", "src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...env, ...ownStoreEnv("ink-rail"), PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test",
+  // bootServer merges process.env: these are held out of it while the child
+  // spawns (synchronously, inside the call) and put back for this process.
+  const held = {};
+  for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "INK_FACILITATOR_URL", "NETWORK_PRICE_FLOORS", "FACILITATOR_PUBLIC_INDEX_CHAINS"]) if (k in process.env) { held[k] = process.env[k]; delete process.env[k]; }
+  const booting = bootServer({ stores: "ink-rail", args: ["--import", "./scripts/lib/loopback-only-preload.js"], timeoutMs: 80_000, env: { FREE_MODE: "", NODE_ENV: "test",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: networks,
     ...(urls ? { INK_FACILITATOR_URL: urls } : {}), ROBINHOOD_FALLBACK_RECHECK_MS: "60000", ...extraEnv,
     PAYMENT_SETTLE_FALLBACK: "true", FACILITATOR_GAS_CHECK: "off", STATS_ALLOW_EPHEMERAL: "true",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } });
-  const log = []; proc.stdout.on("data", (c) => log.push(String(c))); proc.stderr.on("data", (c) => log.push(String(c)));
-  const B = `http://127.0.0.1:${PORT}`;
-  let up = false; for (let i = 0; i < 160 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch {} if (!up) await sleep(500); }
+  Object.assign(process.env, held);
+  let srv = null, bootError = "";
+  try { srv = await booting; } catch (e) { bootError = e.message; }
+  const log = () => (srv ? srv.log() : bootError);
+  const B = srv?.url;
+  const up = Boolean(srv);
   let required = null;
   if (up) {
     const r402 = await fetch(`${B}${PATH}`);
@@ -120,7 +121,7 @@ async function boot({ inkUrls = (p) => `http://127.0.0.1:${p.INK1},http://127.0.
     return r.status;
   };
   const get = async (path) => { const r = await fetch(`${B}${path}`); return { status: r.status, text: await r.text() }; };
-  const stop = () => { proc.kill("SIGKILL"); for (const [s] of servers) s.close(); };
+  const stop = () => { srv?.child.kill("SIGKILL"); for (const [s] of servers) s.close(); };
   return { up, required, accepted, pay, st, log, stop, get, INK2 };
 }
 
@@ -143,10 +144,10 @@ for (const [label, opts] of [
     check(b.required?.status === 402 && b.required.offer?.accepts?.some((a) => a.network === BASE_NET), `${label}: the paywall answers 402 with the Base accept (status ${b.required?.status})`);
     check(!b.accepted && !b.required?.offer?.accepts?.some((a) => a.network === INK), `${label}: no eip155:57073 accept`);
     if (opts.caip2Drop) {
-      check(!b.log.join("").includes("INK_FACILITATOR_URL is unset - Ink is not configured"), `${label}: the name-level drop did not fire (the primary is never removed there)`);
-      check(b.log.join("").includes("INK_FACILITATOR_URL is unset - dropping Ink from the offered networks"), `${label}: the CAIP-2 guard drops eip155:57073 and says why`);
-    } else if (opts.networks !== "base") check(b.log.join("").includes("INK_FACILITATOR_URL is unset - Ink is not configured"), `${label}: the boot says why Ink is not offered`);
-    if (opts.extraEnv?.FACILITATOR_PUBLIC_INDEX_CHAINS) check(b.log.join("").includes("FACILITATOR_PUBLIC_INDEX_CHAINS lists ink but Ink is not offered"), `${label}: the boot warns that the listed public-index chain is not offered`);
+      check(!b.log().includes("INK_FACILITATOR_URL is unset - Ink is not configured"), `${label}: the name-level drop did not fire (the primary is never removed there)`);
+      check(b.log().includes("INK_FACILITATOR_URL is unset - dropping Ink from the offered networks"), `${label}: the CAIP-2 guard drops eip155:57073 and says why`);
+    } else if (opts.networks !== "base") check(b.log().includes("INK_FACILITATOR_URL is unset - Ink is not configured"), `${label}: the boot says why Ink is not offered`);
+    if (opts.extraEnv?.FACILITATOR_PUBLIC_INDEX_CHAINS) check(b.log().includes("FACILITATOR_PUBLIC_INDEX_CHAINS lists ink but Ink is not offered"), `${label}: the boot warns that the listed public-index chain is not offered`);
     if (b.up && opts.caip2Drop) {
       // A dropped Ink primary is not named as the primary anywhere public:
       // the manifest, /api/pricing and /api/rails name the first offered
@@ -161,7 +162,7 @@ for (const [label, opts] of [
       const railsBody = JSON.parse((await b.get("/api/rails")).text);
       const inkRail = (railsBody?.rails || []).find((r) => r.caip2 === INK);
       check(railsBody?.primary === "base" && (!inkRail || inkRail.offered === false), `${label}: /api/rails names base as the primary and does not offer eip155:57073 (${railsBody?.primary}; ${JSON.stringify(inkRail)})`);
-      const warned = b.log.join("").split("\n").filter((l) => l.includes("NETWORK is `ink` but `ink` is not offered"));
+      const warned = b.log().split("\n").filter((l) => l.includes("NETWORK is `ink` but `ink` is not offered"));
       check(warned.length === 1 && warned[0].includes("INK_FACILITATOR_URL") && warned[0].includes("name `base` as the primary network"), `${label}: one boot warning names the misconfiguration by variable (${warned.length})`);
       const byNet = Object.keys(manifest?.settlementFacilitators?.byNetwork || {}).sort();
       check(JSON.stringify(byNet) === '["base","eip155:8453"]', `${label}: the manifest's facilitator map names no Ink (${byNet.join(",")})`);
@@ -176,7 +177,7 @@ for (const [label, opts] of [
       const byNet = Object.keys(JSON.parse((await b.get("/.well-known/x402")).text)?.settlementFacilitators?.byNetwork || {}).sort();
       check(JSON.stringify(byNet) === '["base","eip155:8453"]', `${label}: the manifest's facilitator map names only offered networks, no Ink (either name) and no testnet (${byNet.join(",")})`);
     }
-  } finally { if (failed > before) console.log(b.log.join("").slice(-2500)); b.stop(); }
+  } finally { if (failed > before) console.log(b.log().slice(-2500)); b.stop(); }
 }
 
 // --- 3. enabled: the offer, routing, and the listed settle order --------------
@@ -195,7 +196,7 @@ for (const [label, opts] of [
       check(Number(a.amount) === Math.max(baseAmount, Math.round(FLOOR * 1e6)), `enabled: amount is the list raised to the configured floor (${a.amount} vs list ${baseAmount})`);
       check(a.payTo === "0x000000000000000000000000000000000000dEaD", "enabled: settles to the treasury payTo");
     }
-    check(/Accepting USDC on: [^\n]*\bink\b/.test(b.log.join("")), "enabled: the boot log lists ink in the offer");
+    check(/Accepting USDC on: [^\n]*\bink\b/.test(b.log()), "enabled: the boot log lists ink in the offer");
     const pricing = JSON.parse((await b.get("/api/pricing")).text);
     check(pricing?.payment?.minPriceUsdByNetwork?.ink === FLOOR, `enabled: /api/pricing publishes the floor the 402 quotes (${JSON.stringify(pricing?.payment?.minPriceUsdByNetwork)})`);
     // Offered, Ink is named only where a runtime surface lists the live offer,
@@ -219,7 +220,7 @@ for (const [label, opts] of [
     b.st.ink1.mode = "prose"; b.st.ink2.mode = "prose";
     status = a ? await b.pay() : 0;
     check(status === 402 && b.st.ink2.settles === 2 && b.st.base.settles === 0, `enabled: both listed refuse with no verdict -> 402, no other facilitator is asked (status ${status}, generic ${b.st.base.settles})`);
-  } finally { if (failed > before) console.log(b.log.join("").slice(-3000)); b.stop(); }
+  } finally { if (failed > before) console.log(b.log().slice(-3000)); b.stop(); }
 }
 
 // --- 4. first listed down at boot: the second settles, the disclosure names it -
@@ -228,23 +229,23 @@ for (const [label, opts] of [
   const before = failed;
   try {
     check(b.up && !!b.accepted, "boot choice: Ink is still offered with the first listed facilitator down");
-    check(b.log.join("").includes(`127.0.0.1:${b.INK2} settles first`), "boot choice: the boot log names the facilitator that settles first");
+    check(b.log().includes(`127.0.0.1:${b.INK2} settles first`), "boot choice: the boot log names the facilitator that settles first");
     const para = ((await b.get("/privacy")).text.match(/<li id="public-settlement-index">([\s\S]*?)<\/li>/) || [])[1] || "";
     check(para.startsWith("On Ink, ") && para.includes("(127.0.0.1)") && !para.includes("localhost"), `boot choice: /privacy discloses Ink's public index naming the chosen host (${para.slice(0, 110)})`);
     const idx = JSON.parse((await b.get("/.well-known/x402")).text)?.payment?.dataHandling?.publicSettlementIndex;
     check(JSON.stringify(idx?.chains) === '["ink"]' && JSON.stringify(idx?.hosts) === '["127.0.0.1"]', `boot choice: /.well-known/x402 names it (${JSON.stringify(idx)})`);
     const status = b.accepted ? await b.pay() : 0;
     check(status === 200 && b.st.ink2.settles === 1 && b.st.ink1.settles === 0, `boot choice: a paid call settles through the second, once (status ${status}, ink1 ${b.st.ink1.settles}, ink2 ${b.st.ink2.settles})`);
-  } finally { if (failed > before) console.log(b.log.join("").slice(-2500)); b.stop(); }
+  } finally { if (failed > before) console.log(b.log().slice(-2500)); b.stop(); }
 }
 
 // --- 5. gas runway readings are kept per network ---------------------------------
 {
-  const [RPC, FAC] = await getFreePorts(2);
   const SIGNER = "0x00000000000000000000000000000000000000a1";
   const rpc = stub((q, r, b) => json(r, 200, { jsonrpc: "2.0", id: b?.id ?? 1, result: b?.method === "eth_getBalance" ? "0xde0b6b3a7640000" : b?.method === "eth_gasPrice" ? "0x3b9aca00" : "0x1" }));
   const fac = stub((q, r) => (q.url === "/supported" ? json(r, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: INK }, { x402Version: 2, scheme: "exact", network: "eip155:4663" }], extensions: [], signers: { "eip155:*": [SIGNER] } }) : json(r, 404, {})));
-  await Promise.all([[rpc, RPC], [fac, FAC]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+  await Promise.all([rpc, fac].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", r))));
+  const [RPC, FAC] = [rpc, fac].map((s) => s.address().port);
   process.env.EVM_RPC_57073 = `http://127.0.0.1:${RPC}`;
   process.env.EVM_RPC_4663 = `http://127.0.0.1:${RPC}`;
   try {

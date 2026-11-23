@@ -16,10 +16,8 @@
 // through it after the primary reverts, while one without the key does not.
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
 import { createServer, request as httpRequest } from "node:http";
-import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,7 +27,7 @@ import {
 } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { SettleError } from "@x402/core/types";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const RH = "eip155:4663";
 const CHAIN_ID = 4663;
@@ -246,8 +244,8 @@ function sharedLease() {
 
 console.log("own Robinhood relayer");
 const { st, server } = stubChain();
-const [rpcPort] = await getFreePorts(1);
-await new Promise((r) => server.listen(rpcPort, "127.0.0.1", r));
+await new Promise((r) => server.listen(0, "127.0.0.1", r));
+const rpcPort = server.address().port;
 const RPC = `http://127.0.0.1:${rpcPort}`;
 const relayerKey = generatePrivateKey();
 const relayer = privateKeyToAccount(relayerKey);
@@ -619,14 +617,13 @@ const CDN_SECRET = "cdn-origin-secret-for-tests-0123456789";
 // (scripts/lib/settled-status-preload.js). Either way the refund ledger's
 // newest row is returned as `owed`.
 async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait = "", hangup = false, settledStatus = 0, env: extraEnv = {} }) {
-  const [PORT, BASE_FAC, RH1] = await getFreePorts(3);
   const json = (res, s, o) => { res.writeHead(s, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
   const stub = (h) => createServer((req, res) => { let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => { let body = {}; try { body = JSON.parse(b || "{}"); } catch { /* empty */ } h(req, res, body); }); });
   const rhAsked = { settle: 0 };
   const res502 = (r) => { r.writeHead(502, { "content-type": "text/plain" }); r.end("bad gateway"); };
   const servers = [
-    [stub((q, r) => q.url === "/supported" ? json(r, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }) : q.url === "/rpc" ? json(r, 200, { jsonrpc: "2.0", id: 1, result: "0x0" }) : json(r, 404, {})), BASE_FAC],
-    [stub((q, r, b) => {
+    stub((q, r) => q.url === "/supported" ? json(r, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }) : q.url === "/rpc" ? json(r, 200, { jsonrpc: "2.0", id: 1, result: "0x0" }) : json(r, 404, {})),
+    stub((q, r, b) => {
       if (q.url === "/supported") return json(r, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: RH }], extensions: [], signers: {} });
       if (q.url === "/verify") return json(r, 200, { isValid: true, payer: b?.paymentPayload?.payload?.authorization?.from });
       if (q.url === "/settle") {
@@ -639,29 +636,34 @@ async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait
         return json(r, 200, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: 'The contract function "transferWithAuthorization" reverted.', transaction: "", network: RH });
       }
       return json(r, 404, {});
-    }), RH1],
+    }),
   ];
-  await Promise.all(servers.map(([srv, p]) => new Promise((r) => srv.listen(p, "127.0.0.1", r))));
+  await Promise.all(servers.map((srv) => new Promise((r) => srv.listen(0, "127.0.0.1", r))));
+  const [BASE_FAC, RH1] = servers.map((srv) => srv.address().port);
   const tmp = mkdtempSync(join(tmpdir(), "a402-ownrelayer-"));
-  const env = { ...process.env };
-  for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "ROBINHOOD_MIN_PRICE_USD", "ROBINHOOD_RELAYER_MIN_PRICE_USD", "NETWORK_PRICE_FLOORS", "NETWORK_PRICE_PREMIUMS"]) delete env[k];
+  // bootServer spreads process.env into the child when it spawns, before its
+  // first await: these keys are lifted out of process.env for that call only.
+  const lifted = ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "ROBINHOOD_MIN_PRICE_USD", "ROBINHOOD_RELAYER_MIN_PRICE_USD", "NETWORK_PRICE_FLOORS", "NETWORK_PRICE_PREMIUMS"].filter((k) => k in process.env).map((k) => [k, process.env[k]]);
+  for (const [k] of lifted) delete process.env[k];
   const preload = settledStatus ? ["--import", "./scripts/lib/settled-status-preload.js"] : [];
-  const proc = spawn(process.execPath, [...preload, "src/server.js"], { cwd: fileURLToPath(new URL("..", import.meta.url)), stdio: ["ignore", "pipe", "pipe"], env: { ...env, PORT: String(PORT), FREE_MODE: "", ...(settledStatus ? { SETTLED_STATUS_TEST: "1" } : {}),
-    WALLET_ADDRESS: TREASURY, NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
-    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
-    ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${RH1}`, EVM_RPC_4663: RPC, ...(withKey ? { ROBINHOOD_RELAYER_KEY: relayerKey } : {}),
-    PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, FACILITATOR_GAS_CHECK: "off",
-    LATE_SETTLE_FILE: join(tmp, "late.json"), ...(outageWait ? { ROBINHOOD_AMBIGUOUS_WAIT_MS: outageWait } : {}),
-    ...(cdn ? { CDN_PROXY: "on", CDN_ORIGIN_SECRET: CDN_SECRET, CF_IP_RANGES_EXTRA: "127.0.0.1/32", CDN_SYNC_MAX_SECONDS: "20" } : {}),
-    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", ...extraEnv } });
-  const log = [];
-  proc.stdout.on("data", (c) => log.push(String(c)));
-  proc.stderr.on("data", (c) => log.push(String(c)));
+  let booting;
   try {
-    const B = `http://127.0.0.1:${PORT}`, PATH = "/api/demand-radar?limit=1";
-    let up = false;
-    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!up) await sleep(500); }
-    assert.ok(up, "server booted");
+    booting = bootServer({ stores: false, args: preload, timeoutMs: 60_000, env: { FREE_MODE: "", ...(settledStatus ? { SETTLED_STATUS_TEST: "1" } : {}),
+      WALLET_ADDRESS: TREASURY, NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
+      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
+      ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${RH1}`, EVM_RPC_4663: RPC, ...(withKey ? { ROBINHOOD_RELAYER_KEY: relayerKey } : {}),
+      PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, FACILITATOR_GAS_CHECK: "off",
+      LATE_SETTLE_FILE: join(tmp, "late.json"), ...(outageWait ? { ROBINHOOD_AMBIGUOUS_WAIT_MS: outageWait } : {}),
+      ...(cdn ? { CDN_PROXY: "on", CDN_ORIGIN_SECRET: CDN_SECRET, CF_IP_RANGES_EXTRA: "127.0.0.1/32", CDN_SYNC_MAX_SECONDS: "20" } : {}),
+      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", ...extraEnv } })
+      .catch((e) => { console.error(e.message); return null; });
+  } finally { for (const [k, v] of lifted) process.env[k] = v; }
+  let proc = null;
+  try {
+    const srv = await booting;
+    proc = srv?.child ?? null;
+    assert.ok(srv, "server booted");
+    const B = srv.url, PATH = "/api/demand-radar?limit=1";
     const r402 = await fetch(`${B}${PATH}`);
     const accepted = JSON.parse(Buffer.from(r402.headers.get("payment-required"), "base64").toString()).accepts.find((a) => a.network === RH);
     assert.ok(accepted, "USDG on 4663 is offered");
@@ -709,10 +711,10 @@ async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait
         try { const db = new Database(join(tmp, "agent402-refunds.db"), { readonly: true, fileMustExist: true }); owed = db.prepare("SELECT slug, network, payer, priceUsd, httpStatus, status, evidence FROM refunds ORDER BY id DESC LIMIT 1").get() || null; db.close(); } catch { /* not written yet */ }
       }
     }
-    return { status: paid.status, ownSends: st.sends.length - sends, ownAttempts: st.sendAttempts - attempts, treasuryGain: (st.balances.get(TREASURY.toLowerCase()) || 0n) - treasuryBefore, primarySettles: rhAsked.settle, log: log.join(""), sale, owed, signedUsd: Number(accepted.amount) / 1e6 };
+    return { status: paid.status, ownSends: st.sends.length - sends, ownAttempts: st.sendAttempts - attempts, treasuryGain: (st.balances.get(TREASURY.toLowerCase()) || 0n) - treasuryBefore, primarySettles: rhAsked.settle, log: srv.log(), sale, owed, signedUsd: Number(accepted.amount) / 1e6 };
   } finally {
-    proc.kill("SIGKILL");
-    for (const [srv] of servers) srv.close();
+    proc?.kill("SIGKILL");
+    for (const srv of servers) srv.close();
   }
 }
 

@@ -6,15 +6,16 @@
 // must keep spending their balance, or turning sales off would strand money
 // that is already out there. This pins both halves.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 
-const PORT = await getFreePort();
-const B = `http://127.0.0.1:${PORT}`;
-let pass = 0, proc = null;
-const log = [];
-const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of log.slice(-20)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); };
+let B = "";
+let pass = 0, srv = null;
+const booted = [];
+const bootErrors = [];
+const log = () => [...booted.flatMap((s) => s.log().split("\n").filter(Boolean)), ...bootErrors];
+const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of log().slice(-20)) console.error("  server:", l); srv?.child.kill("SIGKILL"); process.exit(1); };
 const ok = (c, m) => { c ? (pass++, console.log("ok -", m)) : fail(m); };
 
 // Every surface that names a credits key a caller may hold reads the switch:
@@ -45,20 +46,18 @@ async function keySurfaces() {
   ];
 }
 
-const boot = (env) => new Promise(async (resolve) => {
-  proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", STRIPE_SECRET_KEY: "sk_test_x",
+// Both boots share one set of file stores, as they shared one before.
+const STORES = ownStoreEnv("credits-sales-gate");
+const boot = async (env) => {
+  try {
+    srv = await bootServer({ stores: false, timeoutMs: 60_000, env: { ...STORES, FREE_MODE: "true", STRIPE_SECRET_KEY: "sk_test_x",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off",
-      FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false", ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  proc.stdout.on("data", (d) => log.push(...String(d).split("\n").filter(Boolean)));
-  proc.stderr.on("data", (d) => log.push(...String(d).split("\n").filter(Boolean)));
-  for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`${B}/health`)).ok) return resolve(true); } catch { await new Promise((r) => setTimeout(r, 500)); }
-  }
-  resolve(false);
-});
+      FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false", ...env } });
+  } catch (e) { bootErrors.push(...e.message.split("\n")); return false; }
+  booted.push(srv);
+  B = srv.url;
+  return true;
+};
 
 // The flagship tool descriptions are clipped before this line can show, so
 // their source is read: no surface module types the off-state phrase bare.
@@ -178,7 +177,7 @@ try {
     const xml = await (await fetch(`${B}${path}`)).text();
     ok(/<loc>/.test(xml) && !/\/credits<\/loc>/.test(xml), `${path} does not list /credits while sales are off`);
   }
-  proc.kill("SIGKILL");
+  srv?.child.kill("SIGKILL");
 
   // --- explicitly on: selling works again, so this is a switch and not a deletion
   // The daily purchase limit is wide here so every pack is on offer (a pack
@@ -241,7 +240,7 @@ try {
   ok(inUrl.status === 400 && inUrlBody.reason === "key_in_url" && !JSON.stringify(inUrlBody).includes(leaked), "a key in a URL is refused, and the answer does not repeat it");
   await fetch(`${B}/api/hash`, { method: "POST", headers: { authorization: `Bearer ${leaked}`, "content-type": "application/json" }, body: "{}" });
   await fetch(`${B}/api/credits/balance`, { headers: { authorization: `Bearer ${leaked}` } });
-  ok(!log.join("\n").includes(leaked.slice(8)), "no key sent in a URL or a header reaches the server's log");
+  ok(!log().join("\n").includes(leaked.slice(8)), "no key sent in a URL or a header reaches the server's log");
   // Revoke by key: one answer for every key, with sales on or off.
   const rvA = await (await fetch(`${B}/api/credits/revoke`, { method: "POST", headers: { authorization: `Bearer ${leaked}` } })).json();
   const rvB = await (await fetch(`${B}/api/credits/revoke`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "not-a-key" }) })).json();
@@ -252,4 +251,4 @@ try {
   ok(/if \(!creditsSalesEnabled\(\)\) return res\.status\(503\)/.test(src), "the check runs inside the handler, before Stripe is touched");
 
   console.log(`\n${pass} passed, 0 failed`);
-} finally { proc?.kill("SIGKILL"); }
+} finally { srv?.child.kill("SIGKILL"); }

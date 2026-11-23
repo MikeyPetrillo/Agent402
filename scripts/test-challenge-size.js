@@ -50,20 +50,19 @@ const heartbeatHeaders = () => {
 const LOCAL_BOOT = process.env.CHALLENGE_LOCAL_BOOT === "1";
 let localBase = null, localProc = null, localFac = null;
 if (LOCAL_BOOT) {
-  const { spawn } = await import("node:child_process");
+  const { bootServer } = await import("./lib/boot-server.js");
   const { createServer } = await import("node:http");
-  const { getFreePorts } = await import("./lib/free-port.js");
   const { mkdtempSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const [PORT, FAC_PORT] = await getFreePorts(2);
   localFac = createServer((req, res) => {
     res.writeHead(req.url === "/supported" ? 200 : 404, { "Content-Type": "application/json" });
     res.end(JSON.stringify(req.url === "/supported" ? { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} } : {}));
   });
-  await new Promise((r) => localFac.listen(FAC_PORT, "127.0.0.1", r));
-  localProc = spawn(process.execPath, ["src/server.js"], { env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "", TARGET_URL: "",
+  await new Promise((r) => localFac.listen(0, "127.0.0.1", r));
+  const FAC_PORT = localFac.address().port;
+  const local = await bootServer({ stores: "challenge-size", timeoutMs: 60_000, env: {
+    FREE_MODE: "", TARGET_URL: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base",
     // MPP on, so the evm challenges in WWW-Authenticate are this tree's (they
@@ -79,10 +78,9 @@ if (LOCAL_BOOT) {
     // Mount the Decide routes too (their challenge is among the largest), with
     // a placeholder service that is never called: only the 402 is read.
     DECIDE_SERVICE_URL: "http://127.0.0.1:9", DECIDE_INTERNAL_TOKEN: "challenge-size-local-placeholder-token-0000", DECIDE_LEDGER_DB: join(mkdtempSync(join(tmpdir(), "challenge-size-")), "decide.db"),
-  }, stdio: ["ignore", "ignore", "pipe"] });
-  localProc.stderr.on("data", () => {});
-  localBase = `http://127.0.0.1:${PORT}`;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${localBase}/health`)).ok) break; } catch {} await new Promise((r) => setTimeout(r, 500)); }
+  } });
+  localProc = local.child;
+  localBase = local.url;
 }
 const stopLocal = () => { try { localProc?.kill("SIGKILL"); } catch {} try { localFac?.close(); } catch {} };
 process.on("exit", stopLocal);

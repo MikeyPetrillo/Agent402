@@ -7,8 +7,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { isDeepStrictEqual } from "node:util";
-import { spawn } from "node:child_process";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { parsePaymentRequired, ResourceInfoSchema } from "@x402/core/schemas";
 import { validateDiscoveryExtension, validateDiscoveryExtensionSpec } from "@x402/extensions/bazaar";
 import { boundedSchemaFromExample, SHAPE_HAPPY_PATH_ONLY } from "../src/openapi-schema.js";
@@ -68,9 +67,7 @@ async function unusedWalletHeaders(origin, route) {
 const MIN_OFFER_ROUTES = 300;
 const MIN_ROUTES = 560;
 const CONCURRENCY = 12;
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const [port, stubPort] = await getFreePorts(2);
-const base = `http://127.0.0.1:${port}`;
+let base = "";
 
 // The helper's contract, checked before anything boots: an object example
 // gets an object schema, anything else gets none.
@@ -89,13 +86,11 @@ const stub = createServer((req, res) => {
     } else { res.writeHead(404); res.end(); }
   });
 });
-await new Promise((resolve) => stub.listen(stubPort, "127.0.0.1", resolve));
+await new Promise((resolve) => stub.listen(0, "127.0.0.1", resolve));
+const stubPort = stub.address().port;
 
-let serverLog = "";
 // Dummy keys let the gated paid routes register without reaching an upstream.
-const serverEnv = (listenPort, extra = {}) => ({
-  ...process.env,
-  PORT: String(listenPort),
+const serverEnv = (extra = {}) => ({
   FREE_MODE: "",
   NODE_ENV: "test",
   NETWORK: "base",
@@ -116,21 +111,17 @@ const serverEnv = (listenPort, extra = {}) => ({
   STATS_ALLOW_EPHEMERAL: "true",
   ...extra,
 });
-const child = spawn(process.execPath, ["src/server.js"], { env: serverEnv(port), stdio: ["ignore", "pipe", "pipe"] });
-child.stdout.on("data", (d) => { serverLog += d; });
-child.stderr.on("data", (d) => { serverLog += d; });
+const booting = bootServer({ stores: false, timeoutMs: 60_000, env: serverEnv() });
+let child = null;
 
 const failures = [];
 const fail = (route, problem) => { failures.push(`${route}: ${problem}`); };
 const jsonType = (v) => (Array.isArray(v) ? "array" : v === null ? "null" : Number.isInteger(v) ? "integer" : typeof v === "number" ? "number" : typeof v);
 
 try {
-  let up = false;
-  for (let i = 0; i < 240; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-    await wait(250);
-  }
-  if (!up) throw new Error(`server did not boot:\n${serverLog.slice(-1200)}`);
+  const srv = await booting.catch((e) => { throw new Error(`server did not boot:\n${e.message.slice(-1200)}`); });
+  child = srv.child;
+  base = srv.url;
   const pricing = await (await fetch(`${base}/api/pricing`)).json();
   const endpoints = Array.isArray(pricing.endpoints) ? pricing.endpoints : [];
   if (!endpoints.length) throw new Error("/api/pricing lists no endpoints");
@@ -476,18 +467,13 @@ try {
       "/v1/audio/speech": "(raw mp3 bytes - Content-Type: audio/mpeg)",
     };
     try { child.kill("SIGKILL"); } catch { /* stopped */ }
-    const [offPort] = await getFreePorts(1);
-    const off = spawn(process.execPath, ["src/server.js"], { env: serverEnv(offPort, { X402_BINARY_LISTINGS: "off" }), stdio: "ignore" });
+    const off = await bootServer({ stores: false, timeoutMs: 60_000, env: serverEnv({ X402_BINARY_LISTINGS: "off" }) }).catch(() => null);
+    const offBase = off?.url;
     try {
-      let offUp = false;
-      for (let i = 0; i < 240 && !offUp; i++) {
-        try { offUp = (await fetch(`http://127.0.0.1:${offPort}/health`)).ok; } catch { /* booting */ }
-        if (!offUp) await wait(250);
-      }
-      if (!offUp) fail("X402_BINARY_LISTINGS=off", "server did not boot");
+      if (!off) fail("X402_BINARY_LISTINGS=off", "server did not boot");
       else for (const endpoint of endpoints.filter((e) => e.mimeType || e.path === "/api/hash")) {
         const offRoute = `${String(endpoint.method || "GET").toUpperCase()} ${endpoint.path}`;
-        const res = await fetch(`http://127.0.0.1:${offPort}${endpoint.path}`, { method: endpoint.method || "GET", headers: { "content-type": "application/json" }, body: /^(POST|PUT|PATCH)$/i.test(endpoint.method || "") ? "{}" : undefined });
+        const res = await fetch(`${offBase}${endpoint.path}`, { method: endpoint.method || "GET", headers: { "content-type": "application/json" }, body: /^(POST|PUT|PATCH)$/i.test(endpoint.method || "") ? "{}" : undefined });
         await res.text();
         const pr = JSON.parse(Buffer.from(res.headers.get("payment-required") || "", "base64").toString("utf8") || "{}");
         const ext = pr.extensions?.bazaar;
@@ -502,7 +488,7 @@ try {
         else if (offSchema?.type !== jsonType(legacy) || offSchema?.contentMediaType !== undefined) fail(offRoute, `switch off: output schema is ${JSON.stringify(offSchema)}`);
         else if (!isDeepStrictEqual(pr.accepts?.[0]?.outputSchema, offSchema)) fail(offRoute, "switch off: accepts[0].outputSchema is not the extension's schema");
       }
-    } finally { try { off.kill("SIGKILL"); } catch { /* stopped */ } }
+    } finally { try { off?.child.kill("SIGKILL"); } catch { /* stopped */ } }
   }
   console.log(`largest 402 header: ${largestHeader.route} at ${largestHeader.bytes} chars`);
   console.log(`largest 402 body: ${largestBody.route} at ${largestBody.bytes} bytes; largest own fields: ${largestOwn.route} at ${largestOwn.bytes} bytes`);
@@ -516,6 +502,6 @@ try {
   console.log(`${failures.length ? "FAILED" : "OK"}: ${endpoints.length - failures.length}/${endpoints.length} route checks green`);
   process.exitCode = failures.length ? 1 : 0;
 } finally {
-  try { child.kill("SIGKILL"); } catch { /* stopped */ }
+  try { child?.kill("SIGKILL"); } catch { /* stopped */ }
   stub.close();
 }

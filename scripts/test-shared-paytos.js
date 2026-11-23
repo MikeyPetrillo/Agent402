@@ -15,11 +15,10 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { buildEvidenceBinding, baseLiveGate } from "../src/evidence-binding.js";
 import { dispatchEligibility, DISPATCH_DETAILS, dispatchLegend } from "../src/dispatch-eligibility.js";
 import { createSharedPayToStore, parseSharedPayTosEnv } from "../src/shared-paytos.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -115,22 +114,25 @@ try {
   let proc = null, port = null;
   const serverLog = [];
   const boot = async () => {
-    port = await getFreePort();
-    proc = spawn(process.execPath, ["src/server.js"], {
+    // stores: false: both boots read the caller's stores, so the restart is
+    // over the same files.
+    const srv = await bootServer({
+      stores: false,
       env: {
-        ...process.env, PORT: String(port), FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN,
+        FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN,
         LEADERBOARD_SNAPSHOT_FILE: lbFile, SOR_SHARED_PAYTOS_FILE: storeFile, SOR_MULTI_TENANT_PAYTOS: `${T},not-a-wallet`,
         X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
         MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    }).catch((e) => { serverLog.push(String(e.message).slice(-300)); return null; });
+    if (!srv) return false;
+    proc = srv.child; port = srv.port;
     const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 300)); if (serverLog.length > 60) serverLog.splice(0, serverLog.length - 60); };
+    keep(srv.log());
     proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-    for (let i = 0; i < 160; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return true; } catch { /* booting */ } await new Promise((r) => setTimeout(r, 500)); }
-    return false;
+    return true;
   };
-  const stop = () => new Promise((r) => { if (!proc) return r(); proc.once("exit", () => r()); proc.kill("SIGKILL"); });
+  const stop = () => new Promise((r) => { if (!proc || proc.exitCode !== null || proc.signalCode) return r(); proc.once("exit", () => r()); proc.kill("SIGKILL"); });
   const get = async (p, h = H) => { const r = await fetch(`http://127.0.0.1:${port}${p}`, { headers: h }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
   const post = async (body, h = H) => { const r = await fetch(`http://127.0.0.1:${port}/__operator/shared-paytos`, { method: "POST", headers: h, body: JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
   try {

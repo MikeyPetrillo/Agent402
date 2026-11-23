@@ -8,13 +8,12 @@
 //   node scripts/test-rugcheck-pause.js
 import "./lib/file-mode.js";
 import express from "express";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { createRugcheckPause, isRugcheckOutage, rugcheckFailureKind, rugcheckInputKey, rugcheckPauseMiddleware } from "../src/rugcheck-pause.js";
 
 let pass = 0, fail = 0;
@@ -119,10 +118,8 @@ ok(rugcheckInputKey("https://api.rugcheck.xyz/v1/tokens/MINTA/report/summary") =
 
 // --- booted: the real server, paid mode ---------------------------------------
 {
-  const ROOT = fileURLToPath(new URL("..", import.meta.url));
   const PRELOAD = fileURLToPath(new URL("./lib/rugcheck-outcome-preload.mjs", import.meta.url));
   const TMP = mkdtempSync(join(tmpdir(), "rugcheck-pause-"));
-  const [PORT, FAC_PORT] = await getFreePorts(2);
   const nowS = () => Math.floor(Date.now() / 1000);
   const fac = { verify: 0, settle: 0 };
   const facilitator = createServer((req, res) => {
@@ -141,24 +138,24 @@ ok(rugcheckInputKey("https://api.rugcheck.xyz/v1/tokens/MINTA/report/summary") =
       reply({});
     });
   });
-  await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
-  const child = spawn(process.execPath, ["--import", PRELOAD, "src/server.js"], {
-    cwd: ROOT,
-    env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+  const FAC_PORT = facilitator.address().port;
+  const bootOpts = {
+    stores: "rugcheck-pause",
+    args: ["--import", PRELOAD],
+    timeoutMs: 120_000,
+    env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "", OPENROUTER_API_KEY: "",
       RUGCHECK_TOOLS: "on", RUGCHECK_PAUSE: "", RUGCHECK_PAUSE_AFTER: "3", RUGCHECK_PAUSE_MS: "300000", SOLANA_RPC_URL: "", JUPITER_API_BASE: "",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", HANGUP_FORGIVE_FILE: "off",
       REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db") },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const logs = [];
-  child.stdout.on("data", (d) => logs.push(String(d))); child.stderr.on("data", (d) => logs.push(String(d)));
-  const B = `http://127.0.0.1:${PORT}`;
+  };
+  let srv = null;
   try {
-    let up = false;
-    for (let i = 0; i < 240 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!up) await new Promise((r) => setTimeout(r, 500)); }
-    ok(up, "the paid-mode server booted");
+    srv = await bootServer(bootOpts);
+    const B = srv.url;
+    ok(true, "the paid-mode server booted");
     const mint = (prefix, c) => `${prefix}${"1".repeat(28)}${c}`;
     const post = (path, body, headers = {}) => fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
     let accept = null, nonce = 0;
@@ -200,9 +197,9 @@ ok(rugcheckInputKey("https://api.rugcheck.xyz/v1/tokens/MINTA/report/summary") =
     r = await post("/api/sol-price", { mint: mint("Bad", "C") });
     ok(r.status === 402, `a tool that does not read RugCheck still reaches the payment gate (${r.status})`);
     ok(fac.settle === 0, `no failed read was settled (settle calls ${fac.settle})`);
-    ok(logs.join("").includes("[rugcheck-pause]"), "the server logged the pause");
+    ok(srv.log().includes("[rugcheck-pause]"), "the server logged the pause");
   } finally {
-    child.kill("SIGKILL");
+    srv?.child.kill("SIGKILL");
     facilitator.close();
     rmSync(TMP, { recursive: true, force: true });
   }

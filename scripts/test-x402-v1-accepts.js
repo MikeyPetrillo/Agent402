@@ -14,11 +14,10 @@
 // time today. It can turn a guaranteed failure into a normal match; it can
 // never change the outcome of a payment that already works.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { translateV1Accepts } from "../src/x402-v1-accepts.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../src/avm-network.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, proc = null, facilitator = null;
 const fail = (m) => { console.error("FAIL:", m); proc?.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
@@ -113,8 +112,7 @@ ok(bothPairs?.payload.accepted.network === ALGORAND_MAINNET_CAIP2 && !("maxAmoun
 }
 
 // ---- the wire: does a v1-shaped payment actually settle? ----
-const [PORT, FAC_PORT] = [await getFreePort(), await getFreePort()];
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const ALGO_TREASURY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ";
 const facCalls = { verify: 0, settle: 0, avmVerify: [], avmSettle: [] };
@@ -136,20 +134,24 @@ facilitator = createServer((req, res) => {
     res.end(JSON.stringify({ isValid: true, success: true, transaction: `0x${facCalls.settle.toString(16).padStart(64, "0")}`, network: "eip155:8453" }));
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, r));
-proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+await new Promise((r) => facilitator.listen(0, r));
+const FAC_PORT = facilitator.address().port;
+const booting = bootServer({
+  stores: false,
+  timeoutMs: 60_000,
+  env: { FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     PAYMENT_NETWORKS: "base,algorand", ALGORAND_WALLET_ADDRESS: ALGO_TREASURY,
     FACILITATOR_URL: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
     PAYAI_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}/evm`, ALGORAND_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}/avm`,
     ALGORAND_UPSTREAM_BUYER_ADDRESS: "", MPP_SECRET_KEY: "", PAYMENT_SETTLE_FALLBACK: "", AVM_SUBCENT_GATE: "off", CIRCLE_FACILITATOR_API_KEY: "",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", X402_INDEX_CRAWL: "off" },
-  stdio: "ignore",
 });
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
 
 try {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
+  const srv = await booting;
+  proc = srv.child;
+  B = srv.url;
 
   // Build a REAL payment with a real x402 client and a real signature, then
   // rename the price field to the v1 name. A hand-assembled payload cannot

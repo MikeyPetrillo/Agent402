@@ -20,8 +20,8 @@
 // two-replica deployment rests on, and CI provides the service container.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
+import { bootServer } from "./lib/boot-server.js";
 import { createInterface } from "node:readline";
-import { getFreePorts } from "./lib/free-port.js";
 // Each server keeps its own stores (lib/own-stores.js): only Redis is shared.
 import { ownStoreEnv } from "./lib/own-stores.js";
 
@@ -42,31 +42,26 @@ const PREFIX = `xp${process.pid}${Date.now().toString(36)}`;
 // answered every command since. The servers here hold it for the minimum, so
 // the word reads what the store does now; what is shared is asserted by the
 // behavior checks.
-const BASE_ENV = { ...process.env, SHARED_LIMITS_PREFIX: PREFIX, SHARED_LIMITS: "on", SHARED_LIMITS_DEGRADED_HOLD_MS: "1000" };
+const SHARED_ENV = { SHARED_LIMITS_PREFIX: PREFIX, SHARED_LIMITS: "on", SHARED_LIMITS_DEGRADED_HOLD_MS: "1000" };
+const BASE_ENV = { ...process.env, ...SHARED_ENV };
 const children = [];
 const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } catch { /* */ } } process.exit(code); };
 
 // ---- 1. two real servers -----------------------------------------------------------
 {
   const TOKEN = "operator-crossprocess-secret";
-  const [pa, pb, pr] = await getFreePorts(3);
-  const boot = (port, token = TOKEN) => {
-    const c = spawn(process.execPath, ["src/server.js"], {
-      env: { ...BASE_ENV, ...ownStoreEnv("shared-limits"), FREE_MODE: "true", PORT: String(port), AGENT402_OPERATOR_TOKEN: token, OPERATOR_AUTH_FAIL_ALERT: "10" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    c.log = "";
-    c.stdout.on("data", (d) => { c.log += d; });
-    c.stderr.on("data", (d) => { c.log += d; });
-    children.push(c);
-    return c;
-  };
+  // Resolves to the booted server, or to { error } with the log tail when it never became healthy.
+  const boot = (token = TOKEN) => bootServer({
+    stores: "shared-limits",
+    timeoutMs: 60_000,
+    env: { ...SHARED_ENV, FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: token, OPERATOR_AUTH_FAIL_ALERT: "10" },
+  }).then((srv) => { children.push(srv.child); return srv; }, (e) => ({ error: e.message }));
   // R runs a rotated operator token on the same Redis (a container after a rotation).
-  const A = boot(pa), Bs = boot(pb), R = boot(pr, `${TOKEN}-rotated`);
-  const up = async (port) => { for (let i = 0; i < 120; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return true; } catch { /* */ } await wait(500); } return false; };
-  const [ua, ub, ur] = await Promise.all([up(pa), up(pb), up(pr)]);
-  ok(ua && ub && ur, "three servers booted on free ports against one Redis");
-  if (!(ua && ub && ur)) { console.error(A.log.slice(-800), Bs.log.slice(-800), R.log.slice(-800)); done(1); }
+  const [A, Bs, R] = await Promise.all([boot(), boot(), boot(`${TOKEN}-rotated`)]);
+  const ua = !A.error, ub = !Bs.error, ur = !R.error;
+  ok(ua && ub && ur, "three servers booted on port 0 against one Redis");
+  if (!(ua && ub && ur)) { console.error([A, Bs, R].map((x) => (x.error || x.log()).slice(-800)).join("\n")); done(1); }
+  const pa = A.port, pb = Bs.port, pr = R.port;
   const status = async (port, auth = false) => (await fetch(`http://127.0.0.1:${port}/api/gateway-status`, auth ? { headers: { "x-operator-token": TOKEN } } : {})).json();
   // Polled: the word is a measurement, and a boot-time miss clears once the hold ends.
   const settled = async (port) => { let j = null; for (let i = 0; i < 80; i++) { j = await status(port); if (j.sharedLimits?.status === "on") break; await wait(250); } return j; };
@@ -106,7 +101,7 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
   ok(opB.operatorAuth?.status === "elevated" && opB.operatorAuth?.failures1h >= 10, `B reads the wrong credentials counted on A: operatorAuth ${opB.operatorAuth?.status}, failures1h ${opB.operatorAuth?.failures1h}`);
   const pubB = await status(pb);
   ok(pubB.operatorAuth?.status === "elevated" && !("failures1h" in pubB.operatorAuth), "and the public word on B is elevated, with no number");
-  A.kill("SIGKILL"); Bs.kill("SIGKILL"); R.kill("SIGKILL");
+  A.child.kill("SIGKILL"); Bs.child.kill("SIGKILL"); R.child.kill("SIGKILL");
 }
 
 // ---- 2. two replicas of the control modules --------------------------------------------

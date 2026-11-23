@@ -18,10 +18,9 @@
 // that is not an object (array, string, null, number) answers 4xx, never 5xx.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -160,8 +159,8 @@ async function withLogs(fn) {
   const app = express();
   app.use(paymentMiddlewareFromHTTPServer(http, undefined, undefined, false));
   app.get("/api/uuid", (_req, res) => { handlerRuns++; res.json({ uuid: randomUUID() }); });
-  const [p] = await getFreePorts(1);
-  const listener = await new Promise((r) => { const l = app.listen(p, "127.0.0.1", () => r(l)); });
+  const listener = await new Promise((r) => { const l = app.listen(0, "127.0.0.1", () => r(l)); });
+  const p = listener.address().port;
   try {
     const unpaid = await fetch(`http://127.0.0.1:${p}/api/uuid`);
     const accepted = JSON.parse(Buffer.from(unpaid.headers.get("payment-required"), "base64").toString()).accepts[0];
@@ -196,7 +195,6 @@ async function withLogs(fn) {
 
 // ------------------------------------------------------------ part 2
 console.log("part 2: paid-mode boots against a stub facilitator");
-const [CTL_PORT, FAULT_PORT, MARK_PORT, FAC_PORT] = await getFreePorts(4);
 const fac = { verify: 0, settle: 0 };
 let txN = 0;
 const facilitator = createServer((req, res) => {
@@ -216,31 +214,30 @@ const facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
+// The servers inherit this process's environment: these are removed from it
+// (not blanked), so no boot sees a shared store.
+delete process.env.REDIS_URL; delete process.env.STATE_DATABASE_URL;
 const procs = [];
-function boot(port, extra) {
-  const stores = ownStoreEnv(`hook-throws-${port}`);
-  const env = { ...process.env, ...stores };
-  delete env.REDIS_URL; delete env.STATE_DATABASE_URL;
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...env, PORT: String(port), FREE_MODE: "", NODE_ENV: "test", NETWORK: "base", PAYMENT_NETWORKS: "base", WALLET_ADDRESS: PAYTO,
+// Boot on port 0 with this boot's own stores (passed in, so the sales ledger's
+// path is known here); stores: false keeps exactly those.
+async function boot(label, extra) {
+  const stores = ownStoreEnv(`hook-throws-${label}`);
+  delete stores.STATE_DATABASE_URL;
+  const srv = await bootServer({
+    stores: false,
+    env: { ...stores, FREE_MODE: "", NODE_ENV: "test", NETWORK: "base", PAYMENT_NETWORKS: "base", WALLET_ADDRESS: PAYTO,
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "",
       MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "", OPENROUTER_API_KEY: "", CIRCLE_FACILITATOR_API_KEY: "",
       FACILITATOR_GAS_CHECK: "off", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       STATS_ALLOW_EPHEMERAL: "true", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "600000", FIRST_CALL_ALLOWANCE: "", WALLET_BLOCKLIST: "",
       ...extra },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const log = [];
-  proc.stdout.on("data", (d) => log.push(String(d))); proc.stderr.on("data", (d) => log.push(String(d)));
-  procs.push(proc);
-  return { base: `http://127.0.0.1:${port}`, proc, log, salesDb: stores.SALES_LEDGER_DB };
-}
-async function up(s) {
-  for (let i = 0; i < 240; i++) { try { if ((await fetch(`${s.base}/health`)).ok) return true; } catch { /* booting */ } await sleep(250); }
-  throw new Error(`server did not boot: ${s.log.join("").slice(-1500)}`);
+  }).catch((e) => { throw new Error(`server did not boot: ${String(e?.message || e).slice(-1500)}`); });
+  procs.push(srv.child);
+  return { base: srv.url, proc: srv.child, log: () => srv.log(), salesDb: stores.SALES_LEDGER_DB };
 }
 const salesRows = (s) => {
   try { const db = new Database(s.salesDb, { readonly: true }); try { return db.prepare("SELECT slug, tx FROM sales").all(); } finally { db.close(); } }
@@ -248,10 +245,11 @@ const salesRows = (s) => {
 };
 
 try {
-  const ctl = boot(CTL_PORT, {});
-  const flt = boot(FAULT_PORT, { X402_HOOK_FAULT_FOR_TEST: HOOK_NAMES.walletBlocklist });
-  const mrk = boot(MARK_PORT, { X402_HOOK_FAULT_FOR_TEST: HOOK_NAMES.settleSent });
-  await Promise.all([up(ctl), up(flt), up(mrk)]);
+  const booting = [boot("ctl", {}), boot("fault", { X402_HOOK_FAULT_FOR_TEST: HOOK_NAMES.walletBlocklist }), boot("mark", { X402_HOOK_FAULT_FOR_TEST: HOOK_NAMES.settleSent })];
+  const settled = await Promise.allSettled(booting);
+  const failed = settled.find((b) => b.status === "rejected");
+  if (failed) throw failed.reason;
+  const [ctl, flt, mrk] = settled.map((b) => b.value);
   const [{ privateKeyToAccount, generatePrivateKey }, { x402Client }, { registerExactEvmScheme }, { wrapFetchWithPayment }] =
     await Promise.all([import("viem/accounts"), import("@x402/core/client"), import("@x402/evm/exact/client"), import("@x402/fetch")]);
   // Mint one genuine signed payment header against a server's 402.
@@ -306,7 +304,7 @@ try {
     const again = await fetch(`${flt.base}/api/uuid`, { headers: { [pay.name]: pay.value, "Idempotency-Key": key } });
     await again.text();
     ok(again.status === 402 && !again.headers.get("x-replayed-answer") && !again.headers.get("x-idempotent-replay") && fac.settle - s0 === 0, `fault: nothing was committed under the key or the payment (resend ${again.status}, replayed ${again.headers.get("x-replayed-answer") || again.headers.get("x-idempotent-replay") || "no"})`);
-    ok(flt.log.join("").includes(`${HOOK_NAMES.walletBlocklist} failed, payment refused`), "fault: the server logged the refusal by name");
+    ok(flt.log().includes(`${HOOK_NAMES.walletBlocklist} failed, payment refused`), "fault: the server logged the refusal by name");
   }
 
   // The settle-sent mark forced to throw: 402 naming its reason, no settle,
@@ -332,7 +330,7 @@ try {
     const againResp = again.headers.get("payment-response") || again.headers.get("x-payment-response") || "";
     const againAll = `${againText} ${againResp ? Buffer.from(againResp, "base64").toString() : ""}`;
     ok(againAll.includes(SETTLE_MARK_FAILED) && !againAll.includes("duplicate_authorization"), `settle-sent fault: the resend is not refused as a duplicate (${againAll.slice(0, 240)})`);
-    ok(mrk.log.join("").includes(`${HOOK_NAMES.settleSent} failed, payment refused`), "settle-sent fault: the server logged the refusal by name");
+    ok(mrk.log().includes(`${HOOK_NAMES.settleSent} failed, payment refused`), "settle-sent fault: the server logged the refusal by name");
   }
 
   // A payment header that decodes to JSON that is not an object.
@@ -357,7 +355,7 @@ try {
     const bad = seen.filter((x) => !/=4\d\d$/.test(x));
     ok(bad.length === 0, `every non-object payment header answers 4xx, never 5xx (${seen.length} requests; ${bad.length ? bad.join(", ") : "statuses " + [...new Set(seen.map((x) => x.slice(x.lastIndexOf("=") + 1)))].join(",")})`);
     ok(fac.settle === s0, "no non-object header reached a settle");
-    ok(![ctl, flt].some((s) => /TypeError|Cannot read properties of null/.test(s.log.join(""))), "no server logged a TypeError from a non-object header");
+    ok(![ctl, flt].some((s) => /TypeError|Cannot read properties of null/.test(s.log())), "no server logged a TypeError from a non-object header");
   }
 } finally {
   for (const p of procs) p.kill("SIGKILL");
