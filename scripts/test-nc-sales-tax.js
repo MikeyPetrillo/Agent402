@@ -82,4 +82,19 @@ ok(/if \(ncTaxableKind\(tool\.slug\)\) facts\.push\(`Sales tax: the price includ
 ok(/ncTaxReport\(rows/.test(src("server.js")) && /externalSalesForSlugs\(Object\.keys\(NC_TAXABLE_SLUGS\)/.test(src("server.js")), "the operator report is built from the sales ledger");
 
 console.log(failed ? `${failed} failed` : "all passed");
+// Every kind of taxable call is one the /terms sentence names, so a new kind
+// (a new slug of another sort) cannot be taxed without the terms saying so.
+{
+  const { termsPage } = await import("../src/terms.js");
+  const text = termsPage("https://agent402.tools").replace(/<[^>]*>/g, "").replace(/\s+/g, " ");
+  const NAMED = {
+    "digital audio work": "returns generated speech, audio",
+    "digital audiovisual work": "audio or video",
+    "edit of a buyer's image": "edits an image or audio file you send",
+    "edit of a buyer's audio": "edits an image or audio file you send",
+  };
+  const kinds = [...new Set(Object.values(NC_TAXABLE_SLUGS))];
+  const unnamed = kinds.filter((k) => !Object.hasOwn(NAMED, k) || !text.includes(NAMED[k]));
+  ok(unnamed.length === 0, `every taxable kind is named in the /terms tax sentence${unnamed.length ? `: ${unnamed.join(", ")}` : ""}`);
+}
 process.exit(failed ? 1 : 0);
