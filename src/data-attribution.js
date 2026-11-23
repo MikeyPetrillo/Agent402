@@ -94,8 +94,10 @@ export const CAMS_C3S_ATTRIBUTION = "Contains modified Copernicus CAMS and C3S i
 // (src/tools/onchain-identity-kit.js, solana-intel-kit.js, derivatives-kit.js,
 // contract-kit.js). A tool served wholly from one of them carries the key
 // (its description ends with the sentence) and the sentence as `credit` on
-// every answer; a tool that reads one as a leg carries the sentence in
-// `credit` on the answers that leg served (addCredit).
+// every answer; a tool that reads one as a leg, or whose answer another
+// source can serve in its place (Sourcify's verified source and signature
+// database, each with a fallback), carries the sentence in `credit` on the
+// answers that source served (addCredit), and has no key here.
 export const GOPLUS_ATTRIBUTION = "Powered by GoPlus Security (https://gopluslabs.io).";
 export const EAS_ATTRIBUTION = "Indexed by EASSCAN (https://easscan.org).";
 export const RUGCHECK_ATTRIBUTION = "Data from RugCheck (https://rugcheck.xyz).";
@@ -122,8 +124,6 @@ export const ATTRIBUTIONS = Object.freeze({
   eas: EAS_ATTRIBUTION,
   rugcheck: RUGCHECK_ATTRIBUTION,
   hyperliquid: HYPERLIQUID_ATTRIBUTION,
-  sourcify: SOURCIFY_ATTRIBUTION,
-  "sourcify-sigdb": SOURCIFY_SIGDB_ATTRIBUTION,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */

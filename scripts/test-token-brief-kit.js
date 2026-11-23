@@ -191,6 +191,10 @@ let happy = null;
   ok(e.holders.concentration.top10PctExcludingPools < e.holders.concentration.top10Pct, "pool-excluded concentration is lower than the raw figure");
   ok(e.risk.riskCounts.danger === 1 && e.risk.risks.length === 2, "risk flags and counts carried");
   ok(e.probes.report && e.probes.safety && e.probes.pairs && e.probes.lookup && e.probes.price, "all five probes recorded as ok");
+  {
+    const { RUGCHECK_ATTRIBUTION } = await import("../src/data-attribution.js");
+    ok(happy.credit === RUGCHECK_ATTRIBUTION, "a brief built on RugCheck's report credits it by name and link");
+  }
 
   ok(e.buckets.mint === "revoked" && e.buckets.freeze === "revoked", "authority buckets");
   ok(e.buckets.lpLocked === "partial-low", `LP-locked bucket for 8.98% is "partial-low" (${e.buckets.lpLocked})`);
