@@ -22,9 +22,8 @@
 //   - a malformed CF-Connecting-IP from a CDN peer falls back to the peer;
 //   - the same holds for an IPv6 CDN peer.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { buildCdnRanges, resolveClientIp, inCdnRanges, normalizeIp, cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginSecret, originAuthOk, cdnOriginStatus, refreshCdnOriginShared, __resetCdnOriginStatus, CDN_ORIGIN_UNAUTH_ALERT, ORIGIN_AUTH_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from "../src/cdn-client-ip.js";
 
 let pass = 0;
@@ -172,15 +171,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---- end to end ----
 
 const boot = async (extraEnv) => {
-  const PORT = await getFreePort();
-  const B = `http://127.0.0.1:${PORT}`;
-  proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", CF_IP_RANGES_EXTRA: "", CDN_PROXY: "", CDN_ORIGIN_SECRET: "", POW_CHALLENGE_PER_MIN: "", ...extraEnv },
-    stdio: "ignore",
-  });
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) { up = true; break; } } catch { /* booting */ } await sleep(500); }
-  ok(up, `server booted (${JSON.stringify(extraEnv)})`);
+  const srv = await bootServer({
+    stores: false,
+    timeoutMs: 60_000,
+    env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", CF_IP_RANGES_EXTRA: "", CDN_PROXY: "", CDN_ORIGIN_SECRET: "", POW_CHALLENGE_PER_MIN: "", ...extraEnv },
+  }).catch((e) => fail(`server booted (${JSON.stringify(extraEnv)}): ${e.message}`));
+  proc = srv.child;
+  const B = srv.url;
+  ok(true, `server booted (${JSON.stringify(extraEnv)})`);
   const buy = (headers) => fetch(`${B}/api/buy`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: "{" })
     .then((r) => r.status).catch(() => 0);
   const cdnWord = async () => (await (await fetch(`${B}/api/gateway-status`)).json()).cdnOrigin?.status;

@@ -17,12 +17,11 @@
 //   4. a run that fails after the 202 ends the job failed and never settles.
 // Unit checks cover the switch (SLOW_SYNC_WINDOW_SECONDS, "off") and parsing.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 import { Challenge, Credential } from "mppx";
 import { slowSyncWindowSeconds, preferWaitSeconds, needsAsyncOrWait, slowSyncWindowMiddleware, syncWindowRefusalOf, SYNC_WINDOW_RETRY } from "../src/slow-sync-window.js";
@@ -38,13 +37,13 @@ const pushCredential = () => Credential.serialize({
 });
 const x402Header = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64");
 
-let pass = 0, fail = 0, proc = null, facilitator = null, upstream = null;
+let pass = 0, fail = 0, srv = null, facilitator = null, upstream = null;
 const TMP = mkdtempSync(join(tmpdir(), "slow-sync-"));
-const serverLog = [];
+const serverLog = () => (srv?.log() || "").split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 400));
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await cond()) return true; await sleep(50); } return cond(); };
-setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.slice(-25)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); }, 120_000).unref();
+setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog().slice(-25)) console.error("  server:", l); srv?.child.kill("SIGKILL"); process.exit(1); }, 120_000).unref();
 
 // ---- unit ----
 {
@@ -85,8 +84,7 @@ setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.
   ok(!nexted && r3.code === 400 && syncWindowRefusalOf(pushReq2) === null && tempoClauses(r3.sent?.hint) === 0 && r3.sent.hint === r2.sent.hint, "without a Tempo gate to defer to, a push-shaped credential is refused like any other payment, hint and all");
 }
 
-const [PORT, FAC_PORT, UP_PORT] = await getFreePorts(3);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 
 const fac = { verify: 0, settle: 0 };
 facilitator = createServer((req, res) => {
@@ -106,7 +104,8 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 const up = { calls: 0, delayMs: 2500, failNext: false };
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -123,7 +122,8 @@ upstream = createServer((req, res) => {
     }, up.delayMs);
   });
 });
-await new Promise((r) => upstream.listen(UP_PORT, "127.0.0.1", r));
+await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
+const UP_PORT = upstream.address().port;
 
 const preload = join(TMP, "openai-stub.mjs");
 writeFileSync(preload, `
@@ -139,8 +139,11 @@ globalThis.fetch = function (input, init) {
 // The connector marker carries a per-process secret (src/mcp-loopback.js); the
 // booted server inherits this one.
 const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "8d".repeat(24))}`;
-proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+const booting = bootServer({
+  stores: false,
+  args: ["--import", preload],
+  timeoutMs: 80_000,
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "", CDN_PROXY: "",
@@ -149,10 +152,7 @@ proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
     AGENT402_MCP_TASK_TTL_MS: "" },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 400)); };
-proc.stdout.on("data", keep); proc.stderr.on("data", keep);
 
 const PATH = "/api/image-gen-premium";
 const BODY = JSON.stringify({ prompt: "a red fox in the snow" });
@@ -170,7 +170,8 @@ const final = (url) => waitFor(async () => ["succeeded", "failed"].includes((awa
 const counts = () => ({ v: fac.verify, s: fac.settle, u: up.calls });
 
 try {
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch { /* booting */ } await sleep(500); }
+  srv = await booting;
+  B = srv.url;
 
   // 3a. Unpaid: the ordinary 402, whose async block names both headers.
   const r0 = await post({ "x-forwarded-for": "10.8.0.1" });
@@ -273,9 +274,9 @@ try {
     ok(r.status !== 400 && r.status !== 202 && !r.headers.get("x-async-recommended"), `a fast route is untouched (got ${r.status})`);
   }
 } finally {
-  proc?.kill("SIGKILL"); facilitator?.close(); upstream?.close();
+  srv?.child.kill("SIGKILL"); facilitator?.close(); upstream?.close();
   rmSync(TMP, { recursive: true, force: true });
 }
-if (fail) for (const l of serverLog.slice(-25)) console.error("  server:", l);
+if (fail) for (const l of serverLog().slice(-25)) console.error("  server:", l);
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
