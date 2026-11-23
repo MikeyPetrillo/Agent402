@@ -24,8 +24,8 @@
 //     (maxUnpaidBytes, an eighth of the budget, never less than the largest
 //     route's body); a slow body is bounded by the server's requestTimeout.
 //
-// A route matches with any sub-path under it, as the parser mounted with
-// app.use on that path does.
+// A route matches with any sub-path under it, and any method, as the parser
+// mounted with app.use on that path does.
 //
 // A route's own parser still enforces its limit with a 413; a body declared
 // over that limit is left to it and reserves nothing.
@@ -63,7 +63,9 @@ export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, 
   let inFlight = 0, unpaidInFlight = 0;
   const byClient = new Map();
   function gate(req, res, next) {
-    if (req.method !== "POST") return next();
+    // Every method: the parsers on these routes are mounted for any method
+    // (app.use), so a body sent with GET, PUT or anything else is read by
+    // them too and meets the same rules. A request with no body passes below.
     // Routing is case-insensitive and ignores a trailing slash; so is this.
     const limit = limitOf(req.path);
     if (!limit) return next();

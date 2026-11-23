@@ -108,6 +108,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     got[0].res.emit("finish");
     ok(g.unpaidBytes() === 0 && run(g, fakeReq({ "transfer-encoding": "chunked", ip: "1.0.0.4" }, "/quoted")).nexted, "a released unpaid parse frees the unpaid share");
   }
+  {
+    // Every method that carries a body is gated: the route's parser is mounted
+    // for every method, so a GET, PUT or PATCH body would otherwise be parsed
+    // past the encoding refusal, the unpaid bound and the in-flight budget.
+    const g = createLargeBodyGate({ routes: [["/big", 10_000_000]], isPaid: (req) => req.headers["x-paid"] === "1", maxInflightBytes: 3_500_000 });
+    const asMethod = (method, headers, path = "/big") => ({ method, path, headers });
+    for (const m of ["GET", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      const enc = run(g, asMethod(m, { "content-encoding": "gzip", "content-length": "100" }));
+      const unpaid = run(g, asMethod(m, { "content-length": big }));
+      ok(!enc.nexted && enc.res.statusCode === 415 && unpaid.nexted && unpaid.req.__bodyUnread === true, `${m}: a body is gated as a POST body is (encoding refused, an unpaid large body left unread)`);
+    }
+    const held = run(g, asMethod("GET", { "content-length": "3000000", "x-paid": "1" }));
+    const over = run(g, asMethod("PUT", { "content-length": "3000000", "x-paid": "1" }));
+    ok(held.nexted && g.inFlightBytes() === 3_000_000 && !over.nexted && over.res.statusCode === 503, "a GET body reserves the in-flight budget, and a PUT past it is refused 503");
+    held.res.emit("finish");
+    ok(g.inFlightBytes() === 0 && run(g, asMethod("GET", {})).nexted && g.inFlightBytes() === 0, "a GET with no body passes and reserves nothing");
+  }
   const free = createLargeBodyGate({ routes: [["/big", 10_000_000]], isPaid: () => false, freeMode: true });
   r = run(free, fakeReq({ "content-length": big }));
   ok(r.nexted && !r.req.__bodyUnread, "FREE_MODE reads every body");
@@ -166,6 +183,27 @@ try {
   for (const path of ["/v1/images/edits", "/v1/judge/vision", "/api/html-frames", "/v1/audio/transcriptions", "/api/onchain-sql", "/api/xlsx-create", "/api/docx-create", "/api/pptx-create"]) {
     const r = await post(path, gz, { "content-encoding": "gzip" });
     ok(r.status === 415, `${path}: a gzip body is refused 415 (got ${r.status})`);
+  }
+
+  // 1b. A body sent with another method is gated too: the parsers on these
+  // routes are mounted for every method. A GET holding a 3 MB body open
+  // reserves it, so a second one past the 4 MB budget is refused busy.
+  {
+    const looksPaid = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64");
+    const u = new URL(B + "/v1/images/edits");
+    const opened = (method) => {
+      const rq = httpRequest({ host: u.hostname, port: u.port, path: u.pathname, method, headers: { "content-type": "application/json", "content-length": "3000000", "payment-signature": looksPaid } });
+      const done = new Promise((resolve) => { rq.on("response", (rs) => { let t = ""; rs.on("data", (c) => (t += c)); rs.on("end", () => resolve({ status: rs.statusCode, text: t })); }); rq.on("error", () => resolve({ status: 0, text: "" })); });
+      rq.write("{\"prompt\":\"");
+      return { rq, done };
+    };
+    const first = opened("GET");
+    await sleep(300);
+    const second = opened("PATCH");
+    const r2 = await Promise.race([second.done, sleep(5000).then(() => ({ status: -1, text: "" }))]);
+    ok(r2.status === 503 && /busy/.test(r2.text), `a PATCH body past the in-flight budget held by an open GET body is refused busy (got ${r2.status})`);
+    first.rq.destroy(); second.rq.destroy();
+    await sleep(300);
   }
 
   // 2. An unpaid large image edit gets the same 402 as a small one, unread.
