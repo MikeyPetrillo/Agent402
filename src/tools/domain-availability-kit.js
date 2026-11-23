@@ -302,7 +302,7 @@ export const DOMAIN_AVAILABILITY_TOOLS = [
       bodyType: "json",
       input: { domain: "example.com" },
       inputSchema: {
-        properties: { domain: { type: "string", description: "Domain name to check, e.g. example.com (a URL or an internationalized name is accepted)" } },
+        properties: { domain: { type: "string", maxLength: 300, description: "Domain name to check, e.g. example.com (a URL or an internationalized name is accepted)" } },
         required: ["domain"],
       },
       output: {

@@ -807,7 +807,7 @@ export const PARSE_TOOLS = [
       input: { text: "forty-two thousand and seven" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Number words (\"one hundred forty-seven\", \"twenty-first\", \"three point five\") or digits (\"42007\", \"1,250.50\"); at most 500 characters" },
+          text: { type: "string", maxLength: 500, description: "Number words (\"one hundred forty-seven\", \"twenty-first\", \"three point five\") or digits (\"42007\", \"1,250.50\"); at most 500 characters" },
         },
         required: ["text"],
       },
@@ -855,7 +855,7 @@ export const PARSE_TOOLS = [
       inputSchema: {
         properties: {
           text: { type: "string", description: "Log text (at most 100,000 characters)" },
-          assumeZone: { type: "string", description: "IANA time zone for stamps that carry no zone or offset (default UTC)" },
+          assumeZone: { type: "string", maxLength: 64, description: "IANA time zone for stamps that carry no zone or offset (default UTC)" },
           year: { type: "number", description: "Year for syslog stamps, which carry none (default the current UTC year)" },
           epoch: { type: "boolean", description: "Read 10- and 13-digit numbers as epoch seconds and milliseconds (default true)" },
           limit: { type: "number", description: "Stamps to list, 1-2000 (default 500); the summary counts every stamp" },
@@ -890,7 +890,7 @@ export const PARSE_TOOLS = [
       inputSchema: {
         properties: {
           csv: { type: "string", description: "CSV text with a header row (at most 100,000 characters)" },
-          groupBy: { type: "string", description: "Column to group rows by (optional)" },
+          groupBy: { type: "string", maxLength: 200, description: "Column to group rows by (optional)" },
           columns: { type: "array", items: { type: "string" }, description: "Columns to summarize (default every column but groupBy); a comma-separated string also works" },
           delimiter: { type: "string", description: "comma (default), semicolon, tab, pipe, or any single character other than a quote or a line break" },
           limit: { type: "number", description: "Groups to list, 1-1000 (default 100), largest first" },
