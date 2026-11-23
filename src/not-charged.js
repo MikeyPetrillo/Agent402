@@ -29,3 +29,14 @@ export function withoutChargeClaim(text) {
 export function notChargedOn(req) {
   return isRouteCall(req) ? ` ${NOT_CHARGED}` : "";
 }
+
+// Any wording of the claim, the shared sentence or a handler's own.
+const ANY_CHARGE_CLAIM = /\b(?:not|never) charged\b|\bnothing (?:was|is|has been) charged\b|\bno charge\b|\buncharged\b/i;
+
+/** `text` without each sentence that says nothing was charged, whatever its
+ *  wording: for a gate whose payment was taken before the handler ran (the
+ *  AWS Marketplace front door, src/aws-marketplace-gate.js), where a handler's
+ *  claim would be false and the gate states the payment's state itself. */
+export function withoutChargeSentences(text) {
+  return String(text ?? "").split(/(?<=[.!?;])\s+/).filter((s) => !ANY_CHARGE_CLAIM.test(s)).join(" ").trim();
+}

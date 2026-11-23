@@ -50,6 +50,7 @@
 // registered for the listing.
 import { binaryTypesOf } from "./tool-media-type.js";
 import { namesOwnHost } from "./referral-gate.js";
+import { withoutChargeSentences } from "./not-charged.js";
 
 export const AWS_NETWORK = "aws:base";
 export const AWS_RAIL = "aws";
@@ -379,7 +380,9 @@ export async function createAwsMarketplaceGate({
     for (const [k, v] of Object.entries(value)) { if (k === "howToCall") continue; const w = clean(v, depth + 1); if (w !== undefined) out[k] = w; }
     return out;
   };
-  const errorText = (msg) => { const t = String(redact(String(msg || "")) || "").slice(0, 600); return t && !notePointers(t) ? t : "The request could not be completed."; };
+  // The payment was taken before the handler ran, so a handler's "nothing was
+  // charged" is dropped: the body's paymentUsed and note state the payment.
+  const errorText = (msg) => { const t = String(redact(withoutChargeSentences(String(msg || ""))) || "").slice(0, 600); return t && !notePointers(t) ? t : "The request could not be completed."; };
 
   async function runPaid(req, res, def) {
     const pay = req.__awsPayment;

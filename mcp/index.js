@@ -829,7 +829,7 @@ function signingRefusal(tool, d) {
 /** The tool result for a job still running when the wait ended. */
 function pendingJobResult(tool, e) {
   return {
-    content: [{ type: "text", text: `${tool.slug}: ${e.message}. The call was paid for as a job; payment settles only if the answer is delivered. Poll the job link (free, no payment) for the answer.` }],
+    content: [{ type: "text", text: `${tool.slug}: ${e.message}. The call was paid for as a job; payment settles only if the answer is delivered. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. Poll the job link (free, no payment) for the answer.` }],
     structuredContent: { slug: tool.slug, pending: true, jobUrl: e.jobUrl || null, job: e.job || null },
     isError: true,
   };

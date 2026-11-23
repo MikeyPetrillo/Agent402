@@ -24,3 +24,10 @@ const ON = settleFirstCopyOn();
 export const FAILED_CALL_SENTENCE = ON ? FAILED_CALL_TEXT : "";
 /** The short form, beside a claim worded another way ("" when settle-first is off). */
 export const SETTLE_FIRST_SENTENCE = ON ? SETTLE_FIRST_TEXT : "";
+
+/** " " + the short form on a route that may settle first (`def.settlesFirst`,
+ *  which server.js sets from the settle-first slugs), "" otherwise: appended
+ *  after a per-route sentence that says the payment settles only on the answer. */
+export function settleFirstClause(def) {
+  return def && def.settlesFirst === true && SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : "";
+}
