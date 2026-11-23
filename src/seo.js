@@ -763,7 +763,17 @@ export function surfaceClause(text) {
 export function llmsTxt(baseUrl, catalog) {
   const full = llmsFullBody(baseUrl, catalog).split("\n");
   const title = full[0];
-  const summary = full.find((l) => l.startsWith("> "));
+  // The short index says each fact once: the explainer link and /api/pricing
+  // are in the paragraph under the summary, access (no account or key, the
+  // quote in the 402) in the front door's lines, the card method in the MPP
+  // methods, and the per-request quote and the metered wires in the metered
+  // section below. /llms-full.txt keeps the summary whole.
+  const summary = full.find((l) => l.startsWith("> "))
+    .replace(" (explainer: /agentic-finance)", "")
+    .replace(" (a card payment token over MPP's `stripe` charge method - no wallet, no stablecoin)", "")
+    .replace(" No human, no signup, no API key: the payment is the identity.", "")
+    .replace(" (the metered gateway quotes each request from its body)", "")
+    .replace("; every price is in /api/pricing and quoted in the 402.", ".");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
   const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
   // Key machine surfaces: the short index names each surface in one clause
@@ -805,6 +815,7 @@ export function llmsTxt(baseUrl, catalog) {
     if (start < 0) return "";
     let end = start + 1;
     while (end < full.length && !full[end].startsWith("## ")) end += 1;
+    if (name === "Call a model (metered, the default)") return full.slice(start, end).join("\n").replace(" (OpenAI chat, Anthropic Messages and OpenAI Responses wires)", "").trimEnd();
     if (name !== "Key machine surfaces") return full.slice(start, end).join("\n").trimEnd();
     return [full[start], `Each in one clause; in full, with parameters and limits: ${baseUrl}/llms-full.txt`, ...full.slice(start + 1, end).map(surfaceBrief)].join("\n").trimEnd();
   }).filter(Boolean);
@@ -824,7 +835,7 @@ ${summary}
 
 Base URL: ${baseUrl}
 
-The full text, with every skill pack and every tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP in plain language, for people: ${GUIDE_SITE}.
+The full text, every skill pack and tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP in plain language, for people: ${GUIDE_SITE}.
 
 ${[
     frontDoorMarkdown(catalog, baseUrl),

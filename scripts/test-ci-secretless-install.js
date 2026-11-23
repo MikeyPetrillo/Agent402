@@ -320,5 +320,15 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
   ok(/keyed/.test(String(cStep?.run || "")) && !/echo[^\n]*\$\{?COINGECKO_API_KEY/.test(String(cStep?.run || "")), "corpus-nightly.yml: the corpus step logs keyed or keyless, never the key");
 }
 
+// npm releases authenticate by trusted publishing (OIDC, the publish job's
+// id-token): no workflow holds a long-lived npm token, so no install step,
+// lifecycle script or third-party CLI can read one.
+{
+  const { readdirSync } = await import("node:fs");
+  const dir = new URL("../.github/workflows/", import.meta.url);
+  const holders = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).filter((f) => readFileSync(new URL(f, dir), "utf8").split("\n").some((l) => !/^\s*#/.test(l) && /secrets\.NPM_TOKEN\b|NODE_AUTH_TOKEN\s*:/.test(l)));
+  ok(holders.length === 0, `no workflow reads secrets.NPM_TOKEN or sets NODE_AUTH_TOKEN (${holders.join(", ") || "none"})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

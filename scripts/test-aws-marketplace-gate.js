@@ -25,7 +25,9 @@ import { bootPaidServer } from "./lib/paid-boot.js";
 import { notChargedOn } from "../src/not-charged.js";
 
 const gateMod = await import("../src/aws-marketplace-gate.js");
-const { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsIneligibility, awsRoutes, createAwsPaymentClaims, createAwsMarketplaceGate, paymentJwksBase, AWS_DEFAULT_SLUGS } = gateMod;
+const { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsIneligibility, awsRoutes, createAwsPaymentClaims, createAwsMarketplaceGate, createAwsRateLimits, paymentJwksBase, callerUrlFields, AWS_DEFAULT_SLUGS, AWS_DEFAULTS } = gateMod;
+const { limiterKey } = await import("../src/rate-limit.js");
+const { markResaleBarred, markResaleComputed } = await import("../src/resale-terms.js");
 const { PRIVATE_RAILS, COUNTED_RAILS, isCountedRail, isPaidRail, UNCOUNTED_PRIVATE_RAILS } = await import("../src/paid-rails.js");
 
 let pass = 0, fail = 0;
@@ -60,10 +62,10 @@ const jwksStub = createServer((req, res) => {
 await new Promise((r) => jwksStub.listen(0, "127.0.0.1", r));
 const JWKS_BASE = `http://127.0.0.1:${jwksStub.address().port}`;
 
-function paymentToken(quoteToken, { id = `awsmp-${randomUUID()}`, expIn = 300, cnf = null, issuer = ISSUER } = {}) {
+function paymentToken(quoteToken, { id = `awsmp-${randomUUID()}`, expIn = 300, cnf = null, issuer = ISSUER, sub = "buyer-test" } = {}) {
   const q = claimsOf(quoteToken);
   const now = Math.floor(Date.now() / 1000);
-  const token = signJwt({ alg: "ES256", kid: SERVICE_KID, typ: "JWT" }, { iss: issuer, sub: "buyer-test", aud: q.iss, iat: now - 1, exp: now + expIn, jti: id, payment_id: id, quote_token: quoteToken, ...(cnf ? { cnf } : {}) }, service.privateKey);
+  const token = signJwt({ alg: "ES256", kid: SERVICE_KID, typ: "JWT" }, { iss: issuer, sub, aud: q.iss, iat: now - 1, exp: now + expIn, jti: id, payment_id: id, quote_token: quoteToken, ...(cnf ? { cnf } : {}) }, service.privateKey);
   return { token, id };
 }
 const paymentHeader = (required, token) => Buffer.from(JSON.stringify({ x402Version: 2, resource: required.resource, accepted: required.accepts[0], payload: { paymentToken: token, paymentId: "buyer-set-anything" } })).toString("base64");
@@ -105,7 +107,38 @@ const DEFS = {
   ok(/model tier/.test(awsIneligibility({ ...DEFS["POST /api/echo"], category: "llm" })), "a model tier is refused");
   ok(/priced per request/.test(awsIneligibility({ ...DEFS["POST /api/echo"], quote: () => 0.01 })), "a tool priced per request is refused");
   ok(/outlives/.test(awsIneligibility(DEFS["POST /api/echo"], { lastingEffect: true })) && /outside seller/.test(awsIneligibility(DEFS["POST /api/echo"], { paysThirdParty: true })) && /long-running/.test(awsIneligibility(DEFS["POST /api/echo"], { longRunning: true })), "lasting effect, outside seller and long-running are refused");
-  ok(/own host/.test(awsIneligibility({ ...DEFS["POST /api/echo"], discovery: { input: { url: "https://agent402.tools/x" } } }, {}, { ownHosts: ["agent402.tools"] })), "a tool whose example names this host is refused");
+  ok(/own host/.test(awsIneligibility({ ...DEFS["POST /api/echo"], discovery: { input: { domain: "agent402.tools" } } }, {}, { ownHosts: ["agent402.tools"] })), "a tool whose example names this host is refused");
+
+  // Resold through a third party: a source whose terms bar it, or content a third party owns.
+  const [barred] = markResaleBarred([{ ...DEFS["POST /api/echo"], slug: "barred" }], ["barred"], "raw pass-through of a source that bars resale");
+  ok(awsIneligibility(barred) === "raw pass-through of a source that bars resale", "a resale-barred tool is refused, quoting its reason");
+  const [computed] = markResaleComputed([{ ...DEFS["POST /api/echo"], slug: "computed" }], ["computed"]);
+  ok(awsIneligibility(computed) === null, "control: a tool computed from such a source stays eligible");
+  const withInput = (inputSchema, input) => ({ ...DEFS["POST /api/echo"], discovery: { inputSchema: { properties: inputSchema }, input } });
+  const cases = [
+    ["a url field", withInput({ url: { type: "string" } }, { url: "https://example.com/a" }), ["url"]],
+    ["a urls list", withInput({ urls: { type: "array", items: { type: "string" } } }, { urls: ["https://example.com/a"] }), ["urls"]],
+    ["an imageUrl field", withInput({ imageUrl: { type: "string" } }, {}), ["imageUrl"]],
+    ["a feed_url field", withInput({ feed_url: { type: "string" } }, {}), ["feed_url"]],
+    ["a uri-format field", withInput({ target: { type: "string", format: "uri" } }, {}), ["target"]],
+    ["an href field", withInput({ href: { type: "string" } }, {}), ["href"]],
+    ["an example value that is a web address", withInput({ text: { type: "string" } }, { source: "https://example.com/a.pdf" }), ["source"]],
+  ];
+  for (const [label, def, fields] of cases) {
+    ok(JSON.stringify(callerUrlFields(def)) === JSON.stringify(fields) && /third-party content from a URL the caller names/.test(awsIneligibility(def)), `a tool with ${label} is refused, naming the field`);
+  }
+  ok(callerUrlFields(withInput({ text: { type: "string" }, links: { type: "array" } }, { text: "see https://example.com/a for more" })).length === 0, "control: prose that mentions an address and a list of links to inspect are not URL inputs");
+}
+
+// ---- the default listing, on the real tool definitions ------------------------------
+{
+  ok(!AWS_DEFAULT_SLUGS.some((s) => ["extract", "render", "pdf-to-markdown"].includes(s)), "the default listing holds no tool that reads a caller-named page or document");
+  const real = new Map();
+  for (const mod of ["../src/tools/kit2.js", "../src/tools/sql-guard-kit.js", "../src/tools/email-guard-kit.js", "../src/tools/sanctions-kit.js", "../src/tools/demand-kit.js"]) {
+    for (const v of Object.values(await import(mod))) if (Array.isArray(v)) for (const t of v) if (t && typeof t === "object" && t.slug && !real.has(t.slug)) real.set(t.slug, t);
+  }
+  for (const slug of AWS_DEFAULT_SLUGS) ok(real.has(slug) && awsIneligibility(real.get(slug)) === null, `default ${slug}: its real definition passes the boot checks`);
+  ok(/third-party content from a URL the caller names \(url\)/.test(awsIneligibility(real.get("pdf-to-markdown")) || ""), "pdf-to-markdown's real definition is refused: it reads a caller-named URL");
 }
 
 // ---- the rail ------------------------------------------------------------------
@@ -281,10 +314,97 @@ async function quote(path = "/aws/echo") {
 }
 await new Promise((r) => srv.close(r));
 
+// ---- per-client rate limits and the pointer scrub, on a gate of their own -------------
+{
+  { const d = awsMarketplaceConfig(ENV, { baseUrl: "http://127.0.0.1:1" }); ok(d.quotesPerMin === AWS_DEFAULTS.quotesPerMin && d.paidPerMin === AWS_DEFAULTS.paidPerMin, "the per-minute limits default when unset"); }
+  ok(/AWS_MARKETPLACE_QUOTES_PER_MIN/.test(awsMarketplaceConfigProblem({ ...ENV, AWS_MARKETPLACE_QUOTES_PER_MIN: "0" }) || "") && /AWS_MARKETPLACE_PAID_PER_MIN/.test(awsMarketplaceConfigProblem({ ...ENV, AWS_MARKETPLACE_PAID_PER_MIN: "many" }) || ""), "an unusable limit is a named setting problem (the gate stays off)");
+  const cfg = awsMarketplaceConfig({ ...ENV, AWS_MARKETPLACE_QUOTES_PER_MIN: "2", AWS_MARKETPLACE_PAID_PER_MIN: "2" }, { baseUrl: "http://127.0.0.1:1" });
+  ok(cfg.quotesPerMin === 2 && cfg.paidPerMin === 2, "the limits are read from the settings");
+  const clock = { t: Date.now() };
+  let flaky2 = 0;
+  const defs2 = new Map([
+    ["echo", DEFS["POST /api/echo"]],
+    ["pointer", { route: "POST /api/pointer", slug: "pointer", name: "Pointer", category: "text", price: "$0.002", description: "Answers with a verify step.", discovery: { inputSchema: { properties: { text: { type: "string" } } }, input: { text: "x" } }, handler: async (i) => ({ verdict: "allow", echo: i.text, certificate: { token: "t.k.n", verifyWith: "POST /api/sql-cert-verify { sql, certificate }" }, link: "https://agent402.tools/docs", steps: ["read /mcp for more", "keep this"], note: "a path that is not a route: /api/sql-cert-verify-not" }) }],
+    ["flaky2", { route: "POST /api/flaky2", slug: "flaky2", name: "Flaky", category: "text", price: "$0.002", description: "Fails on demand.", discovery: { input: { text: "x" } }, handler: async () => { if (flaky2 > 0) { flaky2--; throw Object.assign(new Error("upstream unavailable"), { statusCode: 502 }); } return { fine: true }; } }],
+  ]);
+  const sold = [];
+  const g2 = await createAwsMarketplaceGate({
+    config: cfg, defs: defs2, claims: createAwsPaymentClaims({ log: () => {} }), recordSale: (row) => { sold.push(row); },
+    ownHosts: ["agent402.tools"], ownPaths: ["/api/sql-cert-verify", "/api/echo", "/mcp"],
+    clientKey: (req) => limiterKey(String(req.headers["x-test-ip"] || "127.0.0.1")),
+    rateLimits: createAwsRateLimits({ quotesPerMin: cfg.quotesPerMin, paidPerMin: cfg.paidPerMin, now: () => clock.t }),
+    log: () => {},
+  });
+  const app2 = express();
+  app2.use(express.json());
+  app2.all(["/aws", "/aws/:slug"], (req, res, next) => g2.handler(req, res, next));
+  const srv2 = await new Promise((r) => { const s = app2.listen(0, "127.0.0.1", () => r(s)); });
+  const B2 = `http://127.0.0.1:${srv2.address().port}`;
+  const send = (path, body, ip, headers = {}) => fetch(`${B2}${path}`, { method: "POST", headers: { "content-type": "application/json", "x-test-ip": ip, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const freshPay = async (path, ip, opts = {}) => { const r = await send(path, undefined, ip); const req = readRequired(r); const t = paymentToken(req.accepts[0].extra.quoteToken, opts); return { hdr: paymentHeader(req, t.token), id: t.id }; };
+  try {
+    // Unpaid: per address, an IPv6 address by its /64.
+    const q1 = await send("/aws/echo", undefined, "2001:db8:1:1::1");
+    const q2 = await send("/aws/echo", undefined, "2001:db8:1:1::2");
+    const q3 = await send("/aws/echo", undefined, "2001:db8:1:1::3");
+    const q3j = await q3.json();
+    ok(q1.status === 402 && q2.status === 402 && q3.status === 429 && q3j.errorReason === "rate_limited" && Number(q3.headers.get("retry-after")) > 0 && !("paymentUsed" in q3j), `unpaid: past the per-minute limit one /64 is answered 429 with Retry-After (${q1.status},${q2.status},${q3.status})`);
+    ok((await send("/aws/echo", undefined, "2001:db8:1:2::1")).status === 402, "another /64 is counted apart");
+    ok((await send("/aws/echo", { nope: 1 }, "2001:db8:1:1::4")).status === 429, "an unpaid refusal counts against the same limit");
+    clock.t += 61_000;
+    ok((await send("/aws/echo", undefined, "2001:db8:1:1::1")).status === 402, "the next minute: quoted again");
+
+    // The pointer scrub on a served answer.
+    clock.t += 61_000;
+    const pp = await freshPay("/aws/pointer", "198.51.100.10");
+    const pr = await send("/aws/pointer", { text: "hello" }, "198.51.100.10", { "payment-signature": pp.hdr });
+    const pj = await pr.json();
+    ok(pr.status === 200 && pj.verdict === "allow" && pj.certificate?.token === "t.k.n" && !("verifyWith" in (pj.certificate || {})), `a served answer drops a field naming a direct route (verifyWith), keeping the rest (${JSON.stringify(pj.certificate)})`);
+    ok(!("link" in pj) && JSON.stringify(pj.steps) === JSON.stringify(["keep this"]) && /verify-not/.test(pj.note || ""), "and strings naming this host or the connector; a path that is no route of ours stays");
+    clock.t += 61_000;
+    const own = await freshPay("/aws/pointer", "198.51.100.11");
+    const oj = await (await send("/aws/pointer", { text: "my text names POST /api/echo" }, "198.51.100.11", { "payment-signature": own.hdr })).json();
+    ok(oj.echo === "my text names POST /api/echo" && !("verifyWith" in (oj.certificate || {})), "a route the caller's own text names comes back whole; the answer's own pointer is still dropped");
+
+    // Paid, per client address and per buyer; a refused payment stays usable.
+    clock.t += 61_000;
+    const pays = [];
+    for (let i = 0; i < 3; i++) { clock.t += 61_000; pays.push(await freshPay("/aws/echo", "203.0.113.5", { sub: `buyer-${i}` })); }
+    clock.t += 61_000; // the quotes above are a minute behind: only the paid limit is read below
+    const outs = [];
+    for (const p of pays) { const r = await send("/aws/echo", { text: "x" }, "203.0.113.5", { "payment-signature": p.hdr }); outs.push([r.status, await r.json()]); }
+    ok(outs[0][0] === 200 && outs[1][0] === 200 && outs[2][0] === 429 && outs[2][1].paymentUsed === false && outs[2][1].errorReason === "rate_limited", `paid: a third new payment from one address in a minute is 429, payment not used (${outs.map((o) => o[0]).join(",")})`);
+    clock.t += 61_000;
+    const later = await send("/aws/echo", { text: "x" }, "203.0.113.5", { "payment-signature": pays[2].hdr });
+    await new Promise((r) => setTimeout(r, 20));
+    ok(later.status === 200 && sold.filter((s) => s.tx === pays[2].id).length === 1, "the refused payment, sent again after the wait: served and booked once");
+    const byBuyer = [];
+    for (let i = 0; i < 3; i++) byBuyer.push(await freshPay("/aws/echo", `192.0.2.${20 + i}`, { sub: "one-buyer" }));
+    clock.t += 61_000;
+    const bOuts = [];
+    for (let i = 0; i < 3; i++) bOuts.push((await send("/aws/echo", { text: "x" }, `192.0.2.${20 + i}`, { "payment-signature": byBuyer[i].hdr })).status);
+    ok(bOuts.join(",") === "200,200,429", `paid: one buyer across three addresses is limited by its buyer id (${bOuts.join(",")})`);
+
+    // A payment already accepted is never refused: its resend after a failed run is served whatever the counts read.
+    clock.t += 61_000;
+    const acc = await freshPay("/aws/flaky2", "198.51.100.77", { sub: "busy-buyer" });
+    clock.t += 61_000;
+    flaky2 = 1;
+    const f1 = await send("/aws/flaky2", { text: "a" }, "198.51.100.77", { "payment-signature": acc.hdr });
+    ok(f1.status === 502 && (await f1.json()).paymentUsed === false, "setup: the accepted payment's run failed and the payment is usable");
+    for (let i = 0; i < 3; i++) { const o = await freshPay("/aws/echo", `198.51.100.${80 + i}`, { sub: "busy-buyer" }); await send("/aws/echo", { text: "x" }, `198.51.100.${80 + i}`, { "payment-signature": o.hdr }); }
+    const resend = await send("/aws/flaky2", { text: "a" }, "198.51.100.77", { "payment-signature": acc.hdr });
+    await new Promise((r) => setTimeout(r, 20));
+    ok(resend.status === 200 && sold.filter((s) => s.tx === acc.id).length === 1, `the accepted payment's resend is served with its buyer past the limit (${resend.status})`);
+    ok(g2.stats().limitedPaid >= 2 && g2.stats().limitedUnpaid >= 2, "the operator counters record both kinds of refusal");
+  } finally { await new Promise((r) => srv2.close(r)); }
+}
+
 // ===============================================================================
 // Part 2: booted servers
 // ===============================================================================
-const SERVER_ENV = { AWS_MARKETPLACE_QUOTE_KEY: ENV.AWS_MARKETPLACE_QUOTE_KEY, AWS_MARKETPLACE_QUOTE_KEY_ID: "quote-test-1", AWS_MARKETPLACE_PRODUCT_ID: PRODUCT, AWS_MARKETPLACE_SLUGS: "redact,sql-guard", AWS_MARKETPLACE_PAYMENT_JWKS_URL: JWKS_BASE };
+const SQL_CERT_PEM = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
+const SERVER_ENV = { SQL_CERT_SIGNING_KEY: SQL_CERT_PEM, AWS_MARKETPLACE_QUOTE_KEY: ENV.AWS_MARKETPLACE_QUOTE_KEY, AWS_MARKETPLACE_QUOTE_KEY_ID: "quote-test-1", AWS_MARKETPLACE_PRODUCT_ID: PRODUCT, AWS_MARKETPLACE_SLUGS: "redact,sql-guard,extract,render,pdf-to-markdown,public-holidays", AWS_MARKETPLACE_PAYMENT_JWKS_URL: JWKS_BASE };
 const BLANK = Object.fromEntries(Object.keys(SERVER_ENV).map((k) => [k, ""]));
 const OP = "test-operator-token-aws-gate-0001";
 // The direct routes compared with the switch off and on: unpaid, bare and with input, both verbs.
@@ -333,9 +453,23 @@ try {
   ok(paid.status === 200 && typeof JSON.stringify(pj) === "string", "a valid payment: the tool's answer");
   const again = await fetch(`${on.url}/aws/redact`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": hdr }, body: JSON.stringify({ text: "call 555-0100 now" }) });
   ok(again.status === 409, "the same payment again: 409");
+  {
+    // sql-guard's answer names its verify route on the direct path; on /aws it does not.
+    const direct = await fetch(`${on.url}/api/sql-guard`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sql: "select 1" }) });
+    const sq = await fetch(`${on.url}/aws/sql-guard`, { method: "POST" });
+    const sreq = readRequired(sq);
+    const st = paymentToken(sreq.accepts[0].extra.quoteToken);
+    const sr = await fetch(`${on.url}/aws/sql-guard`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": paymentHeader(sreq, st.token) }, body: JSON.stringify({ sql: "select 1" }) });
+    const sj = await sr.json();
+    ok(direct.status === 402 && sr.status === 200 && typeof sj.certificate?.token === "string" && !("verifyWith" in sj.certificate) && !/\/api\/|agent402\.tools/.test(JSON.stringify(sj)), `the /aws sql-guard answer keeps its certificate and names no direct route (${Object.keys(sj.certificate || {}).join(",")})`);
+  }
   await new Promise((r) => setTimeout(r, 200));
   const opv = await (await fetch(`${on.url}/__operator/aws.json`, { headers: { "x-operator-token": OP } })).json();
-  ok(opv.enabled === true && opv.sinceBoot.booked === 1 && opv.sinceBoot.served === 1 && opv.sinceBoot.replayed === 1, "booked once, served once, the replay counted");
+  const notServed = new Map((opv.notServed || []).map((r) => [r.slug, r.reason]));
+  ok(["extract", "render", "pdf-to-markdown"].every((s) => /third-party content from a URL the caller names/.test(notServed.get(s) || "")), "boot: extract, render and pdf-to-markdown are refused with the reason");
+  ok(/holiday/.test(notServed.get("public-holidays") || ""), "boot: a resale-barred tool is refused with its terms reason");
+  ok(JSON.stringify(opv.routes) === JSON.stringify(["redact", "sql-guard"]), "boot: only the eligible listed tools are served");
+  ok(opv.enabled === true && opv.sinceBoot.booked === 2 && opv.sinceBoot.served === 2 && opv.sinceBoot.replayed === 1, "booked once per served call, the replay counted");
   const opNo = await fetch(`${on.url}/__operator/aws.json`);
   ok(opNo.status === 404, "the operator view without the token: 404");
   const pricing = await (await fetch(`${on.url}/api/pricing`)).text();

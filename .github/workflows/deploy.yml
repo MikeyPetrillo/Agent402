@@ -3962,7 +3962,8 @@ jobs:
               # the ref.
               echo "--- npm exchange verdict, every publishable package ---"
               UNMATCHED_PENDING=""
-              for DIR in mcp tollbooth client adapters/*/; do
+              # Every directory a publish step below enters (scripts/test-deploy-release-order.js holds the two lists equal).
+              for DIR in mcp tollbooth client openclaw adapters/*/; do
                 [ -f "$DIR/package.json" ] || continue
                 PKG=$(node -p "const p=require('./$DIR/package.json'); p.private ? '' : (p.name || '')" 2>/dev/null || echo "")
                 [ -n "$PKG" ] || continue
@@ -5187,6 +5188,9 @@ jobs:
           ck "robots welcomes AI crawlers" 'has "$PROD/robots.txt" GPTBot'
           ck "MCP connector on landing"  'has "$PROD/" agent402-mcp'
           ck "MCP connector in llms.txt" 'has "$PROD/llms.txt" agent402-mcp'
+          # The short index's bound (scripts/test-front-door.js measures the tree under test).
+          LLMS_BYTES=$(curl -sf --max-time 20 "$PROD/llms.txt" | wc -c | tr -d ' ')
+          ck "llms.txt under 16,384 bytes ($LLMS_BYTES)" '[ "${LLMS_BYTES:-0}" -gt 1000 ] && [ "${LLMS_BYTES:-0}" -lt 16384 ]'
           ck "unit-convert tool page"    'has "$PROD/tools/unit-convert" "Unit convert"'
           ck "guides with TechArticle JSON-LD" 'has "$PROD/guides/x402-in-5-minutes" TechArticle'
           [ "$FAILS" -eq 0 ] || { echo "$FAILS production surface(s) regressed"; exit 1; }

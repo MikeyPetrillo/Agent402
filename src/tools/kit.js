@@ -2116,6 +2116,27 @@ export function robotsAllows(groups, ua, path) {
   return { allowed: best ? best.allow : true, matchedRule: best ? `${best.allow ? "Allow" : "Disallow"}: ${best.path}` : null };
 }
 
+/** The brand token: a robots.txt group naming it speaks to every one of our agents. */
+export const ROBOTS_BRAND_TOKEN = "Agent402";
+
+/**
+ * robotsAllows for one of our own product tokens, matched exactly (RFC 9309
+ * 2.2.1): a group applies when a User-agent line's product token (its value up
+ * to a space or "/") is `token` or the brand token, case-insensitive, else the
+ * `*` groups do. A group for another product whose name is a part of ours
+ * (`Bot`, `Agent`) is not ours, which robotsAllows' substring read of a full
+ * user-agent string would take it to be.
+ */
+export function robotsAllowsForToken(groups, token, path) {
+  const tok = String(token).toLowerCase();
+  const want = new Set([tok, ROBOTS_BRAND_TOKEN.toLowerCase()]);
+  const narrowed = groups.map((g) => ({
+    ...g,
+    agents: g.agents.filter((a) => a === "*" || want.has(String(a).split(/[\s/]/)[0])).map((a) => (a === "*" ? a : tok)),
+  }));
+  return robotsAllows(narrowed, tok, path);
+}
+
 // Rule and path bounds for robotsAllows/parseRobots; both sides come from
 // outside (the site's robots.txt and the caller's path).
 const ROBOTS_MAX_RULES_PER_GROUP = 2000;

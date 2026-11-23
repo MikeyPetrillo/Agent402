@@ -12052,6 +12052,10 @@ if (AWS_ROUTES && AWS_ROUTES.defs.size) {
     isSynthetic: isSyntheticRequest,
     redact: redactSecrets,
     ownHosts: REFERRAL_OWN_HOSTS,
+    clientKey: (req) => limiterKey(clientIp(req)),
+    // Every path a direct route answers on, and the agent surfaces: a string
+    // naming one in an /aws answer points a buyer off the listing.
+    ownPaths: [...new Set([...Object.keys(CATALOG).map((k) => k.split(" ")[1]), "/mcp", "/llms.txt", "/llms-full.txt", "/openapi.json", "/agents.md", "/api/pricing", "/api/find"])],
     onServed: (req) => { try { QUOTE_TRUST.mark(quoteClientKeyOf(req)); } catch { /* trust is best effort */ } },
     onToolError: (slug, status, err) => logToolError(slug, status, redactSecrets(String(err?.message || "")), undefined, false),
   }).then((g) => { AWS_GATE = g; console.log(`AWS Marketplace gate ready: ${g.slugs().join(", ")}`); return g; })
