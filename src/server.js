@@ -3660,8 +3660,9 @@ try {
     // A refunded or disputed pack payment: the refunded amount leaves the key's
     // balance; the key is disabled once the payment is fully reversed.
     onChargeReversed: (paymentIntent, type, reversal) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded", reversal) : null),
-    // A dispute that closed in our favor gives the key it disabled back.
-    onDisputeClosed: (paymentIntent, { won }) => (won && _credits ? _credits.enableByPaymentIntent(paymentIntent, "disputed") : null),
+    // A dispute closed: won gives back what it alone held; lost takes the
+    // disputed payment off the balance and releases the other payments' share.
+    onDisputeClosed: (paymentIntent, outcome) => (_credits ? _credits.disputeClosed(paymentIntent, outcome) : null),
     // A refund sent on request settles by its own status (src/credits.js settleRefund).
     onRefundUpdated: (refund) => (_credits ? _credits.settleRefund(refund) : null),
     // An early fraud warning freezes the key that payment loaded and refunds its unspent balance.
