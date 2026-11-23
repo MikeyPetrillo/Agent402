@@ -18,13 +18,12 @@
 //   - a job reports queued, then running with a stage, an estimated progress
 //     and an ETA, with Retry-After on every state that is not final.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { connect } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { generateKeyPairSync } from "node:crypto";
 import { verifyReceipt as verifySignedReceipt } from "../client/receipt.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
@@ -38,8 +37,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await cond()) return true; await sleep(50); } return cond(); };
 setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.slice(-25)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); }, 120_000).unref();
 
-const [PORT, FAC_PORT, UP_PORT] = await getFreePorts(3);
-const B = `http://127.0.0.1:${PORT}`;
 const BAD_PAYER = "0x" + "ba".repeat(20);
 
 const fac = { verify: 0, settle: 0, verifiedPayers: [] };
@@ -60,7 +57,8 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 const up = { calls: 0, delayMs: 2500, failNext: false };
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -77,7 +75,8 @@ upstream = createServer((req, res) => {
     }, up.delayMs);
   });
 });
-await new Promise((r) => upstream.listen(UP_PORT, "127.0.0.1", r));
+await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
+const UP_PORT = upstream.address().port;
 
 const preload = join(TMP, "openai-stub.mjs");
 writeFileSync(preload, `
@@ -90,8 +89,10 @@ globalThis.fetch = function (input, init) {
   return real.call(this, input, init);
 };
 `);
-proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+// The boot gives up inside the suite's own 120 s timer, killing its child.
+const srv = await bootServer({
+  stores: "async-jobs", timeoutMs: 110_000, args: ["--import", preload],
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "",
@@ -100,9 +101,12 @@ proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
     AGENT402_MCP_TASK_TTL_MS: "" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+}).catch((e) => { console.error(`FAIL - server did not boot: ${e.message}`); facilitator.close(); upstream.close(); process.exit(1); });
+proc = srv.child;
+const PORT = srv.port;
+const B = srv.url;
 const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(l.slice(0, 400)); };
+keep(srv.log());
 proc.stdout.on("data", keep); proc.stderr.on("data", keep);
 
 const PATH = "/api/image-gen-premium";
@@ -118,7 +122,6 @@ const post = (headers, path = PATH, body = BODY) => fetch(`${B}${path}`, { metho
 const job = async (url) => (await fetch(`${B}${url}`)).json();
 
 try {
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch { /* booting */ } await sleep(500); }
 
   // Unpaid, with the header: the ordinary 402, no job.
   const r0 = await post({ prefer: "respond-async", "x-forwarded-for": "10.9.0.1" });
