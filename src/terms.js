@@ -12,6 +12,7 @@ import { publicIndexTermsText, withPublicIndexDate } from "./facilitator-public-
 import { referralOffered } from "./referral-gate.js";
 import { awsMarketplaceOffered } from "./aws-marketplace-gate.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { ROBOTS_UNGATED_READS } from "./tools/robots-gate.js";
 import { refundClauseText } from "./refund-terms.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { connectorWires } from "./connector-pay.js";
@@ -92,7 +93,8 @@ skill packs built on them. When you use them:</p>
   <li><b>How we fetch:</b> each URL is fetched for that call, at your request, as a browser would: without signing in,
   without cookies or credentials, and without getting past any access control. The request names itself
   as ours (see <a href="/crawler">/crawler</a>). Before returning a page's content we read the site's
-  robots.txt, and we do not fetch a path it disallows for our fetch token; such a call answers 403.</li>
+  robots.txt, and we do not fetch a path it disallows for our fetch token; such a call answers 403.
+  The tools that read only a status or metadata do not read robots.txt first: ${ROBOTS_UNGATED_READS}.</li>
   <li><b>What we keep:</b> fetched content is returned to you and not stored, except that a paid answer is
   kept for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes so that the same payment sent again gets the same answer, and the
   result of a call you run as an async job or an MCP task is kept for ${taskRetentionPublic().keptFor} so you can fetch it.</li>

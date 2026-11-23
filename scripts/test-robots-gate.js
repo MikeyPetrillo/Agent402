@@ -270,5 +270,21 @@ for (const f of GATED_MODULES) {
   ok(/cache\.set\(origin, \{ groups, expires/.test(gateSrc) && !/cache\.set\([^)]*html/.test(gateSrc), "the robots gate keeps rules only, never a page");
 }
 
+// The caller-URL clause on /terms and the reads it exempts, the same on
+// /terms and /crawler (one list, src/tools/robots-gate.js).
+{
+  const { termsPage } = await import("../src/terms.js");
+  const { crawlerPage } = await import("../src/crawler-page.js");
+  const { ROBOTS_UNGATED_READS } = gate;
+  const flat = (h) => h.replace(/\s+/g, " ");
+  const terms = flat(termsPage("https://agent402.tools"));
+  const crawler = flat(crawlerPage("https://agent402.tools"));
+  const sec = /<h2 id="caller-urls">URLs you ask us to fetch<\/h2>([\s\S]*?)<h2/.exec(terms)?.[1] || "";
+  ok(sec.length > 0, "/terms carries the caller-URL section");
+  ok(/you represent that you have the right to access the content/.test(sec) && /robots\.txt, and we do not fetch a path it disallows for our fetch token; such a call answers 403/.test(sec), "the section states the caller's right to the content and the robots rule");
+  ok(typeof ROBOTS_UNGATED_READS === "string" && ROBOTS_UNGATED_READS.length > 20 && sec.includes(ROBOTS_UNGATED_READS) && crawler.includes(ROBOTS_UNGATED_READS), "/terms and /crawler name the same reads that do not read robots.txt first");
+  ok(!/Every tool that returns a page's content/.test(crawler), "/crawler does not state the rule without its exceptions");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

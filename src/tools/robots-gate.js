@@ -45,6 +45,10 @@ const RULE_MAX_CHARS = 200;
 /** A group naming the brand alone applies to every one of our agents. */
 export const ROBOTS_BRAND_TOKEN = "Agent402";
 
+/** The reads that are not robots-gated (they return only a status or
+ *  metadata), named in the same words on /terms and /crawler. */
+export const ROBOTS_UNGATED_READS = "an HTTP status or headers, a TLS certificate, robots.txt itself, a sitemap file, a redirect chain, the technologies a page uses, an x402 price or audit, an agent card, and the OpenAPI document an audit pack reads";
+
 /** The catalog tools whose URL read passes this gate (the skill packs built
  *  on them inherit it, and the packs' own page and file reads pass it too).
  *  scripts/test-robots-gate.js drives each one against a disallowed URL. */
