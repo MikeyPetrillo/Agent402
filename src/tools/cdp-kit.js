@@ -532,6 +532,9 @@ const SQL_WINDOW_DAYS_PER_CALL = SQL_WINDOW_MAX_QUERIES - 1;
 const SQL_WINDOW_SENTENCE = `A plain row select on solana.instructions over more than a day whose whole range runs past the query service's time window is read one UTC day at a time and merged in order, at most ${SQL_WINDOW_MAX_QUERIES} queries per call including the whole-range send, so up to ${SQL_WINDOW_DAYS_PER_CALL} ${SQL_WINDOW_DAYS_PER_CALL === 1 ? "day" : "days"} per call; windowed.stoppedBy and the note give the next block_time range to send.`;
 // What a day-by-day read is charged, stated wherever a buyer reads before buying.
 export const SQL_WALK_CHARGE = "A walk that read at least one day is a served answer and is charged at this route's price, even when it is partial or holds no rows; a walk that read no day answers 422 and is not charged (a Tempo push payment is final before the call and is booked as owed).";
+// The same rule on the route that takes x402 exact on EVM chains only, where
+// no Tempo push payment can reach it.
+const SQL_WALK_CHARGE_EVM = SQL_WALK_CHARGE.replace(/ \(a Tempo push[^)]*\)\.$/, " (this route takes x402 exact on EVM chains only).");
 const SQL_OTHER_QUERIES = "Any query that is not read by day gets the same answer as on onchain-sql, at this route's price; send it to onchain-sql for the lower price.";
 // The budget also carries how the call's sends are paced: `own` (this
 // server's own read) and `callerGone` (the buyer's connection closed before
@@ -1786,14 +1789,14 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.33",
     description:
-      `Run the same read-only SQL as onchain-sql (the same tables, dialect and rules) over long ranges in one call. It takes x402 exact on EVM chains and runs as a job (Prefer: respond-async). A plain row select on solana.instructions whose whole block_time range runs past the query service's time window is read one UTC day at a time, up to ${SQL_RANGE_MAX_DAYS} days, and the rows are merged in block_time order, up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows. When the call's time, the row cap or a day the query service cannot answer ends the walk early, the answer is served partial and marked in fields (complete, truncated, windowed with the days read, coveredFrom and coveredTo) with the range left to read. ${SQL_WALK_CHARGE} ${SQL_OTHER_QUERIES}`,
+      `Run the same read-only SQL as onchain-sql (the same tables, dialect and rules) over long ranges in one call. It takes x402 exact on EVM chains and runs as a job (Prefer: respond-async). A plain row select on solana.instructions whose whole block_time range runs past the query service's time window is read one UTC day at a time, up to ${SQL_RANGE_MAX_DAYS} days, and the rows are merged in block_time order, up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows. When the call's time, the row cap or a day the query service cannot answer ends the walk early, the answer is served partial and marked in fields (complete, truncated, windowed with the days read, coveredFrom and coveredTo) with the range left to read. ${SQL_WALK_CHARGE_EVM} ${SQL_OTHER_QUERIES}`,
     tags: [...SHARED_TAGS, "sql", "onchain-data", "long-range", "month", "backfill", "history", "instructions"],
     discovery: {
       bodyType: "json",
       input: { sql: "SELECT block_slot, block_time, executing_account FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY AND executing_account = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' ORDER BY block_time LIMIT 100" },
       inputSchema: {
         properties: {
-          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars) over the onchain-sql tables (base.*, base_sepolia.*, solana.instructions; a query that filters, groups or aggregates solana.instructions needs a block_time range). A plain row select on solana.instructions (one table, no aggregate, GROUP BY, DISTINCT, JOIN or subquery, ORDER BY block_time if any) over more than a day and up to ${SQL_RANGE_MAX_DAYS} days whose whole range runs past the query service's time window is read one UTC day at a time and merged in order. Returns up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows; a walk that ends early is marked partial in fields. ${SQL_WALK_CHARGE}` },
+          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars) over the onchain-sql tables (base.*, base_sepolia.*, solana.instructions; a query that filters, groups or aggregates solana.instructions needs a block_time range). A plain row select on solana.instructions (one table, no aggregate, GROUP BY, DISTINCT, JOIN or subquery, ORDER BY block_time if any) over more than a day and up to ${SQL_RANGE_MAX_DAYS} days whose whole range runs past the query service's time window is read one UTC day at a time and merged in order. Returns up to ${SQL_MAX_ROWS.toLocaleString("en-US")} rows; a walk that ends early is marked partial in fields. ${SQL_WALK_CHARGE_EVM}` },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900)." },
         },
         required: ["sql"],

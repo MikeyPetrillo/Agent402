@@ -509,10 +509,16 @@ try {
   // ---- what a buyer reads before buying: the charge rule and the routes' terms ----
   {
     const CHARGE = "A walk that read at least one day is a served answer and is charged at this route's price, even when it is partial or holds no rows; a walk that read no day answers 422 and is not charged (a Tempo push payment is final before the call and is booked as owed).";
+    // The Tempo push exception is named only where the route takes Tempo push:
+    // onchain-sql-range is x402 exact on EVM chains only.
+    const BASE = CHARGE.slice(0, CHARGE.indexOf(" (a Tempo push"));
     for (const slug of ["onchain-sql", "onchain-sql-week", "onchain-sql-range"]) {
       const t = CDP_TOOLS.find((x) => x.slug === slug);
-      ok(t.description.includes(CHARGE), `${slug}: the description states the charge rule`);
-      ok(t.discovery.inputSchema.properties.sql.description.includes(CHARGE), `${slug}: the sql field states the charge rule`);
+      const texts = [["description", t.description], ["sql field", t.discovery.inputSchema.properties.sql.description]];
+      for (const [where, text] of texts) {
+        if (slug === "onchain-sql-range") ok(text.includes(BASE) && !/Tempo/.test(text) && /x402 exact on EVM chains/.test(text.slice(text.indexOf(BASE))), `${slug}: the ${where} states the charge rule, scoped to its EVM exact payment, with no Tempo clause`);
+        else ok(text.includes(CHARGE), `${slug}: the ${where} states the charge rule`);
+      }
     }
     const WEEK = CDP_TOOLS.find((x) => x.slug === "onchain-sql-week"), RANGE_T = CDP_TOOLS.find((x) => x.slug === "onchain-sql-range");
     ok(/its day walk stops inside \d+ seconds/.test(WEEK.description) && !/answered within/.test(WEEK.description), "onchain-sql-week: the time is the walk's, not a promise about the answer");
