@@ -124,10 +124,14 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
     if (!(paceMs > 0)) return;
     const t = Date.now();
     const slot = Math.max(t, nextSlot.get(host) || 0);
-    if (slot - t > PACE_MAX_WAIT_MS) {
+    // A turn further off than the pacing bound, or than this run's ceiling
+    // (the wait must end at it: the slug is marked endsAtCeiling), is not
+    // waited for and takes no place in the queue.
+    const wait = slot - t;
+    if (wait > PACE_MAX_WAIT_MS || (wait > 0 && capByCeiling(wait) < wait)) {
       // Our own pacing, not the registry's: nothing was sent.
-      const retryAfter = Math.ceil((slot - t) / 1000);
-      throw Object.assign(new Error(`Lookups to this registry's RDAP service (${host}) are paced, and this one would wait more than ${PACE_MAX_WAIT_MS / 1000} s, so it was not sent; retry in ${retryAfter}s`), { statusCode: 503, retryAfter, attribution: "upstream" });
+      const retryAfter = Math.max(1, Math.ceil(wait / 1000));
+      throw Object.assign(new Error(`Lookups to this registry's RDAP service (${host}) are paced, and this one would wait ${wait > PACE_MAX_WAIT_MS ? `more than ${PACE_MAX_WAIT_MS / 1000} s` : "past this call's time limit"}, so it was not sent; retry in ${retryAfter}s`), { statusCode: 503, retryAfter, attribution: "ours" });
     }
     nextSlot.set(host, slot + paceMs);
     if (nextSlot.size > 500) for (const [h, at] of nextSlot) { if (at < t) nextSlot.delete(h); }
