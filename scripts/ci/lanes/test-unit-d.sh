@@ -105,6 +105,8 @@ t node scripts/test-credits-terms.js
 t node scripts/test-credits-refund-race.js
 # Purchase checks: card authentication and neutral tags on every checkout, checkout and purchase counts, failed payments, a flagged charge, the freeze and refund on a fraud warning, spending limits, revoke by key, the key format (offline)
 t node scripts/test-credits-purchase-checks.js
+# The private credits table: no defaults in code; without it nothing is sold and the word reads attention.
+t node scripts/test-credits-guards.js
 # Credits for people: top-ups within the cap, refunds across payments, email sign-in, history and CSV, a new key, receipts and the low-balance email; absent with sales off.
 t node scripts/test-credits-account.js
 # The credits figures (sign-in link life, session life, low-balance threshold) are read by every sentence that states them: changing one changes the copy (offline)

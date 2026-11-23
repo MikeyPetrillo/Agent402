@@ -862,6 +862,7 @@ import { recordSellerVerification, sellerVerificationStatus } from "./seller-ver
 import { setPayerDustFloorUsd, externalPaymentEventsForAsync, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerSummaryAsync, ledgerBuyerRepeat7, ledgerDailyAsync, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { parseRevenueRange, hasRangeQuery, inWindow, revenueSeriesFirstDay, rangedRevenueDaily, revenueWindowTotals, revenuePageRange, carryPartial } from "./revenue-range.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
+import { creditsGuardsWord } from "./credits-guards.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
@@ -903,7 +904,7 @@ import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
 import { routerBenchmarks, ROUTER_BENCHMARKS_PATH } from "./router-benchmarks.js";
 import { agentcorePage, AGENTCORE_SLUG } from "./agentcore-page.js";
-import { creditsSalesEnabled, creditsTopupFields, creditsBalanceMaxCents, creditsTermsVersion } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsSalesSwitch, mcpOAuthSwitch, creditsTopupFields, creditsBalanceMaxCents, creditsTermsVersion } from "./credits-sales.js";
 
 // The /v1 settle breaker reads whether a wallet has ever paid from the sales
 // ledger, handed in here so the breaker never imports it (see the module).
@@ -4706,6 +4707,10 @@ app.get("/api/gateway-status", async (req, res) => {
     backup: { status: (() => { try { return backupAlarmStatus(); } catch { return "unknown"; } })() },
     // One word, never a value: whether the private upstream-cost table loaded.
     upstreamCosts: { status: upstreamCostsStatus() },
+    // One word, never a value: whether the private credits table
+    // (src/credits-guards.js) is complete while CREDITS_SALES or MCP_OAUTH asks
+    // for it: off / ok / attention (sales and the connector sign-in stay off).
+    creditsGuards: { status: creditsGuardsWord(creditsSalesSwitch() || mcpOAuthSwitch()) },
     // The ElevenLabs breaker on /api/tts and /api/tts-hd (src/tools/tts-kit.js):
     // ok / cooling (a throttle sent calls to the backups) / probing. One word.
     speechUpstream: { status: (() => { try { return elevenLabsBreakerState(); } catch { return "unknown"; } })() },

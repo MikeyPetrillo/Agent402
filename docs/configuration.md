@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1140 variables in 114 groups.
+1125 variables in 114 groups.
 
 ## Contents
 
@@ -290,26 +290,20 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `CREDITS_ABANDONED_HOLD_MS` | Credits abandoned hold, in milliseconds. |  | `src/credits.js` |
-| `CREDITS_BAD_KEY_MAX` | Credits bad key maximum. |  | `src/credits.js` |
-| `CREDITS_BAD_KEY_WINDOW_MS` | Credits bad key window, in milliseconds. |  | `src/credits.js` |
-| `CREDITS_BALANCE_MAX_USD` | Credits balance maximum, in USD. |  | `src/changelog.js`, `src/credits-sales.js` |
-| `CREDITS_BUYER_DAY_MAX` | Prepaid credits purchase check: completed purchases one buyer may make per day. | `6` | `src/credits-sales.js` |
-| `CREDITS_BUYER_HOUR_MAX` | Prepaid credits purchase check: completed purchases one buyer may make per hour. | `3` | `src/credits-sales.js` |
-| `CREDITS_DAILY_MAX_USD` | The most one buyer may buy in prepaid credits in any 24 hours, in USD; a pack above it is not offered. |  | `src/credits-sales.js` |
+| `CREDITS_BAD_KEY_MAX` | Failed credits key lookups (unknown, malformed or revoked) one client may make within CREDITS_BAD_KEY_WINDOW_MS before its further failed lookups are answered 429; a valid key is always served. |  | `src/credits.js` |
+| `CREDITS_BAD_KEY_WINDOW_MS` | The window CREDITS_BAD_KEY_MAX counts in, and how long a client past it is slowed, in milliseconds. |  | `src/credits.js` |
+| `CREDITS_BALANCE_MAX_USD` | The most one credits key's balance may hold, in USD; a pack or top-up above it is not offered. | `100` | `src/changelog.js`, `src/credits-sales.js` |
+| `CREDITS_DAILY_MAX_USD` | The most one buyer may buy in prepaid credits in any 24 hours, in USD; a pack above it is not offered. | `50` | `src/credits-sales.js` |
 | `CREDITS_DEBIT_WAIT_MS` | Credits debit wait, in milliseconds. | `3000` | `src/credits.js` |
 | `CREDITS_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout; the legacy human-checkout.json is read beside the latter). |  | `src/credits.js` |
-| `CREDITS_EFW_AUTO_REFUND` | off, false, 0 or no stops the card refund made without review of a key's unspent balance after an early fraud warning (the key is still frozen and the balance listed as owed); on by default. |  | `src/credits.js` |
-| `CREDITS_EFW_AUTO_REFUND_DAY_MAX_USD` | The most refunded automatically after early fraud warnings per UTC day, in USD; past it a frozen key's balance is listed as owed for approval. |  | `src/credits.js` |
+| `CREDITS_EFW_AUTO_REFUND` | off, false, 0 or no stops the card refund made without review of a key's unspent balance after an early fraud warning (the key is still frozen and the balance listed as owed); on by default, inside the private table's day total (CREDITS_GUARDS_JSON). |  | `src/credits.js` |
 | `CREDITS_EU_UK_REQUIRE_TAX_ID` | Credits eu uk require tax id. |  | `src/credits.js` |
-| `CREDITS_FAILED_HOLD_MS` | Prepaid credits purchase check: how long a held source starts no new purchase, in milliseconds. | `24` | `src/credits-sales.js` |
-| `CREDITS_FAILED_MAX` | Prepaid credits purchase check: credits payments that did not go through, per source, before the source is held from new purchases. | `5` | `src/credits-sales.js` |
-| `CREDITS_FAILED_WINDOW_MS` | Prepaid credits purchase check: the window CREDITS_FAILED_MAX counts in, in milliseconds. | `60` | `src/credits-sales.js` |
+| `CREDITS_GUARDS_FILE` | A file holding the private credits table, read when CREDITS_GUARDS_JSON is unset. |  | `src/credits-guards.js` |
+| `CREDITS_GUARDS_JSON` | The private credits table (src/credits-guards.js): purchase checks, the card review outcomes a purchase is refused on, the automatic fraud-warning refund day total and the connector sign-in limits, as raw JSON or base64. A credential-like secret set on the host; never committed. Without a complete table credit sales and the connector sign-in stay off. docs/example-credits-guards.json shows the format. |  | `src/credits-guards.js` |
 | `CREDITS_HOLD_REFRESH_MAX_MS` | Credits hold refresh maximum, in milliseconds. |  | `src/credits.js` |
 | `CREDITS_INDEXES` | Prepaid credits table indexes built in the background; off leaves them to an operator. | `on` | `src/credits.js` |
 | `CREDITS_INDEX_DELAY_MS` | Delay before the prepaid credits index build starts after the store's first load, in milliseconds. | `60000` | `src/credits.js` |
-| `CREDITS_SALES` | 1, true, on or yes turns prepaid credit sales on; unset keeps them off. |  | `src/changelog.js`, `src/credits-sales.js` |
-| `CREDITS_SOURCE_DAY_MAX` | Prepaid credits purchase check: checkouts one client or account may start per day. | `30` | `src/credits-sales.js` |
-| `CREDITS_SOURCE_HOUR_MAX` | Prepaid credits purchase check: checkouts one client or account may start per hour. | `10` | `src/credits-sales.js` |
+| `CREDITS_SALES` | 1, true, on or yes turns prepaid credit sales on; unset keeps them off. |  | `src/credits-sales.js` |
 
 ## DATABENTO
 
@@ -690,22 +684,13 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `MCP_LOOPBACK_TEST_SECRET` | MCP loopback test secret (a credential, set on the host). |  | `src/mcp-loopback.js` |
-| `MCP_OAUTH` | on (exactly) turns on the connector sign-in (OAuth 2.1 for /mcp: an app pays for tool calls from a credits balance under a daily cap); it also needs credits on sale. Off, every sign-in route is absent and /mcp is unchanged. |  | `src/credits-sales.js` |
+| `MCP_OAUTH` | on (exactly) turns on the connector sign-in (OAuth 2.1 for /mcp: an app pays for tool calls from a credits balance under a daily cap); it also needs credits on sale and the private credits table (CREDITS_GUARDS_JSON). Off, every sign-in route is absent and /mcp is unchanged. |  | `src/credits-sales.js` |
 | `MCP_OAUTH_ACCESS_TTL_SECONDS` | Life of a connector access token, in seconds. | `3600` | `src/mcp-oauth.js` |
-| `MCP_OAUTH_AUTHORIZE_PER_IP` | Connector authorize requests allowed per client address per limit window. | `30` | `src/mcp-oauth.js` |
 | `MCP_OAUTH_AUTH_CODE_TTL_SECONDS` | Life of a connector authorization code, in seconds (at most 600). | `60` | `src/mcp-oauth.js` |
-| `MCP_OAUTH_CODE_FAILS_PER_EMAIL` | Wrong connector sign-in codes per email address before the address is locked out for the lockout window. | `10` | `src/mcp-oauth.js` |
-| `MCP_OAUTH_CODE_SENDS_PER_EMAIL` | Connector sign-in code sends allowed per email address per limit window. | `5` | `src/mcp-oauth.js` |
-| `MCP_OAUTH_CODE_SENDS_PER_IP` | Connector sign-in code sends (and checkouts) allowed per client address per limit window. | `10` | `src/mcp-oauth.js` |
 | `MCP_OAUTH_DEFAULT_CAP_USD` | The daily cap the connector sign-in page offers first, in USD. | `5` | `src/mcp-oauth.js` |
-| `MCP_OAUTH_EMAIL_CODE_TRIES` | Attempts one emailed sign-in code takes before it stops working. | `5` | `src/mcp-oauth.js` |
 | `MCP_OAUTH_EMAIL_CODE_TTL_SECONDS` | Life of an emailed connector sign-in code, in seconds. | `600` | `src/mcp-oauth.js` |
-| `MCP_OAUTH_LIMIT_WINDOW_MINUTES` | The window the connector sign-in limits count in, in minutes. | `60` | `src/mcp-oauth.js` |
-| `MCP_OAUTH_LOCKOUT_MINUTES` | How long the wrong-code count for an email address is kept, in minutes. | `60` | `src/mcp-oauth.js` |
 | `MCP_OAUTH_REFRESH_TTL_DAYS` | Life of a connector refresh token, in days (each use rotates it). | `30` | `src/mcp-oauth.js` |
-| `MCP_OAUTH_REGISTER_PER_IP` | Connector app registrations allowed per client address per limit window. | `10` | `src/mcp-oauth.js` |
 | `MCP_OAUTH_REQUEST_TTL_MINUTES` | Life of a started connector sign-in, in minutes (a card purchase in the middle included). | `60` | `src/mcp-oauth.js` |
-| `MCP_OAUTH_TOKEN_PER_IP` | Connector token and revoke requests allowed per client address (and per app) per limit window; also the bearer tokens that do not verify per client address. | `60` | `src/mcp-oauth.js` |
 | `MCP_SKILLS` | MCP skills. |  | `src/mcp-skills.js` |
 
 ## MEMORY
@@ -1384,7 +1369,7 @@ holds it.
 | `TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS` | Tempo access key check timeout, in milliseconds. |  | `src/mpp-tempo.js` |
 | `TEMPO_API_BASE_URL` | Tempo API base URL. | `https://api.tempo.xyz` | `src/mpp-reconcile.js`, `src/mpp-tempo.js`, `src/sanctions-screen.js` and 1 more |
 | `TEMPO_API_KEY` | Turns on the Tempo rail (a credential, set on the host). |  | `src/mpp-tempo.js` |
-| `TEMPO_CURRENCY` | Comma list of Tempo tokens, one tempo/charge challenge each, in order; an address or a name (usdc = USDC.e, pathusd = PathUSD, ousd = OUSD). Put the token most buyers hold first (usdc,ousd keeps USDC.e first for stock clients). |  | `src/changelog.js`, `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
+| `TEMPO_CURRENCY` | Comma list of Tempo tokens, one tempo/charge challenge each, in order; an address or a name (usdc = USDC.e, pathusd = PathUSD, ousd = OUSD). Put the token most buyers hold first (usdc,ousd keeps USDC.e first for stock clients). |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_DATA_API_KEY` | Tempo data API key (a credential, set on the host). |  | `src/sanctions-screen.js`, `src/tempo-transfers.js` |
 | `TEMPO_DECIMALS` | Tempo decimals. |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_EARLY_CONFIRM` | Tempo early confirm. |  | `src/server.js` |

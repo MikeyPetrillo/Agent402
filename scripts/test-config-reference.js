@@ -146,6 +146,9 @@ ok(defaultOf("PLANTED_MEMBER", ["const a = process.env.PLANTED_MEMBER || 5;"]) =
     },
     // Unset reads as on: only "off" leaves the build to an operator.
     CREDITS_INDEXES: async () => (/String\(process\.env\.CREDITS_INDEXES \|\| ""\)\.toLowerCase\(\) !== "off"/.test(srcText("src/credits.js")) ? "on" : null),
+    // Public credits terms (/terms prints both): the cents the read answers with the variable unset.
+    CREDITS_BALANCE_MAX_USD: async () => unset(["CREDITS_BALANCE_MAX_USD"], async () => String((await import("../src/credits-sales.js")).creditsBalanceMaxCents() / 100)),
+    CREDITS_DAILY_MAX_USD: async () => unset(["CREDITS_DAILY_MAX_USD"], async () => String((await import("../src/credits-sales.js")).creditsDailyMaxCents() / 100)),
     FUNNEL_FOUND_CAP: async () => unset(["FUNNEL_FOUND_CAP"], async () => String((await import("../src/funnel-sources.js?cap")).FOUND_CAP)),
     FUNNEL_FOUND_WINDOW_MS: async () => unset(["FUNNEL_FOUND_WINDOW_MS"], async () => String((await import("../src/funnel-sources.js?window")).FOUND_WINDOW_MS)),
   };

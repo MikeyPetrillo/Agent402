@@ -1,3 +1,5 @@
+import { creditsGuards, creditsGuardsReady } from "./credits-guards.js";
+
 // Whether prepaid card credits are on sale, in a leaf module so page renderers
 // can state it without importing server.js. Off unless CREDITS_SALES is set;
 // existing keys keep spending either way.
@@ -10,7 +12,11 @@ export const CREDITS_CONNECTOR_PATH = "/mcp/credits";
 export const creditsConnectorOn = () => creditsSalesEnabled() && mcpOAuthSwitch();
 /** Days a disconnected app's record is kept (src/mcp-oauth.js). */
 export const CONNECTED_APP_KEEP_DAYS = 30;
-export const creditsSalesEnabled = () => /^(1|true|on|yes)$/i.test(String(process.env.CREDITS_SALES || "").trim());
+/** The CREDITS_SALES switch as set, whatever else is ready. */
+export const creditsSalesSwitch = () => /^(1|true|on|yes)$/i.test(String(process.env.CREDITS_SALES || "").trim());
+/** Credits are on sale: the switch is set AND the private purchase-check table
+ *  (src/credits-guards.js) is complete. Without the table nothing is sold. */
+export const creditsSalesEnabled = () => creditsSalesSwitch() && creditsGuardsReady();
 
 // The terms version a credits checkout records (the date printed on /terms;
 // scripts/test-nc-sales-tax.js checks they match).
@@ -24,25 +30,19 @@ export const creditsDailyMaxCents = () => {
   return Math.round((Number.isFinite(n) && n > 0 ? n : 50) * 100);
 };
 
-// Purchase checks (src/credits.js). Each is a count in a window, read at call
-// time from its variable; the defaults here are safe starting values and the
-// service sets its own. A purchase or a checkout a check refuses is answered
-// with PURCHASE_REFUSED, which never names the check.
-const envCount = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt; };
-const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; };
-export const purchaseChecks = () => ({
-  // Purchases one buyer (an email, a card, a customer) completes per hour and per day.
-  buyerPerHour: envCount("CREDITS_BUYER_HOUR_MAX", 3),
-  buyerPerDay: envCount("CREDITS_BUYER_DAY_MAX", 6),
-  // Checkouts one client starts per hour and per day.
-  sourcePerHour: envCount("CREDITS_SOURCE_HOUR_MAX", 10),
-  sourcePerDay: envCount("CREDITS_SOURCE_DAY_MAX", 30),
-  // Payments that did not go through, per source, inside the window; past the
-  // count the source starts no new checkout for the hold.
-  failedMax: envCount("CREDITS_FAILED_MAX", 5),
-  failedWindowMs: envMs("CREDITS_FAILED_WINDOW_MS", 60 * 60_000),
-  failedHoldMs: envMs("CREDITS_FAILED_HOLD_MS", 24 * 60 * 60_000),
-});
+// Purchase checks (src/credits.js): counts in windows, read at call time from
+// the private table (src/credits-guards.js); null without it, and a caller
+// then refuses. A purchase or a checkout a check refuses is answered with
+// PURCHASE_REFUSED, which never names the check.
+export const purchaseChecks = () => {
+  const p = creditsGuards()?.purchase;
+  return p ? { ...p } : null;
+};
+/** The connector sign-in's limits (src/mcp-oauth.js), from the same table; null without it. */
+export const mcpOAuthGuards = () => {
+  const m = creditsGuards()?.mcpOAuth;
+  return m ? { ...m } : null;
+};
 export const PURCHASE_REFUSED = "This purchase can't be completed right now. Try again later or contact help@agent402.tools.";
 
 // The most one key's balance may hold (CREDITS_BALANCE_MAX_USD, default $100,
@@ -62,7 +62,7 @@ export const creditsBalanceMaxCents = () => {
 // and this one (never a day after today, UTC), and a credits checkout records
 // that printed date as the terms version the buyer accepted. With sales off
 // the pages keep their own dates.
-export const CREDITS_SALES_TERMS_DATE = "2026-11-22";
+export const CREDITS_SALES_TERMS_DATE = "2026-11-23";
 export function creditsLegalDate(own, today = new Date().toISOString().slice(0, 10)) {
   if (!creditsSalesEnabled()) return own;
   return CREDITS_SALES_TERMS_DATE > own && CREDITS_SALES_TERMS_DATE <= today ? CREDITS_SALES_TERMS_DATE : own;

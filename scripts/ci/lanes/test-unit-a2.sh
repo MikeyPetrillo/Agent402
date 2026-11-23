@@ -56,6 +56,8 @@ t node scripts/test-timsort-steps.js
 # @step 3: Shared limits (REAL redis: the counter primitive on both backends, two Redis instances read one count, a store that does not answer is a miss and never an exception; then two servers and two control replicas on one Redis: a breaker, a money guard and a budget counted on A refuse on B, an operator session minted on A is honoured and revoked on B, the judge's token ceiling and a wallet's in-flight runs are summed across A and B)
 t node scripts/test-shared-limits.js
 t node scripts/test-shared-limits-crossprocess.js
+# A flood of failed credits keys keeps one fixed counter per client on the store (REAL redis).
+t node scripts/test-credits-badkey-redis.js
 # xDataSpend and routerSpendWindow in a new process
 t node scripts/test-spend-words-shared-redis.js
 # topBuyerFailures read the same on a container that served none of the failures; a refusing store leaves this process's own word.

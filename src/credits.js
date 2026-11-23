@@ -41,6 +41,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { sendEmail } from "./email.js";
 import { creditsTopupFields, creditsDailyMaxCents, creditsBalanceMaxCents, creditsTermsVersion, creditsSalesEnabled, purchaseChecks, PURCHASE_REFUSED } from "./credits-sales.js";
 import { shared } from "./shared-limits.js";
+import { creditsGuards } from "./credits-guards.js";
 import { limiterKey } from "./rate-limit.js";
 import { chargeCancelledForClientGone, clientGoneBeforeFirstByte, markSettleSent } from "./hangup-settlement.js";
 import { meteredUsdOf } from "./gateway-meter.js";
@@ -94,10 +95,14 @@ export const KEY_SCAN_RE = /a402_[A-Za-z0-9_-]{32,64}/g;
 export const newKeyString = () => `${KEY_PREFIX}${randomBytes(32).toString("base64url")}`;
 // Disable causes under which a call already running takes nothing more.
 const FROZEN = new Set(["disputed", "fraud-warning"]);
-// A charge Stripe's review held or rated at its highest risk issues nothing.
+// A charge whose card review outcome is one the private table lists
+// (src/credits-guards.js flagged) issues nothing. Without the table every
+// charge counts as flagged: nothing is issued that the checks did not see.
 export const chargeFlagged = (charge) => {
+  const f = creditsGuards()?.flagged;
+  if (!f) return true;
   const o = charge && typeof charge === "object" ? charge.outcome : null;
-  return Boolean(o) && (o.type === "manual_review" || o.type === "blocked" || o.risk_level === "highest");
+  return Boolean(o) && (f.outcomeTypes.includes(String(o.type)) || f.riskLevels.includes(String(o.risk_level)));
 };
 // The packs on offer: those within the cap on one key's balance
 // (creditsBalanceMaxCents, src/credits-sales.js).
@@ -568,6 +573,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   const tagOf = (kind, v) => (v ? (tagSecret ? createHmac("sha256", tagSecret) : createHash("sha256")).update(`credits-${kind}|${String(v)}`).digest("hex").slice(0, 24) : null);
   /** The tag a client address is counted under (an IPv6 address by its /64). */
   const sourceTag = (ip) => tagOf("src", limiterKey(String(ip || "")));
+  const unavailablePurchase = () => Object.assign(new Error("Credits purchases are unavailable right now. Try again later."), { statusCode: 503, buyerSafe: true });
   const refusedPurchase = () => Object.assign(new Error(PURCHASE_REFUSED), { statusCode: 429, buyerSafe: true, refused: true });
   // Counted in the shared store, so every server sees one count. A store that
   // does not answer lets the check pass on this server's own count.
@@ -584,6 +590,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   /** Before a checkout starts: false when a check refuses this client or account. */
   async function checkoutAllowed({ email = null, ip = null } = {}) {
     const c = purchaseChecks();
+    if (!c) throw unavailablePurchase();
     const src = sourceTag(ip), acct = tagOf("acct", emailKeyOf(email));
     if (await held(src) || await held(acct)) return false;
     for (const tag of [src, acct].filter(Boolean)) {
@@ -598,6 +605,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
    *  held from new purchases for a while. */
   async function notePaymentFailed({ source = null, cardFingerprint = null } = {}) {
     const c = purchaseChecks();
+    if (!c) return;
     for (const tag of [source ? String(source).slice(0, 64) : null, cardFingerprint ? tagOf("card", cardFingerprint) : null].filter(Boolean)) {
       const n = await countIn("credits-failed", tag, c.failedWindowMs, true);
       if (n >= c.failedMax) await shared.flagSet("credits-hold", tag, now() + c.failedHoldMs, { now: now() });
@@ -629,6 +637,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     if (buyer.flagged) return true;
     if (await held(buyer.cardFingerprint ? tagOf("card", buyer.cardFingerprint) : null) || await held(tagOf("acct", buyer.email))) return true;
     const c = purchaseChecks();
+    if (!c) return true;
     if (await purchasesIn(buyer, now(), HOUR_MS, sessionId) >= c.buyerPerHour) return true;
     if (await purchasesIn(buyer, now(), DAY_MS, sessionId) >= c.buyerPerDay) return true;
     return false;
@@ -1117,7 +1126,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   function takeHold(rec, heldMicro, holdId) {
     if (!rec.holds) return heldMicro;
     if (!holdId) {
-      const hit = Object.entries(rec.holds).filter(([, h]) => Number(h?.m) === Number(heldMicro)).sort((a, b) => a[1].at - b[1].at)[0];
+      // A connector grant's hold is always named; an unnamed end never takes it.
+      const hit = Object.entries(rec.holds).filter(([, h]) => Number(h?.m) === Number(heldMicro) && !h?.g).sort((a, b) => a[1].at - b[1].at)[0];
       if (hit) delete rec.holds[hit[0]];
       return heldMicro;
     }
@@ -1418,7 +1428,20 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     if (!paymentIntent) return answer(null);
     const held = (r) => paidBy(r, paymentIntent) && r.disabled === true && r.disabledReason === reason
       && (reason !== "disputed" || !r.disputedPaymentIntent || r.disputedPaymentIntent === paymentIntent);
-    const lift = (r) => { r.disabled = false; r.disabledReason = null; if (reason === "disputed") r.disputeClosedAt = new Date(now()).toISOString(); log(`[credits] key ${r.keyId} enabled again (${reason} closed in our favor, ${paymentIntent})`); return r.keyId; };
+    const lift = (r) => {
+      if (reason === "disputed") r.disputeClosedAt = new Date(now()).toISOString();
+      // A fraud warning that arrived during the dispute keeps the key frozen
+      // under its own cause; its review, held while the dispute ran, is owed again.
+      if (reason === "disputed" && Array.isArray(r.fraudWarnings) && r.fraudWarnings.length) {
+        r.disabledReason = "fraud-warning";
+        if (r.fraudReview?.state === "disputed") r.fraudReview = { ...r.fraudReview, state: "owed" };
+        log(`[credits] key ${r.keyId}: dispute closed in our favor; still frozen for a fraud warning (${paymentIntent})`);
+        return r.keyId;
+      }
+      r.disabled = false; r.disabledReason = null;
+      log(`[credits] key ${r.keyId} enabled again (${reason} closed in our favor, ${paymentIntent})`);
+      return r.keyId;
+    };
     if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => held(x.rec)); return hit ? mutatePg(hit.hash, (r) => (held(r) ? { rec: r, result: lift(r) } : { result: null })) : null; });
     for (const { hash, rec: r } of allKeys()) {
       if (held(r)) { const id = lift(r); save(hash, r); return id; }
@@ -1666,9 +1689,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     badKeys.delete(k); badKeys.set(k, e);
     while (badKeys.size > 5000) badKeys.delete(badKeys.keys().next().value);
     if (e.n === badKeyMax()) { badKeyStats.clientsOverThreshold++; log("[credits] a client passed the failed-key bound"); }
+    // Past the bound here the client is held already: nothing more is
+    // written. Below it, one fixed counter per client per window (INCRBY and
+    // an expiry), so a flood of failed keys keeps the store O(1) per client.
+    if (e.n > badKeyMax()) return;
     const tag = tagOf("badkey", k);
-    shared.windowAdd("credits-badkey", tag, { windowMs: badKeyWindowMs(), member: `${at}:${randomBytes(4).toString("hex")}`, now: at })
-      .then((r) => { if (r?.ok && Number(r.count) >= badKeyMax()) return shared.flagSet("credits-badkey-hold", tag, at + badKeyWindowMs(), { now: at }); })
+    shared.counterAdd("credits-badkey", tag, 1, badKeyWindowMs(), { now: at })
+      .then((r) => { if (r?.ok && Number(r.value) >= badKeyMax()) return shared.flagSet("credits-badkey-hold", tag, at + badKeyWindowMs(), { now: at }); })
       .catch(() => {});
   }
   /** Whether a client is past the failed-key bound: this process's count, then the shared one. */
@@ -1999,7 +2026,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
    *  - automatically (CREDITS_EFW_AUTO_REFUND, on unless set off) when the
    *    whole unspent balance is refundable on the warned payment itself (a
    *    refund only ever goes to that payment's own charge) and the day's total
-   *    of these card refunds made without review stays inside CREDITS_EFW_AUTO_REFUND_DAY_MAX_USD;
+   *    of these card refunds made without review stays inside the private table's day total;
    *  - otherwise it is listed as owed for a person to approve
    *    (refundRequestsOwed, the operator credits view and the refundsOwed
    *    word; approveFraudRefund sends it).
@@ -2007,7 +2034,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
    * is delivered again). Idempotent: a payment already handled moves nothing.
    */
   const efwAutoRefund = () => !/^(0|false|off|no)$/i.test(String(process.env.CREDITS_EFW_AUTO_REFUND || "").trim());
-  const efwDayMaxCents = () => { const n = Number(process.env.CREDITS_EFW_AUTO_REFUND_DAY_MAX_USD); return Math.round((Number.isFinite(n) && n >= 0 && String(process.env.CREDITS_EFW_AUTO_REFUND_DAY_MAX_USD ?? "").trim() !== "" ? n : 50) * 100); };
+  // The day's automatic total, from the private table; none without it (every such refund waits for approval).
+  const efwDayMaxCents = () => { const n = Number(creditsGuards()?.efw?.autoRefundDayMaxUsd); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : 0; };
   const setReview = (hash, patch) => mutate(hash, (rec) => (rec?.fraudReview ? { rec: (rec.fraudReview = { ...rec.fraudReview, ...patch }, rec), result: true } : { result: null }));
   async function fraudWarning(paymentIntent, { warningId = null } = {}) {
     if (!paymentIntent) return { status: "unknown" };
@@ -2018,7 +2046,11 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       if (!paidBy(r, paymentIntent)) return { result: null };
       const seen = Array.isArray(r.fraudWarnings) ? r.fraudWarnings : [];
       if (!seen.some((w) => w.pi === paymentIntent)) r.fraudWarnings = [...seen, { pi: paymentIntent, at: new Date(now()).toISOString(), ...(warningId ? { id: String(warningId).slice(0, 64) } : {}) }].slice(-10);
-      disableFor(r, "fraud-warning");
+      // A key already frozen by a dispute keeps that cause: the dispute's
+      // outcome decides it, and a dispute won later moves the freeze to the
+      // warning (enableByPaymentIntent) instead of lifting it.
+      if (r.disabled === true && r.disabledReason === "disputed") r.disabled = true;
+      else disableFor(r, "fraud-warning");
       if (!r.refundRequest && !r.fraudReview) r.fraudReview = { pi: paymentIntent, at: now(), state: "owed" };
       log(`[credits] key ${r.keyId} frozen (fraud-warning, ${paymentIntent})`);
       return { rec: r, result: { keyId: r.keyId, review: r.fraudReview ? { ...r.fraudReview } : null } };
@@ -2046,6 +2078,17 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     try { r = await requestRefundOf(hit.hash); }
     catch (e) { await shared.counterAdd("credits-efw-auto", day, -plan.cents, 2 * DAY_MS, { now: now() }); throw e; }
     if (r.status === "in_flight") { await shared.counterAdd("credits-efw-auto", day, -plan.cents, 2 * DAY_MS, { now: now() }); return r; }
+    // Only a refund that was sent (refunded, or pending at the card network)
+    // counts against the day and closes the review. Any other answer sent
+    // nothing: the day total goes back and the review stays open (or waits on
+    // the dispute, which decides what goes back).
+    if (r.status !== "refunded" && r.status !== "pending") {
+      await shared.counterAdd("credits-efw-auto", day, -plan.cents, 2 * DAY_MS, { now: now() });
+      if (r.status === "disputed") await setReview(hit.hash, { state: "disputed" });
+      else if (r.status === "nothing_to_refund") await setReview(hit.hash, { state: "nothing", decidedAt: now() });
+      log(`[credits] key ${rec.keyId}: fraud-warning refund not sent (${r.status}); ${r.status === "disputed" ? "the dispute decides it" : "owed for approval"}`);
+      return { status: r.status, keyId: rec.keyId, ...(r.status === "nothing_to_refund" ? {} : { owed: true }) };
+    }
     await setReview(hit.hash, { state: "sent-on-warning", cents: plan.cents, decidedAt: now() });
     log(`[credits] key ${rec.keyId}: fraud-warning refund of $${(plan.cents / 100).toFixed(2)} sent to ${paymentIntent} (${r.status})`);
     return { ...r, auto: true };
