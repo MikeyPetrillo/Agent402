@@ -25,7 +25,7 @@ const rejects = async (fn, status, msg) => {
 };
 
 // --- kit shape ---------------------------------------------------------------
-ok(CDP_TOOLS.length === 7, "kit exports 7 tools");
+ok(CDP_TOOLS.length === 5 && !CDP_TOOLS.some((t) => ["onchain-sql-week", "onchain-sql-range"].includes(t.slug)), "kit exports 5 tools (onchain-sql-week and -range retired 2026-11-23)");
 for (const t of CDP_TOOLS) {
   ok(t.route && t.slug && t.price && t.discovery?.inputSchema && typeof t.handler === "function", `${t.slug} has the full tool contract`);
 }
