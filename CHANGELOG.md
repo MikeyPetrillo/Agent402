@@ -10,7 +10,8 @@ carries its own version on npm.
 Gateway:
 - Every speech answer names the model that produced it in the
   `X-Agent402-Model` header; a call that named a model and was served by
-  another also carries `X-Agent402-Model-Fallback: 1`.
+  another also carries `X-Agent402-Model-Fallback: 1`. An idempotent replay
+  of the answer carries the same headers.
 
 ### 2026-11-22 (named speech model length)
 Gateway:
@@ -41,11 +42,16 @@ Tools:
   character other than a quote or a line break.
 - json-lint lists a duplicate key up to 200 characters and its path up to
   300 (`keyTruncated`, `keyLength` and `pathTruncated` say when one was cut).
+- csv-to-json and csv-aggregate answer 413 before building an answer that
+  would pass 5 MB (a long column name repeated per row or per group).
 
 ### 2026-11-22 (domain availability)
 Tools:
 - New domain-availability tool: asks the TLD's own registry over RDAP
-  whether a domain name is registered.
+  whether a domain name is registered. A name under a registration, however
+  many labels deep, reads registered null with the registration in
+  `registeredParent`; the registry's notices pass through as links in
+  `registryNotices`, and lookups to each registry are paced.
 
 ### 2026-11-22 (onchain-sql day reads)
 Tools:
@@ -57,12 +63,17 @@ Tools:
   first ones, and its fields name the limit and where to continue.
 - onchain-sql: only a query whose ORDER BY starts with block_time (quoted or
   not) is read one day at a time; any other first key is answered as before.
+- A walk that read at least one day is a served answer and is charged at
+  this route's price, even when it is partial or holds no rows; a walk that
+  read no day answers 422 and is not charged (a Tempo push payment is final
+  before the call and is booked as owed). A caller who leaves mid-walk gets no
+  further day sent.
 
 ### 2026-11-22 (seller-trust wallets)
 Router:
 - seller-trust's `routerGate` names the wallet its settled calls were
   measured at (`measuredAtWallet`), the Base payTo the seller's 402 named at
-  our last crawl (`livePayTo`) with that wallet's own counted calls, and a
+  our last crawl (`crawledPayTo`) with that wallet's own counted calls, and a
   `walletNote` when the two differ, since the router counts history only at
   the payTo the live 402 names.
 
@@ -80,11 +91,15 @@ Index:
 
 ### 2026-11-22 (identifier checks, build logs, JSON repair, Solana RPC)
 Tools:
-- New tools: id-validate checks the format and check digits of BIC, NINO,
-  CPF, CNPJ, ABN, SEDOL, ISIN, LEI and Norwegian organization numbers.
-  build-log-triage finds the first real error in a CI log and classifies it.
-  json-repair fixes broken JSON and lists every fix. solana-rpc offers
-  read-only Solana mainnet JSON-RPC.
+- New tools: id-validate checks the format, and the check digits where the
+  type has them, of BIC, NINO, CPF, CNPJ, ABN, SEDOL, ISIN, LEI and Norwegian
+  organization numbers. build-log-triage finds the first real error in a CI
+  log and classifies it. json-repair fixes broken JSON and lists its fixes
+  (the first 200 in full; the counts cover all). solana-rpc offers read-only
+  Solana mainnet JSON-RPC.
+- solana-rpc reads raw account bytes through a dataSlice of at most 64 KB
+  (or jsonParsed), takes getTokenAccountsByOwner with a mint filter, and
+  serves a large block's signatures as the first 1,000, marked partial.
 
 ### 2026-11-22 (onchain-sql range and week)
 Tools:
@@ -97,8 +112,8 @@ Tools:
 ### 2026-11-22 (Solana fee payer status)
 Operations:
 - `/api/gateway-status` adds `solanaFeePayer` (ok, low, empty, unknown or
-  off): how much Solana settlement capacity is left on the fee payers of the
-  Solana facilitators that take quotes.
+  off): a status word for whether the fee payers of the Solana facilitators
+  that take quotes can cover settlements; no balances are shown.
 
 ## v2.12.1 - 2026-11-22
 

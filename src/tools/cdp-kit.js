@@ -531,7 +531,7 @@ const SQL_WINDOW_DAYS_PER_CALL = SQL_WINDOW_MAX_QUERIES - 1;
 // The per-call limit as the tool's descriptions state it.
 const SQL_WINDOW_SENTENCE = `A plain row select on solana.instructions over more than a day whose whole range runs past the query service's time window is read one UTC day at a time and merged in order, at most ${SQL_WINDOW_MAX_QUERIES} queries per call including the whole-range send, so up to ${SQL_WINDOW_DAYS_PER_CALL} ${SQL_WINDOW_DAYS_PER_CALL === 1 ? "day" : "days"} per call; windowed.stoppedBy and the note give the next block_time range to send.`;
 // What a day-by-day read is charged, stated wherever a buyer reads before buying.
-export const SQL_WALK_CHARGE = "A walk that read at least one day is a served answer and is charged at this route's price, even when it is partial or holds no rows; a walk that read no day answers 422 and is not charged.";
+export const SQL_WALK_CHARGE = "A walk that read at least one day is a served answer and is charged at this route's price, even when it is partial or holds no rows; a walk that read no day answers 422 and is not charged (a Tempo push payment is final before the call and is booked as owed).";
 const SQL_OTHER_QUERIES = "Any query that is not read by day gets the same answer as on onchain-sql, at this route's price; send it to onchain-sql for the lower price.";
 // The budget also carries how the call's sends are paced: `own` (this
 // server's own read) and `callerGone` (the buyer's connection closed before

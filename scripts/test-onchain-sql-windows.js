@@ -508,7 +508,7 @@ try {
   }
   // ---- what a buyer reads before buying: the charge rule and the routes' terms ----
   {
-    const CHARGE = "A walk that read at least one day is a served answer and is charged at this route's price, even when it is partial or holds no rows; a walk that read no day answers 422 and is not charged.";
+    const CHARGE = "A walk that read at least one day is a served answer and is charged at this route's price, even when it is partial or holds no rows; a walk that read no day answers 422 and is not charged (a Tempo push payment is final before the call and is booked as owed).";
     for (const slug of ["onchain-sql", "onchain-sql-week", "onchain-sql-range"]) {
       const t = CDP_TOOLS.find((x) => x.slug === slug);
       ok(t.description.includes(CHARGE), `${slug}: the description states the charge rule`);
