@@ -298,6 +298,23 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
     check("control: rails all observed together stay operational however old inside the daily bound", RAIL_COMPONENTS.every((c) => of(snap, c.key).current.state === "operational"));
     snap = view(storeAt((key) => (key === "rail_celo" ? 27 * H : /^rail_/.test(key) ? 28 * MIN : fresh(key))));
     check("a rail past the daily bound keeps the stale reason and degrades the headline", of(snap, "rail_celo").current.reason === "no recent observation" && snap.overall === "degraded");
+    // Stale never upgrades the headline: a rail whose last reading was an
+    // outage (or degraded) still holds the headline at degraded when it lags.
+    const { markRailsBehindPeers, overallState } = await import("../src/status.js");
+    const core = [{ key: "api", observed: 1, current: { state: "operational" } }];
+    for (const last of ["outage", "degraded"]) {
+      const rails = markRailsBehindPeers([
+        { key: "rail_celo", observed: 1, current: { state: last, ageMs: 8 * H } },
+        { key: "rail_base", observed: 1, current: { state: "operational", ageMs: 1 * H } },
+      ]);
+      check(`a lagging rail last read ${last}: its card reads unknown behind its peers, the headline stays degraded`,
+        rails[0].current.state === "unknown" && rails[0].current.reason === "behind its peers" && rails[0].current.lastState === last && overallState(core, rails) === "degraded");
+    }
+    const okRails = markRailsBehindPeers([
+      { key: "rail_celo", observed: 1, current: { state: "operational", ageMs: 8 * H } },
+      { key: "rail_base", observed: 1, current: { state: "operational", ageMs: 1 * H } },
+    ]);
+    check("control: a lagging rail last read operational does not move the headline", overallState(core, okRails) === "operational");
   }
 
   snap = view(storeAt((key) => (key === "paywall" ? 50 * MIN : fresh(key))));

@@ -178,8 +178,11 @@ export function overallState(components, railComponents = []) {
   if (allUnknown) return "unknown";
   const bad = (c) => ["outage", "degraded", "unknown"].includes(c.current?.state);
   // A rail behind its peers is a gap in measurement inside its daily bound,
-  // shown on its own card; it does not move the headline.
-  const railBad = (c) => bad(c) && c.current?.reason !== BEHIND_PEERS;
+  // shown on its own card; it does not move the headline. Stale never
+  // upgrades it: a rail whose last reading was an outage or degraded still
+  // votes degraded while it lags.
+  const lastBad = (c) => ["outage", "degraded"].includes(c.current?.lastState);
+  const railBad = (c) => bad(c) && (c.current?.reason !== BEHIND_PEERS || lastBad(c));
   if (voting.some(bad) || railVoting.some(railBad)) return "degraded";
   return "operational";
 }
