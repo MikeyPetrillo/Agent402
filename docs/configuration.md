@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1123 variables in 114 groups.
+1124 variables in 114 groups.
 
 ## Contents
 
@@ -1574,6 +1574,7 @@ holds it.
 | `AUDIO_DECODE_SLOTS` | Audio decode slots. |  | `src/tools/media-kit.js` |
 | `BING_SITE_URL` | Bing site URL. | `https://agent402.tools/` | `src/search-data.js` |
 | `BING_WEBMASTER_API_KEY` | Bing webmaster API key (a credential, set on the host). |  | `src/search-data.js` |
+| `BLS_API_KEY` | U.S. Bureau of Labor Statistics Public Data API v2 registration key (a credential, set on the host). fred-series reads BLS series keyless (v1, 25 queries a day) without it, 500 a day with it; reads are cached by decade. |  | `src/tools/us-macro-series.js` |
 | `BOOT_CPU_PROFILE` | Boot CPU profile. |  | `src/boot-profile.js` |
 | `BUYER_REFUSAL_WINDOW_MS` | Buyer refusal window, in milliseconds. |  | `src/tool-failure-monitor.js` |
 | `CF_IP_RANGES_EXTRA` | Cf IP ranges extra. |  | `src/cdn-client-ip.js` |

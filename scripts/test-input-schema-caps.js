@@ -175,7 +175,8 @@ try {
     const taken = async (slug, field, value, alone = false) => !/^4\d\d:/.test(await outcomeOf(tools.get(slug), field, value, alone));
     const prop = (slug, field) => tools.get(slug)?.discovery.inputSchema.properties[field];
     const { SUPPORTED } = await import("../src/tools/dns.js");
-    const { FRED_FREQ } = await import("../src/tools/macro-kit.js");
+    const { SUPPORTED_FREQ } = await import("../src/tools/us-macro-series.js");
+    const FRED_FREQ = new Set([...SUPPORTED_FREQ, "wef"]); // the codes fred-series' sources take
     const { LANG_RE } = await import("../src/tools/llm-context-kit.js");
     const { VIDEOS_MAX_PROMPT_CHARS } = await import("../src/tools/llm-images-fast-kit.js");
     const each = async (slug, field, values) => { const out = []; for (const x of values) if (!fits(prop(slug, field), x) || !(await taken(slug, field, x))) out.push(x); return out; };
