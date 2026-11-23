@@ -27,13 +27,12 @@
 // turn was long enough to read as a stall.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import http from "node:http";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { buildRoutePerfFixture } from "./lib/route-perf-fixture.js";
 
 let n = 0;
@@ -51,17 +50,14 @@ buildRoutePerfFixture({ cache: { set: (o, e) => lines.push(JSON.stringify([o, { 
 writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: lines.length }), ...lines].join("\n") + "\n");
 ok(lines.length >= 2900, `fixture written (${lines.length} sellers)`);
 
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: file, INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: TOKEN },
-  stdio: ["ignore", "ignore", "inherit"],
-});
-const base = `http://127.0.0.1:${port}`;
+const srv = await bootServer({
+  stores: "perf-budget",
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "true", INDEX_CACHE_FILE: file, INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: TOKEN },
+}).catch((e) => { console.error(e.message); return null; });
+const base = srv?.url;
 const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : null; };
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted");
+  ok(Boolean(srv), "server booted");
   let sellers = 0;
   for (let i = 0; i < 60 && sellers < 2900; i++) {
     try { sellers = (await (await fetch(`${base}/api/index?limit=1`)).json()).sellerCount || 0; } catch { /* warming */ }
@@ -129,6 +125,6 @@ try {
   ok(p95 <= PAID_P95_MS, `paid-path p95 ${p95} ms <= ${PAID_P95_MS} ms while 50 addresses flood uncached search`);
   ok((perf.loop.stalls || 0) === 0, `no event-loop stall over 1 s during the flood (worst ${perf.loop.worstMs} ms)`);
 } finally {
-  proc.kill("SIGKILL");
+  srv?.child.kill("SIGKILL");
 }
 console.log(`test-perf-budget: ${n} passed`);

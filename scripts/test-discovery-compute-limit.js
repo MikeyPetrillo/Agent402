@@ -8,9 +8,8 @@
 //   4. routableSellerSummaries is memoized and rebuilt when the cache changes.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -38,16 +37,13 @@ ok(Object.isFrozen(a2), "the shared list is frozen, so no caller can mutate anot
 // The connector marker carries a per-process secret (src/mcp-loopback.js); the
 // booted server inherits this one.
 const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "7c".repeat(24))}`;
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_COMPUTE_PER_MIN: "5", DISCOVERY_COMPUTE_PER_HOUR: "100" },
-  stdio: ["ignore", "ignore", "inherit"],
-});
-const base = `http://127.0.0.1:${port}`;
+const srv = await bootServer({
+  stores: "discovery-compute",
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_COMPUTE_PER_MIN: "5", DISCOVERY_COMPUTE_PER_HOUR: "100" },
+}).catch((e) => { console.error(e.message); return null; });
+const base = srv?.url;
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted");
+  ok(Boolean(srv), "server booted");
   const find = (q, ip) => fetch(`${base}/api/find?q=${encodeURIComponent(q)}`, { headers: ip ? { "X-Forwarded-For": ip } : {} });
   const statuses = [];
   for (let i = 0; i < 6; i++) statuses.push((await find(`distinct query number ${i}`, "203.0.113.9")).status);
@@ -80,7 +76,7 @@ try {
   }
   ok(mcpOk, "the MCP connector's marked loopback replay is never limited, even for a buyer past its budget");
 } finally {
-  proc.kill("SIGKILL");
+  srv?.child.kill("SIGKILL");
 }
 
 // --- 5. each client's own CPU share (2026-10-01): one bursting client gets a
@@ -91,16 +87,13 @@ ok(body.indexOf("clientBudget?.over()") > 0 && body.indexOf("clientBudget?.over(
 ok(/clientBudget\?\.record\(ms\)/.test(body) && /clientBudget\?\.record\(syncMs\)/.test(body), "the per-client budget is charged with the same CPU the global budget is");
 ok(/if \(!shed\) recordToolCall\(/.test(body), "a shed refusal is not recorded as a tool-call server error");
 {
-  const port2 = await getFreePort();
-  const proc2 = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port2), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_CLIENT_CPU_MS: "1", DISCOVERY_COMPUTE_PER_MIN: "100" },
-    stdio: ["ignore", "ignore", "inherit"],
-  });
-  const base2 = `http://127.0.0.1:${port2}`;
+  const srv2 = await bootServer({
+    stores: "discovery-compute-client",
+    env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_CLIENT_CPU_MS: "1", DISCOVERY_COMPUTE_PER_MIN: "100" },
+  }).catch((e) => { console.error(e.message); return null; });
+  const base2 = srv2?.url;
   try {
-    let up = false;
-    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base2}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-    ok(up, "second server booted with a 1 ms per-client share");
+    ok(Boolean(srv2), "second server booted with a 1 ms per-client share");
     const f = (q, ip) => fetch(`${base2}/api/find?q=${encodeURIComponent(q)}`, { headers: { "X-Forwarded-For": ip } });
     const first = await f("a first uncached search", "203.0.113.50");
     ok(first.status === 200, `a client's first uncached search answers (${first.status})`);
@@ -109,7 +102,7 @@ ok(/if \(!shed\) recordToolCall\(/.test(body), "a shed refusal is not recorded a
     ok(second.status === 429 && second.headers.get("retry-after") === "10" && /at once/i.test(sb.error), `past its own share: 429 naming the client's limit (${second.status})`);
     ok((await f("someone else searching", "198.51.100.50")).status === 200, "another client is unaffected by the first client's burst");
   } finally {
-    proc2.kill("SIGKILL");
+    srv2?.child.kill("SIGKILL");
   }
 }
 console.log(`test-discovery-compute-limit: ${n} passed`);

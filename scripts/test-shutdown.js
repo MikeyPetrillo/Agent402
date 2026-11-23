@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 // Each server this test starts gets its own stats database. Without one they
 // all open /tmp/agent402-stats.db, and a lock held there by any other process
@@ -27,30 +27,17 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- 1. Real server: SIGTERM drains and exits 0 (redeploy path intact) ----
 async function testSigterm() {
-  const port = await getFreePort();
-  const child = spawn(process.execPath, ["src/server.js"], {
+  const srv = await bootServer({
+    stores: false,
     // No lame duck: deploys overlap, so the replacement is already serving
     // new calls when SIGTERM lands (see the shutdown comment in
     // src/server.js). SIGTERM closes the listener at once and drains; the
     // in-flight half of that contract is test-drain-on-sigterm.js.
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), ...ownStats() },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let out = "";
-  child.stdout.on("data", (d) => { out += d; });
-  child.stderr.on("data", (d) => { out += d; });
-
-  // Wait for the server to be listening.
-  let up = false;
-  for (let i = 0; i < 80; i++) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/health`);
-      if (r.ok) { up = true; break; }
-    } catch { /* not up yet */ }
-    await wait(250);
-  }
-  ok(up, "server booted in FREE_MODE");
-  if (!up) console.log(`# server output (last 2000 chars):\n${out.slice(-2000)}`);
+    env: { FREE_MODE: "true", ...ownStats() },
+  }).catch((e) => { console.log(`# server output: ${e.message}`); return null; });
+  ok(Boolean(srv), "server booted in FREE_MODE");
+  if (!srv) return;
+  const { child } = srv;
 
   const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
   const t0 = Date.now();
@@ -59,7 +46,7 @@ async function testSigterm() {
   const elapsed = Date.now() - t0;
   ok(code === 0, `SIGTERM exits 0 (graceful redeploy) — got ${code}`);
   ok(elapsed < 20_000, `SIGTERM drain completes well under the 75s hard deadline (${elapsed}ms)`);
-  ok(/closing listener, draining in-flight requests \(exit 0\)/.test(out), "SIGTERM logs close + drain with exit 0");
+  ok(/closing listener, draining in-flight requests \(exit 0\)/.test(srv.log()), "SIGTERM logs close + drain with exit 0");
   if (code === "timeout") child.kill("SIGKILL");
 }
 
@@ -113,13 +100,16 @@ async function testFatalFileModeDeadline() {
   const dir = mkdtempSync(join(tmpdir(), "a402-fatal-srv-"));
   const preload = join(dir, "throw-on-usr2.mjs");
   writeFileSync(preload, `process.on("SIGUSR2", () => { throw new Error("boom from the test"); });\n`);
-  const port = await getFreePort();
   // Both index crawlers off: their outbound reads and parses are background
   // work on the event loop that has nothing to do with the drain being timed.
-  const env = { ...process.env, FREE_MODE: "true", PORT: String(port), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", ...ownStats() };
-  delete env.STATE_DATABASE_URL;
-  const child = spawn(process.execPath, ["--import", preload, "src/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
-  let out = "";
+  const env = { FREE_MODE: "true", STATE_DATABASE_URL: "", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", ...ownStats() };
+  // The boot is watched by bootServer; the drain line is watched below.
+  const srv = await bootServer({ stores: false, args: ["--import", preload], env })
+    .catch((e) => { console.log(`# server output: ${e.message}`); return null; });
+  ok(Boolean(srv), "server booted in FREE_MODE with the throwing preload");
+  if (!srv) return;
+  const { child, port } = srv;
+  let out = srv.log();
   // The deadline runs from the moment the server starts draining (its log
   // line), not from the kill: a signal waits for the event loop, and a busy
   // loop at that instant delays the handler without changing the deadline.
@@ -128,12 +118,6 @@ async function testFatalFileModeDeadline() {
   child.stdout.on("data", seen);
   child.stderr.on("data", seen);
   const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
-  let up = false;
-  for (let i = 0; i < 120; i++) {
-    try { const r = await fetch(`http://127.0.0.1:${port}/health`); if (r.ok) { up = true; break; } } catch { /* not up yet */ }
-    await wait(250);
-  }
-  ok(up, "server booted in FREE_MODE with the throwing preload");
   const http = await import("node:http");
   const held = http.request({ host: "127.0.0.1", port, method: "POST", path: "/api/hash", headers: { "content-type": "application/json", "content-length": 64 } });
   held.on("error", () => {});
