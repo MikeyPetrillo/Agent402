@@ -301,6 +301,22 @@ try {
   stub("coin-ohlc", async () => ({ bars, summary: { changePct: 5 }, days: 365, granularity: "1d" }));
   const k = await tool("token-diligence").handler({ coins: ["a", "b", "a"] });
   ok(k.coins === 2 && k.comparison.byMarketCap.length === 2 && k.pricing.units === 2, "tokens: a complete answer, duplicates read once and priced once");
+  {
+    // Resold through a third party (/ref, /aws): the source's own figures per
+    // coin (price, market cap, FDV, volume, all-time high, changes, supply
+    // counts) are dropped; what is computed here and the credit stay. The
+    // public answer is unchanged.
+    const { refAnswerOf } = await import("../src/resale-terms.js");
+    const pub = tool("token-diligence").discovery.output.example;
+    const ref = refAnswerOf(tool("token-diligence"), pub);
+    const text = JSON.stringify(ref);
+    ok(typeof tool("token-diligence").refAnswer === "function", "token-diligence declares its /ref and /aws answer");
+    ok(ref.rows.every((r) => !("market" in r) && Object.keys(r.supply || {}).join() === "circulatingShare" && r.computed && r.flags), `the resold rows carry no raw market figures or supply counts (${Object.keys(ref.rows[0]).join(",")}; supply ${Object.keys(ref.rows[0].supply || {}).join(",")})`);
+    ok(ref.comparison.byMarketCap.every((x) => !("value" in x) && x.rank && x.id) && ref.comparison.byReturn1y.every((x) => "value" in x), "the market-cap ranking keeps rank and id, never the market cap");
+    ok(!/"(?:price|marketCap|fullyDilutedValuation|volume24h|ath|athChangePct|change7dPct|change30dPct|change1yPct|circulating|total|max)":/.test(text) && Array.isArray(ref.credits) && ref.credits.length > 0, `no raw CoinGecko field is left, and the credit stays`);
+    ok(pub.rows[0].market && pub.rows[0].market.price !== undefined && JSON.stringify(refAnswerOf(tool("token-diligence"), pub)) === text, "the public answer keeps its figures and is not changed by the trim");
+    for (const odd of [null, "x", { error: "e" }]) ok(JSON.stringify(refAnswerOf(tool("token-diligence"), odd)) === JSON.stringify(odd), `an answer of another shape passes as it is (${JSON.stringify(odd)})`);
+  }
   // pacing: both legs read one host, so a coin holds one read at a time and
   // the call at most TOKEN_CONCURRENCY; two reads a coin, none repeated.
   {

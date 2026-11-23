@@ -31,7 +31,7 @@ import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
 import { markEndsAtCeiling, ceilingLeftMs, CEILING_TIMER_SLACK_MS } from "../run-ceiling.js";
-import { markResaleComputed, markResaleCleared } from "../resale-terms.js";
+import { markResaleComputed, markResaleCleared, markRefAnswer } from "../resale-terms.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
 import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 
@@ -682,6 +682,23 @@ markResaleCleared(BUNDLE_TOOLS, ["weather-risk-brief"], "Open-Meteo commercial p
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
 markResaleCleared(BUNDLE_TOOLS, ["token-diligence"], "computed over market data whose terms allow products that incorporate it");
+// On a /ref copy and on /aws (both resold through a third party) token-diligence
+// serves what it computes, the flags, the profile and the credit, without the
+// source's own figures per coin (the market block: price, market cap, fully
+// diluted value, volume, all-time high and the source's changes; the supply
+// counts) or the market caps in its ranking. The public route's answer is unchanged.
+markRefAnswer(BUNDLE_TOOLS, ["token-diligence"], (answer) => {
+  if (!answer || typeof answer !== "object" || !Array.isArray(answer.rows)) return answer;
+  const rows = answer.rows.map((r) => {
+    if (!r || typeof r !== "object") return r;
+    const { market: _market, supply, ...kept } = r;
+    return { ...kept, supply: { circulatingShare: supply && typeof supply === "object" ? supply.circulatingShare ?? null : null } };
+  });
+  const comparison = answer.comparison && typeof answer.comparison === "object"
+    ? { ...answer.comparison, byMarketCap: Array.isArray(answer.comparison.byMarketCap) ? answer.comparison.byMarketCap.map((x) => (x && typeof x === "object" ? { rank: x.rank, id: x.id } : x)) : answer.comparison.byMarketCap }
+    : answer.comparison;
+  return { ...answer, rows, comparison };
+});
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
 markResaleCleared(BUNDLE_TOOLS, ["filings-brief"], "SEC EDGAR public filings");
