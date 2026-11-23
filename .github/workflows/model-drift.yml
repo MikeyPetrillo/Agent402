@@ -56,7 +56,7 @@ jobs:
           ref: main
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies (secretless)
         # Dependency lifecycle scripts run here, so the cost table is blanked
         # for this step; only the guard step below receives it.

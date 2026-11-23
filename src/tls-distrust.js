@@ -26,7 +26,7 @@
 // src/db-ssl.js exactly as they were.
 //
 // REMOVAL: this list can be dropped once the pinned Node base image (the
-// deploy Dockerfiles pin node:22-slim by digest) ships a CA store that no
+// deploy Dockerfiles pin node:24-slim by digest) ships a CA store that no
 // longer builds this path (no cross-signed emSign Root TLS CA - G3 under
 // emSign ECC Root CA - G3, or an explicit distrust of these intermediates).
 // Until then it stays.

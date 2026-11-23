@@ -507,7 +507,7 @@ const c = new Agent402({ gateway: { signer: privateKeyToAccount(process.env.AGEN
 
 A separate, read-only service that draws x402 payments on Base and MPP payments on Tempo as they settle. It reads public chain RPCs and public discovery listings, holds the last hour in memory, and fans out to browsers over one server-sent event stream; it shares no process, database or key with the API. Hosted at https://live.agent402.tools.
 
-Run it locally (Node 22+, no dependencies):
+Run it locally (Node 24+, no dependencies):
 
 ```bash
 cd services/live

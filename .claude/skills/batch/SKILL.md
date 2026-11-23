@@ -50,7 +50,7 @@ Result: every piece has a running agent with a brief that names its tests and re
 
 ## 3. Environment facts for every agent
 Put these in every brief that runs code:
-- Node 22 on `PATH` (the repo's engines; older Node fails suites in ways that look real).
+- Node 24 on `PATH` (the repo's engines; older Node fails suites in ways that look real).
 - A local Postgres URL needs `?sslmode=disable`.
 - Redis: a local `redis-server` on a port below 32768, one per suite run that needs it.
 - Suites that need the private cost table read `UPSTREAM_COSTS_FILE`; the table is never

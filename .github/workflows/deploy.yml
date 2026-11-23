@@ -240,7 +240,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       # The gate reads deploy.yml with the real YAML parser rather than a
       # bespoke regex, so it needs node_modules. Omitting this is what made its
@@ -251,13 +251,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
@@ -285,7 +285,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 viem@2.52.2
 
@@ -558,7 +558,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 @x402/svm@2.32.0 @solana/kit@8.6.0 viem@2.52.2
       - name: Sweep the catalog via Solana settlement
@@ -583,7 +583,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Refresh stale Bazaar listings
@@ -621,7 +621,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Register missing Bazaar routes
@@ -655,7 +655,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Sweep the catalog via Base settlement (4 batches)
@@ -683,7 +683,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Drain the burner into the revenue wallet via paid tool calls
@@ -790,7 +790,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 viem@2.52.2
       - name: Run the demo (real paid buys from the burner)
@@ -824,7 +824,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Build the SBOMs
         run: node scripts/sbom-release.js --out sbom
       - name: Upload the SBOMs
@@ -912,7 +912,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -923,13 +923,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1003,14 +1003,14 @@ jobs:
       # the lane's version is restored right after.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       # elizaos-plugin-agent402 against a REAL elizaOS runtime (2026-09-15): the
       # packed artifact + @elizaos/core, plugin-sql (PGlite) and plugin-bootstrap
       # from the registry, a real AgentRuntime, the runtime's own dispatcher on a
       # plain user message. Once on `latest` (1.x) and once on `beta` (2.x). The
       # registry review asked for exactly this; a stub runtime proved nothing.
       # Same key shadowing as above: third-party install with network access.
-      # AFTER the Node 22 restore: the step boots src/server.js, whose native
+      # AFTER the lane's Node restore: the step boots src/server.js, whose native
       # modules were built for the lane's Node (a first cut ran under the
       # openclaw step's Node 24 and the server never answered).
       - name: elizaOS plugin against a REAL elizaOS runtime (latest + beta)
@@ -1128,7 +1128,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1139,13 +1139,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1251,7 +1251,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1262,13 +1262,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1444,7 +1444,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1455,13 +1455,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1632,7 +1632,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1643,13 +1643,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1781,7 +1781,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1792,13 +1792,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1874,7 +1874,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1885,13 +1885,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1995,7 +1995,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2006,13 +2006,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2100,7 +2100,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2111,7 +2111,7 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: ffmpeg for the media-kit tests (ubuntu-latest ships none; test-media SKIPPED on every CI run until 2026-09-06)
         timeout-minutes: 10
         run: bash scripts/ci-apt-install.sh ffmpeg && ffmpeg -version | head -1
@@ -2120,7 +2120,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2259,7 +2259,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2270,13 +2270,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2456,7 +2456,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2467,13 +2467,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2726,7 +2726,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2737,13 +2737,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2799,7 +2799,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2810,7 +2810,7 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: ffmpeg for the three media tools in the example sweep (ubuntu-latest ships none; they answered 503 "not installed" once that stopped being a silent 422)
         timeout-minutes: 10
         run: bash scripts/ci-apt-install.sh ffmpeg && ffmpeg -version | head -1
@@ -2821,7 +2821,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -3050,7 +3050,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -3061,13 +3061,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -3355,18 +3355,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
@@ -3433,18 +3433,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
@@ -3566,18 +3566,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
@@ -3638,7 +3638,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       # NOTE: this job and the test lanes are the ONLY installs that still run
       # dependency lifecycle scripts, because better-sqlite3 downloads its
       # prebuilt binary from one (the server cannot boot without it). Every
@@ -3849,9 +3849,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
-      # Trusted publishing (OIDC) needs npm >= 11.5.1; node 22 ships npm 10.x.
+      # Trusted publishing (OIDC) needs npm >= 11.5.1, pinned here whatever npm the runner's Node ships.
       # Pinned exactly (our own supply-chain doctrine: no floating installs of
       # anything that can execute). Still 11.x, the line every publish so far
       # has gone out on; npm 12's default of disabling install scripts no
@@ -5106,7 +5106,7 @@ jobs:
       # before it shipped (2026-08-25). Cache the fetch instead of skipping it.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - name: Install dependencies for the production smoke check
         run: npm ci --ignore-scripts

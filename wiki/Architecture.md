@@ -1,6 +1,6 @@
 # Architecture
 
-One Node 22 / Express process serving everything; deliberately boring where possible.
+One Node 24 / Express process serving everything; deliberately boring where possible.
 
 ```
                       ┌──────────────────────────────────────────────┐
