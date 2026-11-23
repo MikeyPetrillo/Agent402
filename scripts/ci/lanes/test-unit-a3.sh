@@ -64,6 +64,16 @@ t node scripts/test-changelog-switched.js
 t node scripts/test-github-release.js
 # The wiki mirror publishes from main only (push trigger and job guard)
 t node scripts/test-wiki-sync-main.js
+# Markdown links in README, wiki, docs and package READMEs resolve: files, anchors, wiki pages, links into this repo (offline; the external check is doc-links.yml, weekly)
+t node scripts/test-doc-links.js
+# The OpenAPI info.version and the A2A card version are package.json's
+t node scripts/test-server-version.js
+# README and wiki facts held to their source: pack floor, report range, Decide settings, Start here, rails example, config reference links
+t node scripts/test-readme-facts.js
+# Sample report citations were checked; a source that no longer answers is an archived copy or marked, never a dead link
+t node scripts/test-sample-citations.js
+# /llms.txt links every published framework package
+t node scripts/test-llms-packages.js
 # NOTICE, the README, CONTRIBUTING.md and /llms-full.txt carry one ownership sentence, word for word (offline)
 t node scripts/test-ownership-statement.js
 # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
