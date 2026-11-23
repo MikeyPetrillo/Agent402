@@ -86,6 +86,23 @@ export const C3S_CREDIT = `${C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
 /** Both Copernicus services in one sentence, for a description whose tool serves both. */
 export const CAMS_C3S_ATTRIBUTION = "Contains modified Copernicus CAMS and C3S information.";
 
+// Chain and crypto data sources, each credited with a link wherever its data
+// is served. GoPlus's API terms ask for attribution "via a backlink or a
+// mention" (src/tools/token-risk-kit.js); the EAS indexer, RugCheck,
+// Hyperliquid's info API and Sourcify (verified source and its signature
+// database) are public services for builders, credited by name and link
+// (src/tools/onchain-identity-kit.js, solana-intel-kit.js, derivatives-kit.js,
+// contract-kit.js). A tool served wholly from one of them carries the key
+// (its description ends with the sentence) and the sentence as `credit` on
+// every answer; a tool that reads one as a leg carries the sentence in
+// `credit` on the answers that leg served (addCredit).
+export const GOPLUS_ATTRIBUTION = "Powered by GoPlus Security (https://gopluslabs.io).";
+export const EAS_ATTRIBUTION = "Indexed by EASSCAN (https://easscan.org).";
+export const RUGCHECK_ATTRIBUTION = "Data from RugCheck (https://rugcheck.xyz).";
+export const HYPERLIQUID_ATTRIBUTION = "Data from Hyperliquid (https://hyperliquid.xyz).";
+export const SOURCIFY_ATTRIBUTION = "Verified source from Sourcify (https://sourcify.dev).";
+export const SOURCIFY_SIGDB_ATTRIBUTION = "Signatures from the Sourcify signature database (https://4byte.sourcify.dev).";
+
 /** Source key (a tool's `attribution` field) -> the sentence its terms require. */
 export const ATTRIBUTIONS = Object.freeze({
   fred: FRED_NOTICE,
@@ -101,6 +118,12 @@ export const ATTRIBUTIONS = Object.freeze({
   geonames: GEONAMES_ATTRIBUTION,
   nager: NAGER_ATTRIBUTION,
   fema: FEMA_NOTICE,
+  goplus: GOPLUS_ATTRIBUTION,
+  eas: EAS_ATTRIBUTION,
+  rugcheck: RUGCHECK_ATTRIBUTION,
+  hyperliquid: HYPERLIQUID_ATTRIBUTION,
+  sourcify: SOURCIFY_ATTRIBUTION,
+  "sourcify-sigdb": SOURCIFY_SIGDB_ATTRIBUTION,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */
@@ -167,13 +190,22 @@ export function withoutAttributions(text) {
 
 const isPlainAnswer = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && !v.__binary;
 
-/** `answer` with `credit` added as its `credit` field: a plain-object answer
- *  that does not already carry one gets a copy with the field; anything else
- *  is returned as it is. */
+/** `answer` with `credit` in its `credit` field: a plain-object answer with
+ *  no credit gets a copy with the field; one whose credit is a string that
+ *  does not already hold this sentence gets a copy with the sentence after
+ *  it, so an answer built from several sources credits each. Anything else
+ *  (a non-object, a credit that is not a string) is returned as it is. */
 export function withCredit(answer, credit) {
-  if (!isPlainAnswer(answer) || Object.hasOwn(answer, "credit")) return answer;
-  return { ...answer, credit };
+  if (!isPlainAnswer(answer)) return answer;
+  if (!Object.hasOwn(answer, "credit")) return { ...answer, credit };
+  const cur = answer.credit;
+  if (typeof cur !== "string" || cur.includes(credit)) return answer;
+  return { ...answer, credit: cur ? `${cur} ${credit}` : credit };
 }
+
+/** The same as withCredit, for a handler crediting a source one of its legs
+ *  read (the leg answered). */
+export const addCredit = withCredit;
 
 /** Mark `tool` as one whose answers carry `credit` (a source's credit
  *  sentence with its link): set `tool.credit`, add the field to the published
@@ -184,7 +216,7 @@ export function creditAnswers(tool, credit) {
   if (tool.credit === credit) return tool;
   tool.credit = credit;
   const ex = tool.discovery?.output?.example;
-  if (isPlainAnswer(ex) && !Object.hasOwn(ex, "credit")) tool.discovery.output.example = { ...ex, credit };
+  if (isPlainAnswer(ex)) tool.discovery.output.example = withCredit(ex, credit);
   const inner = tool.handler;
   if (typeof inner === "function") {
     tool.handler = async function credited(...args) { return withCredit(await inner.apply(this, args), credit); };
