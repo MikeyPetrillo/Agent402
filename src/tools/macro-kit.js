@@ -902,7 +902,7 @@ MACRO_TOOLS.push(
     route: "GET /api/fred-series", name: "US economic time series by FRED series ID", slug: "fred-series", category: "data", attribution: "us-agencies", price: "$0.001",
     upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     description:
-      `US economic time series by FRED series ID, read from the agency that publishes it: GDP and real GDP (GDP, GDPC1), labor and price series (UNRATE, CPIAUCSL), Treasury yields and spreads (DGS10, T10Y2Y), the money stock (M2SL), overnight rates (DFF, FEDFUNDS) and total public debt (GFDEBTN). Date windows, units and lower frequencies; other IDs answer 404 with the list. ${US_AGENCIES_ATTRIBUTION}`,
+      `US economic series by FRED ID, from the agency that publishes each: GDP (GDPC1), jobs and prices (UNRATE, CPIAUCSL), Treasury yields (DGS10), money stock (M2SL), rates (FEDFUNDS), public debt (GFDEBTN). Units and frequencies; other IDs answer 404 listing those served. ${US_AGENCIES_ATTRIBUTION}`,
     tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "treasury-yields", "money-supply", "bls", "bea", "macro", "economic-data", "treasury"],
     discovery: {
       input: { seriesId: "GDPC1", startDate: "2024-01-01", endDate: "2024-12-31" },
