@@ -235,6 +235,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 .hm-claim { padding: 22px 24px; display: flex; flex-direction: column; gap: 8px; }
 .hm-claim h3 { font-weight: 600; font-size: var(--fs-lg); line-height: 1.3; letter-spacing: -.01em; margin: 0; color: var(--ink); text-wrap: balance; }
 .hm-claim p { font-size: var(--fs-md); line-height: 1.55; color: var(--muted); margin: 0; font-weight: 300; text-wrap: pretty; }
+.hm-claim p.hm-claim-note { font-size: var(--fs-sm); }
 .hm-claim a { margin-top: auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--dash); align-self: flex-start; white-space: nowrap; }
 .hm-door { padding: 32px; display: flex; flex-direction: column; gap: 16px; }
 .hm-door p { margin: 0; font-size: var(--fs-base); line-height: 1.55; font-weight: 400; text-wrap: pretty; }
@@ -264,7 +265,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
     : "";
 
   const claimsHtml = whyHomeClaims().map((c) =>
-    `<div class="hm-card hm-claim" id="why-${esc(c.id)}"><h3>${esc(c.t)}</h3><p>${esc(c.s)}</p><a href="${esc(c.link[0])}">${esc(c.link[1])} &rarr;</a></div>`
+    `<div class="hm-card hm-claim" id="why-${esc(c.id)}"><h3>${esc(c.t)}</h3><p>${esc(c.s)}</p>${c.note ? `<p class="hm-claim-note">${esc(c.note)}</p>` : ""}<a href="${esc(c.link[0])}">${esc(c.link[1])} &rarr;</a></div>`
   ).join("");
 
   const faqHtml = faqs.map((f) =>

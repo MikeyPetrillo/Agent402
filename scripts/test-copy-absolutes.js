@@ -32,6 +32,7 @@ import { RAILS } from "../src/rails.js";
 import { failedCallFootnote } from "../src/settlement-footnote.js";
 import { execFileSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
+import { notChargedClaims } from "./lib/not-charged-claims.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -1088,7 +1089,9 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     if (!text) continue;
     for (const m of text.matchAll(CLAIM)) {
       const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
-      if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
+      // A comment line is skipped in a module only: a markdown paragraph that
+      // opens in bold (`**Heading.**`) is copy.
+      if (rel.endsWith(".js") && /^\s*(?:\/\/|\/?\*)/.test(line)) continue;
       claims++;
       const after = text.slice(m.index, m.index + m[0].length + 1300).replace(/\\?\n\s*/g, " ");
       if (!carries(after)) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
@@ -1116,7 +1119,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 // not this claim.
 {
   const fam = await import("../src/settle-first-copy.js");
-  const GENERAL = /\bfailed x402 (?:call|run|request)s? (?:is|are) not charged|\b(?:response|answer)s? of 400 or above (?:is|are) not (?:settled|charged)|\bfailed run is not charged|\berror status cancels\b|\b4xx\b[^.;|]{0,20}\b5xx\b[^.;|]{0,120}\b(?:cancels settlement|not charged|never settled)|\bonly (?:for a response )?under 400 \| not charged|\bany status of 400 or above is not charged|\ba 4xx or 5xx\b[^.;]{0,200}?\b(?:cancels settlement|is not charged|is never charged)|\ban? (?:error|failed) (?:answer|call|response)s? (?:is|are) not (?:charged|settled)|\b(?:calls?|requests?) (?:that|which) fails? (?:is|are) not charged|\bsettles? only after\b[^.;]{0,80}\bsuccess|\bnot settled and you are not charged|\bnever pays? for a failed\b|\bfailed calls? (?:is|are) (?:never|not) charged|\berrors? (?:is|are) (?:never|not) charged|\b(?:fail\w*|errors?|upstream|outage|5\d\d|timed[- ]out|cut off)\b[^.\n]{0,300}?\bnot charged on x402\b|\bfailed (?:call|run)s?\b[^.;]{0,200}?\b(?:is|are) not charged|\ba call the tool fails is not charged|\bfailure case costs nothing|\ban? error cancels settlement|\bnot charged for a failure|\b(?:answer|response)s? with an error status (?:is|are) not (?:settled|charged)|\bnot charged: the (?:error|same settlement path|credential)|\bsettles only (?:on a delivered result|when the result is ready)/gi;
+  const GENERAL = notChargedClaims();
   // Served copy outside COPY_SURFACES' names: the /tools ledger, the discovery
   // manifest, the 202 job message, the MCP task notices and /what-is-mpp.
   const EXTRA = new Set(["src/settlement-footnote.js", "src/refund-terms.js", "src/refund-terms-doc.js", "src/conformance.js", "src/mcp-http.js", "mcp/index.js", "src/agentcore-page.js",
@@ -1130,10 +1133,13 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     if (!text) continue;
     for (const m of text.matchAll(GENERAL)) {
       const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
-      if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
+      // A comment line is skipped in a module only: a markdown paragraph that
+      // opens in bold (`**Heading.**`) is copy.
+      if (rel.endsWith(".js") && /^\s*(?:\/\/|\/?\*)/.test(line)) continue;
       if (/\b[Rr]efusals? (?:are|is) free\b/.test(text.slice(Math.max(0, m.index - 120), m.index))) continue;
-      // A home card (16 words at most, test-static-pages) links to its /docs#why
-      // point, which carries the sentence (checked below).
+      // A home card (16 words at most, test-static-pages) prints the sentence as
+      // its note (checked below, and on the served page by
+      // scripts/test-not-charged-rendered.js).
       if (rel === "src/why.js" && /link: \["\/docs#why-never-charged"/.test(text.slice(m.index, text.indexOf("\n", m.index)))) { homeCard = true; continue; }
       claims++;
       // A claim in a table row is carried by the sentence right under that
@@ -1177,9 +1183,10 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     ok(tools.length >= 6 && claimers.length >= 2 && bareTools.length === 0, `every settle-first tool description that says a failure is not charged carries the settle-first sentence (${claimers.length} of ${tools.length}${bareTools.length ? `; bare: ${bareTools.join(", ")}` : ""})`);
   }
   {
-    const { WHY_POINTS } = await import("../src/why.js");
-    ok(homeCard && String(WHY_POINTS.find((w) => w.id === "never-charged")?.p || "").includes(fam.SETTLE_FIRST_TEXT),
-      "the never-charged home card links to its /docs#why point, which carries the settle-first sentence");
+    const { WHY_POINTS, whyHomeClaims } = await import("../src/why.js");
+    ok(homeCard && whyHomeClaims().find((c) => c.id === "never-charged")?.note === fam.SETTLE_FIRST_TEXT
+      && String(WHY_POINTS.find((w) => w.id === "never-charged")?.p || "").includes(fam.SETTLE_FIRST_TEXT),
+      "the never-charged home card prints the settle-first sentence as its note, and its /docs#why point carries it");
   }
   ok(claims >= 40, `the failed-call not-charged claim is found where it is made (${claims} places)`);
   ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
@@ -1190,7 +1197,8 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "the ordinary failure case costs nothing and needs no refund.", "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.",
     "Any `4xx`/`5xx` (a bad input, a capacity `503`, an upstream `502`) **cancels settlement**, so the x402 buyer is not charged for a failure.",
     "only a successful answer is settled on x402: an answer with an error status is not settled.", "Not charged: the error cancels settlement before any facilitator call.",
-    "A failed call (an error, a timeout, an upstream outage) is not charged on x402", "You were not charged: payment settles only on a delivered result."]
+    "A failed call (an error, a timeout, an upstream outage) is not charged on x402", "You were not charged: payment settles only on a delivered result.",
+    "it fails, and on x402 that failure is not charged."]
     .every((x) => [...x.matchAll(GENERAL)].length >= 1),
     "control: the long-parenthetical, table-cell, manifest and job-notice phrasings are matched");
 
