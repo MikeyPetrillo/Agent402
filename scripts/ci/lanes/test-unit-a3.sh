@@ -60,6 +60,8 @@ t node scripts/test-no-url-pathname.js
 t node scripts/test-changelog-parity.js
 # A changelog entry about something a switch sells is on /changelog and its feed only while the switch is on.
 t node scripts/test-changelog-switched.js
+# The release job cuts package.json's version from its changelog section when no release exists; the top heading is that version (offline, stub gh)
+t node scripts/test-github-release.js
 # NOTICE, the README, CONTRIBUTING.md and /llms-full.txt carry one ownership sentence, word for word (offline)
 t node scripts/test-ownership-statement.js
 # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
