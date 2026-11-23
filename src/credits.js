@@ -1,4 +1,4 @@
-// credits - PREPAID CARD CREDITS for the tool catalog: a person buys a $20/$50/$100 pack by card (Stripe
+// credits - PREPAID CARD CREDITS for the tool catalog: a person buys a pack (CREDIT_PACKS) by card (Stripe
 // Checkout), gets an `a402_...` key ONCE, and spends it across every paid tool
 // with `Authorization: Bearer a402_...` - the card-native equivalent of the
 // per-call x402 model, for buyers who will not hold a wallet.
@@ -59,11 +59,30 @@ const abandonedHoldMs = () => { const n = Number(process.env.CREDITS_ABANDONED_H
 // CREDITS_HOLD_REFRESH_MAX_MS, default 6 hours.
 export const holdRefreshMaxMs = () => { const n = Number(process.env.CREDITS_HOLD_REFRESH_MAX_MS); return Math.max(abandonedHoldMs(), Number.isFinite(n) && n > 0 ? n : 6 * 60 * 60 * 1000); };
 
+// The packs, smallest first. Every surface that names a pack or its price
+// reads this table (the /credits cards, /api/pricing, the share card, the
+// checkout's product name), so a pack is added or repriced here alone. `note`
+// is the line under the price on /credits.
 export const CREDIT_PACKS = {
-  "credits-20": { label: "Starter", cents: 2000 },
-  "credits-50": { label: "Builder", cents: 5000 },
-  "credits-100": { label: "Pro", cents: 10000 },
+  "credits-5": { label: "Try", cents: 500, note: "a first key: try the tools before you commit" },
+  "credits-10": { label: "Starter", cents: 1000, note: "wire one agent to the catalog and run it end to end" },
+  "credits-20": { label: "Regular", cents: 2000, note: "everyday calls across the catalog; never expires" },
+  "credits-50": { label: "Builder", cents: 5000, note: "try the whole catalog; research, dossiers, audits included" },
+  "credits-100": { label: "Pro", cents: 10000, note: "for a team or an agent fleet; never expires" },
 };
+// What Stripe records a pack or a top-up as: Nontaxable. The pack is a
+// prepayment for our own services, taxed (where a call is taxable) when it is
+// spent (src/nc-sales-tax.js), never at sale. Never a gift-card code.
+export const CREDITS_TAX_CODE = "txcd_00000000";
+// The product a pack or top-up checkout sells, as Stripe shows and records it.
+// No name or description calls it a gift card or a wallet
+// (scripts/test-credits-terms.js).
+export function creditsProductData(p, { topup = false } = {}) {
+  const usd = `$${(p.cents / 100).toFixed(0)}`;
+  return topup
+    ? { name: `Agent402 credits top-up (${usd})`, description: "Added to your existing Agent402 credits balance. A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; no fees; the unspent balance is refunded to the card that paid on request; not cash, not transferable.", tax_code: CREDITS_TAX_CODE }
+    : { name: `Agent402 credits - ${p.label} (${usd})`, description: "A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; no fees; the unspent balance is refunded to this card on request; not cash, not transferable.", tax_code: CREDITS_TAX_CODE };
+}
 export const KEY_RE = /^a402_[A-Za-z0-9_-]{32,64}$/;
 // The packs on offer: those within the cap on one key's balance
 // (creditsBalanceMaxCents, src/credits-sales.js).
@@ -537,7 +556,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     }
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits - ${p.label} ($${(p.cents / 100).toFixed(0)})`, description: "A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; no fees; the unspent balance is refunded to this card on request; not cash, not transferable, not a gift card." } } }],
+      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: creditsProductData(p) } }],
       // A billing address sources sales tax (src/nc-sales-tax.js); a business
       // may add its tax ID; the buyer confirms business or developer use and
       // accepts the terms, both required and kept on the key's record. Tax is
@@ -898,7 +917,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       customer_email: rec.email,
-      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits top-up ($${(p.cents / 100).toFixed(0)})`, description: "Added to your existing Agent402 credits balance. A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; no fees; the unspent balance is refunded to the card that paid on request; not cash, not transferable, not a gift card." } } }],
+      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: creditsProductData(p, { topup: true }) } }],
       billing_address_collection: "required",
       tax_id_collection: { enabled: true },
       custom_fields: [

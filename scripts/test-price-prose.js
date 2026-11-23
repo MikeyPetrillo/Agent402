@@ -16,6 +16,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { HUMAN_PRODUCTS } from "../src/human-checkout.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { priceUsdFor } from "../src/report-tiers.js";
+import { CREDIT_PACKS } from "../src/credits.js";
 import { humanReportsPage } from "../src/human-reports-page.js";
 import { monitorsPage } from "../src/monitors-page.js";
 import { stripScripts, stripTags } from "./lib/html-text.js";
@@ -32,7 +33,7 @@ for (const p of Object.values(HUMAN_PRODUCTS)) {
 }
 for (const p of Object.values(MONITOR_PRODUCTS)) real.add((p.price / 100).toFixed(2));
 // Credit packs are fixed denominations, not product prices.
-for (const pack of ["20.00", "50.00", "100.00"]) real.add(pack);
+for (const pack of Object.values(CREDIT_PACKS)) real.add((pack.cents / 100).toFixed(2));
 ok(real.size > 3, `collected ${real.size} real price values from the product tables`);
 
 const descOf = (html) => (html.match(/name="description" content="([^"]*)"/) || [])[1] || "";

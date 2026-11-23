@@ -146,6 +146,9 @@ try {
   ok(/already issued/.test(String(pricingOff.credits.how)) && /balance/.test(String(pricingOff.credits.balance)), "...and still tells an existing key holder how to spend and read it");
   const pageOff = await (await fetch(`${B}/credits`)).text();
   ok(!/InStock/.test(pageOff) && !/Buy \$20/.test(pageOff) && !/data-pack-buy/.test(pageOff), "/credits carries no Offer, buy snippet or buy button while sales are off");
+  ok(!/Buy \$5 of credits|Buy \$10 of credits/.test(pageOff) && !/\$5, \$10/.test(pageOff), "/credits offers no starter pack while sales are off");
+  const ogOff = await (await fetch(`${B}/og/credits.svg`)).text();
+  ok(/not on sale/.test(ogOff) && !/\$5, \$10/.test(ogOff), "the credits share card names no pack while sales are off");
   const descOf = (html) => (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
   // /terms states whether credits are sold, read from the same switch: the
   // credits clause and the access line both follow it.
@@ -200,6 +203,20 @@ try {
   const pageOn = await pageOnRes.text();
   ok(pageOnRes.status === 200 && !/noindex/.test(robotsMeta(pageOn)), `/credits is 200 and indexable when sales are on (got "${robotsMeta(pageOn)}")`);
   ok(!/not on sale/.test(descOf(pageOn)) && /\$20/.test(descOf(pageOn)), `/credits describes the purchase when sales are on ("${descOf(pageOn).slice(0, 40)}...")`);
+  // The starter packs, read from the pack table on every surface that sells.
+  const { CREDIT_PACKS } = await import("../src/credits.js");
+  const dollars = Object.values(CREDIT_PACKS).map((p) => `$${p.cents / 100}`);
+  ok(dollars[0] === "$5" && dollars[1] === "$10", "the pack table starts with the $5 and $10 starter packs");
+  ok(/^Buy \$5, \$10, \$20, \$50 or \$100 by card/.test(descOf(pageOn)), `/credits description lists every pack, starters first ("${descOf(pageOn).slice(0, 50)}...")`);
+  for (const [key, p] of Object.entries(CREDIT_PACKS)) ok(pageOn.includes(`data-pack-buy="${key}"`) && pageOn.includes(`Buy $${p.cents / 100} of credits`) && pageOn.includes(p.note), `/credits sells the ${key} pack with its own note`);
+  const lds = [...pageOn.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].flatMap((m) => { try { const j = JSON.parse(m[1]); return Array.isArray(j["@graph"]) ? j["@graph"] : [j]; } catch { return []; } });
+  const offers = lds.find((j) => j && j["@type"] === "Product" && Array.isArray(j.offers)) || {};
+  ok(Array.isArray(offers.offers) && offers.offers.map((o) => o.price).join() === "5.00,10.00,20.00,50.00,100.00", "the /credits structured data offers every pack at its table price");
+  ok(pricingOn.credits.packs.map((p) => `${p.pack}:${p.priceUsd}`).join() === "credits-5:5,credits-10:10,credits-20:20,credits-50:50,credits-100:100" && pricingOn.credits.checkout.body.pack === "credits-5", "/api/pricing lists the starter packs and its example checkout body names the smallest");
+  const ogOn = await (await fetch(`${B}/og/credits.svg`)).text();
+  ok(/\$5, \$10, \$20, \$50 or \$100\./.test(ogOn), "the credits share card lists every pack, starters first, while sales are on");
+  const starter = await fetch(`${B}/api/credits/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "credits-5" }) });
+  ok(starter.status !== 503 && starter.status !== 400, `a $5 starter pack checkout is accepted by the route (got ${starter.status})`);
   for (const path of ["/sitemap.xml", "/sitemap-pages.xml"]) {
     const xml = await (await fetch(`${B}${path}`)).text();
     ok(/\/credits<\/loc>/.test(xml), `${path} lists /credits when sales are on`);

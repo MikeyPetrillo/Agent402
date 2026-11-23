@@ -38,7 +38,7 @@ export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
     <div class="pcard" data-pack="${esc(key)}" style="text-align:center;">
       <div class="k">${esc(p.label)}</div>
       <div style="font-family:var(--font-mono);font-size:var(--fs-3xl);color:var(--ink);letter-spacing:-.02em;margin:6px 0 2px;">$${(p.cents / 100).toFixed(0)}</div>
-      <p style="margin:4px 0 16px;">${esc(p.cents === 2000 ? "about 20,000 calls at the $0.001 floor, or fifty deep research reports" : p.cents === 5000 ? "try the whole catalog; research, dossiers, audits included" : "for a team or an agent fleet; never expires")}</p>
+      <p style="margin:4px 0 16px;">${esc(p.note || "")}</p>
       <button class="btn btn-primary" style="width:100%;justify-content:center" data-pack-buy="${esc(key)}">Buy $${(p.cents / 100).toFixed(0)} of credits →</button>
       <div class="err" id="err-${esc(key)}"></div>
     </div>`).join("");
@@ -104,7 +104,7 @@ ${ledgerFooterCompact()}
   });
 }
 
-// "$20, $50 or $100" from the packs on offer.
+// "$5, $10 or $20" from the packs on offer.
 function dollarList(ps) {
   const d = ps.map((p) => `$${(p.cents / 100).toFixed(0)}`);
   return d.length > 1 ? `${d.slice(0, -1).join(", ")} or ${d[d.length - 1]}` : d[0] || "";

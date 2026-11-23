@@ -232,7 +232,8 @@ address in the European Union or the United Kingdom are sold to businesses that 
 checkout; a purchase there without one is refunded in full and issues no key. Card prices include
 payment processing and are shown before you pay. Prices are the same everywhere and include North Carolina
 sales tax where it applies: for a credits key or a card payment billed to a North Carolina address, a
-call that returns generated speech, audio or video includes that tax.</p>
+call that returns generated speech, audio or video, or that edits an image or audio file you send, includes
+that tax.</p>
 <p><b>If the service stops.</b> A prepaid credits balance is a prepayment for services we have not yet
 delivered, and it should not depend on us being here forever. If we decide to stop operating the hosted
 service, we will give at least 30 days notice on this site and by email to the address on each purchase,

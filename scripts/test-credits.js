@@ -30,7 +30,7 @@ const debits = [], loads = [];
 const mk = () => createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, onDebit: (d) => debits.push(d), onLoad: (l) => loads.push(l), log: () => {} });
 let cr = mk();
 
-ok(Object.values(CREDIT_PACKS).every((p) => p.cents >= 2000), "every pack is >= $20");
+ok(Object.values(CREDIT_PACKS).every((p) => p.cents >= 500 && p.cents <= 10000), "every pack is between the $5 starter and the $100 cap");
 ok(usdToMicro(0.001) === 1000 && microToUsd(1000) === 0.001 && usdToMicro(19) === 19_000_000, "micro-dollar math is exact for sub-cent prices");
 
 // checkout

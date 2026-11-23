@@ -6290,7 +6290,7 @@ app.get("/__operator/evidence-watch.json", (req, res) => {
     rows: listed,
   });
 });
-// North Carolina sales tax on card-funded sales of digital audio and video,
+// North Carolina sales tax on card-funded sales of the taxable routes (NC_TAXABLE_SLUGS),
 // by month and billing ZIP, for filing (src/nc-sales-tax.js). Built from the
 // sales ledger; ?month=YYYY-MM (default: this month and last).
 app.get("/__operator/nc-sales-tax.json", async (req, res) => {
