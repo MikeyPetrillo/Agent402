@@ -803,6 +803,125 @@ const sorobanRpc = getRpcClient(NETWORK);
   console.log("settle whole-answer deadline tests ✓");
 }
 
+// ---------------------------------------------------------------------------
+// Each /settle answer names only its own submission. The real server, with
+// the vendor scheme's settle replaced in the child (a preload) by one that
+// submits a known transaction to a local RPC stub and then fails in a chosen
+// way. Several settles are in flight at once (the queue runs them in turn):
+// each failed answer carries its own hash or none, never another request's.
+// The settle context lives in the request, not in a module-level variable.
+// ---------------------------------------------------------------------------
+{
+  const { createServer } = await import("node:http");
+  const net = await import("node:net");
+  const { mkdtempSync, writeFileSync, rmSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { pathToFileURL } = await import("node:url");
+  ok(!/^\s*(let|var)\s+\w*[Ss]ettleC(tx|ontext)\b/m.test(readFileSync(join(ROOT, "index.js"), "utf8")), "settle context: index.js holds no module-level settle context");
+  const source = Keypair.random().publicKey();
+  // The hash of each submission, read from what the stub received (the child
+  // builds with its own fee bid installed), keyed by the plan's sequence.
+  const sent = [];
+  const hashOf = (seq) => {
+    for (const x of sent) {
+      const tx = TransactionBuilder.fromXDR(x, Networks.TESTNET);
+      if (tx.source === source && String(tx.operations[0]?.bumpTo) === String(seq)) return tx.hash().toString("hex");
+    }
+    return undefined;
+  };
+  const stub = createServer((req, res) => {
+    let b = ""; req.on("data", (c) => { b += c; });
+    req.on("end", () => {
+      let j = {}; try { j = JSON.parse(b); } catch { /* ignore */ }
+      if (j.method === "sendTransaction") sent.push(j.params?.transaction);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: j.id ?? 1, result: { status: "PENDING", hash: "00".repeat(32), latestLedger: 1, latestLedgerCloseTime: "1" } }));
+    });
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const dir = mkdtempSync(join(tmpdir(), "settle-ctx-"));
+  const preload = join(dir, "fake-settle.mjs");
+  writeFileSync(preload, `
+import { ExactStellarScheme } from ${JSON.stringify(import.meta.resolve("@x402/stellar/exact/facilitator"))};
+import { rpc, TransactionBuilder, Account, Operation, BASE_FEE, Networks, TimeoutInfinite } from ${JSON.stringify(import.meta.resolve("@stellar/stellar-sdk"))};
+const server = new rpc.Server(process.env.STUB_RPC_URL, { allowHttp: true });
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+ExactStellarScheme.prototype.settle = async function (payload, requirements) {
+  const { mode, seq, waitMs } = payload.payload;
+  const tx = new TransactionBuilder(new Account(process.env.STUB_SOURCE, "1"), { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+    .addOperation(Operation.bumpSequence({ bumpTo: String(seq) })).setTimeout(TimeoutInfinite).build();
+  await pause(waitMs);
+  if (mode === "throw-before-send") throw new Error("refused before submit");
+  await server.sendTransaction(tx);
+  if (mode === "throw-after-send") throw new Error("dropped after submit");
+  if (mode === "hang-after-send") { await pause(Number(process.env.HANG_MS)); throw new Error("late"); }
+  if (mode === "fail-result") return { success: false, errorReason: "settle_exact_stellar_transaction_failed", transaction: "", network: requirements.network, payer: process.env.STUB_SOURCE };
+  return { success: true, transaction: tx.hash().toString("hex"), network: requirements.network, payer: process.env.STUB_SOURCE };
+};
+`);
+  const freePort = await new Promise((r) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => r(p)); }); });
+  const SETTLE_MS = 1_500;
+  const token = "ctx-test-token";
+  const child = spawn(process.execPath, ["--import", pathToFileURL(preload).href, join(ROOT, "index.js")], {
+    env: {
+      ...process.env,
+      FACILITATOR_NETWORK: "testnet",
+      FACILITATOR_STELLAR_SECRET: Keypair.random().secret(),
+      FACILITATOR_AUTH_TOKEN: token,
+      FACILITATOR_SETTLE_TIMEOUT_MS: String(SETTLE_MS),
+      FACILITATOR_RPC_MIN_VERSION: "off",
+      STUB_RPC_URL: `http://127.0.0.1:${stub.address().port}`,
+      STUB_SOURCE: source,
+      HANG_MS: String(SETTLE_MS + 300),
+      PORT: String(freePort),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let childOut = "";
+  child.stdout.on("data", (d) => { childOut += d; });
+  child.stderr.on("data", (d) => { childOut += d; });
+  try {
+    let up = false;
+    for (let i = 0; i < 60 && !up; i++) {
+      up = await fetch(`http://127.0.0.1:${freePort}/supported`, { headers: { authorization: `Bearer ${token}` } }).then((r) => r.ok, () => false);
+      if (!up) await new Promise((r) => setTimeout(r, 250));
+    }
+    ok(up, `settle context: the facilitator boots with the stub settle (${childOut.slice(-300)})`);
+    const requirements = { scheme: "exact", network: NETWORK, asset: USDC_TESTNET_ADDRESS, amount: "10000", payTo: Keypair.random().publicKey(), maxTimeoutSeconds: 60, extra: { areFeesSponsored: true } };
+    // Arrival order is the queue order; the one that hangs past its deadline goes last.
+    const plan = [
+      ["throw-after-send", 101, 80], ["throw-before-send", 102, 30], ["success", 103, 40],
+      ["throw-after-send", 104, 0], ["fail-result", 105, 30], ["throw-after-send", 106, 60],
+      ["throw-before-send", 107, 0], ["hang-after-send", 108, 0],
+    ];
+    const calls = [];
+    for (const [mode, seq, waitMs] of plan) {
+      calls.push(fetch(`http://127.0.0.1:${freePort}/settle`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ paymentPayload: { x402Version: 2, accepted: requirements, payload: { mode, seq, waitMs } }, paymentRequirements: requirements }),
+        signal: AbortSignal.timeout(30_000),
+      }).then((r) => r.json()));
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    const bodies = await Promise.all(calls);
+    const own = { "throw-after-send": true, "hang-after-send": true, success: true };
+    plan.forEach(([mode, seq], i) => {
+      const body = bodies[i];
+      const want = own[mode] ? hashOf(seq) : undefined;
+      if (own[mode]) ok(typeof want === "string" && want.length === 64, `settle context: the stub received #${seq}'s submission`);
+      ok((body.transaction || undefined) === want, `settle context: ${mode} #${seq} answers with ${want ? "its own hash" : "no hash"} (${JSON.stringify(body).slice(0, 200)})`);
+    });
+    ok(bodies[plan.length - 1].errorReason === "settle_timed_out", "settle context: the settle past its deadline is answered as timed out, naming what it sent");
+    ok(sent.length === 6, `settle context: the stub saw the six submissions the plan makes (${sent.length})`);
+  } finally {
+    child.kill("SIGKILL");
+    stub.closeAllConnections?.(); stub.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+  console.log("settle context isolation tests ✓");
+}
+
 // Everything above is offline and deterministic; everything below needs
 // Stellar testnet plus a persistent funded payer. CI runs the offline half
 // on every push (FACILITATOR_TEST_OFFLINE_ONLY=1) - before this gate the

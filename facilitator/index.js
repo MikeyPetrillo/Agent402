@@ -278,11 +278,6 @@ app.post("/verify", requireAuth, async (req, res) => {
   }
 });
 
-// withTimeout rejects outside the ALS scope, so the job's ctx is remembered
-// on the settle promise chain: the most recent ctx whose job is still the one
-// being awaited. Settles are serialized (queue.js), so "current" is exact.
-let _currentSettleCtx = null;
-const settleCtxOf = () => _currentSettleCtx;
 app.post("/settle", requireAuth, async (req, res) => {
   const { paymentPayload, paymentRequirements } = req.body ?? {};
   if (!isPlausiblePaymentPayload(paymentPayload) || !isPlausiblePaymentRequirements(paymentRequirements)) {
@@ -291,6 +286,9 @@ app.post("/settle", requireAuth, async (req, res) => {
   if (ALLOWED_PAYTO.length && !ALLOWED_PAYTO.includes(paymentRequirements.payTo)) {
     return res.status(200).json(invalidSettle("payto_not_allowed", paymentRequirements.network));
   }
+  // This request's settle context, kept in the request: the catch below reads
+  // the hash this settle submitted, never another request's.
+  const ctx = newSettleContext(SETTLE_TIMEOUT_MS);
   try {
     // The caller is answered at SETTLE_TIMEOUT_MS, but the vendor settle is
     // not cancellable and keeps running. Two things keep that from racing the
@@ -302,12 +300,10 @@ app.post("/settle", requireAuth, async (req, res) => {
     // The deadline runs from this request's arrival (newSettleContext), so a
     // settle that waited in the queue behind a held one gets only what is left
     // of it, and one whose caller has gone or whose time is up never starts.
-    const ctx = newSettleContext(SETTLE_TIMEOUT_MS);
     let clientGone = false;
     res.on("close", () => { if (!res.writableEnded) clientGone = true; });
     let result = await enqueueSettle(settleJob(ctx, {
       run: (c, fn) => settleContext.run(c, fn),
-      onStart: (c) => { _currentSettleCtx = c; },
       clientClosed: () => clientGone || req.socket?.destroyed === true,
       settle: () => facilitator.settle(paymentPayload, paymentRequirements),
     }));
@@ -317,7 +313,6 @@ app.post("/settle", requireAuth, async (req, res) => {
     console.log(`[/settle] ${result?.success ? "settled" : `not settled (${result?.errorReason || "?"})`} in ${Date.now() - ctx.startedAt}ms${ctx.txHash ? ` tx ${ctx.txHash.slice(0, 12)}...` : " (nothing submitted)"}`);
     res.status(200).json(normalizeSettle(result, paymentRequirements.network));
   } catch (err) {
-    const ctx = settleCtxOf(err);
     const reason = err?.code === "FACILITATOR_TIMEOUT" ? "settle_timed_out" : "facilitator_dispatch_error";
     // The underlying settle may already have submitted, or may have a
     // submission still in flight (see the comment above) - either way this response is
@@ -331,7 +326,7 @@ app.post("/settle", requireAuth, async (req, res) => {
     // polled hash, or, for a submission still in flight at the deadline, the
     // hash recorded as it was sent (settle-deadline.js). That one may yet
     // land, so the caller is handed it to confirm rather than a bare failure.
-    const txHash = ctx?.txHash || ctx?.sentHash || "";
+    const txHash = ctx.txHash || ctx.sentHash || "";
     console.error(`[/settle] dispatch error${txHash ? ` (submitted ${txHash.slice(0, 12)}... before the response)` : " (nothing submitted before the response)"}:`, err);
     res.status(200).json({ ...invalidSettle(reason, paymentRequirements.network, safeMessage(err)), payer, ...(txHash ? { transaction: txHash } : {}) });
   }
