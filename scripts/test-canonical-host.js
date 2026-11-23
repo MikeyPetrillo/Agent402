@@ -114,7 +114,7 @@ try {
   // The extension's own constraints (ext-server-card schema.ts), and the
   // registry entry and the card describing the server in the same words.
   const registry = JSON.parse(readFileSync(join(ROOT, "mcp", "server.json"), "utf8"));
-  ok(c.$schema === SERVER_CARD_SCHEMA && /^https:\/\/static\.modelcontextprotocol\.io\/schemas\/v1\/server-card\.schema\.json$/.test(c.$schema), "the card names the v1 server-card schema");
+  ok(SERVER_CARD_SCHEMA === null ? !("$schema" in c) : c.$schema === SERVER_CARD_SCHEMA, "the card names a $schema only once one is published (none resolves yet, so the key is left out)");
   ok(/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/.test(c.name) && c.name.length <= 200 && c.title.length <= 100 && c.description.length >= 1 && c.description.length <= 100 && c.version.length <= 255, "the card's name is reverse-DNS and its fields fit the schema's lengths");
   ok(mcpShortDescription({ mpp: true }) === registry.description && c.name === registry.name, "the card and mcp/server.json carry the same name and description (MPP on)");
   const n = c._meta?.["tools.agent402/catalog"]?.tools;

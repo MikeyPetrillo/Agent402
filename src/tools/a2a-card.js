@@ -131,7 +131,9 @@ export function buildOurAgentCard({ baseUrl, version, toolCount } = {}) {
       `Pay-per-call web tools for autonomous agents: ${catalog} settled in ${SETTLE_ASSETS} over x402 or MPP, ` +
       `${payTail()} No account and no API key. The same catalog is ` +
       `callable over MCP at ${base}/mcp and documented at ${base}/openapi.json.`,
-    url: `${base}/api`,
+    // A JSON read of every route that answers 200 to a GET: the bare /api
+    // redirects to the docs page, which a client following url would land on.
+    url: `${base}/api/pricing`,
     preferredTransport: "HTTP+JSON",
     version: String(version || "1.0.0"),
     documentationUrl: `${base}/docs`,

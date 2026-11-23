@@ -67,11 +67,11 @@ ok(A2A_WELL_KNOWN_PATHS[0] === "/.well-known/agent-card.json" && A2A_WELL_KNOWN_
   // Parsed origin, never a prefix: "https://agent402.tools" as a startsWith
   // also accepts https://agent402.tools.example.com, which is the whole point
   // of the rule CodeQL raises here.
-  ok(new URL(card.url).origin === "https://agent402.tools" && new URL(card.url).pathname === "/api", "the url is our own origin, matched exactly");
+  ok(new URL(card.url).origin === "https://agent402.tools" && new URL(card.url).pathname === "/api/pricing", "the url is our own origin, matched exactly, on a path that answers 200 (not the bare /api, which redirects)");
   ok(new Set(card.skills.map((s) => s.id)).size === card.skills.length && card.skills.length >= 3, "skills are unique and there are enough to be useful");
   ok(card.skills.every((s) => s.tags.length > 0), "every skill carries tags an A2A client can match on");
   const stale = buildOurAgentCard({ baseUrl: "https://agent402.tools/", version: "2.1.0" });
-  ok(stale.url === "https://agent402.tools/api", "a trailing slash on the base url never doubles");
+  ok(stale.url === "https://agent402.tools/api/pricing", "a trailing slash on the base url never doubles");
   ok(/500\+ priced endpoints/.test(stale.description), "an unreadable catalog count falls back to the evergreen claim, never to a wrong number");
   ok(/607 priced endpoints/.test(card.description), "and a live count is used when there is one");
 }

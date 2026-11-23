@@ -20,7 +20,7 @@ We publish a runnable sample: [`examples/agentcore-x402-buyer`](https://github.c
 
 ## What you get out of the box
 
-- 500+ pay-per-call tools + 70+ multi-tool skill packs from Agent402, callable from an AgentCore-hosted agent
+- 500+ pay-per-call tools + 80+ multi-tool skill packs from Agent402, callable from an AgentCore-hosted agent
 - Free tier with **no wallet** on the pure-CPU tools (proof-of-work through the adapters, or free and rate-limited through the hosted `/mcp` connector)
 - USDC settlement for wallet-only tools through the Payments plugin (the live-proven path above)
 - A Strands adapter (`agent402-strands`) for embedding a chosen tool subset in a Strands agent

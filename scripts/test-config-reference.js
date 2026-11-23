@@ -125,6 +125,18 @@ for (const n of ["PLANTED_AFTER_STRING_STAR", "PLANTED_AFTER_STRING_SLASHES", "P
 ok(!literals.names.has("PLANTED_QUOTED_COMMENT"), "control: a comment that holds a quote character is still a comment");
 ok(stripComments("const s = \"/*\"; /* gone */ const t = 1; // gone too").replace(/\s+/g, " ").trim() === "const s = \"/*\"; const t = 1;", "stripComments keeps string text and removes only real comments");
 ok(defaultOf("PLANTED_MEMBER", ["const a = process.env.PLANTED_MEMBER || 5;"]) === "5" && defaultOf("PLANTED_HELPER", ["envMs(\"PLANTED_HELPER\", 10_000)"]) === "10000", "control: the default is read from both fallback shapes");
+// Arithmetic binds tighter than the fallback: the default is the product, not
+// its first factor; a tail naming a constant or a call has no plain value.
+ok(defaultOf("PLANTED_MUL", ["const a = Number(process.env.PLANTED_MUL || 24 * 3600_000);"]) === "86400000", "a multiplied default is the product (24 * 3600_000 reads 86400000)");
+ok(defaultOf("PLANTED_MUL2", ["envMs(\"PLANTED_MUL2\", 10 * 60_000)"]) === "600000" && defaultOf("PLANTED_EXP", ["envMs(\"PLANTED_EXP\", 3 * 864e5)"]) === "259200000", "the helper shape and exponent literals are evaluated too");
+ok(defaultOf("PLANTED_SCALED", ["Number(process.env.PLANTED_SCALED || 10) * 1000"]) === "10", "a factor outside the fallback's parentheses is not part of the default");
+ok(defaultOf("PLANTED_NAMED", ["process.env.PLANTED_NAMED || 24 * HOUR_MS"]) === null && defaultOf("PLANTED_CALL", ["process.env.PLANTED_CALL || 60 * 1000 * Math.max(1, 2)"]) === null, "a tail that names a constant or a call prints no default");
+{
+  const cell = (n) => text.split("\n").find((l) => l.startsWith(`| \`${n}\` |`))?.split(" | ")[2]?.trim();
+  ok(cell("HANGUP_FORGIVE_WINDOW_MS") === "`86400000`" && cell("SANCTIONS_LIST_TIMEOUT_MS") === "`600000`", "the reference prints multiplied defaults whole (HANGUP_FORGIVE_WINDOW_MS, SANCTIONS_LIST_TIMEOUT_MS)");
+  const shortMs = names.filter((n) => /_MS$/.test(n) && /^`([1-9]\d?)`$/.test(cell(n) || ""));
+  ok(shortMs.length === 0, `no millisecond default reads as a bare one- or two-digit number (a first factor printed alone)${list(shortMs)}`);
+}
 
 // A default that is not a plain literal at the read site (a named constant,
 // an expression, a branch) is given in docs/configuration.json `defaults`,

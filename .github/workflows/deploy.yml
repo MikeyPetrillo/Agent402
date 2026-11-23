@@ -84,8 +84,9 @@ on:
         description: "Ticker for mode=demo (US symbol)."
         default: "NVDA"
 
-# Least privilege by default: jobs get a read-only GITHUB_TOKEN. The only job
-# that needs more (publish → OIDC) overrides this with its own permissions block.
+# Least privilege by default: jobs get a read-only GITHUB_TOKEN. A job that
+# needs more (publish → OIDC, github-release → tags and releases) overrides
+# this with its own permissions block.
 permissions:
   contents: read
 
@@ -5605,3 +5606,29 @@ jobs:
           MODE=sweep PAY_NETWORK=base SLUGS="$SLUGS" REQUIRE_SLUGS=1 MAX_PRICE_USD="$MAXP" STALE_DAYS=0 BATCH_COUNT=1 node scripts/refresh-bazaar.js; RB=$?
           set -e
           [ "$RB" = "0" ] || echo "::warning::A price-change buy did not complete (exit $RB): $SLUGS. Run bazaar-keepalive.yml with those slugs and stale_days=0."
+
+  # The GitHub release for package.json's version, cut from its CHANGELOG.md
+  # section once that version is live: only after a deploy from main
+  # succeeded, and only when no release of that version exists yet (a tag made
+  # by hand is released as it is). The job's token can write the tree's tags
+  # and releases and nothing else; it installs no packages
+  # (scripts/github-release.js imports node: only; scripts/test-github-release.js).
+  github-release:
+    needs: [deploy]
+    if: >-
+      !cancelled() && needs.deploy.result == 'success'
+      && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create the release for this version when none exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+        run: node scripts/github-release.js

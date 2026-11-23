@@ -341,5 +341,21 @@ ok(badSlugLinks === 0, `every /tools and /skills link resolves to a real entry (
 ok(exactCounts === 0, `no doc hard-codes an exact catalog count (${exactCounts} found)`);
 ok(wrongFirstAsk === 0, `no doc says the connector's first payment ask is JSON-RPC -32042 (${wrongFirstAsk} found; it is a tool result, -32042 is the tasks path)`);
 
+// The README's /v1 section names every /v1 route the served catalog lists, so
+// a new wire or route (the Gemini wire, transcription, image edits) is in the
+// table a reader scans. A brace form (`/v1/{nano,pro}/messages`) names each.
+{
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  const named = new Set();
+  for (const m of readme.matchAll(/`(?:(?:POST|GET) )?(\/v1[^`\s]*)`/g)) {
+    let forms = [m[1]];
+    for (let b; forms.some((x) => /\{[^}]+\}/.test(x));) forms = forms.flatMap((x) => (b = /\{([^}]+)\}/.exec(x)) ? b[1].split(",").map((v) => x.replace(b[0], v.trim())) : [x]);
+    for (const f of forms) named.add(f);
+  }
+  const v1 = (pricing.endpoints || []).map((e) => e.route || e.path).filter((r) => /^\/v1\//.test(r || ""));
+  const unnamed = v1.filter((r) => !named.has(r));
+  ok(v1.length >= 20 && unnamed.length === 0, `the README names every served /v1 route (${v1.length} served${unnamed.length ? `; missing ${unnamed.join(", ")}` : ""})`);
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

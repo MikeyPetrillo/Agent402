@@ -2,12 +2,13 @@ name: Sync wiki
 
 # The GitHub wiki is its own git repo that can't take PRs, so the source of
 # truth lives in wiki/ here (version-controlled, reviewed) and this job
-# mirrors it to the wiki on every change.
+# mirrors it to the wiki on every change that reaches main. Only main: the
+# wiki describes the live service, so a dev-branch push never publishes copy
+# for code that is not deployed (scripts/test-wiki-sync-main.js).
 on:
   push:
     branches:
       - "main"
-      - "claude/sweet-brown-i99jl3"
     paths:
       - "wiki/**"
       - ".github/workflows/wiki.yml"
@@ -18,6 +19,8 @@ permissions:
 
 jobs:
   sync:
+    # A manual run from another branch publishes nothing.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

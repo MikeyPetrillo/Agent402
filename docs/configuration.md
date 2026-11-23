@@ -72,7 +72,7 @@ holds it.
 | `ALGORAND_PAGE_WAIT_MS` | Algorand page wait, in milliseconds. | `8000` | `src/server.js` |
 | `ALGORAND_RELAY_TOKEN` | Algorand relay token (a credential, set on the host). |  | `src/revenue-live.js`, `src/x402-buyer.js` |
 | `ALGORAND_RELAY_URL` | Algorand relay URL. |  | `src/revenue-live.js`, `src/x402-buyer.js` |
-| `ALGORAND_SELLERS_TTL_MS` | Algorand sellers lifetime, in milliseconds. | `30` | `src/algorand-sellers.js` |
+| `ALGORAND_SELLERS_TTL_MS` | Algorand sellers lifetime, in milliseconds. | `1800000` | `src/algorand-sellers.js` |
 | `ALGORAND_UPSTREAM_BUYER_ADDRESS` | Algorand upstream buyer address. |  | `src/own-wallets.js`, `src/payments.js`, `src/server.js` |
 | `ALGORAND_UPSTREAM_BUYER_LOW_USD` | Algorand upstream buyer low, in USD. | `0.5` | `src/x402-buyer.js` |
 | `ALGORAND_UPSTREAM_BUYER_MNEMONIC` | Mnemonic of the Algorand spending wallet route-execute buys with (a credential, set on the host). |  | `src/x402-buyer.js` |
@@ -313,20 +313,20 @@ holds it.
 | `DATABENTO_DATA_TIMEOUT_MS` | Databento data timeout, in milliseconds. | `12000` | `src/tools/databento.js` |
 | `DATABENTO_MAX_QUERY_USD` | Databento maximum query, in USD. | not listed | `src/tools/databento.js` |
 | `DATABENTO_PRIMARY_SKIP_MS` | Databento primary skip, in milliseconds. |  | `src/tools/databento.js` |
-| `DATABENTO_QUOTE_STALE_MAX_MS` | Databento quote stale maximum, in milliseconds. | `24` | `src/tools/databento.js` |
-| `DATABENTO_RANGE_MAX_AGE_MS` | Databento range maximum age, in milliseconds. | `60` | `src/tools/databento.js` |
-| `DATABENTO_RANGE_REFRESH_MS` | Databento range refresh, in milliseconds. | `15` | `src/tools/databento.js` |
+| `DATABENTO_QUOTE_STALE_MAX_MS` | Databento quote stale maximum, in milliseconds. | `86400000` | `src/tools/databento.js` |
+| `DATABENTO_RANGE_MAX_AGE_MS` | Databento range maximum age, in milliseconds. | `3600000` | `src/tools/databento.js` |
+| `DATABENTO_RANGE_REFRESH_MS` | Databento range refresh, in milliseconds. | `900000` | `src/tools/databento.js` |
 | `DATABENTO_RANGE_RETRY_MS` | Databento range retry, in milliseconds. | `30000` | `src/tools/databento.js` |
-| `DATABENTO_RANGE_STALE_MAX_MS` | Databento range stale maximum, in milliseconds. | `24` | `src/tools/databento.js` |
+| `DATABENTO_RANGE_STALE_MAX_MS` | Databento range stale maximum, in milliseconds. | `86400000` | `src/tools/databento.js` |
 | `DATABENTO_RANGE_TIMEOUT_MS` | Databento range timeout, in milliseconds. | `6000` | `src/tools/databento.js` |
 | `DATABENTO_SHARED_DEADLINE_MS` | Databento shared deadline, in milliseconds. | `250` | `src/tools/databento.js` |
 | `DATABENTO_SHARED_PREFIX` | Databento shared prefix. | `databento:v1:` | `src/tools/databento.js` |
 | `DATABENTO_SUMMARY` | Databento summary. |  | `src/tools/databento.js` |
 | `DATABENTO_WARM` | Databento warm. |  | `src/tools/databento.js` |
-| `DATABENTO_WARM_IDLE_MS` | Databento warm idle, in milliseconds. | `6` | `src/tools/databento.js` |
+| `DATABENTO_WARM_IDLE_MS` | Databento warm idle, in milliseconds. | `21600000` | `src/tools/databento.js` |
 | `DATABENTO_WARM_RETRY_MS` | Databento warm retry, in milliseconds. | `30000` | `src/tools/databento.js` |
 | `DATABENTO_WARM_TOP_N` | Databento warm top n. |  | `src/tools/databento.js` |
-| `DATABENTO_WARM_WINDOW_MS` | Databento warm window, in milliseconds. | `3` | `src/tools/databento.js` |
+| `DATABENTO_WARM_WINDOW_MS` | Databento warm window, in milliseconds. | `259200000` | `src/tools/databento.js` |
 
 ## DECIDE
 
@@ -352,7 +352,7 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `DIRECT_UPSTREAM_BREAKER_FAILS` | Direct upstream breaker fails. | `3` | `src/gateway-direct-upstream.js` |
-| `DIRECT_UPSTREAM_BREAKER_OPEN_MS` | Direct upstream breaker open, in milliseconds. | `5` | `src/gateway-direct-upstream.js` |
+| `DIRECT_UPSTREAM_BREAKER_OPEN_MS` | Direct upstream breaker open, in milliseconds. | `300000` | `src/gateway-direct-upstream.js` |
 | `DIRECT_UPSTREAM_DAILY_ALERT_USD` | Direct upstream daily alert, in USD. |  | `src/direct-upstream-spend.js` |
 | `DIRECT_UPSTREAM_KEY` | Direct upstream key (a credential, set on the host). |  | `src/gateway-direct-upstream.js` |
 | `DIRECT_UPSTREAM_MAX_BYTES` | Direct upstream maximum bytes. |  | `src/tools/llm-gateway-kit.js` |
@@ -364,8 +364,8 @@ holds it.
 | `DIRECT_UPSTREAM_NAME` | Direct upstream name. |  | `src/gateway-direct-upstream.js` |
 | `DIRECT_UPSTREAM_OR_MODELS_URL` | Direct upstream or models URL. | `https://openrouter.ai/api/v1/models` | `src/gateway-direct-pricebook.js` |
 | `DIRECT_UPSTREAM_POLICY_URL` | Direct upstream policy URL. |  | `src/gateway-direct-upstream.js` |
-| `DIRECT_UPSTREAM_PRICE_MAX_BYTES` | Direct upstream price maximum bytes. | `4` | `src/gateway-direct-pricebook.js` |
-| `DIRECT_UPSTREAM_PRICE_REFRESH_MS` | Direct upstream price refresh, in milliseconds. | `60` | `src/gateway-direct-pricebook.js` |
+| `DIRECT_UPSTREAM_PRICE_MAX_BYTES` | Direct upstream price maximum bytes. | `4194304` | `src/gateway-direct-pricebook.js` |
+| `DIRECT_UPSTREAM_PRICE_REFRESH_MS` | Direct upstream price refresh, in milliseconds. | `3600000` | `src/gateway-direct-pricebook.js` |
 | `DIRECT_UPSTREAM_PRICE_TIMEOUT_MS` | Direct upstream price timeout, in milliseconds. | `15000` | `src/gateway-direct-pricebook.js` |
 | `DIRECT_UPSTREAM_SHARE` | Direct upstream share. |  | `src/gateway-direct-upstream.js` |
 | `DIRECT_UPSTREAM_SINCE` | Direct upstream since. |  | `src/gateway-direct-upstream.js` |
@@ -424,7 +424,7 @@ holds it.
 | `EXTERNAL_MAX_UNSETTLED_GLOBAL_USD` | External maximum unsettled global, in USD. |  | `src/external-spend-guard.js` |
 | `EXTERNAL_MAX_UNSETTLED_USD` | External maximum unsettled, in USD. | `6.0` | `src/external-spend-guard.js` |
 | `EXTERNAL_SPEND_EXEMPT` | External spend exempt. |  | `src/external-spend-guard.js` |
-| `EXTERNAL_SPEND_STALE_MS` | External spend stale, in milliseconds. | `10` | `src/external-spend-guard.js` |
+| `EXTERNAL_SPEND_STALE_MS` | External spend stale, in milliseconds. | `600000` | `src/external-spend-guard.js` |
 
 ## FACILITATOR
 
@@ -526,8 +526,8 @@ holds it.
 | `HANGUP_FORGIVE_GLOBAL_USD` | Hangup forgive global, in USD. |  | `src/hangup-forgiveness.js` |
 | `HANGUP_FORGIVE_KEY_USD` | Hangup forgive key (a credential, set on the host), in USD. |  | `src/hangup-forgiveness.js` |
 | `HANGUP_FORGIVE_SALT` | Hangup forgive salt. |  | `src/discovery-refusals.js`, `src/hangup-forgiveness.js`, `src/request-timing.js` and 1 more |
-| `HANGUP_FORGIVE_WINDOW_MS` | Hangup forgive window, in milliseconds. | `24` | `src/hangup-forgiveness.js` |
-| `HANGUP_INFLIGHT_WINDOW_MS` | Hangup inflight window, in milliseconds. | `15` | `src/hangup-forgiveness.js` |
+| `HANGUP_FORGIVE_WINDOW_MS` | Hangup forgive window, in milliseconds. | `86400000` | `src/hangup-forgiveness.js` |
+| `HANGUP_INFLIGHT_WINDOW_MS` | Hangup inflight window, in milliseconds. | `900000` | `src/hangup-forgiveness.js` |
 
 ## HARDCAP
 
@@ -575,7 +575,7 @@ holds it.
 | `INDEX_CACHE_NDJSON_FILE` | Index cache ndjson file path. |  | `src/x402-index.js` |
 | `INDEX_CRAWL_HOLD_HOURS` | Index crawl hold, in hours. |  | `src/x402-index.js` |
 | `INDEX_FIRST_CRAWL_DELAY_MS` | Index first crawl delay, in milliseconds. | `30000` | `src/x402-index.js` |
-| `INDEX_FORCE_CRAWL_COOLDOWN_MS` | Index force crawl cooldown, in milliseconds. | `15` | `src/x402-index.js` |
+| `INDEX_FORCE_CRAWL_COOLDOWN_MS` | Index force crawl cooldown, in milliseconds. | `900000` | `src/x402-index.js` |
 | `INDEX_LISTINGS_RECONCILE_GRACE_MS` | Index listings reconcile grace, in milliseconds. |  | `src/x402-index.js` |
 | `INDEX_LISTINGS_STORE` | Index listings store. |  | `src/index-listings-pg.js` |
 | `INDEX_MAX_SUBMITTED_SEEDS` | Index maximum submitted seeds. |  | `src/x402-index.js` |
@@ -586,7 +586,7 @@ holds it.
 | `INDEX_REGISTER_DEADLINE_MS` | Index register deadline, in milliseconds. |  | `src/x402-index.js` |
 | `INDEX_REGISTER_GLOBAL_MAX` | Index register global maximum. | `300` | `src/server.js` |
 | `INDEX_RELEASE_AFTER_DAYS` | Index release after, in days. | `30` | `src/x402-index.js` |
-| `INDEX_REPRICE_COOLDOWN_MS` | Index reprice cooldown, in milliseconds. | `10` | `src/x402-index.js` |
+| `INDEX_REPRICE_COOLDOWN_MS` | Index reprice cooldown, in milliseconds. | `600000` | `src/x402-index.js` |
 | `INDEX_REPRICE_MAX_PER_ORIGIN_HOUR` | Index reprice maximum per origin hour. | `240` | `src/x402-index.js` |
 | `INDEX_SELLER_TOOL_CAP` | Index seller tool cap. |  | `src/seller-tool-cap.js` |
 | `INDEX_SETTLED_RELEASE_AFTER_DAYS` | Index settled release after, in days. | `90` | `src/x402-index.js` |
@@ -719,7 +719,7 @@ holds it.
 | `MPP_DISCOVERY_URL` | MPP discovery URL. | `https://mpp.dev/api/services` | `src/mpp-index.js` |
 | `MPP_EVM_DOMAIN_FALLBACK` | MPP EVM domain fallback. |  | `src/mpp-fallback.js` |
 | `MPP_EVM_DOMAIN_FALLBACK_MAX_RESPONSES` | MPP EVM domain fallback maximum responses. | `5` | `src/mpp-fallback.js` |
-| `MPP_EVM_DOMAIN_FALLBACK_TTL_MS` | MPP EVM domain fallback lifetime, in milliseconds. | `30` | `src/mpp-fallback.js` |
+| `MPP_EVM_DOMAIN_FALLBACK_TTL_MS` | MPP EVM domain fallback lifetime, in milliseconds. | `1800000` | `src/mpp-fallback.js` |
 | `MPP_INDEX_CACHE_FILE` | MPP index cache file path. | `/data/mpp-index-cache.json` | `src/mpp-index.js` |
 | `MPP_INDEX_CRAWL` | on crawls the MPP seller index regardless of environment detection; off stops it. |  | `src/server.js` |
 | `MPP_INDEX_PULL_MS` | MPP index pull, in milliseconds. |  | `src/mpp-index.js` |
@@ -740,7 +740,7 @@ holds it.
 | `MPP_SUB_SPONSOR_DAILY_MAX_TX` | MPP sub sponsor daily maximum transaction. |  | `src/tempo-sponsor-ceiling.js` |
 | `MPP_SUB_SPONSOR_DAILY_MAX_USD` | MPP sub sponsor daily maximum, in USD. |  | `src/tempo-sponsor-ceiling.js` |
 | `MPP_SUB_UNCONFIRMED_ALERT_HOURS` | MPP sub unconfirmed alert, in hours. |  | `src/mpp-subscriptions.js` |
-| `MPP_TEMPO_DEMOTE_MS` | MPP tempo demote, in milliseconds. | `30` | `src/mpp-tempo.js` |
+| `MPP_TEMPO_DEMOTE_MS` | MPP tempo demote, in milliseconds. | `1800000` | `src/mpp-tempo.js` |
 
 ## MTA
 
@@ -1019,7 +1019,7 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `RERANK_ACT_CONFIDENCE` | Rerank act confidence. | `0.85` | `src/discovery-rerank.js` |
-| `RERANK_CACHE_TTL_MS` | Rerank cache lifetime, in milliseconds. | `24` | `src/discovery-rerank.js` |
+| `RERANK_CACHE_TTL_MS` | Rerank cache lifetime, in milliseconds. | `86400000` | `src/discovery-rerank.js` |
 | `RERANK_CANDIDATES` | Rerank candidates. | `5` | `src/discovery-rerank.js` |
 | `RERANK_CONSIDER_CONFIDENCE` | Rerank consider confidence. | `0.6` | `src/discovery-rerank.js` |
 | `RERANK_MAX_ROWS` | Rerank maximum rows. | `40` | `src/discovery-rerank.js` |
@@ -1106,18 +1106,18 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `SANCTIONS_LIST_REFRESH_MS` | Sanctions list refresh, in milliseconds. | `6` | `src/sanctions-screen.js` |
-| `SANCTIONS_LIST_RETRY_MS` | Sanctions list retry, in milliseconds. | `5` | `src/sanctions-screen.js`, `src/tools/sanctions-kit.js` |
-| `SANCTIONS_LIST_TIMEOUT_MS` | Sanctions list timeout, in milliseconds. | `10` | `src/ofac-sdn.js` |
+| `SANCTIONS_LIST_REFRESH_MS` | Sanctions list refresh, in milliseconds. | `21600000` | `src/sanctions-screen.js` |
+| `SANCTIONS_LIST_RETRY_MS` | Sanctions list retry, in milliseconds. | `300000` | `src/sanctions-screen.js`, `src/tools/sanctions-kit.js` |
+| `SANCTIONS_LIST_TIMEOUT_MS` | Sanctions list timeout, in milliseconds. | `600000` | `src/ofac-sdn.js` |
 | `SANCTIONS_LIST_URL` | Sanctions list URL. |  | `src/ofac-sdn.js` |
 | `SANCTIONS_ONE_HOP` | Sanctions one hop. |  | `src/sanctions-screen.js` |
 | `SANCTIONS_ONE_HOP_DEADLINE_MS` | Sanctions one hop deadline, in milliseconds. | `2500` | `src/sanctions-screen.js` |
-| `SANCTIONS_ONE_HOP_LOOKBACK_MS` | Sanctions one hop lookback, in milliseconds. | `90` | `src/sanctions-screen.js` |
+| `SANCTIONS_ONE_HOP_LOOKBACK_MS` | Sanctions one hop lookback, in milliseconds. | `7776000000` | `src/sanctions-screen.js` |
 | `SANCTIONS_ONE_HOP_MAX_PAGES` | Sanctions one hop maximum pages. | `2` | `src/sanctions-screen.js` |
 | `SANCTIONS_ONE_HOP_MIN_SHARE` | Sanctions one hop minimum share. |  | `src/sanctions-screen.js` |
 | `SANCTIONS_ONE_HOP_MIN_USD` | Sanctions one hop minimum, in USD. |  | `src/sanctions-screen.js` |
 | `SANCTIONS_ONE_HOP_SHARE_FLOOR_USD` | Sanctions one hop share floor, in USD. |  | `src/sanctions-screen.js` |
-| `SANCTIONS_ONE_HOP_TTL_MS` | Sanctions one hop lifetime, in milliseconds. | `7` | `src/sanctions-screen.js` |
+| `SANCTIONS_ONE_HOP_TTL_MS` | Sanctions one hop lifetime, in milliseconds. | `604800000` | `src/sanctions-screen.js` |
 | `SANCTIONS_PAYOUT_FILE` | Sanctions payout file path. |  | `src/tools/sanctions-kit.js` |
 | `SANCTIONS_REFRESH_MS` | Sanctions refresh, in milliseconds. |  | `src/tools/sanctions-kit.js` |
 | `SANCTIONS_SCREEN_FILE` | Sanctions screen file path. |  | `src/sanctions-screen.js` |
@@ -1150,7 +1150,7 @@ holds it.
 | `SELLER_REPUTATION_MAX_DELIVERY_ORIGINS` | Most seller origins with delivery outcomes kept. | `4000` | `src/seller-reputation.js` |
 | `SELLER_REPUTATION_MAX_SELLERS` | Most sellers with a reputation record kept. | `8000` | `src/seller-reputation.js` |
 | `SELLER_REPUTATION_META_FILE` | File for seller reputation re-check requests and the days a crawl cycle failed broadly on our side. | `/data/seller-reputation-meta.json` | `src/seller-reputation.js` |
-| `SELLER_REPUTATION_RECHECK_HOST_MS` | How long one accepted seller reputation re-check request holds before another is accepted for the same seller, in milliseconds. Default 21600000 (6 hours), at least 1000. | `6` | `src/seller-reputation.js` |
+| `SELLER_REPUTATION_RECHECK_HOST_MS` | How long one accepted seller reputation re-check request holds before another is accepted for the same seller, in milliseconds. Default 21600000 (6 hours), at least 1000. | `21600000` | `src/seller-reputation.js` |
 | `SELLER_REVISIT_MAX_HOURS` | Seller revisit maximum, in hours. | `12` | `src/seller-load.js` |
 
 ## SETTLE
@@ -1268,7 +1268,7 @@ holds it.
 | `SOR_SELF_FUNDING_CLEARED` | Router self funding cleared. |  | `src/server.js` |
 | `SOR_SELF_FUNDING_CLEARED_FILE` | Router self funding cleared file path. | `/data/sor-self-funding-cleared.json` | `src/server.js` |
 | `SOR_SELLER_DELIVERY_FAIL_TTL_MS` | Router seller delivery fail lifetime, in milliseconds. |  | `src/x402-buyer.js` |
-| `SOR_SELLER_REFUSAL_TTL_MS` | Router seller refusal lifetime, in milliseconds. | `6` | `src/x402-buyer.js` |
+| `SOR_SELLER_REFUSAL_TTL_MS` | Router seller refusal lifetime, in milliseconds. | `21600000` | `src/x402-buyer.js` |
 | `SOR_SHARED_PAYTOS_FILE` | Router shared paytos file path. | `/data/sor-shared-paytos.json` | `src/server.js` |
 | `SOR_SPEND_CAP_ATOMIC` | Router spend cap atomic. |  | `src/router-spend-window.js` |
 | `SOR_SPEND_HARD_CAP_ATOMIC` | Router spend hard cap atomic. |  | `src/router-spend-window.js` |
@@ -1361,7 +1361,7 @@ holds it.
 | `SVM_FUNDING_HOLD_AFTER` | Solana funding hold after. | `3` | `src/svm-funding-refusal.js` |
 | `SVM_FUNDING_RETRY_AFTER_S` | Solana funding retry after, in seconds. | `300` | `src/svm-funding-refusal.js` |
 | `SVM_FUNDING_THROTTLE` | Solana funding throttle. |  | `src/svm-funding-refusal.js` |
-| `SVM_FUNDING_WINDOW_MS` | Solana funding window, in milliseconds. | `10` | `src/svm-funding-refusal.js` |
+| `SVM_FUNDING_WINDOW_MS` | Solana funding window, in milliseconds. | `600000` | `src/svm-funding-refusal.js` |
 
 ## TEMPO
 
@@ -1435,9 +1435,9 @@ holds it.
 | `TRAFFIC_CRAWLER_PATHS` | Traffic crawler paths. | `25` | `src/traffic-classifier.js` |
 | `TRAFFIC_DIR` | Traffic directory. |  | `src/traffic-classifier.js` |
 | `TRAFFIC_HASH_SALT` | Traffic hash salt. |  | `src/first-call-allowance.js`, `src/traffic-classifier.js` |
-| `TRAFFIC_PERSIST_MS` | Traffic persist, in milliseconds. | `60` | `src/traffic-classifier.js` |
+| `TRAFFIC_PERSIST_MS` | Traffic persist, in milliseconds. | `60000` | `src/traffic-classifier.js` |
 | `TRAFFIC_RETENTION_DAYS` | Traffic retention, in days. |  | `src/traffic-classifier.js` |
-| `TRAFFIC_WINDOW_MS` | Traffic window, in milliseconds. | `10` | `src/traffic-classifier.js` |
+| `TRAFFIC_WINDOW_MS` | Traffic window, in milliseconds. | `600000` | `src/traffic-classifier.js` |
 
 ## TRIAL
 
@@ -1475,7 +1475,7 @@ holds it.
 | --- | --- | --- | --- |
 | `TYPESAFE_API_KEY` | Typesafe API key (a credential, set on the host). |  | `src/discovery-rerank.js`, `src/tool-judge.js`, `src/tools/judge-kit.js` and 2 more |
 | `TYPESAFE_API_URL` | Typesafe API URL. | `https://api.typesafe.ai/v1/systemone` | `src/discovery-rerank.js`, `src/tool-judge.js`, `src/tools/judge-kit.js` and 2 more |
-| `TYPESAFE_CACHE_TTL_MS` | Typesafe cache lifetime, in milliseconds. | `12` | `src/wish-classify.js` |
+| `TYPESAFE_CACHE_TTL_MS` | Typesafe cache lifetime, in milliseconds. | `43200000` | `src/wish-classify.js` |
 | `TYPESAFE_MAX_ROWS` | Typesafe maximum rows. | `60` | `src/wish-classify.js` |
 | `TYPESAFE_MIN_PROBABILITY` | Typesafe minimum probability. | `0.75` | `src/wish-classify.js` |
 | `TYPESAFE_MODEL` | Typesafe model. |  | `src/discovery-rerank.js`, `src/tool-judge.js`, `src/wish-classify.js` |

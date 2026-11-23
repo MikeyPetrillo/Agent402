@@ -1,6 +1,7 @@
 import { siteOrgRef, mppOffered } from "./site-org.js";
 import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
+import { SERVER_VERSION } from "./server-version.js";
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders, answerClientError, addApiHeaderPrefix } from "./security-headers.js";
 import { operatorRoutesOf } from "./operator-routes.js";
@@ -4979,9 +4980,9 @@ for (const p of A2A_WELL_KNOWN_PATHS) {
   app.get(p, (_req, res) => {
     res.set("Cache-Control", "public, max-age=900").json(buildOurAgentCard({
       baseUrl: BASE_URL,
-      // The card's own version, kept in step with the OpenAPI document's so
+      // package.json's version, the same one the OpenAPI document reports, so
       // the two machine surfaces never disagree about which Agent402 this is.
-      version: "2.1.0",
+      version: SERVER_VERSION,
       toolCount: Object.keys(CATALOG || {}).length,
     }));
   });

@@ -2916,6 +2916,8 @@ Operations:
 - The EVM wallet alarm also opens when an enabled chain's balance cannot be
   read for an hour, and the status probe pages on it.
 
+## v2.8.2 - 2026-11-06
+
 ### 2026-11-06 (Stellar settle confirmation)
 Payments:
 - A Stellar settle that the chain confirms is matched to the payment it
