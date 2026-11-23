@@ -38,7 +38,7 @@ Tools:
 - time-convert takes a `zones` list and returns one instant in up to 50 time
   zones in one answer.
 - csv-to-json takes delimiter names (semicolon, tab, pipe) or any single
-  character.
+  character other than a quote or a line break.
 - json-lint lists a duplicate key up to 200 characters and its path up to
   300 (`keyTruncated`, `keyLength` and `pathTruncated` say when one was cut).
 
@@ -91,7 +91,8 @@ Tools:
 - New: onchain-sql-range reads up to 31 days of a plain row select on
   solana.instructions in one call (x402 exact on EVM chains, as a job), and
   onchain-sql-week up to 7 days on every payment rail, Solana included;
-  onchain-sql's partial walks list both in `longerRange`.
+  a partial onchain-sql walk lists the routes that cover its range in
+  `longerRange`.
 
 ### 2026-11-22 (Solana fee payer status)
 Operations:

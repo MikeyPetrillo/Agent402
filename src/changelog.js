@@ -8,7 +8,7 @@ import { walletSignInEnabled } from "./wallet-sign-in.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_SECONDS, sttLongEnabled, sttAdditions } from "./tools/stt-kit.js";
 import { speechAdditions } from "./tools/llm-gateway-kit.js";
-import { SQL_WINDOW_MAX_QUERIES } from "./tools/cdp-kit.js";
+import { SQL_WINDOW_MAX_QUERIES, SQL_RANGE_MAX_DAYS, SQL_WEEK_MAX_DAYS } from "./tools/cdp-kit.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER, WALLET_PROOF_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
 import { tempoGasSponsorConfig, chargeSponsorAccount } from "./tempo-charge-sponsor.js";
@@ -83,7 +83,7 @@ const ENTRIES = [
     items: [
       "Tools: Five new tools, free through proof of work: number-words, encoding-detect, log-timestamps, csv-aggregate and json-lint.",
       "Tools: time-convert takes a `zones` list and returns one instant in up to 50 time zones in one answer.",
-      "Tools: csv-to-json takes delimiter names (semicolon, tab, pipe) or any single character.",
+      "Tools: csv-to-json takes delimiter names (semicolon, tab, pipe) or any single character other than a quote or a line break.",
       "Tools: json-lint lists a duplicate key up to 200 characters and its path up to 300 (`keyTruncated`, `keyLength` and `pathTruncated` say when one was cut).",
     ],
   },
@@ -135,7 +135,7 @@ const ENTRIES = [
     date: "2026-11-22",
     title: "onchain-sql range and week",
     items: [
-      "Tools: New: onchain-sql-range reads up to 31 days of a plain row select on solana.instructions in one call (x402 exact on EVM chains, as a job), and onchain-sql-week up to 7 days on every payment rail, Solana included; onchain-sql's partial walks list both in `longerRange`.",
+      `Tools: New: onchain-sql-range reads up to ${SQL_RANGE_MAX_DAYS} days of a plain row select on solana.instructions in one call (x402 exact on EVM chains, as a job), and onchain-sql-week up to ${SQL_WEEK_MAX_DAYS} days on every payment rail, Solana included; a partial onchain-sql walk lists the routes that cover its range in \`longerRange\`.`,
     ],
   },
   {
