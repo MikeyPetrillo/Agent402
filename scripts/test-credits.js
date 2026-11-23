@@ -419,7 +419,7 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
     ok(lc.disableByPaymentIntent("pi_cs_rf2", "refunded", { amountRefundedCents: 10000, fullyRefunded: true }) === r2.keyId && lc.authorize(r2.key, 0.001).reason === "disabled" && lc.balance(r2.key).balanceUsd === 0,
       "a full refund takes the rest and disables the key");
     const r3 = await buy("cs_rf3", { email: "rf2@x.com", card: "fp_rf2" });
-    ok(lc.disableByPaymentIntent("pi_cs_rf3", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r3.keyId && lc.authorize(r3.key, 0.001).reason === "disabled", "a dispute disables the key outright");
+    ok(lc.disableByPaymentIntent("pi_cs_rf3", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r3.keyId && lc.authorize(r3.key, 0.001).reason === "frozen", "a dispute disables the key outright (it answers frozen: on hold while the payment is reviewed)");
     // The dispute closing in our favor gives the key back; a key disabled
     // because its payment was refunded is not touched by a dispute closing.
     ok(lc.enableByPaymentIntent("pi_cs_rf3", "disputed") === r3.keyId, "a dispute closed in our favor enables the key it disabled");
@@ -454,7 +454,7 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
     { const f = join(LDIR, readdirSync(LDIR).find((n) => n.startsWith("k_") && JSON.parse(readFileSync(join(LDIR, n), "utf8")).keyId === r9.keyId)); const rec = JSON.parse(readFileSync(f, "utf8")); rec.paymentIntents.push("pi_cs_rf9b"); writeFileSync(f, JSON.stringify(rec)); }
     const lc3 = createCredits({ stripe: lstripe, baseUrl: "https://agent402.tools", storeDir: LDIR, now: () => t, log: () => {} });
     ok(lc3.disableByPaymentIntent("pi_cs_rf9b", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r9.keyId && lc3.status().rows.find((x) => x.keyId === r9.keyId)?.disabledReason === "disputed", "setup: a dispute on the key's second payment disables it");
-    ok(lc3.enableByPaymentIntent("pi_cs_rf9", "disputed") === null && lc3.authorize(r9.key, 0.001).reason === "disabled", "a dispute won on another payment of the same key lifts nothing: the key stays disabled for the payment still disputed");
+    ok(lc3.enableByPaymentIntent("pi_cs_rf9", "disputed") === null && lc3.authorize(r9.key, 0.001).reason === "frozen", "a dispute won on another payment of the same key lifts nothing: the key stays disabled for the payment still disputed");
     ok(lc3.enableByPaymentIntent("pi_cs_rf9b", "disputed") === r9.keyId, "the disputed payment's own win lifts it");
     const back9 = lc3.authorize(r9.key, 0.001);
     ok(back9.ok === true, "...and it authorizes again");
