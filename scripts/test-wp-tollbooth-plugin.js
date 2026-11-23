@@ -13,7 +13,9 @@
 //   6. A Verifier URL with no usable secret (an upgrade from before the
 //      secret) keeps failing closed and raises an escaped, administrators-only
 //      notice on every admin page; the README carries an Upgrading note.
+//   7. The plugin's AI_BOTS list is tollbooth/bots.js AI_BOTS, entry for entry.
 import { readFileSync } from "node:fs";
+import { AI_BOTS } from "../tollbooth/bots.js";
 import { createHmac, createHash } from "node:crypto";
 
 const php = readFileSync(new URL("../tollbooth/deploy/wordpress/agent402-tollbooth.php", import.meta.url), "utf8");
@@ -118,6 +120,13 @@ ok((gate.match(/self::verifier_ready\(\$opts\)/g) || []).length === 2, "the gate
 const upgrading = readme.slice(readme.indexOf("## Upgrading"), readme.indexOf("\n## ", readme.indexOf("## Upgrading") + 5));
 ok(upgrading.length > 40 && /0\.1\.1/.test(upgrading) && /fails closed/.test(upgrading) && /notice/.test(upgrading) && /Verifier secret/.test(upgrading), "the README has an Upgrading note for sites with a Verifier URL and no secret");
 ok(!/\u2014/.test(upgrading) && !/\u2014/.test(notice), "no em dash in the notice or the Upgrading note");
+
+// 7. the bot list mirrors tollbooth/bots.js
+{
+  const block = (php.match(/const AI_BOTS = \[([\s\S]*?)\];/) || [])[1] || "";
+  const phpBots = [...block.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  ok(phpBots.length > 20 && JSON.stringify(phpBots) === JSON.stringify(AI_BOTS), `the plugin's AI_BOTS is tollbooth/bots.js AI_BOTS (${phpBots.length} vs ${AI_BOTS.length})`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

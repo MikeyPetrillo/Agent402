@@ -776,7 +776,39 @@ export async function buildCliX402Middleware(env = process.env) {
     // means "*" in @x402/core's matcher. Never a bazaar extension on a wildcard.
     "/*": { accepts: [{ scheme: "exact", network, price, payTo }], description: "agent402-tollbooth: paid access for automated clients", mimeType: "application/json" },
   };
-  return paymentMiddleware(routes, resourceServer);
+  // The facilitator's /supported list is read and the route checked against
+  // it BEFORE the CLI prints its banner. A facilitator that does not settle
+  // "exact" on this network (x402.org's settles testnets only, for example)
+  // used to let the CLI announce "listening", then die on a raw stack when the
+  // library's background check failed. Now the start is refused with one
+  // line naming the network and the facilitator. A facilitator that cannot be
+  // reached yet is not a configuration error: the gate starts and the first
+  // paid request tries again, as before. Older @x402/express releases without
+  // these exports keep the library's own start-up check.
+  const x = await import("@x402/express");
+  if (typeof x.paymentMiddlewareFromHTTPServer !== "function" || typeof x.x402HTTPResourceServer !== "function") return paymentMiddleware(routes, resourceServer);
+  const httpServer = new x.x402HTTPResourceServer(resourceServer, routes);
+  try {
+    await httpServer.initialize();
+    // Initialized here, so the middleware does not repeat the check.
+    return x.paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false);
+  } catch (e) {
+    const where = cdpConfig ? "Coinbase's facilitator" : facilitatorUrl;
+    if (isFatalSettleConfigError(e)) {
+      const why = String(e?.message || e).split("\n").map((l) => l.trim()).filter(Boolean).slice(-1)[0]?.replace(/^-\s*/, "") || "";
+      console.error(`✖ ${where} does not settle "exact" payments on ${rawNet} (${network})${why ? `: ${why.slice(0, 200)}` : ""}. Point TOLLBOOTH_FACILITATOR_URL at a facilitator that settles ${rawNet}, or set TOLLBOOTH_NETWORK to a network it settles (https://x402.org/facilitator settles base-sepolia for a dry run). Refusing to start.`);
+      process.exit(1);
+    }
+    console.warn(`⚠ Could not read the networks ${where} settles (${String(e?.message || e).split("\n")[0].slice(0, 160)}); starting anyway, and the first paid request checks again.`);
+    return x.paymentMiddlewareFromHTTPServer(new x.x402HTTPResourceServer(resourceServer, routes));
+  }
+}
+
+/** True for an x402 start-up error that no retry fixes: the facilitator does
+ *  not support the configured scheme and network. */
+function isFatalSettleConfigError(e) {
+  const name = e?.name || e?.constructor?.name || "";
+  return name === "RouteConfigurationError" || name === "FacilitatorCapabilityError";
 }
 
 async function startCli() {
@@ -810,20 +842,30 @@ async function startCli() {
     // node:sqlite is built in (Node 22.5+); better-sqlite3 covers older Node and
     // is what many operators already have installed. Neither is a dependency of
     // this package: the store is opt-in, so its driver is too.
-    let db = null;
+    // Loading a driver and opening the file fail for different reasons, and
+    // the refusal names the right one: a file the process cannot open
+    // (EACCES, a missing folder) is a path problem, not a missing driver.
+    let open = null;
     try {
       const { DatabaseSync } = await import("node:sqlite");
-      db = new DatabaseSync(replayPath);
+      open = (f) => new DatabaseSync(f);
     } catch {
       try {
         const { default: Database } = await import("better-sqlite3");
-        db = new Database(replayPath);
-      } catch { db = null; }
+        open = (f) => new Database(f);
+      } catch { open = null; }
     }
-    if (!db) {
+    if (!open) {
       // The operator asked for a shared store; starting without one would leave
       // the replay hole open while the config says it is closed. Fail closed.
-      console.error(`✖ TOLLBOOTH_REPLAY_SQLITE=${replayPath} was set but no SQLite driver could be opened. Run Node 22.5+ (built-in node:sqlite) or install better-sqlite3. Refusing to start.`);
+      console.error(`✖ TOLLBOOTH_REPLAY_SQLITE=${replayPath} was set but no SQLite driver could be loaded. Run Node 22.5+ (built-in node:sqlite) or install better-sqlite3. Refusing to start.`);
+      process.exit(1);
+    }
+    let db;
+    try { db = open(replayPath); } catch (e) {
+      const code = e?.code || e?.errcode || "";
+      const why = String(e?.message || e).split("\n")[0].slice(0, 200);
+      console.error(`✖ TOLLBOOTH_REPLAY_SQLITE=${replayPath} could not be opened (${why}${code && !why.includes(String(code)) ? `, ${code}` : ""}). Check that the folder exists and that this process can read and write it and the file. Refusing to start.`);
       process.exit(1);
     }
     try {
