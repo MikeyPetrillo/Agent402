@@ -44,15 +44,11 @@
     "agent402-client": ">=0.8.21 <1.0.0"
   },
   "peerDependencies": {
-    "@elizaos/core": ">=1.0.0 <2",
     "@x402/evm": ">=2.0.0 <3",
     "@x402/fetch": ">=2.0.0 <3",
     "viem": ">=2.0.0 <3"
   },
   "peerDependenciesMeta": {
-    "@elizaos/core": {
-      "optional": true
-    },
     "@x402/evm": {
       "optional": true
     },
