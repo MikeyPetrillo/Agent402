@@ -3,13 +3,11 @@
 // carry BEFORE any payment gate (src/model-catalog.js; server.js mounts the
 // check ahead of the gates), and fails open with no fresh list.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
+import { join } from "node:path";
+import { bootServer } from "./lib/boot-server.js";
 import { refreshModelCatalog, unknownModelRefusal, isListedModel, contextTokensOf, _setModelCatalogForTest, modelCatalogWanted } from "../src/model-catalog.js";
 import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, createCoverRefusalLogSampler, stripControlChars, withPushExceptionText } from "../src/prepayment-refusal.js";
 import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
@@ -17,7 +15,6 @@ import { upstreamCostsLoaded } from "../src/upstream-costs.js";
 import { METERED_UNPAID_QUOTES_PER_MIN } from "../src/unpaid-quote-budget.js";
 import { Challenge, Credential } from "mppx";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
@@ -295,7 +292,6 @@ process.env.MODEL_CATALOG_URL = "http://127.0.0.1:9/api/v1/models";
 
 delete process.env.MODEL_CATALOG_URL;
 // --- the route: refused before the payment gate -----------------------------
-const [FAC_PORT, CAT_PORT, PORT] = await getFreePorts(3);
 const fac = createServer((req, res) => {
   req.resume();
   // /verify refuses every payment (the limiter group sends ones that only decode).
@@ -310,13 +306,16 @@ const relay = createServer((req, res) => { req.resume(); req.on("end", () => { r
 await new Promise((r) => relay.listen(0, "127.0.0.1", r));
 let catalogReads = 0;
 const cat = createServer((req, res) => { catalogReads++; res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ data: [...LISTED, DOTTED].map((id) => ({ id, ...(CTX[id] ? { context_length: CTX[id] } : {}) })) })); });
-await new Promise((r) => fac.listen(FAC_PORT, "127.0.0.1", r));
-await new Promise((r) => cat.listen(CAT_PORT, "127.0.0.1", r));
+await new Promise((r) => fac.listen(0, "127.0.0.1", r));
+await new Promise((r) => cat.listen(0, "127.0.0.1", r));
+const FAC_PORT = fac.address().port, CAT_PORT = cat.address().port;
 const TMP = mkdtempSync(join(tmpdir(), "model-catalog-"));
-const proc = spawn(process.execPath, ["src/server.js"], {
-  cwd: ROOT,
+// Booted (port 0, read back) at the top of the try below; stores: false keeps
+// the caller's stores beside the paths set here, as before.
+const bootOptions = {
+  stores: false,
   env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "", TARGET_URL: "", BASE_URL: "http://agent402.test",
+    FREE_MODE: "", TARGET_URL: "", BASE_URL: "http://agent402.test",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "model-catalog-test-secret",
     TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: "0x000000000000000000000000000000000000dEaD", TEMPO_CURRENCY: "0x2000000000000000000000000000000000000000", TEMPO_API_BASE_URL: `http://127.0.0.1:${relay.address().port}`,
@@ -328,18 +327,14 @@ const proc = spawn(process.execPath, ["src/server.js"], {
     AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
     POSTHOG_TEST_CAPTURE: "1",
   },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-const errTail = [];
-let logAll = "";
-proc.stderr.on("data", (c) => { logAll += String(c); errTail.push(String(c)); if (errTail.length > 40) errTail.shift(); });
-proc.stdout.on("data", (c) => { logAll += String(c); });
+};
+let srv = null;
+const logAll = () => (srv ? srv.log() : "");
 const PROMPT_MARK = "PROMPT-TEXT-MUST-NOT-BE-LOGGED";
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 try {
-  let up = false;
-  for (let i = 0; i < 160 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch {} if (!up) await sleep(500); }
-  if (!up) throw new Error(`server did not boot: ${errTail.join("").slice(-800)}`);
+  srv = await bootServer(bootOptions).catch((e) => { throw new Error(`server did not boot: ${String(e.message).slice(-800)}`); });
+  B = srv.url;
   // The x402 gate answers 402s once it has read the facilitator's /supported.
   let ready = false;
   for (let i = 0; i < 120 && !ready; i++) { ready = (await fetch(`${B}/api/search?q=x`)).status === 402; if (!ready) await sleep(250); }
@@ -348,7 +343,7 @@ try {
   await sleep(200);
   ok(catalogReads >= 1, "the server read the live list at boot");
   const post = (model, content = `hi ${PROMPT_MARK}`) => fetch(`${B}/v1/metered/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "user", content }], max_tokens: 5 }) });
-  const logBefore = logAll.length;
+  const logBefore = logAll().length;
   const r1 = await post(BAD);
   const j1 = await r1.json().catch(() => ({}));
   ok(r1.status === 400 && !r1.headers.get("payment-required") && j1?.error?.code === "unknown_model" && /deepseek-v4-flash/.test(j1?.error?.message || ""),
@@ -356,20 +351,20 @@ try {
   ok(j1?.suggestions?.[0] === DOTTED && j1?.error?.suggestions?.[0] === DOTTED && j1.suggestions.length <= 3, `the refusal carries machine-readable suggestions, closest first (${JSON.stringify(j1?.suggestions)})`);
   ok(j1?.howToCall?.method === "POST" && /\/v1\/metered\/chat\/completions$/.test(j1?.howToCall?.url || "") && j1?.howToCall?.body?.model === DOTTED, `its howToCall retries with the first suggestion (${JSON.stringify(j1?.howToCall)})`);
   await sleep(150);
-  const seen1 = logAll.slice(logBefore);
+  const seen1 = logAll().slice(logBefore);
   ok(/\[tool-error\] 4xx slug=v1-chat-metered status=400 shape=\[b:model,b:messages,b:max_tokens\] prepay=true msg=Model "deepseek\/deepseek-v4-1-flash-1017-uncensored" is not a chat model id/.test(seen1), "the pre-payment refusal writes the [tool-error] line marked prepay=true");
   ok(/\[posthog-test\] .*"event":"tool_error".*"slug":"v1-chat-metered".*"prePayment":true/.test(seen1) && /\[posthog-test\] .*"event":"tool_call".*"status":400.*"refusalReason":"unknown_model".*"prePayment":true/.test(seen1),
     "the pre-payment refusal sends the PostHog tool_error and tool_call events marked pre-payment");
   ok(!seen1.includes(PROMPT_MARK), "no prompt text reaches the log or the events");
   const r5 = await post("deepseek/deepseek-v4-1-flash-1017");
   ok(r5.status === 402 && !!r5.headers.get("payment-required"), `the hyphenated version gets its 402 offer for the dotted id (${r5.status})`);
-  const logBefore2 = logAll.length;
+  const logBefore2 = logAll().length;
   const r6 = await post("openai/gpt-4o-mini", `${PROMPT_MARK} ${"x".repeat(400_000)}`);
   const j6 = await r6.json().catch(() => ({}));
   ok(r6.status === 400 && !r6.headers.get("payment-required") && j6?.error?.code === "input_too_large" && j6?.maxInputChars === 384_000 && j6?.inputChars > 400_000 && j6?.hint === "trim-input" && Array.isArray(j6?.suggestions) && j6.suggestions.length >= 1,
     `an input over the model's cap is a 400 before the gate with the cap, the size and suggestions (${r6.status} ${JSON.stringify({ ...j6, error: undefined }).slice(0, 300)})`);
   await sleep(150);
-  const seen2 = logAll.slice(logBefore2);
+  const seen2 = logAll().slice(logBefore2);
   ok(/\[tool-error\] 4xx slug=v1-chat-metered status=400 .*prepay=true msg=Input too large/.test(seen2) && !seen2.includes(PROMPT_MARK), "the size refusal is logged pre-payment, with no prompt text");
   const r7 = await post(DOTTED, "x".repeat(350_000));
   ok(r7.status === 402 && !!r7.headers.get("payment-required"), `a 350k-char input to a 1M-token model gets its 402 quote (${r7.status})`);
@@ -385,21 +380,21 @@ try {
   const postFrom = (ip, body, headers = {}) => fetch(`${B}/v1/metered/chat/completions`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip, ...headers }, body: JSON.stringify(body) });
   // A model id or a body key carrying a newline is logged on one line.
   {
-    const mark = logAll.length;
+    const mark = logAll().length;
     const r = await postFrom("10.40.0.1", { model: "openai/gpt-4o-mni\n[tool-error] 5xx slug=forged-line", messages: [{ role: "user", content: "hi" }], "k\r\n[tool-error] 5xx slug=forged-key": 1 });
     await r.arrayBuffer();
     await sleep(150);
-    const seen = logAll.slice(mark);
+    const seen = logAll().slice(mark);
     ok(r.status === 400 && /\[tool-error\] 4xx slug=v1-chat-metered .*prepay=true msg=Model "openai\/gpt-4o-mni \[tool-error\] 5xx slug=forged-line"/.test(seen) && !/^\[tool-error\] 5xx slug=forged-line/m.test(seen),
       `a newline in the model id never starts a log line of its own (${r.status})`);
     ok(/shape=\[[^\]\n]*b:k {2}\[tool-error\] 5xx slug=forged-key/.test(seen) && !/^\[tool-error\] 5xx slug=forged-key/m.test(seen), "a newline in a body key name never starts a log line of its own");
   }
   // Pre-payment refusal lines are sampled: a flood prints at most 20 a minute per process.
   {
-    const mark = logAll.length;
+    const mark = logAll().length;
     for (let i = 0; i < 50; i++) await (await postFrom("10.40.0.2", { model: BAD, messages: [{ role: "user", content: "hi" }] })).arrayBuffer();
     await sleep(150);
-    const lines = logAll.slice(mark).split("\n").filter((l) => /\[tool-error\] 4xx slug=v1-chat-metered .*prepay=true msg=/.test(l)).length;
+    const lines = logAll().slice(mark).split("\n").filter((l) => /\[tool-error\] 4xx slug=v1-chat-metered .*prepay=true msg=/.test(l)).length;
     ok(lines <= 40 && lines < 50, `50 pre-payment refusals print at most 20 lines a minute (${lines} printed)`);
   }
   // A Tempo push credential is never answered by the pre-payment check: its
@@ -453,8 +448,8 @@ try {
 } catch (e) {
   fail++; console.log(`FAIL - ${e.message}`);
 } finally {
-  if (fail) console.log(errTail.join("").slice(-3000));
-  proc.kill("SIGKILL"); fac.close(); cat.close(); relay.close();
+  if (fail) console.log(logAll().slice(-3000));
+  srv?.child.kill("SIGKILL"); fac.close(); cat.close(); relay.close();
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
