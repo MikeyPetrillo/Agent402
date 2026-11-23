@@ -385,7 +385,8 @@ import { writeFileSync as markFile } from "node:fs";
 const stubbed = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input?.url || String(input);
-  if (url.startsWith("https://api.search.brave.com/res/v1/chat/completions")) {
+  let p = null; try { p = new URL(url); } catch { /* not a URL */ }
+  if (p && p.origin === "https://api.search.brave.com" && p.pathname.startsWith("/res/v1/chat/completions")) {
     markFile(${JSON.stringify(handlerMark)}, "1");
     await new Promise((r) => setTimeout(r, 800));
   }

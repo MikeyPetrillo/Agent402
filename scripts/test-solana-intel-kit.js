@@ -10,7 +10,7 @@
 // allowed hosts with the validated mint in the path.
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { urlMatches } from "./lib/url-host.js";
+import { isHost, urlMatches } from "./lib/url-host.js";
 import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders } from "../src/tools/solana-intel-kit.js";
 
 const realFetch = globalThis.fetch;
@@ -190,8 +190,8 @@ try {
   // sol-token-safety
   // --------------------------------------------------------------------------
   stub((url) => {
-    if (url.includes("api.rugcheck.xyz")) return Promise.resolve(jsonRes(RC_SUMMARY));
-    if (url.includes("lite-api.jup.ag/tokens/v2/search")) return Promise.resolve(jsonRes([JUP_TOKEN_OTHER, JUP_TOKEN]));
+    if (isHost(url, "api.rugcheck.xyz")) return Promise.resolve(jsonRes(RC_SUMMARY));
+    if (urlMatches(url, "lite-api.jup.ag", "/tokens/v2/search")) return Promise.resolve(jsonRes([JUP_TOKEN_OTHER, JUP_TOKEN]));
     return Promise.reject(new Error("unexpected url " + url));
   });
   let r = await h("sol-token-safety")({ mint: JUP });
@@ -357,7 +357,7 @@ try {
   // --------------------------------------------------------------------------
   // sol-token-search
   // --------------------------------------------------------------------------
-  stub((url) => url.startsWith("https://api.dexscreener.com/latest/dex/search?q=JUP%20token")
+  stub((url) => ((u) => u.host === "api.dexscreener.com" && u.pathname === "/latest/dex/search" && u.searchParams.get("q") === "JUP token")(new URL(url))
     ? Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: [DS_PAIR({ pairAddress: "first", liquidity: { usd: 1 }, info: undefined }), DS_PAIR({ chainId: "robinhood", pairAddress: "rh" }), DS_PAIR({ pairAddress: "second" })] }))
     : Promise.reject(new Error("bad url " + url)));
   r = await h("sol-token-search")({ query: "JUP token", limit: 10 });
@@ -377,7 +377,7 @@ try {
   ok(r.fallback.ran === true && r.fallback.status === "nothing-found" && r.complete === true, "search: an empty fallback that answered is a complete empty answer");
 
   // A matching Solana row in the search: no fallback read at all.
-  stub((url) => url.startsWith("https://api.dexscreener.com/latest/dex/search?q=JUP")
+  stub((url) => ((u) => u.host === "api.dexscreener.com" && u.pathname === "/latest/dex/search" && u.searchParams.get("q") === "JUP")(new URL(url))
     ? Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: [DS_PAIR({ pairAddress: "a" }), DS_PAIR({ pairAddress: "b" }), DS_PAIR({ pairAddress: "c" })] }))
     : Promise.reject(new Error("bad url " + url)));
   r = await h("sol-token-search")({ query: "JUP", limit: 2 });
@@ -399,10 +399,10 @@ try {
     const TOP = [DS_PAIR({ pairAddress: "w1", liquidity: { usd: 100 }, ...base(WIF, "$WIF", "dogwifhat") }), DS_PAIR({ pairAddress: "k1", liquidity: { usd: 9e9 }, ...base(KWIF, "KWIF", "Kitten Wif Hat") }), DS_PAIR({ pairAddress: "s1", ...base(SWORD, "swordcat", "cat wif sword") })];
     const ALL = [DS_PAIR({ pairAddress: "w1", liquidity: { usd: 100 }, ...base(WIF, "$WIF", "dogwifhat") }), DS_PAIR({ pairAddress: "w2", liquidity: { usd: 5000 }, ...base(WIF, "$WIF", "dogwifhat") }), DS_PAIR({ pairAddress: "wq", liquidity: { usd: 1e12 }, baseToken: { address: BONK, symbol: "Bonk", name: "Bonk" }, quoteToken: { address: WIF, symbol: "$WIF" } })];
     const route = ({ search = OTHER_CHAINS, jup = () => Promise.resolve(jsonRes(JUP_WIF)), top = () => Promise.resolve(jsonRes(TOP)), all = () => Promise.resolve(jsonRes(ALL)) } = {}) => (url) => {
-      if (url.startsWith("https://api.dexscreener.com/latest/dex/search?q=")) return Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: search }));
-      if (url.startsWith("https://lite-api.jup.ag/tokens/v2/search?query=")) return jup(url);
-      if (url.startsWith("https://api.dexscreener.com/tokens/v1/solana/")) return top(url);
-      if (url.startsWith("https://api.dexscreener.com/token-pairs/v1/solana/")) return all(url);
+      if (urlMatches(url, "api.dexscreener.com", "/latest/dex/search") && new URL(url).searchParams.has("q")) return Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: search }));
+      if (urlMatches(url, "lite-api.jup.ag", "/tokens/v2/search") && new URL(url).searchParams.has("query")) return jup(url);
+      if (urlMatches(url, "api.dexscreener.com", "/tokens/v1/solana/")) return top(url);
+      if (urlMatches(url, "api.dexscreener.com", "/token-pairs/v1/solana/")) return all(url);
       return Promise.reject(new Error("bad url " + url));
     };
     stub(route());
@@ -631,7 +631,7 @@ try {
     try { out = await h("sol-token-holders")({ mint: JUP, limit: 5 }); } catch (e) { err = e; }
     const ms = Date.now() - t0;
     if (prevRpc === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL = prevRpc;
-    const rpcCalls = calls.filter((c) => c.url.startsWith("https://rpc.test.invalid/")).length;
+    const rpcCalls = calls.filter((c) => isHost(c.url, "rpc.test.invalid")).length;
     ok(!err && Array.isArray(out?.holders) && out.holders.length === 0 && out.holdersSource === null && out.returned === 0 && out.matched === 0 && out.complete === false && out.truncated === true && out.maxHolders === 20,
       `a stalled RPC leaves the optional table empty, and the partial fields say the answer is NOT complete (${err ? "threw " + err.statusCode : JSON.stringify({ holders: out?.holders?.length, returned: out?.returned, matched: out?.matched, complete: out?.complete })})`);
     ok(/Solana RPC did not answer within its deadline/.test(out?.note || ""), `the note names the read that did not finish (got: ${out?.note})`);

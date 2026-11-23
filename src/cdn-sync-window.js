@@ -38,6 +38,7 @@
 // settlement and the write fit after the handler.
 import { deferSyncWindowRefusal } from "./slow-sync-window.js";
 import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
+import { settleFirstClause } from "./settle-first-copy.js";
 
 export const DEFAULT_CDN_SYNC_MAX_SECONDS = 90;
 export function cdnSyncMaxSeconds(env = process.env) {
@@ -120,7 +121,7 @@ export function cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPayme
       slug: def.slug,
       maxSeconds: budget,
       syncLimitSeconds: bound,
-      hint: `This route can take up to ${budget} s, longer than this connection waits for an answer (${bound} s). Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once${push ? "" : ", and payment settles only when the result is ready"}. Prefer: wait is not served on this connection for this route. Nothing was charged${push ? PUSH_EXCEPTION : ""}.`,
+      hint: `This route can take up to ${budget} s, longer than this connection waits for an answer (${bound} s). Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once${push ? "" : ", and payment settles only when the result is ready"}.${push ? "" : settleFirstClause(def)} Prefer: wait is not served on this connection for this route. Nothing was charged${push ? PUSH_EXCEPTION : ""}.`,
     };
     if (push) {
       log(`[cdn-sync-window] ${def.slug} refusal deferred to the Tempo gate (push credential, run budget ${budget} s over ${bound} s)`);

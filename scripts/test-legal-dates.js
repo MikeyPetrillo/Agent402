@@ -5,6 +5,7 @@
 // fails until the date is bumped AND the pin below is updated with it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { stripScripts, stripTags } from "./lib/html-text.js";
 import { createHash } from "node:crypto";
 
 // The date follows the text a reader sees with every optional switch off: a
@@ -21,8 +22,8 @@ const PINS = {
   // The refund sentences /terms prints live in src/refund-terms.js (the
   // conformance document reads them too), so that file is hashed with it.
   // Both print the credits figures (src/credits-figures.js), so it is hashed with them.
-  "src/terms.js": { date: "2026-11-22", sha: "162b4d2d4698c6d1", with: ["src/refund-terms.js", "src/credits-figures.js"] },
-  "src/privacy.js": { date: "2026-11-22", sha: "77407d1a70b78d0c", with: ["src/credits-figures.js"] },
+  "src/terms.js": { date: "2026-11-23", sha: "6e5964a853df761e", with: ["src/refund-terms.js", "src/credits-figures.js"] },
+  "src/privacy.js": { date: "2026-11-23", sha: "5eed0ca22dfdf1a5", with: ["src/credits-figures.js"] },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -42,6 +43,59 @@ for (const [file, pin] of Object.entries(PINS)) {
   ok(Boolean(date) && date <= TODAY, `${file}: last updated ${date} is not after today (${TODAY} UTC)`);
   const h = bodyHash([src, ...(pin.with || []).map((f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8"))].join("\n"));
   ok(h === pin.sha, `${file}: text unchanged since ${pin.date} (hash ${h}; if you changed the text, bump the date in the page and set date + sha here)`);
+}
+// The rendered pages, with every optional switch off and with the switches
+// that add text on (credit sales, the connector sign-in, signed agent
+// requests): each render's text (its date set aside) is pinned to the date it
+// prints. A text change, in any variant, needs a new date: the history below
+// is append-only (a new [date, hash] row with a later date), and where the
+// main branch is at hand the test also reads main's history and fails when a
+// row main already has was rewritten (a changed hash under an old date).
+const RENDERED = {
+  terms: { off: [["2026-11-23", "dedbcbe56eb589b9"]], on: [["2026-11-23", "6907ed67b19327fe"]] },
+  privacy: { off: [["2026-11-23", "8eb5da157cfca4c9"]], on: [["2026-11-23", "3554b6aa8e5e5916"]] },
+};
+{
+  const { termsPage } = await import("../src/terms.js");
+  const { privacyPage } = await import("../src/privacy.js");
+  const SWITCHES = ["CREDITS_SALES", "MCP_OAUTH", "WEB_BOT_AUTH"];
+  const keep = Object.fromEntries(SWITCHES.map((k) => [k, process.env[k]]));
+  // The text a reader sees in the page's main content: scripts, styles, tags
+  // and the shared site chrome (header, nav, footer) set aside.
+  const mainText = (html) => {
+    const m = /<main[\s\S]*?<\/main>/.exec(String(html));
+    return stripTags(stripScripts(m ? m[0] : String(html))).replace(/\s+/g, " ").trim();
+  };
+  const renderHash = (html) => createHash("sha256").update(mainText(html).replace(DATE_LINE, "last updated <date>.")).digest("hex").slice(0, 16);
+  for (const variant of ["off", "on"]) {
+    for (const k of SWITCHES) { if (variant === "on") process.env[k] = "on"; else delete process.env[k]; }
+    for (const [page, fn] of [["terms", termsPage], ["privacy", privacyPage]]) {
+      const html = fn("https://agent402.tools");
+      const printed = (html.match(DATE_LINE) || [])[1];
+      const rows = RENDERED[page][variant];
+      const last = rows.at(-1);
+      const h = renderHash(html);
+      ok(rows.every((r, i) => i === 0 || r[0] > rows[i - 1][0]), `${page} (${variant}): the history's dates only move forward`);
+      ok(last[0] === printed && last[1] === h, `${page} (${variant}): the rendered text is the one pinned to the date it prints (prints ${printed}, hash ${h}; pinned ${last[0]} ${last[1]}). A changed text needs a new date and a new row, never a new hash under an old date`);
+    }
+  }
+  for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  // Main's history, where git and main are at hand: every row main holds is here unchanged.
+  const { execFileSync } = await import("node:child_process");
+  let mainSrc = null;
+  try { mainSrc = execFileSync("git", ["show", "origin/main:scripts/test-legal-dates.js"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch { /* no history in this checkout */ }
+  const mainRows = mainSrc && /const RENDERED = (\{[\s\S]*?\n\});/.exec(mainSrc);
+  if (mainRows) {
+    const main = Function(`return (${mainRows[1]});`)();
+    const rewritten = [];
+    for (const [page, vs] of Object.entries(main)) for (const [v, rows] of Object.entries(vs)) for (const [d, h] of rows) {
+      const here = (RENDERED[page]?.[v] || []).find((r) => r[0] === d);
+      if (!here || here[1] !== h) rewritten.push(`${page} ${v} ${d}`);
+    }
+    ok(rewritten.length === 0, `no row of main's history was rewritten or dropped${rewritten.length ? `: ${rewritten.join(", ")}` : ""}`);
+  } else {
+    console.log("note - main's history is not in this checkout; the append-only rows above still hold the date to the text");
+  }
 }
 {
   const { CREDITS_SALES_TERMS_DATE } = await import("../src/credits-sales.js");

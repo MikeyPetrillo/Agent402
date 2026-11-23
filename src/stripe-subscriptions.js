@@ -21,6 +21,7 @@ import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
 import { cleanSaleSource } from "./sale-source.js";
 import { appendPeriodReceipt } from "./receipt-signing.js";
+import { shared } from "./shared-limits.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).
@@ -172,7 +173,7 @@ const shapeTally = (t) => (t && typeof t === "object" ? { ...emptyTally(), ...t,
  *   while signing is off; called on invoice.paid with an amount paid, and the
  *   answer is kept on the record (`signedReceipts`, the newest last)
  */
-export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed, onRefundUpdated, signPeriod = null }) {
+export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed, onRefundUpdated, onFraudWarning = null, onPaymentFailed = null, signPeriod = null }) {
   const path = storePath || STORE_PATH();
   const doc = createJsonDocument({ file: path, log: () => {} });
   const tallyDoc = createJsonDocument({ file: path + TALLY_SUFFIX, log: () => {} });
@@ -528,162 +529,204 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     // Stripe's signature tolerance is 300 s: a captured delivery replays for
     // five minutes. Handlers are idempotent on their records, but a replayed
     // invoice.paid would book a second sale - remember event ids for a day.
-    if (event.id) {
-      if (seenEvents.has(event.id)) return { received: true, type, duplicate: true };
-      seenEvents.set(event.id, Date.now());
+    // The ids are kept in the shared store as well, so a delivery another
+    // server already applied is answered as a duplicate here too.
+    const eventKey = event.id ? String(event.id).slice(0, 80) : null;
+    if (eventKey) {
+      if (seenEvents.has(eventKey)) return { received: true, type, duplicate: true };
+      const prior = await shared.flagGet("stripe-event", eventKey).catch(() => null);
+      if (prior?.ok && prior.until > Date.now()) return { received: true, type, duplicate: true };
+      seenEvents.set(eventKey, Date.now());
+      await shared.flagSet("stripe-event", eventKey, Date.now() + 86_400_000).catch(() => null);
       if (seenEvents.size > 5000) for (const [k, t] of seenEvents) { if (Date.now() - t > 86_400_000 || seenEvents.size > 5000) seenEvents.delete(k); else break; }
     }
     let stored = true; // every record this event writes reached the database
-    switch (event.type) {
-      case "checkout.session.completed": {
-        const s = event.data.object;
-        // One-shot PAYMENT sessions (credit packs, reports) reach the optional
-        // hook so a buyer whose success redirect never loaded still gets
-        // fulfilled (credits: key minted + emailed) - claim is idempotent.
-        if (s.mode === "payment" && typeof onPaymentSession === "function") { try { await onPaymentSession(s); } catch { /* never fail the webhook on a hook */ } }
-        if (s.mode === "subscription" && s.subscription) {
-          const id = idOf(s.subscription);
-          const promo = store.get(id)?.firstPeriodCents != null ? {} : await promoPricesOf(s, id);
-          // Stripe retries and reorders events: a completed-checkout event must
-          // never overwrite a status the subscription lifecycle already set.
-          stored = stored && await upsert(id, (cur) => ({
-            ...keepPromo(cur, promo),
-            customer: s.customer || cur?.customer || null, status: cur?.status || "active",
-            product: s.metadata?.product || cur?.product || null, target: s.metadata?.target || cur?.target || null,
-            email: s.customer_details?.email || s.customer_email || cur?.email || null,
-            createdAt: cur?.createdAt || new Date().toISOString(),
-          }));
+    // The id is remembered before handling (a concurrent delivery is a
+    // duplicate), and forgotten again on any throw, so the retry Stripe
+    // sends for an unacknowledged event is applied, never dropped.
+    try {
+      switch (event.type) {
+        case "checkout.session.completed": {
+          const s = event.data.object;
+          // One-shot PAYMENT sessions (credit packs, reports) reach the optional
+          // hook so a buyer whose success redirect never loaded still gets
+          // fulfilled (credits: key minted + emailed) - claim is idempotent.
+          if (s.mode === "payment" && typeof onPaymentSession === "function") { try { await onPaymentSession(s); } catch { /* never fail the webhook on a hook */ } }
+          if (s.mode === "subscription" && s.subscription) {
+            const id = idOf(s.subscription);
+            const promo = store.get(id)?.firstPeriodCents != null ? {} : await promoPricesOf(s, id);
+            // Stripe retries and reorders events: a completed-checkout event must
+            // never overwrite a status the subscription lifecycle already set.
+            stored = stored && await upsert(id, (cur) => ({
+              ...keepPromo(cur, promo),
+              customer: s.customer || cur?.customer || null, status: cur?.status || "active",
+              product: s.metadata?.product || cur?.product || null, target: s.metadata?.target || cur?.target || null,
+              email: s.customer_details?.email || s.customer_email || cur?.email || null,
+              createdAt: cur?.createdAt || new Date().toISOString(),
+            }));
+          }
+          break;
         }
-        break;
-      }
-      case "customer.subscription.created":
-      case "customer.subscription.updated": {
-        const sub = event.data.object;
-        const evAt = Number(event.created);
-        stored = stored && await upsert(sub.id, (cur) => {
-          const ids = {
-            customer: sub.customer || cur?.customer || null,
-            product: sub.metadata?.product || cur?.product || null,
-            target: sub.metadata?.target || cur?.target || null,
-          };
-          // An event older than the status on the record fills only what
-          // the record lacks.
-          if (statusStale(cur, evAt)) return ids;
-          return {
-            ...ids, status: sub.status, currentPeriodEnd: periodEndOf(sub), cancelAtPeriodEnd: !!sub.cancel_at_period_end,
-            ...(Number.isFinite(evAt) ? { statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, evAt) } : {}),
-          };
-        });
-        break;
-      }
-      case "customer.subscription.deleted": {
-        const sub = event.data.object;
-        const evAt = Number(event.created);
-        stored = stored && await upsert(sub.id, (cur) => ({
-          status: "canceled",
-          ...(Number.isFinite(evAt) ? { statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, evAt) } : {}),
-        }));
-        break;
-      }
-      case "invoice.paid": {
-        // Recurring revenue lands here (the first invoice too). Hand it to the
-        // accounting hook so /revenue and the operator surfaces see card
-        // subscriptions, not only x402 settlements. Booked once per invoice
-        // id, across containers and restarts (claimInvoiceSale).
-        const inv = event.data.object;
-        const subId = idOf(inv.subscription) || inv.parent?.subscription_details?.subscription || null;
-        const pi = invoicePaymentIntentOf(inv);
-        const charge = idOf(inv.charge);
-        // Whether the stored record already booked this invoice (the file's
-        // sale mark), read inside the write from the stored record.
-        let seenOnRecord = false;
-        // The record first: an event answered 503 (its record not stored) is
-        // delivered again, so the sale is booked on the delivery that stores
-        // it, never once per delivery. Every payment's ids are kept, so a
-        // dispute on any of them finds this subscription.
-        if (subId) {
-          const paidAt = new Date().toISOString();
-          stored = stored && await upsert(subId, (cur) => {
-            seenOnRecord = !!inv.id && cur?.lastInvoiceId === inv.id;
+        case "customer.subscription.created":
+        case "customer.subscription.updated": {
+          const sub = event.data.object;
+          const evAt = Number(event.created);
+          stored = stored && await upsert(sub.id, (cur) => {
+            const ids = {
+              customer: sub.customer || cur?.customer || null,
+              product: sub.metadata?.product || cur?.product || null,
+              target: sub.metadata?.target || cur?.target || null,
+            };
+            // An event older than the status on the record fills only what
+            // the record lacks.
+            if (statusStale(cur, evAt)) return ids;
             return {
-              lastInvoiceId: inv.id, lastPaymentIntent: pi || cur?.lastPaymentIntent || null, lastPaidAt: paidAt,
-              paidInvoiceIds: pushId(cur?.paidInvoiceIds, inv.id), paidPaymentIntents: pushId(cur?.paidPaymentIntents, pi),
-              ...(charge ? { lastCharge: charge, paidCharges: pushId(cur?.paidCharges, charge) } : {}),
-              ...periodReceiptPatch(cur, inv, subId, paidAt),
+              ...ids, status: sub.status, currentPeriodEnd: periodEndOf(sub), cancelAtPeriodEnd: !!sub.cancel_at_period_end,
+              ...(Number.isFinite(evAt) ? { statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, evAt) } : {}),
             };
           });
+          break;
         }
-        if (stored && typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
-          let first;
-          try { first = await claimInvoiceSale(inv.id, seenOnRecord); } catch { first = null; }
-          // The claim could not be read: not acknowledged, so Stripe delivers
-          // the event again and the claim decides then.
-          if (first === null) { stored = false; break; }
-          if (first) { try { onInvoicePaid({ invoiceId: inv.id, subId, product: (subId && store.get(subId)?.product) || null, amountUsd: inv.amount_paid / 100, customer: inv.customer, source: cleanSaleSource((inv.parent?.subscription_details?.metadata || inv.subscription_details?.metadata || {}).source) }); } catch { /* accounting never breaks the webhook */ } }
+        case "customer.subscription.deleted": {
+          const sub = event.data.object;
+          const evAt = Number(event.created);
+          stored = stored && await upsert(sub.id, (cur) => ({
+            status: "canceled",
+            ...(Number.isFinite(evAt) ? { statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, evAt) } : {}),
+          }));
+          break;
         }
-        break;
-      }
-      case "charge.refunded":
-      case "charge.dispute.created": {
-        // Money went back (or is contested): let the credits store claw back
-        // (a charge says how much of it was refunded, and whether all of it).
-        const obj = event.data.object;
-        const pi = idOf(obj?.payment_intent);
-        const reversal = event.type === "charge.refunded"
-          ? { amountRefundedCents: Number.isFinite(Number(obj?.amount_refunded)) ? Number(obj.amount_refunded) : null, fullyRefunded: obj?.refunded === true }
-          : { amountRefundedCents: null, fullyRefunded: true };
-        if (pi && typeof onChargeReversed === "function") { try { await onChargeReversed(pi, event.type, reversal); } catch { /* never fail the webhook on a hook */ } }
-        // A disputed subscription payment stops its fulfillment: the record
-        // is marked (its status still follows Stripe) and listActive drops it.
-        // Any month's payment matches (its payment, charge or invoice id).
-        if (event.type === "charge.dispute.created") {
+        case "invoice.paid": {
+          // Recurring revenue lands here (the first invoice too). Hand it to the
+          // accounting hook so /revenue and the operator surfaces see card
+          // subscriptions, not only x402 settlements. Booked once per invoice
+          // id, across containers and restarts (claimInvoiceSale).
+          const inv = event.data.object;
+          const subId = idOf(inv.subscription) || inv.parent?.subscription_details?.subscription || null;
+          const pi = invoicePaymentIntentOf(inv);
+          const charge = idOf(inv.charge);
+          // Whether the stored record already booked this invoice (the file's
+          // sale mark), read inside the write from the stored record.
+          let seenOnRecord = false;
+          // The record first: an event answered 503 (its record not stored) is
+          // delivered again, so the sale is booked on the delivery that stores
+          // it, never once per delivery. Every payment's ids are kept, so a
+          // dispute on any of them finds this subscription.
+          if (subId) {
+            const paidAt = new Date().toISOString();
+            stored = stored && await upsert(subId, (cur) => {
+              seenOnRecord = !!inv.id && cur?.lastInvoiceId === inv.id;
+              return {
+                lastInvoiceId: inv.id, lastPaymentIntent: pi || cur?.lastPaymentIntent || null, lastPaidAt: paidAt,
+                paidInvoiceIds: pushId(cur?.paidInvoiceIds, inv.id), paidPaymentIntents: pushId(cur?.paidPaymentIntents, pi),
+                ...(charge ? { lastCharge: charge, paidCharges: pushId(cur?.paidCharges, charge) } : {}),
+                ...periodReceiptPatch(cur, inv, subId, paidAt),
+              };
+            });
+          }
+          if (stored && typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
+            let first;
+            try { first = await claimInvoiceSale(inv.id, seenOnRecord); } catch { first = null; }
+            // The claim could not be read: not acknowledged, so Stripe delivers
+            // the event again and the claim decides then.
+            if (first === null) { stored = false; break; }
+            if (first) { try { onInvoicePaid({ invoiceId: inv.id, subId, product: (subId && store.get(subId)?.product) || null, amountUsd: inv.amount_paid / 100, customer: inv.customer, source: cleanSaleSource((inv.parent?.subscription_details?.metadata || inv.subscription_details?.metadata || {}).source) }); } catch { /* accounting never breaks the webhook */ } }
+          }
+          break;
+        }
+        case "charge.refunded":
+        case "charge.dispute.created": {
+          // Money went back (or is contested): let the credits store claw back
+          // (a charge says how much of it was refunded, and whether all of it).
+          const obj = event.data.object;
+          const pi = idOf(obj?.payment_intent);
+          const reversal = event.type === "charge.refunded"
+            ? { amountRefundedCents: Number.isFinite(Number(obj?.amount_refunded)) ? Number(obj.amount_refunded) : null, fullyRefunded: obj?.refunded === true }
+            : { amountRefundedCents: null, fullyRefunded: true, disputeId: typeof obj?.id === "string" ? obj.id : null };
+          if (pi && typeof onChargeReversed === "function") { try { await onChargeReversed(pi, event.type, reversal); } catch { /* never fail the webhook on a hook */ } }
+          // A disputed subscription payment stops its fulfillment: the record
+          // is marked (its status still follows Stripe) and listActive drops it.
+          // Any month's payment matches (its payment, charge or invoice id).
+          if (event.type === "charge.dispute.created") {
+            const ids = { pi, charge: idOf(obj?.charge), invoiceId: idOf(obj?.invoice) };
+            await reload().catch(() => 0);
+            for (const [subId, rec] of [...store]) {
+              if (rec?.disputed || !paidWith(rec, ids)) continue;
+              stored = stored && await upsert(subId, (cur) => (cur?.disputed || !paidWith(cur, ids) ? null : { disputed: true, disputedAt: new Date().toISOString(), disputeOutcome: null }));
+            }
+          }
+          break;
+        }
+        case "refund.updated":
+        case "refund.failed":
+        case "charge.refund.updated": {
+          // A refund changed status (pending -> succeeded, failed or canceled).
+          // The credits store settles a refund it sent on request by this event
+          // (matched by the refund's metadata and payment). A hook that throws
+          // leaves the event unacknowledged, so Stripe delivers it again; the
+          // hook is idempotent on a repeat.
+          const obj = event.data.object;
+          if (obj?.id && typeof onRefundUpdated === "function") { try { await onRefundUpdated(obj); } catch { stored = false; } }
+          break;
+        }
+        case "radar.early_fraud_warning.created": {
+          // The card network warned that a payment may be fraudulent. A credits
+          // key that payment loaded is frozen and its unspent balance refunded
+          // (the hook). A hook that throws, or a refund that must wait for a
+          // running call, leaves the event unacknowledged, so Stripe delivers it
+          // again; the hook is idempotent on a repeat.
+          const obj = event.data.object;
+          const pi = idOf(obj?.payment_intent);
+          if (pi && typeof onFraudWarning === "function") {
+            try { const r = await onFraudWarning(pi, { warningId: obj?.id || null }); if (r && (r.status === "in_flight" || r.status === "retry" || r.status === "error")) stored = false; }
+            catch { stored = false; }
+          }
+          break;
+        }
+        case "payment_intent.payment_failed": {
+          // A credits payment that did not go through counts against its
+          // purchase checks (the hook); other payments are not read.
+          const obj = event.data.object;
+          if (obj?.metadata?.credits_pack && typeof onPaymentFailed === "function") {
+            const card = obj?.last_payment_error?.payment_method?.card || null;
+            try { await onPaymentFailed({ source: typeof obj.metadata.ref_source === "string" ? obj.metadata.ref_source : null, cardFingerprint: card?.fingerprint || null }); } catch { /* never fail the webhook on a hook */ }
+          }
+          break;
+        }
+        case "charge.dispute.closed": {
+          // The dispute ended. Won, or an inquiry closed without a chargeback
+          // (warning_closed): the money stayed, so the hold on fulfillment ends
+          // and the credits key the dispute disabled is enabled again (the
+          // hook). Lost: the record stays disputed and the outcome is noted;
+          // the hook takes the disputed amount off a credits balance. The
+          // credits hook settles every other status too (src/credits.js
+          // disputeClosed), and a close that arrives before its create.
+          const obj = event.data.object;
+          const pi = idOf(obj?.payment_intent);
+          const outcome = typeof obj?.status === "string" ? obj.status.slice(0, 40) : "unknown";
+          const won = outcome === "won" || outcome === "warning_closed";
+          const amountCents = Number.isFinite(Number(obj?.amount)) ? Number(obj.amount) : null;
+          if (pi && typeof onDisputeClosed === "function") { try { await onDisputeClosed(pi, { won, status: outcome, amountCents, disputeId: typeof obj?.id === "string" ? obj.id : null }); } catch { /* never fail the webhook on a hook */ } }
           const ids = { pi, charge: idOf(obj?.charge), invoiceId: idOf(obj?.invoice) };
           await reload().catch(() => 0);
           for (const [subId, rec] of [...store]) {
-            if (rec?.disputed || !paidWith(rec, ids)) continue;
-            stored = stored && await upsert(subId, (cur) => (cur?.disputed || !paidWith(cur, ids) ? null : { disputed: true, disputedAt: new Date().toISOString(), disputeOutcome: null }));
+            if (!rec?.disputed || !paidWith(rec, ids)) continue;
+            stored = stored && await upsert(subId, (cur) => (!cur?.disputed || !paidWith(cur, ids) ? null
+              : won ? { disputed: false, disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() } : { disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() }));
           }
+          break;
         }
-        break;
+        default: break; // ignore unrelated events
       }
-      case "refund.updated":
-      case "refund.failed":
-      case "charge.refund.updated": {
-        // A refund changed status (pending -> succeeded, failed or canceled).
-        // The credits store settles a refund it sent on request by this event
-        // (matched by the refund's metadata and payment). A hook that throws
-        // leaves the event unacknowledged, so Stripe delivers it again; the
-        // hook is idempotent on a repeat.
-        const obj = event.data.object;
-        if (obj?.id && typeof onRefundUpdated === "function") { try { await onRefundUpdated(obj); } catch { stored = false; } }
-        break;
-      }
-      case "charge.dispute.closed": {
-        // The dispute ended. Won, or an inquiry closed without a chargeback
-        // (warning_closed): the money stayed, so the hold on fulfillment ends
-        // and the credits key the dispute disabled is enabled again (the
-        // hook). Lost: the record stays disputed and the outcome is noted.
-        const obj = event.data.object;
-        const pi = idOf(obj?.payment_intent);
-        const outcome = typeof obj?.status === "string" ? obj.status.slice(0, 40) : "unknown";
-        const won = outcome === "won" || outcome === "warning_closed";
-        if (pi && typeof onDisputeClosed === "function") { try { await onDisputeClosed(pi, { won, status: outcome }); } catch { /* never fail the webhook on a hook */ } }
-        const ids = { pi, charge: idOf(obj?.charge), invoiceId: idOf(obj?.invoice) };
-        await reload().catch(() => 0);
-        for (const [subId, rec] of [...store]) {
-          if (!rec?.disputed || !paidWith(rec, ids)) continue;
-          stored = stored && await upsert(subId, (cur) => (!cur?.disputed || !paidWith(cur, ids) ? null
-            : won ? { disputed: false, disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() } : { disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() }));
-        }
-        break;
-      }
-      default: break; // ignore unrelated events
+    } catch (e) {
+      if (eventKey) { seenEvents.delete(eventKey); await shared.flagSet("stripe-event", eventKey, 0).catch(() => null); }
+      throw e;
     }
     if (!stored) {
       // Database mode: a record waits in the local journal (a backstop). The
       // event is not acknowledged until the record is in the database, so
       // Stripe delivers it again; its id is forgotten so that retry is applied.
-      if (event.id) seenEvents.delete(event.id);
+      if (eventKey) { seenEvents.delete(eventKey); await shared.flagSet("stripe-event", eventKey, 0).catch(() => null); }
       const e = new Error("Webhook received; its record is not stored yet, retry later");
       e.statusCode = 503;
       throw e;

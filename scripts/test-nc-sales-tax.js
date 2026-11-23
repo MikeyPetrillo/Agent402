@@ -6,6 +6,7 @@
 // pages state the price includes the tax (G.S. 105-164.7(2)).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { stripTags } from "./lib/html-text.js";
 import { ncTaxReport, ncTaxableKind, isNcBilling, taxIncludedPortion, monthBounds, NC_TAXABLE_SLUGS } from "../src/nc-sales-tax.js";
 import { TERMS_VERSION, creditsTermsVersion } from "../src/credits-sales.js";
 
@@ -13,7 +14,11 @@ let failed = 0;
 const ok = (c, m) => { if (c) console.log("ok - " + m); else { failed++; console.log("FAIL - " + m); } };
 
 ok(ncTaxableKind("tts") === "digital audio work" && ncTaxableKind("v1-videos") === "digital audiovisual work", "speech and video are taxable kinds");
-ok(ncTaxableKind("v1-images-fast") === null && ncTaxableKind("whois") === null && ncTaxableKind("v1-chat-metered") === null, "images, data and chat are not");
+ok(ncTaxableKind("v1-images-fast") === null && ncTaxableKind("whois") === null && ncTaxableKind("v1-chat-metered") === null, "generated images, data and chat are not");
+// An edit of the buyer's own image or audio file is taxed, conservatively.
+const EDITS = ["v1-images-edit", "image-crop", "image-resize", "image-convert", "image-thumbnail", "audio-convert", "audio-normalize"];
+ok(EDITS.every((slug) => /^edit of a buyer's (image|audio)$/.test(String(ncTaxableKind(slug)))), "edits of a buyer's image or audio file are taxable kinds");
+ok(["v1-images", "v1-images-fast", "transcribe", "v1-audio-transcriptions"].every((slug) => ncTaxableKind(slug) === null), "generated images and transcription stay untaxed");
 ok(isNcBilling({ country: "us", state: "nc" }) && !isNcBilling({ country: "US", state: "VA" }) && !isNcBilling({ country: "CA", state: "NC" }) && !isNcBilling(null), "only a US billing address in NC counts");
 ok(Math.abs(taxIncludedPortion(1.0725, 0.0725) - 0.0725) < 1e-9, "the tax inside a tax-included amount is gross x r / (1 + r) at the combined rate");
 const [s, e] = monthBounds("2026-11");
@@ -46,7 +51,7 @@ ok(!lookups.includes("0xdeadbeef") && lookups.includes("pi_nc"), "wallet payment
 
 // Every taxable slug is a real catalog route.
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
-const toolsSrc = ["tools/tts-kit.js", "tools/llm-gateway-kit.js", "tools/dub-kit.js", "tools/llm-images-fast-kit.js"].map(src).join("\n");
+const toolsSrc = ["tools/tts-kit.js", "tools/llm-gateway-kit.js", "tools/dub-kit.js", "tools/llm-images-fast-kit.js", "tools/image-kit.js", "tools/media-kit.js"].map(src).join("\n");
 for (const slug of Object.keys(NC_TAXABLE_SLUGS)) ok(toolsSrc.includes(`slug: "${slug}"`), `taxable slug ${slug} is a catalog route`);
 
 // Checkout collects what the report and the rules need, and adds no tax of its own.
@@ -54,7 +59,14 @@ const credits = src("credits.js");
 ok(/billing_address_collection: "required"/.test(credits) && /tax_id_collection: \{ enabled: true \}/.test(credits), "credits checkout requires a billing address and offers a tax ID field");
 ok(/key: "terms"[\s\S]{0,200}optional: false/.test(credits) && /key: "use"[\s\S]{0,200}optional: false/.test(credits), "checkout requires the business-use and terms answers");
 ok(!/automatic_tax/.test(credits.slice(credits.indexOf("async function createCheckout"), credits.indexOf("const claimedAnswer"))), "credits checkout adds no Stripe tax on top of a tax-included price");
-ok(/metadata: \{ credits_pack: packKey, terms: creditsTermsVersion\(\) \}/.test(credits), "checkout records the terms version");
+ok(/metadata: \{ credits_pack: packKey, terms: creditsTermsVersion\(\)[ ,}]/.test(credits), "checkout records the terms version");
+// /terms names every taxable kind and keeps the tax-included statement (G.S. 105-164.7(2)).
+{
+  const { termsPage } = await import("../src/terms.js");
+  const text = stripTags(termsPage("https://agent402.tools"), "").replace(/\s+/g, " ");
+  ok(/Prices are the same everywhere and include North Carolina sales tax where it applies/.test(text), "/terms says prices include North Carolina sales tax");
+  ok(/generated speech, audio or video, or that edits an image or audio file you send, includes that tax/.test(text), "/terms names generated speech, audio and video and edits of a buyer's image or audio file as taxed");
+}
 const termsDate = (src("terms.js").match(/last updated (\d{4}-\d{2}-\d{2})\./) || [])[1];
 ok(termsDate === TERMS_VERSION, `TERMS_VERSION is the date in the /terms source (${TERMS_VERSION} vs ${termsDate})`);
 // A checkout runs only while sales are on: what it records is the date /terms prints then.
@@ -71,4 +83,19 @@ ok(/if \(ncTaxableKind\(tool\.slug\)\) facts\.push\(`Sales tax: the price includ
 ok(/ncTaxReport\(rows/.test(src("server.js")) && /externalSalesForSlugs\(Object\.keys\(NC_TAXABLE_SLUGS\)/.test(src("server.js")), "the operator report is built from the sales ledger");
 
 console.log(failed ? `${failed} failed` : "all passed");
+// Every kind of taxable call is one the /terms sentence names, so a new kind
+// (a new slug of another sort) cannot be taxed without the terms saying so.
+{
+  const { termsPage } = await import("../src/terms.js");
+  const text = stripTags(termsPage("https://agent402.tools"), "").replace(/\s+/g, " ");
+  const NAMED = {
+    "digital audio work": "returns generated speech, audio",
+    "digital audiovisual work": "audio or video",
+    "edit of a buyer's image": "edits an image or audio file you send",
+    "edit of a buyer's audio": "edits an image or audio file you send",
+  };
+  const kinds = [...new Set(Object.values(NC_TAXABLE_SLUGS))];
+  const unnamed = kinds.filter((k) => !Object.hasOwn(NAMED, k) || !text.includes(NAMED[k]));
+  ok(unnamed.length === 0, `every taxable kind is named in the /terms tax sentence${unnamed.length ? `: ${unnamed.join(", ")}` : ""}`);
+}
 process.exit(failed ? 1 : 0);

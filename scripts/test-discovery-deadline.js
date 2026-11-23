@@ -19,9 +19,8 @@
 // (DISCOVERY_TEST_HANG_QUERY); the hook is inert whenever payments are on.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -96,20 +95,18 @@ ok(gate.indexOf("releaseSlot()") > gate.indexOf("raceDeadline(pending") && gate.
 ok(gate.indexOf("cacheSet(cacheKey") > gate.indexOf("if (pastDeadline)"), "nothing is cached on the deadline path");
 
 // --- 5. booted server
-const port = await getFreePort();
 const TOKEN = "discovery-deadline-operator-token-0123456789";
 const DEADLINE_MS = 1500;
 const HANG = "hang-marker-7f3a";
-let stderr = "";
-const proc = spawn(process.execPath, ["src/server.js"], {
+const srv = await bootServer({
+  stores: false,
+  timeoutMs: 60_000,
   env: {
-    ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "",
+    TRUST_PROXY_HOPS: "1", FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "",
     AGENT402_OPERATOR_TOKEN: TOKEN, DISCOVERY_TEST_HANG_QUERY: HANG, DISCOVERY_COMPUTE_DEADLINE_MS: String(DEADLINE_MS), DISCOVERY_MAX_INFLIGHT: "2",
   },
-  stdio: ["ignore", "ignore", "pipe"],
 });
-proc.stderr.on("data", (d) => { stderr += String(d); });
-const base = `http://127.0.0.1:${port}`;
+const base = srv.url;
 const op = { headers: { authorization: `Bearer ${TOKEN}` } };
 const perf = async () => (await fetch(`${base}/__operator/perf.json`, op)).json();
 const ask = async (path, q, ip) => {
@@ -120,9 +117,7 @@ const ask = async (path, q, ip) => {
   return { status: r.status, retryAfter: r.headers.get("retry-after"), body, ms: Date.now() - t0 };
 };
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
-  ok(up, "server booted");
+  ok(true, "server booted");
   const p0 = await perf();
   ok(p0.discovery && p0.discovery.inFlight === 0 && p0.discovery.live === 0 && p0.discovery.oldestAgeMs === null && p0.discovery.maxInFlight === 2 && p0.discovery.deadlineMs === DEADLINE_MS, `perf.json carries the gate's live count, oldest age, cap and deadline (${JSON.stringify(p0.discovery)})`);
   ok(p0.shed && p0.shed.discoveryDeadline === 0, "the discoveryDeadline shed counter starts at zero");
@@ -145,7 +140,7 @@ try {
   ok(after.discovery.inFlight === 0 && after.discovery.live === 0 && after.discovery.oldestAgeMs === null, `both slots are released at the deadline (${JSON.stringify(after.discovery)})`);
   ok(after.shed.discoveryDeadline === 2 && after.shed.discoveryInflight === 1, `the sheds are counted apart: deadline ${after.shed.discoveryDeadline}, inflight ${after.shed.discoveryInflight}`);
   await sleep(100);
-  const warns = stderr.split("\n").filter((l) => l.includes("[discovery]") && l.includes("passed the") && l.includes("deadline"));
+  const warns = srv.log().split("\n").filter((l) => l.includes("[discovery]") && l.includes("passed the") && l.includes("deadline"));
   ok(warns.length === 2 && warns.some((l) => l.includes("_find") && l.includes(`${`${HANG} first`.length} chars`)) && warns.some((l) => l.includes("_route")), `one warning per deadline, naming the slug and the query length (${JSON.stringify(warns)})`);
   const normal = await ask("/api/find", "convert json to csv", "203.0.113.11");
   ok(normal.status === 200 && Array.isArray(normal.body?.results) && normal.body.results.length > 0, `a normal query from the same caller is served afterwards (${normal.status})`);
@@ -156,5 +151,5 @@ try {
   ok(unhandled === 0, "no unhandled rejection surfaced in the test process");
   console.log(`\nPASS - ${n} checks (discovery deadline)`);
 } finally {
-  proc.kill("SIGKILL");
+  srv.child.kill("SIGKILL");
 }

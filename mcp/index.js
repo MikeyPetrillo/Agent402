@@ -13,13 +13,20 @@
 //
 // Config (env):
 //   AGENT402_URL          target service (default https://agent402.tools)
-//   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base/Polygon/Arbitrum), optional
+//   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base/Polygon/Arbitrum), optional;
+//                         with or without 0x. Unset, the key `npx agent402-mcp setup` stored is read
+//                         from the OS keychain (./key-store.js; AGENT402_KEY_STORE=off skips it)
 //   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana), optional
 //   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (default 5; 0 or off disables)
 //   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...); pays per successful call with no wallet,
 //                         on Agent402's own services only (outside-seller routes need a wallet)
 //   AGENT402_BUDGET       optional hard cap on total USD spent this session (no cap by default)
+//   AGENT402_MAX_USD_PER_DAY / AGENT402_MAX_USD_PER_MONTH
+//                         optional caps per UTC day / month that hold across restarts (./spend-ledger.js)
+//   AGENT402_OUTPUT_DIR   where media answers are written (./media-output.js); AGENT402_MEDIA_INLINE=1
+//                         returns them inline instead; an image up to AGENT402_MEDIA_INLINE_MAX_BYTES
+//                         (default 1 MB) is also inline beside its file
 //   AGENT402_SHOW_ROUTER  "1" lists router.execute and sellers.list without a wallet (both are listed
 //                         when a wallet or credits key is set)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
@@ -32,6 +39,11 @@ import { parseNetworkPrefs, withNetworkPreference, distrustFetch } from "./netwo
 import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS, jobState } from "./async-job.js";
 import { solvePowAsync } from "./pow-solver.js";
+import { normalizeEvmKey, evmKeyOrNull, walletKeyError } from "./wallet-key.js";
+import { configDir } from "./config-dir.js";
+import { ledgerFromEnv } from "./spend-ledger.js";
+import { keyStoreKind, readStoredKey } from "./key-store.js";
+import { mediaInline, inlineImageMaxBytes, outputDirCandidates, writableOutputDir, saveMedia, extractMediaFields, isBinaryBody, bareType, sniffType, savedLine } from "./media-output.js";
 // MCP SDK v2 (@modelcontextprotocol/server, pinned exactly in package.json).
 // Handlers are registered by method name. The server answers the 2024-11-05
 // through 2025-11-25 revisions it did under SDK v1, and the SDK lifts every
@@ -63,6 +75,13 @@ class McpError extends ProtocolError {
   constructor(code, message, data) { super(code, `MCP error ${code}: ${message}`, data); }
 }
 
+// `npx agent402-mcp setup` stores the wallet key and prints the client config
+// (./setup.js); the server below never starts.
+if (process.argv[2] === "setup") {
+  const { runSetup } = await import("./setup.js");
+  process.exit(await runSetup());
+}
+
 const DEFAULT_URL = "https://agent402.tools";
 const BASE = (process.env.AGENT402_URL || DEFAULT_URL).replace(/\/$/, "");
 // Catalog and seller requests (the 402 and the paid retry included) go through
@@ -78,7 +97,16 @@ const ownFetch = (input, init = {}) => {
   if (!h.has("user-agent")) h.set("user-agent", `agent402-mcp/${VERSION}`);
   return plainFetch(input, { ...init, headers: h });
 };
-const AGENT_KEY = process.env.AGENT_KEY || "";
+// AGENT_KEY when it is set, else the key `npx agent402-mcp setup` stored in
+// the OS credential store (./key-store.js). Either is read with or without
+// its 0x prefix and surrounding whitespace (./wallet-key.js).
+const KEY_DIR = configDir();
+const STORED_KEY = String(process.env.AGENT_KEY || "").trim() ? "" : (() => {
+  try { return readStoredKey({ kind: keyStoreKind(), dir: KEY_DIR }) || ""; } catch { return ""; }
+})();
+const AGENT_KEY = String(process.env.AGENT_KEY || "").trim() ? process.env.AGENT_KEY : STORED_KEY;
+// The name a key error gives: the variable, or the stored key.
+const AGENT_KEY_NAME = STORED_KEY ? "the wallet key stored by `npx agent402-mcp setup` (run it again)" : "AGENT_KEY";
 // Solana secret key: base58 string (Phantom/solana-keygen export) or a JSON
 // byte array. Either key alone enables paid calls; with both, the buyer can
 // settle on whichever chain the seller offers (EVM accepts are tried first).
@@ -107,6 +135,9 @@ const SECRET_FORMS = (() => {
     const v = String(raw || "").trim();
     if (v.length < 8) continue;
     out.add(v);
+    // The key as the signer reads it (quotes and 0x prefix dropped).
+    const k = raw === AGENT_KEY ? evmKeyOrNull(v) : null;
+    if (k) { out.add(k); out.add(k.slice(2)); out.add(k.slice(2).toUpperCase()); }
     const hex = v.replace(/^0x/i, "");
     if (/^[0-9a-f]+$/i.test(hex) && hex.length >= 8) { out.add(hex); out.add(hex.toLowerCase()); out.add(hex.toUpperCase()); }
     if (v.startsWith("[")) out.add(v.replace(/\s+/g, ""));
@@ -146,9 +177,9 @@ if (SECRET_FORMS.length) {
     console[m] = (...a) => orig(redactSecrets(format(...a)));
   }
 }
-/** A fixed error for a key that does not parse: the variable's name, never
- *  the parser's message (it can quote the value). */
-const walletKeyError = (name, what) => new Error(`${name} is set but is not ${what}; check the value (it is never printed)`);
+// walletKeyError (./wallet-key.js) is a fixed error for a key that does not
+// parse: the variable's name and the expected form, never the parser's
+// message (it can quote the value).
 
 // Slow paid routes (async.recommended on their /api/pricing row) are sent with
 // Prefer: respond-async and collected from their job link (./async-job.js).
@@ -186,6 +217,17 @@ const capFromEnv = (name, def, { zeroIsOff = false } = {}) => {
 const MAX_PER_CALL = capFromEnv("AGENT402_MAX_PER_CALL", DEFAULT_MAX_PER_CALL_USD, { zeroIsOff: true });
 const BUDGET = capFromEnv("AGENT402_BUDGET", DEFAULT_BUDGET_USD);
 let spentUsd = 0;
+// Daily and monthly caps that hold across restarts (./spend-ledger.js): what
+// this process confirms as spent is also written to the ledger file while
+// either cap is set.
+const LEDGER = ledgerFromEnv({ dir: KEY_DIR, warn: (m) => console.error(`[agent402-mcp] ${m}`) });
+/** What the daily and monthly caps still allow; 0 when the ledger cannot be read. */
+const ledgerLeft = () => { try { return LEDGER.leftUsd(); } catch { return 0; } };
+/** Count confirmed spend in this session and in the ledger. */
+function addSpent(usd) {
+  spentUsd += usd;
+  try { LEDGER.record(usd); } catch (e) { console.error(`[agent402-mcp] could not write the spend ledger: ${e.message}`); }
+}
 // Signed payments that were sent without a confirmed answer (an error status,
 // a dropped connection, a redirect, a job still running). The seller holds a
 // signed authorization it may still redeem, so the amount counts against the
@@ -219,7 +261,8 @@ const pendingUsd = (except = null) => { let t = 0; for (const e of pendingSpend)
 /** The most the payment being signed may ask for: the per-call cap and what is
  *  left of the session budget after every other call in flight. */
 function signAllowance() {
-  return Math.max(0, Math.min(MAX_PER_CALL, BUDGET - spentUsd - heldNow() - pendingUsd(signCtx.getStore() || null)));
+  const others = heldNow() + pendingUsd(signCtx.getStore() || null);
+  return Math.max(0, Math.min(MAX_PER_CALL, BUDGET - spentUsd - others, ledgerLeft() - others));
 }
 
 const DEFAULT_CURATED = [
@@ -367,7 +410,8 @@ async function walletHintHeaders(tool) {
 
 /** The viem account for AGENT_KEY, or walletKeyError. */
 function evmAccount(privateKeyToAccount) {
-  try { return privateKeyToAccount(AGENT_KEY.trim()); } catch { throw walletKeyError("AGENT_KEY", "a 0x-prefixed 32-byte hex private key"); }
+  const key = normalizeEvmKey(AGENT_KEY, AGENT_KEY_NAME);
+  try { return privateKeyToAccount(key); } catch { throw walletKeyError(AGENT_KEY_NAME); }
 }
 
 // @solana/kit KeyPairSigner from SOLANA_AGENT_KEY, base58 64-byte secret key
@@ -392,9 +436,10 @@ function solanaSigner() {
 function walletRequiredText(tool) {
   return [
     `"${tool.slug}" costs ${tool.price}/call and requires a USDC wallet (it is not eligible for the proof-of-work tier).`,
-    `To enable it: set AGENT_KEY on this MCP server to the hex private key of an EVM wallet funded with USDC`,
-    `on Base (or Polygon/Arbitrum), and/or SOLANA_AGENT_KEY to the base58 secret key of a Solana wallet funded`,
-    `with USDC on Solana. Payment is per call via the x402 protocol: no signup or API key.`,
+    `To enable it: run \`npx agent402-mcp setup\` once to store the key of an EVM wallet funded with USDC on Base`,
+    `(a Base payment needs no ETH) in your OS keychain, or set AGENT_KEY on this MCP server to that hex private key;`,
+    `and/or set SOLANA_AGENT_KEY to the base58 secret key of a Solana wallet funded with USDC on Solana.`,
+    `Payment is per call via the x402 protocol: no signup or API key.`,
     `Hold a prepaid credits key? Set AGENT402_CREDITS_KEY to the a402_ key and it pays per successful call on Agent402's own services (${BASE}/credits says whether packs are on sale).`,
     `Pricing and details: ${BASE}/tools/${tool.slug}`,
   ].join(" ");
@@ -416,7 +461,7 @@ function walletRequiredText(tool) {
 // signing (guardSigning in getPayFetch). Only run when a ceiling is
 // configured: with none, the number changes nothing and the round trip is
 // pure cost.
-const CAPS_CONFIGURED = Number.isFinite(MAX_PER_CALL) || Number.isFinite(BUDGET);
+const CAPS_CONFIGURED = Number.isFinite(MAX_PER_CALL) || Number.isFinite(BUDGET) || LEDGER.enabled;
 
 /** The accepts array, at the top level or under the envelope keys sellers wrap it in. */
 function acceptsOf(obj) {
@@ -546,6 +591,10 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
 
   let res;
   let heldNote = "";
+  // A paid call the default host served under its first-call allowance:
+  // nothing was charged, and the signed payment is held, not spent
+  // (firstCallGrant).
+  let freeGrant = false;
   if (!HAS_WALLET && HAS_CREDITS) {
     // Credits key: same budget guards as the wallet path, against the same
     // number - the credits gate holds and debits what the 402 quotes for THIS
@@ -558,13 +607,15 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     if (spentUsd + price > BUDGET) {
       return { content: [{ type: "text", text: `Refused: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request). Raise AGENT402_BUDGET (or set it to off) on this MCP server to continue.` }], isError: true };
     }
+    const capRefusal = LEDGER.refusal(price, tool.slug);
+    if (capRefusal) return { content: [{ type: "text", text: capRefusal }], isError: true };
     try {
       const first = await ownFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders, Authorization: `Bearer ${CREDITS_KEY}` } });
       if (isRedirect(first)) return redirectRefusal(first);
       res = await collect(first);
     }
-    catch (e) { if (e instanceof AsyncJobPendingError) { spentUsd += price; return pendingJobResult(tool, e); } throw e; }
-    if (res.ok) spentUsd += price;
+    catch (e) { if (e instanceof AsyncJobPendingError) { addSpent(price); return pendingJobResult(tool, e); } throw e; }
+    if (res.ok) addSpent(price);
     if (res.status === 402) {
       let body = {}; try { body = await res.clone().json(); } catch { /* plain */ }
       // The refusal carries a topup link only while the service sells credits;
@@ -595,6 +646,8 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
         isError: true,
       };
     }
+    const capRefusal = LEDGER.refusal(price, tool.slug, { otherUsd: heldUsd + inFlight });
+    if (capRefusal) return { content: [{ type: "text", text: capRefusal }], isError: true };
     const payFetch = await getPayFetch();
     // Held until the call settles or fails; the guard replaces `usd` with the
     // amount it lets the wallet sign.
@@ -634,17 +687,23 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
       if (header) {
         resent = true;
         try { res = await collect(await ownFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders, ...hintHeaders, ...header } })); }
-        catch (e) { spentUsd += entry.usd; if (e instanceof AsyncJobPendingError) return pendingJobResult(tool, e); throw e; }
+        catch (e) { addSpent(entry.usd); if (e instanceof AsyncJobPendingError) return pendingJobResult(tool, e); throw e; }
       }
     }
     // A sent payment is spent when the server confirms settlement (payment
     // receipt header) or answers 2xx; any other answer leaves the signed
     // authorization with the seller, so it is held, never released.
     if (entry.sent && takenFirst) {
-      spentUsd += entry.usd;
+      addSpent(entry.usd);
       if (!res.ok) heldNote = ` The payment of $${entry.usd} was taken before the call ran, so it counts as spent against AGENT402_BUDGET and is owed back, refunded after on-chain proof${resent ? "; the same payment, sent once more, failed too" : "; sending the same payment again runs the call at no further charge"}.`;
+    } else if (entry.sent && firstCallGrant(res, url)) {
+      // The default host served it under the first-call allowance: verified
+      // and not settled, so it is not spent, but the signed authorization
+      // left this process and stays held until it expires unused.
+      freeGrant = true;
+      holdPayment(entry.usd, entry.until ?? Date.now() + OWN_HOST_BLIND_HOLD_MS);
     } else if (entry.sent) {
-      if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += entry.usd;
+      if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) addSpent(entry.usd);
       else if (res.status >= 400 && url.origin === DEFAULT_ORIGIN) {
         // The default host did not settle it: held until it expires unused.
         const until = entry.until ?? Date.now() + OWN_HOST_BLIND_HOLD_MS;
@@ -666,17 +725,64 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     return { content: [{ type: "text", text: walletRequiredText(tool) }], isError: true };
   }
 
-  const contentType = (res.headers.get("content-type") || "").split(";")[0];
-  if (contentType.startsWith("image/")) {
-    const data = Buffer.from(await res.arrayBuffer()).toString("base64");
+  const out = await answerOf(tool, res, heldNote);
+  if (freeGrant && !out.isError) out.content = [...out.content, { type: "text", text: FIRST_CALL_LABEL }];
+  return out;
+}
+
+// The server's first-call allowance (src/first-call-allowance.js on the
+// default host): a wallet's first paid call on an eligible route is served
+// with the header X-Agent402-Allowance: first-call and no settlement receipt.
+// Read only from the default host's exact origin (DEFAULT_ORIGIN), on a 2xx
+// answer that carries no PAYMENT-RESPONSE, so a settled call, and any other
+// host's answer, is always counted: a seller holding the payment cannot
+// vouch that it was not taken.
+const FIRST_CALL_LABEL = "One-time free call: this wallet's first paid call was served by the first-call allowance, and its x402 payment was verified and not settled, so nothing was charged. The signed payment stays held against AGENT402_BUDGET until its authorization expires unused.";
+function firstCallGrant(res, url) {
+  return url?.origin === DEFAULT_ORIGIN && res.ok
+    && String(res.headers.get("x-agent402-allowance") || "").trim().toLowerCase() === "first-call"
+    && !res.headers.get("payment-response") && !res.headers.get("x-payment-response");
+}
+
+// Media answers are written to files (./media-output.js) unless
+// AGENT402_MEDIA_INLINE is on; the folder is found once, on the first one.
+const MEDIA_INLINE = mediaInline();
+// An image this small is also returned inline, so the model sees it.
+const INLINE_IMAGE_MAX = inlineImageMaxBytes();
+let mediaDir;
+function mediaFolder() { mediaDir ??= writableOutputDir(outputDirCandidates()); return mediaDir; }
+/** Save `buf` for `tool`, or null when inline is asked for or no folder can be written. */
+function trySave(tool, buf, { field = "", contentType } = {}) {
+  if (MEDIA_INLINE) return null;
+  const dir = mediaFolder();
+  if (!dir) return null;
+  try { return saveMedia(buf, { dir, slug: tool.slug, field, contentType }); } catch (e) { log(`could not write a media answer to ${dir}: ${e.message}`); return null; }
+}
+/** The tool result for a bytes answer: a file, or inline when asked (or unwritable). */
+function bytesResult(tool, buf, contentType) {
+  const type = bareType(contentType) || sniffType(buf) || "application/octet-stream";
+  const f = trySave(tool, buf, { contentType: type });
+  if (f) {
+    const seen = type.startsWith("image/") && buf.length <= INLINE_IMAGE_MAX;
     return {
-      content: [{ type: "image", data, mimeType: contentType }],
-      structuredContent: {
-        slug: tool.slug,
-        result: { contentType, encoding: "base64", note: "Binary payload is in the image content block" },
-      },
+      content: [...(seen ? [{ type: "image", data: buf.toString("base64"), mimeType: type }] : []), { type: "text", text: savedLine(f) }],
+      structuredContent: { slug: tool.slug, result: { contentType: f.contentType, bytes: f.bytes, savedTo: f.path, inline: seen, note: seen ? "The answer was written to this file and is also in the image content block" : "The answer was written to this file; set AGENT402_MEDIA_INLINE=1 to receive it inline" } },
     };
   }
+  const data = buf.toString("base64");
+  const block = type.startsWith("image/") ? { type: "image", data, mimeType: type }
+    : type.startsWith("audio/") ? { type: "audio", data, mimeType: type }
+    : { type: "text", text: JSON.stringify({ contentType: type, encoding: "base64", data }) };
+  return {
+    content: [block],
+    structuredContent: { slug: tool.slug, result: { contentType: type, encoding: "base64", note: block.type === "text" ? "Binary payload is base64 in the text content block" : `Binary payload is in the ${block.type} content block` } },
+  };
+}
+
+/** The tool result for a delivered (or failed) answer. */
+async function answerOf(tool, res, heldNote) {
+  const contentType = bareType(res.headers.get("content-type"));
+  if (res.status < 400 && isBinaryBody(contentType)) return bytesResult(tool, Buffer.from(await res.arrayBuffer()), contentType);
   const text = await res.text();
   if (res.status >= 400) {
     return { content: [{ type: "text", text: failureText(res.status, text) + heldNote }], isError: true };
@@ -685,13 +791,32 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
   try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
   const structured = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : { result: parsed };
   // A binary answer collected from a job arrives as { contentType, encoding: "base64", data }.
-  if (structured.encoding === "base64" && typeof structured.data === "string" && /^image\//.test(String(structured.contentType || ""))) {
-    return {
-      content: [{ type: "image", data: structured.data, mimeType: String(structured.contentType) }],
-      structuredContent: { slug: tool.slug, result: { contentType: structured.contentType, encoding: "base64", note: "Binary payload is in the image content block" } },
-    };
+  if (structured.encoding === "base64" && typeof structured.data === "string" && isBinaryBody(structured.contentType)) {
+    return bytesResult(tool, Buffer.from(structured.data, "base64"), structured.contentType);
+  }
+  // A JSON answer that carries a large base64 media field (an image, audio
+  // or video) gets the file's path, size and type in that field instead.
+  if (!MEDIA_INLINE && text.length >= 8 * 1024) {
+    let extracted = null;
+    try { extracted = extractMediaFields(structured, (buf, o) => { const f = trySave(tool, buf, o); if (!f) throw new Error("not saved"); return f; }); } catch { extracted = null; }
+    if (extracted && extracted.files.length) {
+      return {
+        content: [{ type: "text", text: JSON.stringify(extracted.value) }, { type: "text", text: extracted.files.map(savedLine).join("\n") }],
+        structuredContent: extracted.value,
+      };
+    }
   }
   return { content: [{ type: "text", text }], structuredContent: structured };
+}
+
+/** The daily and monthly caps for payment.info ({} when neither is set). */
+function ledgerControls() {
+  if (!LEDGER.enabled) return {};
+  try {
+    const st = LEDGER.status();
+    const one = (c) => c && { capUsd: c.capUsd, spentUsd: c.spentUsd, leftUsd: c.leftUsd, resetsAt: c.resetsAt, setting: c.setting };
+    return { ...(st.day ? { daily: one(st.day) } : {}), ...(st.month ? { monthly: one(st.month) } : {}), ledger: LEDGER.file };
+  } catch (e) { return { ledgerError: e.message }; }
 }
 
 /** The tool result for a payment the signing guard refused. */
@@ -702,14 +827,14 @@ function signingRefusal(tool, d) {
     ? `Refused without paying: for "${tool.slug}", ${d.detail}, so the payment was not sent.`
     : d.reason === "validity"
     ? `Refused without paying: for "${tool.slug}", ${d.detail}, so nothing was signed.`
-    : `Refused without paying: "${tool.slug}" asked for $${d.priceUsd} on the paid request, above the $${Number(d.allowanceUsd.toFixed(6))} this server may sign (AGENT402_MAX_PER_CALL ${MAX_PER_CALL === Infinity ? "off" : `$${MAX_PER_CALL}`}, AGENT402_BUDGET ${BUDGET === Infinity ? "off" : `$${BUDGET}`} with $${spentUsd.toFixed(4)} spent). Nothing was signed; raise the setting that refused it (AGENT402_MAX_PER_CALL also takes 0 or off) on this MCP server to allow it.`;
+    : `Refused without paying: "${tool.slug}" asked for $${d.priceUsd} on the paid request, above the $${Number(d.allowanceUsd.toFixed(6))} this server may sign (AGENT402_MAX_PER_CALL ${MAX_PER_CALL === Infinity ? "off" : `$${MAX_PER_CALL}`}, AGENT402_BUDGET ${BUDGET === Infinity ? "off" : `$${BUDGET}`} with $${spentUsd.toFixed(4)} spent${LEDGER.summary()}). Nothing was signed; raise the setting that refused it (AGENT402_MAX_PER_CALL also takes 0 or off) on this MCP server to allow it.`;
   return { content: [{ type: "text", text }], isError: true };
 }
 
 /** The tool result for a job still running when the wait ended. */
 function pendingJobResult(tool, e) {
   return {
-    content: [{ type: "text", text: `${tool.slug}: ${e.message}. The call was paid for as a job; payment settles only if the answer is delivered. Poll the job link (free, no payment) for the answer.` }],
+    content: [{ type: "text", text: `${tool.slug}: ${e.message}. The call was paid for as a job; payment settles only if the answer is delivered. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. Poll the job link (free, no payment) for the answer.` }],
     structuredContent: { slug: tool.slug, pending: true, jobUrl: e.jobUrl || null, job: e.job || null },
     isError: true,
   };
@@ -1134,6 +1259,8 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
         service: BASE,
         mode: HAS_WALLET ? "usdc" : HAS_CREDITS ? "credits" : "proof-of-work",
         wallet: address,
+        walletKeySource: AGENT_KEY ? (STORED_KEY ? "stored key (npx agent402-mcp setup)" : "AGENT_KEY") : null,
+        mediaOutput: MEDIA_INLINE ? "inline (AGENT402_MEDIA_INLINE)" : "files in AGENT402_OUTPUT_DIR (default ~/Downloads/agent402, else the OS temp folder)",
         solanaWallet: solanaAddress,
         network: pricingInfo?.payment?.network ?? "base",
         networks: pricingInfo?.payment?.networks ?? undefined,
@@ -1151,6 +1278,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
               spentThisSessionUsd: Number(spentUsd.toFixed(6)),
               heldThisSessionUsd: Number(heldNow().toFixed(6)),
               remainingUsd: BUDGET === Infinity ? "unlimited" : Number(Math.max(0, BUDGET - spentUsd - heldNow()).toFixed(6)),
+              ...ledgerControls(),
             }
           : "n/a (proof-of-work mode spends CPU, not money)",
         note: HAS_WALLET
@@ -1159,10 +1287,10 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
             ? "Every tool on Agent402's own services is available; each call is paid from the credits key (AGENT402_CREDITS_KEY), debited only on a successful call, within the spend controls above. The routes that buy from outside sellers (router.execute, seller-payability, decide.execute, the flight tools) and the wallet-identity tools (memory, usage) need a wallet key."
             : `No wallet or credits key configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (AGENT_KEY / SOLANA_AGENT_KEY) or a prepaid credits key (AGENT402_CREDITS_KEY).`,
         install: {
-          claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
+          claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.15.0",
+          npm: "npx -y agent402-mcp@0.16.0",
           maintainer: "Havok Holdings LLC",
         },
         positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Flagship search/answer first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
@@ -1180,9 +1308,9 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
           mode: HAS_WALLET ? "usdc" : HAS_CREDITS ? "credits" : "proof-of-work",
         },
         install: {
-          claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
+          claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.15.0",
+          npm: "npx -y agent402-mcp@0.16.0",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,
@@ -1361,12 +1489,12 @@ log(`catalog: ${catalog.size} tools from ${BASE}; ${curated.length} first-class,
 {
   const parsed = [], broken = [];
   if (AGENT_KEY) {
-    try { const { privateKeyToAccount } = await import("viem/accounts"); evmAccount(privateKeyToAccount); parsed.push("EVM"); } catch { broken.push("AGENT_KEY"); }
+    try { const { privateKeyToAccount } = await import("viem/accounts"); evmAccount(privateKeyToAccount); parsed.push(STORED_KEY ? "EVM (stored key)" : "EVM"); } catch { broken.push(AGENT_KEY_NAME); }
   }
   if (SOLANA_AGENT_KEY) {
     try { await solanaSigner(); parsed.push("Solana"); } catch { broken.push("SOLANA_AGENT_KEY"); }
   }
-  const caps = `max/call ${MAX_PER_CALL === Infinity ? "unlimited" : `$${MAX_PER_CALL}`}, session budget ${BUDGET === Infinity ? "unlimited" : `$${BUDGET}`}`;
+  const caps = `max/call ${MAX_PER_CALL === Infinity ? "unlimited" : `$${MAX_PER_CALL}`}, session budget ${BUDGET === Infinity ? "unlimited" : `$${BUDGET}`}${Number.isFinite(LEDGER.dayCap) ? `, $${LEDGER.dayCap}/day` : ""}${Number.isFinite(LEDGER.monthCap) ? `, $${LEDGER.monthCap}/month` : ""}`;
   if (broken.length) log(`payment: ${broken.join(" and ")} ${broken.length > 1 ? "are set but do" : "is set but does"} not parse as a key (the value is never printed); paid calls that need ${broken.length > 1 ? "them fail until they are" : "it fail until it is"} fixed`);
   log(parsed.length
     ? `payment: USDC via x402 (${parsed.join(" + ")} wallet configured; ${caps})`

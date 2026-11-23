@@ -16,9 +16,8 @@
 //   node scripts/test-sticky-chrome.js                 (boots its own FREE_MODE server)
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-sticky-chrome.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const PAGES = ["/", "/docs", "/tools", "/pricing", "/sell", "/playground", "/101", "/leaderboard"];
 const WIDTHS = [[1440, 900], [390, 844]];
@@ -30,18 +29,14 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 let srv = null;
 let BASE = process.env.TARGET_URL;
 async function boot() {
-  const PORT = await getFreePort();
-  srv = spawn(process.execPath, ["src/server.js"], {
-    stdio: ["ignore", "ignore", "pipe"],
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
+  srv = await bootServer({
+    stores: false,
+    timeoutMs: 60_000,
+    env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
   });
-  let err = "";
-  srv.stderr.on("data", (d) => { err += d; });
-  BASE = `http://127.0.0.1:${PORT}`;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) return; } catch {} await new Promise((r) => setTimeout(r, 500)); }
-  throw new Error(`server did not boot: ${err.slice(-2000)}`);
+  BASE = srv.url;
 }
-const stop = () => { if (srv) { try { srv.kill("SIGTERM"); } catch {} srv = null; } };
+const stop = () => { if (srv) { try { srv.child.kill("SIGTERM"); } catch {} srv = null; } };
 
 // Everything measured on one page at one width, in the page.
 async function measure(page) {

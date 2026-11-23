@@ -19,8 +19,7 @@
 // database, cannot add calls to the count or hold its SQLite write lock.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
-import { spawn } from "node:child_process";
+import { bootServer } from "./lib/boot-server.js";
 import { createServer } from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -29,7 +28,6 @@ import { evm } from "mppx/client";
 import { Credential } from "mppx";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, MCP_PAYMENT_REQUIRED_CODE, MCP_CREDENTIAL_META } from "../src/mcp-mpp.js";
-import { getFreePorts } from "./lib/free-port.js";
 import { generateKeyPairSync } from "node:crypto";
 import { verifyReceipt as verifySignedReceipt } from "../client/receipt.js";
 import { MCP_SIGNED_RECEIPT_META } from "../src/mcp-http.js";
@@ -38,8 +36,7 @@ import { MCP_SIGNED_RECEIPT_META } from "../src/mcp-http.js";
 // signed receipt in _meta (src/mcp-http.js withSignedReceipt).
 const RECEIPT_KEY = Buffer.from(generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" })).toString("base64");
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 const SECRET = "test-mcp-mpp-secret";
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const TX = `0x${"cd".repeat(32)}`;
@@ -144,11 +141,14 @@ facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, r));
+await new Promise((r) => facilitator.listen(0, r));
+const FAC_PORT = facilitator.address().port;
 
-proc = spawn(process.execPath, ["src/server.js"], {
+const booting = bootServer({
+  stores: "mcp-mpp",
+  timeoutMs: 30_000,
   env: {
-    ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("mcp-mpp"), PORT: String(PORT), FREE_MODE: "",
+    TRUST_PROXY_HOPS: "1", FREE_MODE: "",
     WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     MPP_SECRET_KEY: SECRET,
@@ -163,11 +163,12 @@ proc = spawn(process.execPath, ["src/server.js"], {
     AGENT402_MCP_MAX_ANSWER_BYTES: "1024",
     RECEIPT_SIGNING_KEY: RECEIPT_KEY, RECEIPT_SIGNING_KEY_ID: "r1-mcp-mpp", RECEIPT_RETIRED_KEYS: "",
   },
-  stdio: "ignore",
 });
 
 try {
-  for (let i = 0; i < 60; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
+  const first = await booting;
+  proc = first.child;
+  B = first.url;
 
   const connect = async () => {
     const client = new Client({ name: "test-mcp-mpp", version: "0.0.0" });
@@ -325,11 +326,11 @@ try {
   //    second server whose deadline is shorter than the loopback bound makes
   //    the deadline win.
   proc.kill("SIGKILL");
-  const { getFreePort } = await import("./lib/free-port.js");
-  const port2 = await getFreePort();
-  proc = spawn(process.execPath, ["src/server.js"], {
+  const second = await bootServer({
+    stores: "mcp-mpp-deadline",
+    timeoutMs: 60_000,
     env: {
-      ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("mcp-mpp-deadline"), PORT: String(port2), FREE_MODE: "",
+      TRUST_PROXY_HOPS: "1", FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
       MPP_SECRET_KEY: SECRET,
@@ -338,10 +339,9 @@ try {
       AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
       AGENT402_MCP_REQ_DEADLINE_MS: "800", REFUND_DB_DIR: REFUND_DIR,
     },
-    stdio: "ignore",
   });
-  const B2 = `http://127.0.0.1:${port2}`;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B2}/health`)).ok) break; } catch {} await sleep(500); }
+  proc = second.child;
+  const B2 = second.url;
   const c2 = new Client({ name: "test-mcp-mpp-deadline", version: "0.0.0" });
   await c2.connect(new StreamableHTTPClientTransport(new URL(`${B2}/mcp`)));
   McpClient.wrap(c2, { methods: [evm.charge({ account, currencies: [evm.assets.base.USDC], maxAmount: "1.00" })] });

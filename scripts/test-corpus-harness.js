@@ -74,6 +74,27 @@ ok(T({ status: 404, body: { error: "Price feed upstream: not found (check ids)" 
   ok(u.kind === "upstream" && /outside host example\.com/.test(u.note), `a 5xx on a case with a target host names the host (${u.note})`);
   ok(!/outside host/.test(classify({ status: 504, body: { error: "Price feed upstream timed out" }, tier: 1, expectFails: ["x"] }).note), "a tool on a fixed upstream carries its own message, no invented host");
 }
+// An answer that marks its own missed part as not measured (a lookup that
+// timed out answered honestly: lookupError set, the leg listed in unmeasured,
+// ownerUnavailable, a record read as null rather than false) is the outside
+// lookup's miss, named; a body that says nothing about it stays ours.
+{
+  const miss = ["dmarc.hasRecord = null, expected true"];
+  const kinds = [
+    ["lookupError", { spf: { hasRecord: true }, dmarc: { lookupError: "queryTxt ETIMEOUT _dmarc.example.com" } }],
+    ["unmeasured", { summary: "partial", unmeasured: ["dmarc"] }],
+    ["ownerUnavailable", { asn: 15169, owner: null, ownerUnavailable: true }],
+    ["hasRecord null", { dmarc: { hasRecord: null } }],
+  ];
+  for (const [label, body] of kinds) {
+    const c = classify({ status: 200, body, tier: 1, expectFails: miss });
+    ok(c.kind === "upstream" && c.note.includes(label.split(" ")[0]), `a 200 whose body marks ${label} is upstream and names it (${c.kind}: ${c.note})`);
+  }
+  ok(T({ status: 200, body: { dmarc: { hasRecord: false } }, tier: 1, expectFails: miss }) === "fatal", "a body that says nothing about a missed lookup stays fatal (hasRecord false is a reading)");
+  ok(T({ status: 200, body: { owner: null }, tier: 1, expectFails: ["owner not populated"] }) === "fatal", "a null value with no mark stays fatal");
+  ok(T({ status: 200, body: { unmeasured: [] }, tier: 1, expectFails: miss }) === "fatal", "an empty unmeasured list marks nothing");
+  ok(T({ status: 200, body: { ownerUnavailable: true }, tier: 0, expectFails: ["x"] }) === "fatal", "a pure-CPU tool has no lookup to blame: fatal");
+}
 // A keyless boot: a pack whose every step says "not configured" answers 502,
 // and that is configuration, not an outside host (three packs read as upstream
 // 21 nights running after the equities feed went key-gated on 2026-09-20).

@@ -12,11 +12,10 @@
 //
 //   node scripts/test-seller-trust-lanes.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { EXEC_TIERS } from "../src/tools/route-execute.js";
 
 const TIERS_ASC = [...EXEC_TIERS].sort((a, b) => a.underlyingMaxUsd - b.underlyingMaxUsd);
@@ -28,7 +27,7 @@ let pass = 0;
 // A failed check exits at once, so it kills the booted servers itself (a
 // finally block does not run past process.exit, and an orphan holds the pipe).
 const procs = new Set();
-const ok = (c, m) => { if (!c) { console.error(`FAIL - ${m}`); for (const p of procs) p.kill("SIGTERM"); process.exit(1); } pass++; console.log(`ok - ${m}`); };
+const ok = (c, m) => { if (!c) { console.error(`FAIL - ${m}`); for (const p of procs) { console.error(p.log().slice(-2000)); p.child.kill("SIGTERM"); } process.exit(1); } pass++; console.log(`ok - ${m}`); };
 
 const PAYTO = "0x3D7718d5D868AF1Daae41D757244DE73DF72FB53";
 const now = Date.now();
@@ -61,18 +60,18 @@ async function boot(ceiling) {
     walletEvidence: { [W_MID]: { callsSettled: 500, uniqueBuyers: 40, origins: [MID] }, [W_HUGE]: { callsSettled: 500, uniqueBuyers: 40, origins: [HUGE] }, [W_OLD]: { callsSettled: 145, uniqueBuyers: 12, origins: [MOVED] } },
   }));
   writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: entries.length }), ...entries.map((e) => JSON.stringify(e))].join("\n") + "\n");
-  const port = await getFreePort();
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), SOR_BASE_UNPROVEN_MAX_USD: ceiling, LEADERBOARD_SNAPSHOT_FILE: lbFile },
-    stdio: ["ignore", "ignore", "inherit"],
+  // Ready once the index answers for the seeded seller (the cache loads after listen).
+  const srv = await bootServer({
+    stores: false,
+    readyPath: `/api/index?seller=${encodeURIComponent(CHEAP)}`,
+    timeoutMs: 90_000,
+    env: { FREE_MODE: "true", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), SOR_BASE_UNPROVEN_MAX_USD: ceiling, LEADERBOARD_SNAPSHOT_FILE: lbFile },
   });
-  procs.add(proc);
-  const base = `http://127.0.0.1:${port}`;
-  let detail = null;
-  for (let i = 0; i < 180 && !detail; i++) {
-    try { const r = await fetch(`${base}/api/index?seller=${encodeURIComponent(CHEAP)}`); if (r.ok) detail = await r.json(); } catch {}
-    if (!detail) await new Promise((r) => setTimeout(r, 500));
-  }
+  procs.add(srv);
+  const proc = srv.child;
+  const base = srv.url;
+  const r = await fetch(`${base}/api/index?seller=${encodeURIComponent(CHEAP)}`);
+  const detail = r.ok ? await r.json() : null;
   return { proc, base, detail };
 }
 const trust = async (base, origin) => { const r = await fetch(`${base}/api/x402/seller-trust?origin=${encodeURIComponent(origin)}`); return { status: r.status, body: await r.json() }; };

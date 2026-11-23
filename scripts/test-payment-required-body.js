@@ -28,12 +28,11 @@
 // PAYMENT-REQUIRED header to be byte-identical for the same requests: the
 // mirror writes the body and never the header.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { decodeFunctionData, encodeFunctionResult, parseAbi } from "viem";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import {
   decodePaymentRequired,
   explainsItself,
@@ -49,14 +48,15 @@ import { Agent402 } from "../client/index.js";
 import { x402TestPage } from "../src/x402-test-page.js";
 
 let pass = 0, proc = null, facilitator = null;
-const serverLog = [];
+// Every boot's output, the stopped one's included; a boot that never came up leaves its log tail.
+const boots = [];
+const serverLog = () => boots.flatMap((b) => (b.error || b.log()).split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 400))).slice(-120);
 const fail = (m) => {
   console.error("FAIL:", m);
-  if (serverLog.length) { console.error("--- server output (last lines) ---"); for (const l of serverLog.slice(-40)) console.error(l); console.error("--- end server output ---"); }
+  if (serverLog().length) { console.error("--- server output (last lines) ---"); for (const l of serverLog().slice(-40)) console.error(l); console.error("--- end server output ---"); }
   proc?.kill("SIGKILL"); facilitator?.close(); process.exit(1);
 };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const b64 = (o) => Buffer.from(typeof o === "string" ? o : JSON.stringify(o)).toString("base64");
 
 // ---------------------------------------------------------------------------
@@ -198,8 +198,7 @@ for (const [label, body] of [["HTML", "<!doctype html><html><body>Pay</body></ht
 // ---------------------------------------------------------------------------
 // Part 2: a booted paid server
 // ---------------------------------------------------------------------------
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 const SECRET = "test-mpp-secret";
 const AGG3 = parseAbi(["function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[] returnData)"]);
 const PAYER = "0x00000000000000000000000000000000000000a1";
@@ -238,33 +237,28 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 // A fixed BASE_URL, so the resource URL in the header does not depend on the
 // port and Part 3 can compare headers from two boots byte for byte.
 const BASE_URL = "http://agent402.test";
-const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 400)); } if (serverLog.length > 120) serverLog.splice(0, serverLog.length - 120); };
-const bootServer = (port, extraEnv = {}) => {
-  const child = spawn(process.execPath, ["src/server.js"], {
-    env: {
-      ...process.env, PORT: String(port), FREE_MODE: "", BASE_URL,
-      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
-      FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
-      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: SECRET, PAYMENT_REQUIRED_BODY: "", X402_UPTO_NETWORKS: "eip155:8453",
-      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-      STATS_ALLOW_EPHEMERAL: "true", OPENROUTER_TTS_ENABLED: "true",
-      ...extraEnv,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", keepLog); child.stderr.on("data", keepLog);
-  return child;
-};
-const waitUp = async (base) => {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${base}/health`)).ok) return true; } catch { /* booting */ } await sleep(500); }
-  return false;
-};
-proc = bootServer(PORT);
+// Resolves to the booted server, or to { error } with the log tail when /health never answered.
+const bootPaid = (extraEnv = {}) => bootServer({
+  stores: false,
+  timeoutMs: 60_000,
+  env: {
+    FREE_MODE: "", BASE_URL,
+    WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
+    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: SECRET, PAYMENT_REQUIRED_BODY: "", X402_UPTO_NETWORKS: "eip155:8453",
+    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    STATS_ALLOW_EPHEMERAL: "true", OPENROUTER_TTS_ENABLED: "true",
+    ...extraEnv,
+  },
+}).then((srv) => { proc = srv.child; boots.push(srv); return srv; }, (e) => { const b = { error: e.message }; boots.push(b); return b; });
+const waitUp = async (booting) => !(await booting).error;
+const firstBoot = bootPaid();
 
 let parsePaymentRequired;
 try { ({ parsePaymentRequired } = await import("@x402/core/schemas")); } catch (e) { fail(`@x402/core/schemas is not installed: ${e?.message || e}`); }
@@ -336,7 +330,8 @@ const credential = (accepted, payer = PAYER) => b64({
 });
 
 try {
-  ok(await waitUp(B), "the paid server booted within 60 s");
+  ok(await waitUp(firstBoot), "the paid server booted within 60 s");
+  B = (await firstBoot).url;
 
   // B1 unpaid POST on a proof-of-work tool
   const HASH = { path: "/api/hash", method: "POST", body: JSON.stringify({ text: "x" }) };
@@ -571,10 +566,9 @@ try {
   const on = await capture(B);
   proc.kill("SIGKILL");
   await new Promise((r) => (proc.exitCode !== null || proc.signalCode !== null ? r() : proc.once("exit", r)));
-  const [OFF_PORT] = await getFreePorts(1);
-  const OFF_B = `http://127.0.0.1:${OFF_PORT}`;
-  proc = bootServer(OFF_PORT, { PAYMENT_REQUIRED_BODY: "off" });
-  ok(await waitUp(OFF_B), "P3 the PAYMENT_REQUIRED_BODY=off server booted within 60 s");
+  const offBoot = bootPaid({ PAYMENT_REQUIRED_BODY: "off" });
+  ok(await waitUp(offBoot), "P3 the PAYMENT_REQUIRED_BODY=off server booted within 60 s");
+  const OFF_B = (await offBoot).url;
   const off = await capture(OFF_B);
   for (const [label, a] of Object.entries(on)) {
     const b = off[label];

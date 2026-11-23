@@ -15,7 +15,7 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/docs#why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
-**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.15.0`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
+**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.16.0`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
 
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
@@ -89,7 +89,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > Protocol, the IETF-track `Payment` HTTP auth scheme co-authored by Tempo and
 > Stripe): the same 402 carries both, an [`mppx`](https://www.npmjs.com/package/mppx)
 > client pays out of the box, and MPP settles on Base and Celo (USDC), natively
-> on [Tempo](https://tempo.xyz) (USDC.e or PathUSD via Tempo's relay), or by
+> on [Tempo](https://tempo.xyz) (in a dollar token the 402 names, via Tempo's relay), or by
 > card over MPP (Stripe `stripe/charge`, offered on routes priced $0.50 and up
 > when the operator configures it). The
 > [MPP marketplace](https://agent402.tools/mpp-marketplace) lists every MPP
@@ -141,8 +141,8 @@ The pure-CPU tools run free there. A wallet-only tool is payable in the same cal
 **2. One command - run the MCP server locally** (the pure-CPU tools work with no key; it pays the tiny proof-of-work for you):
 
 ```bash
-npx -y agent402-mcp@0.15.0
-# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.15.0
+npx -y agent402-mcp@0.16.0
+# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.16.0
 ```
 
 **3. Clone and host the whole thing** (all 500+ tools as an HTTP API + MCP, free mode, no payments):
@@ -169,7 +169,7 @@ The button creates the service from this repository; it adds no database or cach
 
 Every paid route answers `402` with both an x402 offer and MPP challenges, so either client pays it. No API key, no signup: the wallet is the account.
 
-**MPP** (USDC.e or PathUSD on Tempo, listed first in the 402, or USDC on Base or Celo) with [`mppx`](https://www.npmjs.com/package/mppx):
+**MPP** (a dollar token on Tempo, listed first in the 402, or USDC on Base or Celo) with [`mppx`](https://www.npmjs.com/package/mppx):
 
 ```js
 import { Mppx, tempo, evm } from "mppx/client";
@@ -187,6 +187,8 @@ import { wrapFetchWithPayment } from "@x402/fetch"; import { x402Client } from "
 const client = new x402Client(); registerExactEvmScheme(client, { signer: (await import("viem/accounts")).privateKeyToAccount(process.env.AGENT_KEY) });
 const res = await wrapFetchWithPayment(fetch, client)("https://agent402.tools/api/uuid");
 ```
+
+On Base, an x402 exact payment is a signature (EIP-3009): the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.
 
 More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-MPP) · [Paying with x402](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-x402).
 

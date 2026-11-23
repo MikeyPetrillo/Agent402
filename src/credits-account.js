@@ -1,6 +1,7 @@
-// The credits balance page for people: sign in with the email a balance was
-// bought with, then see the balance and its history, top it up, export a CSV,
-// ask for the unspent balance back, or issue a new key for a lost one. Served
+// The credits balance page for people: sign in by email, then buy credits
+// (every purchase is made signed in, bound to that email), see each balance
+// and its history, top it up, set its spending limits, export a CSV, ask for
+// the unspent balance back, issue a new key for a lost one, or revoke a key. Served
 // only while credits are on sale (CREDITS_SALES); with sales off every route
 // here falls through as if it did not exist.
 //
@@ -9,10 +10,14 @@
 // (the nonce is recorded until the expiry). Opening the link shows a button;
 // pressing it (a same-origin POST) spends the token, so a mail scanner that
 // fetches the link signs nobody in. A request for a link answers the same for
-// every well-formed address, before any lookup, and the lookup and the send
-// run after the answer, so neither the body nor the timing says whether an
-// address holds a balance. Requests are rate-limited per address and per
-// client address.
+// every well-formed address and every address gets the link (a new buyer
+// signs in before a first purchase); the send runs after the answer, so
+// neither the body nor the timing says whether an address holds a balance. Requests are rate-limited per address and per
+// client address, and the sends draw on hourly budgets from the private
+// table (src/credits-guards.js account): one per client network (an IPv6
+// /64) and one for the whole service, kept in the shared store so every
+// replica meets one ceiling. Past a budget the answer is the same and no mail
+// goes; the first send refused in a window is logged.
 //
 // The session is an opaque random id in an HttpOnly, SameSite=Strict cookie
 // scoped to /credits/account (Secure on an https site); the server keeps only
@@ -23,21 +28,26 @@
 //
 // No key is needed to manage a balance and no key is ever put in a URL: the
 // page acts on the key id, and a new key is answered once in a POST response.
+import { mailboxKey } from "./mailbox-key.js";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { SKIP_UPDATE } from "./json-document.js";
 import { escapeHtml, headerText } from "./email-text.js";
+import { creditsGuards } from "./credits-guards.js";
+import { shared, createMemoryLimits } from "./shared-limits.js";
+import { limiterKey } from "./rate-limit.js";
 
 export const ACCOUNT_PATH = "/credits/account";
 export const ACCOUNT_COOKIE = "a402_acct";
 import { SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS, signInLifeWords, lowBalanceWords, lowBalanceUsd } from "./credits-figures.js";
 export { SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS };
 const TOUCH_MS = 60_000;
+const HOUR_MS = 3_600_000;
 /** A new key is issued only to a session whose sign-in link was used this recently. */
 export const NEW_KEY_FRESH_SIGN_IN_MS = 10 * 60_000;
 /** How often ended sessions and expired link records are deleted from the store. */
 export const ACCOUNT_SWEEP_MS = 10 * 60_000;
-export const SIGN_IN_ANSWER = `If that email bought a credits balance, a sign-in link is on its way. It works once, for ${signInLifeWords()}.`;
+export const SIGN_IN_ANSWER = `A sign-in link is on its way to that address. It works once, for ${signInLifeWords()}.`;
 const LINK_LIFE_NOTE = () => `Sign-in links work once, for ${signInLifeWords()}.`;
 const EMAIL_RE = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
 const SID_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -64,7 +74,7 @@ const usd = (n) => `$${Number(n || 0).toFixed(2)}`;
 
 export function buildSignInEmail({ link }) {
   const subject = "Sign in to your Agent402 credits balance";
-  const lead = `Open this link to manage your prepaid credits balance: see what it holds and what it paid for, add to it, ask for the unspent balance back, or issue a new key. It works once, for ${signInLifeWords()}.`;
+  const lead = `Open this link to buy prepaid credits or manage your balance: see what it holds and what it paid for, add to it, set its spending limits, ask for the unspent balance back, or issue a new key. It works once, for ${signInLifeWords()}.`;
   const why = "You are getting this because someone asked to sign in with this email address at agent402.tools/credits/account. If that was not you, you can ignore this email; nothing changes.";
   const html = mailWrap(subject, `${mailP(escapeHtml(lead))}${mailP(mailLink(link, "Sign in to your balance"))}${mailFine(escapeHtml(why))}`);
   const text = `${subject}\n\n${lead}\n\n${link}\n\n${why}\n\nAgent402`;
@@ -102,6 +112,15 @@ export function buildLowBalanceEmail({ balanceUsd, keyId, accountUrl, unsubscrib
   return { subject, html, text };
 }
 
+export function buildSpendLimitEmail({ keyId, limitUsd, accountUrl, unsubscribeUrl }) {
+  const subject = "Your Agent402 credits key reached its daily limit";
+  const lead = `A call on key ${keyId} was refused because it would pass the ${usd(limitUsd)} daily limit set on this balance. Nothing was charged. The limit resets at 00:00 UTC; change it from your balance page.`;
+  const why = "We send this at most once a day per balance. You can turn off these notices with the link below; receipts and sign-in links still arrive.";
+  const html = mailWrap(subject, `${mailP(escapeHtml(lead))}${mailP(mailLink(accountUrl, "Your balance page"))}${mailFine(`${escapeHtml(why)} ${mailLink(unsubscribeUrl, "Stop these emails")}`)}`);
+  const text = `${subject}\n\n${lead}\n\nYour balance page: ${accountUrl}\n\n${why}\nStop these emails: ${unsubscribeUrl}\n\nAgent402`;
+  return { subject, html, text };
+}
+
 export function buildNewKeyEmail({ keyId, accountUrl }) {
   const subject = "A new key was issued for your Agent402 credits balance";
   const lead = `A new key was issued from your balance page for the balance with key id ${keyId}. The previous key no longer works; the balance and its history moved to the new key, which was shown once on the page.`;
@@ -120,8 +139,9 @@ export function buildNewKeyEmail({ keyId, accountUrl }) {
  * @param {object} d.store        a json-document (createJsonDocument) for sessions and spent tokens
  * @param {{check:(k:string)=>{limited:boolean}}} d.ipLimiter
  * @param {{check:(k:string)=>{limited:boolean}}} d.emailLimiter
+ * @param {object} [d.limits]     the shared counters the send budgets are kept in (src/shared-limits.js)
  */
-export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, store, ipLimiter, emailLimiter, termsVersion = () => null, now = () => Date.now(), log = console.log, sweepEveryMs = ACCOUNT_SWEEP_MS }) {
+export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, store, ipLimiter, emailLimiter, limits = shared, termsVersion = () => null, now = () => Date.now(), log = console.log, sweepEveryMs = ACCOUNT_SWEEP_MS }) {
   const mac = (purpose, body) => createHmac("sha256", secret).update(`${purpose}|${body}`).digest("base64url");
   const accountUrl = `${baseUrl}${ACCOUNT_PATH}`;
 
@@ -142,6 +162,27 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     return c;
   }
   const signInLink = (email) => `${accountUrl}/verify?t=${encodeURIComponent(signInToken(email))}`;
+
+  // ---- the sign-in email's send budgets (private table; none set: no send) ----
+  const accountGuard = (k) => { const v = Number(creditsGuards()?.account?.[k]); return v > 0 ? v : null; };
+  const local = createMemoryLimits({ keyCap: 20_000 });
+  async function spend(name, key) {
+    const k = digest(`${name}|${key}`).slice(0, 40);
+    let r = await limits.counterAdd(`acct-${name}`, k, 1, HOUR_MS).catch(() => ({ ok: false }));
+    if (!r?.ok) r = await local.counterAdd(`acct-${name}`, k, 1, HOUR_MS);
+    return Number(r.value) || 0;
+  }
+  // The network's budget first, the service-wide one last, so a send the
+  // network's budget refused does not spend the service's.
+  async function sendRoom(ip) {
+    const perNet = accountGuard("sendsPerNetHour"), global = accountGuard("sendsGlobalPerHour");
+    if (!perNet || !global) return "unset";
+    const n = await spend("send-net", limiterKey(String(ip || "?")));
+    if (n > perNet) return n === perNet + 1 ? "net-first" : "net";
+    const g = await spend("send-global", "all");
+    if (g > global) return g === global + 1 ? "global-first" : "global";
+    return "ok";
+  }
 
   // Low-balance notice off, by link: signed over the key id, no expiry (an
   // unsubscribe link keeps working).
@@ -182,12 +223,18 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     if (!secret) return { status: 503, message: "Signing in is not available on this server." };
     if (ipLimiter?.check(String(ip || "?")).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
     const email = normEmail(rawEmail);
-    if (!validEmail(email)) return { status: 400, message: "Enter the email address you bought credits with." };
-    if (emailLimiter?.check(`e:${digest(email).slice(0, 32)}`).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
+    if (!validEmail(email)) return { status: 400, message: "Enter your email address." };
+    // Counted per mailbox (src/mailbox-key.js), so "+tag" and dotted
+    // spellings of one inbox share the limit; the link goes to the address typed.
+    if (emailLimiter?.check(`e:${digest(mailboxKey(email)).slice(0, 32)}`).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
     const work = (async () => {
       await sweepQuietly();
-      const held = await credits.balancesForEmail(email);
-      if (!held.length) return false;
+      const room = await sendRoom(ip);
+      if (room !== "ok") {
+        if (room === "unset") log("[credits-account] a sign-in email was not sent: the send budgets are not set");
+        else if (room.endsWith("-first")) log(`[credits-account] sign-in emails are being held: the ${room === "global-first" ? "service-wide" : "per-network"} hourly send budget is spent`);
+        return false;
+      }
       const sent = await sendEmail({ to: email, ...buildSignInEmail({ link: signInLink(email) }) });
       if (!sent) log("[credits-account] a sign-in email was not sent");
       return sent;
@@ -266,6 +313,12 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     const m = buildLowBalanceEmail({ balanceUsd, keyId, accountUrl, unsubscribeUrl: unsub });
     return sendEmail({ to: email, subject: headerText(m.subject), html: m.html, text: m.text, headers: { "List-Unsubscribe": `<${unsub}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } }).catch(() => false);
   }
+  function sendSpendLimit({ keyId, email, limitUsd }) {
+    if (!email || !secret) return Promise.resolve(false);
+    const unsub = noticeOffLink(keyId);
+    const m = buildSpendLimitEmail({ keyId, limitUsd, accountUrl, unsubscribeUrl: unsub });
+    return sendEmail({ to: email, subject: headerText(m.subject), html: m.html, text: m.text, headers: { "List-Unsubscribe": `<${unsub}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } }).catch(() => false);
+  }
   function sendReceipt(r) {
     if (!r?.email) return Promise.resolve(false);
     const m = buildReceiptEmail({ ...r, accountUrl, termsUrl: `${baseUrl}/terms`, termsVersion: termsVersion() });
@@ -277,11 +330,11 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     return sendEmail({ to: email, subject: headerText(m.subject), html: m.html, text: m.text }).catch(() => false);
   }
 
-  return { requestSignIn, redeem, sessionEmail, signedInWithin, signOut, sweep, stopSweep: () => { if (sweepTimer) clearInterval(sweepTimer); sweepTimer = null; }, signInToken, readToken, signInLink, noticeOffLink, noticeOffValid, sendLowBalance, sendReceipt, sendNewKeyNotice, enabled: () => Boolean(secret) };
+  return { requestSignIn, redeem, sessionEmail, signedInWithin, signOut, sweep, stopSweep: () => { if (sweepTimer) clearInterval(sweepTimer); sweepTimer = null; }, signInToken, readToken, signInLink, noticeOffLink, noticeOffValid, sendLowBalance, sendSpendLimit, sendReceipt, sendNewKeyNotice, enabled: () => Boolean(secret) };
 }
 
 // ---- HTTP ---------------------------------------------------------------------
-const readCookie = (req, name) => {
+export const readCookie = (req, name) => {
   const raw = req.headers?.cookie;
   if (typeof raw !== "string") return "";
   for (const part of raw.split(";")) {
@@ -404,12 +457,56 @@ export function mountCreditsAccount(app, { express, account, credits, baseUrl, s
     const email = await who(req, res);
     if (!email) return;
     if (limited(req, res)) return;
-    try { res.json({ url: (await credits.createTopupCheckout(keyIdOf(req.body?.key), email, req.body?.pack)).url }); }
+    try { res.json({ url: (await credits.createTopupCheckout(keyIdOf(req.body?.key), email, req.body?.pack, { ip: clientIp(req) })).url }); }
     catch (e) {
       if (e?.buyerSafe) return res.status(e.statusCode || 400).json({ error: String(e.message).slice(0, 300), ...(e.roomUsd != null ? { roomUsd: e.roomUsd, capUsd: e.capUsd } : {}) });
       log(`[credits-account] top-up checkout failed: ${String(e?.message || e).slice(0, 160)}`);
       res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
     }
+  });
+  // A new purchase, made signed in: the checkout is bound to this email.
+  app.post(`${ACCOUNT_PATH}/buy`, async (req, res, next) => {
+    if (!salesOn()) return next();
+    noStore(res);
+    if (refuseCross(req, res)) return;
+    const email = await who(req, res);
+    if (!email) return;
+    if (limited(req, res)) return;
+    try { res.json({ url: (await credits.createCheckout(req.body?.pack, { email, ip: clientIp(req) })).url }); }
+    catch (e) {
+      if (e?.buyerSafe) return res.status(e.statusCode || 400).json({ error: String(e.message).slice(0, 300), ...(e.validPacks ? { validPacks: e.validPacks } : {}) });
+      log(`[credits-account] checkout failed: ${String(e?.message || e).slice(0, 160)}`);
+      res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
+    }
+  });
+  // The holder's spending limits on one balance.
+  app.post(`${ACCOUNT_PATH}/limits`, async (req, res, next) => {
+    if (!salesOn()) return next();
+    noStore(res);
+    if (refuseCross(req, res)) return;
+    const email = await who(req, res);
+    if (!email) return;
+    if (limited(req, res)) return;
+    const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
+    const dailyUsd = num(req.body?.dailyUsd), perCallUsd = num(req.body?.perCallUsd);
+    if ([dailyUsd, perCallUsd].some((v) => v !== null && !(Number.isFinite(v) && v >= 0))) return res.status(400).json({ error: "A limit is a number of dollars, zero or more; leave it empty for no limit." });
+    const id = keyIdOf(req.body?.key);
+    const r = id ? await credits.setLimits(id, email, { dailyUsd, perCallUsd }) : { status: "unknown" };
+    if (r.status !== "set") return res.status(404).json({ error: "No balance with that id is on this account." });
+    res.json(r);
+  });
+  // Revoke a balance's key: it stops working at once; nothing is spent.
+  app.post(`${ACCOUNT_PATH}/revoke`, async (req, res, next) => {
+    if (!salesOn()) return next();
+    noStore(res);
+    if (refuseCross(req, res)) return;
+    const email = await who(req, res);
+    if (!email) return;
+    if (limited(req, res)) return;
+    const id = keyIdOf(req.body?.key);
+    const r = id ? await credits.revokeFor(id, email) : { status: "unknown" };
+    if (r.status !== "revoked") return res.status(404).json({ error: "No balance with that id is on this account." });
+    res.json({ ...r, message: "The key is revoked and no longer works. The unspent balance stays refundable to the card that paid, from this page." });
   });
   const REFUND_SAID = {
     refunded: (r) => `The unspent balance was refunded to the card that paid ($${Number(r.refundedUsd || 0).toFixed(2)}); the balance is closed.`,

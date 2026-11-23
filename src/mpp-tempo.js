@@ -64,6 +64,7 @@ import { IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "./dispatch-caller.js";
 import { limiterKey } from "./rate-limit.js";
 import { chargeSponsorAccount, chargeSponsorPolicy, isSponsoredChallengeRequest, sponsorChargeFor, runWithSponsorContext, runSponsoredBroadcast, withholdSponsorshipForCurrentClient, withSponsorBooking, PATH_USD_ADDRESS as SPONSOR_FEE_TOKEN } from "./tempo-charge-sponsor.js";
 import { signingHalted } from "./signing-halt.js";
+import { TEMPO_USDC_E_ADDRESS, TEMPO_OUSD_ADDRESS, resolveTempoCurrency, tempoTokenLabel } from "./tempo-currencies.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -95,12 +96,21 @@ function envRecipient() {
 // stays PathUSD (the currency the daily canary is funded in) until the
 // operator flips the env; the canaries pay with autoSwap so a USDC.e-first
 // config can be proven before the flip.
-export const TEMPO_USDC_E_ADDRESS = "0x20C000000000000000000000b9537d11c60E8b50";
+// The names `usdc`, `pathusd` and `ousd` stand for their addresses
+// (src/tempo-currencies.js). OUSD is listed after USDC.e, not first: a stock
+// client pays the first challenge, and buyers that hold OUSD pick its
+// challenge wherever it sits.
+export { TEMPO_USDC_E_ADDRESS, TEMPO_OUSD_ADDRESS };
 function envCurrencies() {
   const raw = (process.env.TEMPO_CURRENCY || "").split(",").map((s) => s.trim()).filter(Boolean);
   const list = raw.length ? raw : [PATH_USD_ADDRESS];
-  return [...new Set(list.map((c) => (c.toLowerCase() === "usdc" ? TEMPO_USDC_E_ADDRESS : c.toLowerCase() === "pathusd" ? PATH_USD_ADDRESS : c)))];
+  return [...new Set(list.map(resolveTempoCurrency))];
 }
+/** The labels of the Tempo tokens this server's challenges name, in order
+ *  (TEMPO_CURRENCY, or its default): what copy says a Tempo payment takes. */
+export function tempoCurrencyLabels() { return envCurrencies().map((a) => tempoTokenLabel(a) || a); }
+/** The same, as a phrase: "USDC.e or OUSD". */
+export function tempoCurrencyPhrase(joiner = " or ") { return tempoCurrencyLabels().join(joiner); }
 function envCurrency() {
   return envCurrencies()[0];
 }

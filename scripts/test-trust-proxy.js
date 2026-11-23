@@ -15,9 +15,7 @@
 //   node scripts/test-trust-proxy.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { randomBytes } from "node:crypto";
-import { spawn } from "node:child_process";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { trustProxyHops, replayClientIpMiddleware, forwardedWithoutHopsWarning, isProxyLikePeer } from "../src/trust-proxy.js";
 
 let pass = 0, fail = 0;
@@ -92,19 +90,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- 3. two boots: TRUST_PROXY_HOPS unset, and 1
 const CAP = 3;
-const [P0, P1] = await getFreePorts(2);
+// The servers inherit this process's environment, so a TRUST_PROXY_HOPS the
+// caller exported is removed here: the first boot must see it unset.
+delete process.env.TRUST_PROXY_HOPS;
 const procs = [];
-const boot = (port, extra, label) => {
-  const env = { ...process.env, ...ownStoreEnv(label), PORT: String(port), FREE_MODE: "true", X402_SYNC_ON_START: "false",
+const boot = async (extra, label) => {
+  const env = { FREE_MODE: "true", X402_SYNC_ON_START: "false",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", REDIS_URL: "", SHARED_LIMITS: "off",
     AGENT402_MCP_REQ_PER_MIN: String(CAP), AGENT402_MCP_REQ_PER_HOUR: "1000", ...extra };
-  if (!("TRUST_PROXY_HOPS" in extra)) delete env.TRUST_PROXY_HOPS;
-  const p = spawn(process.execPath, ["src/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
-  p.log = [];
-  p.stdout.on("data", (d) => p.log.push(String(d)));
-  p.stderr.on("data", (d) => p.log.push(String(d)));
-  procs.push(p);
-  return p;
+  const srv = await bootServer({ stores: label, env });
+  procs.push(srv.child);
+  return srv;
 };
 const killAll = () => { for (const p of procs) try { p.kill("SIGKILL"); } catch { /* gone */ } };
 setTimeout(() => { console.error("FAIL - timed out"); killAll(); process.exit(1); }, 150_000).unref();
@@ -115,26 +111,19 @@ const mcp = (port, id, xff, extra = {}) => fetch(`http://127.0.0.1:${port}/mcp`,
   headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(xff ? { "X-Forwarded-For": xff } : {}), ...extra },
   body: initBody(id),
 }).then(async (r) => { await r.arrayBuffer(); return r.status; });
-const healthy = async (port, p) => {
-  for (let i = 0; i < 200; i++) {
-    if (p.exitCode !== null) return false;
-    try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return true; } catch { /* booting */ }
-    await sleep(500);
-  }
-  return false;
-};
 
 try {
-  const s0 = boot(P0, {}, "trust-proxy-unset");
-  const s1 = boot(P1, { TRUST_PROXY_HOPS: "1" }, "trust-proxy-one");
-  const [u0, u1] = await Promise.all([healthy(P0, s0), healthy(P1, s1)]);
+  const booted = await Promise.allSettled([boot({}, "trust-proxy-unset"), boot({ TRUST_PROXY_HOPS: "1" }, "trust-proxy-one")]);
+  const [u0, u1] = booted.map((b) => b.status === "fulfilled");
   ok(u0 && u1, `both servers booted (unset ${u0}, one hop ${u1})`);
-  if (!u0 || !u1) for (const p of [s0, s1]) console.error(p.log.join("").slice(-1500));
+  if (!u0 || !u1) { for (const b of booted) if (b.status === "rejected") console.error(String(b.reason?.message || b.reason).slice(-1500)); throw new Error("boot failed"); }
+  const [s0, s1] = booted.map((b) => b.value);
+  const P0 = s0.port, P1 = s1.port;
 
-  ok(/TRUST_PROXY_HOPS is unset/.test(s0.log.join("")), "the unset boot logs a warning naming TRUST_PROXY_HOPS");
-  ok(!/TRUST_PROXY_HOPS is unset/.test(s1.log.join("")), "the boot that sets it logs no such warning");
+  ok(/TRUST_PROXY_HOPS is unset/.test(s0.log()), "the unset boot logs a warning naming TRUST_PROXY_HOPS");
+  ok(!/TRUST_PROXY_HOPS is unset/.test(s1.log()), "the boot that sets it logs no such warning");
   const FWD = /carries X-Forwarded-For while TRUST_PROXY_HOPS is 0/;
-  ok(!FWD.test(s0.log.join("")), "unset: no forwarded-header warning before any forwarded request");
+  ok(!FWD.test(s0.log()), "unset: no forwarded-header warning before any forwarded request");
 
   // Unset: spend the real address's transport budget, then rotate the header.
   const spent0 = [];
@@ -144,7 +133,7 @@ try {
   const spoof0 = [await mcp(P0, 11, "198.51.100.77"), await mcp(P0, 12, "198.51.100.78")];
   ok(spoof0.every((s) => s === 429), `unset: a spoofed X-Forwarded-For does not mint a fresh bucket (${spoof0.join(",")})`);
   await sleep(200);
-  ok((s0.log.join("").match(new RegExp(FWD.source, "g")) || []).length === 1, "unset: forwarded requests from a loopback peer log the TRUST_PROXY_HOPS warning exactly once");
+  ok((s0.log().match(new RegExp(FWD.source, "g")) || []).length === 1, "unset: forwarded requests from a loopback peer log the TRUST_PROXY_HOPS warning exactly once");
   // A forged replay marker (an async-loopback token or an MCP marker this
   // process did not mint) must not let a loopback client choose its address.
   const forged0 = [
@@ -161,7 +150,7 @@ try {
   const fwd1 = [await mcp(P1, 11, "198.51.100.77"), await mcp(P1, 12, "198.51.100.78")];
   ok(fwd1.every((s) => s !== 429), `one hop: each forwarded client has its own bucket, as before (${fwd1.join(",")})`);
   await sleep(200);
-  ok(!FWD.test(s1.log.join("")), "one hop: forwarded requests never log the TRUST_PROXY_HOPS warning");
+  ok(!FWD.test(s1.log()), "one hop: forwarded requests never log the TRUST_PROXY_HOPS warning");
 } finally {
   killAll();
 }

@@ -17,14 +17,12 @@
 //   4. the deadline fits under the Railway grace the deploy job sets, and the
 //      code has no timer/quiet-window path left that could reintroduce a wait.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
+let BASE = "";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -33,19 +31,18 @@ const get = async (p) => {
   catch { return 0; }
 };
 
-const srv = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let out = "";
-srv.stdout.on("data", (d) => { out += d; });
-srv.stderr.on("data", (d) => { out += d; });
-const exited = new Promise((resolve) => srv.on("exit", (code) => resolve(code)));
-
-let up = false;
-for (let i = 0; i < 90; i++) { if (await get("/health") === 200) { up = true; break; } await sleep(500); }
-ok(up, `server booted on :${PORT}`);
-if (!up) { srv.kill("SIGKILL"); console.log(out.slice(-800)); process.exit(1); }
+let booted = null, bootError = "";
+try {
+  booted = await bootServer({ stores: "drain-on-sigterm", timeoutMs: 45_000, env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" } });
+} catch (e) { bootError = e.message; }
+const up = Boolean(booted);
+ok(up, `server booted on :${booted?.port}`);
+if (!up) { console.log(bootError.slice(-800)); process.exit(1); }
+const srv = booted.child;
+const PORT = booted.port;
+BASE = booted.url;
+const out = () => booted.log();
+const exited = new Promise((resolve) => (booted.exited() ? resolve(booted.exited().code) : srv.on("exit", (code) => resolve(code))));
 
 // --- 1. an in-flight request survives SIGTERM --------------------------------
 // Hold a POST open by sending the headers and half the body, signal the server
@@ -69,8 +66,8 @@ srv.kill("SIGTERM");
 await sleep(700);
 const after = await get("/health");
 ok(after === 0, `new connections refused shortly after SIGTERM (got ${after}) - lingering here only delays the replacement`);
-ok(/closing listener, draining in-flight requests \(exit 0\)/.test(out), "SIGTERM log names the action: close listener + drain, exit 0");
-ok(!/serving (for|until)/.test(out), "no 'keep serving' path fired after SIGTERM");
+ok(/closing listener, draining in-flight requests \(exit 0\)/.test(out()), "SIGTERM log names the action: close listener + drain, exit 0");
+ok(!/serving (for|until)/.test(out()), "no 'keep serving' path fired after SIGTERM");
 
 const r = await inflight;
 ok(r.status === 200 && /"/.test(r.data), `in-flight request completed after SIGTERM (got ${r.status})`);

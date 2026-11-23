@@ -21,12 +21,11 @@
 //
 //   node scripts/test-mcp-protocol-input-bound.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import * as hosted from "../src/mcp-flagship.js";
 import * as stdio from "../mcp/output-schemas.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -107,17 +106,14 @@ ok(stdio.toolInputBoundRefusal("t", { v: series(MAX) }) === hosted.toolInputBoun
 }
 
 // --- hosted connector, booted --------------------------------------------------
-const PORT = await getFreePort();
-const B = `http://127.0.0.1:${PORT}`;
-const proc = spawn(process.execPath, ["src/server.js"], {
-  cwd: ROOT,
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATE_DATABASE_URL: "", UPSTREAM_COSTS_JSON: "" },
-  stdio: ["ignore", "ignore", "inherit"],
-});
-const kill = () => { try { proc.kill("SIGKILL"); } catch {} };
+let booted = null;
+try {
+  booted = await bootServer({ stores: "mcp-protocol-input-bound", timeoutMs: 120_000, env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATE_DATABASE_URL: "", UPSTREAM_COSTS_JSON: "" } });
+} catch (e) { console.error(e.message); }
+const B = booted?.url;
+const kill = () => { try { booted?.child.kill("SIGKILL"); } catch {} };
 process.on("exit", kill);
-let up = false;
-for (let i = 0; i < 240 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch {} if (!up) await new Promise((r) => setTimeout(r, 500)); }
+const up = Boolean(booted);
 ok(up, "server booted");
 
 const rpc = async (path, method, params, { version, id = 1, headers: extra = {} } = {}) => {
@@ -202,7 +198,7 @@ const rpc = async (path, method, params, { version, id = 1, headers: extra = {} 
 {
   const transport = new StdioClientTransport({
     command: process.execPath, args: [join(ROOT, "mcp/index.js")], cwd: ROOT,
-    env: { PATH: process.env.PATH || "", HOME: process.env.HOME || "", AGENT402_URL: B },
+    env: { PATH: process.env.PATH || "", HOME: process.env.HOME || "", AGENT402_URL: B, AGENT402_KEY_STORE: "off" },
     stderr: "ignore",
   });
   const client = new Client({ name: "stdio-test", version: "0" });

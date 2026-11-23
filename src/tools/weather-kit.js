@@ -15,7 +15,7 @@
 // archive from Copernicus C3S reanalysis, each credited (src/data-attribution.js).
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling } from "../run-ceiling.js";
-import { OPEN_METEO_ATTRIBUTION, ATTRIBUTIONS, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION } from "../data-attribution.js";
+import { OPEN_METEO_ATTRIBUTION, ATTRIBUTIONS, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 import { redactSecrets } from "./redact.js";
 
 export function bad(message, statusCode = 400) {
@@ -811,4 +811,7 @@ export const WEATHER_TOOLS = [
 // read helper and its retry), which ends at a run's ceiling when one is set
 // (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
 // can serve them. A handler that gains another kind of wait leaves this list.
+// Open-Meteo's licence asks for links to Open-Meteo and to the licence beside
+// its data: every answer of these tools carries them (src/data-attribution.js).
+openMeteoLicensed(WEATHER_TOOLS, ["place-lookup"]);
 markEndsAtCeiling(WEATHER_TOOLS, ["place-lookup", "weather-air-quality", "weather-current", "weather-daily", "weather-history", "weather-hourly"]);

@@ -34,8 +34,9 @@ const MARKER = `mcp;k=${SECRET}`;
  *  with the paid replay's call id when it has one (openLoopbackCall), and a
  *  task run's key when the replay runs one (src/mcp-tasks.js newRunKey): the
  *  route books that key on the sale it makes for the replay. */
-export function mcpLoopbackHeaders({ callId = null, runKey = null } = {}) {
+export function mcpLoopbackHeaders({ callId = null, runKey = null, grantHandle = null } = {}) {
   return {
+    ...(typeof grantHandle === "string" && GRANT_RE.test(grantHandle) ? { "X-Agent402-Via-Grant": grantHandle } : {}),
     "X-Agent402-Via": MARKER,
     ...(typeof callId === "string" && CALL_RE.test(callId) ? { "X-Agent402-Via-Call": callId } : {}),
     ...(typeof runKey === "string" && RUN_RE.test(runKey) ? { "X-Agent402-Via-Run": runKey } : {}),
@@ -76,8 +77,51 @@ export function isMcpLoopback(req) {
     if (genuine && typeof run === "string" && RUN_RE.test(run.trim())) runKeyOf.set(req, run.trim());
     delete headers[MCP_RUN_HEADER];
   }
+  // So is a connector grant's handle (src/mcp-oauth.js): read only beside a
+  // genuine marker, and spent here, so a handle pays for one replay.
+  const grantH = headers ? headers[MCP_GRANT_HEADER] : undefined;
+  if (grantH !== undefined) {
+    if (genuine && typeof grantH === "string" && GRANT_RE.test(grantH.trim())) {
+      const g = takeGrantHandle(grantH.trim());
+      if (g) grantOfReq.set(req, g);
+    }
+    delete headers[MCP_GRANT_HEADER];
+  }
   verdicts.set(req, genuine);
   return genuine;
+}
+
+// ---- A connector grant's call -------------------------------------------------
+// The connector resolves a bearer to a grant, opens a handle for one paid
+// replay (openGrantHandle: random, in this process only, short-lived), and
+// sends it beside the marker. The credits gate reads the grant with
+// loopbackGrantOf; nothing a caller sends can name one.
+export const MCP_GRANT_HEADER = "x-agent402-via-grant";
+const GRANT_RE = /^[0-9a-f]{48}$/;
+const GRANT_HANDLE_TTL_MS = 60_000;
+const GRANT_HANDLES_MAX = 5_000;
+const grantHandles = new Map(); // handle -> { at, grant }
+const grantOfReq = new WeakMap();
+function takeGrantHandle(h) {
+  const e = grantHandles.get(h);
+  grantHandles.delete(h);
+  return e && Date.now() - e.at < GRANT_HANDLE_TTL_MS ? e.grant : null;
+}
+/** A handle for one paid replay under `grant` ({ id, keyId, capUsd }). */
+export function openGrantHandle(grant) {
+  const h = randomBytes(24).toString("hex");
+  grantHandles.set(h, { at: Date.now(), grant: Object.freeze({ id: String(grant.id), keyId: String(grant.keyId), capUsd: Number(grant.capUsd) }) });
+  const now = Date.now();
+  for (const [k, e] of grantHandles) {
+    if (grantHandles.size <= GRANT_HANDLES_MAX && now - e.at < GRANT_HANDLE_TTL_MS) break;
+    grantHandles.delete(k);
+  }
+  return h;
+}
+/** The grant a genuine replay is paid under, or null. */
+export function loopbackGrantOf(req) {
+  if (!isMcpLoopback(req)) return null;
+  return grantOfReq.get(req) || null;
 }
 
 /** The task run's key on a genuine replay that names one, or null. */

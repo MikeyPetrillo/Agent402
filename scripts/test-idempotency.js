@@ -10,16 +10,15 @@
 // same nonce is not, an explicit key still wins, a replay past the store's
 // window is not served, and a route with a lasting effect never replays.
 import "./lib/file-mode.js";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
+let srv = null;
 const OP_TOKEN = "idempotency-test-operator-token-0123456789";
 // Shortened so the past-window case can be run. Every replay below is a first
 // answer and its copy sent back to back, and both must land inside this
@@ -29,7 +28,7 @@ const OP_TOKEN = "idempotency-test-operator-token-0123456789";
 // the wait.
 const IDEM_TTL_MS = 12_000;
 let facilitator = null;
-const fail = (m) => { console.error("FAIL:", m); for (const l of serverLog.slice(-20)) console.error("  server:", l); proc.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
+const fail = (m) => { console.error("FAIL:", m); for (const l of serverLog().slice(-20)) console.error("  server:", l); srv?.child.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
 const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
 const solve = (c) => { let n = 0; while (lz(createHash("sha256").update(`${c.challenge}:${n}`).digest()) < c.difficulty) n++; return n; };
 
@@ -59,27 +58,27 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+const bootOpts = {
+  stores: "idempotency",
+  readyPath: "/api/pow",
+  timeoutMs: 180_000,
+  env: { WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     SALES_LEDGER_DB: join(mkdtempSync(join(tmpdir(), "idem-sales-")), "sales.db"),
     AGENT402_OPERATOR_TOKEN: OP_TOKEN, IDEM_TTL_MS: String(IDEM_TTL_MS),
-    POW_DIFFICULTY: "12", PORT: String(PORT), FREE_MODE: "" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-const serverLog = [];
-const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 300)); } if (serverLog.length > 60) serverLog.splice(0, serverLog.length - 60); };
-proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
+    POW_DIFFICULTY: "12", FREE_MODE: "" },
+};
+const serverLog = () => (srv?.log() || "").split("\n").filter((l) => l.trim()).map((l) => l.slice(0, 300)).slice(-60);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 try {
-  let up = false;
-  for (let i = 0; i < 360 && !up; i++) { try { up = (await fetch(`${B}/api/pow`)).ok; } catch {} if (!up) await sleep(500); }
-  if (!up) fail("the server did not answer /api/pow within 180 s of its start");
+  try { srv = await bootServer(bootOpts); } catch (e) { fail(`the server did not answer /api/pow within 180 s of its start\n${e.message}`); }
+  B = srv.url;
 
   const powFor = async () => { const c = await (await fetch(`${B}/api/pow/challenge?slug=hash`)).json(); return `${c.token}:${solve(c)}`; };
   const hash = (sol, idem) => fetch(`${B}/api/hash`, {
@@ -362,7 +361,7 @@ try {
     `an explicit key on the aliased call replays too (status ${keyedPostAgain.status}, settles ${settles - s1st})`);
 
   console.log(`\n${pass} passed`);
-  proc.kill("SIGKILL");
+  srv.child.kill("SIGKILL");
   facilitator.close();
   process.exit(0);
 } catch (e) {

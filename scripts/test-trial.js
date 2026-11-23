@@ -19,24 +19,22 @@
 //  3. The bounds hold: a second call to the same tool pays, and the catalog
 //     cannot be swept.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { createServer } from "node:http";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // OS-assigned ephemeral ports, not a fixed pid-derived range. The old
 // `3900 + (pid % 90)` scheme had only 90 possible values and collided under
 // CI's closely-sequential PIDs - it surfaced as unrelated-looking 500s on
 // whatever else happened to be bound to the same port, not an obvious port
-// clash. PORT needs a probe-and-release (the child process needs the number
-// before it can bind it itself); the facilitator server binds directly to 0
-// since we hold it open for the test's own lifetime. Same pattern already
-// proven in scripts/test-backup.js.
-const PORT = await getFreePort();
-const base = `http://127.0.0.1:${PORT}`;
+// clash. The server boots on port 0 and its port is read back from its
+// listening line (scripts/lib/boot-server.js); the facilitator server binds
+// directly to 0 since we hold it open for the test's own lifetime.
+let PORT = 0;
+let base = "";
+let srv = null;
 let log = "";
 
 // Local stub facilitator (same pattern as scripts/test-mpp-shim.js). A real
@@ -56,44 +54,35 @@ const facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(0, r));
 const FAC_PORT = facilitator.address().port;
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: {
-    ...process.env,
-    PORT: String(PORT),
-    FREE_MODE: "",
-    NETWORK: "base",
-    PAYMENT_NETWORKS: "base",
-    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
-    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
-    NODE_ENV: "test",
-    X402_INDEX_CRAWL: "off",
-    // X402_SYNC_ON_START is deliberately NOT set to false here. It skips the
-    // facilitator handshake, and without those supported kinds @x402/core
-    // cannot build a 402 at all - every unpaid request answers 500 and this
-    // test would be asserting against a broken paywall rather than a real one.
-    WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
-    STATS_ALLOW_EPHEMERAL: "true",
-    // Headroom on the per-CLIENT budget so earlier blocks do not starve later
-    // ones; the per-TOOL cap stays at its default of 1, and the sweep block
-    // below still proves the client cap by exceeding it.
-    TRIAL_PER_IP_PER_MIN: "8", TRIAL_PER_IP_PER_HOUR: "8",
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-child.stdout.on("data", (d) => { log += d; });
-child.stderr.on("data", (d) => { log += d; });
+const bootEnv = {
+  FREE_MODE: "",
+  NETWORK: "base",
+  PAYMENT_NETWORKS: "base",
+  FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
+  CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
+  NODE_ENV: "test",
+  X402_INDEX_CRAWL: "off",
+  // X402_SYNC_ON_START is deliberately NOT set to false here. It skips the
+  // facilitator handshake, and without those supported kinds @x402/core
+  // cannot build a 402 at all - every unpaid request answers 500 and this
+  // test would be asserting against a broken paywall rather than a real one.
+  WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
+  STATS_ALLOW_EPHEMERAL: "true",
+  // Headroom on the per-CLIENT budget so earlier blocks do not starve later
+  // ones; the per-TOOL cap stays at its default of 1, and the sweep block
+  // below still proves the client cap by exceeding it.
+  TRIAL_PER_IP_PER_MIN: "8", TRIAL_PER_IP_PER_HOUR: "8",
+};
 const done = (code) => {
-  try { child.kill("SIGKILL"); } catch { /* */ }
+  try { srv?.child.kill("SIGKILL"); } catch { /* */ }
   try { facilitator.close(); } catch { /* */ }
   process.exit(code);
 };
 
 (async () => {
-  let up = false;
-  for (let i = 0; i < 240; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-    await wait(250);
-  }
+  srv = await bootServer({ stores: "trial", env: bootEnv }).catch((e) => { log = e.message; return null; });
+  const up = Boolean(srv);
+  if (srv) { PORT = srv.port; base = srv.url; }
   ok(up, `server booted on :${PORT}`);
   if (!up) { console.error(log.slice(-2000) || "(no output)"); return done(1); }
 
@@ -261,4 +250,4 @@ const done = (code) => {
 
   console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
   done(fail ? 1 : 0);
-})().catch((e) => { console.error(e); console.error(log.slice(-1500)); done(1); });
+})().catch((e) => { console.error(e); console.error((srv ? srv.log() : log).slice(-1500)); done(1); });

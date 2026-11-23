@@ -731,9 +731,9 @@ Packages: 75. Licenses: MIT 62, Apache-2.0 13.
   commander@15.0.0  MIT
   eventemitter3@5.0.1  MIT
   isows@1.0.7  MIT
-  ox@0.14.29  MIT
+  ox@0.14.59  MIT
   undici-types@8.11.2  MIT
-  viem@2.52.2  MIT
+  viem@2.57.16  MIT
   ws@8.21.1  MIT
   zod@4.6.7  MIT
 

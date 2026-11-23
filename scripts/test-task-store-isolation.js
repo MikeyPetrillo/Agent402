@@ -12,25 +12,25 @@
 //     another (the mechanism, reproduced); a server booting on its OWN
 //     directory leaves it running, and the job completes and settles once.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 import { createTaskStore, taskDataDir } from "../src/mcp-tasks.js";
 requireUpstreamCosts("test-task-store-isolation");
 
 let pass = 0, fail = 0;
 const procs = [];
+const srvs = [];
 let facilitator = null, upstream = null;
 const TMP = mkdtempSync(join(tmpdir(), "task-iso-"));
-const serverLog = [];
+const serverLog = () => srvs.flatMap(({ tag, srv }) => srv.log().split("\n").filter((l) => l.trim()).map((l) => `${tag}: ${l.slice(0, 300)}`));
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitFor = async (cond, ms = 20000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await cond()) return true; await sleep(100); } return cond(); };
-setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.slice(-25)) console.error("  server:", l); for (const p of procs) p.kill("SIGKILL"); process.exit(1); }, 150_000).unref();
+setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog().slice(-25)) console.error("  server:", l); for (const p of procs) p.kill("SIGKILL"); process.exit(1); }, 150_000).unref();
 
 // ---- unit ----
 {
@@ -63,7 +63,6 @@ setTimeout(() => { console.error("FAIL - timed out"); for (const l of serverLog.
 }
 
 // ---- live ----
-const [PA, PB, PC, FAC_PORT, UP_PORT] = await getFreePorts(5);
 const fac = { settle: 0 };
 facilitator = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
@@ -82,7 +81,8 @@ facilitator = createServer((req, res) => {
     reply({});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 const up = { delayMs: 30_000 };
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 upstream = createServer((req, res) => {
@@ -93,22 +93,27 @@ upstream = createServer((req, res) => {
     res.end(JSON.stringify({ created: 1, data: [{ b64_json: PNG_B64 }], usage: { input_tokens: 1, output_tokens: 1 } }));
   }, up.delayMs));
 });
-await new Promise((r) => upstream.listen(UP_PORT, "127.0.0.1", r));
+await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
+const UP_PORT = upstream.address().port;
 const preload = join(TMP, "openai-stub.mjs");
 writeFileSync(preload, `
 const STUB = ${JSON.stringify(`http://127.0.0.1:${UP_PORT}`)};
 const real = globalThis.fetch;
 globalThis.fetch = function (input, init) {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input?.url;
-  if (typeof url === "string" && url.startsWith("https://api.openai.com/")) return real.call(this, STUB + url.slice("https://api.openai.com".length), init);
+  let p = null; try { p = typeof url === "string" ? new URL(url) : null; } catch { /* not a URL */ }
+  if (p && p.protocol === "https:" && p.hostname === "api.openai.com") return real.call(this, STUB + p.pathname + p.search, init);
   return real.call(this, input, init);
 };
 `);
-const boot = async (port, dataDir, tag) => {
+const boot = async (dataDir, tag) => {
   const sub = join(TMP, tag);
   mkdirSync(sub, { recursive: true });
-  const proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-    env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  const srv = await bootServer({
+    stores: false,
+    args: ["--import", preload],
+    timeoutMs: 80_000,
+    env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
       OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "", CDN_PROXY: "", STATE_DATABASE_URL: "",
@@ -116,17 +121,14 @@ const boot = async (port, dataDir, tag) => {
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       REFUND_DB_DIR: sub, SALES_LEDGER_DB: join(sub, "sales.db"), HANGUP_FORGIVE_FILE: join(sub, "hangup.json"),
       AGENT402_MCP_TASK_TTL_MS: "" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  procs.push(proc);
-  const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) serverLog.push(`${tag}: ${l.slice(0, 300)}`); };
-  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-  const ready = await waitFor(async () => { try { return (await fetch(`http://127.0.0.1:${port}/health`)).ok; } catch { return false; } }, 80_000);
-  ok(ready, `server ${tag} boots`);
-  return proc;
+  }).catch((e) => { ok(false, `server ${tag} boots (${e.message})`); throw e; });
+  procs.push(srv.child);
+  srvs.push({ tag, srv });
+  ok(true, `server ${tag} boots`);
+  return srv;
 };
 
-const A = `http://127.0.0.1:${PA}`;
+let A = "";
 const PATH = "/api/image-gen-premium";
 const BODY = JSON.stringify({ prompt: "a red fox in the snow" });
 let accepted = null, nonce = 0;
@@ -142,7 +144,7 @@ const jobOf = async (url) => (await fetch(`${A}${url}`)).json();
 
 try {
   const dirA = join(TMP, "store-a");
-  await boot(PA, dirA, "A");
+  A = (await boot(dirA, "A")).url;
   const r0 = await fetch(`${A}${PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: BODY });
   accepted = (JSON.parse(Buffer.from(r0.headers.get("payment-required") || "", "base64").toString("utf8")).accepts || []).find((a) => a.network === "eip155:8453" && a.scheme === "exact");
   ok(!!accepted, "server A offers exact on Base");
@@ -150,7 +152,7 @@ try {
   // Control: a second server on A's directory fails A's running job at boot.
   const j1 = await startJob(1);
   ok(!!j1, "server A accepts a job");
-  const b = await boot(PB, dirA, "B-same-dir");
+  const b = (await boot(dirA, "B-same-dir")).child;
   const g1 = await jobOf(j1);
   ok(g1.state === "failed" && /restart/.test(g1.message || ""), `a server booting on the same directory fails another's running job (state ${g1.state})`);
   b.kill("SIGKILL");
@@ -159,7 +161,7 @@ try {
   const s0 = fac.settle;
   const j2 = await startJob(2);
   ok(!!j2, "server A accepts a second job");
-  await boot(PC, join(TMP, "store-c"), "C-own-dir");
+  await boot(join(TMP, "store-c"), "C-own-dir");
   const g2 = await jobOf(j2);
   ok(g2.state === "queued" || g2.state === "running", `a server booting on its own directory leaves the job running (state ${g2.state})`);
   await waitFor(async () => ["succeeded", "failed"].includes((await jobOf(j2)).state), 60_000);
@@ -173,6 +175,6 @@ try {
   facilitator?.close(); upstream?.close();
   rmSync(TMP, { recursive: true, force: true });
 }
-if (fail) for (const l of serverLog.slice(-30)) console.error("  server:", l);
+if (fail) for (const l of serverLog().slice(-30)) console.error("  server:", l);
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

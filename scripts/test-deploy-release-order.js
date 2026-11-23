@@ -13,6 +13,36 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 const deploySteps = wf.jobs?.deploy?.steps || [];
+
+// A run that publishes packages deploys only after they are published, so the
+// install lines the new build prints never name a version npm does not hold
+// yet. A run with no publish (skipped) deploys as before; a failed publish
+// holds the deploy. Every earlier gate stays in the deploy job's condition.
+{
+  const deploy = wf.jobs?.deploy || {};
+  const needs = [].concat(deploy.needs || []);
+  const cond = String(deploy.if || "").replace(/\s+/g, " ");
+  ok(needs.includes("publish"), "the deploy job needs the publish job (it waits while publish runs)");
+  ok(needs.includes("publish-gate"), "the deploy job needs the publish gate too (a gate that failed is read, not taken as no publish)");
+  // The publish clause, evaluated for each outcome: a skipped publish counts
+  // only when the gate was skipped too (no [publish] marker); a failed gate
+  // (whose publish then reads skipped) holds the deploy.
+  const clause = (cond.match(/\(\s*needs\.publish\.result[^]*?needs\.publish-gate\.result == 'skipped'\s*\)\s*\)/) || [])[0] || "";
+  const holds = (gate, pub) => {
+    if (!clause) return null;
+    const js = clause.replace(/needs\.publish-gate\.result/g, JSON.stringify(gate)).replace(/needs\.publish\.result/g, JSON.stringify(pub)).replace(/==/g, "===");
+    return Function(`return (${js});`)();
+  };
+  ok(!!clause, `the deploy condition holds the publish clause (${clause.slice(0, 80)})`);
+  for (const [gate, pub, want] of [["skipped", "skipped", true], ["success", "success", true], ["failure", "skipped", false], ["success", "failure", false], ["success", "skipped", false], ["cancelled", "skipped", false]]) {
+    ok(holds(gate, pub) === want, `publish gate ${gate}, publish ${pub}: the deploy ${want ? "runs" : "is held"}`);
+  }
+  ok(/^!cancelled\(\)/.test(cond.trim()), "the deploy condition keeps !cancelled() (a skipped publish does not skip the deploy)");
+  const lanes = needs.filter((n) => /^test(-|$)/.test(n));
+  ok(lanes.length >= 4 && lanes.every((l) => cond.includes(`needs.${l}.result == 'success'`)), `every test lane's success is still required (${lanes.length} lanes)`);
+  ok(cond.includes("needs.tree-gate.outputs.skip == 'true'") && cond.includes("github.ref == 'refs/heads/main'") && cond.includes("inputs.mode == 'deploy'") && cond.includes("needs.markers.outputs.deploy == 'true'"), "the tree-gate, push-to-main, dispatch and marker gates are unchanged");
+  ok(![].concat(wf.jobs?.publish?.needs || []).includes("deploy"), "the publish job does not wait for the deploy (no cycle)");
+}
 const upserts = deploySteps.filter((s) => /variableCollectionUpsert/.test(String(s.run || "")));
 ok(upserts.length >= 1, `the deploy job holds the variable upsert (${upserts.length})`);
 for (const s of upserts) {
@@ -94,6 +124,38 @@ const registryAt = pub.findIndex((n) => /MCP Registry/.test(n));
 const npmAt = pub.map((n, i) => (/to npm$/.test(n) ? i : -1)).filter((i) => i >= 0);
 ok(clawAt >= 0 && registryAt >= 0, "the publish job holds the ClawHub and MCP Registry steps");
 ok(clawAt > registryAt && npmAt.every((i) => i < clawAt), "ClawHub runs after every npm publish and the MCP Registry");
+// A ClawHub refusal never holds production (the deploy waits on the publish
+// job, and install lines need only npm and the MCP Registry): only the ClawHub
+// step continues on error, and a failure there is a visible warning. Every npm
+// publish and the MCP Registry step still fail the job.
+{
+  const steps = wf.jobs?.publish?.steps || [];
+  const claw = steps[clawAt] || {};
+  ok(claw["continue-on-error"] === true && typeof claw.id === "string" && claw.id, "the ClawHub step continues on error and has an id");
+  const warn = steps.find((s, i) => i > clawAt && new RegExp(`steps\\.${claw.id}\\.outcome == 'failure'`).test(String(s.if || "")));
+  ok(!!warn && /::warning::/.test(String(warn.run || "")), "a ClawHub failure is reported as a ::warning:: by the step after it");
+  const blocking = [...npmAt, registryAt].map((i) => steps[i]);
+  ok(blocking.length >= 2 && blocking.every((s) => !s["continue-on-error"]), `every npm publish and the MCP Registry step still fail the job (${blocking.length} steps)`);
+  ok(steps.filter((s) => s["continue-on-error"]).length === 1, "the ClawHub step is the only publish step that continues on error");
+}
+
+// The consumer-install audit reads the npm registry and its advisory feed, so
+// it runs in the publish gate only (a release), never in a lane the deploy
+// waits on: a new upstream advisory or an unreadable registry never holds a
+// deploy or a hotfix. Its lane scripts are read too (scripts/ci/lanes/).
+{
+  const AUDIT = "scripts/test-package-audit.js";
+  const where = [];
+  for (const [jn, job] of Object.entries(wf.jobs || {})) {
+    for (const st of job.steps || []) if (String(st.run || "").split("\n").some((l) => !/^\s*#/.test(l) && l.includes(AUDIT))) where.push(jn);
+  }
+  ok(where.length === 1 && where[0] === "publish-gate", `${AUDIT} runs in the publish gate only (${where.join(", ") || "nowhere"})`);
+  const gateIf = String(wf.jobs?.["publish-gate"]?.if || "");
+  ok(/needs\.markers\.outputs\.publish == 'true'/.test(gateIf), "the publish gate runs only on a release (the [publish] marker or a publish dispatch)");
+  const deployNeeds = [].concat(wf.jobs?.deploy?.needs || []);
+  const laneJobs = deployNeeds.filter((n) => n !== "publish-gate" && n !== "publish");
+  ok(laneJobs.every((n) => !where.includes(n)), "no job the deploy needs besides the gate and publish runs the audit");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

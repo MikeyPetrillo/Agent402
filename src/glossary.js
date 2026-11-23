@@ -61,7 +61,7 @@ export const GLOSSARY = [
     def: "The agent's own key pair holding stablecoins. In agentic finance the payment IS the identity: there is no account to create, and the payer address on a settled payment is what a seller keys memory, usage history and quotas to. Keys never leave the client - the wallet signs an authorization and the facilitator broadcasts it.",
     see: [["/agentic-finance#faq", "do agents need crypto?"]] },
   { id: "rails", name: "Rails (stablecoin rails)", alt: ["payment rails", "chains"],
-    def: "The chains and stablecoins a payment can settle on. Agent402 accepts USDC on {{usdcRailsAnd}}, USDG on Robinhood Chain, and USDC.e and PathUSD natively on Tempo - a buyer picks any rail listed in the 402, at list price plus a small fee on a rail whose settlement charges one (shown in that rail's quote).",
+    def: "The chains and stablecoins a payment can settle on. Agent402 accepts USDC on {{usdcRailsAnd}}, USDG on Robinhood Chain, and the dollar tokens its Tempo challenges name natively on Tempo - a buyer picks any rail listed in the 402, at list price plus a small fee on a rail whose settlement charges one (shown in that rail's quote).",
     see: [["/revenue", "transactions by rail"], ["/pricing", "pricing"]] },
   { id: "dual-stack", name: "Dual-stack (x402 + MPP)", alt: ["dual-stack seller"],
     def: "A server that answers ONE 402 with both an x402 offer and an MPP challenge for the same resource at the same price, and accepts either credential on the retry. A stock x402 client and a stock mppx client both work unmodified against it. Every paid route on Agent402 is dual-stack, and the open-source tollbooth adds it to any site.",
@@ -172,7 +172,7 @@ export function glossaryPage(baseUrl) {
       <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Now see it settle.</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:560px;">Give your agent 500+ tools it can pay for over x402 or MPP, or put a price on your own API. Both are free to start.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
+        <a class="btn btn-primary on-panel" href="/start">Add to your agent →</a>
         <a class="btn btn-secondary on-panel" href="/agentic-finance">What is agentic finance?</a>
       </div>
     </div>

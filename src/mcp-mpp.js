@@ -153,7 +153,7 @@ export function createMcpMppLoopback({ port, host = "127.0.0.1", fetchImpl = fet
   // `timeoutMs` may be overridden PER CALL: a task-shaped composite run outlives
   // the default 60s bound (30s to 4 min), and the loopback is the paid request,
   // so cutting it short would abort work the buyer is waiting for.
-  return async function payCall({ def, params, credentialHeader, paymentSignature, ip, signal, idempotencyKey, timeoutMs: callTimeoutMs, heartbeatToken, progressKey, callId = null, runKey = null } = {}) {
+  return async function payCall({ def, params, credentialHeader, paymentSignature, ip, signal, idempotencyKey, timeoutMs: callTimeoutMs, heartbeatToken, progressKey, callId = null, runKey = null, grantHandle = null } = {}) {
     const [method, path] = String(def.route || "POST /").split(" ");
     const m = (method || "POST").toUpperCase();
     let url = baseOf() + path;
@@ -162,7 +162,7 @@ export function createMcpMppLoopback({ port, host = "127.0.0.1", fetchImpl = fet
     // A paid replay also names its call (`callId`, openLoopbackCall), so a
     // settled answer the connector stopped waiting for is booked as owed. A
     // task run names its key (`runKey`), which the route books on its sale.
-    const headers = { Accept: "application/json, */*", "X-Forwarded-For": String(ip || "127.0.0.1"), ...mcpLoopbackHeaders({ callId, runKey }) };
+    const headers = { Accept: "application/json, */*", "X-Forwarded-For": String(ip || "127.0.0.1"), ...mcpLoopbackHeaders({ callId, runKey, grantHandle }) };
     // Our own signed probe marker, forwarded verbatim from the MCP request so a
     // synthetic check over the connector is booked as internal, exactly as it
     // is on a direct HTTP call. The paid route verifies it (isSyntheticRequest);

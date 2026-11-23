@@ -39,7 +39,7 @@ export const BLOG_POSTS = [
 <h2>Paying from your agent</h2>
 
 <ul>
-  <li><strong>MCP:</strong> <code>npx -y agent402-mcp@0.15.0</code> gives Claude, Cursor or any MCP client the catalog with a wallet. Set <code>AGENT402_NETWORKS=arc</code> and it pays the Arc offer.</li>
+  <li><strong>MCP:</strong> <code>npx -y agent402-mcp@0.16.0</code> gives Claude, Cursor or any MCP client the catalog with a wallet. Set <code>AGENT402_NETWORKS=arc</code> and it pays the Arc offer.</li>
   <li><strong>SDK:</strong> <code>agent402-client</code> wraps <code>fetch</code>: it reads the 402, signs the offer on your chosen chain and retries. <code>arc</code> is a network name it accepts.</li>
   <li><strong>Any x402 client:</strong> the offer is a standard x402 v2 <code>exact</code> accept on <code>eip155:5042</code>, so a stock x402 client that signs EVM transfers pays it as is.</li>
 </ul>
@@ -87,7 +87,7 @@ export const BLOG_POSTS = [
 
 <h2>Connect</h2>
 
-<p>Decide is three routes: <code>POST /api/decide</code> for a plan, <code>POST /api/decide/execute</code> to run one, and <code>POST /api/decide/feedback</code> (free) to report whether a step worked, which feeds future rankings. Pay per request in USDC over x402 or MPP. On the hosted MCP connector they are the <code>decide</code> tools; add it with <code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code>. Prices by depth, the full method and the FAQ are on the <a href="/decide">Decide page</a>, and the reference is on the <a href="${REPO_URL}/wiki/Decide">wiki</a>.</p>`,
+<p>Decide is three routes: <code>POST /api/decide</code> for a plan, <code>POST /api/decide/execute</code> to run one, and <code>POST /api/decide/feedback</code> (free) to report whether a step worked, which feeds future rankings. Pay per request in USDC over x402 or MPP. On the hosted MCP connector they are the <code>decide</code> tools; add it with <code>claude mcp add --transport http -s user agent402 https://agent402.tools/mcp</code>. Prices by depth, the full method and the FAQ are on the <a href="/decide">Decide page</a>, and the reference is on the <a href="${REPO_URL}/wiki/Decide">wiki</a>.</p>`,
   },
   {
     slug: "what-is-agentic-finance-aifi",
@@ -298,7 +298,7 @@ export const BLOG_POSTS = [
 
 <p>To add the hosted connector to Claude Code, run:</p>
 
-<pre><code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code></pre>
+<pre><code>claude mcp add --transport http -s user agent402 https://agent402.tools/mcp</code></pre>
 
 <p>Once connected, Claude Code can search all 500+ tools, find the right one for a task, and call the free proof-of-work ones directly. Paid tools need a client that can pay: run the npm package below with <code>AGENT_KEY</code> set to a funded EVM key. The <code>catalog.search</code> and <code>catalog.find</code> tools help the agent discover relevant tools without needing to know the full catalog.</p>
 

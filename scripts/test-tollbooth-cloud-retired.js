@@ -18,8 +18,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -99,24 +98,18 @@ for (const f of ["src/tollbooth-cloud.js", "src/tollbooth-waitlist.js", "assets/
 
 // --- booted: the routes ------------------------------------------------------
 const TOKEN = "tbcloud-retired-test-operator-token-0123456789";
-const PORT = await getFreePort();
-const base = `http://127.0.0.1:${PORT}`;
-const env = { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", AGENT402_OPERATOR_TOKEN: TOKEN };
-delete env.DATABASE_URL;
-delete env.STATE_DATABASE_URL;
-let childLog = "";
-const child = spawn(process.execPath, ["src/server.js"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
-child.stdout.on("data", (d) => { childLog += d; });
-child.stderr.on("data", (d) => { childLog += d; });
-const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.exit(code); };
+const env = { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", AGENT402_OPERATOR_TOKEN: TOKEN };
+delete process.env.DATABASE_URL; // bootServer merges process.env: the child boots with neither database
+delete process.env.STATE_DATABASE_URL;
+let srv = null, bootError = "";
+try { srv = await bootServer({ stores: "tollbooth-cloud-retired", timeoutMs: 60_000, env }); } catch (e) { bootError = e.message; }
+const childLog = () => (srv ? srv.log() : bootError);
+const done = (code) => { try { srv?.child.kill("SIGKILL"); } catch { /* */ } process.exit(code); };
+const base = srv?.url;
 try {
-  let up = false;
-  for (let i = 0; i < 240 && !up; i++) {
-    try { up = (await fetch(`${base}/health`)).ok; } catch { /* not yet */ }
-    if (!up) await new Promise((r) => setTimeout(r, 250));
-  }
+  const up = Boolean(srv);
   ok(up, "server boots");
-  if (!up) { console.error(childLog.slice(-3000)); done(1); }
+  if (!up) { console.error(childLog().slice(-3000)); done(1); }
 
   for (const p of ["/tollbooth/cloud", "/tollbooth/waitlist", "/tollbooth/waitlist?plan=agency"]) {
     const r = await fetch(base + p, { redirect: "manual" });
@@ -145,7 +138,7 @@ try {
   // Control: the same token opens a live operator page, so the 404 is the route, not the auth.
   const live = await fetch(`${base}/__operator/wishes`, { headers: { authorization: `Bearer ${TOKEN}` } });
   ok(live.status === 200, `control: the token opens /__operator/wishes (got ${live.status})`);
-  if (authed.status !== 404 || live.status !== 200) console.error(childLog.slice(-3000));
+  if (authed.status !== 404 || live.status !== 200) console.error(childLog().slice(-3000));
 } catch (e) {
   ok(false, `booted checks threw: ${e.message}`);
 }

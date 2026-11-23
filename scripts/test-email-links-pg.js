@@ -5,12 +5,11 @@
 // against a Postgres (required under CI); the records are made by a second
 // engine instance on the same schema, standing in for the other container.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { spawn } from "node:child_process";
+import { bootServer } from "./lib/boot-server.js";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
 import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";
 const { schema } = requireTestPg({ label: "test-email-links-pg" });
@@ -31,27 +30,24 @@ const quiet = () => {};
 // The server's own email stores keep their default files (outside DIR), and a
 // database boot imports such a file once: every record here is new per run.
 const RUN = randomBytes(4).toString("hex");
-const PORT = await getFreePort();
-const B = `http://127.0.0.1:${PORT}`;
-let log = "";
-const child = spawn(process.execPath, ["src/server.js"], {
+// stores: false - the stores are the ones named here; the email stores keep their defaults (above).
+const booting = bootServer({
+  stores: false,
   env: {
-    ...process.env, STATE_DATABASE_URL: relay.url, STATE_DB_CONNECT_TIMEOUT_MS: "1500", STATE_DB_SCHEMA: schema, FREE_MODE: "true", PORT: String(PORT), POW_SECRET: SECRET, FREE_ALERTS_SECRET: "", MPP_SECRET_KEY: "",
+    STATE_DATABASE_URL: relay.url, STATE_DB_CONNECT_TIMEOUT_MS: "1500", STATE_DB_SCHEMA: schema, FREE_MODE: "true", POW_SECRET: SECRET, FREE_ALERTS_SECRET: "", MPP_SECRET_KEY: "",
     FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
     STATS_DB_DIR: DIR, MEMORY_DB_FILE: join(DIR, "agent402.db"), POW_DB_PATH: join(DIR, "pow.db"), STATUS_DB_PATH: join(DIR, "status.db"),
     X402_ECONOMY_DB: join(DIR, "economy.db"), SALES_LEDGER_DB: join(DIR, "sales.db"), REFUND_DB_DIR: DIR, DECIDE_LEDGER_DB: join(DIR, "decide.db"),
     REVENUE_LEDGER_DB: join(DIR, "revenue.db"), TRAFFIC_DIR: join(DIR, "traffic"), WISH_FILE: join(DIR, "wishes.jsonl"), OUTBOUND_LEDGER_FILE: join(DIR, "outbound.ndjson"),
     HANGUP_FORGIVE_FILE: join(DIR, "hangup.json"), WALLET_DAILY_LEDGER_FILE: join(DIR, "spend.json"), EMAIL_STATUS_FILE: join(DIR, "email.json"), MPP_RECONCILE_FILE: join(DIR, "reconcile.json"),
   },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-child.stdout.on("data", (d) => { log += d; });
-child.stderr.on("data", (d) => { log += d; });
+}).catch((e) => { console.error(e.message); return null; });
+let srv = null;
 try {
-  let up = false;
-  for (let i = 0; i < 240 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ } if (!up) await sleep(500); }
+  srv = await booting;
+  const up = Boolean(srv);
+  const B = srv?.url;
   ok(up, "the server boots in database mode");
-  if (!up) console.error(log.slice(-2000));
 
   // The other container makes one record of each kind, after this server read the rows.
   const fa = createFreeAlerts({ storePath: join(DIR, "other", "free-alerts.json"), probes: { insider: async () => ({ ids: [] }) }, validators: { insider: (t) => String(t).toUpperCase() }, sendEmail: async () => true, secret: SECRET, log: quiet });
@@ -86,7 +82,7 @@ try {
   ok(u3.status === 503, `a one-click follow-up stop during an outage answers 503 (${u3.status})`);
   relay.heal();
 } finally {
-  child.kill("SIGKILL");
+  srv?.child.kill("SIGKILL");
   relay.heal(); await relay.close();
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

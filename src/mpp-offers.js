@@ -18,19 +18,25 @@
 // A client whose tempo credential the relay just refused sees evm first for a
 // while (src/mpp-tempo.js tempoLeads); discovery documents the default order.
 
-import { tempoDiscoveryInfo, tempoOfferedFor, TEMPO_USDC_E_ADDRESS } from "./mpp-tempo.js";
+import { tempoDiscoveryInfo, tempoOfferedFor } from "./mpp-tempo.js";
+import { tempoTokenLabel, TEMPO_OUSD_ADDRESS } from "./tempo-currencies.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { stripeDiscoveryInfo } from "./mpp-stripe.js";
 import { mppOfferGateClause, mppOfferGateSentence } from "./mpp-offer-gate.js";
 
-const PATH_USD_LC = "0x20c0000000000000000000000000000000000000";
-
 /** A readable name for a Tempo TIP-20 currency address. */
 export function tempoCurrencyLabel(address) {
-  const a = String(address || "").toLowerCase();
-  if (a === TEMPO_USDC_E_ADDRESS.toLowerCase()) return "USDC.e";
-  if (a === PATH_USD_LC) return "PathUSD";
-  return String(address || "");
+  return tempoTokenLabel(address) || String(address || "");
+}
+
+// The one sentence that names Visa CLI (plain text, no mark): its agents pay
+// tempo/charge in OUSD, so it is said only while this instance's tempo
+// challenges name OUSD (TEMPO_CURRENCY), and every surface reads it here.
+export const VISA_CLI_MPP_SENTENCE = "Agents using Visa CLI can pay over MPP on Tempo.";
+/** VISA_CLI_MPP_SENTENCE while the tempo method is on and offers OUSD, else "". */
+export function visaCliMppSentence() {
+  const t = tempoDiscoveryInfo();
+  return t && t.currencies.some((c) => String(c).toLowerCase() === TEMPO_OUSD_ADDRESS.toLowerCase()) ? VISA_CLI_MPP_SENTENCE : "";
 }
 
 /** Ordered MPP offers for one route, as its 402 would list them.

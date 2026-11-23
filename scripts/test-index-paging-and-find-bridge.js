@@ -15,22 +15,13 @@
 //    describing a task - which is every real query. Reported by a seller whose
 //    route /api/route?include=external ranks for the same words.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const PORT = await getFreePort();
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-const base = `http://127.0.0.1:${PORT}`;
-for (let i = 0; i < 120; i++) {
-  try { const r = await fetch(`${base}/health`); if (r.ok) break; } catch {}
-  await new Promise((r) => setTimeout(r, 500));
-}
+const srv = await bootServer({ stores: false, timeoutMs: 60_000, env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false" } });
+const base = srv.url;
 const get = async (p) => (await fetch(`${base}${p}`)).json();
 
 // --- 1. the paging contract names its own base ------------------------------
@@ -132,6 +123,6 @@ const get = async (p) => (await fetch(`${base}${p}`)).json();
   ok(Array.isArray(empty.results) && empty.results.length === 0 && empty.weakMatches === true, "an answer with no rows still carries the link and an empty list");
 }
 
-child.kill("SIGTERM");
+await srv.stop();
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

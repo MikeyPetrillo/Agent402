@@ -13,22 +13,19 @@
 //   node scripts/test-decide-paywall.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { parsePaymentRequired } from "@x402/core/schemas";
 import { validateDiscoveryExtension } from "@x402/extensions/bazaar";
 import { DEFAULTS } from "../src/decide/config.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const TOKEN = "op_" + "x".repeat(40);
 const dir = mkdtempSync(join(tmpdir(), "decide-paywall-"));
 
-const [facPort, deadPort] = await getFreePorts(2);
 const facilitator = createServer((req, res) => {
   req.on("data", () => {});
   req.on("end", () => {
@@ -39,16 +36,21 @@ const facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(facPort, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const facPort = facilitator.address().port;
+// The decide service: a local listener on port 0 that drops every connection,
+// held for the whole run so no other socket can take its port.
+const deadService = createServer((req) => req.socket.destroy());
+await new Promise((r) => deadService.listen(0, "127.0.0.1", r));
+const deadPort = deadService.address().port;
 
 async function boot(name, extra = {}) {
-  const [port] = await getFreePorts(1);
-  const env = { ...process.env };
-  for (const k of ["STATE_DATABASE_URL", "DECIDE_CONFIG", "FREE_MODE"]) delete env[k];
-  let log = "";
-  const child = spawn(process.execPath, ["src/server.js"], {
+  for (const k of ["STATE_DATABASE_URL", "DECIDE_CONFIG", "FREE_MODE"]) delete process.env[k];
+  const srv = await bootServer({
+    stores: false,
+    timeoutMs: 60_000,
     env: {
-      ...env, PORT: String(port), FREE_MODE: "", NODE_ENV: "test",
+      FREE_MODE: "", NODE_ENV: "test",
       NETWORK: "base", PAYMENT_NETWORKS: "base", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
       FACILITATOR_URL: `http://127.0.0.1:${facPort}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
@@ -57,18 +59,8 @@ async function boot(name, extra = {}) {
       DECIDE_LEDGER_DB: join(dir, `${name}.db`), AGENT402_OPERATOR_TOKEN: TOKEN,
       ...extra,
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", (d) => { log += d; });
-  child.stderr.on("data", (d) => { log += d; });
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 240 && !up; i++) {
-    try { up = (await fetch(`${base}/health`)).ok; } catch { /* booting */ }
-    if (!up) await wait(250);
-  }
-  if (!up) { console.log(log.slice(-1500)); throw new Error(`${name}: server did not boot`); }
-  return { base, stop: () => child.kill("SIGKILL"), log: () => log };
+  }).catch((e) => { console.log(e.message); throw new Error(`${name}: server did not boot`); });
+  return { base: srv.url, stop: () => srv.child.kill("SIGKILL"), log: srv.log };
 }
 
 const post = (base, path, body, headers = {}) => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
@@ -147,6 +139,7 @@ try {
   try { await checks(b, low, "lowered"); } finally { b.stop(); }
 } finally {
   facilitator.close();
+  deadService.close();
   rmSync(dir, { recursive: true, force: true });
 }
 console.log(`\ntest-decide-paywall: ${pass} passed, ${fail} failed`);

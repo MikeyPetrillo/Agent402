@@ -247,7 +247,7 @@ process.env.OPENROUTER_API_KEY = "test-key";
 {
   _resetListingCacheForTest();
   calls = []; perModel = {};
-  listingReply = (u) => u.includes("flux.2-klein-4b")
+  listingReply = (u) => new URL(u).pathname.split("/").includes("flux.2-klein-4b")
     ? { data: { id: "black-forest-labs/flux.2-klein-4b", endpoints: [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: KB.listedMaxUsd * 1.4 }] }] } }
     : { data: { endpoints: [{ provider_tag: "recraft", pricing: [{ billable: "output_image", unit: "image", cost_usd: MB.listedMaxUsd }] }] } };
   const out = await bySlug("v1-images-fast").handler({ prompt: "a fox" });

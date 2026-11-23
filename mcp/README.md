@@ -11,17 +11,25 @@ Pick one setup. Both run locally through `npx`.
 **1. Free, no wallet.** Pure-CPU tools (no outbound calls, keys or models) run free. Each call solves a proof-of-work puzzle with your CPU, typically well under a second on a laptop. Tools that reach the network or a model ask for a wallet.
 
 ```
-claude mcp add agent402 -s user -- npx -y agent402-mcp@0.15.0
+claude mcp add agent402 -s user -- npx -y agent402-mcp@0.16.0
 ```
 
-**2. Paid, with a wallet.** Paid tools are settled in USDC on each call.
+**2. Paid, with a wallet.** Paid tools are settled in USDC on each call. Run setup once:
+
+```
+npx -y agent402-mcp@0.16.0 setup
+```
+
+It asks for the wallet's private key (the input is hidden), stores it in your OS keychain (the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux through `secret-tool`; elsewhere a file readable only by your user, with a warning), and prints the config for Claude Code, Claude Desktop and Cursor. That config needs no `AGENT_KEY`: the server reads the stored key whenever `AGENT_KEY` is not set. Fund the wallet with USDC on Base. A Base payment needs no ETH: you sign an authorization and the facilitator pays the network fee.
+
+Or put the key in the config instead (with or without the `0x` prefix):
 
 ```json
 {
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.15.0"],
+      "args": ["-y", "agent402-mcp@0.16.0"],
       "env": { "AGENT_KEY": "0xYOUR_PRIVATE_KEY" }
     }
   }
@@ -30,9 +38,9 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.15.0
 
 > Use a new wallet holding only a few dollars of USDC. Never use your main wallet.
 
-Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`.
+Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`, and no daily or monthly cap unless you set `AGENT402_MAX_USD_PER_DAY` or `AGENT402_MAX_USD_PER_MONTH` (these two hold across restarts).
 
-Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.15.0`
+Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.16.0`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
 
 Advanced setup (chains, MPP, error codes, the hosted connector) is in [Advanced](#advanced).
@@ -43,13 +51,20 @@ Every variable the server reads (all optional):
 
 | env | default | meaning |
 | --- | --- | --- |
-| `AGENT_KEY` | _(unset)_ | Hex private key of an EVM wallet funded with USDC on Base (or another EVM chain the server offers), or USDG on Robinhood Chain. |
+| `AGENT_KEY` | _(unset)_ | Hex private key of an EVM wallet funded with USDC on Base (or another EVM chain the server offers), or USDG on Robinhood Chain: 64 hex characters, with or without the `0x` prefix (surrounding spaces and quotes are ignored). Unset, the key `setup` stored is read from the OS keychain. |
+| `AGENT402_KEY_STORE` | `auto` | Where `setup` keeps the key and the server reads it: `auto` (the platform's keychain, else a file), `macos`, `windows`, `secret-tool`, `file`, or `off` (never read a stored key). |
 | `SOLANA_AGENT_KEY` | _(unset)_ | Base58 secret key (or JSON byte array) of a Solana wallet funded with USDC on Solana. |
 | `AGENT402_CREDITS_KEY` | _(unset)_ | A prepaid credits key (`a402_...`; [agent402.tools/credits](https://agent402.tools/credits) says whether packs are on sale). Sent as `Authorization: Bearer` on every catalog call; the server debits the list price only on a successful (200) call and answers `X-Credits-Balance`. Used only when no wallet key is set (a wallet key wins); in credits mode every call - pure-CPU tools included - is debited from the key. Credits pay Agent402's own services only: `router.execute`, `seller-payability`, `decide.execute` and the flight tools buy from outside sellers and need a wallet key, and memory and usage need a wallet identity. |
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). Paid calls never follow redirects, so use the address that serves the routes directly; a redirect is refused with the origin to use. |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | `5` | Refuse any single call priced above this many USD (e.g. `0.05`); `0` or `off` disables it. A call it refuses names the price, the cap and the setting to raise. Applies to the wallet and the credits path. |
 | `AGENT402_BUDGET` | _(unset, no cap)_ | Optional hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. A call it refuses names the setting to raise. Applies to the wallet and the credits path. |
+| `AGENT402_MAX_USD_PER_DAY` | _(unset, no cap)_ | Optional cap on USD spent per UTC day, kept across restarts (and shared by every copy of this server for the same user) in `spend.json` (mode 0600) in the config folder. A call it refuses says what is left and when the day resets. `off` means no cap; a value that is not a USD amount refuses paid calls until fixed. |
+| `AGENT402_MAX_USD_PER_MONTH` | _(unset, no cap)_ | The same per UTC calendar month. |
+| `AGENT402_CONFIG_DIR` | per-user config folder | Where `spend.json` (and, without a keychain, the key file) live: `~/Library/Application Support/agent402` on macOS, `%APPDATA%\agent402` on Windows, `~/.config/agent402` elsewhere. The key file is kept only in a folder no other user can write to. |
+| `AGENT402_OUTPUT_DIR` | `~/Downloads/agent402` | Where media answers are written (the OS temp folder when `~/Downloads` is absent or cannot be written). |
+| `AGENT402_MEDIA_INLINE` | _(unset)_ | `1` returns media answers inline (an image or audio content block, or base64) instead of as files. |
+| `AGENT402_MEDIA_INLINE_MAX_BYTES` | `1048576` (1 MB) | An image answer up to this size is also returned inline as an image content block, so the model sees it, beside its file. `0` sends every image to the file only. |
 | `AGENT402_SHOW_ROUTER` | _(unset)_ | `1` lists `router.execute` and `sellers.list` even without a wallet. Both are listed automatically when a wallet key is set; a credits key does not pay `router.execute`, which buys from outside sellers and takes a wallet payment. |
 | `AGENT402_NETWORKS` | _(unset)_ | Restrict + order the chains to pay on - e.g. `robinhood` (USDG on Robinhood Chain), `base,solana`, or a raw CAIP-2 like `eip155:4663`. Unset = the client picks (effectively Base on multi-chain sellers). |
 | `AGENT402_ASYNC` | `auto` | Slow routes (reports, video, the premium image; `async.recommended` on their `/api/pricing` row) are paid with `Prefer: respond-async` and collected from their job link, so a long run never outlives the connection. `off` waits on the connection instead (since 0.13.18 sending `Prefer: wait=<maxSeconds>` where the row gives `async.preferWait`); `always` uses a job on every route that runs as one. |
@@ -75,6 +90,24 @@ report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the tick
 so the default per-call cap of $5 covers every tool; set `AGENT402_MAX_PER_CALL` lower for a
 tighter ceiling, or `off` for none.
 
+**One-time free call.** A server may serve a wallet's first paid call on an
+eligible route free (its first-call allowance: the answer carries
+`X-Agent402-Allowance: first-call` and no settlement receipt). From the
+default host such a call is labeled "One-time free call" in the tool result and
+is not counted as spent; its signed payment stays held against the caps until
+the authorization expires unused. From any other host the header alone is a
+paid call.
+
+**Media answers as files.** An answer that is bytes (an image, audio, video or
+PDF), or a JSON answer with a large base64 media field, is written to a file in
+`AGENT402_OUTPUT_DIR`, and the tool result gives its absolute path, size and
+content type instead of the bytes, so they never fill the model's context. An
+image answer up to `AGENT402_MEDIA_INLINE_MAX_BYTES` (1 MB by default) is also
+returned inline as an image content block, so the model still sees it; audio,
+video, PDFs and larger images go to the file only. File
+names are made by this server (the tool's slug, a time stamp and random
+characters), never taken from the answer.
+
 **Held payments.** `payment.info` reports `heldThisSessionUsd`: money a wallet
 call sent a signed payment for without a confirmed answer (an error status, a
 dropped connection, a redirect, a job still running). It is held, not spent: a
@@ -90,10 +123,11 @@ amount once against `AGENT402_BUDGET` as spent, never held. A payment
 option asking to stay valid for more than a day is refused before anything is
 signed, so no signed authorization outlives a day.
 
-**Keys stay local.** `AGENT_KEY`, `SOLANA_AGENT_KEY` and `AGENT402_CREDITS_KEY`
+**Keys stay local.** `AGENT_KEY` (or the stored key), `SOLANA_AGENT_KEY` and `AGENT402_CREDITS_KEY`
 are replaced with `[redacted]` wherever they would appear in a tool result, a
 protocol error or a console line, and a key that does not parse is reported by
-its variable name, not its value.
+its variable name and the expected form, not its value. `setup` passes the key
+to the keychain on stdin, never on a command line.
 
 ## Advanced
 
@@ -113,7 +147,7 @@ its variable name, not its value.
 - The rest of the 500+ tool catalog is reachable via the meta tools `catalog.search` / `catalog.find` + `catalog.call` - keeping your context window small. The same dotted names are listed on the hosted connector; the older snake names (`search_tools`, `find_tool`, `call_tool`, `get_payment_info`, `describe_server`, `list_top_sellers`, and the flagship `search_web` …) remain accepted as CallTool aliases, so existing configs keep working.
 - When a call hits HTTP 402: with a wallet key set (`AGENT_KEY` for the EVM chains, Robinhood Chain included; `SOLANA_AGENT_KEY` for Solana), the server signs an x402 payment on a chain the seller accepts and retries; with only a credits key it sends `Authorization: Bearer a402_…` and the server debits the balance on success; with neither it solves the tool's proof-of-work challenge (~0.2 s of CPU) on the eligible tools. (The service settles USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar and Algorand, plus USDG on Robinhood Chain - 14 chains total - for callers using a raw x402 client rather than this package. Where the server also offers a Circle Gateway batched accept on Arc or Base, this package pays the plain accept beside it.)
 - Since 0.13.15 the server's requests to the catalog and to sellers (catalog reads, the 402 and the paid retry) refuse a TLS chain through one of the intermediate CAs listed in `networks.js` (keys reported recoverable in Mozilla bug 2083449), keyed on each certificate's SubjectPublicKeyInfo hash, on a dedicated dispatcher. With a proxy or custom dispatcher installed, requests go out through it unchanged.
-- **Slow routes run as jobs** (since 0.13.17): a paid call to a route the catalog marks slow carries `Prefer: respond-async`, answers `202` with a job link, and the server polls `GET /api/jobs/{id}` (free), waiting `Retry-After` seconds between polls, until the answer is ready, reading the job's `state` and falling back to its `status`. The x402 payment settles only on the delivered answer. A caller that sends a `progressToken` gets `notifications/progress` from the job's stage, steps and ETA. A job still running when `AGENT402_ASYNC_TIMEOUT_MS` ends comes back with its `jobUrl` instead.
+- **Slow routes run as jobs** (since 0.13.17): a paid call to a route the catalog marks slow carries `Prefer: respond-async`, answers `202` with a job link, and the server polls `GET /api/jobs/{id}` (free), waiting `Retry-After` seconds between polls, until the answer is ready, reading the job's `state` and falling back to its `status`. The x402 payment settles only on the delivered answer. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. A caller that sends a `progressToken` gets `notifications/progress` from the job's stage, steps and ETA. A job still running when `AGENT402_ASYNC_TIMEOUT_MS` ends comes back with its `jobUrl` instead.
 - Proof-of-work challenges are solved on a worker thread, so the server keeps answering while it searches, and a challenge asking for more than 28 bits (the most an Agent402 server asks) is refused rather than searched (since 0.14.0).
 - `catalog.search` returns at most 25 results (`limit`, default 10); `catalog.call` and `router.execute` take `params` as an object or as a JSON string of one, for hosts that serialize nested arguments (since 0.14.0).
 - Tool annotations match the hosted connector's: the catalog lookups, `payment.info` and `server.describe` are read-only; `catalog.call` and `router.execute` can run a tool that writes, deletes or buys, so they are marked destructive, as is `memory.write`.

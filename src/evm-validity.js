@@ -44,6 +44,7 @@ import { paymentHeaderOf } from "./payer.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "./composite-spend-guard.js";
 import { needsAsyncOrWait, slowSyncWindowSeconds, SLOW_ADVISE_SECONDS } from "./slow-sync-window.js";
 import { decodePaymentHeader } from "./payment-header.js";
+import { settleFirstClause } from "./settle-first-copy.js";
 
 /** The reference facilitator refuses at verify AND at settle once validBefore < now + 6 s. */
 export const SETTLE_RULE_SECONDS = 6;
@@ -68,15 +69,17 @@ export const EVM_RUN_SECONDS = Object.freeze({
 });
 
 /** The sentence a slow route's description carries (server.js appends it). */
-export function runTimeNote(seconds, { windowSeconds = slowSyncWindowSeconds() } = {}) {
+export function runTimeNote(seconds, { windowSeconds = slowSyncWindowSeconds(), settlesFirst = false } = {}) {
   const s = Number(seconds);
+  // A route that may be paid before it runs carries the settle-first sentence
+  // after the claim that the payment settles only on a delivered result.
   const span = s >= 120 && s % 60 === 0 ? `${s / 60} minutes` : `${s} seconds`;
   // Past the sync window (src/slow-sync-window.js) a paid call says how it
   // waits: a job link, or Prefer: wait covering the run budget.
   if (needsAsyncOrWait({ slow: s > SLOW_ADVISE_SECONDS, maxSeconds: s }, windowSeconds)) {
-    return `Takes up to ${span} to answer: send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (on x402 the payment settles only on a delivered result), or with "Prefer: wait=${s}" and keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer. A paid call with neither header is answered 400 before any payment is taken.`;
+    return `Takes up to ${span} to answer: send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (on x402 the payment settles only on a delivered result), or with "Prefer: wait=${s}" and keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer. A paid call with neither header is answered 400 before any payment is taken.${settleFirstClause({ settlesFirst })}`;
   }
-  return `Takes up to ${span} to answer: keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer, or send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (on x402 the payment settles only on a delivered result).`;
+  return `Takes up to ${span} to answer: keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer, or send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (on x402 the payment settles only on a delivered result).${settleFirstClause({ settlesFirst })}`;
 }
 
 const UINT = /^\d{1,20}$/;

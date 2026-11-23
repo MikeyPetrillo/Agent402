@@ -292,9 +292,9 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
       <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Let your agent pay for tools</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Paste one MCP URL into Claude, Cursor, or any streamable-HTTP client and your agent can buy from 500+ tools. Pure-CPU tools run free over proof-of-work, so you can try it without a wallet.</p>
       ${codeBlock(`<span style="color:var(--on-panel-faint);"># zero install
-</span>claude mcp add --transport http \
+</span>claude mcp add --transport http -s user \
   agent402 https://agent402.tools/mcp`, { name: "the install command", html: true, wrap: true, size: "xs", style: "margin:0 0 18px" })}
-      <a class="btn btn-secondary btn-sm" href="/docs#add" style="align-self:flex-start;">Add to your agent →</a>
+      <a class="btn btn-secondary btn-sm" href="/start" style="align-self:flex-start;">Add to your agent →</a>
     </div>
   </div>
 </section>

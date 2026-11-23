@@ -61,5 +61,5 @@ body:
     id: when
     attributes:
       label: When (UTC)
-      description: For a paid call that charged and then failed, the approximate time lets us match the settlement on-chain. On x402 a failed call is not charged, so a receipt on a non-200 is itself a bug.
+      description: For a paid call that charged and then failed, the approximate time lets us match the settlement on-chain. On x402 a failed call is not charged, so a receipt on a non-200 is itself a bug unless the answer says it was charged. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
       placeholder: e.g. 2026-09-16 14:02Z

@@ -16,6 +16,8 @@ t node scripts/test-ox-tier.js
 t node scripts/test-macro-kit.js
 # FRED terms line on every FRED answer; third-party series screened by their notes (offline)
 t node scripts/test-fred-terms.js
+# Open-Meteo answers carry the credit with links to Open-Meteo and the CC BY 4.0 licence; fema-disasters carries the OpenFEMA disclaimer, endpoint and access date (stubbed upstream - offline)
+t node scripts/test-source-credits.js
 # MPP dual-stack shim (real mppx client buys over WWW-Authenticate/Authorization wire; single settle; x402 pass-through; HMAC tamper — offline)
 t node scripts/test-mpp-shim.js
 # MPP evm EIP-712 domain fallback (a wrong-domain credential is refused locally, its 402 carries no challenge so the client takes x402, healthy clients untouched — boots a paid

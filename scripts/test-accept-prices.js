@@ -10,16 +10,13 @@
 // payment.info, derived from the same map.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { NETWORKS } from "../src/payments.js";
 
 const OP = "eip155:10", RH = "eip155:4663", BASE_NET = "eip155:8453";
 const PREMIUM_USD = 0.001;
 const CONCURRENCY = 12;
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const [port, facPort] = await getFreePorts(2);
-const base = `http://127.0.0.1:${port}`;
+let base = "";
 const nameOf = Object.fromEntries(Object.entries(NETWORKS).map(([n, c]) => [c, n]));
 const microOf = (usd) => Math.round(Number(String(usd ?? "").replace(/[^0-9.]/g, "")) * 1e6);
 
@@ -33,18 +30,19 @@ const facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((resolve) => facilitator.listen(facPort, "127.0.0.1", resolve));
+await new Promise((resolve) => facilitator.listen(0, "127.0.0.1", resolve));
+const facPort = facilitator.address().port;
 const stub = `http://127.0.0.1:${facPort}`;
 
-const env = { ...process.env };
-delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
-for (const k of ["ROBINHOOD_MIN_PRICE_USD", "NETWORK_PRICE_FLOORS", "NETWORK_PRICE_PREMIUMS"]) delete env[k];
-function bootServer(listenPort, extraEnv = {}) {
-  const out = { log: "" };
-  out.child = spawn(process.execPath, ["src/server.js"], {
+// The servers inherit this process's environment: these are removed from it
+// (not blanked), so each boot reads them unset.
+for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "ROBINHOOD_MIN_PRICE_USD", "NETWORK_PRICE_FLOORS", "NETWORK_PRICE_PREMIUMS"]) delete process.env[k];
+// Boot on port 0; `log` reads the server's output so far.
+async function boot(label, extraEnv = {}) {
+  const srv = await bootServer({
+    stores: label,
     env: {
-      ...env,
-      PORT: String(listenPort), FREE_MODE: "", NODE_ENV: "test",
+      FREE_MODE: "", NODE_ENV: "test",
       NETWORK: "base", PAYMENT_NETWORKS: "base,optimism,robinhood",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
       FACILITATOR_URL: stub, SOLVADOR_KEY: "test-key", SOLVADOR_FACILITATOR_URL: stub, ROBINHOOD_FACILITATOR_URL: stub,
@@ -56,18 +54,8 @@ function bootServer(listenPort, extraEnv = {}) {
       MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATS_ALLOW_EPHEMERAL: "true",
       ...extraEnv,
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  out.child.stdout.on("data", (d) => { out.log += d; });
-  out.child.stderr.on("data", (d) => { out.log += d; });
-  return out;
-}
-async function waitUp(url, srv) {
-  for (let i = 0; i < 240; i++) {
-    try { if ((await fetch(`${url}/health`)).ok) return; } catch { /* booting */ }
-    await wait(250);
-  }
-  throw new Error(`server did not boot: ${srv.log.slice(-1200)}`);
+  }).catch((e) => { throw new Error(`server did not boot: ${String(e.message).slice(-1200)}`); });
+  return { child: srv.child, url: srv.url, get log() { return srv.log(); } };
 }
 const rhAmountOf = async (url, path, method = "POST") => {
   const r = await fetch(`${url}${path}`, { method, headers: { "content-type": "application/json" }, body: method === "POST" ? "{}" : undefined });
@@ -75,15 +63,15 @@ const rhAmountOf = async (url, path, method = "POST") => {
   const by = Object.fromEntries((pr.accepts || []).filter((a) => a.scheme === "exact").map((a) => [a.network, a.amount]));
   return by;
 };
-const main = bootServer(port);
-const child = main.child;
+let main = null;
 let knob = null;
 
 const failures = [];
 const fail = (where, problem) => failures.push(`${where}: ${problem}`);
 
 try {
-  await waitUp(base, main);
+  main = await boot("accept-prices");
+  base = main.url;
 
   const pricing = await (await fetch(`${base}/api/pricing`)).json();
   const endpoints = Array.isArray(pricing.endpoints) ? pricing.endpoints : [];
@@ -164,10 +152,8 @@ try {
   // The knob restores the floor exactly: a second boot with
   // ROBINHOOD_MIN_PRICE_USD=0.004 asks 4000 on Robinhood for the same route,
   // 1000 on Base, and publishes the floor on /api/pricing and llms.txt.
-  const [knobPort] = await getFreePorts(1);
-  const knobBase = `http://127.0.0.1:${knobPort}`;
-  knob = bootServer(knobPort, { ROBINHOOD_MIN_PRICE_USD: "0.004" });
-  await waitUp(knobBase, knob);
+  knob = await boot("accept-prices-knob", { ROBINHOOD_MIN_PRICE_USD: "0.004" });
+  const knobBase = knob.url;
   const k = await rhAmountOf(knobBase, "/api/hash");
   if (k[RH] !== "4000" || k[BASE_NET] !== "1000") fail("knob boot POST /api/hash", `asks ${k[RH]} on ${RH} and ${k[BASE_NET]} on Base; expected 4000 and 1000`);
   const kp = await (await fetch(`${knobBase}/api/pricing`)).json();
@@ -183,7 +169,7 @@ try {
   console.error(`FAIL - ${e?.message || e}`);
   process.exitCode = 1;
 } finally {
-  try { child.kill("SIGKILL"); } catch { /* stopped */ }
+  try { main?.child.kill("SIGKILL"); } catch { /* stopped */ }
   try { knob?.child.kill("SIGKILL"); } catch { /* stopped */ }
   await new Promise((resolve) => facilitator.close(resolve));
 }

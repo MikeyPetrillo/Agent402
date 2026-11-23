@@ -12,12 +12,11 @@
 //
 //   node scripts/test-multipart-openapi.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { isMultipartOperation, requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 import { STT_TOOLS } from "../src/tools/stt-kit.js";
 
@@ -25,7 +24,6 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, "..");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const FIXTURE = readFileSync(path.join(ROOT, "assets/fixtures/sample-speech.wav"));
 
 // Keys a serving path could reach: blank on both boots, so a handler that runs
@@ -33,16 +31,9 @@ const FIXTURE = readFileSync(path.join(ROOT, "assets/fixtures/sample-speech.wav"
 const NO_KEYS = { OPENAI_API_KEY: "", OPENROUTER_API_KEY: "", ELEVENLABS_API_KEY: "", UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: "" };
 const QUIET = { X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATS_ALLOW_EPHEMERAL: "true" };
 
-async function boot(port, env) {
-  const child = spawn(process.execPath, ["src/server.js"], { cwd: ROOT, env: { ...process.env, ...NO_KEYS, ...QUIET, PORT: String(port), ...env }, stdio: ["ignore", "pipe", "pipe"] });
-  let log = ""; child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
-  const base = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 480; i++) {
-    try { if ((await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) })).ok) return { base, child }; } catch { /* booting */ }
-    if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}\n${log.slice(-2000)}`);
-    await wait(250);
-  }
-  child.kill("SIGKILL"); throw new Error(`no /health\n${log.slice(-2000)}`);
+async function boot(label, env) {
+  const srv = await bootServer({ stores: label, env: { ...NO_KEYS, ...QUIET, ...env } });
+  return { base: srv.url, child: srv.child };
 }
 
 const send = (url, op) => {
@@ -54,7 +45,6 @@ const decode = (h) => { try { return JSON.parse(Buffer.from(h || "", "base64").t
 const formDataRoutes = STT_TOOLS.filter((t) => t.discovery?.bodyType === "form-data").map((t) => t.route);
 ok(formDataRoutes.length >= 2, `the kit declares its multipart routes (${formDataRoutes.join(", ")})`);
 
-const [paidPort, freePort, facPort] = await getFreePorts(3);
 const facilitator = createServer((req, res) => {
   req.on("data", () => {});
   req.on("end", () => {
@@ -62,13 +52,14 @@ const facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(facPort, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const facPort = facilitator.address().port;
 
 const servers = [];
 try {
   const [paid, free] = await Promise.all([
-    boot(paidPort, { FREE_MODE: "", NODE_ENV: "test", NETWORK: "base", PAYMENT_NETWORKS: "base", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", FACILITATOR_URL: `http://127.0.0.1:${facPort}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "" }),
-    boot(freePort, { FREE_MODE: "true" }),
+    boot("multipart-paid", { FREE_MODE: "", NODE_ENV: "test", NETWORK: "base", PAYMENT_NETWORKS: "base", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", FACILITATOR_URL: `http://127.0.0.1:${facPort}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "" }),
+    boot("multipart-free", { FREE_MODE: "true" }),
   ]);
   servers.push(paid.child, free.child);
 

@@ -47,7 +47,14 @@ const OPT_IN = `${OFFER_REQUEST_HEADER}: mpp`;
   ok(t.includes("x402 is this server's default for the Payments plugin's HTTP client"), "default: x402 named this server's default");
   ok(t.includes(OPT_IN), "default + Tempo: the opt-in header is named");
   ok(t.includes('network_preferences_config=["tempo:4217", "eip155:4217"]') && t.includes("buyer_pays_gas_fees=True"), "default + Tempo: the plugin configuration");
-  ok(t.includes("USDC.e or PathUSD on Tempo"), "default + Tempo: the funds");
+  // The Tempo tokens are this server's configured ones, never a typed list.
+  const { tempoCurrencyPhrase } = await import("../src/mpp-tempo.js");
+  ok(t.includes(`${tempoCurrencyPhrase()} on Tempo`), `default + Tempo: the funds name the configured Tempo tokens (${tempoCurrencyPhrase()})`);
+  const keepCur = process.env.TEMPO_CURRENCY;
+  process.env.TEMPO_CURRENCY = "usdc,ousd";
+  const t2 = render({ tempo: true, env: {} });
+  ok(t2.includes("USDC.e or OUSD on Tempo") && !t2.includes("PathUSD"), "TEMPO_CURRENCY=usdc,ousd: the funds name USDC.e and OUSD, not PathUSD");
+  if (keepCur === undefined) delete process.env.TEMPO_CURRENCY; else process.env.TEMPO_CURRENCY = keepCur;
 }
 {
   // Gate at its default, Tempo not offered: no MPP paragraph, no header.

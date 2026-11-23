@@ -49,6 +49,15 @@ const ONLY = (process.env.SETTLE_FIRST_PARTS || "1,2,3,4").split(",");
 // =============================================================================
 if (ONLY.includes("1")) {
   delete process.env.GATEWAY_SETTLE_FIRST;
+  // The sentence a route that may settle first carries after its "settles
+  // only on the answer" claim: present on such a route, absent elsewhere.
+  {
+    const copy = await import("../src/settle-first-copy.js?clause");
+    const c = copy.settleFirstClause({ settlesFirst: true });
+    await ok(c === ` ${copy.SETTLE_FIRST_TEXT}` && c.includes(copy.SETTLE_FIRST_MARK), `settleFirstClause gives a settle-first route the sentence (${JSON.stringify(c.slice(0, 40))})`);
+    await ok(copy.settleFirstClause({ settlesFirst: false }) === "" && copy.settleFirstClause(null) === "", "settleFirstClause adds nothing on any other route");
+    await ok(copy.settleFirstCopyOn({ GATEWAY_SETTLE_FIRST: "off" }) === false && copy.settleFirstCopyOn({}) === true, "the sentence follows the settle-first switch");
+  }
   // The meter's per-minute figures stay within its 24-hour window even when
   // nothing ever reads them (each new minute drops the minutes past it).
   {

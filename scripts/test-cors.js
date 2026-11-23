@@ -7,9 +7,8 @@
 // (a preflight is never asked to pay and never spends a limiter token) and
 // that the payment headers a buyer must read are on the expose list.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { corsAllowsPath, corsAllowHeaders, exposeHeadersFor402, CORS_EXPOSE_HEADERS, CORS_DEFAULT_ALLOW_HEADERS } from "../src/cors.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; } else { fail++; console.error(`FAIL: ${m}`); } };
@@ -65,20 +64,11 @@ for (const h of ["PAYMENT-REQUIRED", "PAYMENT-RESPONSE", "WWW-Authenticate", "Pa
 }
 
 // --- booted ---------------------------------------------------------------
-const PORT = await getFreePort();
-const base = `http://127.0.0.1:${PORT}`;
-const srv = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-srv.stdout.on("data", () => {});
-srv.stderr.on("data", () => {});
+let srv = null;
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) {
-    try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); }
-  }
-  ok(up, "server booted");
+  srv = await bootServer({ stores: "cors", timeoutMs: 60_000, env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" } });
+  const base = srv.url;
+  ok(true, "server booted");
 
   // A preflight is answered before any gate: 204, no body, and the client's
   // own payment header is allowed.
@@ -113,7 +103,7 @@ try {
   const opPre = await fetch(`${base}/__operator/stats`, { method: "OPTIONS", headers: { origin: "https://example.com", "access-control-request-method": "GET" } });
   ok(opPre.status !== 204 || !opPre.headers.get("access-control-allow-origin"), "operator preflight is not granted");
 } finally {
-  srv.kill("SIGKILL");
+  srv?.child.kill("SIGKILL");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -327,7 +327,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     return BigInt(acceptOn(o, (n) => n.startsWith("stellar:")).amount);
   }
   /** The request headers of one new, distinct payment from `w` for `route`. */
-  async function credentialFor(w, route, { ttlMs = null, validForSeconds = null, scheme = "exact" } = {}) {
+  // tempoCurrency: pay the tempo challenge in that token (it must be one the 402 lists); default the rig's own.
+  async function credentialFor(w, route, { ttlMs = null, validForSeconds = null, scheme = "exact", tempoCurrency = null } = {}) {
     const o = await offerOf(route);
     const x402 = (accept, payload) => ({ "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, resource: o.offer.resource, accepted: accept, payload })).toString("base64") });
     // An upto (Permit2) payment from an EVM wallet, on the Base upto accept.
@@ -347,10 +348,12 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       return { Authorization: Credential.serialize({ challenge: ch, payload: { from: w.address, to: ch.request.recipient, value: ch.request.amount, validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 280), nonce: "0x" + randomBytes(32).toString("hex"), signature: "0x" + "11".repeat(65), type: "authorization" } }) };
     }
     if (w.wire === "tempo") {
-      const seen = o.challenges.find((c) => c.method === "tempo" && c.intent === "charge");
-      const ch = Challenge.from({ realm: seen.realm, method: "tempo", intent: "charge", expires: new Date(Date.now() + (ttlMs ?? 60_000) + (tempoSeq++ % 20_000)), request: { amount: seen.request.amount, currency: TEMPO_CUR, decimals: 6, recipient: TREASURY, methodDetails: { chainId: 4217 } }, secretKey: secret });
+      const cur = tempoCurrency || TEMPO_CUR;
+      const seen = o.challenges.find((c) => c.method === "tempo" && c.intent === "charge" && (!tempoCurrency || String(c.request.currency).toLowerCase() === cur.toLowerCase()));
+      if (!seen) throw new Error(`rig: the route offers no tempo challenge in ${cur}`);
+      const ch = Challenge.from({ realm: seen.realm, method: "tempo", intent: "charge", expires: new Date(Date.now() + (ttlMs ?? 60_000) + (tempoSeq++ % 20_000)), request: { amount: seen.request.amount, currency: cur, decimals: 6, recipient: TREASURY, methodDetails: { chainId: 4217 } }, secretKey: secret });
       // As the stock client signs it: valid for TEMPO_TX_LIFE_MS from now, and the stub relay holds it to that.
-      const fields = { chainId: 4217, type: "tempo", calls: [{ to: TEMPO_CUR, data: "0x" }], nonce: tempoNonce++, gas: 100000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, validBefore: Math.floor((Date.now() + TEMPO_TX_LIFE_MS) / 1000) };
+      const fields = { chainId: 4217, type: "tempo", calls: [{ to: cur, data: "0x" }], nonce: tempoNonce++, gas: 100000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, validBefore: Math.floor((Date.now() + TEMPO_TX_LIFE_MS) / 1000) };
       const tx = w.keychain ? await w.account.signTransaction(fields) : await w.account.signTransaction(fields, { serializer: viemTempo.Transaction.serialize });
       payments.set(tx, { id: w.id, amount: BigInt(seen.request.amount), signedAt: Date.now(), lifeMs: TEMPO_TX_LIFE_MS });
       return { Authorization: Credential.serialize({ challenge: ch, payload: { signature: tx, type: "transaction" } }) };

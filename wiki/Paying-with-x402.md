@@ -9,7 +9,9 @@
 3. Client signs a USDC `transferWithAuthorization` from its own wallet (no gas needed - the facilitator sponsors it) and retries with the payment header.
 4. Facilitator verifies + settles on-chain; the server serves the result. End-to-end this is seconds.
 
-The payer needs **only USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar, or Algorand** - no ETH, no account, no API key. Agent402 also accepts **USDG on Robinhood Chain** (see [[Robinhood Chain (USDG)|Robinhood-Chain]]).
+The payer needs **only USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar, or Algorand** - no account, no API key. Agent402 also accepts **USDG on Robinhood Chain** (see [[Robinhood Chain (USDG)|Robinhood-Chain]]).
+
+On Base, an x402 exact payment is a signature (EIP-3009): the facilitator submits it and pays the gas, so the paying wallet needs only USDC, no ETH.
 
 ## What the 402 carries
 

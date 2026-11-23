@@ -5,42 +5,42 @@
 // With ROUTER_WORKERS=0 there is no worker to wait for and readiness answers
 // 200 at once.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function boot(env) {
-  const port = await getFreePort();
-  const child = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), ROUTER_WORKERS: "1", ROUTER_WORKER_TEST_HOOKS: "1", X402_INDEX_CRAWL: "off", ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let log = "";
-  child.stdout.on("data", (d) => { log += d; });
-  child.stderr.on("data", (d) => { log += d; });
-  const seen = [];
+  // The listening line is enough: the samples below start right after listen,
+  // before /health?ready=1 turns 200.
   const t0 = Date.now();
+  const srv = await bootServer({
+    stores: false,
+    readyPath: null,
+    timeoutMs: 90_000,
+    env: { FREE_MODE: "true", ROUTER_WORKERS: "1", ROUTER_WORKER_TEST_HOOKS: "1", X402_INDEX_CRAWL: "off", ...env },
+  });
+  const port = srv.port;
+  const seen = [];
   let listenAt = 0;
   while (Date.now() - t0 < 90_000) {
     try {
       // Read the log BEFORE the request: a sample is "loaded" only when the
       // worker had loaded when the server answered it, never when it loaded
       // between the answer and this read.
-      const loadedBefore = /worker \d+ loaded/.test(log);
+      const loadedBefore = /worker \d+ loaded/.test(srv.log());
       const r = await fetch(`http://127.0.0.1:${port}/health?ready=1`, { signal: AbortSignal.timeout(2000) });
       const live = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) });
       const path = await fetch(`http://127.0.0.1:${port}/health/ready`, { signal: AbortSignal.timeout(2000) });
       if (!listenAt) listenAt = Date.now();
-      seen.push({ at: Date.now() - listenAt, status: r.status, path: path.status, live: live.status, loaded: loadedBefore, loadedAfter: /worker \d+ loaded/.test(log) });
+      seen.push({ at: Date.now() - listenAt, status: r.status, path: path.status, live: live.status, loaded: loadedBefore, loadedAfter: /worker \d+ loaded/.test(srv.log()) });
       if (r.status === 200) break;
     } catch { /* not listening yet */ }
     await wait(150);
   }
-  child.kill("SIGTERM");
-  await wait(300);
+  const log = srv.log();
+  await srv.stop();
   return { seen, log };
 }
 

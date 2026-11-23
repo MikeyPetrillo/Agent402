@@ -1,24 +1,4 @@
 {
   "note": "Test files that route a stubbed fetch by a substring of the URL string, with their counts. Frozen 2026-11-09: a count may only fall and a file at zero leaves the list. Use isHost/urlMatches from scripts/lib/url-host.js. Enforced by scripts/test-url-host-match.js.",
-  "files": {
-    "test-arc-rail.js": 1,
-    "test-async-jobs.js": 1,
-    "test-cdn-sync-window.js": 1,
-    "test-decide-cost.js": 1,
-    "test-decide-instrumentation.js": 1,
-    "test-direct-upstream-cost-guard.js": 3,
-    "test-direct-upstream.js": 3,
-    "test-first-call-allowance.js": 1,
-    "test-images-fast-kit.js": 1,
-    "test-llm-gateway.js": 2,
-    "test-report-upgrade.js": 1,
-    "test-sanctions-screen.js": 3,
-    "test-session-read-error-pg.js": 1,
-    "test-settlement-event.js": 1,
-    "test-slow-sync-window.js": 1,
-    "test-solana-intel-kit.js": 9,
-    "test-task-store-isolation.js": 1,
-    "test-tempo-router.js": 1,
-    "test-x402-payer-screen.js": 1
-  }
+  "files": {}
 }

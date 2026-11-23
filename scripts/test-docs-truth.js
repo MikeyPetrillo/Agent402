@@ -162,6 +162,8 @@ const KNOWN_NON_CATALOG = new Set([
   "/api/refunds", "/api/refunds/lookup",
   // Card front door (Stripe): served outside CATALOG, mounted with STRIPE_SECRET_KEY.
   "/api/buy", "/api/subscribe", "/api/credits/checkout", "/api/credits/claim", "/api/credits/balance",
+  // Revoke a presented credits key (one answer for every key), mounted with the credits store.
+  "/api/credits/revoke",
 ]);
 
 // A walkthrough's approval step ("4. User approves the ~$0.010 USDC payment")

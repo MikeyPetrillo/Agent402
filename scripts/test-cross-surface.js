@@ -29,16 +29,12 @@
 // Mismatches are FATAL: a disagreement between two of our own surfaces is
 // never an upstream's fault.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { PROBE_POW_SLUG } from "../src/pow.js";
 import { isIdentityBoundRoute } from "../src/payments.js";
 import { requestExampleOf } from "../src/openapi-request.js";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const near = (a, b) => Math.abs(Number(a) - Number(b)) < 1e-9;
@@ -47,21 +43,9 @@ const near = (a, b) => Math.abs(Number(a) - Number(b)) < 1e-9;
 // its reason. Anything else missing fails.
 const MANIFEST_EXEMPT = new Map([]);
 
-async function bootServer() {
-  const port = await getFreePort();
-  const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: path.join(HERE, ".."),
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let log = ""; child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
-  const base = `http://127.0.0.1:${port}`; const t0 = Date.now();
-  while (Date.now() - t0 < 120_000) {
-    try { const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) }); if (r.ok) return { base, child }; } catch { /* booting */ }
-    if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}\n${log.slice(-2000)}`);
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  child.kill("SIGKILL"); throw new Error(`no /health in 120s\n${log.slice(-2000)}`);
+async function boot() {
+  const srv = await bootServer({ stores: false, env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } });
+  return { base: srv.url, child: srv.child };
 }
 const getJson = async (base, p) => { const r = await fetch(`${base}${p}`, { signal: AbortSignal.timeout(60_000) }); if (!r.ok) throw new Error(`${p} -> ${r.status}`); return r.json(); };
 const priceNum = (s) => Number(String(s).replace(/[^0-9.]/g, ""));
@@ -69,7 +53,7 @@ const priceNum = (s) => Number(String(s).replace(/[^0-9.]/g, ""));
 async function main() {
   let base = process.env.TARGET_URL?.replace(/\/+$/, "") || "";
   let child = null;
-  if (!base) ({ base, child } = await bootServer());
+  if (!base) ({ base, child } = await boot());
   try {
     const [health, pricing, openapi, manifest, wishes, models] = await Promise.all([
       getJson(base, "/health"), getJson(base, "/api/pricing"), getJson(base, "/openapi.json"),

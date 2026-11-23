@@ -22,7 +22,7 @@ import { repoUrl } from "./repo-link.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { displayPrice } from "./integration-pages.js";
 import { withheldUserAgentPrefixes, OFFER_REQUEST_HEADER } from "./mpp-offer-gate.js";
-import { tempoEnabled } from "./mpp-tempo.js";
+import { tempoEnabled, tempoCurrencyPhrase } from "./mpp-tempo.js";
 import { PLATFORM_INTEGRATIONS } from "./platform-integrations.js";
 
 const PLATFORM = PLATFORM_INTEGRATIONS.find((p) => p.slug === "agentcore");
@@ -70,7 +70,7 @@ export function agentcorePage(baseUrl, catalog = {}, { tempo = tempoEnabled(), e
     ? `x402 is this server's default for the Payments plugin's HTTP client. A request whose User-Agent starts with ${code(AGENTCORE_PLUGIN_USER_AGENT)} (what the plugin sent when the sample ran) is answered with the x402 offer alone: the ${code("PAYMENT-REQUIRED")} header and the full offer in the body, with no ${code("WWW-Authenticate: Payment")} challenge. The offer is payable in USDC with no extra configuration on this server's side.`
     : `Every 402 here carries the ${code("PAYMENT-REQUIRED")} header and the full x402 offer in the body, payable in USDC.`;
   const tempoConfig = pre('network_preferences_config=["tempo:4217", "eip155:4217"]\nbuyer_pays_gas_fees=True');
-  const tempoFunds = "Paying over MPP on Tempo takes USDC.e or PathUSD on Tempo; the sample's Tempo probe sets the plugin's network preferences to Tempo first:";
+  const tempoFunds = `Paying over MPP on Tempo takes ${esc(tempoCurrencyPhrase())} on Tempo; the sample's Tempo probe sets the plugin's network preferences to Tempo first:`;
   const mppPara = !tempo ? ""
     : x402Alone
       ? `<p ${P}>To get the MPP challenges instead, send ${code(`${OFFER_REQUEST_HEADER}: mpp`)} with the request: the 402 then carries them as every other client gets them. ${tempoFunds}</p>${tempoConfig}`

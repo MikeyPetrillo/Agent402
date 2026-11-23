@@ -29,13 +29,16 @@ import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEO
 export { AsyncJobPendingError } from "./async-job.js";
 export { verifyReceipt, verifyStreamedReceipt, splitStreamedReceipt, receiptRequestDigest, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_SSE_COMMENT } from "./receipt.js";
 import { solvePowSync, solvePowAsync, checkPowChallenge } from "./pow-solver.js";
+// An EVM private key read with or without its 0x prefix, surrounding
+// whitespace or quotes: privateKeyToAccount(normalizeEvmKey(process.env.AGENT_KEY)).
+export { normalizeEvmKey, evmKeyOrNull, EVM_KEY_FORM } from "./wallet-key.js";
 export { MAX_POW_DIFFICULTY, MAX_POW_TRIES_FACTOR, solvePowAsync } from "./pow-solver.js";
 
 // Keep in lockstep with package.json. Every request the SDK issues carries
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.11.0";
+const VERSION = "0.12.0";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -352,6 +355,8 @@ export class Agent402 {
     // call's own reservation from every other one (see guardX402Client).
     this._signCtx = new AsyncLocalStorage();
     this._guarded = false;
+    // Paid calls the server served free under its first-call allowance.
+    this._freeCalls = 0;
     if (x402Client) this.guardX402Client(x402Client);
     // The chains a pre-wrapped fetch pays on, as CAIP-2 ids (null = unknown).
     this._payNetworks = Array.isArray(payNetworks) && payNetworks.length
@@ -830,7 +835,13 @@ export class Agent402 {
             }
             throw this._fail(slug, r, await this._failureDetail(slug, r));
           }
+          // A call the built-in host served under its first-call allowance
+          // was verified and not settled, so it is no settled spend; the
+          // authorization that left the process stays held against the caps
+          // until it can no longer settle. From any other host the header is
+          // the seller's own word and the call is a paid one.
           if (!sentPayment()) this._spendRelease(reservation);
+          else if (firstCallGrantOf(r, this.baseUrl)) { this._spendHold(reservation, guarded ? ctx.sent : null, { ownHost: true }); this._freeCalls++; }
           else this._spendHold(reservation, guarded ? ctx.sent : null, { settleLast: true });
           settled = true;
           return await this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: true });
@@ -895,7 +906,8 @@ export class Agent402 {
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
       if (r.ok) return this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: false });
-      throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (a prepaid credits key; routes that buy from an outside seller need a wallet)`);
+      if (r.status === 402) throw new WalletRequiredError(slug);
+      throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; ${WALLET_REQUIRED_HINT}`);
     }
 
     // Free (compute-payable) tool: succeeds plainly on a FREE_MODE instance,
@@ -1259,9 +1271,22 @@ export class Agent402 {
       heldUsd: held.usd,
       heldCalls: held.calls,
       heldByHost: held.byHost,
+      freeCalls: this._freeCalls,
       limits: { maxPerCallUsd: this._spend.maxPerCall, dailyLimitUsd: this._spend.daily, maxPerHostUsd: this._spend.perHost },
     };
   }
+}
+
+/** True for a delivered answer the built-in host (DEFAULT_BASE_URL's exact
+ *  origin) served under its first-call allowance: the header
+ *  X-Agent402-Allowance: first-call and no settlement receipt
+ *  (PAYMENT-RESPONSE), so a settled call is always counted. Any other host's
+ *  header is never read: the seller holding the payment cannot vouch for it. */
+function firstCallGrantOf(r, baseUrl) {
+  if (!isDefaultOrigin(baseUrl)) return false;
+  const get = typeof r?.headers?.get === "function" ? (k) => r.headers.get(k) : () => null;
+  return !!r?.ok && String(get("x-agent402-allowance") || "").trim().toLowerCase() === "first-call"
+    && !get("payment-response") && !get("x-payment-response");
 }
 
 /** Thrown when a paid call would exceed a configured spending ceiling. The call
@@ -1306,6 +1331,22 @@ export class OutputValidationError extends Error {
     this.contractId = contractId;
     this.paid = Boolean(paid);
     this.cacheHit = Boolean(cacheHit);
+  }
+}
+
+const WALLET_REQUIRED_HINT = "construct with { fetch: payFetch } (a fetch that pays over x402, wrapped by @x402/fetch, or over MPP, wrapped by mppx) or { creditsKey } (a prepaid credits key; routes that buy from an outside seller need a wallet)";
+
+/** A wallet-only tool was called with no way to pay: no `fetch` that pays over
+ *  x402 or MPP and no `creditsKey`. Nothing was signed and nothing was charged.
+ *  `code` is "WALLET_REQUIRED", so a caller can branch without reading the text. */
+export class WalletRequiredError extends Error {
+  constructor(slug) {
+    super(`call "${slug}" needs payment: HTTP 402 - wallet-only tool; ${WALLET_REQUIRED_HINT}`);
+    this.name = "WalletRequiredError";
+    this.code = "WALLET_REQUIRED";
+    this.slug = slug;
+    this.status = 402;
+    this.paid = false;
   }
 }
 

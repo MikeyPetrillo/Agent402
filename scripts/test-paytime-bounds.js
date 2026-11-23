@@ -695,6 +695,14 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
 // With REDIS_URL the server keeps its controls in the shared store: its own
 // key prefix, so state the unit sections above wrote (and a fire-and-forget
 // write that lands after their reset) is not this server's.
+// The booted half prices the image and video tiers from an upstream-cost
+// table (the private one, or the placeholder docs/example-upstream-costs.json,
+// which scripts/test-example-costs-suites.js runs this suite on): without one
+// those routes refuse with 503 by design, so the half needs a table loaded.
+{
+  const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+  requireUpstreamCosts("test-paytime-bounds (booted half)");
+}
 proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-preload.js", "src/server.js"], {
   // The slow-route sync window (src/slow-sync-window.js) is off: this suite
   // drives slow routes synchronously; test-slow-sync-window.js covers the window.

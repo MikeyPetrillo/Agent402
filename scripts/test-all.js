@@ -362,6 +362,8 @@ const NETWORK = new Set([
   "/api/tts", "/api/tts-hd", "/api/tts-lite",
   // Dub composes the chat gateway and the speech tiers: keyless, the first step answers 503.
   "/api/dub",
+  // Redact-chat masks, then runs the v1-chat gateway tier in-process: keyless, the chat step answers 503.
+  "/api/redact-chat",
   // STT kit: fetches external audio + hits OpenAI transcription API.
   "/api/transcribe", "/api/transcribe-pro", "/api/transcribe-long",
   // Embeddings kit: every call hits OpenAI embeddings API upstream.

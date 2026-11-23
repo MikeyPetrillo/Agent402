@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (171 scripts, one process each)
+# @step 1: Offline suites (172 scripts, one process each)
 # Client route discovery and output validation (clean-room behavior test, offline)
 t node scripts/test-cleanroom-client-contract.js
 # Paid scan budget (a public route must not spend without limit)
@@ -103,6 +103,10 @@ t node scripts/test-credits.js
 t node scripts/test-credits-terms.js
 # A refund retry racing its own refund.failed never records the older refund over a newer one; a success settles once.
 t node scripts/test-credits-refund-race.js
+# Purchase checks: card authentication and neutral tags on every checkout, checkout and purchase counts, failed payments, a flagged charge, the freeze and refund on a fraud warning, spending limits, revoke by key, the key format (offline)
+t node scripts/test-credits-purchase-checks.js
+# The private credits table: no defaults in code; without it nothing is sold and the word reads attention.
+t node scripts/test-credits-guards.js
 # Credits for people: top-ups within the cap, refunds across payments, email sign-in, history and CSV, a new key, receipts and the low-balance email; absent with sales off.
 t node scripts/test-credits-account.js
 # The credits figures (sign-in link life, session life, low-balance threshold) are read by every sentence that states them: changing one changes the copy (offline)
@@ -179,6 +183,8 @@ t node scripts/test-tts-quote.js
 t node scripts/test-tts-margins.js
 # Dub (translate, then speak): both steps stubbed, uncharged step failures, the cap before any call, language forms, json mode, the price sum (offline)
 t node scripts/test-dub-kit.js
+# Redact-chat (mask, then the real v1-chat handler on a stubbed upstream): no original leaves, local restore, 400s before any call, the price sum (offline)
+t node scripts/test-redact-chat-kit.js
 # Stellar late-settle confirmation (a confirmed transfer overrides the facilitator; a payment to anyone else never does — offline)
 t node scripts/test-stellar-confirm.js
 # Stellar one payment, one answer: the signed entry claimed before settle, a re-encoded copy refused, the success-path tx claim, the replay key (offline)

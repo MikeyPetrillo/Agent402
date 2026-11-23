@@ -16,7 +16,7 @@
 // the caller passes in, echoed beside the forecast probability as two facts.
 // No field compares them and no text rates one against the other.
 import { markEndsAtCeiling } from "../run-ceiling.js";
-import { OPEN_METEO_ATTRIBUTION } from "../data-attribution.js";
+import { OPEN_METEO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 import { bad, openMeteoJson, resolveLocation, requireCoords, locationFields, tempUnitOf, LOCATION_PROPERTIES, cacheNote } from "./weather-kit.js";
 
 export const ENSEMBLE_SOURCE = "computed from Open-Meteo ensemble data, ensemble-api.open-meteo.com (CC BY 4.0)";
@@ -627,4 +627,7 @@ async function boardCities(raw) {
 // Every upstream wait in these handlers is a safeFetch through the weather
 // kit's read helper (the ensemble read, and the place lookups before it), so
 // each ends at a run's ceiling (src/run-ceiling.js).
+// Open-Meteo's licence asks for links to Open-Meteo and to the licence beside
+// its data: every answer of these tools carries them (src/data-attribution.js).
+openMeteoLicensed(WEATHER_PROBABILITY_TOOLS);
 markEndsAtCeiling(WEATHER_PROBABILITY_TOOLS, ["weather-market-board", "weather-market-brackets", "weather-probability"]);

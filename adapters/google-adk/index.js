@@ -33,7 +33,7 @@ import { createHash } from "node:crypto";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-google-adk/0.1.12";
+const USER_AGENT = "agent402-google-adk/0.1.13";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It

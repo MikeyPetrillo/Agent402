@@ -25,7 +25,7 @@ import { batchOfferPublic } from "./batch-settlement.js";
 import { CHAIN_PAGES } from "./market-page.js";
 import { EXEC_TIERS } from "./tools/route-execute.js";
 import { stripeEnabled } from "./mpp-stripe.js";
-import { mppMethodsProse, mppMethodsSummary } from "./mpp-offers.js";
+import { mppMethodsProse, mppMethodsSummary, visaCliMppSentence } from "./mpp-offers.js";
 import { mppOfferGateClause, mppOfferGateSentence } from "./mpp-offer-gate.js";
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
 import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
@@ -47,6 +47,7 @@ import { fromPriceLabel } from "./quoted-from.js";
 import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { connectorPayShort, connectorWires } from "./connector-pay.js";
 import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
+import { BASE_NO_GAS_SHORT } from "./base-no-gas.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
 const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${fromPriceLabel(t)}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
@@ -283,6 +284,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/integrations`, priority: "0.8" },
     { loc: `${baseUrl}/pricing`, priority: "0.8" },
     { loc: `${baseUrl}/changelog`, priority: "0.7" },
+    { loc: `${baseUrl}/start`, priority: "0.9" },
     { loc: `${baseUrl}/quickstart`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
@@ -371,6 +373,7 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/monitors`, priority: "0.8" },
     // A closed product takes no crawl slot: listed only while packs are on sale.
     ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
+    { loc: `${baseUrl}/start`, priority: "0.9" },
     { loc: `${baseUrl}/quickstart`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
@@ -642,7 +645,7 @@ Every x402 authorization is single-use, so a retry needs a fresh signature unles
 
 The settlement rule: on x402 a response of 400 or above is not settled, and each response shows whether anything settled, so you can check it yourself. ${SETTLE_FIRST_SENTENCE}
 
-**MPP clients are first-class (dual-stack), and now a native second method too.** Every paid endpoint also speaks MPP (Machine Payments Protocol, the IETF-track \`Payment\` HTTP auth scheme): the same 402 carries \`WWW-Authenticate: Payment\` challenges, listed in this order: ${mppMethodsProse() || "none on this instance (MPP_SECRET_KEY / TEMPO_API_KEY unset)"}. ${mppMethodsSummary().enabled && mppOfferGateSentence() ? `${mppOfferGateSentence()} ` : ""}\`/openapi.json\` publishes the same offers, in the same order, per route (\`x-payment-info.offers\`). A stock mppx client pays the first challenge it has a method for, so a wallet holding Tempo funds pays over Tempo; a client whose Tempo credential was just refused is shown the \`evm\` challenge first for a while. Settled responses return a signed \`Payment-Receipt\` header either way. An \`mppx\` client (\`Fetch.from\` with \`evm.charge\` or \`tempo.charge\`) works out of the box - same URL, same price, whichever method your client speaks.${connectorWires().mpp ? ` The hosted MCP connector at \`${baseUrl}/mcp\` pays the same way: a wallet-only tool answers with a readable tool result carrying the challenges in \`_meta["org.paymentauth/payment-required"]\` (a refused credential is JSON-RPC -32043), and an MCP client wrapped with mppx's \`McpClient.wrap()\` pays and retries on its own (receipt in \`_meta\`).` : ""}${mppStartHereBlock ? `\n\n${mppStartHereBlock}` : ""}
+**MPP clients are first-class (dual-stack), and now a native second method too.** Every paid endpoint also speaks MPP (Machine Payments Protocol, the IETF-track \`Payment\` HTTP auth scheme): the same 402 carries \`WWW-Authenticate: Payment\` challenges, listed in this order: ${mppMethodsProse() || "none on this instance (MPP_SECRET_KEY / TEMPO_API_KEY unset)"}. ${mppMethodsSummary().enabled && mppOfferGateSentence() ? `${mppOfferGateSentence()} ` : ""}${visaCliMppSentence() ? `${visaCliMppSentence()} ` : ""}\`/openapi.json\` publishes the same offers, in the same order, per route (\`x-payment-info.offers\`). A stock mppx client pays the first challenge it has a method for, so a wallet holding Tempo funds pays over Tempo; a client whose Tempo credential was just refused is shown the \`evm\` challenge first for a while. Settled responses return a signed \`Payment-Receipt\` header either way. An \`mppx\` client (\`Fetch.from\` with \`evm.charge\` or \`tempo.charge\`) works out of the box - same URL, same price, whichever method your client speaks.${connectorWires().mpp ? ` The hosted MCP connector at \`${baseUrl}/mcp\` pays the same way: a wallet-only tool answers with a readable tool result carrying the challenges in \`_meta["org.paymentauth/payment-required"]\` (a refused credential is JSON-RPC -32043), and an MCP client wrapped with mppx's \`McpClient.wrap()\` pays and retries on its own (receipt in \`_meta\`).` : ""}${mppStartHereBlock ? `\n\n${mppStartHereBlock}` : ""}
 
 **How to read our 402 if you only speak one dialect.** The same response carries BOTH headers${mppMethodsSummary().enabled && mppOfferGateClause() ? ` (except that ${mppOfferGateClause()})` : ", always"} - \`WWW-Authenticate: Payment\` is additive, never a replacement for the real x402 \`PAYMENT-REQUIRED\` header (full \`accepts\` array, \`exact\` scheme, EIP-3009). A client that hard-fails on an unrecognized \`WWW-Authenticate\` scheme instead of also checking for \`PAYMENT-REQUIRED\` will bail with something like "no supported rail" on a 402 it could have paid. If your parser only understands one of the two dialects, check for the header it understands FIRST rather than trusting whichever header happens to be read first; do not treat an unrecognized \`WWW-Authenticate\` scheme as "this server has no payment option for me." The JSON body of every paywall 402 also carries the same PaymentRequired object as the \`PAYMENT-REQUIRED\` header (\`x402Version\`, \`accepts\`, \`resource\`, \`extensions\`), beside our own fields; the header is authoritative. ${smallHeaderLimitText()}
 
@@ -685,12 +688,13 @@ ${flatTiersLine()}
 - [/health](${baseUrl}/health): health check
 
 ## Connect via MCP
+- [Start here](${baseUrl}/start): connect Claude, Claude Code or Cursor
 - [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/data/transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
-  - Claude Code: \`claude mcp add --transport http agent402 ${baseUrl}/mcp\`
+  - Claude Code: \`claude mcp add --transport http -s user agent402 ${baseUrl}/mcp\`
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - ${connectorPayShort()}
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
-- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.15.0\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.15.0\`
+- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.16.0\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.16.0\`
 ${PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
 
 ## Framework adapters (zero-dependency npm)
@@ -708,6 +712,7 @@ ${packItems}
 
 ## Settlement chains
 ${chainItems}
+${BASE_NO_GAS_SHORT}
 ${chainClauses()}
 ${toolSections}
 
@@ -846,6 +851,7 @@ ${[
     frontDoorMarkdown(catalog, baseUrl),
     mppMethodsProse(),
     mppMethodsSummary().enabled ? mppOfferGateSentence() : "",
+    visaCliMppSentence(),
     mppFlagshipLlmsBlock(catalog, { compact: true }),
     gatewayNanopaymentsLine(),
     paymentChannelsLine(),

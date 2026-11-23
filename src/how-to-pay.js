@@ -19,7 +19,7 @@ import { siteOrgLd } from "./site-org.js";
 import { GUIDE_SITE, GUIDE_SITE_NAME, guideLink } from "./ask402-links.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { RAILS, railKey, x402EvmOnly, liveRails } from "./rails.js";
-import { mppMethodsSummary } from "./mpp-offers.js";
+import { mppMethodsSummary, visaCliMppSentence } from "./mpp-offers.js";
 import { mppOfferGateSentence } from "./mpp-offer-gate.js";
 import { connectorWires } from "./connector-pay.js";
 import { mppFlagshipRows, mppFlagshipSnippet, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
@@ -139,7 +139,8 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
   const mppTable = mppMethodRows.length
     ? table(["method", "pays with", "what you need"], mppMethodRows.join(""))
     : p(`This instance has no MPP method switched on, so its 402s carry the x402 offer only. The hosted service lists the methods it takes in ${link("/.well-known/x402", "/.well-known/x402")} under ${code("mpp")}.`);
-  const mppOrder = mpp.enabled ? `The 402 lists the methods in this order: ${esc(mpp.order.join(", then "))}. A stock mppx client takes the first one it holds a method for.` : "";
+  const visaCli = mpp.tempo ? visaCliMppSentence() : "";
+  const mppOrder = mpp.enabled ? `The 402 lists the methods in this order: ${esc(mpp.order.join(", then "))}. A stock mppx client takes the first one it holds a method for.${visaCli ? ` ${esc(visaCli)}` : ""}` : "";
 
   // ---- card ---------------------------------------------------------------------
   const cardHtml = mpp.stripe
@@ -291,14 +292,14 @@ ${section("mcp", `
   ${h2("From an MCP host, the payment rides underneath.")}
   ${p(`The hosted connector at ${code(`${baseUrl}/mcp`)} serves the free tier with no install and no wallet${connectorWires().names.length ? `, and makes the wallet-only tools payable in the call over ${connectorWires().phrase}, from an MCP client that speaks it` : ""}. The npm server pays over x402 from a key you give it, with spend caps checked before any payment is signed.`)}
   ${pre("install lines", `# hosted, no wallet: the proof-of-work tools
-claude mcp add --transport http agent402 ${baseUrl}/mcp
+claude mcp add --transport http -s user agent402 ${baseUrl}/mcp
 
 # npm server with a funded EVM key: every paid tool over x402
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.15.0
+claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.16.0
 
 # a credits key${creditsKeyQualifier()} works there too
-claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.15.0`)}
+claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.16.0`)}
   ${p(`Every host's verified config block is in the ${link("/guides/agent-hosts", "agent-hosts guide")}; ${link("/quickstart", "/quickstart")} has the same first call for curl, JavaScript and the model gateway.`)}
 `)}
 

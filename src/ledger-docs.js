@@ -124,11 +124,11 @@ node demo.js
 
       <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>A / MCP</span><span>Claude &amp; any MCP client</span></div>
       ${codeBlock(`<span style="color:var(--on-panel-faint);"># Claude Code - hosted connector (no install; free proof-of-work tools, paid tools need a wallet client)
-</span>claude mcp add --transport http agent402 https://agent402.tools/mcp
+</span>claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 
 <span style="color:var(--on-panel-faint);"># Claude Code - npm server with a funded EVM key (paid tools settle via x402)
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.15.0
+</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.16.0
 
 <span style="color:var(--on-panel-faint);"># Cursor - ~/.cursor/mcp.json
 </span>{

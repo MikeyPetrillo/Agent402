@@ -6,6 +6,8 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { EVM_RUN_SECONDS, runTimeNote } from "../src/evm-validity.js";
+import { settleFirstSlugs } from "../src/settle-first-tools.js";
+import { SETTLE_FIRST_SENTENCE } from "../src/settle-first-copy.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -22,16 +24,22 @@ try {
   const j = await (await fetch(`${B}/api/pricing`)).json();
   const eps = j.endpoints || j;
   const bySlug = new Map(eps.map((e) => [e.slug, e]));
-  let checked = 0;
+  let checked = 0, sfChecked = 0;
+  const SETTLE_FIRST = settleFirstSlugs([]);
   for (const [slug, s] of Object.entries(EVM_RUN_SECONDS)) {
     const e = bySlug.get(slug);
     if (!e) continue;
     checked++;
     const d = String(e.description || "");
-    ok(d.endsWith(runTimeNote(s)), `${slug}: description ends with its run-time note (${s} s)`);
+    // A route that may be paid before it runs (no /v1 wire is slow here) ends
+    // with the settle-first sentence after its job claim.
+    const settlesFirst = SETTLE_FIRST.has(slug);
+    ok(d.endsWith(runTimeNote(s, { settlesFirst })), `${slug}: description ends with its run-time note (${s} s)`);
+    if (settlesFirst) { sfChecked++; ok(d.endsWith(SETTLE_FIRST_SENTENCE), `${slug}: settles first, so its run-time note ends with the settle-first sentence`); }
     ok(d.split("keep the connection open").length === 2, `${slug}: the note appears once`);
   }
   ok(checked >= 15, `the slow routes are in the catalog (${checked} checked)`);
+  ok(sfChecked >= 1, `a slow route that settles first is checked (${sfChecked})`);
   const fast = bySlug.get("uuid");
   ok(fast && !/keep the connection open/.test(fast.description || ""), "a fast route carries no run-time note");
 } finally {

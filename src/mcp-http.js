@@ -52,7 +52,7 @@ import {
 import { SKILLS_EXTENSION, mcpSkillsEnabled, clientDeclaresSkills, isSkillMethod, buildSkillSet, handleSkillsRpc } from "./mcp-skills.js";
 import { EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug } from "./composite-spend-guard.js";
 import { registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
-import { tempoEnabled, pushHashOf, tempoOfferedFor } from "./mpp-tempo.js";
+import { tempoEnabled, pushHashOf, tempoOfferedFor, tempoCurrencyPhrase } from "./mpp-tempo.js";
 import { isIdentityBoundRoute } from "./payments.js";
 import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
 import { stripeEnabled } from "./mpp-stripe.js";
@@ -108,7 +108,7 @@ import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
-import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsKeyQualifier, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import { redactSecrets } from "./tools/redact.js";
 import { STOCK_SLUGS, stockNotOffered } from "./tools/stock-provider.js";
@@ -149,7 +149,8 @@ import {
 import { maxHeaderSize } from "node:http";
 import { mcpX402Entries, mcpX402PathOf, MCP_X402_PREFIX, isFixedPriceDef } from "./mcp-x402-routes.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
-import { openLoopbackCall, closeLoopbackCall, cutLoopbackCall } from "./mcp-loopback.js";
+import { openLoopbackCall, closeLoopbackCall, cutLoopbackCall, openGrantHandle } from "./mcp-loopback.js";
+import { BASE_NO_GAS_SENTENCE } from "./base-no-gas.js";
 
 // serverInfo reports the agent402-mcp package version in the deployed build
 // (mcp/package.json, which the image copies) with the server's build as
@@ -433,7 +434,7 @@ export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402",
   };
 }
 
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX, quietMiss = () => false }) {
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, creditsLoopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX, quietMiss = () => false }) {
   // The wires this mount takes in the call. `payWires` is the boot's own
   // account (src/connector-pay.js connectorWires, the source the pages read):
   // a wire it denies has no loopback here, so the capability advertisement,
@@ -722,7 +723,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     } catch { return false; }
   }
 
-  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false } = {}) {
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false, grant = null } = {}) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -1078,6 +1079,44 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         ? (twinAsk ? await twinAsk : paymentRequiredFromHeader(r.headers.get("payment-required")))
         : null;
       return withSignedReceipt(translateMppResponse(entry, meta, params, startedAt, isNamed, r, { x402Required }), r);
+    }
+
+    /** A paid call under a connector grant: replayed to the slug's own route
+     *  with a one-call grant handle beside the loopback marker; the credits
+     *  gate holds the price (and the grant's daily cap) before the handler and
+     *  debits only a final 200. Blocking only. */
+    async function payOverCredits(entry, reqParams, args, isNamed, ip, signal, grant) {
+      const def = entry.def;
+      const params = paidParamsOf(args, isNamed);
+      const startedAt = Date.now();
+      if (needsAsyncOrWait(def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
+        return { content: [{ type: "text", text: `${def.slug} can take up to ${Number(def.asyncProfile?.maxSeconds)} s, longer than this connector waits for a call paid from credits (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s). Call the HTTP route ${def.route} with your credits key and the header Prefer: respond-async. Nothing was charged.` }], isError: true };
+      }
+      const idempotencyKey = reqParams?._meta?.["org.agent402/idempotency-key"];
+      const callId = openLoopbackCall();
+      let r;
+      try {
+        r = await creditsLoopback({ def, params, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken, callId, grantHandle: openGrantHandle(grant) });
+        closeLoopbackCall(callId);
+      } catch (err) {
+        const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
+        console.warn(`[mcp] tools/call failed class=${timedOut ? "paid-timeout" : "paid-loopback-error"} wire=credits tool=${def.slug} after=${Date.now() - startedAt}ms`);
+        const { routeCounted } = cutLoopbackCall(callId);
+        onPaidCutoff(def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken, routeCounted });
+        return { content: [{ type: "text", text: connectorCutoffText({ label: `Agent402 (${def.slug})`, seconds: Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000), paid: true, route: def.route, error: timedOut ? null : (err?.message || err) }) }], isError: true };
+      }
+      if (r.status === 402) {
+        const why = typeof r.json?.error === "string" ? r.json.error : "This call could not be paid from your credits.";
+        return { content: [{ type: "text", text: `Agent402 (${def.slug}): ${why} Your balance, connected apps and caps: ${baseUrl}/credits/account. Nothing was charged.` }], isError: true };
+      }
+      if (r.status >= 400) {
+        const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
+        return { content: [{ type: "text", text: `Agent402 (${def.slug}) HTTP ${r.status} - not charged: ${detail}` }], isError: true };
+      }
+      if (r.bytes) return withSignedReceipt(mcpBinaryResult({ slug: def.slug, bytes: r.bytes, contentType: r.contentType, headers: r.headers }), r);
+      const result = r.json !== undefined ? r.json : { text: r.text };
+      if (isNamed) return withSignedReceipt(mcpJsonResult(result), r);
+      return withSignedReceipt({ content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: { slug: def.slug, result } }, r);
     }
 
     /** The params a paid call replays (flagship: args IS params; catalog.call:
@@ -1707,7 +1746,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 tagline: p.tagline,
               })),
             },
-            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key${creditsKeyQualifier()} (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools ${TYPICAL_PRICE_RANGE.text} per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
+            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key${creditsKeyQualifier()} (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or ${tempoCurrencyPhrase()} natively on Tempo. No signup, no API key; most tools ${TYPICAL_PRICE_RANGE.text} per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
             ...(sellersListed ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
             missingATool: "Call demand.request (or POST /api/wish) with what you needed. We cluster and track demand - repeated requests get built.",
             docs: `${baseUrl}/llms.txt`,
@@ -1820,7 +1859,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (name === "payment.info") {
           return mcpJsonResult({
             connector: "hosted free tier - no wallet is held on this connector (authless)",
-            credits: { onSale: creditsSalesEnabled(), how: `${creditsSalesEnabled() ? `packs are sold by card at ${baseUrl}/credits` : "new credits are not on sale; a key already issued keeps working"}: Authorization: Bearer a402_<key> on any paid HTTP route except the wallet-identity-bound ones and the routes that buy from an outside seller (the router's execute tiers, seller-payability, decide-execute and the flight routes), which take a wallet payment, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success`, balance: `${baseUrl}/api/credits/balance` },
+            credits: { onSale: creditsSalesEnabled(), how: `${creditsSalesEnabled() ? `packs are sold by card at ${baseUrl}/credits` : "new credits are not on sale; a key already issued keeps working"}: Authorization: Bearer a402_<key> on any paid HTTP route except the wallet-identity-bound ones and the routes that buy from an outside seller (the router's execute tiers, seller-payability, decide-execute and the flight routes), which take a wallet payment, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success`, balance: `${baseUrl}/api/credits/balance`,
+              // Named only while credits are on sale and the connector sign-in is on.
+              ...(creditsConnectorOn() ? { connector: `${baseUrl}${CREDITS_CONNECTOR_PATH}`, connectorHow: "add this address as the connector instead of /mcp: the app asks you to sign in with your email and pays for paid tool calls from your credits balance under a daily cap you set, with no key or wallet" } : {}) },
             // DERIVED, never typed. This block quoted the pre-2026-08-23 ladder
             // for three weeks - every figure understated 1.7x to 3.4x - and an
             // agent budgeting from a machine surface under-budgets, pays, and
@@ -1840,8 +1881,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             },
             pay: {
               model: "HTTP 402 + x402, settled in USDC on-chain, non-custodial (you hold the key)",
-              mpp: `every paid endpoint also accepts MPP (Machine Payments Protocol, the Payment HTTP auth scheme): the same 402 carries a WWW-Authenticate: Payment challenge, an mppx client pays out of the box, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo - see ${baseUrl}/what-is-mpp${mppOfferGateClauseIfOffered({ code: (x) => x }) ? `; ${mppOfferGateClauseIfOffered({ code: (x) => x })}` : ""}`,
+              mpp: `every paid endpoint also accepts MPP (Machine Payments Protocol, the Payment HTTP auth scheme): the same 402 carries a WWW-Authenticate: Payment challenge, an mppx client pays out of the box, settling USDC on Base/Celo or ${tempoCurrencyPhrase()} natively on Tempo - see ${baseUrl}/what-is-mpp${mppOfferGateClauseIfOffered({ code: (x) => x }) ? `; ${mppOfferGateClauseIfOffered({ code: (x) => x })}` : ""}`,
               rails: RAILS_PAREN,
+              baseGas: BASE_NO_GAS_SENTENCE,
+              start: `${baseUrl}/start`,
               setup: `run the agent402-mcp npm server: \`npx agent402-mcp\` with ${npmEvmSetup} and/or SOLANA_AGENT_KEY=<base58 secret> for Solana. No signup, no API key.`,
               // DERIVED. Both ranges here were hand-typed and kept through two
               // repricings: the pack ceiling was over ten times the real one and
@@ -1913,6 +1956,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         const x402Read = x402Loopback && !credentialHeaderFromMeta(req.params?._meta) ? readPaymentFromMeta(req.params?._meta) : null;
         if (x402Read && (!x402Read.ok || x402Read.payment)) {
           return await payOverX402(entry, req.params, args, isNamed, ip, signal, x402Read);
+        }
+        if (!entry.free && grant && !credentialHeaderFromMeta(req.params?._meta)) {
+          // Signed in through the connector sign-in: paid from the grant's
+          // credits balance, under its daily cap, by the credits gate.
+          return await payOverCredits(entry, req.params, args, isNamed, ip, signal, grant);
         }
         if (!entry.free) {
           // Native MPP (2026-08-19): with the MPP gates mounted, a paid tool is
@@ -2297,7 +2345,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       res.vary("X-Operator-Token");
       const quiet = req.headers["x-operator-token"] !== undefined && Boolean(quietMiss(req));
       if (quiet) res.set("Cache-Control", "private, no-store");
-      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet };
+      // A connector grant (src/mcp-oauth.js, resolved from this request's
+      // bearer before this handler) pays this request's paid calls from credits.
+      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet, grant: creditsLoopback ? req.mcpCreditsGrant || null : null };
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport?.close(); } catch { /* already closing */ } });

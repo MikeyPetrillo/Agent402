@@ -20,7 +20,7 @@ const DEFINITION = "Agentic Finance (AIFI) is software agents paying and getting
 // looks like on the wire live in the long-form post and the glossary; this page
 // links them instead of retelling them.
 const FAQS = [
-  { q: "Do agents need crypto to take part?", a: "To pay, an agent needs a wallet holding a stablecoin (USDC, or USDG on Robinhood Chain, or USDC.e or PathUSD on Tempo) on a supported chain; gas is sponsored on the EVM rails, so no native token is required. Pure-CPU tools are also payable with a proof-of-work solve instead of money." },
+  { q: "Do agents need crypto to take part?", a: "To pay, an agent needs a wallet holding a stablecoin (USDC, or USDG on Robinhood Chain, or a dollar token on Tempo) on a supported chain; gas is sponsored on the EVM rails, so no native token is required. Pure-CPU tools are also payable with a proof-of-work solve instead of money." },
   { q: "Is it live today?", a: "Yes. Agent402 settles on {{railCount}} x402 chains plus Tempo over MPP, and a daily canary buys real tools over both wires. Every figure on the revenue page links to its on-chain proof." },
 ];
 
@@ -87,7 +87,7 @@ export function agenticFinancePage(baseUrl) {
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
   <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:44px;">
     <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 24px;color:var(--on-panel);">Give your agent 500+ tools</h2>
-    <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
+    <a class="btn btn-primary on-panel" href="/start">Add to your agent →</a>
   </div>
 </section>
 ${ledgerFooterCompact()}`;

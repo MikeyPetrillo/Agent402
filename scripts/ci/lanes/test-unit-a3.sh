@@ -35,6 +35,10 @@ t node scripts/test-mcp-x402.js
 t node scripts/test-mcp-x402-connector.js
 # A paid replay the hosted MCP connector stopped waiting for: the call id rides only the genuine marker, a settled answer the connector never read is booked as owed in either order (an event-loop stall reproduced over the real loopback client), one outcome per call, bounded entries, server and connector wiring pins (offline, port 0)
 t node scripts/test-mcp-loopback-cut.js
+# Connector sign-in (OAuth 2.1, MCP_OAUTH=on): a grant's daily cap on the key's own record, frozen and disabled keys refuse; switch off = every route 404 and unauthenticated /mcp byte-identical; PKCE S256 only, exact redirect_uri, state, single-use short-lived codes, refresh rotation with reuse revoking the grant, consent page unframed with CSRF, email code tries and lockout, buy by card, paid calls held and debited from credits, cap and identity-bound and third-party refusals, connected apps list, cap and revoke, limits from the environment (paid boot, Stripe stub, mail sink)
+t node scripts/test-mcp-oauth.js
+# Connector sign-in pages as a person and a screen reader meet them: one h1 per step and on the error page, error lines with role=alert tied to their field and in the error color after the cascade, a lockout that disables the code form and offers a new code, Allow before Deny, the balance page linked, no key named (paid boot, Stripe stub, mail sink)
+t node scripts/test-mcp-oauth-pages.js
 
 # @step 2: Offline suites (21 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
@@ -43,6 +47,7 @@ t node scripts/test-llms-txt.js
 t node scripts/test-llms-link.js
 # Copy about paying on the hosted MCP connector names the wires that boot takes in the call and no other: /llms.txt, /agents.md, /how-to-pay, /quickstart, /learn/mcp-payments, /integrations/mcp and the agent-hosts guide against the connector's own instructions, descriptions, payment.info and first ask, on a paid boot with MPP, a paid boot without, and FREE_MODE; static trees name x402 wherever they name MPP on the connector (three boots, stub facilitator)
 t node scripts/test-connector-pay-copy.js
+t node scripts/test-start-page.js
 # No third-party seller host or counterparty name in any tracked file (hashed list)
 t node scripts/test-no-third-party-names.js
 # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
@@ -88,6 +93,8 @@ t node scripts/test-render-film-out.js
 t node scripts/test-wallet-sign-in.js
 # Web Bot Auth verification: the RFC 9421 Ed25519 example, draft-shaped signatures and each refusal, bounded directory fetches, never refusing a request; every switch off and on answers pricing, openapi, llms.txt and the identity-bound 402s byte for byte alike (two paid boots, stub facilitator)
 t node scripts/test-web-bot-auth.js
+# Visa CLI Trusted Agent Protocol signatures: a label only (pinned registry, profiles and windows, Content-Digest over the streamed body, single-use nonce, bounded registry reads; a verified request is answered as an unsigned one on a paid boot - offline)
+t node scripts/test-visa-tap.js
 # Configuration reference: every environment variable src/ reads has a purpose line; docs/configuration.md is current (offline)
 t node scripts/test-config-reference.js
 # Debug and test switches are never honored on a production boot (src/test-seams.js; offline)

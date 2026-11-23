@@ -13,25 +13,22 @@
 // (settlement cancelled), while one left on the route tier ends 400 "served by
 // the ... tier". Nothing leaves the machine; nothing settles.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Challenge } from "mppx";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { PRICED_BY_MODEL_NOTE } from "../src/tools/llm-gateway-kit.js";
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 const PAYER = "0x00000000000000000000000000000000000000b2";
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
-let pass = 0, proc = null, facilitator = null;
-const serverLog = [];
+let pass = 0, srv = null, facilitator = null;
+const serverLog = () => (srv?.log() || "").split("\n").filter((l) => l.trim()).slice(-60).map((l) => l.slice(0, 300));
 const fail = (m) => {
   console.error("FAIL:", m);
-  if (serverLog.length) { console.error("--- server output (last lines) ---"); for (const l of serverLog) console.error(l); }
-  proc?.kill("SIGKILL"); facilitator?.close(); process.exit(1);
+  if (serverLog().length) { console.error("--- server output (last lines) ---"); for (const l of serverLog()) console.error(l); }
+  srv?.child.kill("SIGKILL"); facilitator?.close(); process.exit(1);
 };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let verifies = 0, settles = 0, relayCalls = 0;
 facilitator = createServer((req, res) => {
@@ -44,11 +41,14 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
-proc = spawn(process.execPath, ["src/server.js"], {
+const booting = bootServer({
+  stores: false,
+  timeoutMs: 80_000,
   env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test",
+    FREE_MODE: "", NODE_ENV: "test",
     WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
     // No upstream: a request that clears validation ends at the key check.
@@ -59,10 +59,7 @@ proc = spawn(process.execPath, ["src/server.js"], {
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     SOLANA_LEADERBOARD: "off", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000",
   },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) if (line.trim()) serverLog.push(line.slice(0, 300)); if (serverLog.length > 60) serverLog.splice(0, serverLog.length - 60); };
-proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
 
 const post = (path, body, headers = {}) => fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 const decode402 = (res) => { const h = res.headers.get("payment-required"); try { return h ? JSON.parse(Buffer.from(h, "base64").toString("utf8")) : null; } catch { return null; } };
@@ -86,7 +83,8 @@ const credential = (pr, accepted, nonce) => Buffer.from(JSON.stringify({
 const MSG = [{ role: "user", content: "hi" }];
 const OPUS = "anthropic/claude-opus-5";
 try {
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
+  srv = await booting.catch((e) => fail(`server did not boot: ${e.message}`));
+  B = srv.url;
   ok((await fetch(`${B}/health`)).ok, "server booted (paid mode, stub facilitator)");
 
   // 1. the 402 quotes the model's home tier on every flat route and wire
@@ -222,5 +220,5 @@ try {
   ok(/const priceUsd = paidUsdOf\(def, req, res, receipt\?\.network\);/.test(debt) && !/def\.price/.test(debt) && /function paidUsdOf\([^)]*\) \{\s*return paidPriceUsd\(\{ basePriceUsd: settledPriceUsd\(def, req, res\)/.test(serverSrc), "the charged-failure debt is priced by paidUsdOf over settledPriceUsd (the gated price), never the route's list price");
   ok(/priceFnOf\(def\) && Number\.isFinite\(req\?\.__meteredQuoteUsd\)/.test(serverSrc), "settledPriceUsd honours a flat route's tierQuote stash, so the books record the home-tier price");
   console.log(`\nPASS - ${pass} checks (price by model, booted paid server)`);
-  proc.kill("SIGKILL"); facilitator.close(); process.exit(0);
+  srv.child.kill("SIGKILL"); facilitator.close(); process.exit(0);
 } catch (e) { fail(e?.stack || String(e)); }

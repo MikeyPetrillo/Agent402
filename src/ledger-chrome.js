@@ -547,7 +547,10 @@ a { color: inherit; }
      an unwrappable host in a 1fr column sets a min-content floor above 375px.
      .mlr-host stays on one line and ends in an ellipsis instead (market-page.js
      ROSTER_CSS); its title carries the whole host. */
-  .lb-name, .lb-addr, .mlr-name, .lb-addr a, pre, pre code { overflow-wrap: anywhere !important; word-break: break-word !important; }
+  .lb-name, .lb-addr, .mlr-name, .lb-addr a, :not(.ml-code-wrap) > pre, :not(.ml-code-wrap) > pre code { overflow-wrap: anywhere !important; word-break: break-word !important; }
+  /* A wrap block (codeBlock wrap: a command to paste) breaks at its spaces
+     only: a token split mid-word pastes broken, so a token wider than the
+     phone scrolls inside its own block instead. */
   /* Inline code keeps whole words: it breaks at the <wbr> points site-chrome.js
      adds after its punctuation (and between camelCase words), and only a run
      with no break point at all (a hash, an address) splits where it must.
@@ -622,7 +625,7 @@ main:focus, main:focus-visible { outline: none !important; }
 .ml-code > pre { margin: 0; padding: 16px 84px 16px 20px; background: transparent; border: 0; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6; color: var(--on-panel); white-space: pre; overflow-x: auto; overflow-wrap: normal; word-break: normal; }
 .ml-code > pre code { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
 .ml-code-xs > pre { font-size: var(--fs-xs); }
-.ml-code-wrap > pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ml-code-wrap > pre { white-space: pre-wrap; overflow-wrap: normal; word-break: normal; overflow-x: auto; }
 .ml-code-labeled > pre { padding-right: 20px; }
 /* A labeled block carries its copy button in the header row, beside the label; the label stays on one line. */
 .ml-code-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; min-height: 36px; padding: 4px 8px 4px 20px; border-bottom: 1px solid var(--panel-rule-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .06em; color: var(--on-panel-dim); }
@@ -748,7 +751,7 @@ const NAV_ZONES = [
 // The header's one primary action: the home hero's own primary, so a
 // newcomer sees the same next step on every page. Left out on the home page,
 // where the hero carries it (one primary per view).
-export const NAV_PRIMARY_ACTION = Object.freeze({ href: "/docs#add", label: "Add to your agent" });
+export const NAV_PRIMARY_ACTION = Object.freeze({ href: "/start", label: "Add to your agent" });
 
 // Fallback by-chain rows used whenever no live index-snapshot data is wired
 // (offline unit tests, early boot, a throwing/null provider) - the dropdown
@@ -852,6 +855,7 @@ function docsPanelNav() {
                 <span class="mlnav-cols">
                 <span style="display:block;">
                 <span class="mlnav-label">BUILD ON AGENT402</span>
+                <a href="/start" class="mlnav-row"><span style="font-weight:700;">start here</span><span class="mlnav-faint">Claude, Cursor</span></a>
                 <a href="/docs" class="mlnav-row"><span style="font-weight:700;">docs</span><span class="mlnav-faint">API, MCP, SDKs</span></a>
                 <a href="/quickstart" class="mlnav-row"><span style="font-weight:700;">quickstart</span><span class="mlnav-faint">first paid call</span></a>
                 <a href="/how-to-pay" class="mlnav-row"><span style="font-weight:700;">how to pay</span><span class="mlnav-faint">every rail, step by step</span></a>
@@ -997,6 +1001,7 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/agentic-finance", "agentic finance", activePath === "/agentic-finance")}
       ${mmLink("/glossary", "glossary", activePath === "/glossary")}
       ${mmLink(GUIDE_SITE, `${GUIDE_SITE_NAME} · plain-language guide`, false, "", ' rel="noopener"')}
+      ${mmLink("/start", "start here", activePath === "/start")}
       ${mmLink("/quickstart", "quickstart", activePath === "/quickstart")}
       ${mmLink("/how-to-pay", "how to pay · every rail", activePath === "/how-to-pay")}
       ${mmLink("/guides", "guides", activePath === "/guides")}
@@ -1022,7 +1027,7 @@ function nav(activePath) {
     // inside the marketplace panel either.
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
     // /status and /pricing light their own top-level link, not a panel's.
-    docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
+    docs: new Set(["/docs", "/start", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
     sell: new Set(["/sell", "/tollbooth", "/contribute"]),
     tools: new Set(["/tools", "/skills", "/speech", "/playground"]),
   };

@@ -6,21 +6,17 @@
 // SDK's own accounting (spend reservation/settle) and result caching hold on
 // that path exactly as on x402.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Fetch as MppFetch, evm } from "mppx/client";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { Agent402 } from "../client/index.js";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
-const [PORT, FAC_PORT] = await getFreePorts(2);
-const B = `http://127.0.0.1:${PORT}`;
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const TX = `0x${"cd".repeat(32)}`;
-let pass = 0; let proc = null; let facilitator = null;
-const fail = (m) => { console.error("FAIL:", m); proc?.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
+let pass = 0; let srv = null; let facilitator = null;
+const fail = (m) => { console.error("FAIL:", m); srv?.child.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const facCalls = { verify: 0, settle: 0 };
 facilitator = createServer((req, res) => {
@@ -34,16 +30,17 @@ facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
-proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+srv = await bootServer({
+  stores: "client-mpp",
+  env: { FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, MPP_SECRET_KEY: "client-mpp-test", CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
     PAYMENT_NETWORKS: "base", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" },
-  stdio: "ignore",
-});
+}).catch((e) => fail(`server did not boot: ${e.message}`));
+const B = srv.url;
 try {
-  for (let i = 0; i < 60; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
 
   // An mppx fetch IS the SDK's `fetch:` - nothing MPP-specific in the SDK.
   const account = privateKeyToAccount(generatePrivateKey());
@@ -69,7 +66,7 @@ try {
   const again = await a.call(paid.slug, input, { cache: false });
   ok(again && facCalls.settle === before.settle + 2, "a repeat call (cache off) settles again - the MPP path is not short-circuited by the SDK");
 } finally {
-  proc.kill("SIGKILL"); facilitator.close();
+  srv.child.kill("SIGKILL"); facilitator.close();
 }
 console.log(`\nAll ${pass} assertions passed`);
 process.exit(0);

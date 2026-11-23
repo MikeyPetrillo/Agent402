@@ -13,11 +13,11 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1115 variables in 113 groups.
+1123 variables in 114 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MCP](#mcp) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -164,7 +164,7 @@ holds it.
 | `BASE_NOTIFICATIONS_API_KEY` | Base notifications API key (a credential, set on the host); /health reports only whether it is set. |  | `src/server.js` |
 | `BASE_RPCS` | Base RPC endpoints. |  | `src/leaderboard.js` |
 | `BASE_SEPOLIA_DENIM_ACTIVATION_TIMESTAMP` | Base sepolia denim activation timestamp. |  | `src/chain-block-time.js` |
-| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/price-webhooks.js` and 3 more |
+| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/price-webhooks.js` and 4 more |
 
 ## BAZAAR
 
@@ -290,13 +290,14 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `CREDITS_ABANDONED_HOLD_MS` | Credits abandoned hold, in milliseconds. |  | `src/credits.js` |
-| `CREDITS_BAD_KEY_MAX` | Credits bad key maximum. |  | `src/credits.js` |
-| `CREDITS_BAD_KEY_WINDOW_MS` | Credits bad key window, in milliseconds. |  | `src/credits.js` |
-| `CREDITS_BALANCE_MAX_USD` | Credits balance maximum, in USD. |  | `src/changelog.js`, `src/credits-sales.js` |
-| `CREDITS_DAILY_MAX_USD` | Credits daily maximum, in USD. |  | `src/credits-sales.js` |
+| `CREDITS_BALANCE_MAX_USD` | The most one credits key's balance may hold, in USD; a pack or top-up above it is not offered. | `100` | `src/changelog.js`, `src/credits-sales.js` |
+| `CREDITS_DAILY_MAX_USD` | The most one buyer may buy in prepaid credits in any 24 hours, in USD; a pack above it is not offered. | `50` | `src/credits-sales.js` |
 | `CREDITS_DEBIT_WAIT_MS` | Credits debit wait, in milliseconds. | `3000` | `src/credits.js` |
 | `CREDITS_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout; the legacy human-checkout.json is read beside the latter). |  | `src/credits.js` |
+| `CREDITS_EFW_AUTO_REFUND` | off, false, 0 or no stops the card refund made without review of a key's unspent balance after an early fraud warning (the key is still frozen and the balance listed as owed); on by default, inside the private table's day total (CREDITS_GUARDS_JSON). |  | `src/credits.js` |
 | `CREDITS_EU_UK_REQUIRE_TAX_ID` | Credits eu uk require tax id. |  | `src/credits.js` |
+| `CREDITS_GUARDS_FILE` | A file holding the private credits table, read when CREDITS_GUARDS_JSON is unset. |  | `src/credits-guards.js` |
+| `CREDITS_GUARDS_JSON` | The private credits table (src/credits-guards.js): purchase checks, the card review outcomes a purchase is refused on, the automatic fraud-warning refund day total, the failed credits key bound, the connector sign-in limits and the balance page sign-in email budgets, as raw JSON or base64. A credential-like secret set on the host; never committed. Without a complete table credit sales and the connector sign-in stay off. docs/example-credits-guards.json shows the format. |  | `src/credits-guards.js` |
 | `CREDITS_HOLD_REFRESH_MAX_MS` | Credits hold refresh maximum, in milliseconds. |  | `src/credits.js` |
 | `CREDITS_INDEXES` | Prepaid credits table indexes built in the background; off leaves them to an operator. | `on` | `src/credits.js` |
 | `CREDITS_INDEX_DELAY_MS` | Delay before the prepaid credits index build starts after the store's first load, in milliseconds. | `60000` | `src/credits.js` |
@@ -675,6 +676,20 @@ holds it.
 | `LOOP_LAG_COUNT_MS` | Loop lag count, in milliseconds. |  | `src/loop-lag.js` |
 | `LOOP_LAG_TICK_MS` | Loop lag tick, in milliseconds. |  | `src/loop-lag.js` |
 | `LOOP_LAG_WARN_MS` | Loop lag warn, in milliseconds. |  | `src/loop-lag.js` |
+
+## MCP
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `MCP_LOOPBACK_TEST_SECRET` | MCP loopback test secret (a credential, set on the host). |  | `src/mcp-loopback.js` |
+| `MCP_OAUTH` | on (exactly) turns on the connector sign-in (OAuth 2.1 for /mcp: an app pays for tool calls from a credits balance under a daily cap); it also needs credits on sale and the private credits table (CREDITS_GUARDS_JSON). Off, every sign-in route is absent and /mcp is unchanged. |  | `src/credits-sales.js` |
+| `MCP_OAUTH_ACCESS_TTL_SECONDS` | Life of a connector access token, in seconds. | `3600` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_AUTH_CODE_TTL_SECONDS` | Life of a connector authorization code, in seconds (at most 600). | `60` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_DEFAULT_CAP_USD` | The daily cap the connector sign-in page offers first, in USD. | `5` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_EMAIL_CODE_TTL_SECONDS` | Life of an emailed connector sign-in code, in seconds. | `600` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_REFRESH_TTL_DAYS` | Life of a connector refresh token, in days (each use rotates it). | `30` | `src/mcp-oauth.js` |
+| `MCP_OAUTH_REQUEST_TTL_MINUTES` | Life of a started connector sign-in, in minutes (a card purchase in the middle included). | `60` | `src/mcp-oauth.js` |
+| `MCP_SKILLS` | MCP skills. |  | `src/mcp-skills.js` |
 
 ## MEMORY
 
@@ -1352,7 +1367,7 @@ holds it.
 | `TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS` | Tempo access key check timeout, in milliseconds. |  | `src/mpp-tempo.js` |
 | `TEMPO_API_BASE_URL` | Tempo API base URL. | `https://api.tempo.xyz` | `src/mpp-reconcile.js`, `src/mpp-tempo.js`, `src/sanctions-screen.js` and 1 more |
 | `TEMPO_API_KEY` | Turns on the Tempo rail (a credential, set on the host). |  | `src/mpp-tempo.js` |
-| `TEMPO_CURRENCY` | Tempo currency. |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
+| `TEMPO_CURRENCY` | Comma list of Tempo tokens, one tempo/charge challenge each, in order; an address or a name (usdc = USDC.e, pathusd = PathUSD, ousd = OUSD). Put the token most buyers hold first (usdc,ousd keeps USDC.e first for stock clients). |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_DATA_API_KEY` | Tempo data API key (a credential, set on the host). |  | `src/sanctions-screen.js`, `src/tempo-transfers.js` |
 | `TEMPO_DECIMALS` | Tempo decimals. |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_EARLY_CONFIRM` | Tempo early confirm. |  | `src/server.js` |
@@ -1625,8 +1640,6 @@ holds it.
 | `MARKET_SCAN_BUDGET_MS` | Market scan budget, in milliseconds. |  | `src/revenue-live.js` |
 | `MAX_CALL_USD` | Maximum call, in USD. | `0.75` | `src/leaderboard.js`, `src/revenue-live.js` |
 | `MAX_WALLETS_SCAN` | Maximum wallets scan. | `0` | `src/leaderboard.js` |
-| `MCP_LOOPBACK_TEST_SECRET` | MCP loopback test secret (a credential, set on the host). |  | `src/mcp-loopback.js` |
-| `MCP_SKILLS` | MCP skills. |  | `src/mcp-skills.js` |
 | `METERED_MEDIA` | Speech, transcription and embedding tools settle on measured work for metered buyers (on). |  | `src/gateway-meter.js` |
 | `MODEL_CATALOG_URL` | Model catalog URL. | `https://openrouter.ai/api/v1/models` | `src/model-catalog.js` |
 | `MONITOR_MANAGE_SECRET` | Monitor manage secret (a credential, set on the host). |  | `src/server.js` |

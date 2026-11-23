@@ -30,11 +30,9 @@
 // suite's calls never land in this one's counts.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { PAID_CALL_MAX_DIFFICULTY, SOLVE_CAP_FACTOR, checkPaidCall } from "../workers/status-probe/src/index.js";
 
 let pass = 0, fail = 0;
@@ -44,23 +42,17 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const OP = "operator-root-token-aaaaaaaaaaaaaaaa";
 const PROBE = "status-probe-only-token-bbbbbbbbbbbb";
 const NORMAL = 12; // POW_DIFFICULTY for the booted server: keeps the ordinary solves quick
-const [PORT, PORT_OFF] = await getFreePorts(2);
-const base = `http://127.0.0.1:${PORT}`;
-const baseOff = `http://127.0.0.1:${PORT_OFF}`;
+let base = "";
+let baseOff = "";
 
-const boot = (port, env) => {
-  const child = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, ...ownStoreEnv("status-probe-pow"), PORT: String(port), X402_INDEX_CRAWL: "off", POW_DIFFICULTY: String(NORMAL), POW_SECRET: "status-probe-pow-test-secret", ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.log = "";
-  child.stdout.on("data", (d) => { child.log += d; });
-  child.stderr.on("data", (d) => { child.log += d; });
-  return child;
-};
+// Each server boots on port 0 with stores of its own, ready once /api/pow answers.
+const boot = (env) => bootServer({
+  stores: "status-probe-pow", readyPath: "/api/pow",
+  env: { X402_INDEX_CRAWL: "off", POW_DIFFICULTY: String(NORMAL), POW_SECRET: "status-probe-pow-test-secret", ...env },
+});
 // Paid mode: WALLET_ADDRESS set and an unreachable facilitator never touched
 // (X402_SYNC_ON_START=false; the proof-of-work path bypasses settlement).
-const paid = boot(PORT, {
+const booting = [boot({
   FREE_MODE: "",
   WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
   NETWORK: "base",
@@ -68,9 +60,9 @@ const paid = boot(PORT, {
   X402_SYNC_ON_START: "false",
   AGENT402_OPERATOR_TOKEN: OP,
   STATUS_PROBE_TOKEN: PROBE,
-});
-const off = boot(PORT_OFF, { FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: OP, STATUS_PROBE_TOKEN: "" });
-const done = (code) => { for (const c of [paid, off]) { try { c.kill("SIGKILL"); } catch { /* */ } } process.exit(code); };
+}), boot({ FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: OP, STATUS_PROBE_TOKEN: "" })];
+const servers = [];
+const done = (code) => { for (const c of servers) { try { c.child.kill("SIGKILL"); } catch { /* */ } } process.exit(code); };
 
 const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
 function solve(challenge, difficulty) {
@@ -97,15 +89,15 @@ async function countersAfter(before, key) {
 const sha = (t) => createHash("sha256").update(t).digest("hex");
 
 (async () => {
-  for (const [name, b, c] of [["paid-mode", base, paid], ["token-unset", baseOff, off]]) {
-    let up = false;
-    for (let i = 0; i < 120; i++) {
-      try { if ((await fetch(`${b}/api/pow`)).ok) { up = true; break; } } catch { /* */ }
-      await wait(500);
-    }
+  const booted = await Promise.allSettled(booting);
+  for (const b of booted) if (b.status === "fulfilled") servers.push(b.value);
+  for (const [name, b] of [["paid-mode", booted[0]], ["token-unset", booted[1]]]) {
+    const up = b.status === "fulfilled";
     ok(up, `${name} server booted`);
-    if (!up) { console.error(c.log.slice(-1500)); return done(1); }
+    if (!up) { console.error(String(b.reason?.message || b.reason).slice(-1500)); return done(1); }
   }
+  base = booted[0].value.url;
+  baseOff = booted[1].value.url;
   const info = await (await fetch(`${base}/api/pow`)).json();
   ok(info.difficultyBits === NORMAL, `normal difficulty is ${NORMAL} on the booted server`);
   ok(info.eligibleTools.includes("hash") && info.eligibleTools.includes("hmac"), "hash and hmac are proof-of-work eligible (the probe slug and a control slug)");

@@ -641,10 +641,11 @@ ok(hc.peek("cs_old")?.report === "# OLD" && !existsSync(legacyPath) && existsSyn
   const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/onPaymentSession: \(session\) => \([\s\S]{0,200}session\?\.metadata\?\.product && _humanCheckout \? _humanCheckout\.fulfill\(session\.id\)/.test(serverSrc),
     "server.js wires the webhook's payment-session hook to the report store's fulfill");
-  // The dispute-closed hook lifts a credits key only on a win, through the
-  // store's own enable (which lifts nothing a stronger cause holds).
-  ok(/onDisputeClosed: \(paymentIntent, \{ won \}\) => \(won && _credits \? _credits\.enableByPaymentIntent\(paymentIntent, "disputed"\) : null\)/.test(serverSrc),
-    "server.js wires the webhook's dispute-closed hook to the credits store's enable, gated on a win");
+  // The dispute-closed hook hands every outcome to the credits store, which
+  // lifts a key only on a win and takes a lost payment off the balance
+  // (scripts/test-credits-purchase-checks.js drives both through the webhook).
+  ok(/onDisputeClosed: \(paymentIntent, outcome\) => \(_credits \? _credits\.disputeClosed\(paymentIntent, outcome\) : null\)/.test(serverSrc),
+    "server.js wires the webhook's dispute-closed hook to the credits store's dispute close");
   // A leased loop that is never started never runs: the server starts the
   // owed card refund read-back (code, not a comment that names the call).
   // Offline here, so a run without Postgres checks it too.

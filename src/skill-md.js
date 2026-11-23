@@ -18,6 +18,7 @@ import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { isComputePayable, POW_DIFFICULTY, powCostPhrase } from "./pow.js";
 import { RAILS } from "./rails.js";
 import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
+import { tempoCurrencyPhrase } from "./mpp-tempo.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
 // (isComputePayable + POW_DIFFICULTY both live in pow.js - same import seo.js uses)
 
@@ -92,7 +93,7 @@ Pick ONE payment mode. Ask the user which before spending money.
 |------|---------------|--------|
 | Proof-of-work (free) | Nothing. CPU per call: ${powCostPhrase()}. | ${powCount} pure-compute tools |
 | x402 (USDC) | ${x402Need} | every tool on EVM; identity-bound and long-running routes take EVM only |
-| MPP (USDC / Tempo) | An EVM private key with USDC on Base/Celo, or USDC.e/PathUSD on Tempo | every tool on Base/Celo; Tempo is not offered on identity-bound or long-running routes |
+| MPP (USDC / Tempo) | An EVM private key with USDC on Base/Celo, or ${tempoCurrencyPhrase("/")} on Tempo | every tool on Base/Celo; Tempo is not offered on identity-bound or long-running routes |
 
 Gas is sponsored on EVM chains: the wallet only needs the stablecoin. Never
 paste a private key into a prompt, log or file; read it from an environment
@@ -120,9 +121,9 @@ Run these in order. Do not skip steps.
 
 \`\`\`bash
 # free tier (proof-of-work tools only)
-claude mcp add agent402 -- npx -y agent402-mcp@0.15.0
+claude mcp add agent402 -- npx -y agent402-mcp@0.16.0
 # full catalog: add a wallet (EVM key with USDC) via env
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.15.0
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.16.0
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -130,7 +131,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.15.0
 Generic MCP host config:
 
 \`\`\`json
-{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.15.0"],
+{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.16.0"],
   "env": { "AGENT_KEY": "0x...", "AGENT402_MAX_PER_CALL": "0.05", "AGENT402_BUDGET": "1.00" } } } }
 \`\`\`
 
@@ -224,7 +225,8 @@ header instead of a payment.
    \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is
    \`completed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` show where it
    is. Payment settles only on the answer, except a Tempo transfer sent before
-   the call, which is repaid after on-chain proof if the run fails.
+   the call, which is repaid after on-chain proof if the run fails.${SETTLE_FIRST_SENTENCE ? `
+   ${SETTLE_FIRST_SENTENCE}` : ""}
 
 ### Request Templates
 

@@ -47,7 +47,7 @@ import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { toolJudgeEnabled } from "./tool-judge.js";
 import { fromPriceLabel } from "./quoted-from.js";
 import { CARD_ART_VERSION } from "./brand-mark.js";
-import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
+import { SETTLE_FIRST_SENTENCE, settleFirstClause } from "./settle-first-copy.js";
 
 // A price in base units of an offer's token (src/base-units.js), or null
 // when the price is not a dollar figure.
@@ -441,8 +441,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     facts.push(`Long-running: payment settles after the work finishes, so x402 is offered on EVM chains only${lrMpp ? ` and MPP on ${e(lrMpp)}` : ""}; Tempo is not offered.`);
   }
   if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer itself is the tool's own.`);
-  if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
-  else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.`);
+  if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${settleFirstClause(tool)}${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
+  else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${settleFirstClause(tool)}`);
   if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(fromPriceLabel(tool)))} and $${e(String(tool.quoteRange.maxUsd))}.${tool.quoteFormula ? ` The quote is ${e(tool.quoteFormula)}.` : ""}`);
   if (isMeteredChatSlug(tool.slug)) facts.push(e(meteredTimeoutSentence()));
   if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
@@ -556,7 +556,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   <h2 class="tp-h2">From an MCP client</h2>
   ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.15.0</code>.</p>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.16.0</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
@@ -1034,7 +1034,7 @@ export function openapiSpec(baseUrl, catalog) {
         name: "Prefer",
         in: "header",
         required: false,
-        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting${tool.asyncProfile.maxSeconds ? ` up to ${tool.asyncProfile.maxSeconds} s` : " on the connection"}; or send wait=${tool.asyncProfile.maxSeconds} to hold the connection and get the answer in the same response (a plain call with no Prefer header is refused with 400 before payment); poll GET /api/jobs/{id} (free, honor Retry-After) until status is completed or failed (state succeeded or failed).${tool.asyncProfile.slow ? " Recommended on this route." : ""} Payment settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${needsAsyncOrWait(tool.asyncProfile) ? ` wait=${tool.asyncProfile.maxSeconds}: wait on this connection for the answer instead. A paid call with neither is answered 400 before any payment is taken.` : ""}`,
+        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting${tool.asyncProfile.maxSeconds ? ` up to ${tool.asyncProfile.maxSeconds} s` : " on the connection"}; or send wait=${tool.asyncProfile.maxSeconds} to hold the connection and get the answer in the same response (a plain call with no Prefer header is refused with 400 before payment); poll GET /api/jobs/{id} (free, honor Retry-After) until status is completed or failed (state succeeded or failed).${tool.asyncProfile.slow ? " Recommended on this route." : ""} Payment settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${settleFirstClause(tool)}${needsAsyncOrWait(tool.asyncProfile) ? ` wait=${tool.asyncProfile.maxSeconds}: wait on this connection for the answer instead. A paid call with neither is answered 400 before any payment is taken.` : ""}`,
         schema: needsAsyncOrWait(tool.asyncProfile)
           ? { type: "string", examples: ["respond-async", `wait=${tool.asyncProfile.maxSeconds}`] }
           : { type: "string", enum: ["respond-async"] },

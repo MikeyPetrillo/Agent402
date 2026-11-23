@@ -8,16 +8,15 @@
 // output and schemas), the full catalog on /api/pricing and /openapi.json,
 // /.well-known/x402, and the curated listing copy in src/payments.js.
 //
-// The catalog is assembled in src/server.js, so this boots it on a free local
-// port against a local /supported stub (the boot scripts/test-bazaar-contracts.js
+// The catalog is assembled in src/server.js, so this boots it on port 0
+// against a local /supported stub (the boot scripts/test-bazaar-contracts.js
 // uses): no payment is made and nothing leaves the machine. A hit fails with
 // the slug and the field path. A control plants an instruction phrase and a
 // hidden character in copies of a real 402 and of /openapi.json, and the run
 // fails unless both are reported at the planted path.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { listingInjectionFinding } from "../src/listing-screen.js";
 import { ownDirectiveIn } from "../src/own-listing-rules.js";
 import { hiddenCharacters, hex } from "../src/hidden-chars.js";
@@ -25,7 +24,6 @@ import { BAZAAR_DESCRIPTIONS } from "../src/payments.js";
 
 const ROUTE_FLOOR = 400;
 const CONCURRENCY = 12;
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Every string in `value` (object keys included) through both screens. */
 export function screenTree(value, where, hits = []) {
@@ -63,8 +61,6 @@ const ok = (cond, msg) => { if (cond) console.log("ok - " + msg); else { failed+
   ok(own.length === 2, `control: a fact about the answer, a field's own behavior and a when-to-use line are not reported (${own.length} hits)`);
 }
 
-const [port, facPort] = await getFreePorts(2);
-const base = `http://127.0.0.1:${port}`;
 const facilitator = createServer((req, res) => {
   req.on("data", () => {});
   req.on("end", () => {
@@ -75,13 +71,14 @@ const facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((resolve) => facilitator.listen(facPort, "127.0.0.1", resolve));
+await new Promise((resolve) => facilitator.listen(0, "127.0.0.1", resolve));
+const facPort = facilitator.address().port;
 
-let serverLog = "";
-const child = spawn(process.execPath, ["src/server.js"], {
+const booting = bootServer({
+  stores: false,
+  timeoutMs: 60_000,
   env: {
-    ...process.env,
-    PORT: String(port), FREE_MODE: "", NODE_ENV: "test",
+    FREE_MODE: "", NODE_ENV: "test",
     NETWORK: "base", PAYMENT_NETWORKS: "base",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     FACILITATOR_URL: `http://127.0.0.1:${facPort}`,
@@ -93,19 +90,13 @@ const child = spawn(process.execPath, ["src/server.js"], {
     MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     STATS_ALLOW_EPHEMERAL: "true",
   },
-  stdio: ["ignore", "pipe", "pipe"],
 });
-child.stdout.on("data", (d) => { serverLog += d; });
-child.stderr.on("data", (d) => { serverLog += d; });
 
 const hits = [];
+let srv = null;
 try {
-  let up = false;
-  for (let i = 0; i < 240; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-    await wait(250);
-  }
-  if (!up) throw new Error(`server did not boot: ${serverLog.slice(-1200)}`);
+  srv = await booting.catch((e) => { throw new Error(`server did not boot: ${e.message.slice(-1200)}`); });
+  const base = srv.url;
 
   const pricing = await (await fetch(`${base}/api/pricing`)).json();
   const endpoints = Array.isArray(pricing.endpoints) ? pricing.endpoints : [];
@@ -172,7 +163,7 @@ try {
     ok(planted.some((h) => /\.description$/.test(h.at) && h.why === "instruction-phrase"), "control: an instruction planted in a real /openapi.json description is reported");
   }
 } finally {
-  try { child.kill("SIGKILL"); } catch { /* stopped */ }
+  try { srv?.child.kill("SIGKILL"); } catch { /* stopped */ }
   await new Promise((resolve) => facilitator.close(resolve));
 }
 

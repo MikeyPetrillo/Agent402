@@ -4,6 +4,100 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.14.0 - 2026-11-23
+
+### 2026-11-23 (redact, then chat)
+Tools:
+- POST /api/redact-chat masks email addresses, card-like runs of 13 to 16
+  digits, US SSNs written 123-45-6789, US-style phone numbers and IPv4
+  addresses on this server with numbered placeholders, then sends only the
+  masked text to a chat model in one paid call. It is model-backed; the
+  masking is pattern-based, and other forms (international phone numbers, SSNs
+  without dashes, IPv6 addresses, IBANs, names) pass unmasked, so review the
+  text for anything else sensitive. Its price is the sum of /api/redact and
+  the chat tier it calls.
+
+### 2026-11-23 (start here page)
+Site:
+- A new /start page gives the one step that adds Agent402 to Claude desktop,
+  Claude Code or Cursor, lists what runs with no wallet, and shows how to pay
+  from a wallet holding USDC on Base through the npm server (Node.js needed),
+  set up once with its key kept outside the app's config.
+Docs:
+- The /start and /base pages, payment.info, /llms.txt, the README and the wiki
+  say that an x402 exact payment on Base is a signature: the facilitator
+  submits it and pays the gas, so the paying wallet needs only USDC, no ETH.
+
+### 2026-11-23 (agent402-mcp 0.16.0 and agent402-client 0.12.0)
+Packages:
+- agent402-mcp 0.16.0: `npx agent402-mcp setup` asks for the wallet key once
+  and keeps it in the OS keychain (where none is available, in a file only
+  your user can read), so the key need not sit in an app's config or an
+  environment variable.
+- agent402-mcp 0.16.0 reads a key with or without its `0x` prefix, adds
+  optional daily and monthly spending caps kept across restarts, and saves
+  media answers as files, with small images also kept inline.
+- agent402-client 0.12.0: `normalizeEvmKey` reads a private key with or
+  without its `0x` prefix, and names the setting in its error, never the
+  value.
+Site:
+- Every install line on the site and in the docs pins agent402-mcp 0.16.0.
+
+### 2026-11-23 (prepaid credits purchases and controls)
+Credits:
+- On a server with `CREDITS_SALES=on` and its private credits table set,
+  smaller credit packs are on sale, and a pack above the daily purchase limit
+  is not offered.
+- On a server with `CREDITS_SALES=on` and its private credits table set, a
+  credits purchase is made signed in to the balance page at /credits/account,
+  bound to the email the credits go to, and the bank may ask to confirm the
+  card payment; `POST /api/credits/checkout` answers 401 with the sign-in
+  address.
+- On a server with `CREDITS_SALES=on` and its private credits table set, the
+  balance page at /credits/account sets a daily and a per-call spending limit
+  on each key, revokes a key, and emails a notice when the daily limit refuses
+  a call.
+
+### 2026-11-23 (credits keys protected)
+Credits:
+- A credits key is frozen while a dispute of the payment that loaded it is
+  open, and while a fraud warning on that payment is reviewed; its unspent
+  balance goes back to that payment's card.
+- When a dispute of one payment on a topped-up key is decided against us, only
+  that payment's share comes off the balance; the rest stays usable, or is
+  owed back to its own card while a fraud warning holds the key.
+- `POST /api/credits/revoke` with a key in the Authorization header disables
+  that key at once, with the same answer for every key.
+- A request whose address carries a credits key or a connector token is
+  refused with a 400 before it is read, and the answer never repeats it.
+
+### 2026-11-23 (connect an app to your credits)
+MCP:
+- On a server with `CREDITS_SALES=on`, `MCP_OAUTH=on` and its private credits
+  table set, an app added at /mcp/credits signs you in with an emailed code
+  and pays for paid tool calls from your credits balance under a daily cap you
+  set, with no key or wallet.
+- On a server with `CREDITS_SALES=on`, `MCP_OAUTH=on` and its private credits
+  table set, a first purchase starts from the same sign-in at /mcp/credits and
+  goes through the balance page's checkout, and /start and payment.info name
+  the /mcp/credits address.
+Credits:
+- On a server with `CREDITS_SALES=on`, `MCP_OAUTH=on` and its private credits
+  table set, the balance page lists each app connected at /mcp/credits with
+  its spend today, changes its daily cap and disconnects it.
+
+### 2026-11-23 (another Tempo dollar token)
+Payments:
+- On a server that offers Tempo and sets `TEMPO_CURRENCY=usdc,ousd` (or lists
+  `ousd` among its Tempo tokens), the Tempo rail also takes OUSD as its own
+  challenge, and a refund of an OUSD payment goes back in OUSD.
+
+### 2026-11-23 (signed agent requests labeled)
+Payments:
+- On a server that sets `WEB_BOT_AUTH=on`, a request signed by Visa CLI under
+  the Trusted Agent Protocol is labeled as that agent in the traffic rollup;
+  prices, limits and payment are the same as for an unsigned request.
+
 ## v2.13.0 - 2026-11-22
 
 ### 2026-11-22 (speech model headers)

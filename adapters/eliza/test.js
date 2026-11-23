@@ -42,6 +42,16 @@ const msg = (content) => ({ id: "m1", entityId: "u1", roomId: "r1", content });
 const capture = () => { const calls = []; const cb = async (c) => { calls.push(c); return []; }; return { calls, cb }; };
 
 async function main() {
+  {
+    // No @elizaos/core peer: the plugin imports nothing from core at run time,
+    // and npm's peer check never admits a prerelease outside its own version
+    // tuple, so any range refuses a host on the registry's `beta` line
+    // (2.x prereleases) with ERESOLVE. test-runtime.js installs the packed
+    // plugin beside core `latest` and `beta`; this keeps the cause in view.
+    const { readFileSync } = await import("node:fs");
+    const pkg = JSON.parse(readFileSync(join(HERE, "package.json"), "utf8"));
+    ok(!pkg.peerDependencies?.["@elizaos/core"] && !pkg.peerDependenciesMeta?.["@elizaos/core"], "no @elizaos/core peer that would refuse a host on a core prerelease");
+  }
   ok(plugin.name === "agent402" && plugin.actions.length === 3 && plugin.providers.length === 1 && typeof plugin.init === "function", "plugin shape: name, three actions, one provider, init");
   ok(plugin.actions.map((a) => a.name).join(",") === "AGENT402_FIND,AGENT402_CALL,AGENT402_ABOUT", "actions in order: find, call, about");
   for (const a of plugin.actions) ok(typeof a.validate === "function" && typeof a.handler === "function" && a.description.length > 40 && Array.isArray(a.examples) && a.examples[0].length === 2, `${a.name}: validate + handler + description + a two-turn example`);

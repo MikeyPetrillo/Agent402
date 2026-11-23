@@ -22,17 +22,21 @@ payments - and with a **proof-of-work free tier** so a walletless agent still
 has a path through. Built on the same hardened 402 + proof-of-work machinery as
 [Agent402](https://github.com/MikeyPetrillo/Agent402).
 
-## See it work (one command)
+## See it work
+
+The demo script runs from a clone of the repository (it is not in the npm
+package):
 
 ```bash
-npx agent402-tollbooth   # then, in the repo:  npm run --prefix tollbooth demo
+git clone https://github.com/MikeyPetrillo/Agent402.git
+cd Agent402/tollbooth && npm install --ignore-scripts && npm run demo
 ```
 
 ```text
-agent402-tollbooth - live pay-per-crawl demo
+agent402-tollbooth: live pay-per-crawl demo
 
 ① A human opens the page (normal browser)
-   → HTTP 200 FREE  "📄 The Future of Machine Payments - full article text…"
+   → HTTP 200 FREE  "📄 The Future of Machine Payments: full article text…"
    Humans are never charged.
 
 ② An AI crawler hits the same page (ClaudeBot)
@@ -42,9 +46,9 @@ agent402-tollbooth - live pay-per-crawl demo
 
 ③ The crawler has no wallet, so it spends CPU instead
    solved in 0.32s (nonce=100208)
-   → HTTP 200 OK (paid via pow)  "📄 The Future of Machine Payments - full article text…"
+   → HTTP 200 OK (paid via pow)  "📄 The Future of Machine Payments: full article text…"
 
-✓ Pay-per-crawl, end to end - humans free, bots pay (USDC or compute).
+✓ Pay-per-crawl, end to end: humans free, bots pay (USDC or compute), settled to your own wallet with no signup.
 ```
 
 ## Install

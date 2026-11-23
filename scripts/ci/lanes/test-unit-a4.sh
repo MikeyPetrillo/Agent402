@@ -321,6 +321,8 @@ t node scripts/test-copy-truth.js
 t node scripts/test-public-index-copy.js
 t node scripts/test-wire-count-copy.js
 t node scripts/test-chain-list-copy.js
+# Package READMEs: no "no cap by default" against agent402-client's default ceiling, Amazon Bedrock naming, one OpenAI example model (offline)
+t node scripts/test-package-readme-claims.js
 t node scripts/test-pack-copy-retired.js
 # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
 t node scripts/test-tollbooth-cloud-retired.js

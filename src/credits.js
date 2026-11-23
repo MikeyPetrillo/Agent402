@@ -1,4 +1,4 @@
-// credits - PREPAID CARD CREDITS for the tool catalog: a person buys a $20/$50/$100 pack by card (Stripe
+// credits - PREPAID CARD CREDITS for the tool catalog: a person buys a pack (CREDIT_PACKS) by card (Stripe
 // Checkout), gets an `a402_...` key ONCE, and spends it across every paid tool
 // with `Authorization: Bearer a402_...` - the card-native equivalent of the
 // per-call x402 model, for buyers who will not hold a wallet.
@@ -37,9 +37,11 @@
 // previous build reads current balances.
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join, basename } from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { sendEmail } from "./email.js";
-import { creditsTopupFields, creditsDailyMaxCents, creditsBalanceMaxCents, creditsTermsVersion, creditsSalesEnabled } from "./credits-sales.js";
+import { creditsTopupFields, creditsDailyMaxCents, creditsBalanceMaxCents, creditsTermsVersion, creditsSalesEnabled, purchaseChecks, PURCHASE_REFUSED } from "./credits-sales.js";
+import { shared } from "./shared-limits.js";
+import { creditsGuards } from "./credits-guards.js";
 import { limiterKey } from "./rate-limit.js";
 import { chargeCancelledForClientGone, clientGoneBeforeFirstByte, markSettleSent } from "./hangup-settlement.js";
 import { meteredUsdOf } from "./gateway-meter.js";
@@ -59,15 +61,54 @@ const abandonedHoldMs = () => { const n = Number(process.env.CREDITS_ABANDONED_H
 // CREDITS_HOLD_REFRESH_MAX_MS, default 6 hours.
 export const holdRefreshMaxMs = () => { const n = Number(process.env.CREDITS_HOLD_REFRESH_MAX_MS); return Math.max(abandonedHoldMs(), Number.isFinite(n) && n > 0 ? n : 6 * 60 * 60 * 1000); };
 
+// The packs, smallest first. Every surface that names a pack or its price
+// reads this table (the /credits cards, /api/pricing, the share card, the
+// checkout's product name), so a pack is added or repriced here alone. `note`
+// is the line under the price on /credits.
 export const CREDIT_PACKS = {
-  "credits-20": { label: "Starter", cents: 2000 },
-  "credits-50": { label: "Builder", cents: 5000 },
-  "credits-100": { label: "Pro", cents: 10000 },
+  "credits-5": { label: "Try", cents: 500, note: "a first key: try the tools before you commit" },
+  "credits-10": { label: "Starter", cents: 1000, note: "wire one agent to the catalog and run it end to end" },
+  "credits-20": { label: "Regular", cents: 2000, note: "everyday calls across the catalog; never expires" },
+  "credits-50": { label: "Builder", cents: 5000, note: "try the whole catalog; research, dossiers, audits included" },
+  "credits-100": { label: "Pro", cents: 10000, note: "for a team or an agent fleet; never expires" },
 };
+// What Stripe records a pack or a top-up as: Nontaxable. The pack is a
+// prepayment for our own services, taxed (where a call is taxable) when it is
+// spent (src/nc-sales-tax.js), never at sale. Never a gift-card code.
+export const CREDITS_TAX_CODE = "txcd_00000000";
+// The product a pack or top-up checkout sells, as Stripe shows and records it.
+// No name or description calls it a gift card or a wallet
+// (scripts/test-credits-terms.js).
+export function creditsProductData(p, { topup = false } = {}) {
+  const usd = `$${(p.cents / 100).toFixed(0)}`;
+  return topup
+    ? { name: `Agent402 credits top-up (${usd})`, description: "Added to your existing Agent402 credits balance. A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; no fees; the unspent balance is refunded to the card that paid on request; not cash, not transferable.", tax_code: CREDITS_TAX_CODE }
+    : { name: `Agent402 credits - ${p.label} (${usd})`, description: "A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; no fees; the unspent balance is refunded to this card on request; not cash, not transferable.", tax_code: CREDITS_TAX_CODE };
+}
+// A key: the recognizable prefix KEY_PREFIX and 32 random bytes (base64url).
+// Keys issued before the prefix ("a402_" and 24 random bytes) keep working;
+// KEY_RE matches both, and KEY_SCAN_RE finds one in any text (secret scanning,
+// log redaction). Only the key's sha256 is stored.
+export const KEY_PREFIX = "a402_ck_";
 export const KEY_RE = /^a402_[A-Za-z0-9_-]{32,64}$/;
+export const KEY_SCAN_RE = /a402_[A-Za-z0-9_-]{32,64}/g;
+export const newKeyString = () => `${KEY_PREFIX}${randomBytes(32).toString("base64url")}`;
+// Disable causes under which a call already running takes nothing more.
+const FROZEN = new Set(["disputed", "fraud-warning"]);
+// A charge whose card review outcome is one the private table lists
+// (src/credits-guards.js flagged) issues nothing. Without the table every
+// charge counts as flagged: nothing is issued that the checks did not see.
+export const chargeFlagged = (charge) => {
+  const f = creditsGuards()?.flagged;
+  if (!f) return true;
+  const o = charge && typeof charge === "object" ? charge.outcome : null;
+  return Boolean(o) && (f.outcomeTypes.includes(String(o.type)) || f.riskLevels.includes(String(o.risk_level)));
+};
 // The packs on offer: those within the cap on one key's balance
 // (creditsBalanceMaxCents, src/credits-sales.js).
-export const sellablePacks = () => Object.fromEntries(Object.entries(CREDIT_PACKS).filter(([, p]) => p.cents <= creditsBalanceMaxCents()));
+// A pack above the daily purchase limit is not offered either: no one buyer
+// could complete it.
+export const sellablePacks = () => Object.fromEntries(Object.entries(CREDIT_PACKS).filter(([, p]) => p.cents <= Math.min(creditsBalanceMaxCents(), creditsDailyMaxCents())));
 // PURCHASE LIMIT. One buyer (matched by email or card fingerprint) may buy at most creditsDailyMaxCents() (src/credits-sales.js) of
 // credits in any 24 hours. A purchase that would pass it is refunded in full
 // and no key is issued; its session is recorded as refused so a later claim
@@ -81,7 +122,9 @@ export { creditsDailyMaxCents };
 // "refused-cap" is a pack above the cap on one key's balance.
 // "refused-topup" is a top-up whose balance can no longer take it (refunded,
 // disabled, replaced, or not the signed-in buyer's).
-const REFUSAL_KINDS = { limit: "refused", taxId: "refused-taxid", refunded: "refused-refunded", cap: "refused-cap", topup: "refused-topup" };
+// "refused-review" is a purchase a purchase check refused (src/credits-sales.js
+// purchaseChecks, a flagged payment); its answer never names the check.
+const REFUSAL_KINDS = { limit: "refused", taxId: "refused-taxid", refunded: "refused-refunded", cap: "refused-cap", topup: "refused-topup", review: "refused-review" };
 const isRefused = (v) => typeof v === "string" && v.startsWith("refused");
 // "<kind>:pending@<ms>" carries when the refusal began, so a refund stuck
 // there (a crash between refusing and refunding) is owed after STUCK_MS.
@@ -207,6 +250,9 @@ export async function ensureCreditsIndexes({ log = console.log } = {}) {
     return { built, rebuilt };
   });
 }
+const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
+// A key's per-grant day records: only today's are kept.
+const pruneGrantDays = (days, day) => Object.fromEntries(Object.entries(days || {}).filter(([, g]) => g?.d === day));
 export const microToUsd = (m) => Math.round(Number(m) / 100) / 10000; // 4 dp
 
 /**
@@ -229,10 +275,11 @@ function servedWithoutRun(req, res) {
     || String(res.getHeader?.("X-Idempotent-Replay") || "").toLowerCase() === "true";
 }
 
-export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLowBalance = null, onReceipt = null, onNewKey = null, now = () => Date.now(), log = console.log }) {
+export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLowBalance = null, onReceipt = null, onNewKey = null, onSpendLimit = null, tagSecret = null, now = () => Date.now(), log = console.log }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* writes fail loudly below */ }
   const SESSIONS = join(dir, "_sessions.json"); // sessionId -> key hash (claim-once)
+  const WARNED = join(dir, "_warned.json"); // paymentIntent -> { at } (a fraud warning before any key)
   const recPath = (hash) => join(dir, `k_${hash}.json`);
   const usePg = stateDbEnabled();
   const cache = new Map(); // hash -> record (write-through; file backend only)
@@ -268,6 +315,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     return fileIdx;
   }
   const sessionsIdx = () => readJson(SESSIONS) || {};
+  const warnedIdx = () => readJson(WARNED) || {};
   const keyFiles = () => { try { return readdirSync(dir).filter((f) => f.startsWith("k_") && f.endsWith(".json")); } catch { return []; } };
 
   // ---- state database primitives ------------------------------------------
@@ -312,13 +360,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const files = (() => { try { return readdirSync(dir); } catch { return []; } })();
     let bytes = 0, n = 0;
     for (const f of files) {
-      const id = f.startsWith("k_") && f.endsWith(".json") ? f.slice(0, -5) : f === "_sessions.json" ? "_sessions" : null;
+      const id = f.startsWith("k_") && f.endsWith(".json") ? f.slice(0, -5) : f === "_sessions.json" ? "_sessions" : f === "_warned.json" ? "_warned" : null;
       if (!id) continue;
       const body = readJson(join(dir, f));
       if (!body) continue;
       await pgPutIfAbsent(id, body);
       try { bytes += statSync(join(dir, f)).size; } catch { /* counted as 0 */ }
-      if (id !== "_sessions") n++;
+      if (id.startsWith("k_")) n++;
     }
     log(`[credits] imported ${n} key record(s) from ${dir} into the state database`);
     return { bytes, records: n };
@@ -329,7 +377,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // rollback window): every key record and the index are re-read with the
   // FILE WINNING per id, and the replacement is logged.
   async function rollForwardIfFilesNewer() {
-    const files = (() => { try { return readdirSync(dir).filter((f) => (f.startsWith("k_") && f.endsWith(".json")) || f === "_sessions.json"); } catch { return []; } })();
+    const files = (() => { try { return readdirSync(dir).filter((f) => (f.startsWith("k_") && f.endsWith(".json")) || f === "_sessions.json" || f === "_warned.json"); } catch { return []; } })();
     let mtime = 0;
     for (const f of files) { try { mtime = Math.max(mtime, statSync(join(dir, f)).mtimeMs); } catch { /* gone */ } }
     if (!mtime) return 0;
@@ -341,9 +389,9 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     for (const f of files) {
       const body = readJson(join(dir, f));
       if (!body) continue;
-      const id = f === "_sessions.json" ? "_sessions" : f.slice(0, -5);
+      const id = f.slice(0, -5);
       await stateQuery(`INSERT INTO ${RT()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`, [COLL, id, JSON.stringify(body)]);
-      if (id === "_sessions") index++; else keys++;
+      if (id.startsWith("k_")) keys++; else index++;
     }
     log(`[credits] rolled forward ${keys} key record(s) and ${index} index from ${dir}: the files were written ${Math.round((mtime - rowAt) / 1000)} s after the newest row (a rollback window), the files win`);
     return keys + index;
@@ -427,8 +475,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
           if (liveHolds.has(id) || !(Number(h?.at) < cut)) continue;
           const held = Number(h.m) || 0;
           leaving += held;
-          if (h.s) { const taken = Math.max(0, Math.min(held, Number(h.s.m) || 0)); spends.push([id, held, taken, h.s.slug ?? null, h.s.via ?? null]); back += held - taken; }
-          else { back += held; n++; }
+          if (h.s) { const taken = Math.max(0, Math.min(held, Number(h.s.m) || 0)); spends.push([id, held, taken, h.s.slug ?? null, h.s.via ?? null]); back += held - taken; grantHoldDone(rec, h, held, taken); }
+          else { back += held; n++; grantHoldDone(rec, h, held, 0); }
           delete holds[id];
         }
         // Held money no entry accounts for, on a row nobody has touched for the whole window.
@@ -521,7 +569,95 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     return () => { try { onLowBalance(snap); } catch { /* a notice never breaks a debit */ } };
   };
 
-  async function createCheckout(packKey) {
+  // ---- purchase checks ---------------------------------------------------------
+  // A tag stands for an email, a client or a balance where Stripe or the shared
+  // counters need one: a keyed digest, never the value itself.
+  const tagOf = (kind, v) => (v ? (tagSecret ? createHmac("sha256", tagSecret) : createHash("sha256")).update(`credits-${kind}|${String(v)}`).digest("hex").slice(0, 24) : null);
+  /** The tag a client address is counted under (an IPv6 address by its /64). */
+  const sourceTag = (ip) => tagOf("src", limiterKey(String(ip || "")));
+  const unavailablePurchase = () => Object.assign(new Error("Credits purchases are unavailable right now. Try again later."), { statusCode: 503, buyerSafe: true });
+  const refusedPurchase = () => Object.assign(new Error(PURCHASE_REFUSED), { statusCode: 429, buyerSafe: true, refused: true });
+  // Counted in the shared store, so every server sees one count. A store that
+  // does not answer lets the check pass on this server's own count.
+  const HOUR_MS = 60 * 60_000;
+  async function countIn(name, key, windowMs, add) {
+    const r = add ? await shared.windowAdd(name, key, { windowMs, member: `${now()}:${randomBytes(6).toString("hex")}`, now: now() }) : await shared.windowRead(name, key, { windowMs, now: now() });
+    return r?.ok ? Number(r.count) || 0 : 0;
+  }
+  async function held(tag) {
+    if (!tag) return false;
+    const r = await shared.flagGet("credits-hold", tag, { now: now() });
+    return Boolean(r?.ok && r.until > now());
+  }
+  /** Before a checkout starts: false when a check refuses this client or account. */
+  async function checkoutAllowed({ email = null, ip = null } = {}) {
+    const c = purchaseChecks();
+    if (!c) throw unavailablePurchase();
+    const src = sourceTag(ip), acct = tagOf("acct", emailKeyOf(email));
+    if (await held(src) || await held(acct)) return false;
+    for (const tag of [src, acct].filter(Boolean)) {
+      if (await countIn("credits-start-h", tag, HOUR_MS, false) >= c.sourcePerHour) return false;
+      if (await countIn("credits-start-d", tag, DAY_MS, false) >= c.sourcePerDay) return false;
+    }
+    for (const tag of [src, acct].filter(Boolean)) { await countIn("credits-start-h", tag, HOUR_MS, true); await countIn("credits-start-d", tag, DAY_MS, true); }
+    return true;
+  }
+  /** A credits payment that did not go through (the payment_intent.payment_failed
+   *  webhook): counted against its client and its card; past the count, each is
+   *  held from new purchases for a while. */
+  async function notePaymentFailed({ source = null, cardFingerprint = null } = {}) {
+    const c = purchaseChecks();
+    if (!c) return;
+    for (const tag of [source ? String(source).slice(0, 64) : null, cardFingerprint ? tagOf("card", cardFingerprint) : null].filter(Boolean)) {
+      const n = await countIn("credits-failed", tag, c.failedWindowMs, true);
+      if (n >= c.failedMax) await shared.flagSet("credits-hold", tag, now() + c.failedHoldMs, { now: now() });
+    }
+  }
+  // Purchases this buyer completed inside `windowMs` before `at` (each pack
+  // and top-up payment counts once). A buyer matches by email, card or Stripe
+  // customer; the session being decided never counts against itself.
+  async function purchasesIn(buyer, at, windowMs, sessionId = null) {
+    let n = 0;
+    for (const { rec } of await allKeys()) {
+      if (!rec) continue;
+      const same = (buyer.email && recEmailKey(rec) === buyer.email)
+        || (buyer.cardFingerprint && rec.cardFingerprint === buyer.cardFingerprint)
+        || (buyer.customer && rec.customer === buyer.customer);
+      if (!same) continue;
+      if (Array.isArray(rec.payments) && rec.payments.length) {
+        for (const p of rec.payments) if (Number(p.at) > at - windowMs && !(sessionId && p.session === sessionId)) n++;
+        continue;
+      }
+      if (!(Date.parse(rec.createdAt) > at - windowMs)) continue;
+      if (sessionId && Array.isArray(rec.sessions) && rec.sessions.includes(sessionId)) continue;
+      n++;
+    }
+    return n;
+  }
+  /** At issue: true when a check refuses this paid session (it is refunded, no key). */
+  async function purchaseRefused(buyer, sessionId) {
+    if (buyer.flagged) return true;
+    if (await held(buyer.cardFingerprint ? tagOf("card", buyer.cardFingerprint) : null) || await held(tagOf("acct", buyer.email))) return true;
+    const c = purchaseChecks();
+    if (!c) return true;
+    if (await purchasesIn(buyer, now(), HOUR_MS, sessionId) >= c.buyerPerHour) return true;
+    if (await purchasesIn(buyer, now(), DAY_MS, sessionId) >= c.buyerPerDay) return true;
+    return false;
+  }
+  // What a checkout tells Stripe: card authentication requested on every
+  // payment, and neutral tags Stripe's own rules can read (never a key, an
+  // email or an address).
+  const checkoutGuards = (packKey, p, { email = null, ip = null, keyId = null } = {}) => ({
+    payment_method_options: { card: { request_three_d_secure: "any" } },
+    piMetadata: { credits_pack: packKey, ref_pack_usd: String(p.cents / 100), ...(email ? { ref_buyer: tagOf("acct", emailKeyOf(email)) } : {}), ...(ip ? { ref_source: sourceTag(ip) } : {}), ...(keyId ? { ref_balance: tagOf("bal", keyId) } : {}) },
+  });
+
+  // `returnTo`: { success, cancel } URLs on this site for a purchase started
+  // somewhere other than the credits page (the connector sign-in,
+  // src/mcp-oauth.js); success must carry {CHECKOUT_SESSION_ID}. Every caller
+  // passes the signed-in email and the client address, so the same purchase
+  // checks, card authentication and limits apply on every path.
+  async function createCheckout(packKey, { email = null, ip = null, returnTo = null } = {}) {
     const p = Object.hasOwn(CREDIT_PACKS, String(packKey)) ? CREDIT_PACKS[packKey] : null;
     if (!p) {
       // Self-correcting: an agent cannot guess "credits-20" from a bare 20,
@@ -535,9 +671,17 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       const e = new Error(`This pack is above the $${creditsBalanceMaxCents() / 100} most one key's balance may hold. Valid packs: ${Object.keys(sellablePacks()).join(", ")}`);
       e.statusCode = 400; e.validPacks = Object.keys(sellablePacks()); e.buyerSafe = true; throw e;
     }
+    if (p.cents > creditsDailyMaxCents()) {
+      const e = new Error(`This pack is above the $${creditsDailyMaxCents() / 100} one buyer may buy in a day. Valid packs: ${Object.keys(sellablePacks()).join(", ")}`);
+      e.statusCode = 400; e.validPacks = Object.keys(sellablePacks()); e.buyerSafe = true; throw e;
+    }
+    if (!(await checkoutAllowed({ email, ip }))) throw refusedPurchase();
+    const guard = checkoutGuards(packKey, p, { email, ip });
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits - ${p.label} ($${(p.cents / 100).toFixed(0)})`, description: "A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; no fees; the unspent balance is refunded to this card on request; not cash, not transferable, not a gift card." } } }],
+      ...(email ? { customer_email: email } : {}),
+      payment_method_options: guard.payment_method_options,
+      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: creditsProductData(p) } }],
       // A billing address sources sales tax (src/nc-sales-tax.js); a business
       // may add its tax ID; the buyer confirms business or developer use and
       // accepts the terms, both required and kept on the key's record. Tax is
@@ -550,10 +694,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       ],
       // The buyer sees the terms and the credit rules on the pay button's page.
       custom_text: { submit: { message: `By paying you agree to the Terms of Service (${baseUrl}/terms). Credits are for business and developer use, are spent only on Agent402's own services, never expire and carry no fees, and the unspent balance on the key is refunded to this card on request. Prices include North Carolina sales tax where it applies.` } },
-      metadata: { credits_pack: packKey, terms: creditsTermsVersion() },
-      success_url: `${baseUrl}/credits/thanks?session={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${baseUrl}/credits?canceled=1`,
-      payment_intent_data: { description: `Agent402 credits ${p.label}` },
+      metadata: { credits_pack: packKey, terms: creditsTermsVersion(), ...(email ? { credits_account: emailKeyOf(email) } : {}) },
+      success_url: returnTo?.success || `${baseUrl}/credits/thanks?session={CHECKOUT_SESSION_ID}`,
+      cancel_url: returnTo?.cancel || `${baseUrl}/credits?canceled=1`,
+      payment_intent_data: { description: `Agent402 credits ${p.label}`, metadata: guard.piMetadata },
     });
     return { id: session.id, url: session.url };
   }
@@ -572,21 +716,24 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // A payment Stripe had already refunded in full when it was claimed: no key.
   const refundedAnswer = () => ({ status: "refunded" });
   const topupRefusedAnswer = (refunded) => ({ status: "topup_refused", refunded });
-  const refusedAnswer = (v) => (String(v).startsWith(REFUSAL_KINDS.taxId) ? taxIdAnswer(refusalRefunded(v)) : String(v).startsWith(REFUSAL_KINDS.refunded) ? refundedAnswer() : String(v).startsWith(REFUSAL_KINDS.cap) ? capAnswer(refusalRefunded(v)) : String(v).startsWith(REFUSAL_KINDS.topup) ? topupRefusedAnswer(refusalRefunded(v)) : overLimitAnswer(refusalRefunded(v)));
+  const reviewAnswer = (refunded) => ({ status: "not_completed", refunded, error: PURCHASE_REFUSED });
+  const refusedAnswer = (v) => (String(v).startsWith(REFUSAL_KINDS.review) ? reviewAnswer(refusalRefunded(v)) : String(v).startsWith(REFUSAL_KINDS.taxId) ? taxIdAnswer(refusalRefunded(v)) : String(v).startsWith(REFUSAL_KINDS.refunded) ? refundedAnswer() : String(v).startsWith(REFUSAL_KINDS.cap) ? capAnswer(refusalRefunded(v)) : String(v).startsWith(REFUSAL_KINDS.topup) ? topupRefusedAnswer(refusalRefunded(v)) : overLimitAnswer(refusalRefunded(v)));
   // Who bought: lowercased email and the card's fingerprint, whichever the
   // session carries, and how much of the payment Stripe has refunded already
   // (cents). A read that fails leaves a field null; the other still matches.
   async function buyerOf(session, paymentIntent) {
     const email = emailKeyOf(session.customer_details?.email || session.customer_email);
-    let cardFingerprint = null, refundedCents = 0;
+    let cardFingerprint = null, refundedCents = 0, flagged = false;
     if (paymentIntent && stripe.paymentIntents?.retrieve) {
       try {
         const pi = await stripe.paymentIntents.retrieve(paymentIntent, { expand: ["latest_charge"] });
         cardFingerprint = pi?.latest_charge?.payment_method_details?.card?.fingerprint || null;
         refundedCents = Math.max(0, Number(pi?.latest_charge?.amount_refunded) || 0);
+        flagged = chargeFlagged(pi?.latest_charge);
       } catch { /* the email still matches */ }
     }
-    return { email, cardFingerprint, refundedCents };
+    const customer = typeof session.customer === "string" ? session.customer : session.customer?.id || null;
+    return { email, cardFingerprint, customer, refundedCents, flagged };
   }
   // Credits this buyer was issued in the 24 hours before `at`, in cents.
   // A key minted for `sessionId` itself never counts against that session.
@@ -721,6 +868,37 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     return r.rowCount === 1 ? r.rows[0].body : null;
   }
 
+  // A fraud warning on a payment that has no key yet (the claim comes later,
+  // or its webhook failed) is remembered in the store, so a later claim or
+  // top-up on that payment issues nothing and is refunded in full.
+  async function rememberWarned(paymentIntent, warningId = null) {
+    const entry = { at: now(), ...(warningId ? { id: String(warningId).slice(0, 64) } : {}) };
+    if (usePg) {
+      await readyP();
+      const r = await stateQuery(
+        `INSERT INTO ${RT()} (collection, id, body) VALUES ($1, '_warned', jsonb_build_object($2::text, $3::jsonb))
+         ON CONFLICT (collection, id) DO UPDATE SET body = ${RT()}.body || jsonb_build_object($2::text, $3::jsonb), updated_at = now()
+         RETURNING body`,
+        [COLL, paymentIntent, JSON.stringify(entry)]);
+      if (r.rows[0]?.body) through(WARNED, r.rows[0].body);
+      return;
+    }
+    const idx = warnedIdx();
+    if (idx[paymentIntent]) return;
+    idx[paymentIntent] = entry;
+    if (!writeJsonAtomic(WARNED, idx)) throw new Error("could not record the warned payment");
+  }
+  async function warnedPayment(paymentIntent) {
+    if (!paymentIntent) return false;
+    if (usePg) { await readyP(); return Boolean(((await pgGet("_warned")) || {})[paymentIntent]); }
+    return Boolean(warnedIdx()[paymentIntent]);
+  }
+  // A warning recorded while this payment was being issued (the warning saw
+  // no key yet, the claim saw no warning yet) freezes the key it now names.
+  async function warnedAfterIssue(paymentIntent) {
+    if (paymentIntent && await warnedPayment(paymentIntent)) await fraudWarning(paymentIntent).catch((e) => log(`[credits] fraud warning on ${paymentIntent} after issue not applied (${String(e?.message || e).slice(0, 80)}); Stripe delivers it again`));
+  }
+
   // Claim the key for a paid session: mints ONCE; later claims say "claimed".
   async function claim(sessionId) {
     if (typeof sessionId !== "string" || !SESSION_RE.test(sessionId)) return { status: "invalid" };
@@ -755,11 +933,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     // charged to a business; a consumer sale there is not offered).
     const country = String(session.customer_details?.address?.country || "").toUpperCase();
     const hasTaxId = Array.isArray(session.customer_details?.tax_ids) && session.customer_details.tax_ids.some((t) => t?.value && (t.type === "eu_vat" || t.type === "gb_vat"));
+    if (buyer.refundedCents < p.cents && await warnedPayment(paymentIntent)) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.review, "fraud_warning");
     if (euUkTaxIdRequired() && EU_UK.has(country) && !hasTaxId) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.taxId, "eu_uk_tax_id_required");
     // The cap on one key's balance (lowered after this checkout began).
     if (p.cents > creditsBalanceMaxCents()) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.cap, "balance_cap");
     // The daily purchase limit, checked before anything is issued.
     if ((await boughtInDayCents(buyer, now(), sessionId)) + p.cents > creditsDailyMaxCents()) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.limit, "daily_purchase_limit");
+    if (buyer.refundedCents < p.cents && await purchaseRefused(buyer, sessionId)) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.review, "purchase_check");
     // A payment already refunded in full mints nothing (claim-once, nothing
     // to refund); a partial refund is minted net of what went back.
     if (buyer.refundedCents >= p.cents) {
@@ -772,7 +952,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       return refundedAnswer();
     }
     const refundedMicro = buyer.refundedCents * 10_000;
-    const key = `a402_${randomBytes(24).toString("base64url")}`;
+    const key = newKeyString();
     const hash = hashKey(key);
     const keyId = hash.slice(0, 12);
     // Where the buyer is billed (sales tax sourcing) and any business tax ID given.
@@ -782,7 +962,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     // The buyer's answers to the required checkout fields (business use, terms).
     const fields = Object.fromEntries((Array.isArray(session.custom_fields) ? session.custom_fields : []).map((f) => [String(f?.key || ""), String(f?.dropdown?.value || "")]));
     const consent = { use: fields.use || null, terms: fields.terms === "agreed" ? session.metadata?.terms || null : null };
-    const rec = { keyId, balanceMicro: loadedMicro - refundedMicro, loadedMicro, ...(refundedMicro ? { refundedMicro } : {}), spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, emailKey: emailKeyOf(email), cardFingerprint: buyer.cardFingerprint, billing, consent, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
+    const rec = { keyId, balanceMicro: loadedMicro - refundedMicro, loadedMicro, ...(refundedMicro ? { refundedMicro } : {}), spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, emailKey: emailKeyOf(email), cardFingerprint: buyer.cardFingerprint, ...(buyer.customer ? { customer: buyer.customer } : {}), billing, consent, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
     note(rec, { k: "purchase", m: loadedMicro - refundedMicro });
     if (usePg) {
       // The record first (nobody holds its key yet), then the claim; a claim
@@ -802,6 +982,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       again[sessionId] = hash; writeJsonAtomic(SESSIONS, again);
     }
     try { onLoad?.({ sessionId, pack: packKey, priceUsd: p.cents / 100, keyId, paymentIntent }); } catch { /* accounting never breaks minting */ }
+    await warnedAfterIssue(paymentIntent);
     if (email) {
       sendEmail({ to: email, subject: "Your Agent402 credits key",
         text: `Your prepaid credits are ready: $${(p.cents / 100).toFixed(2)} loaded.\n\nYour key (keep it secret, it is shown only here and on the thanks page):\n\n${key}\n\nUse it on our paid tools (the wallet-scoped routes and the routes that buy from an outside seller take a wallet):\ncurl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com\n\nBalance: GET ${baseUrl}/api/credits/balance with the same header.\nRefund the unspent balance to your card: POST ${baseUrl}/api/credits/refund with the same header (the key is then disabled).\nAnother key: ${baseUrl}/credits${creditsSalesEnabled() ? `\nYour balance, its history, top-ups and a new key if you lose this one: sign in with this email at ${baseUrl}/credits/account` : ""}\n\nAgent402`,
@@ -834,8 +1015,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     if (again[sessionId]) return claimedAnswer(await readRec(again[sessionId]), sessionId);
     const country = String(session.customer_details?.address?.country || "").toUpperCase();
     const hasTaxId = Array.isArray(session.customer_details?.tax_ids) && session.customer_details.tax_ids.some((t) => t?.value && (t.type === "eu_vat" || t.type === "gb_vat"));
+    if (buyer.refundedCents < p.cents && await warnedPayment(paymentIntent)) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.review, "fraud_warning");
     if (euUkTaxIdRequired() && EU_UK.has(country) && !hasTaxId) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.taxId, "eu_uk_tax_id_required");
     if ((await boughtInDayCents(buyer, now(), sessionId)) + p.cents > creditsDailyMaxCents()) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.limit, "daily_purchase_limit");
+    if (buyer.refundedCents < p.cents && await purchaseRefused(buyer, sessionId)) return refuseAndRefund(sessionId, paymentIntent, REFUSAL_KINDS.review, "purchase_check");
     if (buyer.refundedCents >= p.cents) {
       if (!(await refuseSession(sessionId, REFUSAL_KINDS.refunded, "refunded"))) {
         const theirs = usePg ? (await pgGet("_sessions")) || {} : sessionsIdx();
@@ -872,9 +1055,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       const idx = sessionsIdx();
       if (!idx[sessionId]) { idx[sessionId] = hash; writeJsonAtomic(SESSIONS, idx); }
     }
-    const rec = await readRec(hash);
-    if (out?.dup) return claimedAnswer(rec, sessionId);
+    if (out?.dup) return claimedAnswer(await readRec(hash), sessionId);
     try { onLoad?.({ sessionId, pack: packKey, priceUsd: p.cents / 100, keyId, paymentIntent }); } catch { /* accounting never breaks a top-up */ }
+    await warnedAfterIssue(paymentIntent);
+    const rec = await readRec(hash);
     receipt({ kind: "topup", email: out.email, keyId, cents: p.cents, balanceMicro: out.balanceMicro, paymentIntent, sessionId });
     log(`[credits] topped up key ${keyId} ($${(p.cents / 100).toFixed(2)}) for session ${sessionId}`);
     return claimedAnswer(rec, sessionId);
@@ -883,7 +1067,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // A top-up checkout for a balance the signed-in buyer holds. The cap is
   // checked here, before any payment: a pack the balance has no room for is
   // refused with the room left. Answers { url } or throws a buyer-safe 4xx.
-  async function createTopupCheckout(keyId, account, packKey) {
+  async function createTopupCheckout(keyId, account, packKey, { ip = null } = {}) {
     const p = Object.hasOwn(CREDIT_PACKS, String(packKey)) ? CREDIT_PACKS[packKey] : null;
     const bad = (msg, extra = {}) => Object.assign(new Error(msg), { statusCode: 400, buyerSafe: true, ...extra });
     if (!p) throw bad(`Unknown credit pack. Valid packs: ${Object.keys(sellablePacks()).join(", ")}`, { validPacks: Object.keys(sellablePacks()) });
@@ -895,10 +1079,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const usedCents = Math.ceil(((Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0)) / 10_000);
     const roomCents = Math.max(0, capCents - usedCents);
     if (p.cents > roomCents) throw bad(`This balance holds at most $${(capCents / 100).toFixed(2)} and has room for $${(roomCents / 100).toFixed(2)} more, so a $${(p.cents / 100).toFixed(2)} top-up is refused before any payment.`, { roomUsd: roomCents / 100, capUsd: capCents / 100 });
+    if (!(await checkoutAllowed({ email: rec.email, ip }))) throw refusedPurchase();
+    const guard = checkoutGuards(packKey, p, { email: rec.email, ip, keyId: rec.keyId });
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       customer_email: rec.email,
-      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: { name: `Agent402 credits top-up ($${(p.cents / 100).toFixed(0)})`, description: "Added to your existing Agent402 credits balance. A prepayment for Agent402's own pay-per-call services, for business and developer use. Spent per request at list price; never expire; no fees; the unspent balance is refunded to the card that paid on request; not cash, not transferable, not a gift card." } } }],
+      payment_method_options: guard.payment_method_options,
+      line_items: [{ quantity: 1, price_data: { currency: "usd", unit_amount: p.cents, product_data: creditsProductData(p, { topup: true }) } }],
       billing_address_collection: "required",
       tax_id_collection: { enabled: true },
       custom_fields: [
@@ -909,22 +1096,65 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       metadata: { credits_pack: packKey, credits_topup: rec.keyId, credits_account: account, terms: creditsTermsVersion() },
       success_url: `${baseUrl}/credits/account?topup={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/credits/account`,
-      payment_intent_data: { description: `Agent402 credits top-up ${p.label}` },
+      payment_intent_data: { description: `Agent402 credits top-up ${p.label}`, metadata: guard.piMetadata },
     });
     return { id: session.id, url: session.url };
   }
+
+  // What a key spent on the current UTC day (for the holder's daily limit).
+  const dayOf = (t) => new Date(t).toISOString().slice(0, 10);
+  const daySpentMicro = (rec) => (rec.daySpent && rec.daySpent.d === dayOf(now()) ? Number(rec.daySpent.m) || 0 : 0);
+  const addDaySpent = (rec, micro) => { if (!(micro > 0)) return; rec.daySpent = { d: dayOf(now()), m: daySpentMicro(rec) + micro }; };
 
   // ---- the money moves, as pure steps on one record --------------------------
   // Each answers { rec?, result, after? }: `rec` is the record to write back
   // (absent when nothing changed), `after` the accounting hook to run once it
   // is written. The file and the database backends apply them the same way.
-  function authorizeOn(rec, hash, need, priceUsd, holdId = null) {
+  // `grant` (a connector grant, src/mcp-oauth.js): { id, capUsd }. Its day's
+  // spend and holds live on the key's own record (rec.grantDays), so the cap
+  // is checked and held under the same lock as the balance, on every replica.
+  function authorizeOn(rec, hash, need, priceUsd, holdId = null, grant = null) {
     if (!rec) return { result: { ok: false, reason: "unknown" } };
-    if (rec.disabled) return { result: { ok: false, reason: "disabled", balanceUsd: microToUsd(rec.balanceMicro) } };
+    // A key frozen while a payment that loaded it is questioned (a dispute or
+    // a fraud warning, FROZEN) spends nothing, on a key or a connector grant.
+    if (rec.disabled && FROZEN.has(rec.disabledReason)) return { result: { ok: false, reason: "frozen", balanceUsd: microToUsd(rec.balanceMicro) } };
+    if (rec.disabled) return { result: { ok: false, reason: "disabled", balanceUsd: microToUsd(rec.balanceMicro), ...(rec.disabledReason === "revoked" ? { revoked: true } : {}) } };
+    // The holder's own limits (set on the balance page): a most per call, and
+    // a most per UTC day counting what is spent and what is held.
+    const lim = rec.limits || {};
+    if (Number(lim.perCallMicro) > 0 && need > Number(lim.perCallMicro)) return { result: { ok: false, reason: "over_call_limit", balanceUsd: microToUsd(rec.balanceMicro), priceUsd, limitUsd: microToUsd(lim.perCallMicro) } };
+    if (Number(lim.dailyMicro) > 0 && daySpentMicro(rec) + (Number(rec.heldMicro) || 0) + need > Number(lim.dailyMicro)) {
+      const today = dayOf(now());
+      const notify = rec.limitNoticeDay !== today && !rec.lowNoticeOff && onSpendLimit && rec.email ? { keyId: rec.keyId, email: rec.email, limitUsd: microToUsd(lim.dailyMicro) } : null;
+      if (notify) rec.limitNoticeDay = today;
+      return { ...(notify ? { rec, after: () => { try { onSpendLimit(notify); } catch { /* a notice never breaks a call */ } } } : {}), result: { ok: false, reason: "over_daily_limit", balanceUsd: microToUsd(rec.balanceMicro), priceUsd, limitUsd: microToUsd(lim.dailyMicro) } };
+    }
     if (rec.balanceMicro < need) return { result: { ok: false, reason: "insufficient", balanceUsd: microToUsd(rec.balanceMicro), priceUsd } };
+    let g = null;
+    if (grant) {
+      const day = utcDay(now());
+      const prev = rec.grantDays?.[grant.id];
+      g = prev && prev.d === day ? { ...prev } : { d: day, s: 0, h: 0 };
+      const capMicro = usdToMicro(grant.capUsd);
+      if ((Number(g.s) || 0) + (Number(g.h) || 0) + need > capMicro) return { result: { ok: false, reason: "daily_cap", balanceUsd: microToUsd(rec.balanceMicro), priceUsd, capUsd: microToUsd(capMicro), spentTodayUsd: microToUsd(Number(g.s) || 0) } };
+      g.h = (Number(g.h) || 0) + need;
+      rec.grantDays = { ...pruneGrantDays(rec.grantDays, day), [grant.id]: g };
+    }
     rec.balanceMicro -= need; rec.heldMicro = (rec.heldMicro || 0) + need;
-    if (holdId) rec.holds = { ...(rec.holds || {}), [holdId]: { m: need, at: now() } };
+    if (holdId) rec.holds = { ...(rec.holds || {}), [holdId]: { m: need, at: now(), ...(g ? { g: grant.id, gd: g.d } : {}) } };
     return { rec, result: { ok: true, hash, keyId: rec.keyId, heldMicro: need, balanceUsd: microToUsd(rec.balanceMicro), priceUsd, ...(holdId ? { holdId } : {}) } };
+  }
+  // A grant hold ends: what it held leaves the grant's day, and what the
+  // debit took (if any) is that day's spend. A hold from a day already over
+  // moves nothing (the new day started from zero).
+  function grantHoldDone(rec, entry, held, taken) {
+    const id = entry?.g;
+    if (!id || !rec.grantDays || !Object.hasOwn(rec.grantDays, id)) return;
+    const g = { ...rec.grantDays[id] };
+    if (g.d !== entry.gd) return;
+    g.h = Math.max(0, (Number(g.h) || 0) - held);
+    g.s = (Number(g.s) || 0) + Math.max(0, taken);
+    rec.grantDays = { ...rec.grantDays, [id]: g };
   }
   // A hold the sweep already returned (its entry is gone) is worth nothing
   // now: the settle or release that finally arrives moves no money.
@@ -933,7 +1163,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   function takeHold(rec, heldMicro, holdId) {
     if (!rec.holds) return heldMicro;
     if (!holdId) {
-      const hit = Object.entries(rec.holds).filter(([, h]) => Number(h?.m) === Number(heldMicro)).sort((a, b) => a[1].at - b[1].at)[0];
+      // A connector grant's hold is always named; an unnamed end never takes it.
+      const hit = Object.entries(rec.holds).filter(([, h]) => Number(h?.m) === Number(heldMicro) && !h?.g).sort((a, b) => a[1].at - b[1].at)[0];
       if (hit) delete rec.holds[hit[0]];
       return heldMicro;
     }
@@ -952,12 +1183,21 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       const taken = Number(prior.m) || 0;
       return { result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(Number(prior.h) || taken), returnedUsd: microToUsd(Math.max(0, (Number(prior.h) || taken) - taken)) }, ...(prior.booked ? {} : { after: () => onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId, via }) }) };
     }
+    // A key frozen while this call ran (a dispute or a fraud warning on the
+    // payment that loaded it) takes nothing more: the hold goes back.
+    if (rec.disabled && FROZEN.has(rec.disabledReason)) {
+      const back = releaseOn(rec, heldMicro, holdId);
+      return { rec, result: { balanceUsd: back.result.balanceUsd, chargedUsd: 0, heldUsd: microToUsd(heldMicro), returnedUsd: microToUsd(heldMicro) } };
+    }
+    const entry = holdId && rec.holds && Object.hasOwn(rec.holds, holdId) ? rec.holds[holdId] : null;
     heldMicro = takeHold(rec, heldMicro, holdId);
     const held = Math.min(heldMicro, rec.heldMicro || 0);
     const want = Number.isFinite(Number(chargeUsd)) && Number(chargeUsd) > 0 ? usdToMicro(Number(chargeUsd)) : held;
     const taken = Math.min(held, want);
+    grantHoldDone(rec, entry, held, taken);
     const returned = held - taken;
     rec.heldMicro = (rec.heldMicro || 0) - held; rec.balanceMicro += returned; rec.spentMicro += taken; rec.calls += 1; rec.lastUsedAt = new Date(now()).toISOString();
+    addDaySpent(rec, taken);
     if (holdId) rec.settledHolds = recentSettled({ ...(rec.settledHolds || {}), [holdId]: { m: taken, h: held, at: now() } });
     // `d`: the debit id a signed receipt names as its settlement.
     note(rec, { k: "charge", slug: slug ?? null, m: taken, ...(typeof debitId === "string" && debitId ? { d: debitId } : {}) });
@@ -974,8 +1214,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   }
   function releaseOn(rec, heldMicro, holdId = null) {
     if (!rec) return { result: null };
+    const entry = holdId && rec.holds && Object.hasOwn(rec.holds, holdId) ? rec.holds[holdId] : null;
     heldMicro = takeHold(rec, heldMicro, holdId);
     const back = Math.min(heldMicro, rec.heldMicro || 0);
+    grantHoldDone(rec, entry, back, 0);
     rec.heldMicro = (rec.heldMicro || 0) - back; rec.balanceMicro += back;
     return { rec, result: { balanceUsd: microToUsd(rec.balanceMicro) } };
   }
@@ -984,6 +1226,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const need = usdToMicro(priceUsd);
     const taken = Math.min(need, a.balanceMicro);
     a.balanceMicro -= taken; a.spentMicro += taken; a.calls += 1; a.lastUsedAt = new Date(now()).toISOString();
+    addDaySpent(a, taken);
     note(a, { k: "charge", slug: slug ?? null, m: taken });
     const low = lowCrossed(a, taken) ? lowNotice(a) : null;
     return { rec: a, result: { balanceUsd: microToUsd(a.balanceMicro), chargedUsd: microToUsd(taken) }, after: () => { onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: a.keyId }); low?.(); } };
@@ -1001,6 +1244,32 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const need = usdToMicro(priceUsd);
     const holdId = usePg ? `${hash.slice(0, 12)}:${randomBytes(8).toString("hex")}` : null;
     return mutate(hash, (rec) => authorizeOn(rec, hash, need, priceUsd, holdId));
+  }
+  // A connector grant's hold (src/mcp-oauth.js): by key id (a grant never
+  // holds the key), under the grant's daily cap. Always a named hold, so the
+  // settle or release finds the grant it counts against. Async on both backends.
+  async function authorizeGrant(keyId, priceUsd, grant) {
+    const hash = await keyHashById(String(keyId || ""));
+    if (!hash) return { ok: false, reason: "unknown" };
+    const need = usdToMicro(priceUsd);
+    const holdId = `${hash.slice(0, 12)}:${randomBytes(8).toString("hex")}`;
+    return mutate(hash, (rec) => (rec && rec.keyId === keyId ? authorizeOn(rec, hash, need, priceUsd, holdId, grant) : { result: { ok: false, reason: "unknown" } }));
+  }
+  /** What a grant spent on its key today (USD), for the balance page. */
+  async function grantSpentToday(keyId, grantId) {
+    const hash = await keyHashById(String(keyId || ""));
+    const rec = hash ? await readRec(hash) : null;
+    const g = rec?.grantDays?.[grantId];
+    return g && g.d === utcDay(now()) ? microToUsd(Number(g.s) || 0) : 0;
+  }
+  /** The key id and purchase email a claimed Checkout session loaded, or null (internal; never on a public answer). */
+  async function sessionOwner(sessionId) {
+    if (typeof sessionId !== "string" || !SESSION_RE.test(sessionId)) return null;
+    const idx = usePg ? (await readyP(), (await pgGet("_sessions")) || {}) : sessionsIdx();
+    const hash = idx[sessionId];
+    if (!hash || isRefused(hash)) return null;
+    const rec = await readRec(hash);
+    return rec?.email ? { keyId: rec.keyId, email: rec.email } : null;
   }
   // Final 200: the hold becomes spend. `chargeUsd` (the meter's actual x
   // markup on a metered route) takes LESS than the hold and returns the rest
@@ -1031,7 +1300,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     return mutate(hash, (a) => chargeOn(a, priceUsd, slug));
   }
 
-  const balanceOf = (rec) => (rec ? { keyId: rec.keyId, balanceUsd: microToUsd(rec.balanceMicro), heldUsd: microToUsd(rec.heldMicro || 0), loadedUsd: microToUsd(rec.loadedMicro), spentUsd: microToUsd(rec.spentMicro), calls: rec.calls, createdAt: rec.createdAt, lastUsedAt: rec.lastUsedAt, disabled: !!rec.disabled, ...(rec.refundRequest ? { refund: { state: rec.refundRequest.state === "done" ? "refunded" : "pending", amountUsd: (Number(rec.refundRequest.cents) || 0) / 100 } } : {}) } : null);
+  const balanceOf = (rec) => (rec ? { keyId: rec.keyId, balanceUsd: microToUsd(rec.balanceMicro), heldUsd: microToUsd(rec.heldMicro || 0), loadedUsd: microToUsd(rec.loadedMicro), spentUsd: microToUsd(rec.spentMicro), calls: rec.calls, createdAt: rec.createdAt, lastUsedAt: rec.lastUsedAt, disabled: !!rec.disabled, ...(rec.disabled && rec.disabledReason === "revoked" ? { revoked: true } : {}), ...(rec.limits && (rec.limits.dailyMicro || rec.limits.perCallMicro) ? { limits: { dailyUsd: microToUsd(rec.limits.dailyMicro || 0) || null, perCallUsd: microToUsd(rec.limits.perCallMicro || 0) || null } } : {}), ...(rec.refundRequest ? { refund: { state: rec.refundRequest.state === "done" ? "refunded" : "pending", amountUsd: (Number(rec.refundRequest.cents) || 0) / 100 } } : {}) } : null);
   function balance(keyString) {
     if (typeof keyString !== "string" || !KEY_RE.test(keyString)) return answer(null);
     const rec = readRec(hashKey(keyString));
@@ -1068,7 +1337,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // Disable causes rank: an operator disable is kept over a refund, a refund
   // over a dispute, so the reason on the key is the strongest cause and a
   // dispute closing lifts nothing a stronger cause holds. The dispute itself
-  // is recorded beside it (disputedPaymentIntent, disputeAt). Returns the
+  // is recorded beside it, per payment (rec.disputes, below). Returns the
   // key id or null.
   const paidBy = (r, paymentIntent) => r && Array.isArray(r.paymentIntents) && r.paymentIntents.includes(paymentIntent);
   // The record of one charged payment's refund total, kept per payment on a
@@ -1138,12 +1407,24 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     return true;
   }
   // "refund-requested": the holder asked for the unspent balance back (requestRefund).
-  const CAUSE_RANK = { operator: 3, refunded: 2, "refund-requested": 2, disputed: 1 };
-  function disableByPaymentIntent(paymentIntent, reason = "refunded", { amountRefundedCents = null, fullyRefunded = null } = {}) {
+  const CAUSE_RANK = { operator: 3, "fraud-warning": 2, revoked: 2, refunded: 2, "refund-requested": 2, disputed: 1 };
+  function disableByPaymentIntent(paymentIntent, reason = "refunded", { amountRefundedCents = null, fullyRefunded = null, disputeId = null } = {}) {
     if (!paymentIntent) return answer(null);
     const cents = amountRefundedCents == null ? null : Number(amountRefundedCents);
     const clawback = (r) => {
-      if (reason === "disputed") { r.disputedPaymentIntent = paymentIntent; r.disputeAt = new Date(now()).toISOString(); }
+      if (reason === "disputed") {
+        const ds = disputeMap(r);
+        const d = ds[paymentIntent];
+        const id = disputeId ? String(disputeId).slice(0, 64) : null;
+        // The close came first (or this create is delivered again after its
+        // close): the outcome is already applied, so nothing is frozen.
+        if (d && d.closedAt && ((d.early && !d.at) || (id && d.id === id))) {
+          ds[paymentIntent] = { ...d, at: d.at || isoNow() };
+          log(`[credits] key ${r.keyId}: dispute created after its close (${paymentIntent}); nothing frozen`);
+          return r.keyId;
+        }
+        ds[paymentIntent] = { id, at: isoNow() };
+      }
       if (reason === "refunded" && cents !== null && Number.isFinite(cents) && cents >= 0) {
         // `cents` is this charge's running total. A key loaded by more than
         // one payment (a top-up) keeps each payment's own total; a key with
@@ -1166,7 +1447,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
           const part = partsOf(r).find((p) => p.pi === paymentIntent);
           if (part && part.state !== "done" && !part.refundId && Number(part.targetCents) > 0 && Math.round(cents) >= Number(part.targetCents)) applyRefundOn(r, { keyId: r.keyId, pi: paymentIntent, id: null, st: "succeeded" });
         }
-        const whole = pays && pays.length > 1 ? pays.every((p) => (Number(p.refundedCents) || 0) >= (Number(p.cents) || 0)) : fullyRefunded === true || Math.round(cents) * 10_000 >= (r.loadedMicro || 0);
+        const whole = pays && pays.length > 1 ? pays.every((p) => (Number(p.refundedCents) || 0) + (Number(p.lostCents) || 0) >= (Number(p.cents) || 0)) : fullyRefunded === true || Math.round(cents) * 10_000 >= (r.loadedMicro || 0);
         if (!whole) { log(`[credits] key ${r.keyId}: $${(cents / 100).toFixed(2)} refunded (${paymentIntent}), balance reduced`); return r.keyId; }
       }
       // A key disabled with no recorded cause was switched off by the operator
@@ -1185,23 +1466,180 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     return null;
   }
 
-  // The reverse of a dispute clawback: the dispute closed in our favor (won,
-  // or an inquiry closed without a chargeback), so the key it disabled is
-  // enabled again. Lifted only when that dispute, on that payment, is the
-  // key's sole disable cause: a key the operator switched off, or whose
-  // payment was refunded, before or after the dispute, stays disabled
-  // (disableByPaymentIntent keeps the stronger cause). Returns the key id or
-  // null.
-  function enableByPaymentIntent(paymentIntent, reason = "disputed") {
-    if (!paymentIntent) return answer(null);
-    const held = (r) => paidBy(r, paymentIntent) && r.disabled === true && r.disabledReason === reason
-      && (reason !== "disputed" || !r.disputedPaymentIntent || r.disputedPaymentIntent === paymentIntent);
-    const lift = (r) => { r.disabled = false; r.disabledReason = null; if (reason === "disputed") r.disputeClosedAt = new Date(now()).toISOString(); log(`[credits] key ${r.keyId} enabled again (${reason} closed in our favor, ${paymentIntent})`); return r.keyId; };
-    if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => held(x.rec)); return hit ? mutatePg(hit.hash, (r) => (held(r) ? { rec: r, result: lift(r) } : { result: null })) : null; });
-    for (const { hash, rec: r } of allKeys()) {
-      if (held(r)) { const id = lift(r); save(hash, r); return id; }
+  // DISPUTES, kept per payment (a charge carries at most one dispute):
+  // rec.disputes = { [paymentIntent]: { id, at, closedAt, outcome, early, review } }.
+  // A dispute is open from its create until its close. A key is frozen while
+  // any dispute on it is open and thaws only when none is; each close settles
+  // its own payment only. A close that arrives before its create is applied
+  // when it arrives (early) and the create, when it comes, freezes nothing. A
+  // close whose status is neither won nor lost lifts the hold and is listed
+  // for a person (review) until resolved; refunds wait on it meanwhile.
+  // An older record's single slot (disputedPaymentIntent, disputeAt,
+  // disputeClosedAt, disputeOutcome) is read as one entry and moved into the
+  // map on the record's next dispute write.
+  const isoNow = () => new Date(now()).toISOString();
+  function disputesOf(r) {
+    const m = r && r.disputes && typeof r.disputes === "object" ? { ...r.disputes } : {};
+    if (r?.disputedPaymentIntent && !m[r.disputedPaymentIntent]) {
+      const at = r.disputeAt || null, closed = r.disputeClosedAt || null;
+      m[r.disputedPaymentIntent] = { id: null, at, closedAt: closed && String(closed) >= String(at || "") ? closed : null, outcome: r.disputeOutcome || null };
     }
+    return m;
+  }
+  function disputeMap(r) {
+    r.disputes = disputesOf(r);
+    delete r.disputedPaymentIntent; delete r.disputeAt; delete r.disputeClosedAt; delete r.disputeOutcome;
+    return r.disputes;
+  }
+  const isOpen = (d) => Boolean(d && d.at && !d.closedAt);
+  // The dispute on this payment is open, or the key was frozen for a dispute
+  // by an older build that named no payment (any payment's close settles it).
+  const openOn = (r, pi) => {
+    const m = disputesOf(r);
+    return isOpen(m[pi]) || (!m[pi] && !Object.keys(m).length && r.disabled === true && r.disabledReason === "disputed");
+  };
+  const disputeOpen = (rec) => Object.values(disputesOf(rec)).some(isOpen);
+  const disputeInReview = (rec) => Object.values(disputesOf(rec)).some((d) => d && d.review === true);
+  // What stands in the way of a refund: an open dispute, or one closed with
+  // an outcome a person has not yet resolved.
+  const disputeHolds = (rec) => disputeOpen(rec) || disputeInReview(rec);
+  const WON_STATUSES = new Set(["won", "warning_closed", "prevented"]);
+  const outcomeKind = (won, status) => (status === "lost" ? "lost" : won === true || WON_STATUSES.has(status) ? "won" : "review");
+  // A payment's share as the list of payments, synthesized for a key loaded once.
+  const paymentsOf = (r) => (Array.isArray(r.payments) && r.payments.length ? r.payments.map((p) => ({ ...p })) : (() => {
+    const first = Array.isArray(r.paymentIntents) ? r.paymentIntents[0] || null : null;
+    return [{ pi: first, cents: Math.round((Number(r.loadedMicro) || 0) / 10_000), refundedCents: Math.round((Number(r.refundedMicro) || 0) / 10_000), at: Date.parse(r.createdAt) || 0, kind: "purchase", session: Array.isArray(r.sessions) ? r.sessions[0] || null : null }];
+  })());
+  const shareLeft = (p) => (Number(p.cents) || 0) - (Number(p.refundedCents) || 0) - (Number(p.lostCents) || 0);
+  // The card network returned (part of) one payment: that amount, never more
+  // than the payment has left, leaves the balance once.
+  function takeLost(r, paymentIntent, amountCents) {
+    const pays = paymentsOf(r);
+    const pay = pays.find((p) => p.pi === paymentIntent);
+    if (!pay) return;
+    const left = Math.max(0, shareLeft(pay));
+    const asked = Number(amountCents);
+    const lost = Number.isFinite(asked) && asked > 0 ? Math.min(left, Math.round(asked)) : left;
+    pay.lostCents = (Number(pay.lostCents) || 0) + lost;
+    r.payments = pays;
+    const off = Math.min(Math.max(0, Number(r.balanceMicro) || 0), lost * 10_000);
+    r.balanceMicro = Math.max(0, (Number(r.balanceMicro) || 0) - lost * 10_000);
+    if (off > 0) note(r, { k: "dispute-lost", m: off });
+  }
+  // After one dispute closes: while another is open nothing thaws. Otherwise a
+  // fraud review the disputes held is owed again (or settled when nothing is
+  // left), and a key the disputes alone froze is enabled again while any
+  // payment on it is left, or kept frozen under a fraud warning it carries.
+  // Answers true when the key's state changed.
+  function afterDisputeClose(r) {
+    if (disputeOpen(r)) return false;
+    const has = (Number(r.balanceMicro) || 0) + (Number(r.heldMicro) || 0) > 0;
+    if (r.fraudReview?.state === "disputed") r.fraudReview = { ...r.fraudReview, state: "owed" };
+    if (r.fraudReview?.state === "owed" && !has) r.fraudReview = { ...r.fraudReview, state: "nothing", decidedAt: now() };
+    if (!(r.disabled === true && r.disabledReason === "disputed")) return false;
+    if (Array.isArray(r.fraudWarnings) && r.fraudWarnings.length) { r.disabledReason = "fraud-warning"; return true; }
+    if (!paymentsOf(r).some((p) => shareLeft(p) > 0)) return false;
+    r.disabled = false; r.disabledReason = null;
+    return true;
+  }
+  // Closes the open dispute on one payment with its outcome. Answers the key
+  // id when the key thawed (or moved to a fraud warning's freeze), else null.
+  function closeOpenDispute(r, paymentIntent, kind, { status = null, amountCents = null } = {}) {
+    const ds = disputeMap(r);
+    if (kind === "lost") takeLost(r, paymentIntent, amountCents);
+    ds[paymentIntent] = { id: null, at: isoNow(), ...ds[paymentIntent], closedAt: isoNow(), outcome: kind === "review" ? String(status || "unknown").slice(0, 40) : kind === "lost" ? "lost" : "won", ...(kind === "review" ? { review: true } : {}) };
+    const changed = afterDisputeClose(r);
+    log(`[credits] key ${r.keyId}: dispute ${kind === "review" ? "closed with an outcome to review" : kind} (${paymentIntent}); ${r.disabled ? `kept ${r.disabledReason}` : "the key is usable"}`);
+    return changed ? r.keyId : null;
+  }
+  // The key a payment loaded, its record changed under its lock by `decide`
+  // ({ rec?, result }).
+  function onPayingKey(paymentIntent, decide) {
+    if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => paidBy(x.rec, paymentIntent)); return hit ? mutatePg(hit.hash, (r) => (paidBy(r, paymentIntent) ? decide(r) : { result: null })) : null; });
+    for (const { hash, rec } of allKeys()) { if (paidBy(rec, paymentIntent)) return mutateFile(hash, (r) => (paidBy(r, paymentIntent) ? decide(r) : { result: null })); }
     return null;
+  }
+
+  // A dispute closed in our favor (won, or an inquiry closed without a
+  // chargeback): its record closes, and a key it alone froze is enabled again
+  // once no other dispute on the key is open. A stronger cause (an operator
+  // disable, a refund, a fraud warning) keeps the key as it is. Returns the key
+  // id when the key thawed, or null.
+  function enableByPaymentIntent(paymentIntent, reason = "disputed") {
+    if (!paymentIntent || reason !== "disputed") return answer(null);
+    return onPayingKey(paymentIntent, (r) => (openOn(r, paymentIntent) ? { rec: r, result: closeOpenDispute(r, paymentIntent, "won") } : { result: null }));
+  }
+
+  // A dispute LOST: the card network returned the disputed amount to the
+  // cardholder. That amount, never more than the payment has left, leaves the
+  // balance once (the payment records it as `lostCents`, and a refund never
+  // draws on it again). What the key's other payments funded stays the
+  // buyer's: once no dispute on the key is open, a key the disputes alone froze
+  // is enabled again while any payment on it is left; one whose every payment
+  // is gone stays disabled. A stronger cause keeps the key as it is, and a
+  // fraud review the disputes held is owed again for what is left. Returns the
+  // key id, or null.
+  function disputeLostByPaymentIntent(paymentIntent, { amountCents = null } = {}) {
+    if (!paymentIntent) return answer(null);
+    return onPayingKey(paymentIntent, (r) => {
+      if (!openOn(r, paymentIntent)) return { result: null };
+      closeOpenDispute(r, paymentIntent, "lost", { amountCents });
+      return { rec: r, result: r.keyId };
+    });
+  }
+  /** The charge.dispute.closed hook. Won (or an inquiry closed, or a dispute
+   *  prevented) lifts what the dispute alone held; lost takes the disputed
+   *  payment off the balance; any other status lifts the hold and lists the
+   *  dispute for a person (disputesToReview). A close that arrives before its
+   *  create is applied now and recorded, so the create freezes nothing. */
+  function disputeClosed(paymentIntent, { won = false, status = null, amountCents = null, disputeId = null } = {}) {
+    if (!paymentIntent) return answer(null);
+    const kind = outcomeKind(won, status);
+    return onPayingKey(paymentIntent, (r) => {
+      const d = disputesOf(r)[paymentIntent];
+      if (openOn(r, paymentIntent)) {
+        const changed = closeOpenDispute(r, paymentIntent, kind, { status, amountCents });
+        return { rec: r, result: kind === "lost" ? r.keyId : changed };
+      }
+      if (d && d.review === true && kind !== "review") {
+        // A later close with a known outcome resolves one waiting on a person.
+        return { rec: r, result: resolveOn(r, paymentIntent, kind, amountCents) };
+      }
+      if (d) return { result: null }; // delivered again
+      // The close came first: apply it and remember it for the create.
+      const ds = disputeMap(r);
+      if (kind === "lost") takeLost(r, paymentIntent, amountCents);
+      ds[paymentIntent] = { id: disputeId ? String(disputeId).slice(0, 64) : null, at: null, closedAt: isoNow(), outcome: kind === "review" ? String(status || "unknown").slice(0, 40) : kind, early: true, ...(kind === "review" ? { review: true } : {}) };
+      log(`[credits] key ${r.keyId}: dispute ${kind === "review" ? "closed with an outcome to review" : kind} before its create (${paymentIntent}); its create freezes nothing`);
+      return { rec: r, result: kind === "lost" ? r.keyId : null };
+    });
+  }
+  // A dispute waiting on a person, resolved: lost takes its payment, won takes
+  // nothing. Either way it leaves the review list.
+  function resolveOn(r, paymentIntent, kind, amountCents = null) {
+    const ds = disputeMap(r);
+    const d = ds[paymentIntent];
+    if (!d || d.review !== true) return null;
+    if (kind === "lost") takeLost(r, paymentIntent, amountCents);
+    ds[paymentIntent] = { ...d, review: false, resolved: kind, resolvedAt: isoNow() };
+    afterDisputeClose(r);
+    log(`[credits] key ${r.keyId}: dispute on ${paymentIntent} resolved as ${kind}`);
+    return r.keyId;
+  }
+  /** Operator: resolve a dispute listed for review as "won" or "lost". */
+  async function resolveDispute(keyId, paymentIntent, outcome) {
+    if (outcome !== "won" && outcome !== "lost") return null;
+    const hit = (await keysByKeyId(String(keyId || ""))).find((x) => disputesOf(x.rec)[paymentIntent]?.review === true);
+    if (!hit) return null;
+    return mutate(hit.hash, (r) => (r && r.keyId === keyId && disputesOf(r)[paymentIntent]?.review === true ? { rec: r, result: resolveOn(r, paymentIntent, outcome) } : { result: null }));
+  }
+  /** Disputes closed with an outcome a person has to resolve, by key. */
+  async function disputesToReview() {
+    const out = [];
+    for (const { rec } of await allKeysLite()) {
+      for (const [pi, d] of Object.entries(disputesOf(rec))) if (d && d.review === true) out.push({ keyId: rec.keyId, paymentIntent: pi, outcome: d.outcome || null, closedAt: d.closedAt || null });
+    }
+    return out;
   }
 
   // REFUND ON REQUEST. The holder of a key asks for its unspent balance back
@@ -1220,7 +1658,6 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // next request under a new idempotency key. A key the operator switched off
   // keeps its unspent balance refundable; a key whose payment is under an open
   // dispute answers "disputed" (the dispute settles what goes back).
-  const disputeOpen = (rec) => Boolean(rec.disputedPaymentIntent) && (!rec.disputeClosedAt || String(rec.disputeAt || "") > String(rec.disputeClosedAt));
   // A request is sent as one card refund per payment it draws on (a key
   // topped up holds more than one payment). Part 0 keeps the idempotency key
   // a one-payment request always had.
@@ -1243,7 +1680,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     for (const p of [...rec.payments].reverse()) {
       if (left <= 0) break;
       const had = Number(p.refundedCents) || 0;
-      const take = Math.min(left, Math.max(0, (Number(p.cents) || 0) - had));
+      // A share a lost dispute returned to the card is never refunded again.
+      const take = Math.min(left, Math.max(0, (Number(p.cents) || 0) - had - (Number(p.lostCents) || 0)));
       if (take > 0) { parts.push({ pi: p.pi || null, cents: take, targetCents: had + take, state: "pending" }); left -= take; }
     }
     return { cents: parts.reduce((a, p) => a + p.cents, 0), parts };
@@ -1258,7 +1696,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       const rr = rec.refundRequest;
       if (rr && rr.state === "done") return { result: { status: "refunded", keyId: rec.keyId, refundedUsd: (Number(rr.cents) || 0) / 100 } };
       if (rr) return { result: { status: "retry", keyId: rec.keyId, rr: { ...rr, parts: partsOf(rec) } } };
-      if (rec.disabled && (rec.disabledReason === "disputed" || disputeOpen(rec))) return { result: { status: "disputed", keyId: rec.keyId } };
+      if ((rec.disabled && rec.disabledReason === "disputed") || disputeHolds(rec)) return { result: { status: "disputed", keyId: rec.keyId } };
       if ((Number(rec.heldMicro) || 0) > 0) return { result: { status: "in_flight", keyId: rec.keyId } };
       // The amount, and the charge total each part brings its charge to, are
       // fixed here, under the lock, so every send of this request is the same one.
@@ -1349,6 +1787,12 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   async function refundRequestsOwed() {
     const t = now();
     return (await allKeysLite()).filter(({ rec }) => {
+      // A frozen key whose refund waits for a person's approval, listed until
+      // the review is resolved; only a dispute that decides what goes back
+      // (open, or closed and waiting on a person, itself listed in
+      // disputesToReview) holds it off this list.
+      const review = rec?.fraudReview?.state;
+      if ((review === "owed" || review === "disputed") && !rec.refundRequest && (Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0) > 0) return !disputeHolds(rec);
       const rr = rec?.refundRequest;
       if (!rr || rr.state === "done") return false;
       if (rr.state === "failed") return true;
@@ -1356,7 +1800,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     }).map(({ rec }) => rec.keyId);
   }
 
-  // The one word /api/gateway-status shows for owed card refunds. Both reads
+  // The one word /api/gateway-status shows for owed card refunds. Its reads
   // walk every key record, and that surface is public and uncached, so the
   // word is computed at most once per OWED_WORD_TTL_MS and concurrent readers
   // share one walk; a failed walk is not kept.
@@ -1365,7 +1809,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   function refundsOwedWord(ttlMs = OWED_WORD_TTL_MS) {
     const t = Date.now();
     if (owedWordMemo && t - owedWordMemo.at < ttlMs) return owedWordMemo.p;
-    const p = Promise.all([refusalsToRefund(), refundRequestsOwed()]).then(([a, b]) => (a.length || b.length ? "owed" : "ok"));
+    // A dispute closed with an outcome a person has to resolve reads owed too.
+    const p = Promise.all([refusalsToRefund(), refundRequestsOwed(), disputesToReview()]).then(([a, b, c]) => (a.length || b.length || c.length ? "owed" : "ok"));
     owedWordMemo = { at: t, p };
     p.catch(() => { if (owedWordMemo?.p === p) owedWordMemo = null; });
     return p;
@@ -1417,28 +1862,57 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     })();
   }
 
-  // GUESSING WATCH. A key is 24 random bytes, so it cannot be guessed, and a
-  // key works only when its hash is a stored record, so it cannot be made up.
-  // Refusing a client after failed keys would also refuse a paying customer
-  // behind the same address and protect nothing, so failures are counted, not
-  // refused: per client (req.ip, an IPv6 address by its /64), a client that
-  // sends CREDITS_BAD_KEY_MAX (default 20) unknown or malformed keys within
-  // CREDITS_BAD_KEY_WINDOW_MS (default 10 minutes) is logged once and counted
-  // on the operator credits view. Per process; the map is bounded.
+  // GUESSING WATCH. A key is 32 random bytes (24 for keys issued before the
+  // prefix), so it cannot be guessed, and a key works only when its hash is a
+  // stored record, so it cannot be made up. Refusing a client after failed
+  // keys would also refuse a paying customer behind the same address, so a
+  // valid key is ALWAYS served: only failed lookups are slowed. Per client
+  // (req.ip, an IPv6 address by its /64), a client that sends the private
+  // table's badKey.failedMax unknown, malformed or revoked keys within its
+  // badKey.windowMs (src/credits-guards.js) is logged once, counted on the
+  // operator credits view, and its further failed lookups are answered 429
+  // until that window ends (a key that works is answered as usual). The count
+  // is kept in the shared store too; this process's own map (bounded) answers
+  // when the store does not. Without the table nobody is held: a key cannot
+  // be guessed either way, and a valid key is served regardless.
   const badKeys = new Map(); // client -> { n, until }
-  const badKeyMax = () => { const n = Number(process.env.CREDITS_BAD_KEY_MAX); return Number.isFinite(n) && n > 0 ? n : 20; };
-  const badKeyWindowMs = () => { const n = Number(process.env.CREDITS_BAD_KEY_WINDOW_MS); return Number.isFinite(n) && n > 0 ? n : 10 * 60 * 1000; };
+  const badKeyBound = () => creditsGuards()?.badKey || null;
+  const badKeyMax = () => badKeyBound()?.failedMax ?? Infinity;
+  const badKeyWindowMs = () => badKeyBound()?.windowMs ?? 0;
   const badKeyStats = { failures: 0, clientsOverThreshold: 0 };
   function noteBadKey(client, at = now()) {
     const k = limiterKey(String(client || "?"));
     badKeyStats.failures++;
+    if (!badKeyBound()) return;
     let e = badKeys.get(k);
     if (!e || e.until <= at) { e = { n: 0, until: at + badKeyWindowMs() }; }
     e.n++;
     badKeys.delete(k); badKeys.set(k, e);
     while (badKeys.size > 5000) badKeys.delete(badKeys.keys().next().value);
-    if (e.n === badKeyMax()) { badKeyStats.clientsOverThreshold++; log(`[credits] a client sent ${e.n} unknown or malformed keys within the window`); }
+    if (e.n === badKeyMax()) { badKeyStats.clientsOverThreshold++; log("[credits] a client passed the failed-key bound"); }
+    // Past the bound here the client is held already: nothing more is
+    // written. Below it, one fixed counter per client per window (INCRBY and
+    // an expiry), so a flood of failed keys keeps the store O(1) per client.
+    if (e.n > badKeyMax()) return;
+    const tag = tagOf("badkey", k);
+    shared.counterAdd("credits-badkey", tag, 1, badKeyWindowMs(), { now: at })
+      .then((r) => { if (r?.ok && Number(r.value) >= badKeyMax()) return shared.flagSet("credits-badkey-hold", tag, at + badKeyWindowMs(), { now: at }); })
+      .catch(() => {});
   }
+  /** Whether a client is past the failed-key bound: this process's count, then the shared one. */
+  function badKeyHeldHere(client, at = now()) {
+    const e = badKeys.get(limiterKey(String(client || "?")));
+    return Boolean(e && e.until > at && e.n >= badKeyMax());
+  }
+  async function badKeyHeld(client, at = now()) {
+    if (!badKeyBound()) return false;
+    if (badKeyHeldHere(client, at)) return true;
+    const r = await shared.flagGet("credits-badkey-hold", tagOf("badkey", limiterKey(String(client || "?"))), { now: at }).catch(() => null);
+    return Boolean(r?.ok && r.until > at);
+  }
+  // A lookup that found no usable key: unknown, malformed or revoked.
+  const failedLookup = (a) => Boolean(a) && !a.ok && (a.reason === "unknown" || a.reason === "malformed" || a.revoked === true);
+  const BAD_KEY_BUSY = { error: "Too many requests with a credits key from this client. Try again later.", reason: "rate_limited" };
 
   // Express gate: mount BEFORE the x402 paywall. `priceFor(method, path)` ->
   // { priceUsd } for catalog routes, null otherwise. A Bearer a402_ key on a
@@ -1452,14 +1926,24 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // landed debit: req.creditsDebitId names it. A debit that does not land
   // in CREDITS_DEBIT_WAIT_MS (default 3000) ends the answer without a
   // receipt and is retried as before; the hold is never released for it.
-  function gate(priceFor, { settleBeforeEnd = null } = {}) {
+  // `grantOf(req)`: a connector grant this request is paid under (src/mcp-oauth.js:
+  // the connector's own loopback names it beside its secret marker), or null.
+  // A grant spends its key by id, under the grant's daily cap.
+  function gate(priceFor, { settleBeforeEnd = null, grantOf = null } = {}) {
     // What every request does before the hold: null = not ours, pass through;
-    // `{ done: true }` = answered here; else the key and the priced item.
+    // `{ done: true }` = answered here; else the key (or grant) and the priced item.
     const begin = (req, res) => {
+      const grant = grantOf ? grantOf(req) : null;
       const auth = String(req.headers?.authorization || "");
-      if (!/^Bearer a402_/.test(auth)) return null;
-      const key = auth.slice(7).trim();
+      if (!grant && !/^Bearer a402_/.test(auth)) return null;
+      const key = grant ? null : auth.slice(7).trim();
       const item = priceFor(req.method, req.path, req);
+      if (!item && grant) {
+        // A grant pays priced catalog routes only; anything else is refused, never served free on its say-so.
+        res.setHeader("X-Credits-Error", "not-priced");
+        res.status(402).json({ error: "This route is not sold for credits.", reason: "not-priced" });
+        return { done: true };
+      }
       if (!item) return null; // not a priced catalog route - let the site handle it
       // Identity-bound routes (wallet-keyed memory, my-usage) derive the caller
       // from a SIGNED x402 payer; a credits key carries no verified wallet, so
@@ -1477,14 +1961,40 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
         res.status(402).json({ error: "Prepaid credits are spent only on Agent402's own services. This route buys from an outside seller with our wallet and is sold for a wallet payment only (x402, or MPP on a chain).", reason: "third-party-purchase" });
         return { done: true };
       }
-      return { key, item };
+      return { key, grant, item };
     };
     // After the hold: the refusal, or the settle-on-finish wiring.
-    const arm = (req, res, next, a, item) => {
+    const arm = (req, res, next, a, item, heldShared = false) => {
       if (!a.ok) {
-        if (a.reason === "unknown" || a.reason === "malformed") noteBadKey(req.ip);
+        // Only a failed lookup is slowed; a key that works is never refused here.
+        // A connector grant names its key by id from the connector itself, never
+        // a guessed key, so its refusal is not a failed lookup of this client.
+        if (failedLookup(a) && !grantOf?.(req)) {
+          const busy = heldShared || badKeyHeldHere(req.ip);
+          noteBadKey(req.ip);
+          if (busy) { res.setHeader("X-Credits-Error", "rate_limited"); return res.status(429).json(BAD_KEY_BUSY); }
+        }
         res.setHeader("X-Credits-Error", a.reason);
-        return res.status(402).json({ error: a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.` : a.reason === "unknown" ? "Unknown credits key." : a.reason === "disabled" ? "This credits key is disabled." : "Malformed credits key.", reason: a.reason, balanceUsd: a.balanceUsd ?? null, priceUsd: item.priceUsd, ...creditsTopupFields(baseUrl) });
+        // Under a connector grant the app is never told the balance (the
+        // consent page promises it cannot read it), and the person was never
+        // shown a key, so the refusal names neither.
+        if (grantOf?.(req)) {
+          const told = a.reason === "insufficient" ? `The balance is too low for this call ($${item.priceUsd}). Add credits on your balance page.`
+            : a.reason === "daily_cap" ? `This connection's daily spending cap is reached: $${a.spentTodayUsd} of $${a.capUsd} spent today (UTC). Raise the cap on your balance page, or wait for the next day.`
+            : a.reason === "frozen" ? "This credits balance is on hold while a payment that loaded it is reviewed, so it cannot pay for calls right now."
+            : a.reason === "disabled" ? "This credits balance is disabled."
+            : a.reason === "over_call_limit" ? `This call costs $${item.priceUsd}, above the $${a.limitUsd} per-call limit set on this balance. Change it from the balance page.`
+            : a.reason === "over_daily_limit" ? `This call would pass the $${a.limitUsd} daily limit set on this balance. It resets at 00:00 UTC; change it from the balance page.`
+            : "This credits balance cannot pay for calls right now.";
+          return res.status(402).json({ error: told, reason: a.reason, priceUsd: item.priceUsd, ...(a.limitUsd != null ? { limitUsd: a.limitUsd } : {}), ...(a.reason === "daily_cap" ? { capUsd: a.capUsd, spentTodayUsd: a.spentTodayUsd } : {}), ...creditsTopupFields(baseUrl) });
+        }
+        const said = a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.`
+          : a.reason === "daily_cap" ? `This connection's daily spending cap is reached: $${a.spentTodayUsd} of $${a.capUsd} spent today (UTC). Raise the cap on your balance page, or wait for the next day.`
+          : a.reason === "frozen" ? "This credits balance is on hold while a payment that loaded it is reviewed, so it cannot pay for calls right now."
+          : a.reason === "unknown" ? "Unknown credits key." : a.reason === "disabled" ? "This credits key is disabled."
+          : a.reason === "over_call_limit" ? `This call costs $${item.priceUsd}, above the $${a.limitUsd} per-call limit set on this balance. Change it from the balance page.`
+          : a.reason === "over_daily_limit" ? `This call would pass the $${a.limitUsd} daily limit set on this balance. It resets at 00:00 UTC; change it from the balance page.` : "Malformed credits key.";
+        return res.status(402).json({ error: said, reason: a.reason, balanceUsd: a.balanceUsd ?? null, priceUsd: item.priceUsd, ...(a.limitUsd != null ? { limitUsd: a.limitUsd } : {}), ...(a.reason === "daily_cap" ? { capUsd: a.capUsd, spentTodayUsd: a.spentTodayUsd } : {}), ...creditsTopupFields(baseUrl) });
       }
       // Accepted: the x402 dispatcher is bypassed for this request, so any
       // UNSIGNED payment headers riding alongside must not survive to a handler
@@ -1492,7 +2002,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       // as the Tempo and Stripe gates do on acceptance.
       for (const h of ["payment-signature", "x-payment", "payment-identifier", "x-pow-solution"]) { if (req.headers && h in req.headers) delete req.headers[h]; }
       req.creditsSettling = true; req.creditsSettled = true; req.creditsKeyId = a.keyId; req.creditsPriceUsd = item.priceUsd;
-      if (a.holdId) { liveHolds.add(a.holdId); keepHoldFresh(a.hash, a.holdId); }
+      if (a.holdId && usePg) { liveHolds.add(a.holdId); keepHoldFresh(a.hash, a.holdId); }
       res.setHeader("X-Credits-Balance", String(a.balanceUsd));
       const slug = item.slug || req.path;
       const via = salePathOf(req);
@@ -1503,11 +2013,11 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       // database they are scheduled (and retried), and the charged amount is
       // recorded when the debit lands.
       const settleHold = (chargeUsd = null) => {
-        if (!usePg) { const c = settle(a.hash, a.heldMicro, slug, chargeUsd, null, via, debitId); if (c) req.creditsCharged = c.chargedUsd; return; }
+        if (!usePg) { const c = settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId ?? null, via, debitId); if (c) req.creditsCharged = c.chargedUsd; return; }
         later(`debit of key ${a.keyId}`, () => settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId, via, debitId), (c) => { if (c) req.creditsCharged = c.chargedUsd; }, a.holdId, { persist: true });
       };
       const releaseHold = () => {
-        if (!usePg) { release(a.hash, a.heldMicro); return; }
+        if (!usePg) { release(a.hash, a.heldMicro, a.holdId ?? null); return; }
         later(`release of key ${a.keyId}`, () => release(a.hash, a.heldMicro, a.holdId), null, a.holdId);
       };
       let done = false;
@@ -1577,7 +2087,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
           settleHold();
           return;
         }
-        const c = settle(a.hash, a.heldMicro, slug, null, null, via, debitId);
+        const c = settle(a.hash, a.heldMicro, slug, null, a.holdId ?? null, via, debitId);
         if (c) { req.creditsCharged = c.chargedUsd; req.creditsChargedOnClose = c.chargedUsd; }
       };
       const priorEnd = res.end;
@@ -1593,7 +2103,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
           const chargeUsd = Number.isFinite(metered) && metered > 0 ? metered : null;
           const landed = (c) => { if (c) { req.creditsCharged = c.chargedUsd; req.creditsDebitId = debitId; } };
           if (!usePg) {
-            try { landed(settle(a.hash, a.heldMicro, slug, chargeUsd, null, via, debitId)); } catch (e) { log(`[credits] debit of key ${a.keyId} failed: ${String(e?.message || e).slice(0, 120)}`); }
+            try { landed(settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId ?? null, via, debitId)); } catch (e) { log(`[credits] debit of key ${a.keyId} failed: ${String(e?.message || e).slice(0, 120)}`); }
             return priorEnd.apply(this, args);
           }
           const self = this;
@@ -1662,12 +2172,17 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       });
       return next();
     };
+    const hold = (b) => (b.grant ? authorizeGrant(b.grant.keyId, b.item.priceUsd, { id: b.grant.id, capUsd: b.grant.capUsd }) : authorize(b.key, b.item.priceUsd));
     if (!usePg) {
       return (req, res, next) => {
         const b = begin(req, res);
         if (!b) return next();
         if (b.done) return;
-        return arm(req, res, next, authorize(b.key, b.item.priceUsd), b.item);
+        if (!b.grant) return arm(req, res, next, authorize(b.key, b.item.priceUsd), b.item);
+        return hold(b).then((a) => arm(req, res, next, a, b.item), () => {
+          res.setHeader("X-Credits-Error", "unavailable");
+          res.status(503).json({ error: "Prepaid credits are unavailable right now; nothing was charged. Retry shortly.", reason: "unavailable" });
+        });
       };
     }
     return async (req, res, next) => {
@@ -1675,14 +2190,14 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       if (!b) return next();
       if (b.done) return;
       let a;
-      try { a = await authorize(b.key, b.item.priceUsd); }
+      try { a = await hold(b); }
       catch (e) {
         // No hold could be placed: nothing is charged and nothing is served.
         log(`[credits] hold failed: ${String(e?.message || e).slice(0, 120)}`);
         res.setHeader("X-Credits-Error", "unavailable");
         return res.status(503).json({ error: "Prepaid credits are unavailable right now; nothing was charged. Retry shortly.", reason: "unavailable" });
       }
-      return arm(req, res, next, a, b.item);
+      return arm(req, res, next, a, b.item, failedLookup(a) && !b.grant ? await badKeyHeld(req.ip) : false);
     };
   }
 
@@ -1711,6 +2226,153 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       .map(({ rec }) => ({ ...balanceOf(rec), roomUsd: rec.disabled || rec.refundRequest ? 0 : capRoomUsd(rec), lowNotice: !rec.lowNoticeOff, disabledReason: rec.disabled ? rec.disabledReason || "operator" : null }))
       .sort((a, b) => String(b.lastUsedAt || b.createdAt).localeCompare(String(a.lastUsedAt || a.createdAt)));
   }
+  // ---- the holder's controls and the freezes ------------------------------------
+  // Disable a key for `reason` unless a stronger cause already holds it.
+  const disableFor = (r, reason) => {
+    if (r.disabled === true && !CAUSE_RANK[r.disabledReason]) r.disabledReason = "operator";
+    const held = r.disabled === true ? CAUSE_RANK[r.disabledReason] || 0 : 0;
+    r.disabled = true;
+    if ((CAUSE_RANK[reason] || 0) >= held) r.disabledReason = reason;
+  };
+  /**
+   * An early fraud warning on a payment that loaded a key. The key is frozen
+   * at once (no further spend; a call running on it takes nothing) and the
+   * warning is recorded on it. Then its unspent balance goes back:
+   *  - automatically (CREDITS_EFW_AUTO_REFUND, on unless set off) when the
+   *    whole unspent balance is refundable on the warned payment itself (a
+   *    refund only ever goes to that payment's own charge) and the day's total
+   *    of these card refunds made without review stays inside the private table's day total;
+   *  - otherwise it is listed as owed for a person to approve
+   *    (refundRequestsOwed, the operator credits view and the refundsOwed
+   *    word; approveFraudRefund sends it).
+   * Answers { status }; "in_flight" or a throw means try again (the webhook
+   * is delivered again). Idempotent: a payment already handled moves nothing.
+   */
+  const efwAutoRefund = () => !/^(0|false|off|no)$/i.test(String(process.env.CREDITS_EFW_AUTO_REFUND || "").trim());
+  // The day's automatic total, from the private table; none without it (every such refund waits for approval).
+  const efwDayMaxCents = () => { const n = Number(creditsGuards()?.efw?.warningRefundDayMaxUsd); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : 0; };
+  const setReview = (hash, patch) => mutate(hash, (rec) => (rec?.fraudReview ? { rec: (rec.fraudReview = { ...rec.fraudReview, ...patch }, rec), result: true } : { result: null }));
+  async function fraudWarning(paymentIntent, { warningId = null } = {}) {
+    if (!paymentIntent) return { status: "unknown" };
+    let hit = (await allKeys()).find((x) => paidBy(x.rec, paymentIntent));
+    if (!hit) {
+      // No key yet: remember the payment (a later claim on it issues nothing),
+      // then look again for a key minted meanwhile (the claim checks after it mints).
+      await rememberWarned(paymentIntent, warningId);
+      hit = (await allKeys()).find((x) => paidBy(x.rec, paymentIntent));
+      if (!hit) { log(`[credits] fraud warning on ${paymentIntent} before any key; a claim on it is refused and refunded`); return { status: "unknown", remembered: true }; }
+    }
+    const first = await mutate(hit.hash, (r) => {
+      if (!paidBy(r, paymentIntent)) return { result: null };
+      const seen = Array.isArray(r.fraudWarnings) ? r.fraudWarnings : [];
+      if (!seen.some((w) => w.pi === paymentIntent)) r.fraudWarnings = [...seen, { pi: paymentIntent, at: new Date(now()).toISOString(), ...(warningId ? { id: String(warningId).slice(0, 64) } : {}) }].slice(-10);
+      // A key already frozen by a dispute keeps that cause: the dispute's
+      // outcome decides it, and a dispute won later moves the freeze to the
+      // warning (enableByPaymentIntent) instead of lifting it.
+      if (r.disabled === true && r.disabledReason === "disputed") r.disabled = true;
+      else disableFor(r, "fraud-warning");
+      if (!r.refundRequest && !r.fraudReview) r.fraudReview = { pi: paymentIntent, at: now(), state: "owed" };
+      log(`[credits] key ${r.keyId} frozen (fraud-warning, ${paymentIntent})`);
+      return { rec: r, result: { keyId: r.keyId, review: r.fraudReview ? { ...r.fraudReview } : null } };
+    });
+    if (!first) return { status: "unknown" };
+    const review = first.review;
+    if (!review || review.state !== "owed" || review.pi !== paymentIntent) return { status: "frozen", keyId: first.keyId };
+    if (!efwAutoRefund()) return { status: "frozen", keyId: first.keyId, owed: true };
+    const rec = await readRec(hit.hash);
+    if (!rec) return { status: "unknown" };
+    if ((Number(rec.heldMicro) || 0) > 0) return { status: "in_flight", keyId: rec.keyId };
+    const plan = refundPlan(rec);
+    if (plan.cents === 0) { await setReview(hit.hash, { state: "nothing", decidedAt: now() }); return { status: "nothing_to_refund", keyId: rec.keyId }; }
+    // Without review, only the warned payment's own card charge is ever refunded.
+    if (plan.parts.some((p) => p.pi !== paymentIntent)) { log(`[credits] key ${rec.keyId}: fraud-warning refund spans other payments; owed for approval`); return { status: "frozen", keyId: rec.keyId, owed: true }; }
+    // The day's automatic total, shared across servers.
+    const day = `d${new Date(now()).toISOString().slice(0, 10)}`;
+    const add = await shared.counterAdd("credits-efw-auto", day, plan.cents, 2 * DAY_MS, { now: now() });
+    if (!add?.ok || Number(add.value) > efwDayMaxCents()) {
+      if (add?.ok) await shared.counterAdd("credits-efw-auto", day, -plan.cents, 2 * DAY_MS, { now: now() });
+      log(`[credits] key ${rec.keyId}: fraud-warning refund over the automatic day total; owed for approval`);
+      return { status: "frozen", keyId: rec.keyId, owed: true };
+    }
+    let r;
+    try { r = await requestRefundOf(hit.hash); }
+    catch (e) { await shared.counterAdd("credits-efw-auto", day, -plan.cents, 2 * DAY_MS, { now: now() }); throw e; }
+    if (r.status === "in_flight") { await shared.counterAdd("credits-efw-auto", day, -plan.cents, 2 * DAY_MS, { now: now() }); return r; }
+    // Only a refund that was sent (refunded, or pending at the card network)
+    // counts against the day and closes the review. Any other answer sent
+    // nothing: the day total goes back and the review stays open (or waits on
+    // the dispute, which decides what goes back).
+    if (r.status !== "refunded" && r.status !== "pending") {
+      await shared.counterAdd("credits-efw-auto", day, -plan.cents, 2 * DAY_MS, { now: now() });
+      if (r.status === "disputed") await setReview(hit.hash, { state: "disputed" });
+      else if (r.status === "nothing_to_refund") await setReview(hit.hash, { state: "nothing", decidedAt: now() });
+      log(`[credits] key ${rec.keyId}: fraud-warning refund not sent (${r.status}); ${r.status === "disputed" ? "the dispute decides it" : "owed for approval"}`);
+      return { status: r.status, keyId: rec.keyId, ...(r.status === "nothing_to_refund" ? {} : { owed: true }) };
+    }
+    await setReview(hit.hash, { state: "sent-on-warning", cents: plan.cents, decidedAt: now() });
+    log(`[credits] key ${rec.keyId}: fraud-warning refund of $${(plan.cents / 100).toFixed(2)} sent to ${paymentIntent} (${r.status})`);
+    return { ...r, auto: true };
+  }
+  /** Operator: approve the refund a fraud review holds, by key id (the same
+   *  refund on request every other path uses). */
+  async function approveFraudRefund(keyId) {
+    const hit = (await keysByKeyId(String(keyId || ""))).find((x) => x.rec?.fraudReview?.state === "owed");
+    if (!hit) return { status: "unknown" };
+    const r = await requestRefundOf(hit.hash);
+    // Only a refund actually sent closes the review; an open dispute holds it
+    // (the dispute's close makes it owed again), and anything else leaves it owed.
+    if (r.status === "refunded" || r.status === "pending") await setReview(hit.hash, { state: "approved", decidedAt: now() });
+    else if (r.status === "disputed") await setReview(hit.hash, { state: "disputed" });
+    else if (r.status === "nothing_to_refund") await setReview(hit.hash, { state: "nothing", decidedAt: now() });
+    return r;
+  }
+  /** Operator view: every key a fraud warning froze, and what became of its balance. */
+  async function fraudReviews() {
+    return (await allKeysLite()).filter(({ rec }) => rec?.fraudReview).map(({ rec }) => ({ keyId: rec.keyId, state: rec.fraudReview.state, cents: rec.fraudReview.cents ?? null, at: new Date(Number(rec.fraudReview.at) || 0).toISOString(), balanceUsd: microToUsd(rec.balanceMicro) }));
+  }
+  /** Disable a key presented in full, without spending it. The same answer for
+   *  any key, live or not: nothing says whether the key existed. */
+  const REVOKED = { status: "received", message: "If this is a live credits key, it is now disabled and cannot be spent. Its unspent balance stays refundable to the card that bought it, from the balance page." };
+  async function revokeByKey(keyString) {
+    if (typeof keyString === "string" && KEY_RE.test(keyString)) {
+      await mutate(hashKey(keyString), (r) => {
+        if (!r) return { result: null };
+        if (r.disabled && CAUSE_RANK[r.disabledReason] >= CAUSE_RANK.revoked) return { result: null };
+        disableFor(r, "revoked");
+        note(r, { k: "revoked" });
+        log(`[credits] key ${r.keyId} revoked by key`);
+        return { rec: r, result: true };
+      });
+    }
+    return { ...REVOKED };
+  }
+  /** The holder revokes a balance's key from the balance page. */
+  async function revokeFor(keyId, email) {
+    const hit = await ownedRec(keyId, email);
+    if (!hit) return { status: "unknown" };
+    await mutate(hit.hash, (r) => {
+      if (!r || recEmailKey(r) !== emailKeyOf(email)) return { result: null };
+      if (r.disabled && CAUSE_RANK[r.disabledReason] >= CAUSE_RANK.revoked) return { result: null };
+      disableFor(r, "revoked"); note(r, { k: "revoked" });
+      return { rec: r, result: true };
+    });
+    return { status: "revoked", keyId };
+  }
+  /** The holder's limits on one balance: a most per UTC day and a most per
+   *  call, in USD (0 or null clears one). Answers the limits as set. */
+  async function setLimits(keyId, email, { dailyUsd = null, perCallUsd = null } = {}) {
+    const hit = await ownedRec(keyId, email);
+    if (!hit) return { status: "unknown" };
+    const toMicro = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.min(usdToMicro(n), creditsBalanceMaxCents() * 10_000) : 0; };
+    const limits = { dailyMicro: toMicro(dailyUsd), perCallMicro: toMicro(perCallUsd) };
+    await mutate(hit.hash, (r) => {
+      if (!r || recEmailKey(r) !== emailKeyOf(email)) return { result: null };
+      r.limits = limits;
+      return { rec: r, result: true };
+    });
+    return { status: "set", keyId, limits: { dailyUsd: microToUsd(limits.dailyMicro) || null, perCallUsd: microToUsd(limits.perCallMicro) || null } };
+  }
+
   async function ownedRec(keyId, email) {
     const e = emailKeyOf(email);
     const hit = e ? (await keysByKeyId(keyId)).find((x) => recEmailKey(x.rec) === e) : null;
@@ -1753,7 +2415,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   async function issueNewKey(keyId, email) {
     const hit = await ownedRec(keyId, email);
     if (!hit) return { status: "unknown" };
-    const key = `a402_${randomBytes(24).toString("base64url")}`;
+    const key = newKeyString();
     const next = hashKey(key);
     const move = (rec) => {
       if (!rec || rec.keyId !== keyId || !sameEmail(recEmailKey(rec), email)) return { status: "unknown" };
@@ -1798,5 +2460,5 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { authorizeGrant, grantSpentToday, sessionOwner, refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, fraudWarning, approveFraudRefund, fraudReviews, disputeClosed, disputeLostByPaymentIntent, disputesToReview, resolveDispute, revokeByKey, revokeFor, setLimits, notePaymentFailed, sourceTag, badKeyHeld, failedLookup, _internals: { boughtInDayCents, refuseAndRefund, refuseSession, purchasesIn }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }

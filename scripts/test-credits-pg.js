@@ -8,6 +8,7 @@
 // ends and the history names the debit's id.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
+import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
@@ -374,7 +375,7 @@ try {
     ok(!(await B.refusalsToRefund()).includes("cs_pgstuck"), "pg: a fresh pending refusal is not owed");
     t += 6 * 60_000;
     ok((await B.refusalsToRefund()).includes("cs_pgstuck"), "pg: pending past five minutes is owed");
-    delete process.env.CREDITS_DAILY_MAX_USD;
+    looseCreditsChecks();
   }
   // ---- refund on request, on the rows: two containers, one refund ---------
   {
@@ -441,6 +442,92 @@ try {
     ok(n.status === "issued" && (await rowRec(hashKey(k.key))) === null && (await rowRec(hashKey(n.key)))?.keyId === k.keyId, "pg: the record moves to the new key's row in one step");
     ok((await T2.authorize(k.key, 0.001)).reason === "unknown" && (await T2.balance(n.key)).balanceUsd === 40, "pg: another container refuses the old key and spends the new one");
     ok((await T2.claim("cs_tp")).keyId === k.keyId && (await T2.claim("cs_tq")).status === "topped_up", "pg: the claim index follows the record");
+  }
+  // ---- fraud warnings and disputes on the rows, across containers -------------
+  {
+    const ws = {}, wch = {}, wref = [];
+    const pay = (id, pi, email, meta = {}) => { ws[id] = { id, mode: "payment", payment_status: "paid", payment_intent: pi, customer_details: { email }, metadata: { credits_pack: "credits-20", ...meta } }; wch[pi] = { amount: 2000, amount_refunded: 0 }; };
+    const wstripe = {
+      checkout: { sessions: { retrieve: async (id) => { if (!ws[id]) throw new Error("no"); return ws[id]; } } },
+      paymentIntents: { retrieve: async (pi) => ({ id: pi, latest_charge: wch[pi] ? { amount: wch[pi].amount, amount_refunded: wch[pi].amount_refunded, outcome: { type: "authorized", risk_level: "normal" }, payment_method_details: { card: { fingerprint: `fp_${pi}` } } } : null }) },
+      refunds: { create: async (a) => { const c = wch[a.payment_intent]; const amt = a.amount ?? (c.amount - c.amount_refunded); c.amount_refunded += amt; const r = { id: `re_w${wref.length}`, amount: amt, status: "succeeded", payment_intent: a.payment_intent, metadata: a.metadata || {} }; wref.push(r); return { ...r }; },
+        retrieve: async (id) => ({ ...wref.find((r) => r.id === id) }), list: async ({ payment_intent }) => ({ data: wref.filter((r) => r.payment_intent === payment_intent) }) },
+    };
+    const W1 = createCredits({ stripe: wstripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
+    const W2 = createCredits({ stripe: wstripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
+    // A warning before the key: remembered on the database, refused on another container's claim.
+    pay("cs_wpg", "pi_wpg", "wpg@x.com");
+    ok((await W1.fraudWarning("pi_wpg")).remembered === true, "pg: a warning on a payment with no key yet is remembered");
+    const wc = await W2.claim("cs_wpg");
+    ok(wc.status === "not_completed" && !wc.key && wch.pi_wpg.amount_refunded === 2000 && (await W1.balancesForEmail("wpg@x.com")).length === 0, `pg: another container's claim on it issues no key and refunds it in full (${wc.status})`);
+    ok((await W1.claim("cs_wpg")).status === "not_completed" && wref.filter((r) => r.payment_intent === "pi_wpg").length === 1, "pg: a second claim refunds nothing more");
+    // A dispute on a top-up, lost: the purchase's share stays usable.
+    pay("cs_lpa", "pi_lpa", "lp@x.com");
+    const LK = await W1.claim("cs_lpa");
+    pay("cs_lpb", "pi_lpb", "lp@x.com", { credits_topup: LK.keyId, credits_account: "lp@x.com" });
+    ok((await W2.claim("cs_lpb")).status === "topped_up", "guard: pg: the balance was topped up");
+    await W1.disableByPaymentIntent("pi_lpb", "disputed");
+    ok((await W2.authorize(LK.key, 0.001)).reason === "frozen", "guard: pg: the dispute froze the key");
+    ok((await W2.disputeClosed("pi_lpb", { won: false, status: "lost", amountCents: 2000 })) === LK.keyId, "pg: a dispute lost reaches the row");
+    const lrow = await rowRec(hashKey(LK.key));
+    ok(lrow.balanceMicro === 20_000_000 && lrow.disabled === false && lrow.payments.find((p) => p.pi === "pi_lpb")?.lostCents === 2000, `pg: the disputed payment leaves the balance once and the other payment's share is usable (${lrow.balanceMicro})`);
+    ok((await W2.disputeClosed("pi_lpb", { won: false, status: "lost", amountCents: 2000 })) === null && (await rowRec(hashKey(LK.key))).balanceMicro === 20_000_000, "pg: the same outcome delivered again takes nothing more");
+    // A warning, then a dispute, then the dispute won: the review is owed again.
+    const keepAuto = process.env.CREDITS_EFW_AUTO_REFUND;
+    process.env.CREDITS_EFW_AUTO_REFUND = "off";
+    pay("cs_wwp", "pi_wwp", "wwp@x.com");
+    const WK = await W1.claim("cs_wwp");
+    ok((await W1.fraudWarning("pi_wwp")).owed === true, "guard: pg: the warning's refund is owed");
+    await W2.disableByPaymentIntent("pi_wwp", "disputed");
+    ok(!(await W1.refundRequestsOwed()).includes(WK.keyId), "pg: nothing is listed as owed while the dispute runs");
+    ok((await W2.approveFraudRefund(WK.keyId)).status === "disputed" && (await rowRec(hashKey(WK.key))).fraudReview?.state === "disputed" && wch.pi_wwp.amount_refunded === 0, "pg: an approval during the dispute sends nothing and holds the review");
+    await W1.enableByPaymentIntent("pi_wwp", "disputed");
+    const wrow = await rowRec(hashKey(WK.key));
+    ok(wrow.disputes?.pi_wwp?.closedAt && wrow.disputes.pi_wwp.outcome === "won" && wrow.disabledReason === "fraud-warning" && wrow.fraudReview?.state === "owed" && (await W2.refundRequestsOwed()).includes(WK.keyId), "pg: the dispute won is recorded, the key stays frozen for the warning and the refund is owed");
+    ok((await W2.approveFraudRefund(WK.keyId)).status === "refunded" && wch.pi_wwp.amount_refunded === 2000, "pg: the approval then sends it");
+    if (keepAuto === undefined) delete process.env.CREDITS_EFW_AUTO_REFUND; else process.env.CREDITS_EFW_AUTO_REFUND = keepAuto;
+    // Two disputes on one key, each kept on its own payment across containers:
+    // a loss takes only its payment, a win restores only what it held, and the
+    // key thaws only when neither is open.
+    const two = async (tag) => {
+      pay(`cs_t${tag}a`, `pi_t${tag}a`, `t${tag}@x.com`);
+      const K = await W1.claim(`cs_t${tag}a`);
+      pay(`cs_t${tag}b`, `pi_t${tag}b`, `t${tag}@x.com`, { credits_topup: K.keyId, credits_account: `t${tag}@x.com` });
+      ok((await W2.claim(`cs_t${tag}b`)).status === "topped_up", `guard: pg: key ${tag} holds two payments`);
+      await W1.disableByPaymentIntent(`pi_t${tag}a`, "disputed", { disputeId: `dp_t${tag}a` });
+      await W2.disableByPaymentIntent(`pi_t${tag}b`, "disputed", { disputeId: `dp_t${tag}b` });
+      return K;
+    };
+    const LL = await two("ll");
+    await W2.disputeClosed("pi_tlla", { won: false, status: "lost" });
+    ok((await W1.authorize(LL.key, 0.001)).reason === "frozen" && (await rowRec(hashKey(LL.key))).balanceMicro === 20_000_000, "pg: lost+lost: the first loss takes its payment; the key stays frozen for the other dispute");
+    await W1.disputeClosed("pi_tllb", { won: false, status: "lost" });
+    const llRow = await rowRec(hashKey(LL.key));
+    ok(llRow.balanceMicro === 0 && llRow.disabled === true && !(await W2.refundRequestsOwed()).includes(LL.keyId), `pg: lost+lost: both payments leave, the key stays disabled, nothing owed (${llRow.balanceMicro})`);
+    const LW = await two("lw");
+    await W1.disputeClosed("pi_tlwa", { won: false, status: "lost" });
+    await W2.disputeClosed("pi_tlwb", { won: true, status: "won" });
+    const lwRow = await rowRec(hashKey(LW.key));
+    ok(lwRow.balanceMicro === 20_000_000 && lwRow.disabled === false, `pg: lost+won: only the lost payment leaves and the key thaws (${lwRow.balanceMicro})`);
+    const WL = await two("wl");
+    await W2.disputeClosed("pi_twla", { won: true, status: "won" });
+    ok((await W1.authorize(WL.key, 0.001)).reason === "frozen", "pg: won+lost: the win thaws nothing while the other dispute is open");
+    await W1.disputeClosed("pi_twlb", { won: false, status: "lost" });
+    const wlRow = await rowRec(hashKey(WL.key));
+    ok(wlRow.balanceMicro === 20_000_000 && wlRow.disabled === false, `pg: won+lost: the loss takes only its payment and the key thaws (${wlRow.balanceMicro})`);
+    const RV = await two("rv");
+    await W1.disputeClosed("pi_trvb", { won: true, status: "won" });
+    ok((await W2.authorize(RV.key, 0.001)).reason === "frozen", "pg: the second dispute won first keeps the key frozen while the first is open");
+    await W2.disputeClosed("pi_trva", { won: false, status: "lost" });
+    const rvRow = await rowRec(hashKey(RV.key));
+    ok(rvRow.balanceMicro === 20_000_000 && rvRow.disabled === false, `pg: ...and the first one lost then takes only its payment and the key thaws (${rvRow.balanceMicro})`);
+    // A close before its create, and a status not recognized.
+    pay("cs_tea", "pi_tea", "te@x.com");
+    const TE = await W1.claim("cs_tea");
+    await W2.disputeClosed("pi_tea", { won: false, status: "status-not-known", disputeId: "dp_te" });
+    await W1.disableByPaymentIntent("pi_tea", "disputed", { disputeId: "dp_te" });
+    ok((await W2.authorize(TE.key, 0.001)).ok === true && (await W1.disputesToReview()).some((d) => d.keyId === TE.keyId) && (await W2.refundsOwedWord(0)) === "owed", "pg: an unrecognized close before its create freezes nothing, is listed for review and reads owed");
+    ok((await W1.resolveDispute(TE.keyId, "pi_tea", "lost")) === TE.keyId && !(await W2.disputesToReview()).some((d) => d.keyId === TE.keyId), "pg: a person's resolution clears it");
   }
   // The balance page's lookups find rows by email and key id in the
   // database (the history-free full walk stays for status and the owed word).

@@ -2,8 +2,7 @@
 // limiter's IPv6 /64 keying and key cap, offline and booted.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -75,17 +74,18 @@ ok(limiterKey("2001:db8:1:2:aaaa::1|hash") === "2001:db8:1:2:aaaa::1|hash", "a c
 
 // --- booted: every free request sheds when the in-flight ceiling is 1; the
 // protected ones do not, and the discovery CPU budget refuses before computing.
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: "shed-test-operator-token-0123456789", SHED_INFLIGHT: "1" },
-  stdio: ["ignore", "ignore", "inherit"],
-});
-const base = `http://127.0.0.1:${port}`;
+let srv = null;
+const bootOpts = {
+  stores: "load-shed",
+  timeoutMs: 60_000,
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: "shed-test-operator-token-0123456789", SHED_INFLIGHT: "1" },
+};
+let base = "";
 const from = (ip, extra = {}) => ({ headers: { "x-forwarded-for": ip, ...extra } });
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted (/health is never shed)");
+  srv = await bootServer(bootOpts);
+  base = srv.url;
+  ok(true, "server booted (/health is never shed)");
   const ready = await fetch(`${base}/health/ready`, from("203.0.113.5"));
   const readyQ = await fetch(`${base}/health?ready=1`, from("203.0.113.5"));
   ok(ready.status === 200 && readyQ.status === 200, `the readiness check (/health/ready, /health?ready=1) is never shed (${ready.status}, ${readyQ.status})`);
@@ -141,17 +141,17 @@ try {
   const refusals = await (await fetch(`${base}/__operator/discovery-refusals.json`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }))).json();
   const day = (refusals.days || []).find((d) => d.day === new Date().toISOString().slice(0, 10)) || (refusals.days || [])[0];
   ok(shedRoute.status === 503 && day?.byRule?.["load-gate"] === 3 && day.refused === 3 && day.byRouteAndRule?.find?.["load-gate"] === 2 && day.byRouteAndRule?.route?.["load-gate"] === 1, `a search the load gate sheds is counted under the load-gate rule in the discovery-refusals view, and no other shed path is (${JSON.stringify({ byRule: day?.byRule, byRoute: day?.byRoute })})`);
-} finally { proc.kill("SIGKILL"); }
+} finally { srv?.child.kill("SIGKILL"); }
 
-const port2 = await getFreePort();
-const proc2 = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port2), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_CPU_BUDGET_MS: "1" },
-  stdio: ["ignore", "ignore", "inherit"],
-});
-const base2 = `http://127.0.0.1:${port2}`;
+let srv2 = null;
+const bootOpts2 = {
+  stores: "load-shed-2",
+  timeoutMs: 60_000,
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_CPU_BUDGET_MS: "1" },
+};
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base2}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
+  srv2 = await bootServer(bootOpts2);
+  const base2 = srv2.url;
   const statuses = [];
   for (let i = 0; i < 6; i++) statuses.push((await fetch(`${base2}/api/route?q=${encodeURIComponent(`json csv convert ${i}`)}`, from(`198.51.100.${i}`))).status);
   ok(statuses.includes(503) && statuses[0] === 200, `past the global CPU budget, uncached searches from DIFFERENT addresses are refused (${statuses.join(",")})`);
@@ -171,7 +171,7 @@ try {
   ok(inflightCheck > body.indexOf("cacheGet(cacheKey)") && inflightCheck < body.indexOf("computeFn("), "the in-flight ceiling is checked after the cache lookup and before the compute");
   ok(/const releaseSlot = discoveryInFlight\.enter\(\{ slug: analyticsSlug \}\);\s*let result, syncMs, pastDeadline = false;\s*try \{[\s\S]*?\} finally \{\s*releaseSlot\(\);/.test(body), "...and the in-flight slot is released in a finally");
   ok(/const meter = \(ms\) => \{[^}]*discoveryCpuBudget\.record\(ms\)/.test(body), "each router slice is charged to the CPU budget as it runs");
-} finally { proc2.kill("SIGKILL"); }
+} finally { srv2?.child.kill("SIGKILL"); }
 
 // --- the heartbeat leg that reads this endpoint ------------------------------
 // The issue it opens is public. The operator response carries counts (responses,

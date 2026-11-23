@@ -14,7 +14,8 @@ import { createOperatorResolver, payToOperatorOf } from "./payer-operators.js";
 import { summarizeOperators, composeScoreboard } from "./scoreboard.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
-import { stripMcpMarker, watchLoopbackOutcome, loopbackCallCut, noteLoopbackCounted } from "./mcp-loopback.js";
+import { stripMcpMarker, watchLoopbackOutcome, loopbackCallCut, noteLoopbackCounted, loopbackGrantOf } from "./mcp-loopback.js";
+import { createMcpOAuth } from "./mcp-oauth.js";
 import { createMcpX402Gate, mcpX402PaymentSpecs } from "./mcp-x402-routes.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
@@ -471,6 +472,7 @@ import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, sellablePacks } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
 import { createCreditsAccount, mountCreditsAccount, accountSecretFrom } from "./credits-account.js";
+import { refuseCreditsKeyInUrl } from "./credits-key-url.js";
 import { createJsonDocument as createCreditsAccountStore } from "./json-document.js";
 import { creditsAccountPage, creditsVerifyPage, creditsNoticePage, creditsNoticeOffPage } from "./credits-account-page.js";
 import { sendMonitorEmail, emailSendStatus, subscriptionPriceText } from "./email.js";
@@ -526,6 +528,7 @@ import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
 import { transparencyPage, repoTraffic } from "./transparency.js";
 import { quickstartPage } from "./quickstart.js";
+import { startPage, START_PATH } from "./start-page.js";
 import { whatIsX402Page } from "./what-is-x402.js";
 import { whatIsMppPage } from "./what-is-mpp.js";
 import { howToPayPage } from "./how-to-pay.js";
@@ -779,6 +782,8 @@ import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
 // Translate-and-speak: composes the chat gateway and the tts kit in-process (src/tools/dub-kit.js).
 import { DUB_TOOLS } from "./tools/dub-kit.js";
+// Redact, then chat: redact's patterns, then the chat gateway in-process (src/tools/redact-chat-kit.js).
+import { REDACT_CHAT_TOOLS } from "./tools/redact-chat-kit.js";
 import { OFFICE_TOOLS } from "./tools/office-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
@@ -859,6 +864,7 @@ import { recordSellerVerification, sellerVerificationStatus } from "./seller-ver
 import { setPayerDustFloorUsd, externalPaymentEventsForAsync, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerSummaryAsync, ledgerBuyerRepeat7, ledgerDailyAsync, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerConcentrationIn, buyerDayCounts, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { parseRevenueRange, hasRangeQuery, inWindow, revenueSeriesFirstDay, rangedRevenueDaily, revenueWindowTotals, revenuePageRange, carryPartial } from "./revenue-range.js";
 import { upstreamCostsLoaded, upstreamCostsSummary, upstreamCostsGaps, upstreamCostsStatus } from "./upstream-costs.js";
+import { creditsGuardsWord } from "./credits-guards.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot, economyHistoryFlush } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
@@ -900,7 +906,7 @@ import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
 import { routerBenchmarks, ROUTER_BENCHMARKS_PATH } from "./router-benchmarks.js";
 import { agentcorePage, AGENTCORE_SLUG } from "./agentcore-page.js";
-import { creditsSalesEnabled, creditsTopupFields, creditsBalanceMaxCents, creditsTermsVersion } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsSalesSwitch, mcpOAuthSwitch, creditsTopupFields, creditsBalanceMaxCents, creditsTermsVersion } from "./credits-sales.js";
 
 // The /v1 settle breaker reads whether a wallet has ever paid from the sales
 // ledger, handed in here so the breaker never imports it (see the module).
@@ -916,7 +922,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...VALIDATE_MORE_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...DOMAIN_AVAILABILITY_TOOLS, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...PARSE_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...SOLANA_RPC_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...VALIDATE_MORE_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...DOMAIN_AVAILABILITY_TOOLS, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...PARSE_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...SOLANA_RPC_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...REDACT_CHAT_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -933,7 +939,7 @@ const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZ
 const MODEL_BACKED_KITS = [
   ...JUDGE_TOOLS, ...JUDGE_PREVIEW_TOOLS,   // model-backed whether or not the key is set, so the claim is never wrong
   ...LOOP_GATE_TOOLS,                       // the loop gate sells the same judgment (its code-only stops are still a model-backed route)
-  ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...IMAGE_GEN_TOOLS, ...IMAGES_FAST_TOOLS, ...TTS_TOOLS, ...DUB_TOOLS, ...STT_TOOLS,
+  ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...IMAGE_GEN_TOOLS, ...IMAGES_FAST_TOOLS, ...TTS_TOOLS, ...DUB_TOOLS, ...REDACT_CHAT_TOOLS, ...STT_TOOLS,
   ...EMBED_TOOLS, ...MODERATE_TOOLS, ...PDF_SUMMARIZE_TOOLS,
   ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS,
   ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS,
@@ -2657,7 +2663,13 @@ for (const tool of buildFlightTools({
 // identity error — a charged failure. Flag them here, in one place over the
 // fully-assembled catalog, so the paywall offers EVM rails only for these
 // routes. Every other tool is untouched and keeps all configured chains.
+// A route that may be paid before it runs (src/settle-first.js) is marked, so
+// a surface that says its payment settles only on the answer carries the
+// settle-first sentence (src/settle-first-copy.js settleFirstClause). Not
+// enumerable: no listing that spreads a definition picks it up.
+const SETTLE_FIRST_COPY_SLUGS = settleFirstSlugs(GATEWAY_TOOLS_ENABLED);
 for (const def of Object.values(CATALOG)) {
+  if (SETTLE_FIRST_COPY_SLUGS.has(def.slug)) Object.defineProperty(def, "settlesFirst", { value: true, configurable: true });
   // A proof-of-work tool answers 400, with the field named, when its input
   // holds a value that cannot be coerced (src/caller-input-errors.js); any
   // other bare error stays a 500. Wrapped here, over the assembled catalog,
@@ -2673,7 +2685,7 @@ for (const def of Object.values(CATALOG)) {
   const runS = EVM_RUN_SECONDS[def.slug];
   if (runS && !def.runSeconds) {
     def.runSeconds = runS;
-    def.description = `${String(def.description || "").trim()} ${runTimeNote(runS)}`;
+    def.description = `${String(def.description || "").trim()} ${runTimeNote(runS, { settlesFirst: def.settlesFirst === true })}`;
   }
   // The route's async profile (src/slow-routes.js): which routes run as a job
   // on "Prefer: respond-async", which are advertised as slow, and the numbers
@@ -3024,6 +3036,9 @@ app.use(paidNoStoreMiddleware());
 // email-link routes under /followups and /alerts are registered early; the
 // PostHog proxy sets its own nosniff as well).
 app.use(securityHeaders());
+// A credits key in a URL is refused before anything reads or records the URL
+// (src/credits-key-url.js).
+app.use(refuseCreditsKeyInUrl());
 // Web Bot Auth (src/web-bot-auth.js): off unless WEB_BOT_AUTH=on. Verifies a
 // signing agent's HTTP Message Signature and records it on req.webBotAuth;
 // never refuses and never changes an answer.
@@ -3316,6 +3331,8 @@ const checkoutLimiter = createRateLimiter("checkout", { perMin: 6, perHour: 40 }
 // Refund requests count on their own key, so a holder resending a refund never
 // uses up the same address's checkout budget.
 const creditsRefundLimiter = createRateLimiter("credits-refund", { perMin: 6, perHour: 40 });
+// Revoking by key counts on its own: a holder retrying a refund never uses up a revoke.
+const creditsRevokeLimiter = createRateLimiter("credits-revoke", { perMin: 6, perHour: 40 });
 // The paths that limiter guards. Named here because the check has to run BEFORE
 // express.json() (mounted globally further down): a malformed body 400s at the
 // parser, so those requests never reached the in-route check at all - which is
@@ -3649,10 +3666,15 @@ try {
     // A refunded or disputed pack payment: the refunded amount leaves the key's
     // balance; the key is disabled once the payment is fully reversed.
     onChargeReversed: (paymentIntent, type, reversal) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded", reversal) : null),
-    // A dispute that closed in our favor gives the key it disabled back.
-    onDisputeClosed: (paymentIntent, { won }) => (won && _credits ? _credits.enableByPaymentIntent(paymentIntent, "disputed") : null),
+    // A dispute closed: won gives back what it alone held; lost takes the
+    // disputed payment off the balance and releases the other payments' share.
+    onDisputeClosed: (paymentIntent, outcome) => (_credits ? _credits.disputeClosed(paymentIntent, outcome) : null),
     // A refund sent on request settles by its own status (src/credits.js settleRefund).
     onRefundUpdated: (refund) => (_credits ? _credits.settleRefund(refund) : null),
+    // An early fraud warning freezes the key that payment loaded and refunds its unspent balance.
+    onFraudWarning: (paymentIntent, o) => (_credits ? _credits.fraudWarning(paymentIntent, o) : null),
+    // A credits payment that did not go through counts against its purchase checks.
+    onPaymentFailed: (f) => (_credits ? _credits.notePaymentFailed(f) : null),
   }) : null;
 } catch (e) { console.warn("[monitors] subscriptions init failed:", String(e?.message || e).slice(0, 200)); _subs = null; }
 // The SAME monitor products, subscribed to with a WALLET instead of a card
@@ -3717,6 +3739,9 @@ try {
     onLowBalance: (n) => { void _creditsAccount?.sendLowBalance(n); },
     onReceipt: (r) => { void _creditsAccount?.sendReceipt(r); },
     onNewKey: (n) => { void _creditsAccount?.sendNewKeyNotice(n); },
+    onSpendLimit: (n) => { void _creditsAccount?.sendSpendLimit(n); },
+    // Stripe-facing tags are keyed digests (never an email or an address).
+    tagSecret: accountSecretFrom(process.env.STRIPE_SECRET_KEY),
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
 // The balance page's sign-in and emails (src/credits-account.js): built with
@@ -3732,6 +3757,20 @@ try {
     termsVersion: creditsTermsVersion,
   }) : null;
 } catch (e) { console.warn("[credits] balance page init failed:", String(e?.message || e).slice(0, 200)); _creditsAccount = null; }
+// Connector sign-in (src/mcp-oauth.js): an app connected to /mcp pays for
+// tool calls from a credits balance under a daily cap. Off unless MCP_OAUTH=on
+// and credits are on sale; its routes are mounted before the connector.
+let _mcpOAuth = null;
+try {
+  const acct = _credits ? accountSecretFrom(process.env.STRIPE_SECRET_KEY) : null;
+  _mcpOAuth = _credits && _creditsAccount && acct ? createMcpOAuth({
+    credits: _credits, account: _creditsAccount, baseUrl: BASE_URL, sendEmail: faSendEmail,
+    secret: acct,
+    store: createCreditsAccountStore({ name: "mcp-oauth", file: joinPath(_credits._dir, "_mcp-oauth.json"), log: () => {} }),
+    clientStore: createCreditsAccountStore({ name: "mcp-oauth-clients", file: joinPath(_credits._dir, "_mcp-oauth-clients.json"), log: () => {} }),
+    requestStore: createCreditsAccountStore({ name: "mcp-oauth-requests", file: joinPath(_credits._dir, "_mcp-oauth-requests.json"), log: () => {} }),
+  }) : null;
+} catch (e) { console.warn("[mcp-oauth] init failed:", String(e?.message || e).slice(0, 200)); _mcpOAuth = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
 // id, carried ONLY in the subscriber's email - never in the report JSON or on
 // the report page, which subscribers are told to share. Derived from the
@@ -4679,6 +4718,11 @@ app.get("/api/gateway-status", async (req, res) => {
     backup: { status: (() => { try { return backupAlarmStatus(); } catch { return "unknown"; } })() },
     // One word, never a value: whether the private upstream-cost table loaded.
     upstreamCosts: { status: upstreamCostsStatus() },
+    // One word, never a value: whether the private credits table
+    // (src/credits-guards.js) is complete while CREDITS_SALES or MCP_OAUTH asks
+    // for it: ok, or attention only while a switch is set and the table is
+    // missing or incomplete (sales and the connector sign-in stay off).
+    creditsGuards: { status: creditsGuardsWord(creditsSalesSwitch() || mcpOAuthSwitch()) },
     // The ElevenLabs breaker on /api/tts and /api/tts-hd (src/tools/tts-kit.js):
     // ok / cooling (a throttle sent calls to the backups) / probing. One word.
     speechUpstream: { status: (() => { try { return elevenLabsBreakerState(); } catch { return "unknown"; } })() },
@@ -4986,6 +5030,7 @@ app.get("/transparency", async (_req, res) => htmlCache(res, 300, 900).send(tran
 // /contact folded into /company (2026-09-09): one page for who we are and how to reach us.
 app.get("/contact", (_req, res) => res.redirect(301, "/company#contact"));
 app.get("/quickstart", (_req, res) => htmlCache(res, 300, 900).send(quickstartPage(BASE_URL)));
+app.get(START_PATH, (_req, res) => htmlCache(res, 300, 900).send(startPage(BASE_URL, CATALOG)));
 app.get("/what-is-x402", (_req, res) => htmlCache(res, 300, 900).send(whatIsX402Page(BASE_URL, {
   stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }),
   leaderboardSnapshot: getLeaderboardSnapshot(),
@@ -5613,12 +5658,21 @@ if (_credits) {
     // no obligation exists. Redemption below is untouched on purpose.
     if (!creditsSalesEnabled()) return res.status(503).json({ error: "Prepaid credits are not on sale. Existing keys still work and spend down as normal; pay per call with a wallet over x402, or buy a report by card." });
     if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
-    try { res.json({ url: (await _credits.createCheckout(req.body?.pack)).url }); }
-    catch (e) {
-      if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
-      console.warn("[credits] createCheckout failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
-      res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
-    }
+    // A purchase belongs to an account: it starts from the balance page,
+    // signed in with the email the credits go to (POST /credits/account/buy).
+    res.status(401).json({ error: "Sign in to buy credits: a purchase starts from your balance page, signed in with the email the credits go to.", signIn: `${BASE_URL}/credits/account`, buy: { method: "POST", url: `${BASE_URL}/credits/account/buy`, body: { pack: Object.keys(sellablePacks())[0] || null } } });
+  });
+  // Revoke a key without spending it: whoever holds the key (its owner, or
+  // anyone who found it leaked) sends it and it stops working. The same answer
+  // for every key, so nothing says whether one existed. The balance stays
+  // refundable to the card that bought it from the balance page.
+  app.post("/api/credits/revoke", express.json({ limit: "4kb" }), async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    { const rl = creditsRevokeLimiter.check(clientIp(req)); if (rl.limited) { res.set("Retry-After", String(Math.max(1, Math.ceil(Number(rl.retryAfterSeconds) || 60)))); return res.status(429).json({ status: "rate_limited", error: "Too many requests, please slow down." }); } }
+    const auth = String(req.headers.authorization || "");
+    const key = /^Bearer a402_/.test(auth) ? auth.slice(7).trim() : typeof req.body?.key === "string" ? req.body.key.trim() : "";
+    try { res.json(await _credits.revokeByKey(key)); }
+    catch (e) { console.warn("[credits] revoke failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); res.status(503).json({ status: "error", error: "Could not take the request right now. Retry shortly." }); }
   });
   app.get("/api/credits/claim", async (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -5630,7 +5684,8 @@ if (_credits) {
     res.set("Cache-Control", "no-store");
     const auth = String(req.headers.authorization || "");
     const b = /^Bearer a402_/.test(auth) ? await _credits.balance(auth.slice(7).trim()) : null;
-    if (!b && /^Bearer a402_/.test(auth)) _credits.noteBadKey(req.ip);
+    // Only a failed lookup is slowed; a key that works is always answered.
+    if (!b && /^Bearer a402_/.test(auth)) { const busy = await _credits.badKeyHeld(req.ip); _credits.noteBadKey(req.ip); if (busy) return res.status(429).json({ error: "Too many requests with a credits key from this client. Try again later.", reason: "rate_limited" }); }
     if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", ...creditsTopupFields(BASE_URL) });
     res.json(b);
   });
@@ -5649,7 +5704,7 @@ if (_credits) {
     let r;
     try { r = await _credits.requestRefund(auth.slice(7).trim()); }
     catch (e) { console.warn("[credits] refund request failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); return res.status(503).json({ status: "error", error: "Could not take the refund request right now; nothing moved. Retry shortly." }); }
-    if (r.status === "unknown" || r.status === "malformed") _credits.noteBadKey(req.ip);
+    if (r.status === "unknown" || r.status === "malformed") { const busy = await _credits.badKeyHeld(req.ip); _credits.noteBadKey(req.ip); if (busy) return res.status(429).json({ status: "rate_limited", error: "Too many requests with a credits key from this client. Try again later. Nothing moved." }); }
     const said = {
       refunded: `The unspent balance was refunded to the card that bought this key ($${Number(r.refundedUsd || 0).toFixed(2)}); the key is disabled.`,
       nothing_to_refund: "This key holds no unspent balance; nothing was refunded.",
@@ -5671,7 +5726,21 @@ if (_credits) {
   });
   app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return operatorNotFound(req, res);
-    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund(), refundRequestsOwed: await _credits.refundRequestsOwed() });
+    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund(), refundRequestsOwed: await _credits.refundRequestsOwed(), fraudReviews: await _credits.fraudReviews(), disputesToReview: await _credits.disputesToReview() });
+  });
+  // After reading a dispute's outcome in Stripe (one closed with a status
+  // neither won nor lost, listed as disputesToReview): records it, lost takes
+  // that payment off the balance, and clears it from creditsRefunds.
+  // Body { keyId, paymentIntent, outcome: "won" | "lost" }.
+  app.post("/__operator/credits/dispute-reviewed", express.json(), async (req, res) => {
+    if (!operatorAuthed(req)) return operatorNotFound(req, res);
+    const keyId = String(req.body?.keyId || ""), pi = String(req.body?.paymentIntent || ""), outcome = String(req.body?.outcome || "");
+    if (!/^[0-9a-f]{12}$/.test(keyId) || !/^pi_[A-Za-z0-9_]+$/.test(pi) || (outcome !== "won" && outcome !== "lost")) return res.status(400).json({ error: "keyId (12-character key id), paymentIntent (pi_...) and outcome (won or lost) are required" });
+    try {
+      const done = await _credits.resolveDispute(keyId, pi, outcome);
+      if (!done) return res.status(404).json({ error: "no dispute on that key and payment is waiting for review" });
+      res.json({ ok: true, keyId, paymentIntent: pi, outcome });
+    } catch (e) { res.status(503).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
   });
   // After refunding a refused purchase by hand in Stripe: clears it from
   // creditsRefunds. Body { session: "cs_..." }.
@@ -5682,6 +5751,16 @@ if (_credits) {
     if (!(await _credits.refusalsToRefund()).includes(s)) return res.status(404).json({ error: "that session is not awaiting a refund" });
     await _credits.markRefusalRefunded(s);
     res.json({ ok: true, session: s });
+  });
+  // Approve the refund an early fraud warning left owed on a frozen key (one
+  // the card refund made without review did not send: switched off, over its day total, or
+  // spanning other payments). Body { keyId }.
+  app.post("/__operator/credits/fraud-refund", express.json(), async (req, res) => {
+    if (!operatorAuthed(req)) return operatorNotFound(req, res);
+    const keyId = String(req.body?.keyId || "");
+    if (!/^[0-9a-f]{12}$/.test(keyId)) return res.status(400).json({ error: "keyId must be a 12-character key id" });
+    try { res.json(await _credits.approveFraudRefund(keyId)); }
+    catch (e) { res.status(503).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
   });
   app.post("/__operator/credits/disable", express.json(), async (req, res) => {
     if (!operatorAuthed(req)) return operatorNotFound(req, res);
@@ -6290,7 +6369,7 @@ app.get("/__operator/evidence-watch.json", (req, res) => {
     rows: listed,
   });
 });
-// North Carolina sales tax on card-funded sales of digital audio and video,
+// North Carolina sales tax on card-funded sales of the taxable routes (NC_TAXABLE_SLUGS),
 // by month and billing ZIP, for filing (src/nc-sales-tax.js). Built from the
 // sales ledger; ?month=YYYY-MM (default: this month and last).
 app.get("/__operator/nc-sales-tax.json", async (req, res) => {
@@ -11292,6 +11371,9 @@ const mcpMountOpts = {
   // PAYMENT-SIGNATURE header, so the x402 paywall verifies and settles it.
   // FREE_MODE has no paywall, so nothing to pay.
   x402Loopback: FREE_MODE ? null : createMcpMppLoopback({ port: () => loopbackPort }),
+  // A connector grant's paid call (src/mcp-oauth.js): replayed to the route
+  // with a one-call grant handle, paid by the credits gate.
+  creditsLoopback: !FREE_MODE && _mcpOAuth ? createMcpMppLoopback({ port: () => loopbackPort }) : null,
   // What the connector's own text says it takes in the call: the account the
   // pages read (src/connector-pay.js), so the two cannot disagree on a boot.
   payWires: connectorWires(),
@@ -11348,6 +11430,9 @@ const mcpMountOpts = {
     capturePostHogToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false, probe: isProbe });
   },
 };
+// The connector sign-in's routes come first: its /mcp reader resolves a
+// bearer before the connector runs, and /mcp/credits is rewritten to /mcp.
+_mcpOAuth?.mount(app, { express, clientIp });
 mountMcp(app, CATALOG, { ...mcpMountOpts, serverCardAliases: ["/.well-known/mcp/server-card.json"] });
 // ONE-PRODUCT MCP ENDPOINT (2026-09-10): /mcp/sec serves the SEC filings
 // products only - the EDGAR reads and the three filing reports - under their
@@ -11414,15 +11499,17 @@ app.get("/api/pricing", (_req, res) => {
       // answers 503, so this block must not advertise packs or a checkout an
       // agent would be refused. Existing keys still spend, so it says how.
       credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(sellablePacks()).map((p) => p.cents / 100),
-        // The IDS, not just the dollar amounts: POST /api/credits/checkout takes
+        // The IDS, not just the dollar amounts: the checkout takes
         // {"pack":"credits-20"} and an agent cannot guess that from a bare 20.
         packs: Object.entries(sellablePacks()).map(([id, p]) => ({ pack: id, label: p.label, priceUsd: p.cents / 100 })),
-        checkout: { method: "POST", url: `${BASE_URL}/api/credits/checkout`, body: { pack: Object.keys(sellablePacks())[0] } },
+        checkout: { method: "POST", url: `${BASE_URL}/credits/account/buy`, body: { pack: Object.keys(sellablePacks())[0] }, signIn: `${BASE_URL}/credits/account`, note: "a purchase is made signed in to the balance page with the email the credits go to; card authentication may be asked at checkout" },
+        revoke: { method: "POST", url: `${BASE_URL}/api/credits/revoke`, auth: "Authorization: Bearer a402_<key>", returns: "the same answer for every key; a live key stops working and its unspent balance stays refundable" },
+        keyFormat: "a402_ck_ followed by 43 base64url characters (keys issued earlier: a402_ and 32 characters); sent only in the Authorization header",
         balance: `${BASE_URL}/api/credits/balance`,
         // The terms the purchase carries (src/terms.js), as fields.
         balanceMaxUsd: creditsBalanceMaxCents() / 100, expires: false, feesUsd: 0,
         refund: { method: "POST", url: `${BASE_URL}/api/credits/refund`, auth: "Authorization: Bearer a402_<key>", returns: "the whole unspent balance, rounded up to the cent, to the card that bought the key; the key is disabled" } }
-        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance` },
+        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance`, revoke: { method: "POST", url: `${BASE_URL}/api/credits/revoke`, auth: "Authorization: Bearer a402_<key>" } },
       humanProducts: {
         reports: Object.entries(HUMAN_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsd: p.price / 100, slug: p.slug, buy: `${BASE_URL}/reports` })),
         monitors: Object.entries(MONITOR_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsdPerMonth: p.price / 100, slug: p.slug, subscribe: `${BASE_URL}/monitors` })),
@@ -12288,7 +12375,7 @@ if (!FREE_MODE) {
       return priceUsd ? { priceUsd, slug: def.slug, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
     // While receipts are signed, a final 200 is debited before its answer
     // ends, so the receipt names a landed debit (src/credits.js).
-    }, { settleBeforeEnd: () => gateMounted("receiptSigner") }));
+    }, { settleBeforeEnd: () => gateMounted("receiptSigner"), grantOf: loopbackGrantOf }));
     markGateMounted("credits");
     console.log("Prepaid card credits enabled (Bearer a402_ keys)");
   }
@@ -13814,7 +13901,9 @@ async function admitPaidRun(req, res, def) {
 // (scripts/test-settle-first.js). Not the video route: its job is parked and
 // resumed across calls.
 // Also dub (translate-and-speak): its first paid upstream call is the chat
-// gateway's translation, behind the same settle point, after dub's own checks.
+// gateway's translation, behind the same settle point, after dub's own checks;
+// and redact-chat, whose one paid upstream call is the chat gateway's, after
+// its own checks and its masking.
 // And the catalog routes with a real upstream cost, each with its settle point
 // after its own input checks and before its first paid call: web search and
 // answer (src/tools/search.js), image generation (image-gen-kit), speech

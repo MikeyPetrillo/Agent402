@@ -83,6 +83,45 @@ Loaded when a connector or front-door file is read.
   keeps it (then 410 expired for 90 days), `ANSWER_SHARE_PER_HOUR` (default 60) caps each payer's shares,
   claimed before the call, and `ANSWER_SHARE_DIR` is the file store without the state database. Takedown:
   `POST /__operator/answer-shares/delete {id, note}` (410 removed).
+- **Connector sign-in (OAuth 2.1):** `src/mcp-oauth.js` (+ `src/mcp-oauth-page.js`), off unless `MCP_OAUTH=on`
+  (exactly) and credits are on sale; off, every route falls through (404) and `/mcp` is untouched. Public clients
+  by dynamic registration (https or localhost redirect URIs), authorize with PKCE S256 only, exact redirect_uri,
+  state required; the consent page (no framing, CSRF token plus same-origin on every form, its own CSP whose
+  form-action names this site, the card checkout and the app's return origin) signs the person in with a code
+  emailed to any address, as the balance page's link is (single use, tries, lockout), offers buying a pack by
+  card only once signed in, through `credits.createCheckout` with the email and client address (the purchase
+  checks, card authentication and limits of `POST /credits/account/buy`; back to the same sign-in, which claims
+  the session and accepts it only for that email), and binds one key id and a daily cap. A key frozen by a
+  dispute or fraud warning (`disabled` with a `FROZEN` reason) is not offered and pays nothing under a grant
+  (`authorizeOn` answers `frozen`). `/start` and `payment.info` name `/mcp/credits` only while both
+  `CREDITS_SALES` and `MCP_OAUTH` are on (`creditsConnectorOn`, `src/credits-sales.js`). Codes single-use and short-lived, access
+  tokens short-lived, refresh tokens rotated; a spent code or refresh token presented again revokes the whole
+  grant. State is three size-capped json-documents (apps, pending sign-ins, grants with codes and tokens as
+  digests; `clientStore`/`requestStore` passed from server.js); a registration past the cap evicts the oldest
+  app that never completed a sign-in, and such apps are pruned after an idle limit. Pending sign-ins are
+  capped per browser (the sign-in cookie it presents names its owner), per address, per wider network (an
+  IPv6 /48) and per app: a requester over a cap lets go of its own oldest there, or its new request is
+  refused (429), never another requester's; a full map refuses no one and lets go of the oldest request of
+  the network or app holding the most. The `/mcp` reader is
+  mounted before the connector: a token of ours resolves to a grant (`req.mcpCreditsGrant`) or answers 401
+  with `WWW-Authenticate` naming the metadata; no token, or someone else's, passes untouched. `/mcp/credits`
+  is the same connector that answers 401 without a token. A paid tool under a grant is replayed with a
+  one-call handle (`openGrantHandle`, `X-Agent402-Via-Grant`, read only beside the genuine marker) and paid
+  by the credits gate; free tools stay free. The balance page lists grants (app, key, cap, spend today,
+  created, last use, coarse network) and changes or revokes them. Lifetimes are `MCP_OAUTH_*`
+  variables (docs/configuration.md); every limit (code tries, sends, lockout, per-address rates counted by
+  `limiterKey`, so an IPv6 /64 is one address, the bad-token bound, the pending-request cap and the
+  document size) comes from the private credits table (`mcpOAuth` in `src/credits-guards.js`), and the
+  sign-in stays off without it. A wrong code is counted before it is compared on two shared counters,
+  the requester's address and the emailed code (a right code gives its counts back), never per email, so a
+  stranger's guesses never lock an email's owner out; an address past its bound is sent no new code. Code
+  sends have a global hourly budget and a per-address daily total.
+  Tokens carry a server-keyed tag: a made-up token is refused with no store read, a token found bad is held
+  as bad briefly, and only failed lookups are slowed (429 past the bound); a valid token is never refused.
+  Under a grant a refusal names no balance and no key. The sign-in pages (one h1 each, errors with
+  `role="alert"` tied to their field, a disabled form on lockout with a resend) are held by
+  `scripts/test-mcp-oauth-pages.js`. Authorize errors are shown on this site, never redirected to the app's address. A refusal never
+  names its check (`scripts/test-mcp-oauth.js`).
 - **Answer ceiling:** a free tool answer larger than `AGENT402_MCP_MAX_ANSWER_BYTES` (default 1 MiB of compact JSON)
   is cut in document order to valid JSON and carries `answerBound` (`src/mcp-answer-bound.js`: the partial-answer
   fields in bytes, plus one entry per cut list, string or object). A paid answer is delivered whole.
@@ -98,3 +137,15 @@ Loaded when a connector or front-door file is read.
   server needs `npm --prefix mcp ci`). Errors are a local `McpError` over `ProtocolError` that keeps the
   "MCP error <code>: " prefix. The SDK lifts `io.modelcontextprotocol/*` keys out of `params._meta`, so a handler that
   needs one reads the raw message. A JSON-RPC batch on the hosted transport counts one limiter hit per message.
+- **stdio package first run** (`mcp/test-first-run.js`, run by `mcp/test.js`): `AGENT_KEY` is read with or without
+  `0x` (`mcp/wallet-key.js`, the same file as `client/wallet-key.js`); unset, the key `npx agent402-mcp setup`
+  (`mcp/setup.js`) stored is read from the OS store (`mcp/key-store.js`, `AGENT402_KEY_STORE`; the key always goes on
+  stdin, never argv). `AGENT402_MAX_USD_PER_DAY` / `_PER_MONTH` are UTC caps kept in `spend.json` (0600) under
+  `AGENT402_CONFIG_DIR` (`mcp/spend-ledger.js`; only confirmed spend is written). A 2xx with
+  `X-Agent402-Allowance: first-call` and no `PAYMENT-RESPONSE` from the default host's exact origin is labeled
+  "One-time free call" and not counted as spent, but its sent payment is held until the authorization expires (the
+  client SDK does the same: `freeCalls`, `heldUsd`); from any other host the header alone is a paid call. The key file
+  store stages the key under a random name opened O_EXCL|O_NOFOLLOW (0600) and refuses a folder other users can write. Media answers become files in `AGENT402_OUTPUT_DIR` (`mcp/media-output.js`, names made
+  from a fixed alphabet); an image up to `AGENT402_MEDIA_INLINE_MAX_BYTES` (default 1 MB) is also an inline image block,
+  so the model loses no sight of it; `AGENT402_MEDIA_INLINE=1` keeps everything inline. A suite that spawns the stdio server sets
+  `AGENT402_KEY_STORE=off` and temp `AGENT402_CONFIG_DIR` / `AGENT402_OUTPUT_DIR`, so a developer's stored key is never read.

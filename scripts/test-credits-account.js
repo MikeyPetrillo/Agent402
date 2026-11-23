@@ -10,6 +10,7 @@ process.env.ZEPTOMAIL_TOKEN = "zepto-test-token";
 process.env.RESEND_API_KEY = "";
 process.env.COMPANY_POSTAL_ADDRESS = "PO Box 1, Test Town, NC 00000";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
 import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +21,7 @@ process.on("exit", () => rmSync(DIR, { recursive: true, force: true }));
 process.env.EMAIL_STATUS_FILE = join(DIR, "email-status.json");
 delete process.env.CREDITS_SALES;
 delete process.env.CREDITS_BALANCE_MAX_USD;
-delete process.env.CREDITS_DAILY_MAX_USD;
+looseCreditsChecks();
 
 const { createCredits, hashKey, CREDIT_PACKS, LOW_BALANCE_MICRO } = await import("../src/credits.js");
 const { createCreditsAccount, mountCreditsAccount, accountSecretFrom, historyCsv, SIGN_IN_ANSWER, SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS, ACCOUNT_COOKIE, NEW_KEY_FRESH_SIGN_IN_MS, buildLowBalanceEmail } = await import("../src/credits-account.js");
@@ -108,7 +109,7 @@ clock += 86_400_001;
 paid("cs_t6", "credits-20", "pi_t6", "buyer@x.com", { credits_topup: T.keyId, credits_account: "buyer@x.com" });
 const t6 = await cr.claim("cs_t6");
 ok(t6.status === "topped_up" && t6.balanceUsd === 88, "a day later the same top-up lands");
-delete process.env.CREDITS_DAILY_MAX_USD;
+looseCreditsChecks();
 
 // ---- (2) history by tool ------------------------------------------------------
 const hist = await cr.historyFor(T.keyId, "BUYER@x.com");
@@ -223,14 +224,48 @@ const acct = createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tool
 const known = acct.requestSignIn("K@x.com", "1.1.1.1"), unknown = acct.requestSignIn("nobody@x.com", "1.1.1.1");
 ok(known.status === 200 && unknown.status === 200 && known.message === unknown.message && known.message === SIGN_IN_ANSWER, "a known and an unknown address get the same answer");
 await known.work; await unknown.work;
-ok(mail.length === 1 && mail[0].to === "k@x.com" && /\/credits\/account\/verify\?t=/.test(mail[0].text), "only the address that bought a balance is sent a link");
+ok(mail.length === 2 && mail.map((m) => m.to).sort().join() === "k@x.com,nobody@x.com" && mail.every((m) => /\/credits\/account\/verify\?t=/.test(m.text)), "every address is sent a link, so a new buyer signs in before a first purchase");
+{ const k = mail.find((m) => m.to === "k@x.com"); mail.length = 0; mail.push(k); }
 ok(!/a402_/.test(mail[0].text + mail[0].html), "the sign-in email carries no key");
 ok(acct.requestSignIn("not-an-email", "1.1.1.1").status === 400, "a malformed address is refused");
 acct.requestSignIn("k@x.com", "1.1.1.1");
 ok(acct.requestSignIn("k@x.com", "2.2.2.2").status === 429 && acct.requestSignIn("nobody@x.com", "2.2.2.2").status === 200, "requests are limited per address (from any client address)");
+// The limit counts a mailbox, not a spelling: "+tag" and Gmail's dots and
+// googlemail.com reach one inbox, so they share it; mail goes as typed.
+{
+  const { mailboxKey } = await import("../src/mailbox-key.js");
+  ok(mailboxKey(" V.Ictim+news@GoogleMail.com ") === "victim@gmail.com" && mailboxKey("a.b+c@example.com") === "a.b@example.com" && mailboxKey("plain@x.com") === "plain@x.com" && mailboxKey("+only@x.com") === "+only@x.com", "the mailbox key folds +tags, and Gmail's dots and domain");
+  const sentTo = [];
+  const mb = createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async (m) => { sentTo.push(m.to); return true; }, store, ipLimiter: createLimiter(`t-mb-ip-${Math.random()}`, { perMin: 1000, perHour: 1000 }), emailLimiter: createLimiter(`t-mb-e-${Math.random()}`, { perMin: 2, perHour: 6 }), now: () => clock, log: () => {} });
+  const codes = ["victim@gmail.com", "victim+1@gmail.com", "v.ictim@gmail.com", "victim+2@googlemail.com"].map((e, i) => mb.requestSignIn(e, `5.5.5.${i + 1}`).status);
+  ok(codes[0] === 200 && codes[1] === 200 && codes[2] === 429 && codes[3] === 429, `spellings of one mailbox share its limit (${codes.join(",")})`);
+}
 const ipAcct = createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async () => true, store, ipLimiter: createLimiter("t-ip2", { perMin: 2, perHour: 40 }), emailLimiter: createLimiter("t-email2", { perMin: 100, perHour: 100 }), now: () => clock, log: () => {} });
 ipAcct.requestSignIn("a1@x.com", "3.3.3.3"); ipAcct.requestSignIn("a2@x.com", "3.3.3.3");
 ok(ipAcct.requestSignIn("a3@x.com", "3.3.3.3").status === 429, "...and per client address");
+// The sign-in email draws on hourly send budgets from the private table, one
+// for the whole service and one per client network (an IPv6 /64): past either
+// the answer is the same and no mail is sent.
+{
+  const { useGuardsTable, guardsTable } = await import("./lib/credits-guards-table.js");
+  const { createMemoryLimits } = await import("../src/shared-limits.js");
+  const keep = guardsTable();
+  const sentTo = [];
+  const mk = () => createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async (m) => { sentTo.push(m.to); return true; }, store, limits: createMemoryLimits(), now: () => clock, log: () => {} });
+  try {
+    useGuardsTable({ ...keep, account: { ...keep.account, sendsGlobalPerHour: 2 } });
+    const g = mk();
+    const rs = [];
+    for (let i = 0; i < 3; i++) { const r = g.requestSignIn(`spray${i}@x.com`, `10.0.${i}.1`); rs.push(r); await r.work; }
+    ok(rs.every((r) => r.status === 200 && r.message === SIGN_IN_ANSWER) && sentTo.length === 2, `past the service-wide hourly send budget the answer is the same and no mail is sent (${sentTo.length} sent)`);
+    sentTo.length = 0;
+    useGuardsTable({ ...keep, account: { ...keep.account, sendsPerNetHour: 1 } });
+    const n = mk();
+    const rn = [];
+    for (const [e, ip] of [["n1@x.com", "2001:db8:1:2::1"], ["n2@x.com", "2001:db8:1:2::99"], ["n3@x.com", "2001:db8:1:3::1"]]) { const r = n.requestSignIn(e, ip); rn.push(r); await r.work; }
+    ok(rn.every((r) => r.status === 200 && r.message === SIGN_IN_ANSWER) && sentTo.join() === "n1@x.com,n3@x.com", `past one /64's hourly send budget the answer is the same and no mail is sent; another /64 has its own (${sentTo.join()})`);
+  } finally { useGuardsTable(keep); }
+}
 const token = new URL(mail[0].text.match(/https:\/\/\S+/)[0]).searchParams.get("t");
 const tampered = token.slice(0, -2) + (token.endsWith("AA") ? "BB" : "AA");
 ok((await acct.redeem(tampered)) === null, "a tampered token signs nobody in");

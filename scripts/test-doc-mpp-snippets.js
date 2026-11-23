@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import * as mppxClient from "mppx/client";
 import * as viemAccounts from "viem/accounts";
-import { Agent402 } from "../client/index.js";
+import { Agent402, normalizeEvmKey } from "../client/index.js";
 import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, failed = 0;
@@ -98,7 +98,7 @@ const localOnly = (input, init) => {
 // The SDK's default base URL is production: a snippet's client is pointed here.
 class LocalAgent402 extends Agent402 { constructor(o = {}) { super({ ...o, baseUrl: B }); } }
 const AsyncFunction = (async () => {}).constructor;
-const KNOWN = { "mppx/client": mppxClient, "viem/accounts": viemAccounts, "agent402-client": { Agent402: LocalAgent402 } };
+const KNOWN = { "mppx/client": mppxClient, "viem/accounts": viemAccounts, "agent402-client": { Agent402: LocalAgent402, normalizeEvmKey } }; // the workspace client: the version the docs name, published with them
 /** Run one published block: its imports bound to the installed modules, the
  *  site's URL to the local server, its key to a throwaway one. Returns the
  *  values of the names it declares that a reader would look at. */

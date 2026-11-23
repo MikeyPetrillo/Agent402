@@ -1,6 +1,6 @@
 // The credits balance page (/credits/account) and its small notices: the
 // sign-in form is drawn here, and the page's script (assets/credits/account.js) replaces it with the
-// signed-in view (balances, history by tool, top-up, CSV, refund, new key)
+// signed-in view (a purchase, balances, history by tool, top-up, limits, CSV, refund, new key, revoke)
 // when the session cookie is good. Served only while credits are on sale
 // (src/credits-account.js). External JS (the site CSP drops inline script),
 // served from the page's own path so it too exists only while sales are on.
@@ -19,6 +19,7 @@ export const ACCOUNT_CSS = `
   .acct-meta>span{white-space:nowrap}
   .acct-state{font-size:var(--fs-sm);font-weight:500;white-space:nowrap}.acct-state.ok{color:var(--ok)}.acct-state.warn{color:var(--warn)}.acct-state.off{color:var(--faint)}
   .acct-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:18px}
+  .acct-row input{min-height:40px;width:9em;border:1px solid var(--control);border-radius:var(--radius);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:0 10px}
   .acct-row select{min-height:40px;border:1px solid var(--control);border-radius:var(--radius);background:var(--paper);color:var(--ink);font-family:var(--font-body);font-size:var(--fs-md);padding:0 10px}
   .acct-row label{display:flex;flex-direction:column;gap:6px;font-size:var(--fs-sm);font-weight:500;color:var(--ink)}
   .acct-check{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;min-height:24px;font-weight:400!important;color:var(--muted)!important}
@@ -43,7 +44,7 @@ export function creditsAccountPage(baseUrl) {
   <section class="hero">
     <div class="eyebrow">Prepaid credits · your balance</div>
     <h1>Your credits <em>balance.</em></h1>
-    <p class="lede">See what your balance holds and what it paid for, add to it, download its history, ask for the unspent balance back, or issue a new key. Sign in with the email you bought credits with; no key is needed.</p>
+    <p class="lede">Buy credits, see what each balance holds and what it paid for, add to it, set its spending limits, download its history, ask for the unspent balance back, or issue a new key. Sign in by email; no key is needed.</p>
   </section>
   <div id="app" data-api="${ACCOUNT_PATH}"><div class="status"><h2><span class="spin"></span>Loading your balance</h2><p>One moment.</p></div></div>
   <template id="acct-signin">
@@ -51,7 +52,7 @@ export function creditsAccountPage(baseUrl) {
       <div class="pcard">
         <div class="k">Sign in by email</div>
         <form id="acct-signin-form" novalidate>
-          <label class="flabel" for="in-email">Purchase email</label>
+          <label class="flabel" for="in-email">Email</label>
           <div class="field"><input id="in-email" name="email" type="email" autocomplete="email" placeholder="e.g. you@company.com" aria-describedby="err-email"></div>
           <button class="btn btn-primary" type="submit">Email me a sign-in link</button>
           <div class="err" id="err-email" aria-live="polite"></div>
@@ -64,7 +65,7 @@ export function creditsAccountPage(baseUrl) {
 </div>
 ${ledgerFooterCompact()}
 <script src="${ACCOUNT_PATH}/app.js"></script>`;
-  return shell({ title: "Your Agent402 credits balance", description: "Sign in by email to see your prepaid credits balance and its history, add to it, export a CSV, ask for the unspent balance back, or issue a new key.", body, baseUrl });
+  return shell({ title: "Your Agent402 credits balance", description: "Sign in by email to buy prepaid credits, see each balance and its history, add to it, set spending limits, export a CSV, ask for the unspent balance back, or issue a new key.", body, baseUrl });
 }
 
 /** The page a sign-in link opens: one button spends the token (a mail scanner's fetch does not). */

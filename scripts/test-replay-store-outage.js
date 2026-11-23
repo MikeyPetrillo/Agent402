@@ -1,6 +1,6 @@
 // The replay guard while its shared store is configured but unreachable, on
 // the real server, as two containers would run it: TWO servers configured as
-// two replicas boot with a REDIS_URL naming a local port nothing listens on.
+// two replicas boot with a REDIS_URL naming a local socket nothing listens on.
 // Every paid route (a long-running one and a fast one alike) is refused with
 // a 503 and Retry-After before any payment is verified or settled, so one
 // signed payment sent to both containers at once runs nowhere and reaches
@@ -37,20 +37,21 @@
 // server's log for a chain read and fails on one.
 // Offline: a stub facilitator; Redis only for the optional live control.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { isLongRunningSlug } from "../src/composite-spend-guard.js";
 
 const LIVE_REDIS = String(process.env.REDIS_URL || "").trim();
-const [PORT_A, PORT_B, PORT_C, PORT_D, PORT_E, FAC_PORT, DEAD_REDIS, PORT_F, PORT_G, PORT_H, PORT_I] = await getFreePorts(11);
 const PAYER = "0x" + "4".repeat(40);
 const TMP = mkdtempSync(join(tmpdir(), "replay-outage-"));
+// The unreachable shared store: a unix socket path in this run's own fresh
+// directory that nothing ever binds (no TCP port is reserved for it).
+const DEAD_REDIS_URL = `unix://${join(TMP, "no-redis.sock")}`;
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -66,7 +67,8 @@ const facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 
 const procs = [];
 const logs = new Map();
@@ -76,29 +78,31 @@ const logs = new Map();
 const CHAIN_READ = /\[revenue\]|eth_getLogs|getLogs|\[facilitator-gas\]|\[late-settle\]|\[leaderboard\]/i;
 const chainReads = new Map();
 const bootedAt = Date.now();
-function boot(port, name, redisUrl, extra = {}) {
+// Boot on port 0 (read back): resolves the server's base URL, or false when it
+// never answered /health. stores: false: the store paths set here and the
+// caller's environment, as before.
+async function boot(name, redisUrl, extra = {}) {
   const dir = join(TMP, name);
   mkdirSync(dir, { recursive: true });
   const log = [];
   logs.set(name, log);
   chainReads.set(name, []);
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  const keep = (d) => { for (const l of String(d).split("\n")) if (l.trim()) { log.push(l.slice(0, 300)); if (CHAIN_READ.test(l)) chainReads.get(name).push(l.slice(0, 200)); } if (log.length > 80) log.splice(0, log.length - 80); };
+  const srv = await bootServer({
+    stores: false,
+    env: { FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
       STATS_ALLOW_EPHEMERAL: "true", STATE_DATABASE_URL: "", SALES_LEDGER_DB: join(dir, "sales.db"), REFUND_DB_DIR: dir,
       REDIS_URL: redisUrl, ...extra },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const keep = (d) => { for (const l of String(d).split("\n")) if (l.trim()) { log.push(l.slice(0, 300)); if (CHAIN_READ.test(l)) chainReads.get(name).push(l.slice(0, 200)); } if (log.length > 80) log.splice(0, log.length - 80); };
-  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-  procs.push(proc);
-  return `http://127.0.0.1:${port}`;
-}
-async function waitUp(base) {
-  for (let i = 0; i < 240; i++) { try { if ((await fetch(`${base}/health`)).ok) return true; } catch { /* booting */ } await sleep(500); }
-  return false;
+  }).catch((e) => { keep(String(e?.message || e)); return null; });
+  if (!srv) return false;
+  // The log so far, then every later line (attached in the same turn).
+  keep(srv.log());
+  srv.child.stdout.on("data", keep); srv.child.stderr.on("data", keep);
+  procs.push(srv.child);
+  return srv.url;
 }
 
 const credential = (accept) => Buffer.from(JSON.stringify({
@@ -110,22 +114,23 @@ const acceptOf = (r) => {
 };
 const routeOf = (e) => { const [method, path] = String(e.route || `${e.method || "GET"} ${e.path || ""}`).split(" "); return { method, path }; };
 
-const A = boot(PORT_A, "a", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "2" });
-const Bsrv = boot(PORT_B, "b", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "2" });
+const bootA = boot("a", DEAD_REDIS_URL, { RATE_LIMIT_REPLICAS: "2" });
+const bootB = boot("b", DEAD_REDIS_URL, { RATE_LIMIT_REPLICAS: "2" });
 // One replica past its deploy overlap window, and one still inside it.
-const F = boot(PORT_F, "f", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "0" });
-const G = boot(PORT_G, "g", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600" });
-const C = boot(PORT_C, "c", "");
+const bootF = boot("f", DEAD_REDIS_URL, { RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "0" });
+const bootG = boot("g", DEAD_REDIS_URL, { RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600" });
+const bootC = boot("c", "");
 const prefix = `outage-${process.pid}-${randomBytes(4).toString("hex")}`;
-const D = LIVE_REDIS ? boot(PORT_D, "d", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
-const E = LIVE_REDIS ? boot(PORT_E, "e", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
+const bootD = LIVE_REDIS ? boot("d", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
+const bootE = LIVE_REDIS ? boot("e", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
 // Two single containers held inside their deploy overlap window on the live
 // Redis: H with the default bound on a required claim, I with a 1 s bound.
-const H = LIVE_REDIS ? boot(PORT_H, "h", LIVE_REDIS, { SHARED_LIMITS_PREFIX: `${prefix}-h`, RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600", REPLAY_CLAIM_OP_MS: "", SHARED_LIMITS_OP_MS: "" }) : null;
-const I = LIVE_REDIS ? boot(PORT_I, "i", LIVE_REDIS, { SHARED_LIMITS_PREFIX: `${prefix}-i`, RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600", REPLAY_CLAIM_OP_MS: "1000", SHARED_LIMITS_OP_MS: "" }) : null;
+const bootH = LIVE_REDIS ? boot("h", LIVE_REDIS, { SHARED_LIMITS_PREFIX: `${prefix}-h`, RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600", REPLAY_CLAIM_OP_MS: "", SHARED_LIMITS_OP_MS: "" }) : null;
+const bootI = LIVE_REDIS ? boot("i", LIVE_REDIS, { SHARED_LIMITS_PREFIX: `${prefix}-i`, RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600", REPLAY_CLAIM_OP_MS: "1000", SHARED_LIMITS_OP_MS: "" }) : null;
 
 try {
-  const ups = await Promise.all([A, Bsrv, C, D, E, F, G, H, I].filter(Boolean).map(waitUp));
+  const [A, Bsrv, C, D, E, F, G, H, I] = await Promise.all([bootA, bootB, bootC, bootD, bootE, bootF, bootG, bootH, bootI]);
+  const ups = [A, Bsrv, C, D, E, F, G, H, I].filter((b) => b !== null).map((b) => b !== false);
   ok(ups.every(Boolean), `every server booted (two with an unreachable shared store, one with none${LIVE_REDIS ? ", four on the live Redis" : ""})`);
   if (!ups.every(Boolean)) { for (const [name, log] of logs) for (const l of log.slice(-12)) console.error(`  server ${name}:`, l); throw new Error("a server did not boot"); }
   const pricing = await (await fetch(`${A}/api/pricing`)).json();

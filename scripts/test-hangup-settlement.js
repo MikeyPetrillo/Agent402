@@ -44,6 +44,7 @@
 //      to spare, while the same hang-up on an ordinary tool is not settled.
 // Part 2 also checks the lasting-effect list against the booted catalog.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
+import "./lib/credits-guards-table.js"; // a random test credits table (src/credits-guards.js): without one every charge reads flagged
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";

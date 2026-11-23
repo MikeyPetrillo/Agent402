@@ -6,6 +6,8 @@
 // request passes through untouched; accounting hooks fire; state survives a
 // reload; operator status never exposes key material.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
+import { guardsTable } from "./lib/credits-guards-table.js";
 import { createCredits, CREDIT_PACKS, KEY_RE, usdToMicro, microToUsd } from "../src/credits.js";
 import { rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,7 +32,7 @@ const debits = [], loads = [];
 const mk = () => createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, onDebit: (d) => debits.push(d), onLoad: (l) => loads.push(l), log: () => {} });
 let cr = mk();
 
-ok(Object.values(CREDIT_PACKS).every((p) => p.cents >= 2000), "every pack is >= $20");
+ok(Object.values(CREDIT_PACKS).every((p) => p.cents >= 500 && p.cents <= 10000), "every pack is between the $5 starter and the $100 cap");
 ok(usdToMicro(0.001) === 1000 && microToUsd(1000) === 0.001 && usdToMicro(19) === 19_000_000, "micro-dollar math is exact for sub-cent prices");
 
 // checkout
@@ -341,16 +343,21 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   // A key in the right format that we never issued is unknown, however it was made.
   const forged = "a402_" + "A".repeat(32);
   ok(KEY_RE.test(forged) && cr.balance(forged) === null, "a well-formed key we never issued holds nothing (keys are checked against stored hashes)");
-  process.env.CREDITS_BAD_KEY_MAX = "3";
+  const badMax = guardsTable().badKey.failedMax; // the private table's bound, drawn for this run
   const g = cr.gate(() => ({ priceUsd: 0.001, slug: "hash" }));
   const tryKey = (k, ip = "203.0.113.9") => { const r = fakeRes(); let next = false; g({ method: "GET", path: "/api/hash", ip, headers: { authorization: `Bearer ${k}` } }, r, () => { next = true; }); return { r, next }; };
-  for (let i = 0; i < 3; i++) tryKey("a402_" + String(i).repeat(40));
+  for (let i = 0; i < badMax; i++) tryKey("a402_" + String(i).padStart(3, "0").repeat(14));
   const after = tryKey(KEY);
-  ok(after.r.statusCode !== 429 && after.next === true, "failed keys never block a valid key from the same client (a paying customer behind a shared address is served)");
-  ok(cr.badKeyStats().failures >= 3 && cr.badKeyStats().clientsOverThreshold === 1, "a client past the threshold is counted for the operator view");
-  for (let i = 0; i < 3; i++) tryKey("a402_" + String(i + 5).repeat(40), `2001:db8:1:2::${i + 1}`);
+  ok(after.r.statusCode !== 429 && after.next === true, "past the failed-key bound a valid key from the same client is still served (a paying customer behind a shared address)");
+  const wrong = tryKey("a402_" + "w".repeat(40)), wrong2 = tryKey("a402_" + "v".repeat(40));
+  ok(wrong.r.statusCode === 429 && wrong.next === false && wrong.r.body?.reason === "rate_limited", "past the bound a wrong key from that client is answered 429");
+  ok(JSON.stringify(wrong.r.body) === JSON.stringify(wrong2.r.body) && wrong2.r.statusCode === 429, "...and every failed key there answers identically");
+  ok(!/\d/.test(String(wrong.r.body?.error)), "the 429 names no count or window");
+  const fresh1 = tryKey("a402_" + "x".repeat(40), "198.51.100.7"), fresh2 = tryKey("a402_" + "y".repeat(40), "198.51.100.7");
+  ok(fresh1.r.statusCode === 402 && JSON.stringify(fresh1.r.body) === JSON.stringify(fresh2.r.body), "under the bound an unknown key and a wrong key answer identically");
+  ok(cr.badKeyStats().failures >= badMax && cr.badKeyStats().clientsOverThreshold === 1, "a client past the threshold is counted for the operator view");
+  for (let i = 0; i < badMax; i++) tryKey("a402_" + String(i + 500).repeat(14), `2001:db8:1:2::${i + 1}`);
   ok(cr.badKeyStats().clientsOverThreshold === 2, "IPv6 addresses in one /64 count as one client");
-  delete process.env.CREDITS_BAD_KEY_MAX;
 }
 
 // ---- daily purchase limit: one buyer, at most CREDITS_DAILY_MAX_USD in 24 hours ----
@@ -412,7 +419,7 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
     ok(lc.disableByPaymentIntent("pi_cs_rf2", "refunded", { amountRefundedCents: 10000, fullyRefunded: true }) === r2.keyId && lc.authorize(r2.key, 0.001).reason === "disabled" && lc.balance(r2.key).balanceUsd === 0,
       "a full refund takes the rest and disables the key");
     const r3 = await buy("cs_rf3", { email: "rf2@x.com", card: "fp_rf2" });
-    ok(lc.disableByPaymentIntent("pi_cs_rf3", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r3.keyId && lc.authorize(r3.key, 0.001).reason === "disabled", "a dispute disables the key outright");
+    ok(lc.disableByPaymentIntent("pi_cs_rf3", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r3.keyId && lc.authorize(r3.key, 0.001).reason === "frozen", "a dispute disables the key outright (it answers frozen: on hold while the payment is reviewed)");
     // The dispute closing in our favor gives the key back; a key disabled
     // because its payment was refunded is not touched by a dispute closing.
     ok(lc.enableByPaymentIntent("pi_cs_rf3", "disputed") === r3.keyId, "a dispute closed in our favor enables the key it disabled");
@@ -447,7 +454,7 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
     { const f = join(LDIR, readdirSync(LDIR).find((n) => n.startsWith("k_") && JSON.parse(readFileSync(join(LDIR, n), "utf8")).keyId === r9.keyId)); const rec = JSON.parse(readFileSync(f, "utf8")); rec.paymentIntents.push("pi_cs_rf9b"); writeFileSync(f, JSON.stringify(rec)); }
     const lc3 = createCredits({ stripe: lstripe, baseUrl: "https://agent402.tools", storeDir: LDIR, now: () => t, log: () => {} });
     ok(lc3.disableByPaymentIntent("pi_cs_rf9b", "disputed", { amountRefundedCents: null, fullyRefunded: true }) === r9.keyId && lc3.status().rows.find((x) => x.keyId === r9.keyId)?.disabledReason === "disputed", "setup: a dispute on the key's second payment disables it");
-    ok(lc3.enableByPaymentIntent("pi_cs_rf9", "disputed") === null && lc3.authorize(r9.key, 0.001).reason === "disabled", "a dispute won on another payment of the same key lifts nothing: the key stays disabled for the payment still disputed");
+    ok(lc3.enableByPaymentIntent("pi_cs_rf9", "disputed") === null && lc3.authorize(r9.key, 0.001).reason === "frozen", "a dispute won on another payment of the same key lifts nothing: the key stays disabled for the payment still disputed");
     ok(lc3.enableByPaymentIntent("pi_cs_rf9b", "disputed") === r9.keyId, "the disputed payment's own win lifts it");
     const back9 = lc3.authorize(r9.key, 0.001);
     ok(back9.ok === true, "...and it authorizes again");
@@ -515,7 +522,7 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   process.env.CREDITS_EU_UK_REQUIRE_TAX_ID = "off";
   ok((await euBuy("cs_fr", { country: "FR" })).status === "minted", "CREDITS_EU_UK_REQUIRE_TAX_ID=off lifts the rule");
   delete process.env.CREDITS_EU_UK_REQUIRE_TAX_ID;
-  delete process.env.CREDITS_DAILY_MAX_USD;
+  looseCreditsChecks();
   try { rmSync(LDIR, { recursive: true, force: true }); } catch { /* cleanup */ }
 }
 // The debit books the request's arrival path (src/sale-path.js) with the sale.

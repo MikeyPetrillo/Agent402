@@ -1116,13 +1116,22 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 // not this claim.
 {
   const fam = await import("../src/settle-first-copy.js");
-  const GENERAL = /\bfailed x402 (?:call|run|request)s? (?:is|are) not charged|\b(?:response|answer)s? of 400 or above (?:is|are) not (?:settled|charged)|\bfailed run is not charged|\berror status cancels\b|\b4xx\b[^.;|]{0,20}\b5xx\b[^.;|]{0,120}\b(?:cancels settlement|not charged|never settled)|\bonly (?:for a response )?under 400 \| not charged|\bany status of 400 or above is not charged|\ba 4xx or 5xx\b[^.;]{0,200}?\b(?:cancels settlement|is not charged|is never charged)|\ban? (?:error|failed) (?:answer|call|response)s? (?:is|are) not (?:charged|settled)|\b(?:calls?|requests?) (?:that|which) fails? (?:is|are) not charged|\bsettles? only after\b[^.;]{0,80}\bsuccess|\bnot settled and you are not charged|\bnever pays? for a failed\b|\bfailed calls? (?:is|are) (?:never|not) charged|\berrors? (?:is|are) (?:never|not) charged|\b(?:fail\w*|errors?|upstream|outage|5\d\d|timed[- ]out|cut off)\b[^.\n]{0,300}?\bnot charged on x402\b|\bfailed (?:call|run)s?\b[^.;]{0,200}?\b(?:is|are) not charged|\ba call the tool fails is not charged|\bfailure case costs nothing|\ban? error cancels settlement|\bnot charged for a failure|\b(?:answer|response)s? with an error status (?:is|are) not (?:settled|charged)|\bnot charged: the (?:error|same settlement path|credential)|\bsettles only (?:on a delivered result|when the result is ready)/gi;
+  const GENERAL = /\bfailed x402 (?:call|run|request)s? (?:is|are) not charged|\b(?:response|answer)s? of 400 or above (?:is|are) not (?:settled|charged)|\bfailed run is not charged|\berror status cancels\b|\b4xx\b[^.;|]{0,20}\b5xx\b[^.;|]{0,120}\b(?:cancels settlement|not charged|never settled)|\bonly (?:for a response )?under 400 \| not charged|\bany status of 400 or above is not charged|\ba 4xx or 5xx\b[^.;]{0,200}?\b(?:cancels settlement|is not charged|is never charged)|\ban? (?:error|failed) (?:answer|call|response)s? (?:is|are) not (?:charged|settled)|\b(?:calls?|requests?) (?:that|which) fails? (?:is|are) not charged|\bsettles? only after\b[^.;]{0,80}\bsuccess|\bnot settled and you are not charged|\bnever pays? for a failed\b|\bfailed calls? (?:is|are) (?:never|not) charged|\berrors? (?:is|are) (?:never|not) charged|\b(?:fail\w*|errors?|upstream|outage|5\d\d|timed[- ]out|cut off)\b[^.\n]{0,300}?\bnot charged on x402\b|\bfailed (?:call|run)s?\b[^.;]{0,200}?\b(?:is|are) not charged|\ba call the tool fails is not charged|\bfailure case costs nothing|\ban? error cancels settlement|\bnot charged for a failure|\b(?:answer|response)s? with an error status (?:is|are) not (?:settled|charged)|\bnot charged: the (?:error|same settlement path|credential)|\bsettles only (?:on a delivered result|when the result is ready)|\bsettles\b(?: (?:the|an?) (?:x402 )?payment)? only (?:on|if|when|after|for) (?:the |a |an )?(?:success\w*|delivered|answer|result)|\bpayment (?:still )?settles only (?:if|when|on)\b|\bon x402 (?:that|the|a|an|this|each) (?:failure|error|failed \w+|call|run)s? (?:is|are) not (?:charged|settled)|\bnot charged on x402 or MPP evm\b/gi;
   // Served copy outside COPY_SURFACES' names: the /tools ledger, the discovery
   // manifest, the 202 job message, the MCP task notices and /what-is-mpp.
   const EXTRA = new Set(["src/settlement-footnote.js", "src/refund-terms.js", "src/refund-terms-doc.js", "src/conformance.js", "src/mcp-http.js", "mcp/index.js", "src/agentcore-page.js",
-    "src/ledger-catalog.js", "src/discovery.js", "src/async-jobs.js", "src/mcp-tasks.js", "src/what-is-mpp.js"]);
-  const carries = (near) => near.includes(fam.SETTLE_FIRST_MARK) || /\$\{(?:SETTLE_FIRST_|FAILED_CALL_SENTENCE)/.test(near);
-  const scanned = files.filter((f) => (COPY_SURFACES.test(f) || EXTRA.has(f)) && /\.(?:md|js)$/.test(f) && !/^(?:scripts|tollbooth|adapters|openclaw|workers|services|facilitator|\.github|\.claude|examples)\//.test(f) && !/CHANGELOG/.test(f) && f !== "src/changelog.js" && f !== "CLAUDE.md");
+    "src/ledger-catalog.js", "src/discovery.js", "src/async-jobs.js", "src/mcp-tasks.js", "src/what-is-mpp.js",
+    // The job advice a slow route's 402, description and sync-window refusals carry.
+    "src/slow-routes.js", "src/evm-validity.js", "src/cdn-sync-window.js", "src/slow-sync-window.js"]);
+  // A per-route sentence carries it through settleFirstClause(def): the
+  // sentence on a route that may settle first, nothing on any other.
+  const carries = (near) => near.includes(fam.SETTLE_FIRST_MARK) || /\$\{(?:SETTLE_FIRST_|FAILED_CALL_SENTENCE)/.test(near) || /\bsettleFirstClause\(/.test(near);
+  // Every surface that describes this server's charging: pages, markdown,
+  // published manifests (.codex-plugin, server.json), the issue forms, the
+  // adapters, examples and the plan service's prompt. Left out: tollbooth
+  // (a site owner's own gate, which settles on its own middleware), the
+  // workers and the facilitator (operator side), tests and the rulebook.
+  const scanned = files.filter((f) => (COPY_SURFACES.test(f) || EXTRA.has(f)) && /\.(?:md|js|mjs|json|ya?ml|txt)$/.test(f) && !/^(?:scripts|tollbooth|workers|facilitator|\.claude)\//.test(f) && !/^\.github\/(?!ISSUE_TEMPLATE\/)/.test(f) && !/CHANGELOG/.test(f) && f !== "src/changelog.js" && f !== "CLAUDE.md");
   let claims = 0, homeCard = false;
   const bare = [], drift = [];
   for (const rel of scanned) {
@@ -1146,6 +1155,12 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
         while (pos !== -1 && isRow(lineAt(pos + 1))) pos = text.indexOf("\n", pos + 1);
         end = Math.max(end, (pos === -1 ? text.length : pos) + 600);
       }
+      // A claim in the front door's recovery list (/agents.md, /llms.txt) is
+      // carried by the list: its first item states the failed-call rule with
+      // the sentence, and /llms.txt has no room to print it twice.
+      const list = text.lastIndexOf("recovery: [", m.index);
+      const listEnd = list < 0 ? -1 : text.indexOf("\n    ],", list);
+      if (list >= 0 && listEnd > m.index && carries(text.slice(list, listEnd))) continue;
       if (!carries(text.slice(Math.max(0, m.index - 800), end))) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
     }
     // Word for word: every copy of the family's words is one of its sentences.
@@ -1176,6 +1191,28 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     const bareTools = claimers.filter((t) => !String(t.description).includes(fam.SETTLE_FIRST_MARK)).map((t) => t.slug);
     ok(tools.length >= 6 && claimers.length >= 2 && bareTools.length === 0, `every settle-first tool description that says a failure is not charged carries the settle-first sentence (${claimers.length} of ${tools.length}${bareTools.length ? `; bare: ${bareTools.join(", ")}` : ""})`);
   }
+  // A per-route job sentence ("payment settles only on a delivered result")
+  // carries the sentence on a route that may settle first, and only there:
+  // server.js marks each such definition from the same slugs it arms.
+  {
+    const { runTimeNote } = await import("../src/evm-validity.js");
+    const { asyncAdvice } = await import("../src/slow-routes.js");
+    const srv = readFileSync(join(root, "src/server.js"), "utf8");
+    const sf = { slug: "sf", settlesFirst: true, asyncProfile: { slow: true, expectedSeconds: 40, maxSeconds: 75 } };
+    const plain = { slug: "plain", asyncProfile: { slow: true, expectedSeconds: 40, maxSeconds: 75 } };
+    ok(fam.settleFirstClause(sf) === ` ${fam.SETTLE_FIRST_SENTENCE}` && fam.settleFirstClause(plain) === "" && fam.settleFirstClause({ settlesFirst: "yes" }) === "" && fam.settleFirstClause(null) === "",
+      "settleFirstClause: the short form on a route marked settlesFirst, nothing on any other");
+    ok(runTimeNote(75, { settlesFirst: true }).includes(fam.SETTLE_FIRST_TEXT) && runTimeNote(20, { settlesFirst: true }).includes(fam.SETTLE_FIRST_TEXT)
+      && !runTimeNote(75).includes(fam.SETTLE_FIRST_MARK) && !runTimeNote(20).includes(fam.SETTLE_FIRST_MARK),
+      "a slow route's run-time note carries the sentence when the route may settle first, and not otherwise");
+    ok(asyncAdvice(sf).how.includes(fam.SETTLE_FIRST_TEXT) && !asyncAdvice(plain).how.includes(fam.SETTLE_FIRST_MARK) && !/\s{2}/.test(asyncAdvice(sf).how),
+      "the job advice (402, /api/pricing, /openapi.json) carries the sentence on a settle-first route only");
+    ok(/const SETTLE_FIRST_COPY_SLUGS = settleFirstSlugs\(GATEWAY_TOOLS_ENABLED\);/.test(srv)
+      && /if \(SETTLE_FIRST_COPY_SLUGS\.has\(def\.slug\)\) Object\.defineProperty\(def, "settlesFirst", \{ value: true/.test(srv)
+      && /runTimeNote\(runS, \{ settlesFirst: def\.settlesFirst === true \}\)/.test(srv)
+      && srv.indexOf("SETTLE_FIRST_COPY_SLUGS.has(def.slug)") < srv.indexOf("runTimeNote(runS,"),
+      "server.js marks every settle-first definition, from the slugs it arms, before the run-time note is written");
+  }
   {
     const { WHY_POINTS } = await import("../src/why.js");
     ok(homeCard && String(WHY_POINTS.find((w) => w.id === "never-charged")?.p || "").includes(fam.SETTLE_FIRST_TEXT),
@@ -1190,7 +1227,10 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "the ordinary failure case costs nothing and needs no refund.", "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.",
     "Any `4xx`/`5xx` (a bad input, a capacity `503`, an upstream `502`) **cancels settlement**, so the x402 buyer is not charged for a failure.",
     "only a successful answer is settled on x402: an answer with an error status is not settled.", "Not charged: the error cancels settlement before any facilitator call.",
-    "A failed call (an error, a timeout, an upstream outage) is not charged on x402", "You were not charged: payment settles only on a delivered result."]
+    "A failed call (an error, a timeout, an upstream outage) is not charged on x402", "You were not charged: payment settles only on a delivered result.",
+    "returns the real, structured result, and settles the x402 payment only on success", "The x402 payment settles only on the delivered answer.",
+    "The call was paid for as a job; payment settles only if the answer is delivered.", "payment still settles only when the answer is ready",
+    "it fails, and on x402 that failure is not charged.", "On Agent402 endpoints, a 4xx or 5xx is not charged on x402 or MPP evm"]
     .every((x) => [...x.matchAll(GENERAL)].length >= 1),
     "control: the long-parenthetical, table-cell, manifest and job-notice phrasings are matched");
 

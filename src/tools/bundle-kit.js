@@ -33,7 +33,7 @@ import { withBudgetCeiling } from "../upstream-deadline.js";
 import { markEndsAtCeiling, ceilingLeftMs, CEILING_TIMER_SLACK_MS } from "../run-ceiling.js";
 import { markResaleComputed } from "../resale-terms.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
-import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION } from "../data-attribution.js";
+import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 
 const bad = weatherBad;
 
@@ -670,6 +670,9 @@ export const BUNDLE_MAX_UNITS = Object.freeze({ "weather-risk-brief": WEATHER_RI
 // the one wait of the bundle's own, the pause before a leg's retry, is not
 // taken when it would end after the ceiling. A caller that stops waiting at a
 // deadline of its own can serve them (src/run-ceiling.js).
+// Open-Meteo's licence asks for links to Open-Meteo and to the licence beside
+// its data: every answer of these tools carries them (src/data-attribution.js).
+openMeteoLicensed(BUNDLE_TOOLS);
 markEndsAtCeiling(BUNDLE_TOOLS, ["weather-risk-brief", "filings-brief", "token-diligence"]);
 // Resale terms (src/resale-terms.js): the diligence read is computed.
 markResaleComputed(BUNDLE_TOOLS, ["token-diligence"]);
