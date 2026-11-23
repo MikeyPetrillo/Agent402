@@ -39,6 +39,7 @@ import { isIP } from "node:net";
 import { runHtml } from "./html-pool.js";
 import { cleanText } from "./html-parse-ops.js";
 import { ssrfDispatcher, assertPublicUrl, isSsrfBlock, isPrivateIp, UNRESOLVED_OR_PRIVATE } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { parseRobots, robotsAllows } from "./kit.js";
 import { markUntrusted } from "./provenance.js";
 
@@ -416,6 +417,8 @@ async function siteMapHandler(input) {
   const start = new URL(startUrl);
   if (isPrivateLiteral(start.hostname)) throw bad("URL resolves to a private address");
   const hostPolicy = (h) => hostAllowed(h, start.hostname, includeSubdomains);
+  // The start page is read with this kit's own string, so its token decides.
+  await assertRobotsAllow(startUrl, { token: ROBOTS_UA_PRODUCT });
   const budget = new Budget({ totalMs: CONFIG.MAP_TOTAL_MS, fetchMs: CONFIG.MAP_FETCH_MS, totalBytes: CONFIG.MAP_TOTAL_BYTES, maxFetches: CONFIG.MAP_MAX_FETCHES });
   const fetchedAt = new Date().toISOString();
 

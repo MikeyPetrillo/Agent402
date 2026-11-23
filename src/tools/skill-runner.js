@@ -31,6 +31,7 @@ import { SKILL_PACKS, PACK_PRICES, STOCK_TRIMMED_PACK_SLUGS } from "../skills.js
 import { STOCK_SLUGS, stockDataEnabled } from "./stock-provider.js";
 import { packAttributions, withAttributions } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { capturePostHogPackStep } from "../posthog.js";
 import { callerInputError } from "../caller-input-errors.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
@@ -1980,6 +1981,7 @@ async function fetchPageHtml(url) {
   }
   if (!htmlInFlight.has(url)) {
     const p = (async () => {
+      await assertRobotsAllow(url);
       const { html } = await safeFetch(url, { maxBytes: MAX_HTML_BYTES });
       return typeof html === "string" ? html : "";
     })().finally(() => htmlInFlight.delete(url));
@@ -2020,6 +2022,7 @@ async function fetchAsBase64(url) {
   // The URL is caller-supplied, so this MUST route through safeFetch — it enforces
   // the SSRF guard (blocks private/link-local IPs, DNS-rebind, redirect-to-private)
   // and a byte cap. A raw fetch() here was an SSRF hole (internal/metadata exfil).
+  await assertRobotsAllow(url);
   const { buffer } = await safeFetch(url, { binary: true, maxBytes: MAX_FETCH_BASE64_BYTES });
   return buffer.toString("base64");
 }

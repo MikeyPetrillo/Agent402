@@ -27,6 +27,7 @@ import { renderMarkdown, MARKDOWN_INLINE_MAX_CHARS } from "./markdown-render.js"
 import { runMarkdown } from "./markdown-pool.js";
 import QRCode from "qrcode";
 import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE, isTransientLookupError, lookupUnavailable, resolveHostAddress } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { jsonLeafBytes, jsonStringBytes } from "../json-bytes.js";
 
 const REGEX_WORKER_DEFAULT = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
@@ -2281,6 +2282,7 @@ const networkTools = [
     },
     handler: async (input) => {
       const url = String(need(input, "url"));
+      await assertRobotsAllow(url);
       const r = await safeFetch(url, { maxBytes: 2 * 1024 * 1024, headers: { Accept: "application/json, */*;q=0.5" } });
       const text = r.html || "";
       let json;

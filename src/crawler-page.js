@@ -16,7 +16,10 @@
 import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { NAMED_CLIENT_BUDGET_MULTIPLIER, unpaidQuoteBudgetPerHour } from "./unpaid-quote-budget.js";
-import { CRAWLER_UA, PROBE_UA, ROUTER_UA, FETCH_UA, SITE_CRAWL_UA, SITE_CRAWL_TOKEN, CRAWLER_TOKEN, RETIRED_BARE_UA } from "./user-agents.js";
+import { CRAWLER_UA, PROBE_UA, ROUTER_UA, FETCH_UA, FETCH_TOKEN, BROWSER_FETCH_UA, SITE_CRAWL_UA, SITE_CRAWL_TOKEN, CRAWLER_TOKEN, RETIRED_BARE_UA } from "./user-agents.js";
+import { ROBOTS_CACHE_MS, ROBOTS_UNREADABLE_CACHE_MS, ROBOTS_BRAND_TOKEN } from "./tools/robots-gate.js";
+import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { taskRetentionPublic } from "./mcp-tasks.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
 import { REVISIT_CAP_MS, REVISIT_HINT_FIELD, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, probeShareLabel } from "./seller-load.js";
 
@@ -57,6 +60,7 @@ const SECTIONS = [
       `<code>${esc(PROBE_UA)}</code>: the unpaid request to a paid route that reads its price and payment networks from the 402 challenge, and checks that the route still asks for payment.`,
       `<code>${esc(ROUTER_UA)}</code>: our router buying from you for a paying caller, including the one unpaid request that opens each purchase. It also carries <code>X-Agent402-Via: router</code>.`,
       `<code>${esc(FETCH_UA)}</code>: a tool in our catalog fetching a URL its caller named, one request for one caller.`,
+      `<code>${esc(BROWSER_FETCH_UA)}</code>: the same, for a tool that loads the page in a headless browser (render, screenshot, page speed): a browser's own string with the ${esc(FETCH_TOKEN)} token added, so the page renders as it does for a visitor (the page-speed tool's mobile measurement sends the mobile browser string with the same token).`,
       `<code>${esc(SITE_CRAWL_UA)}</code>: the multi-page site-crawl tool, run for one caller and limited to a few pages.`,
       `No request to a site in our index, or to a URL a caller names, carries the older <code>${esc(RETIRED_BARE_UA)}</code> token; it remains only on the requests some catalog tools make to the fixed data APIs they are built on.`,
       `A User-Agent is text anyone can copy, so a request carrying one of these strings at a volume or cadence this page does not describe may not be ours. We keep a count of the requests each of these components sends each host, per minute, for ${esc(span(REQUEST_LOG_KEEP_MS))}: email us the host and the timestamps from that window and we will check them against it.`,
@@ -85,7 +89,11 @@ const SECTIONS = [
   {
     h: "Tool fetches for callers",
     p: [
-      `Some tools in our catalog fetch a URL that a caller names: reading an article, checking a page's headers or metadata. Those requests send <code>${esc(FETCH_UA)}</code>; the browser-render and screenshot tools load the page in a headless browser with a standard browser User-Agent. Each is one request made for one caller, not a crawl, and is not robots-gated. The multi-page site-crawl tool does read robots.txt and follows the rules for the token <code>${esc(SITE_CRAWL_TOKEN)}</code>, which a rule naming ${esc(ROBOTS_LEGACY_TOKEN)} also matches.`,
+      `Some tools in our catalog fetch a URL that a caller names: reading an article, a PDF, an image, an audio file or a feed, or checking a page's headers or metadata. Those requests send <code>${esc(FETCH_UA)}</code>, and the tools that load the page in a headless browser send <code>${esc(BROWSER_FETCH_UA)}</code>. Each is one request made for one caller, not a crawl.`,
+      `Every tool that returns a page's content, or something read from it (its text, markup, a screenshot, a PDF, image, audio file or feed, a page-speed measurement), first reads that site's <code>/robots.txt</code> and follows the rules for the token <code>${esc(FETCH_TOKEN)}</code>. A group written for <code>${esc(ROBOTS_BRAND_TOKEN)}</code> applies too; with no group for either, the rules for every crawler (<code>User-agent: *</code>) apply. A group is matched on its exact name, so a group for a product whose name is only part of ours does not apply. A path those rules disallow is not fetched: the call answers <code>403</code> with the rule that decided it. The rules read from a site are kept for ${esc(span(ROBOTS_CACHE_MS))}, and a robots.txt we cannot fetch or parse does not block the read (that outcome is kept for ${esc(span(ROBOTS_UNREADABLE_CACHE_MS))}).`,
+      `The tools that read only a status or metadata are not robots-gated: an HTTP status or headers, a TLS certificate, robots.txt itself, a sitemap file, a redirect chain, the technologies a page uses, an x402 price or audit, an agent card, and the OpenAPI document an audit pack reads.`,
+      `The site-crawl and site-map tools send <code>${esc(SITE_CRAWL_UA)}</code> and follow the rules for the token <code>${esc(SITE_CRAWL_TOKEN)}</code>, which a rule naming ${esc(ROBOTS_LEGACY_TOKEN)} also matches: site-crawl on every page it reads, site-map on the start page it reads before the site's sitemaps.`,
+      `A fetched page is returned to the caller and not stored. A paid answer is kept for ${esc(span(IDEM_TTL_MS))} so that the same payment sent again gets the same answer, and the result of a call run as an async job or an MCP task is kept for ${esc(taskRetentionPublic().keptFor)} so the caller can fetch it.`,
     ],
   },
   {

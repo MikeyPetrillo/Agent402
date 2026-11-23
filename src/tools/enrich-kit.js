@@ -20,6 +20,7 @@
 // checks opt-in via ENRICH_LIVE_TEST=1).
 
 import { ssrfDispatcher, safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
@@ -590,6 +591,7 @@ export const ENRICH_TOOLS = [
       if (raw.length > 2048) throw bad(`"url" is capped at 2048 characters`);
       if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) && !/^https?:\/\//i.test(raw)) throw bad(`"url" must be http(s) or a bare domain`);
       if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+      await assertRobotsAllow(raw);
       // Page fetch (SSRF-guarded). A page that won't serve HTML still gets the
       // /favicon.ico fallback below.
       let page = null;

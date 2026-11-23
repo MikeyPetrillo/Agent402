@@ -59,6 +59,7 @@ export const REFUSAL_REASONS = Object.freeze([
   "cover_beside",         // not covered beside a run another container holds
   "cover_unread",         // balance unreadable and never read lately: past the allowance of calls at once
   "cover_kept",           // balance unreadable: judged on the wallet's last good read, not covered
+  "robots_disallowed",    // the URL's robots.txt disallows our fetch token for it (src/tools/robots-gate.js)
   "other",
 ]);
 
@@ -107,6 +108,10 @@ export function coverReasonOf(err) {
 }
 
 const RULES = [
+  // The robots gate's sentence ends in fixed words of ours; the URL it quotes
+  // comes before them, so this is read first, before any rule the URL's own
+  // text could match.
+  [/\bdoes not allow [A-Za-z0-9-]{1,40} to read this URL \(.{0,240}\), so it was not fetched$/, "robots_disallowed"],
   // Coverage refusals first: sentences from src/inflight-cover.js, for a
   // caller that holds the message only.
   [/\bits balance could not be read to confirm it also covers this one\b/i, "cover_unread"],
@@ -166,6 +171,7 @@ export function refusalReason(message, status, err = null) {
   const cover = code === 429 && err && typeof err.coverRefusal === "string" && Object.hasOwn(COVER_REASONS, err.coverRefusal) ? COVER_REASONS[err.coverRefusal] : null;
   if (cover) return cover;
   if (code === 429 && spendRuleOf(err)) return "routing_paused";
+  if (code === 403 && err?.robotsDisallowed === true) return "robots_disallowed";
   if (code === 413) return "too_large";
   // The router's no-match refusals answer 404 too; their own words name
   // the class, so a 404 is read as not_found only when they do not.

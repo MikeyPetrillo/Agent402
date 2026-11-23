@@ -73,9 +73,28 @@ you use them, you also agree to the following:</p>
   license (legal, medical, financial, tax and the like) unless a qualified professional reviews it first.</li>
 </ul>
 `;
-  // The clause for tools that fetch a URL their caller names joins here, as
-  // its own section under the same "last updated" date as the section above.
-  const callerUrlSection = "";
+  // The clause for tools that fetch a URL their caller names, under the same
+  // "last updated" date as the section above. The windows are the ones the
+  // server runs with (src/idempotency-store.js, src/mcp-tasks.js); the robots
+  // rule is src/tools/robots-gate.js, described on /crawler.
+  const callerUrlSection = `
+<h2 id="caller-urls">URLs you ask us to fetch</h2>
+<p>Some tools fetch a web page, file or feed at a URL you name and return its content, or something read
+from it, to you: for example the article, render, screenshot, PDF, image, audio and feed readers and the
+skill packs built on them. When you use them:</p>
+<ul>
+  <li><b>Your right to the content:</b> you represent that you have the right to access the content at
+  every URL you name and to use it as you do. You are responsible for following the terms of the site
+  that serves it and the rights of whoever owns it, copyright included.</li>
+  <li><b>How we fetch:</b> each URL is fetched for that call, at your request, as a browser would: without signing in,
+  without cookies or credentials, and without getting past any access control. The request names itself
+  as ours (see <a href="/crawler">/crawler</a>). Before returning a page's content we read the site's
+  robots.txt, and we do not fetch a path it disallows for our fetch token; such a call answers 403.</li>
+  <li><b>What we keep:</b> fetched content is returned to you and not stored, except that a paid answer is
+  kept for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes so that the same payment sent again gets the same answer, and the
+  result of a call you run as an async job or an MCP task is kept for ${taskRetentionPublic().keptFor} so you can fetch it.</li>
+</ul>
+`;
 
   const extraCss = `
 .tm-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -179,8 +198,11 @@ redistributed by us.</p>
 
 <h2 id="copyright">Copyright complaints</h2>
 <p>Some material on the service is stored or shown at a caller's request: memory-tool data, shared
-answer pages, reports made public, and listings in the published index. If you believe material on the
-service infringes your copyright, send a notice to our designated agent:</p>
+answer pages, reports made public, and listings in the published index. Content our tools fetch from a
+URL a caller names is passed to that caller (see <a href="#caller-urls">URLs you ask us to fetch</a>);
+a notice may concern that content too, and a site can stop those reads for every caller with its
+robots.txt. If you believe material on the service, or content it fetched for a caller, infringes your
+copyright, send a notice to our designated agent:</p>
 <p><b>Copyright agent</b>, ${LEGAL_ENTITY_SENTENCE}<br>
 Email: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a><br>
 Phone: <a href="tel:${COMPANY_PHONE.tel}">${COMPANY_PHONE.display}</a><br>

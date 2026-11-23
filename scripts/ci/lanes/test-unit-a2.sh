@@ -30,6 +30,8 @@ t node scripts/test-algorand-page-deadline.js
 t node scripts/test-crawl-kit.js
 # page-change kit (fixture server on port 0; a DNS lookup is the only network touch)
 t node scripts/test-page-change-kit.js
+# robots.txt gate for caller-named URLs: the rule, its cache, every gated route against a stubbed robots.txt, and no kept page content (boots free mode on port 0, offline)
+t node scripts/test-robots-gate.js
 # email-guard (offline: MIME reader, HTML worker, header, link and text signals)
 t node scripts/test-email-guard.js
 # Office files (offline: xlsx, docx and pptx read back by an independent zip reader; caps, no-formula, no-egress, timing)

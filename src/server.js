@@ -66,6 +66,7 @@ import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg, withHtmlFramesFailureBound } from "./tools/render.js";
 import { LOGO_SVG, FAVICON_SVG, FAVICON_VERSION, brandMarkTile } from "./brand-mark.js";
 import { renderWithStaticRead } from "./tools/render-static.js";
+import { assertRobotsAllow } from "./tools/robots-gate.js";
 import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
 import {
@@ -1124,8 +1125,11 @@ assertWorkerConfig();
 const BASE_URL = process.env.BASE_URL || `http://127.0.0.1:${PORT}`;
 // render's read (src/tools/render-static.js): the served HTML when it carries
 // the page's content, else headless Chromium, on the secretless browser worker
-// when one is configured (F02/F04) and in-process otherwise.
-function renderPage(url, { signal } = {}) {
+// when one is configured (F02/F04) and in-process otherwise. The URL's
+// robots.txt is read first (src/tools/robots-gate.js): a path it disallows
+// for the caller-fetch token answers 403 before either read.
+async function renderPage(url, { signal } = {}) {
+  await assertRobotsAllow(url);
   return renderWithStaticRead(url, (u, o) => (workerEnabled() ? runOnWorker("render", { url: u }, o) : renderArticle(u, o)), { signal });
 }
 
@@ -14218,6 +14222,7 @@ app.get("/api/screenshot", withToolCallLog("screenshot", async (req, res) => {
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
   try {
+    await assertRobotsAllow(url);
     const png = workerEnabled()
       ? (await runOnWorker("screenshot", { url, fullPage: fullPage === "true" }, { signal: ac.signal })).__binary
       : await screenshotPage(url, { fullPage: fullPage === "true", signal: ac.signal });

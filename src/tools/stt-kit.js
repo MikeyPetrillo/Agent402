@@ -57,6 +57,7 @@ import { answerLanguage } from "../text-language.js";
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { settleBeforeUpstream, settleBeforeUpstreamHolding, isSettleFirstRefusal } from "../settle-first.js";
 import { hardCapHold } from "../upstream-hard-caps.js";
 import { measureAudio, transcodeSpeech, inputFormatOf, SPEECH_CODECS } from "./media-kit.js";
@@ -218,6 +219,7 @@ function guessFilename(url, contentType) {
 }
 
 async function fetchAudio(url) {
+  await assertRobotsAllow(url);
   const { buffer: buf, contentType } = await safeFetch(url, { binary: true, maxBytes: MAX_AUDIO_BYTES });
   if (buf.length === 0) throw bad("Audio URL returned empty response", 422);
 

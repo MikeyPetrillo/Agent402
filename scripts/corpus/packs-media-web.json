@@ -125,7 +125,7 @@
       "slug": "feed-parse",
       "name": "an atom feed",
       "input": {
-        "url": "https://github.com/nodejs/node/releases.atom",
+        "url": "https://go.dev/blog/feed.atom",
         "limit": 3
       },
       "expect": {
@@ -813,7 +813,7 @@
       "slug": "skill-feed-watch",
       "name": "an atom feed",
       "input": {
-        "url": "https://github.com/nodejs/node/releases.atom"
+        "url": "https://go.dev/blog/feed.atom"
       },
       "expect": {
         "equals": {

@@ -24,6 +24,7 @@
 // `rendered: true`. RENDER_STATIC_READ=off sends every page to the browser.
 import { safeFetch } from "./fetch-guard.js";
 import { htmlToArticle } from "./extract.js";
+import { BROWSER_FETCH_UA } from "../user-agents.js";
 
 export const STATIC_MIN_WORDS = 50;
 // A noscript JavaScript notice decides only beside this little text.
@@ -31,8 +32,9 @@ export const STATIC_JS_NOTICE_MAX_WORDS = 300;
 // The fetch's own limit: a slow origin goes to the browser without waiting
 // the default fetch timeout first.
 export const STATIC_FETCH_TIMEOUT_MS = 8000;
-export const STATIC_DESKTOP_UA =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+// The browser string render's browser sends (src/user-agents.js), so the
+// served HTML is the one the browser would get.
+export const STATIC_DESKTOP_UA = BROWSER_FETCH_UA;
 
 // The markers below are read from the first STATIC_SCAN_MAX_CHARS of the
 // served HTML only, and every pattern is linear in what it reads: a tag's

@@ -26,6 +26,7 @@
 import { runHtml } from "./html-pool.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { ssrfDispatcher, safeFetch, assertPublicUrl, isSsrfBlock, retryTransient } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 
 // A tool fetching for its caller says so (src/user-agents.js).
 import { FETCH_UA as USER_AGENT } from "../user-agents.js";
@@ -293,6 +294,7 @@ export const WEB_TOOLS = [
     handler: async (i) => {
       const url = takeUrl(i.url);
       const limit = Math.min(Math.max(parseInt(i.limit, 10) || FEED_DEFAULT_ITEMS, 1), FEED_MAX_ITEMS);
+      await assertRobotsAllow(url);
       // One retry on a transient 502/503/504 - added 2026-08-12 after
       // feed-parse hit exactly this shape live in CI (a plain 15s timeout on
       // a caller-supplied feed URL, zero retries previously). Safe for a

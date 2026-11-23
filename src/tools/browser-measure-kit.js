@@ -22,6 +22,7 @@ import {
   PAGE_SPEED_DEVICES, PAGE_SPEED_MEASUREMENT, HTML_FRAMES_LIMITS,
 } from "./render.js";
 import { safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { assertPngWithin, compareStills, decodePng, FRAME_DIFF } from "./frame-diff.js";
 
 function bad(message, statusCode = 400) {
@@ -131,6 +132,7 @@ const FRAME_CHECK_METHOD = `grayscale mean per cell of a ${FRAME_DIFF.columns}x$
  * Runs before any browser slot is held: a refused or absent URL costs nothing.
  */
 async function fetchBaselineDocument(url, L = HTML_FRAMES_LIMITS) {
+  await assertRobotsAllow(url);
   let got;
   try {
     got = await safeFetch(url, { maxBytes: L.maxHtmlBytes, timeoutMs: L.loadTimeoutMs });
@@ -391,6 +393,7 @@ export const BROWSER_MEASURE_TOOLS = [
     },
     handler: async (input, ctx) => {
       const { url, device } = pageSpeedInput(input);
+      await assertRobotsAllow(url);
       return measurePageSpeed(url, { device, signal: abortSignalOf(ctx) });
     },
   },
