@@ -260,6 +260,8 @@ on most calls and longer for long answers, and a client that disconnects after t
 payment settles is charged without the answer (the charge is recorded as owed and
 reviewed for a refund).
 
+The gateway is an Agent402 service: it prices each call before it runs (a flat tier price, or a quote from the request on the metered routes), routes `auto` chat calls to a model chosen for the task, falls back to the next model on a chat tier when one fails, and signs a receipt for each settled paid answer.
+
 ```bash
 curl -i -X POST https://agent402.tools/v1/metered/chat/completions -H 'content-type: application/json' \
   -d '{"model":"anthropic/claude-haiku-4.5","messages":[{"role":"user","content":"Summarize x402 in one line"}],"max_tokens":200}'

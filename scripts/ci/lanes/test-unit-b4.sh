@@ -287,6 +287,12 @@ t node scripts/test-mpp-shim-mppx-registry.js
 t node scripts/test-report-margins.js
 # Untrusted-content provenance (R-14 — external page/search content carries untrustedContent; extract/render/search marked — offline)
 t node scripts/test-provenance.js
+# search-suggest's Wikipedia opensearch read: request, User-Agent, answer shape, credit, serial reads and per-minute ceiling (offline)
+t node scripts/test-search-suggest-source.js
+# /v1 gateway described as this service's product on every surface that describes it (offline)
+t node scripts/test-gateway-product-copy.js
+# /terms passes the model providers' terms on (Model outputs section, gateway bullet) (offline)
+t node scripts/test-terms-model-outputs.js
 # x402-trending momentum tool (organic score, sorts, WoW activation, history persistence — offline)
 t node scripts/test-x402-trending.js
 # ticker pack kit (offline)

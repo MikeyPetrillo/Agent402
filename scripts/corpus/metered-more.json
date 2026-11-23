@@ -1318,7 +1318,6 @@
         "q": "stablec",
         "count": 3
       },
-      "requires": "BRAVE_SUGGEST_API_KEY",
       "expect": {
         "minCount": {
           "suggestions": 1

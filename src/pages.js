@@ -7,6 +7,7 @@ import { frontDoorOneLine } from "./front-door.js";
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
 import { receiptsServed, RECEIPT_FETCH_PATH, RECEIPT_URL_HEADER, RECEIPT_HEADER } from "./receipt-signing.js";
 import { RECEIPT_FETCH_DAYS } from "./receipt-store.js";
+import { gatewayProductSentence } from "./gateway-product-copy.js";
 import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
@@ -1345,7 +1346,7 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
     tags: [
-      ...Object.entries(CATEGORIES).map(([k, v]) => ({ name: k, description: v.label })),
+      ...Object.entries(CATEGORIES).map(([k, v]) => ({ name: k, description: k === "llm" ? `${v.label}. ${gatewayProductSentence({ receipts: receiptsServed() })}` : v.label })),
       { name: "workflows", description: "Curated multi-tool workflows (skill packs) - task-level templates that compose catalog tools." },
       { name: "transparency", description: "Figures about this service computed from its own ledgers." },
     ],

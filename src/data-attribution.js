@@ -79,6 +79,12 @@ export const GEONAMES_ATTRIBUTION = "Place data from GeoNames (CC BY 4.0).";
 // use (https://nagerholidays.com/legal/termsofservice; the v3 and v4 APIs share them);
 // the credit names the dataset wherever its rows or answers computed from them are served.
 export const NAGER_ATTRIBUTION = "Holiday data by Nager.Date.";
+// Wikipedia (search-suggest reads its opensearch API, src/tools/wikipedia-suggest.js):
+// the Wikimedia API usage guidelines bar a client that hides the Foundation
+// as the provider, and the text is CC BY-SA 4.0, so the description and
+// every answer name the source with its link and license.
+export const WIKIPEDIA_ATTRIBUTION = "Suggestions from Wikipedia (CC BY-SA 4.0).";
+export const WIKIPEDIA_CREDIT = "Suggestions from Wikipedia (https://en.wikipedia.org), CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/).";
 export const COPERNICUS_DISCLAIMER = "Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.";
 /** The Copernicus credit an answer carries: its sentence, then the disclaimer. */
 export const CAMS_CREDIT = `${CAMS_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
@@ -121,6 +127,7 @@ export const ATTRIBUTIONS = Object.freeze({
   geonames: GEONAMES_ATTRIBUTION,
   nager: NAGER_ATTRIBUTION,
   fema: FEMA_NOTICE,
+  wikipedia: WIKIPEDIA_ATTRIBUTION,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */

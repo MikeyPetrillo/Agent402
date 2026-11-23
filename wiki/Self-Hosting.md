@@ -77,7 +77,6 @@ Set these on your host. None are committed to the repo. This table is the common
 | `POW_SECRET` | For PoW tier | HMAC secret for signing PoW challenges |
 | `BRAVE_API_KEY` | No | Enables search-kit tools (Web, News, Images) |
 | `BRAVE_ANSWERS_API_KEY` | No | Distinct Brave subscription token for the `answer` tool; falls back to `BRAVE_API_KEY` |
-| `BRAVE_SUGGEST_API_KEY` | No | Distinct Brave subscription token for `search-suggest`; falls back to `BRAVE_API_KEY` |
 | `FRED_API_KEY` | No | Enables macro-kit v1 (FRED economic data) |
 | `OPENROUTER_API_KEY` | No | Enables the `/v1` LLM gateway tiers (chat, metered, embeddings, rerank, images, speech); the routes answer `503` without it |
 | `OPENAI_API_KEY` | No | Enables the older `/api/llm*`, `/api/image-gen*`, `/api/transcribe*` and `/api/embed*` proxies |
