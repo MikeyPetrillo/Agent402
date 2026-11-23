@@ -191,7 +191,6 @@
     "BOOT_CPU_PROFILE": "Boot CPU profile.",
     "BRAVE_ANSWERS_API_KEY": "Brave answers API key (a credential, set on the host).",
     "BRAVE_API_KEY": "Key for the web search tools (a credential, set on the host).",
-    "BRAVE_SUGGEST_API_KEY": "Brave suggest API key (a credential, set on the host).",
     "BROKEN_LISTINGS_WIDESPREAD_MIN": "Broken listings widespread minimum.",
     "BROKEN_LISTINGS_WIDESPREAD_SHARE": "Broken listings widespread share.",
     "BROKEN_LISTINGS_WINDOW_MS": "Broken listings window, in milliseconds.",

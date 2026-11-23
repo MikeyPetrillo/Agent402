@@ -16,7 +16,11 @@ export const METERED_SLUGS = new Set([
   // scripts/test-crypto-screens-kit.js.
   "dex-volume-board", "dex-pool-health",
   // Brave Search subscription
-  "search", "search-lite", "search-news", "search-images", "search-videos", "search-suggest", "answer", "multi-search",
+  "search", "search-lite", "search-news", "search-images", "search-videos", "answer", "multi-search",
+  // Wikipedia opensearch: keyless, but a shared source read under a
+  // per-minute ceiling (src/tools/wikipedia-suggest.js) that sweeps must not
+  // spend; offline coverage is scripts/test-search-suggest-source.js.
+  "search-suggest",
   "llm-context",      // Brave /llm/context - same subscription, billed per call
   // OpenAI
   "llm", "llm-pro", "llm-premium",

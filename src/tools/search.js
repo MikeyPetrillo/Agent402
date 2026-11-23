@@ -1,5 +1,7 @@
 // Live web search — the one thing in the catalog an agent genuinely cannot
 // self-host: fresh results from an independent search index (Brave Search API).
+// search-suggest is the exception: it reads Wikipedia's opensearch API
+// (src/tools/wikipedia-suggest.js) and carries that source's credit.
 // Wallet-only (each call consumes paid upstream quota, so it is never
 // proof-of-work eligible). Requires BRAVE_API_KEY; without it the endpoints
 // report themselves unconfigured instead of failing opaquely.
@@ -17,6 +19,8 @@ import { recordUpstreamCall } from "../stats.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { settleBeforeUpstreamHolding } from "../settle-first.js";
 import { hardCapHold } from "../upstream-hard-caps.js";
+import { wikipediaSuggestions } from "./wikipedia-suggest.js";
+import { attribute, creditAnswers, WIKIPEDIA_CREDIT } from "../data-attribution.js";
 
 // THE SETTLE POINT (src/settle-first.js): a run the server armed has its
 // payment settled here, after the handler's input checks and our key check,
@@ -619,13 +623,15 @@ export const SEARCH_TOOLS = [
     name: "Search autocomplete",
     slug: "search-suggest",
     category: "web",
-    // Autocomplete is high-frequency, low-information per call — priced 10×
-    // cheaper than the other Brave routes so query-expansion agents can use it
-    // generously without burning paid quota on the buyer side.
+    // Autocomplete is high-frequency, low-information per call: priced 10x
+    // under the other search routes so query-expansion agents can use it
+    // generously.
     price: "$0.001",
     description:
-      "Search autocomplete: query suggestions for a partial input as a flat JSON array. Useful for query expansion, did-you-mean refinement, and topic exploration. Returns up to 20 suggestions.",
+      "Search autocomplete: query suggestions for a partial input as a flat JSON array, drawn from Wikipedia article titles. Useful for query expansion, did-you-mean refinement, and topic exploration. Returns up to 20 suggestions.",
     tags: ["search", "autocomplete", "suggest", "query-expansion"],
+    // Read through src/tools/wikipedia-suggest.js (its etiquette and limits are there).
+    upstreamHosts: ["en.wikipedia.org"],
     discovery: {
       input: { q: "agent4", count: 5 },
       inputSchema: {
@@ -639,21 +645,14 @@ export const SEARCH_TOOLS = [
         example: {
           query: "agent4",
           count: 5,
-          suggestions: ["agent402", "agent4 mexico", "agent4 movie", "agent4you", "agent 47"],
+          suggestions: ["Agent 47", "Agent 488", "Agent 47 (2016 film)", "Agent 44", "Agents of S.H.I.E.L.D."],
         },
       },
     },
     handler: async (i) => {
       const q = takeQuery(i.q, { wordLimit: false });
       const count = Math.min(Math.max(parseInt(i.count, 10) || 5, 1), 20);
-      // Brave issues distinct subscription tokens per product SKU; Suggest
-      // may need its own key, same pattern as Answers (BRAVE_ANSWERS_API_KEY).
-      const key = process.env.BRAVE_SUGGEST_API_KEY || process.env.BRAVE_API_KEY;
-      const data = await braveGet("/suggest/search", { q, count }, key, "search-suggest");
-      // Brave returns { results: [{query, ...rich fields requiring paid plan}, ...] }.
-      // We surface only the suggestion string — `rich` enrichment requires a
-      // separate subscription tier, and a flat string[] is what agents want.
-      const suggestions = (data.results ?? []).slice(0, count).map((r) => r.query).filter((s) => typeof s === "string");
+      const suggestions = await wikipediaSuggestions(q, count);
       return markUntrusted({ query: q, count: suggestions.length, suggestions });
     },
   },
@@ -825,3 +824,9 @@ export const SEARCH_TOOLS = [
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(SEARCH_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+// search-suggest names its source on the description and on every answer.
+{
+  const suggest = SEARCH_TOOLS.find((t) => t.slug === "search-suggest");
+  attribute(suggest, "wikipedia");
+  creditAnswers(suggest, WIKIPEDIA_CREDIT);
+}

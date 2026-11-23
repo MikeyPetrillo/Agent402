@@ -76,7 +76,6 @@ Set these on your host. None are committed to the repo.
 | `POW_SECRET` | For PoW tier | HMAC secret for signing PoW challenges |
 | `BRAVE_API_KEY` | No | Enables search-kit tools (Web, News, Images) |
 | `BRAVE_ANSWERS_API_KEY` | No | Distinct Brave subscription token for the `answer` tool; falls back to `BRAVE_API_KEY` |
-| `BRAVE_SUGGEST_API_KEY` | No | Distinct Brave subscription token for `search-suggest`; falls back to `BRAVE_API_KEY` |
 | `NEYNAR_API_KEY` | No | Enables Farcaster tools (Neynar API); falls back to `WARPCAST_API_KEY` |
 | `FRED_API_KEY` | No | Enables macro-kit v1 (FRED economic data) |
 | `FRED_API_KEY_V2` | No | Distinct key for macro-kit v2 bulk endpoints |
