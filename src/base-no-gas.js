@@ -17,3 +17,7 @@ export const BASE_NO_GAS_SENTENCE = "On Base, an x402 exact payment is a signatu
 // holds the file's size; each chain line stays chain, asset and CAIP-2 id,
 // scripts/test-legal-claims.js).
 export const BASE_NO_GAS_SHORT = "Base: an x402 exact payment needs no ETH.";
+
+// The same fact for a newcomer (/start): no scheme, standard or facilitator
+// named. The technical sentence stays on /base, /how-to-pay and the docs.
+export const BASE_NO_GAS_PLAIN = "Your wallet needs only USDC on Base: you do not need ETH to pay fees.";

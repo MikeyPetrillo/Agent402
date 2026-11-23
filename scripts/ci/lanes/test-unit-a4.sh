@@ -203,6 +203,8 @@ t node scripts/test-mpp-index.js
 t node scripts/test-ledger-recent.js
 # The shared HTML escapers escape the single quote; leaderboard notes are escaped per note
 t node scripts/test-escape-quotes.js
+# Every browser script served from assets/ parses (a spliced line ran none of its page)
+t node scripts/test-browser-scripts-parse.js
 # The document CSP's form-action allows only this origin and mailto:, and every form in the tree submits inside it
 t node scripts/test-csp-form-action.js
 # The report page's image preview src comes only from an allowlisted image type and a plain base64 payload

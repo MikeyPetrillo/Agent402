@@ -25,6 +25,7 @@ export const ACCOUNT_CSS = `
   .acct-check{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;min-height:24px;font-weight:400!important;color:var(--muted)!important}
   .acct-section{margin-top:22px}
   .acct-section h3{font-weight:600;font-size:var(--fs-lg);margin:0 0 4px;color:var(--ink)}
+  .acct-section h2,.acct-name{font-weight:700;font-size:var(--fs-lg);line-height:1.3;margin:0 0 4px;color:var(--ink)}
   .acct-section p{font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:4px 0 0;max-width:72ch}
   .acct-key{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--panel);color:var(--on-panel);padding:14px 16px;border-radius:var(--radius);overflow-wrap:anywhere;user-select:all;margin:12px 0 0}
   .acct-msg{font-size:var(--fs-md);line-height:1.5;color:var(--muted);margin-top:10px;min-height:0}
@@ -33,6 +34,17 @@ export const ACCOUNT_CSS = `
   .acct-signin form{margin-top:4px}
   @media (max-width:600px){.acct-card{padding:18px}.acct-amt{font-size:var(--fs-2xl)}}
 `;
+
+/** A balance's name for a person: the day it was bought (UTC), not its key
+ *  id. Two balances bought the same day are told apart by the last four
+ *  characters of the key id. assets/credits/account.js draws the same name. */
+export function balanceName(b, all = []) {
+  const day = (x) => { const d = new Date(x?.createdAt || ""); return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }); };
+  const mine = day(b);
+  if (!mine) return `Balance ${String(b?.keyId || "").slice(-4)}`;
+  const twin = (all || []).some((o) => o && o.keyId !== b.keyId && day(o) === mine);
+  return `Balance bought ${mine}${twin ? ` (${String(b.keyId || "").slice(-4)})` : ""}`;
+}
 
 const shell = ({ title, description, body, baseUrl }) => ledgerShell({
   title, description, canonical: `${baseUrl}${ACCOUNT_PATH}`, baseUrl, activePath: "/credits", extraCss: REPORTS_CSS + ACCOUNT_CSS, body, robots: "noindex, nofollow",

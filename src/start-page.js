@@ -20,7 +20,7 @@ import { isComputePayable } from "./pow.js";
 import { creditsSalesEnabled, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
 import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
 import { cardReportPriceRange } from "./report-tiers.js";
-import { BASE_NO_GAS_SENTENCE } from "./base-no-gas.js";
+import { BASE_NO_GAS_PLAIN } from "./base-no-gas.js";
 import { WALLET_NEW_COMMAND } from "./get-a-wallet.js";
 import { CHAIN_PAGES } from "./market-page.js";
 
@@ -104,7 +104,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
     : `<p class="ml-measure" ${P}>This connector runs the free tools with no wallet and no signup.${credits ? " Paid tools take a credits key or a wallet (below)." : " Paid tools take a wallet (below)."}</p>`;
 
   const noWallet = [
-    powCount ? `<li><strong>Free tools.</strong> ${powCount} tools run free with proof of work on the connector above, rate-limited, with no wallet and no signup. <a href="/tools" ${A}>Browse the tools</a>.</li>` : "",
+    powCount ? `<li><strong>Free tools.</strong> ${powCount} tools run free on the connector above, rate-limited, with no wallet and no signup. <a href="/tools" ${A}>Browse the tools</a>.</li>` : "",
     reportRange ? `<li><strong>Reports by card.</strong> Finished, model-backed reports at <a href="/reports" ${A}>/reports</a>, ${esc(reportRange.text)} by card.</li>` : "",
     credits ? `<li><strong>Credits by card.</strong> Prepaid credits at <a href="/credits" ${A}>/credits</a>: ${viaCredits ? "the connector above pays from your balance after an email sign-in, and " : ""}a credits key pays for most paid tools with no wallet.</li>` : "",
   ].filter(Boolean).join("\n        ");
@@ -124,7 +124,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
       <div class="st-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:16px;">
       ${walletCards}
       </div>
-      <p class="ml-measure" ${P}>${esc(BASE_NO_GAS_SENTENCE)}</p>
+      <p class="ml-measure" ${P}>${esc(BASE_NO_GAS_PLAIN)}</p>
       <p class="ml-measure" ${P}>More on paying from a wallet: <a href="/how-to-pay" ${A}>how to pay</a>.</p>
     </section>`;
 

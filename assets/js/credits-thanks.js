@@ -4,6 +4,7 @@
 (function () {
   var app = document.getElementById("app");
   var id = app && app.getAttribute("data-session");
+  var connector = app && app.getAttribute("data-connector");
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function render(s) {
     if (s.status === "minted") {
@@ -14,6 +15,7 @@
         '<pre id="key-box" style="background:var(--panel);color:var(--on-panel);padding:14px 16px;border-radius:var(--radius);font-family:var(--font-mono);font-size:var(--fs-sm);overflow:auto;margin:16px 0;user-select:all">' + esc(s.key) + '</pre>' +
         '<div class="report-actions"><button class="btn btn-primary" id="copy-key">Copy key</button><a class="btn btn-secondary" href="/tools">Browse tools</a><a class="btn btn-secondary" href="/credits">Buy more</a></div>' +
         '<p class="note">Balance: <span style="font-family:var(--font-mono)">curl -H "Authorization: Bearer &lt;key&gt;" ' + esc(location.origin) + '/api/credits/balance</span></p>' +
+        (connector ? '<p class="note">Using Claude, Cursor or another MCP app? Give it the connector address <span style="font-family:var(--font-mono);overflow-wrap:anywhere">' + esc(connector) + '</span>: it asks for this purchase email, then pays from this balance under a daily cap you set, with no key to paste.</p>' : '') +
         '</div>';
       var b = document.getElementById("copy-key");
       if (b) b.addEventListener("click", function () { try { navigator.clipboard.writeText(s.key); b.textContent = "Copied ✓"; setTimeout(function () { b.textContent = "Copy key"; }, 1500); } catch (e) {} });
@@ -27,16 +29,7 @@
     if (s.status === "over_balance_cap") { app.innerHTML = '<div class="status"><h2>Above the balance limit</h2><p>One key holds at most $' + esc(s.capUsd) + '. ' + (s.refunded ? 'This purchase was refunded in full to your card and no key was issued.' : 'This purchase was not issued a key and will be refunded to your card.') + ' Buy a smaller pack, or pay per call with a wallet.</p><p style="margin-top:16px"><a class="btn btn-secondary" href="/credits">Back to credits</a></p></div>'; return; }
     if (s.status === "not_completed") { app.innerHTML = '<div class="status"><h2>Purchase not completed</h2><p>' + esc(s.error || "This purchase can't be completed right now.") + ' ' + (s.refunded ? 'Your payment was refunded in full and no key was issued.' : 'No key was issued and your payment will be refunded in full.') + '</p><p style="margin-top:16px"><a class="btn btn-secondary" href="/credits">Back to credits</a></p></div>'; return; }
     if (s.status === "refunded") { app.innerHTML = '<div class="status"><h2>Payment refunded</h2><p>This payment was refunded to your card before a key was claimed, so no key was issued.</p><p style="margin-top:16px"><a class="btn btn-secondary" href="/credits">Back to credits</a></p></div>'; return; }
-    if (s.status === "over_limit") { app.innerHTML = '<div class="status"><h2>Daily purchase limit reached</h2><p>Credits are limited to  app.innerHTML = '<div class="status"><h2>Payment not completed</h2><p><a href="/credits">Start over</a></p></div>'; return; }
-    app.innerHTML = '<div class="status"><h2>Purchase not found</h2><p><a href="/credits">Back to credits</a></p></div>';
-  }
-  if (!id) { render({ status: "not_found" }); return; }
-  fetch("/api/credits/claim?session=" + encodeURIComponent(id))
-    .then(function (r) { return r.json(); })
-    .then(render)
-    .catch(function () { render({ status: "not_found" }); });
-})();
- + esc(s.limitUsd) + ' per buyer in any 24 hours. ' + (s.refunded ? 'This purchase was refunded in full to your card and no key was issued.' : 'This purchase was not issued a key and will be refunded to your card.') + '</p><p style="margin-top:16px"><a class="btn btn-secondary" href="/credits">Back to credits</a></p></div>'; return; }
+    if (s.status === "over_limit") { app.innerHTML = '<div class="status"><h2>Daily purchase limit reached</h2><p>Credits are limited to $' + esc(s.limitUsd) + ' per buyer in any 24 hours. ' + (s.refunded ? 'This purchase was refunded in full to your card and no key was issued.' : 'This purchase was not issued a key and will be refunded to your card.') + '</p><p style="margin-top:16px"><a class="btn btn-secondary" href="/credits">Back to credits</a></p></div>'; return; }
     if (s.status === "unpaid") { app.innerHTML = '<div class="status"><h2>Payment not completed</h2><p><a href="/credits">Start over</a></p></div>'; return; }
     app.innerHTML = '<div class="status"><h2>Purchase not found</h2><p><a href="/credits">Back to credits</a></p></div>';
   }

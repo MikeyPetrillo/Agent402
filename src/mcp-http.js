@@ -1110,7 +1110,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const params = paidParamsOf(args, isNamed);
       const startedAt = Date.now();
       if (needsAsyncOrWait(def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
-        return { content: [{ type: "text", text: `${def.slug} can take up to ${Number(def.asyncProfile?.maxSeconds)} s, longer than this connector waits for a call paid from credits (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s). Call the HTTP route ${def.route} with your credits key and the header Prefer: respond-async. Nothing was charged.` }], isError: true };
+        // A person signed in here holds no credits key, so the answer does not
+        // send them to one: it names what this connector can run instead.
+        return { content: [{ type: "text", text: `${def.slug} can take up to ${Number(def.asyncProfile?.maxSeconds)} s, longer than this connector waits for a call paid from credits (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s), so it cannot run here. Nothing was charged. Pick a tool that answers within ${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s (catalog.find), or run this one over HTTP with the header Prefer: respond-async from a client that pays per call (x402 or MPP).` }], isError: true };
       }
       const idempotencyKey = reqParams?._meta?.["org.agent402/idempotency-key"];
       const callId = openLoopbackCall();

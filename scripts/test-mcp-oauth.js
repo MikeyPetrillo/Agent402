@@ -941,6 +941,22 @@ try {
   ok(c.json?.result?.isError && /only on Agent402's own services/.test(c.json.result.content[0].text), "a route that buys from an outside seller is refused under a grant");
   c = await call(T.access_token, "base64", { text: "hello" });
   ok(c.status === 200 && !c.json?.result?.isError, "a free tool stays free under a grant");
+  // A tool whose run outlasts the connector's wait is refused before it runs,
+  // in words for a person who holds no credits key.
+  {
+    let longText = "";
+    for (const slug of ["dossier", "research", "image-gen-premium", "v1-videos"]) {
+      const lc = await call(T.access_token, slug, { ticker: "AAPL", query: "x", prompt: "x" });
+      const tx = lc.json?.result?.content?.[0]?.text || "";
+      if (lc.json?.result?.isError && /cannot run here/.test(tx)) { longText = tx; break; }
+    }
+    ok(longText && /Nothing was charged/.test(longText) && !/credits key/.test(longText) && /Prefer: respond-async/.test(longText), `a long run under a grant is refused without offering a key the person lacks ("${longText.slice(0, 120)}")`);
+  }
+  // A notice is mailed once an app is connected, with where to undo it.
+  {
+    const notes = mails.filter((m) => m.to === "buyer@example.com" && /An app was connected to your Agent402 credits/.test(m.subject || ""));
+    ok(notes.length >= 1 && /Claude evil/.test(notes[0].text || "") && /\/credits\/account/.test(notes[0].text || "") && /a day/.test(notes[0].text || ""), `a connect notice is mailed with the app, its cap and the balance page (${notes.length})`);
+  }
   c = await mcp(B, rpc(5, "tools/list", {}), { token: T.access_token, path: "/mcp/credits" });
   ok(c.status === 200 && Array.isArray(c.json?.result?.tools) && c.json.result.tools.length > 3, "/mcp/credits serves the connector with a token");
 
@@ -960,6 +976,7 @@ try {
   const mine = apps.apps?.find((x) => x.capUsd === 0.01 && x.spentTodayUsd > 0);
   ok(Array.isArray(apps.apps) && mine && mine.app === "Claude evil" && mine.keyId === G.keyId && mine.createdAt && mine.spentTodayUsd === 0.008 && "lastUsedAt" in mine && "lastNetwork" in mine, `connected apps list the app, key, cap, spend today, created and last use (${mine?.spentTodayUsd})`);
   ok(!JSON.stringify(apps).match(/a402[mr]_/), "the list carries no token");
+  ok(/\/mcp\/credits$/.test(apps.connectorUrl || ""), `the connected apps answer names the connector address (${apps.connectorUrl})`);
   ok((await fetch(`${B}/credits/account/connected.json`)).status === 401, "the list needs the balance page's sign-in");
   const acctPost = (p, body, h = same) => fetch(`${B}/credits/account/connected/${p}`, { method: "POST", headers: { "content-type": "application/json", cookie: acct, ...h }, body: JSON.stringify(body) });
   ok((await acctPost("cap", { id: mine.id, capUsd: 1 }, { "sec-fetch-site": "cross-site" })).status === 403, "a cross-site change is refused");
