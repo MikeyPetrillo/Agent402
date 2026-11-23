@@ -1,6 +1,6 @@
 # Agent402.Tools Wiki
 
-**Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one.** One server settles x402 across chains with facilitator fallbacks, MPP with Tempo and card, and proof of work for the pure-CPU tools. An x402 payment settles after a successful answer, a hang-up before the answer can be forgiven, a charged failure is booked and repaid against the chain record, and a crawled index of outside x402 sellers feeds a router that buys from the proven ones. 500+ ready tools sit on the same rails.
+**Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls.** One server settles x402 across chains with facilitator fallbacks, MPP with Tempo and card, and proof of work for the pure-CPU tools. An x402 payment settles after a successful answer, a hang-up before the answer can be forgiven, a charged failure is booked and repaid against the chain record, and a crawled index of outside x402 sellers feeds a router that buys from the proven ones. 500+ ready tools sit on the same rails.
 
 ![A paid call on Agent402: the request, the 402 with its price, the signature, the settlement, the answer and the signed receipt](https://raw.githubusercontent.com/MikeyPetrillo/Agent402/main/docs/media/agent402-call.gif)
 

@@ -1,7 +1,7 @@
 {
   "name": "agent402",
   "version": "2.14.0",
-  "description": "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Open-source MCP server and skill: pay per call in USDC over x402 or MPP, or free via proof-of-work for pure-compute tools.",
+  "description": "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Open-source MCP server and skill: pay per call in USDC over x402 or MPP, or free via proof-of-work for pure-compute tools.",
   "author": {
     "name": "Havok Holdings LLC",
     "url": "https://agent402.tools/company"

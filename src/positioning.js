@@ -10,13 +10,14 @@
 // clause follows receiptsServed() (src/receipt-signing.js), so a server with
 // no signing key loaded never promises one (and says "paid calls" rather than
 // "every paid call"). The published sentence is the one with both wires and
-// the receipt clause, the owner's line word for word. What the clause covers:
-// every settled paid answer on the direct routes is signed
-// (src/receipt-signing.js). A /ref/ copy is never signed (src/server.js
-// receiptFieldsOf: a tool bought through a referral link is that network's
-// sale), and a streamed answer that is neither an event stream nor sent with
-// TE: trailers carries none; the README's money-path line and /trust's
-// receipt step state both.
+// the receipt clause, scoped to what is signed (src/receipt-signing.js): a
+// settled paid 200 (no failed call, charged-first failures included, and no
+// free or trial answer) on a direct route. A /ref/ copy is never signed
+// (src/server.js receiptFieldsOf: a tool bought through a referral link is
+// that network's sale). A streamed answer that can carry no receipt (neither
+// an event stream nor sent with TE: trailers) is still signed: the receipt is
+// kept for GET /api/receipt/<settlement> (src/receipt-store.js), and the
+// answer's X-Agent402-Receipt-Url header names it.
 //
 // The catalog's size is a supporting line, never the lead: SUPPORT_LINE.
 
@@ -28,7 +29,7 @@ export const CATEGORY_LINE = "Payments and trust for AI agents.";
 export function leadSentence({ mpp = true, receipts = true } = {}) {
   const wires = mpp ? "x402 and MPP" : "x402";
   return receipts
-    ? `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across ${wires}, with a signed receipt for each one.`
+    ? `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across ${wires}, with signed receipts on successful direct calls.`
     : `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402 across ${wires}.`;
 }
 

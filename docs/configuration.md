@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1123 variables in 114 groups.
+1126 variables in 114 groups.
 
 ## Contents
 
@@ -920,6 +920,9 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `RECEIPT_FETCH_DAYS` | Days a streamed paid answer's signed receipt stays fetchable at /api/receipt/<settlement>. | `30` | `src/receipt-store.js` |
+| `RECEIPT_FETCH_MAX_ROWS` | Row bound of the streamed-receipt store; past it the oldest go first. | `500000` | `src/receipt-store.js` |
+| `RECEIPT_FETCH_MEMORY` | How many recent streamed receipts are also held in memory (served before a queued database write lands). | `2000` | `src/receipt-store.js` |
 | `RECEIPT_RETIRED_KEYS` | Optional JSON array of earlier public keys still published: [{"kid","x","validFrom","validUntil"}], x the raw 32-byte public key in base64url. |  | `src/receipt-signing.js` |
 | `RECEIPT_SIGNING_KEY` | Ed25519 private key (base64 of a PKCS8 PEM) that signs paid-answer receipts; unset leaves receipts off. |  | `src/changelog.js`, `src/receipt-signing.js` |
 | `RECEIPT_SIGNING_KEY_ID` | Key id published with the receipt key; required with RECEIPT_SIGNING_KEY. |  | `src/receipt-signing.js` |

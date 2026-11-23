@@ -1,6 +1,7 @@
 // Server-rendered technical guides — the prose layer for organic search.
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
+import { getWalletMarkdown } from "./get-a-wallet.js";
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgRef } from "./site-org.js";
@@ -70,6 +71,9 @@ import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS a
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, sttLongEnabled } from "./tools/stt-kit.js";
 /** Where the buying-at-volume guide lives (the metered quote limiter's 429 links it). */
 export const BUYING_AT_VOLUME_PATH = "/guides/buying-at-volume";
+
+/** Guides published under an earlier slug: old slug -> current slug (served as a 301). */
+export const MOVED_GUIDES = Object.freeze({ "why-twelve-chains": "why-many-chains" });
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -502,6 +506,8 @@ export AGENT402_BUDGET=20             # USD for the whole session
 export AGENT402_NETWORKS=solana       # pay only on these chains, in this order
 npx -y agent402-mcp@${AGENT402_MCP_VERSION}
 \`\`\`
+
+${getWalletMarkdown()}
 
 **agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
 \`AGENT402_MAX_PER_CALL_USD\`, defaults to $5; \`0\` or \`off\` turns it off.
@@ -1639,7 +1645,7 @@ work today.
 `,
   },
   {
-    slug: "why-twelve-chains",
+    slug: "why-many-chains",
     title: "Why Agent402 settles on {{railCount}} chains instead of just Base",
     description:
       "Base is where x402 volume actually is today. Agent402 also settles on {{usdcRailsButBase}}, and Robinhood Chain (USDG) anyway - here's the actual reason, chain by chain.",
@@ -2042,6 +2048,8 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.16.0
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
+
+${getWalletMarkdown()}
 
 Or in \`.mcp.json\` at the project root:
 

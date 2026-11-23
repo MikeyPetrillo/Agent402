@@ -45,7 +45,7 @@ export const REPORTS_CSS = `
   .eyebrow-tags{display:flex;flex-wrap:wrap;row-gap:4px}.eyebrow-tags>span{white-space:nowrap}.eyebrow-tags>span+span::before{content:"·";padding:0 10px}
   .samples-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:8px 28px;font-size:var(--fs-md);line-height:1.45}
   .samples-list a{color:var(--ink);text-decoration:none;overflow-wrap:anywhere}.samples-list a:hover{color:var(--accent)}.samples-list b{font-weight:600}
-  .hero{padding:64px 0 20px}.hero h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:clamp(var(--fs-3xl),5vw,var(--fs-4xl));line-height:1.02;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
+  .hero{padding:64px 0 20px}.hero h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
   .lede{font-size:var(--fs-lg);line-height:1.5;color:var(--muted);max-width:76ch;margin:16px 0 0;font-weight:300}.lede b{color:var(--ink);font-weight:500}
   .products{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px;margin-top:8px}
   /* Cards are a flex column so the buy button sits on one baseline across a

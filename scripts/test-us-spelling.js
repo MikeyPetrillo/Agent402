@@ -39,7 +39,7 @@ const BRITISH = {
   defence: "defense", offence: "offense", licence: "license", licences: "licenses",
   enquiry: "inquiry", enquiries: "inquiries", programme: "program", programmes: "programs",
   grey: "gray", metre: "meter", metres: "meters", litre: "liter", litres: "liters",
-  judgement: "judgment", fulfil: "fulfill", instalment: "installment", aluminium: "aluminum",
+  judgement: "judgment", fulfil: "fulfill", fulfilment: "fulfillment", instalment: "installment", aluminium: "aluminum",
   artefact: "artifact", artefacts: "artifacts", whilst: "while", amongst: "among",
 };
 // The -ise verbs, in their four forms each.

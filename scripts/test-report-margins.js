@@ -89,7 +89,7 @@ for (const [key, m] of Object.entries(MONITOR_PRODUCTS)) {
   const cap = t ? Number(t.maxUpstreamUsd) : ONE_SYNTH_WORST;
   const gross = m.price / 100, net = stripeNet(gross);
   const worst = MAX_FULL_PER_SUB_30D * cap;
-  // A subscription's risk is REPEAT fulfilment, so a percentage floor is the
+  // A subscription's risk is REPEAT fulfillment, so a percentage floor is the
   // wrong shape here: one month's fee must cover twice its worst-case month.
   ok(net >= 2 * worst,
     `${key}: monthly fee net of card fees covers at least twice the ${MAX_FULL_PER_SUB_30D}-run worst case`);

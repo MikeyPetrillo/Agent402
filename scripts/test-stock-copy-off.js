@@ -109,6 +109,21 @@ for (const f of samples) {
   ok(dual > 0 && bad.length === 0, `every markdown price of a pack with a stock step states both prices and both match the tables (${dual} lines${bad.length ? `; ${bad.join("; ")}` : ""})`);
 }
 
+// The MCP server description and the llms.txt connector line name the
+// flagships; the quote flagship (market.quote, "market data" there) is named
+// only while a stock provider is active, as the instructions line already is.
+{
+  const { mcpServerDescription, MCP_SERVER_DESCRIPTION: HOSTED } = await import("../src/mcp-flagship.js");
+  const { MCP_SERVER_DESCRIPTION: STDIO } = await import("../mcp/output-schemas.js");
+  const { llmsTxt } = await import("../src/seo.js");
+  const flag = (d) => /Flagships:[^;]*\bmarket data\b/.test(d);
+  ok(!flag(mcpServerDescription({ stock: false })) && flag(mcpServerDescription({ stock: true })), "the hosted serverInfo description names the market data flagship only with a stock provider");
+  ok(!flag(HOSTED) && !flag(STDIO), "the published descriptions (hosted default, stdio package) name no market data flagship");
+  ok(/description: mcpServerDescription\(\{[^}]*\bstock: stockDataEnabled\(\)/.test(readFileSync(join(ROOT, "src/mcp-http.js"), "utf8")), "the hosted connector's description reads the stock switch");
+  const line = (llmsTxt("https://example.test", []).split("\n").find((l) => l.includes("Hosted MCP connector")) || "");
+  ok(line && !/render\/data\//.test(line) && (stockDataEnabled() ? /\/quote\//.test(line) : !/\/quote\//.test(line)), `llms.txt names the quote flagship only with a stock provider (${line.slice(0, 120)})`);
+}
+
 if (stockDataEnabled()) {
   console.log(`(a stock data provider is active: ${findings.length} mention(s) allowed)`);
   ok(true, "switch on: static copy may name the stock tools");

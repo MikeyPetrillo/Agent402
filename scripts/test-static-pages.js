@@ -297,6 +297,14 @@ try {
   }
 }
 
+// --- A renamed guide answers 301 to its new slug (the chain count is not in a slug) ---
+{
+  const res = await fetch(`${BASE}/guides/why-twelve-chains?ref=x`, { redirect: "manual" });
+  ok(res.status === 301 && res.headers.get("location") === "/guides/why-many-chains?ref=x", `/guides/why-twelve-chains -> 301 /guides/why-many-chains (got ${res.status} ${res.headers.get("location")})`);
+  const now = await fetch(`${BASE}/guides/why-many-chains`);
+  ok(now.status === 200 && /<link rel="canonical" href="[^"]*\/guides\/why-many-chains"/.test(await now.text()), "/guides/why-many-chains serves the guide under its own canonical");
+}
+
 // --- "Why pay here": three short claims on the home page (#why), the seven
 // full rows and the side-by-side table on /docs#why; /why redirects there ---
 {
@@ -399,6 +407,15 @@ try {
   const hero = (home.match(/<header[\s\S]*?<\/header>/) || [""])[0];
   ok(hero.includes('href="/start"') && /btn-primary" href="\/start">Add to your agent</.test(hero), "hero primary is Add to your agent, to /start");
   ok(/btn-secondary" href="\/tools">Browse tools</.test(hero), "hero secondary is Browse tools");
+  // "Add to your agent" lands on /docs#add, which leads with the no-terminal
+  // path (a custom connector in the Claude app), then the terminal lines.
+  {
+    const docsHtml = await (await fetch(`${BASE}/docs`)).text();
+    const add = docsHtml.slice(docsHtml.indexOf('id="add"'));
+    const addText = stripTags(stripScripts(add)).replace(/\s+/g, " ");
+    const custom = addText.indexOf("Add custom connector"), term = addText.indexOf("claude mcp add");
+    ok(custom > 0 && term > custom && /claude\.ai/.test(addText.slice(0, term)) && addText.slice(custom, term).includes("/mcp"), `/docs#add leads with the custom connector in the Claude app, then the terminal (${custom}, ${term})`);
+  }
   ok(!/Buy a report|by card|agentic finance/i.test(hero.replace(/<div class="hm-obsidian[\s\S]*$/, "")), "hero copy carries no report, card or agentic-finance line");
 }
 

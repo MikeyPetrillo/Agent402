@@ -128,7 +128,7 @@ async function certTransparencyHandler(body) {
   const crtP = fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(Array.isArray(rows) ? rows : []) }));
   let csP = null;
   const fireCertspotter = () => (csP ??= fetchJson(csUrl, "certspotter").then((rows) => ({ source: "certspotter", ...mapCertspotter(Array.isArray(rows) ? rows : []) })));
-  // Resolve on the FIRST fulfilment; reject with the first error only once ALL reject.
+  // Resolve on the FIRST fulfillment; reject with the first error only once ALL reject.
   const firstSuccess = (ps) => new Promise((resolve, reject) => {
     let pending = ps.length, firstErr = null;
     for (const p of ps) p.then(resolve, (e) => { firstErr ??= e; if (--pending === 0) reject(firstErr); });

@@ -42,7 +42,7 @@ export function companyPage(baseUrl) {
   <div class="co-2col" style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);">
     <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;margin:4px 0 0;">${esc(h)}</h2>
     <div><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">${body}</p>
-    <div class="co-links" style="display:flex;gap:18px;flex-wrap:wrap;">${links.map(([href, label]) => `<a href="${esc(href)}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`).join("")}</div></div>
+    <div class="co-links" style="display:flex;gap:18px;flex-wrap:wrap;">${links.map(([href, label]) => `<a href="${esc(href)}" style="display:inline-flex;align-items:flex-end;min-height:24px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`).join("")}</div></div>
   </div>
 </section>`;
   const op = COMPANY_MAILBOXES.operator, co = COMPANY_MAILBOXES.company, sec = COMPANY_MAILBOXES.security;
@@ -61,7 +61,7 @@ export function companyPage(baseUrl) {
     <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;margin:4px 0 0;">Contact</h2>
     <div><table class="co-contacts" style="border-collapse:collapse;max-width:820px;margin:0 0 14px;"><tbody>${contacts.map(([k, v]) => `<tr><th scope="row">${esc(k)}</th><td>${v}</td></tr>`).join("")}</tbody></table>
     <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">Updates and quick questions: <a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--ink);">@Agent402Tools</a>; bugs and contributions: <a href="${REPO_URL}" rel="noopener" style="color:var(--ink);">the repository</a>.</p>
-    <div class="co-links" style="display:flex;gap:18px;flex-wrap:wrap;">${[["/trust", "Trust"], ["https://havok.holdings", "havok.holdings"], [REPO_URL, "Source"], ["https://x.com/Agent402Tools", "X"]].map(([href, label]) => `<a href="${esc(href)}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`).join("")}</div></div>
+    <div class="co-links" style="display:flex;gap:18px;flex-wrap:wrap;">${[["/trust", "Trust"], ["https://havok.holdings", "havok.holdings"], [REPO_URL, "Source"], ["https://x.com/Agent402Tools", "X"]].map(([href, label]) => `<a href="${esc(href)}" style="display:inline-flex;align-items:flex-end;min-height:24px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`).join("")}</div></div>
   </div>
 </section>`;
   const body = `

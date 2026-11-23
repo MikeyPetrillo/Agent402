@@ -116,6 +116,7 @@ table{border-collapse:collapse;width:100%}
       <input id="cat-search" type="text" placeholder="Describe a task: decode a JWT, OCR an image, verify a settlement…" style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:15px 0;" aria-label="Describe a task: decode a JWT, OCR an image, verify a settlement…">
     </div>
     <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:11px 0 0;">Searches every tool as you type - same free <span style="color:var(--muted);white-space:nowrap;">GET /api/find</span> agents call, no wallet.</p>
+    <p id="cat-find-status" role="status" aria-live="polite" style="display:none;max-width:760px;margin:14px 0 0;font-size:var(--fs-md);line-height:1.5;color:var(--muted);"></p>
     <div id="cat-results" style="display:none;max-width:760px;margin:14px 0 0;border:1px solid var(--hairline);background:var(--card);"></div>
 
     <div style="display:flex;flex-wrap:wrap;margin-top:30px;border-top:1px dashed var(--dash);">

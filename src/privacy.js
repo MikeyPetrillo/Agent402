@@ -10,7 +10,7 @@ import { backupKeepDays } from "./backup.js";
 import { KEEP_DAYS as DISCOVERY_REFUSALS_KEEP_DAYS } from "./discovery-refusals.js";
 import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
-import { RECEIPT_STORE_DAYS } from "./receipt-store.js";
+import { RECEIPT_STORE_DAYS, RECEIPT_FETCH_DAYS } from "./receipt-store.js";
 import { SUBSCRIPTION_RECEIPTS_KEPT } from "./receipt-signing.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { creditsSalesEnabled, withCreditsSalesDate, mcpOAuthSwitch, CONNECTED_APP_KEEP_DAYS } from "./credits-sales.js";
@@ -206,6 +206,9 @@ so every claim below is verifiable in code.</p>
     SHA-256 hashes of the request and the response, never their content) so the paying wallet can
     export it in its <code>/api/audit-report</code>; only a payment from that wallet opens the report.
     Each kept receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued;</li>
+    <li>when a paid answer is streamed, we keep its signed receipt (the same fields) under its settlement,
+    so it can be fetched at <code>/api/receipt/</code> by anyone who holds that settlement; it is deleted
+    ${RECEIPT_FETCH_DAYS} days after it was issued;</li>
     <li>to count how many separate operators pay us, we look up public records about a paying wallet:
     its primary name on Ethereum or Base when the name's own address record is that wallet, or the
     seller whose own payment offer names it as the receiving address. The result is held in memory for
@@ -486,7 +489,7 @@ as soon as the last follow-up is sent, when you stop them or buy again, or after
 in a row, and in any case ${DAYS(ADDRESS_MAX_AGE_MS)} days after the purchase; the rest of the record (the
 product and the subject you asked about) is deleted ${DAYS(RECORD_KEEP_MS)} days after the purchase. Memory audit-log
 entries are deleted ${auditRetentionDays()} days after they are written, and demand-board request text
-${wishRetentionDays()} days after it was sent. A kept signed receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
+${wishRetentionDays()} days after it was sent. A kept signed receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued. A streamed answer's kept receipt is deleted ${RECEIPT_FETCH_DAYS} days after it was issued. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
 is deleted ${jobs.keptFor} after the job was created, and a wallet's funding-screen result after ${oneHop.ttlDays} days. An MPP
 monitor subscription's signing key is deleted when the subscription is canceled or ends, and its reduced
 record ${mppSub.keepDays} days after it ends. You can ask

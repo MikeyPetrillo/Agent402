@@ -234,6 +234,10 @@ var a402BindPass=function(root){try{
   });
 }catch(e){}};
 document.addEventListener('DOMContentLoaded',function(){window.a402BindWidows(document);});
+/* A day strip (/status .bars) reads on touch too: a tap or click on the strip writes the nearest bar's title (its date and probe count) into a line under it, read out by a screen reader. */
+document.addEventListener('click',function(e){try{var strip=e.target&&e.target.closest&&e.target.closest('.bars');if(!strip)return;var bars=strip.querySelectorAll('[title]');if(!bars.length)return;var r=strip.getBoundingClientRect();var i=Math.min(bars.length-1,Math.max(0,Math.floor((e.clientX-r.left)/r.width*bars.length)));var out=strip.nextElementSibling&&strip.nextElementSibling.classList.contains('bar-read')?strip.nextElementSibling:null;if(!out){out=document.createElement('p');out.className='bar-read';out.setAttribute('aria-live','polite');out.style.cssText='font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:6px 0 0;';strip.parentNode.insertBefore(out,strip.nextSibling);}out.textContent=bars[i].getAttribute('title');}catch(err){}});
+/* Copied text reads as the page does: the joiners and no-break spaces the pass above put in are layout, not text, so a copy drops the joiners and gives the spaces back. */
+document.addEventListener('copy',function(e){try{var sel=window.getSelection();if(!sel||sel.isCollapsed||!e.clipboardData)return;var t=sel.toString();if(!/[\u2060\u00A0]/.test(t))return;e.clipboardData.setData('text/plain',t.replace(/\u2060/g,'').replace(/\u00A0/g,' '));e.preventDefault();}catch(err){}});
 
 /* Keyboard access to sideways-scrolling code and tables (WCAG 2.1.1): a <pre>
    or table wrapper wider than its box gets tabindex=0, so arrow keys scroll it once it has focus. Checked

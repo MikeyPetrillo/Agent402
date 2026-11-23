@@ -1,7 +1,7 @@
 // mpp-subscriptions - recurring monitor subscriptions paid with a WALLET over
 // MPP, alongside the card path in src/stripe-subscriptions.js. An agent that
 // holds a Tempo account can now subscribe to the same MONITOR_PRODUCTS a human
-// buys with a card, and the SAME fulfilment engine (src/monitor-scheduler.js)
+// buys with a card, and the SAME fulfillment engine (src/monitor-scheduler.js)
 // serves both: the records this module hands out are the shape the scheduler
 // already reads ({subId, product, target, email, status}), so the scheduler
 // needs no change at all.

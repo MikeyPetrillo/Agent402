@@ -235,7 +235,8 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 .hm-claim { padding: 22px 24px; display: flex; flex-direction: column; gap: 8px; }
 .hm-claim h3 { font-weight: 600; font-size: var(--fs-lg); line-height: 1.3; letter-spacing: -.01em; margin: 0; color: var(--ink); text-wrap: balance; }
 .hm-claim p { font-size: var(--fs-md); line-height: 1.55; color: var(--muted); margin: 0; font-weight: 300; text-wrap: pretty; }
-.hm-claim a { margin-top: auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--dash); align-self: flex-start; white-space: nowrap; }
+.hm-claim p.hm-claim-note { font-size: var(--fs-sm); }
+.hm-claim a { display: inline-flex; align-items: flex-end; min-height: 24px; margin-top: auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--dash); align-self: flex-start; white-space: nowrap; }
 .hm-door { padding: 32px; display: flex; flex-direction: column; gap: 16px; }
 .hm-door p { margin: 0; font-size: var(--fs-base); line-height: 1.55; font-weight: 400; text-wrap: pretty; }
 .hm-door .hm-door-act { margin-top: auto; display: flex; flex-wrap: wrap; gap: 10px; padding-top: 4px; }
@@ -264,7 +265,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
     : "";
 
   const claimsHtml = whyHomeClaims().map((c) =>
-    `<div class="hm-card hm-claim" id="why-${esc(c.id)}"><h3>${esc(c.t)}</h3><p>${esc(c.s)}</p><a href="${esc(c.link[0])}">${esc(c.link[1])} &rarr;</a></div>`
+    `<div class="hm-card hm-claim" id="why-${esc(c.id)}"><h3>${esc(c.t)}</h3><p>${esc(c.s)}</p>${c.note ? `<p class="hm-claim-note">${esc(c.note)}</p>` : ""}<a href="${esc(c.link[0])}">${esc(c.link[1])} &rarr;</a></div>`
   ).join("");
 
   const faqHtml = faqs.map((f) =>
@@ -362,7 +363,7 @@ ${paidCallHtml ? `<section id="paid-call" style="max-width:1180px;margin:0 auto;
   <h2 class="hm-h2" style="margin:0 0 22px;">Why pay here.</h2>
   <div class="hm-claims">${claimsHtml}</div>
   <div class="hm-marks"><span class="hm-marks-k">settles on</span>${railMarksHtml}${tempoMarkHtml}</div>
-  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:18px;"><a href="/docs#why" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">all ${countWord(WHY_POINTS.length)} claims, with proof →</a></div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:18px;"><a href="/docs#why" style="display:inline-flex;align-items:flex-end;min-height:24px;color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">all ${countWord(WHY_POINTS.length)} claims, with proof →</a></div>
 </section>
 
 <section id="sell" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">

@@ -538,7 +538,7 @@ import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { trustPage } from "./trust-page.js";
 import { markGateMounted, gateMounted } from "./gate-mounts.js";
-import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, receiptsServed, createCheckoutReceipt, createSubscriptionReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
+import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, receiptsServed, createCheckoutReceipt, createSubscriptionReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_FETCH_PATH, RECEIPT_HEADER, isReceiptFetchKey } from "./receipt-signing.js";
 import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
 import { refundTermsFullDocumentCached, resetRefundTermsCache, REFUND_TERMS_PATH } from "./refund-terms-doc.js";
 import { toolReliabilityDocument, toolOutcomesCached, toolReliabilityEnabled, TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_WINDOW_HOURS, TOOL_RELIABILITY_MIN_SAMPLE } from "./tool-reliability.js";
@@ -823,7 +823,7 @@ import { STT_TOOLS, sttUnmeasuredSinceBoot } from "./tools/stt-kit.js";
 import { EMBED_TOOLS } from "./tools/embed-kit.js";
 import { USAGE_TOOLS } from "./tools/usage-kit.js";
 import { AUDIT_TOOLS, setAuditReportContext } from "./tools/audit-report-kit.js";
-import { keepReceiptOnFinalOk, startReceiptStoreSweep, receiptStoreCounts } from "./receipt-store.js";
+import { keepReceiptOnFinalOk, startReceiptStoreSweep, receiptStoreCounts, keepStreamedReceiptOnFinalOk, streamedReceipt, RECEIPT_FETCH_DAYS } from "./receipt-store.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
 import { PRICE_WEBHOOK_TOOLS, setPriceWebhookCatalog } from "./tools/price-webhook-kit.js";
 import { startRailwayFlags } from "./feature-flags-railway.js";
@@ -837,7 +837,7 @@ import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, rel
 import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-media-type.js";
 import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe, RESEND_SERVED_NOTE } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
-import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
+import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH, MOVED_GUIDES } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
@@ -5003,6 +5003,24 @@ app.post(RECEIPT_VERIFY_PATH, express.json({ limit: "256kb" }), (req, res) => {
   if (b.request && typeof b.request === "object" && !Array.isArray(b.request) && typeof b.request.method === "string" && typeof b.request.path === "string") opts.request = { method: b.request.method, path: b.request.path, body: b.request.body };
   return res.json(verifyReceipt(b.receipt, opts));
 });
+// A streamed paid answer's receipt, kept where its head said
+// (X-Agent402-Receipt-Url): the same receipt a trailer would carry. Keyed by
+// the call's settlement or the token its head named; nothing is listed, and
+// a failed, free, trial or /ref call is never signed, so it has none here.
+const receiptFetchLimiter = createRateLimiter("receipt-fetch", { perMin: 60, perHour: 1200 });
+app.get(`${RECEIPT_FETCH_PATH}/:key`, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (receiptFetchLimiter.check(clientIp(req)).limited) {
+    res.set("Retry-After", "60");
+    return res.status(429).json({ error: "Too many receipt reads from this address; retry in a minute.", retryAfterSeconds: 60 });
+  }
+  const key = String(req.params.key || "");
+  if (!isReceiptFetchKey(key)) return res.status(400).json({ error: "Send the address a streamed answer's X-Agent402-Receipt-Url header named: GET /api/receipt/<settlement or token>." });
+  let jws = null;
+  try { jws = await streamedReceipt(key); } catch { return res.status(503).json({ error: "The receipt store did not answer; retry shortly.", retryAfterSeconds: 5 }); }
+  if (!jws) return res.status(404).json({ error: `No receipt is kept under that key. A streamed paid answer's receipt is kept for ${RECEIPT_FETCH_DAYS} days once the answer finished; a failed, free or trial call has none.` });
+  return res.json({ receipt: jws, header: RECEIPT_HEADER, keys: `${BASE_URL}${RECEIPT_KEYS_PATH}`, verify: `${BASE_URL}${RECEIPT_VERIFY_PATH}` });
+});
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
@@ -5950,7 +5968,7 @@ if (_subs) {
 }
 // Recurring monitors paid with a WALLET over MPP (src/mpp-subscriptions.js) -
 // the crypto-native counterpart of the Stripe checkout above. Same products,
-// same fulfilment engine, different rail. Registered ONLY when the engine is
+// same fulfillment engine, different rail. Registered ONLY when the engine is
 // up: no engine, no route, no challenge, exactly like the tempo/charge gate.
 if (_mppSubs) {
   // Free discovery surface: what an agent can subscribe to, in what currency,
@@ -6009,10 +6027,10 @@ if (_mppSubs) {
     }
   });
 }
-// Monitor scheduler: the recurring fulfilment engine. Runs only when
+// Monitor scheduler: the recurring fulfillment engine. Runs only when
 // subscriptions are enabled (Stripe key) - it reuses the premium pipeline.
 let _monitors = null;
-// One fulfilment engine, two subscriber sources. The scheduler asks for exactly
+// One fulfillment engine, two subscriber sources. The scheduler asks for exactly
 // three things - listActive(kind), get(id) and refreshStatus(id) - so a facade
 // that dispatches on the id namespace is the whole integration: monitor-
 // scheduler.js is unchanged, and a card subscriber and a wallet subscriber are
@@ -8026,6 +8044,8 @@ for (const alias of ["/router", "/sor", "/smart-order-router"]) {
 }
 app.get("/guides", (_req, res) => htmlCache(res, 300, 900).send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
+  const moved = Object.hasOwn(MOVED_GUIDES, req.params.slug) ? MOVED_GUIDES[req.params.slug] : null;
+  if (moved) { const q = req.originalUrl.indexOf("?"); return res.redirect(301, `/guides/${moved}${q >= 0 ? req.originalUrl.slice(q) : ""}`); }
   const html = guidePage(BASE_URL, req.params.slug, CATALOG);
   if (!html) return notFoundPage(res, { what: "Guide", href: "/guides", label: "All guides" });
   htmlCache(res, 300, 900).send(html);
@@ -12127,6 +12147,10 @@ if (!FREE_MODE) {
       describe: receiptFieldsOf, iss: BASE_URL,
       onError: (e) => console.warn(`[receipts] not signed: ${String(e?.message || e).slice(0, 120)}`),
       onSigned: keepReceiptOnFinalOk,
+      // A streamed answer's receipt, kept for GET /api/receipt/<key> once it
+      // finished 200; its head names the address (X-Agent402-Receipt-Url).
+      onStreamed: keepStreamedReceiptOnFinalOk,
+      fetchUrl: (key) => `${BASE_URL}${RECEIPT_FETCH_PATH}/${encodeURIComponent(key)}`,
     }));
     markGateMounted("receiptSigner");
     startReceiptStoreSweep();
@@ -15092,7 +15116,7 @@ activeStockAdapter().then((a) => {
   if (a?.start && bootStep("startStockProvider", () => a.start())) console.log(`[stock-provider] ${selectedStockProvider()} background reads on`);
 }).catch((e) => console.warn(`[stock-provider] start failed: ${String(e?.message || e).slice(0, 120)}`));
 
-// Monitor scheduler timer (recurring report fulfilment). MONITOR_SCHEDULER=off
+// Monitor scheduler timer (recurring report fulfillment). MONITOR_SCHEDULER=off
 // keeps the manual operator run available while disarming the timer.
 if (_monitors && process.env.MONITOR_SCHEDULER !== "off") bootStep("monitors.start", () => _monitors.start());
 

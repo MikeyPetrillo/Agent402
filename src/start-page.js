@@ -21,6 +21,7 @@ import { creditsSalesEnabled, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from 
 import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
 import { cardReportPriceRange } from "./report-tiers.js";
 import { BASE_NO_GAS_SENTENCE } from "./base-no-gas.js";
+import { WALLET_NEW_COMMAND } from "./get-a-wallet.js";
 import { CHAIN_PAGES } from "./market-page.js";
 
 export const START_PATH = "/start";
@@ -111,6 +112,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   const walletSection = `<section id="fund" style="margin-bottom:24px;">
       <h2 ${H2}>Pay from a wallet</h2>
       <p class="ml-measure" ${P}>A wallet pays through the Agent402 npm server, which runs on your computer and needs Node.js. ${esc(wallet.warning)}</p>
+      <p class="ml-measure" ${P}>No wallet yet? Run ${code(WALLET_NEW_COMMAND)} on your computer: it makes one, stores the key (never shown) and prints the address to fund.</p>
       <ol class="ml-measure" style="padding-left:22px;margin:0 0 16px;color:var(--ink);font-size:var(--fs-base);line-height:1.6;">
         <li style="margin:0 0 8px;">Create a new wallet in a wallet app and copy its private key.</li>
         <li style="margin:0 0 8px;">Buy USDC on Base and send it to that wallet's address. Where you buy it, choose Base as the network.</li>

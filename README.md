@@ -4,7 +4,7 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 ![A paid call on Agent402: the request, the 402 with its price, the signature, the settlement, the answer and the signed receipt](docs/media/agent402-call.gif)
 
-**Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one.**
+**Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls.**
 
 - **Every rail on one server:** x402 across chains with facilitator fallbacks, MPP with Tempo and card, and proof of work for the pure-CPU tools.
 - **In the money path:** an x402 payment settles after a successful answer and an error cancels it, a hang-up before the answer can be forgiven, a charged failure is booked and repaid against the chain record, and a settled paid answer on the direct routes carries a signed receipt (a streamed one as a final event-stream comment line, or as a trailer when the request sends `TE: trailers`); a tool bought through a referral link carries none.
@@ -34,7 +34,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 
 - Every settled x402 answer carries `PAYMENT-RESPONSE` (`success`, `transaction`, `network`, `payer`), and every MPP answer `Payment-Receipt` (`reference`). Look the x402 `transaction` up on its `network` to see the transfer to the `payTo` the 402 named.
 - [`/.well-known/agent402-conformance.json`](https://agent402.tools/.well-known/agent402-conformance.json) lists, per payment rail, settlement after the answer, idempotent re-sends, the replay guard, refunds of a charged failure and the receipt, computed from the serving code.
-- A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) also signs every settled paid answer on the direct routes (a tool bought through a referral link carries none; its transaction on chain is its record): `Agent402-Receipt`, a compact JWS (EdDSA, Ed25519) over the route, the request, the answer's sha256, the price, the rail, the payer and the settlement, checked against `/.well-known/agent402-receipt-key.json` or with `verifyReceipt` in agent402-client. A one-piece answer carries it as a header; a streamed answer ends with a `: agent402-receipt <receipt>` server-sent comment line, which event-stream parsers skip, over every byte streamed before it (and an `Agent402-Receipt` trailer when the client sends `TE: trailers`), checked with `verifyStreamedReceipt`. A prepaid credits call names the key's id and its debit; a card-bought report carries one over the checkout and the report's text, on its page and in its email; the hosted MCP connector passes a paid result's receipt in `_meta["tools.agent402/receipt"]`. The `signedReceipt` cell of each conformance row reads true only while that server signs; without the key, the receipt is the settlement's own record.
+- A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) also signs every settled paid answer on the direct routes (a tool bought through a referral link carries none; its transaction on chain is its record): `Agent402-Receipt`, a compact JWS (EdDSA, Ed25519) over the route, the request, the answer's sha256, the price, the rail, the payer and the settlement, checked against `/.well-known/agent402-receipt-key.json` or with `verifyReceipt` in agent402-client. A one-piece answer carries it as a header; a streamed answer ends with a `: agent402-receipt <receipt>` server-sent comment line, which event-stream parsers skip, over every byte streamed before it (and an `Agent402-Receipt` trailer when the client sends `TE: trailers`), checked with `verifyStreamedReceipt`. Every streamed paid answer's head also names `X-Agent402-Receipt-Url`, where `GET /api/receipt/<settlement>` (free, for 30 days) answers the same receipt once the answer finished, so a client that reads neither the comment line nor a trailer still gets it. A prepaid credits call names the key's id and its debit; a card-bought report carries one over the checkout and the report's text, on its page and in its email; the hosted MCP connector passes a paid result's receipt in `_meta["tools.agent402/receipt"]`. The `signedReceipt` cell of each conformance row reads true only while that server signs; without the key, the receipt is the settlement's own record.
 - `POST /api/attest` binds a paid call's response digest to its settlement on Base; `POST /api/receipts` returns the paying wallet's settled calls with each transaction and digest.
 - [/trust#verify](https://agent402.tools/trust#verify) walks one call end to end; [`/api/index?seller=<host>`](https://agent402.tools/api/index) shows an outside seller's crawl history, paywall probe and router verdict.
 
@@ -726,7 +726,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 | `src/sell.js` | `/sell` - the seller front door: free self-serve listing (`POST /api/index/register`) or `agent402-tollbooth` for pay-per-crawl |
 | `src/human-checkout.js` | Card front door for the report products: `/reports` (page in `src/human-reports-page.js`), `POST /api/buy`, delivery at `/r/:sessionId` (Stripe Checkout, generate-once, auto-refund on failure) |
 | `src/stripe-subscriptions.js` | `/monitors` - $5/month monitor subscriptions (`MONITOR_PRODUCTS`: domain, filing, token, fund, recall, insider, research, ipo), signature-verified webhook, Customer Portal |
-| `src/monitor-scheduler.js` | Fulfilment for the monitors: cheap daily probes, paid re-runs on change, email delivery, reports at `/m/:id` |
+| `src/monitor-scheduler.js` | Fulfillment for the monitors: cheap daily probes, paid re-runs on change, email delivery, reports at `/m/:id` |
 | `src/credits.js` | Prepaid card credits: `/credits`, `a402_` bearer keys, the authorize-then-debit gate in front of every priced route |
 | `mcp/` | The `agent402-mcp` npm package (stdio MCP server) |
 | `client/` | The `agent402-client` buyer SDK (`find()` + `call()` with auto-payment) |
@@ -775,4 +775,4 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 
 PRs that add useful tools, fix bugs, or improve docs are very welcome - see
 [CONTRIBUTING.md](CONTRIBUTING.md) (DCO sign-off and the [CLA](CLA.md)). Server AGPL-3.0, every published package MIT (see Legal above). Maintained by
-[Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
+[Havok Holdings LLC](https://agent402.tools/company).

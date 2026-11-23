@@ -26,15 +26,21 @@ const read = (p) => readFileSync(join(ROOT, p), "utf8");
 const mdText = (s) => String(s).replace(/\[([^\]\n]*)\]\([^)\s]*\)/g, "$1").replace(/\*\*/g, "").replace(/\s+/g, " ");
 
 // --- the sentence itself ---------------------------------------------------------
-// The owner's line, word for word, restored once every paid path is signed
-// (src/receipt-signing.js): the payment and trust layer leads, and the
-// catalog's size is the supporting line, never the lead.
-const APPROVED = "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one.";
+// The owner's line, its receipt clause scoped to what is signed
+// (src/receipt-signing.js; a /ref/ copy, a plain stream and a failed call are not):
+// the payment and trust layer leads, and the catalog's size is the
+// supporting line, never the lead.
+const APPROVED = "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls.";
 ok(LEAD_SENTENCE === APPROVED, "the published lead sentence is the approved line, word for word");
+// The receipt clause claims only what is signed (src/receipt-signing.js): a
+// settled 200 (so not a failed or charged-failed call, a free or trial answer)
+// on a direct route (not a /ref/ copy); a stream that cannot carry its receipt
+// gets it fetchable at GET /api/receipt/<settlement>. No "every" over calls.
+ok(/\bsigned receipts on successful direct calls\.$/.test(LEAD_SENTENCE) && !/\bevery\b|\beach one\b/.test(LEAD_SENTENCE), "the receipt clause is scoped to successful direct calls");
 ok(!/\d/.test(LEAD_SENTENCE.replace(/x402|Agent402/g, "")) && !/tools|catalog/i.test(LEAD_SENTENCE), "the lead sentence carries no catalog size and no tool count");
 ok(SUPPORT_LINE === "500+ ready tools on the same rails.", "the catalog is the supporting line, evergreen 500+");
 ok(!/—/.test(LEAD_SENTENCE + CATEGORY_LINE + SUPPORT_LINE), "no em dash in the lead, the category line or the supporting line");
-ok(leadSentence({ mpp: false }).includes("every paid call to Agent402, across x402, with a signed receipt for each one.") && !/MPP/.test(leadSentence({ mpp: false })), "with MPP off the sentence offers x402 alone");
+ok(leadSentence({ mpp: false }).includes("paid calls to Agent402, across x402, with signed receipts on successful direct calls.") && !/MPP/.test(leadSentence({ mpp: false })), "with MPP off the sentence offers x402 alone");
 ok(leadSentence({ receipts: false }) === "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402 across x402 and MPP." && !/every paid call/.test(leadSentence({ receipts: false })), "with no signing key the sentence drops the signed-receipt clause and claims no receipt for every call");
 ok(!/signed receipt/.test(leadSentence({ mpp: false, receipts: false })) && /across x402\.$/.test(leadSentence({ mpp: false, receipts: false })), "MPP off and receipts off: x402 alone, no receipt clause");
 ok(receiptsServed() === false, "control: this offline process loads no signing key, so the served surfaces below render the key-off line");
@@ -88,7 +94,7 @@ for (const mpp of [true, false]) {
 ok(mcpServerDescription() === HOSTED_DESC && HOSTED_DESC === STDIO_DESC, "the default description is the published one, identical to the stdio package's");
 {
   const src = read("src/mcp-http.js");
-  ok(/description: mcpServerDescription\(\{ mpp: payWires \? Boolean\(payWires\.mpp\) : mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\) \}\)/.test(src), "the hosted connector's description reads the mount's pay wires (the MPP switch without them) and the receipt switch");
+  ok(/description: mcpServerDescription\(\{ mpp: payWires \? Boolean\(payWires\.mpp\) : mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\), stock: stockDataEnabled\(\) \}\)/.test(src), "the hosted connector's description reads the mount's pay wires (the MPP switch without them) and the receipt switch");
   // The initialize lead names MPP from the mount's own pay wires (the boot's
   // account, src/connector-pay.js), and from the MPP switch on a mount given none.
   ok(/mppOffered: payWires \? Boolean\(payWires\.mpp\) : mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\) \}/.test(src), "the hosted connector's initialize lead reads the mount's pay wires (the MPP switch without them) and the receipt switch");
