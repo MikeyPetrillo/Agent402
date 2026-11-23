@@ -219,6 +219,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   run stays as an outcome and never erases failures; a payer is blocked at
   `COMPOSITE_GUARD_MAX_FAILS` only while failures are more than `COMPOSITE_GUARD_MIN_FAIL_SHARE`
   (default 0.5) of its outcomes, and at `COMPOSITE_GUARD_HARD_MAX` (default 10) whatever it settled.
+  A report run settled first (paid; a failure after it is owed) or refused at its settle point
+  (nothing paid ran) is neither counted nor cleared there.
 - **Settle first (the one exception to handler-first):** `src/settle-first.js`;
   `GATEWAY_SETTLE_FIRST=off` settles every run after its handler, `always` forces the budget mode
   on, anything else is automatic. Normal operation is unchanged. On the routes in
@@ -226,7 +228,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   and the metered tier, embeddings, rerank, speech, `/v1/images/generations` and the fast, pro and
   edit image tiers, and dub; not video; plus `SETTLE_FIRST_CATALOG_SLUGS`: web search and answer,
   image generation, speech, transcription, judgment and code runs, each settling after its own
-  input checks and before its first paid upstream call), `settleFirstPlanFor` asks `gatewaySettleFirstPlan` (the settle
+  input checks and before its first paid upstream call; and `SETTLE_FIRST_REPORT_TOOLS`, the report
+  products (`EXPENSIVE_COMPOSITE_SLUGS` less `OWN_GLOBAL_BOUND_SLUGS`), settling at their first
+  `fetchOpenRouter` call after their own checks and free source reads; the unsettled runs of both
+  lists count toward the wallet's settle-first count and the budget meter like a `/v1` run's),
+  `settleFirstPlanFor` asks `gatewaySettleFirstPlan` (the settle
   breaker) for a verified x402 payment (`settleFirstPaymentKindOf`: never Tempo, card, credits,
   proof-of-work, a trial, a first-call allowance grant, or the resend of a payment already settled
   first). **Who, always:** `unsettled-runs`, a wallet (per network) holding
