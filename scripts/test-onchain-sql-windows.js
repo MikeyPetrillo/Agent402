@@ -416,7 +416,7 @@ try {
   ok(!isLongRunningSlug("onchain-sql-week") && !Object.hasOwn(EVM_RUN_SECONDS, "onchain-sql-week") && asyncProfileOf(WEEK) === null, "it is not long-running and not a job route: every rail, answered on the connection");
   ok(WALLET_ONLY_SLUGS.has("onchain-sql-week"), "it is wallet-only");
   ok(SLOW_TOOL_SECONDS["onchain-sql-week"] * 1000 > SQL_WEEK_BUDGET_MS && SLOW_TOOL_SECONDS["onchain-sql-range"] > SQL_RANGE_RUN_SECONDS, "an Algorand payment must outlive each route's budget, or it is refused before any query");
-  ok(/up to 7 days/.test(WEEK.description) && /every payment rail/.test(WEEK.description) && /partial/.test(WEEK.description) && /within 40 seconds/.test(WEEK.description), "its description names the days, the rails, the time and the partial marking");
+  ok(/up to 7 days/.test(WEEK.description) && /every payment rail/.test(WEEK.description) && /partial/.test(WEEK.description) && /stops inside 40 seconds/.test(WEEK.description), "its description names the days, the rails, the time and the partial marking");
   {
     reset();
     const q = days(SQL_WEEK_MAX_DAYS);
@@ -506,6 +506,27 @@ try {
     const r2 = await sqlRange(quotedOk);
     ok(r2.complete === true && r2.windowed?.days >= SQL_RANGE_MAX_DAYS && sortedAsc(r2.rows), `quoted columns and a quoted ORDER BY inside a string still walk ${SQL_RANGE_MAX_DAYS} days in order (${r2.windowed?.daysRead})`);
   }
+  // ---- what a buyer reads before buying: the charge rule and the routes' terms ----
+  {
+    const CHARGE = "A walk that read at least one day is a served answer and is charged at this route's price, even when it is partial or holds no rows; a walk that read no day answers 422 and is not charged.";
+    for (const slug of ["onchain-sql", "onchain-sql-week", "onchain-sql-range"]) {
+      const t = CDP_TOOLS.find((x) => x.slug === slug);
+      ok(t.description.includes(CHARGE), `${slug}: the description states the charge rule`);
+      ok(t.discovery.inputSchema.properties.sql.description.includes(CHARGE), `${slug}: the sql field states the charge rule`);
+    }
+    const WEEK = CDP_TOOLS.find((x) => x.slug === "onchain-sql-week"), RANGE_T = CDP_TOOLS.find((x) => x.slug === "onchain-sql-range");
+    ok(/its day walk stops inside \d+ seconds/.test(WEEK.description) && !/answered within/.test(WEEK.description), "onchain-sql-week: the time is the walk's, not a promise about the answer");
+    for (const t of [WEEK, RANGE_T]) ok(t.description.includes("Any query that is not read by day gets the same answer as on onchain-sql, at this route's price; send it to onchain-sql for the lower price.") && !/answered exactly as onchain-sql answers them/.test(t.description), `${t.slug}: other queries are named at this route's price`);
+    // The partial note: the charge, and no rows named when there are none.
+    reset();
+    rowsPerDay = 0;
+    const z = await sql(days(7));
+    ok(/This partial answer was charged; sending the rest of the range is a new call\./.test(z.note) && !/these rows cover/.test(z.note) && /the days read cover/.test(z.note), `the partial note states the charge and names the days read, not rows (${z.note})`);
+    reset();
+    const r1 = await sql(days(7));
+    ok(/This partial answer was charged; sending the rest of the range is a new call\./.test(r1.note) && /these rows cover/.test(r1.note), "a partial answer with rows says so too");
+  }
+
 } finally {
   globalThis.fetch = realFetch;
 }
