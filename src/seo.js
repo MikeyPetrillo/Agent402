@@ -688,7 +688,7 @@ ${flatTiersLine()}
 - [/health](${baseUrl}/health): health check
 
 ## Connect via MCP
-- [Start here](${baseUrl}/start): set up Claude desktop, Claude Code or Cursor
+- [Start here](${baseUrl}/start): connect Claude, Claude Code or Cursor
 - [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/data/transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
   - Claude Code: \`claude mcp add --transport http -s user agent402 ${baseUrl}/mcp\`
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
