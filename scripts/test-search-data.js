@@ -2,8 +2,7 @@
 // endpoints, an in-memory store, and one booted server for the operator routes.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { generateKeyPairSync, createVerify } from "node:crypto";
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import {
   readConfig, buildJwtAssertion, createSearchData, createMemoryStore, computeWeeklySummary,
   parseBingDate, addDays, GSC_ROW_LIMIT, GSC_SCOPE_READ, GSC_SCOPE_WRITE,
@@ -13,7 +12,6 @@ import { isHost } from "./lib/url-host.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const b64dec = (s) => JSON.parse(Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString());
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -281,20 +279,16 @@ function googleStub({ bigFirstPage = false } = {}) {
 // ---------- operator routes on a booted server ----------
 {
   const TOKEN = "search-data-operator-token-xyz";
-  const PORT = await getFreePort();
-  const base = `http://127.0.0.1:${PORT}`;
-  const env = { ...process.env, FREE_MODE: "true", PORT: String(PORT), AGENT402_OPERATOR_TOKEN: TOKEN, X402_INDEX_CRAWL: "off" };
-  for (const k of ["DATABASE_URL", "ANALYTICS_DATABASE_URL", "GSC_SERVICE_ACCOUNT_JSON", "BING_WEBMASTER_API_KEY"]) delete env[k];
-  const child = spawn(process.execPath, ["src/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
-  let log = "";
-  child.stdout.on("data", (d) => { log += d; });
-  child.stderr.on("data", (d) => { log += d; });
+  // The server inherits this process's environment: these are removed from it
+  // (not blanked), so the boot reads them unset.
+  for (const k of ["DATABASE_URL", "ANALYTICS_DATABASE_URL", "GSC_SERVICE_ACCOUNT_JSON", "BING_WEBMASTER_API_KEY"]) delete process.env[k];
+  let bootLog = "";
+  const srv = await bootServer({ stores: "search-data", env: { FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN, X402_INDEX_CRAWL: "off" } })
+    .catch((e) => { bootLog = e.message; return null; });
+  const base = srv?.url;
+  const log = () => (srv ? srv.log() : bootLog);
   try {
-    let up = false;
-    for (let i = 0; i < 120; i++) {
-      try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-      await wait(500);
-    }
+    const up = Boolean(srv);
     ok(up, "server booted");
     if (up) {
       const st = async (path, opts) => (await fetch(base + path, opts)).status;
@@ -312,9 +306,9 @@ function googleStub({ bigFirstPage = false } = {}) {
       ok(html.status === 200 && /Search data/.test(text) && /noindex/.test(text), "authed HTML view renders, noindex");
       const run = await (await fetch(`${base}/__operator/search/run`, { method: "POST", headers: auth })).json();
       ok(run.reason === "not-configured", "authed run is a no-op without credentials");
-      ok(/\[search-data\] not configured/.test(log), "boot logs the not-configured state");
-    } else console.error(log.slice(-800));
-  } finally { child.kill("SIGKILL"); }
+      ok(/\[search-data\] not configured/.test(log()), "boot logs the not-configured state");
+    } else console.error(log().slice(-800));
+  } finally { srv?.child.kill("SIGKILL"); }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
