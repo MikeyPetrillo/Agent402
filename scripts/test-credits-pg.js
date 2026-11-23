@@ -483,9 +483,45 @@ try {
     ok((await W2.approveFraudRefund(WK.keyId)).status === "disputed" && (await rowRec(hashKey(WK.key))).fraudReview?.state === "disputed" && wch.pi_wwp.amount_refunded === 0, "pg: an approval during the dispute sends nothing and holds the review");
     await W1.enableByPaymentIntent("pi_wwp", "disputed");
     const wrow = await rowRec(hashKey(WK.key));
-    ok(wrow.disputeClosedAt && wrow.disabledReason === "fraud-warning" && wrow.fraudReview?.state === "owed" && (await W2.refundRequestsOwed()).includes(WK.keyId), "pg: the dispute won is recorded, the key stays frozen for the warning and the refund is owed");
+    ok(wrow.disputes?.pi_wwp?.closedAt && wrow.disputes.pi_wwp.outcome === "won" && wrow.disabledReason === "fraud-warning" && wrow.fraudReview?.state === "owed" && (await W2.refundRequestsOwed()).includes(WK.keyId), "pg: the dispute won is recorded, the key stays frozen for the warning and the refund is owed");
     ok((await W2.approveFraudRefund(WK.keyId)).status === "refunded" && wch.pi_wwp.amount_refunded === 2000, "pg: the approval then sends it");
     if (keepAuto === undefined) delete process.env.CREDITS_EFW_AUTO_REFUND; else process.env.CREDITS_EFW_AUTO_REFUND = keepAuto;
+    // Two disputes on one key, each kept on its own payment across containers:
+    // a loss takes only its payment, a win restores only what it held, and the
+    // key thaws only when neither is open.
+    const two = async (tag) => {
+      pay(`cs_t${tag}a`, `pi_t${tag}a`, `t${tag}@x.com`);
+      const K = await W1.claim(`cs_t${tag}a`);
+      pay(`cs_t${tag}b`, `pi_t${tag}b`, `t${tag}@x.com`, { credits_topup: K.keyId, credits_account: `t${tag}@x.com` });
+      ok((await W2.claim(`cs_t${tag}b`)).status === "topped_up", `guard: pg: key ${tag} holds two payments`);
+      await W1.disableByPaymentIntent(`pi_t${tag}a`, "disputed", { disputeId: `dp_t${tag}a` });
+      await W2.disableByPaymentIntent(`pi_t${tag}b`, "disputed", { disputeId: `dp_t${tag}b` });
+      return K;
+    };
+    const LL = await two("ll");
+    await W2.disputeClosed("pi_tlla", { won: false, status: "lost" });
+    ok((await W1.authorize(LL.key, 0.001)).reason === "frozen" && (await rowRec(hashKey(LL.key))).balanceMicro === 20_000_000, "pg: lost+lost: the first loss takes its payment; the key stays frozen for the other dispute");
+    await W1.disputeClosed("pi_tllb", { won: false, status: "lost" });
+    const llRow = await rowRec(hashKey(LL.key));
+    ok(llRow.balanceMicro === 0 && llRow.disabled === true && !(await W2.refundRequestsOwed()).includes(LL.keyId), `pg: lost+lost: both payments leave, the key stays disabled, nothing owed (${llRow.balanceMicro})`);
+    const LW = await two("lw");
+    await W1.disputeClosed("pi_tlwa", { won: false, status: "lost" });
+    await W2.disputeClosed("pi_tlwb", { won: true, status: "won" });
+    const lwRow = await rowRec(hashKey(LW.key));
+    ok(lwRow.balanceMicro === 20_000_000 && lwRow.disabled === false, `pg: lost+won: only the lost payment leaves and the key thaws (${lwRow.balanceMicro})`);
+    const WL = await two("wl");
+    await W2.disputeClosed("pi_twla", { won: true, status: "won" });
+    ok((await W1.authorize(WL.key, 0.001)).reason === "frozen", "pg: won+lost: the win thaws nothing while the other dispute is open");
+    await W1.disputeClosed("pi_twlb", { won: false, status: "lost" });
+    const wlRow = await rowRec(hashKey(WL.key));
+    ok(wlRow.balanceMicro === 20_000_000 && wlRow.disabled === false, `pg: won+lost: the loss takes only its payment and the key thaws (${wlRow.balanceMicro})`);
+    // A close before its create, and a status not recognized.
+    pay("cs_tea", "pi_tea", "te@x.com");
+    const TE = await W1.claim("cs_tea");
+    await W2.disputeClosed("pi_tea", { won: false, status: "status-not-known", disputeId: "dp_te" });
+    await W1.disableByPaymentIntent("pi_tea", "disputed", { disputeId: "dp_te" });
+    ok((await W2.authorize(TE.key, 0.001)).ok === true && (await W1.disputesToReview()).some((d) => d.keyId === TE.keyId) && (await W2.refundsOwedWord(0)) === "owed", "pg: an unrecognized close before its create freezes nothing, is listed for review and reads owed");
+    ok((await W1.resolveDispute(TE.keyId, "pi_tea", "lost")) === TE.keyId && !(await W2.disputesToReview()).some((d) => d.keyId === TE.keyId), "pg: a person's resolution clears it");
   }
   // The balance page's lookups find rows by email and key id in the
   // database (the history-free full walk stays for status and the owed word).

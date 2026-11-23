@@ -1337,7 +1337,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // Disable causes rank: an operator disable is kept over a refund, a refund
   // over a dispute, so the reason on the key is the strongest cause and a
   // dispute closing lifts nothing a stronger cause holds. The dispute itself
-  // is recorded beside it (disputedPaymentIntent, disputeAt). Returns the
+  // is recorded beside it, per payment (rec.disputes, below). Returns the
   // key id or null.
   const paidBy = (r, paymentIntent) => r && Array.isArray(r.paymentIntents) && r.paymentIntents.includes(paymentIntent);
   // The record of one charged payment's refund total, kept per payment on a
@@ -1408,11 +1408,23 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   }
   // "refund-requested": the holder asked for the unspent balance back (requestRefund).
   const CAUSE_RANK = { operator: 3, "fraud-warning": 2, revoked: 2, refunded: 2, "refund-requested": 2, disputed: 1 };
-  function disableByPaymentIntent(paymentIntent, reason = "refunded", { amountRefundedCents = null, fullyRefunded = null } = {}) {
+  function disableByPaymentIntent(paymentIntent, reason = "refunded", { amountRefundedCents = null, fullyRefunded = null, disputeId = null } = {}) {
     if (!paymentIntent) return answer(null);
     const cents = amountRefundedCents == null ? null : Number(amountRefundedCents);
     const clawback = (r) => {
-      if (reason === "disputed") { r.disputedPaymentIntent = paymentIntent; r.disputeAt = new Date(now()).toISOString(); }
+      if (reason === "disputed") {
+        const ds = disputeMap(r);
+        const d = ds[paymentIntent];
+        const id = disputeId ? String(disputeId).slice(0, 64) : null;
+        // The close came first (or this create is delivered again after its
+        // close): the outcome is already applied, so nothing is frozen.
+        if (d && d.closedAt && ((d.early && !d.at) || (id && d.id === id))) {
+          ds[paymentIntent] = { ...d, at: d.at || isoNow() };
+          log(`[credits] key ${r.keyId}: dispute created after its close (${paymentIntent}); nothing frozen`);
+          return r.keyId;
+        }
+        ds[paymentIntent] = { id, at: isoNow() };
+      }
       if (reason === "refunded" && cents !== null && Number.isFinite(cents) && cents >= 0) {
         // `cents` is this charge's running total. A key loaded by more than
         // one payment (a top-up) keeps each payment's own total; a key with
@@ -1454,105 +1466,180 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     return null;
   }
 
-  // The reverse of a dispute clawback: the dispute closed in our favor (won,
-  // or an inquiry closed without a chargeback), so the key it disabled is
-  // enabled again. Lifted only when that dispute, on that payment, is the
-  // key's sole disable cause: a key the operator switched off, or whose
-  // payment was refunded, before or after the dispute, stays disabled
-  // (disableByPaymentIntent keeps the stronger cause). Returns the key id or
-  // null.
-  // The dispute on this payment, recorded on the key, is closed whatever the
-  // key's cause (a stronger cause, a fraud warning or the operator, keeps the
-  // key disabled, but the dispute no longer stands in the way of a refund).
-  // A fraud review the dispute held is owed again. Answers true when it closed one.
-  const closeDisputeOn = (r, paymentIntent, outcome) => {
-    if (!paidBy(r, paymentIntent) || r.disputedPaymentIntent !== paymentIntent || !disputeOpen(r)) return false;
-    r.disputeClosedAt = new Date(now()).toISOString();
-    r.disputeOutcome = outcome;
-    if (r.fraudReview?.state === "disputed") r.fraudReview = { ...r.fraudReview, state: "owed" };
-    return true;
-  };
-  function enableByPaymentIntent(paymentIntent, reason = "disputed") {
-    if (!paymentIntent) return answer(null);
-    const held = (r) => paidBy(r, paymentIntent) && r.disabled === true && r.disabledReason === reason
-      && (reason !== "disputed" || !r.disputedPaymentIntent || r.disputedPaymentIntent === paymentIntent);
-    // A key a stronger cause holds: only the dispute's own record changes.
-    const closesOnly = (r) => reason === "disputed" && !held(r) && paidBy(r, paymentIntent) && r.disputedPaymentIntent === paymentIntent && disputeOpen(r);
-    const decide = (r) => {
-      if (closesOnly(r)) { closeDisputeOn(r, paymentIntent, "won"); log(`[credits] key ${r.keyId}: dispute closed in our favor; kept ${r.disabledReason || "enabled"} (${paymentIntent})`); return { rec: r, result: null }; }
-      return held(r) ? { rec: r, result: lift(r) } : { result: null };
-    };
-    const lift = (r) => {
-      if (reason === "disputed") { if (!closeDisputeOn(r, paymentIntent, "won")) r.disputeClosedAt = new Date(now()).toISOString(); }
-      // A fraud warning that arrived during the dispute keeps the key frozen
-      // under its own cause; its review, held while the dispute ran, is owed again.
-      if (reason === "disputed" && Array.isArray(r.fraudWarnings) && r.fraudWarnings.length) {
-        r.disabledReason = "fraud-warning";
-        if (r.fraudReview?.state === "disputed") r.fraudReview = { ...r.fraudReview, state: "owed" };
-        log(`[credits] key ${r.keyId}: dispute closed in our favor; still frozen for a fraud warning (${paymentIntent})`);
-        return r.keyId;
-      }
-      r.disabled = false; r.disabledReason = null;
-      log(`[credits] key ${r.keyId} enabled again (${reason} closed in our favor, ${paymentIntent})`);
-      return r.keyId;
-    };
-    const match = (r) => held(r) || closesOnly(r);
-    if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => match(x.rec)); return hit ? mutatePg(hit.hash, (r) => (r ? decide(r) : { result: null })) : null; });
-    for (const { hash, rec: r } of allKeys()) {
-      if (match(r)) { const out = decide(r); if (out.rec) save(hash, r); return out.result; }
+  // DISPUTES, kept per payment (a charge carries at most one dispute):
+  // rec.disputes = { [paymentIntent]: { id, at, closedAt, outcome, early, review } }.
+  // A dispute is open from its create until its close. A key is frozen while
+  // any dispute on it is open and thaws only when none is; each close settles
+  // its own payment only. A close that arrives before its create is applied
+  // when it arrives (early) and the create, when it comes, freezes nothing. A
+  // close whose status is neither won nor lost lifts the hold and is listed
+  // for a person (review) until resolved; refunds wait on it meanwhile.
+  // An older record's single slot (disputedPaymentIntent, disputeAt,
+  // disputeClosedAt, disputeOutcome) is read as one entry and moved into the
+  // map on the record's next dispute write.
+  const isoNow = () => new Date(now()).toISOString();
+  function disputesOf(r) {
+    const m = r && r.disputes && typeof r.disputes === "object" ? { ...r.disputes } : {};
+    if (r?.disputedPaymentIntent && !m[r.disputedPaymentIntent]) {
+      const at = r.disputeAt || null, closed = r.disputeClosedAt || null;
+      m[r.disputedPaymentIntent] = { id: null, at, closedAt: closed && String(closed) >= String(at || "") ? closed : null, outcome: r.disputeOutcome || null };
     }
+    return m;
+  }
+  function disputeMap(r) {
+    r.disputes = disputesOf(r);
+    delete r.disputedPaymentIntent; delete r.disputeAt; delete r.disputeClosedAt; delete r.disputeOutcome;
+    return r.disputes;
+  }
+  const isOpen = (d) => Boolean(d && d.at && !d.closedAt);
+  // The dispute on this payment is open, or the key was frozen for a dispute
+  // by an older build that named no payment (any payment's close settles it).
+  const openOn = (r, pi) => {
+    const m = disputesOf(r);
+    return isOpen(m[pi]) || (!m[pi] && !Object.keys(m).length && r.disabled === true && r.disabledReason === "disputed");
+  };
+  const disputeOpen = (rec) => Object.values(disputesOf(rec)).some(isOpen);
+  const disputeInReview = (rec) => Object.values(disputesOf(rec)).some((d) => d && d.review === true);
+  // What stands in the way of a refund: an open dispute, or one closed with
+  // an outcome a person has not yet resolved.
+  const disputeHolds = (rec) => disputeOpen(rec) || disputeInReview(rec);
+  const WON_STATUSES = new Set(["won", "warning_closed", "prevented"]);
+  const outcomeKind = (won, status) => (status === "lost" ? "lost" : won === true || WON_STATUSES.has(status) ? "won" : "review");
+  // A payment's share as the list of payments, synthesized for a key loaded once.
+  const paymentsOf = (r) => (Array.isArray(r.payments) && r.payments.length ? r.payments.map((p) => ({ ...p })) : (() => {
+    const first = Array.isArray(r.paymentIntents) ? r.paymentIntents[0] || null : null;
+    return [{ pi: first, cents: Math.round((Number(r.loadedMicro) || 0) / 10_000), refundedCents: Math.round((Number(r.refundedMicro) || 0) / 10_000), at: Date.parse(r.createdAt) || 0, kind: "purchase", session: Array.isArray(r.sessions) ? r.sessions[0] || null : null }];
+  })());
+  const shareLeft = (p) => (Number(p.cents) || 0) - (Number(p.refundedCents) || 0) - (Number(p.lostCents) || 0);
+  // The card network returned (part of) one payment: that amount, never more
+  // than the payment has left, leaves the balance once.
+  function takeLost(r, paymentIntent, amountCents) {
+    const pays = paymentsOf(r);
+    const pay = pays.find((p) => p.pi === paymentIntent);
+    if (!pay) return;
+    const left = Math.max(0, shareLeft(pay));
+    const asked = Number(amountCents);
+    const lost = Number.isFinite(asked) && asked > 0 ? Math.min(left, Math.round(asked)) : left;
+    pay.lostCents = (Number(pay.lostCents) || 0) + lost;
+    r.payments = pays;
+    const off = Math.min(Math.max(0, Number(r.balanceMicro) || 0), lost * 10_000);
+    r.balanceMicro = Math.max(0, (Number(r.balanceMicro) || 0) - lost * 10_000);
+    if (off > 0) note(r, { k: "dispute-lost", m: off });
+  }
+  // After one dispute closes: while another is open nothing thaws. Otherwise a
+  // fraud review the disputes held is owed again (or settled when nothing is
+  // left), and a key the disputes alone froze is enabled again while any
+  // payment on it is left, or kept frozen under a fraud warning it carries.
+  // Answers true when the key's state changed.
+  function afterDisputeClose(r) {
+    if (disputeOpen(r)) return false;
+    const has = (Number(r.balanceMicro) || 0) + (Number(r.heldMicro) || 0) > 0;
+    if (r.fraudReview?.state === "disputed") r.fraudReview = { ...r.fraudReview, state: "owed" };
+    if (r.fraudReview?.state === "owed" && !has) r.fraudReview = { ...r.fraudReview, state: "nothing", decidedAt: now() };
+    if (!(r.disabled === true && r.disabledReason === "disputed")) return false;
+    if (Array.isArray(r.fraudWarnings) && r.fraudWarnings.length) { r.disabledReason = "fraud-warning"; return true; }
+    if (!paymentsOf(r).some((p) => shareLeft(p) > 0)) return false;
+    r.disabled = false; r.disabledReason = null;
+    return true;
+  }
+  // Closes the open dispute on one payment with its outcome. Answers the key
+  // id when the key thawed (or moved to a fraud warning's freeze), else null.
+  function closeOpenDispute(r, paymentIntent, kind, { status = null, amountCents = null } = {}) {
+    const ds = disputeMap(r);
+    if (kind === "lost") takeLost(r, paymentIntent, amountCents);
+    ds[paymentIntent] = { id: null, at: isoNow(), ...ds[paymentIntent], closedAt: isoNow(), outcome: kind === "review" ? String(status || "unknown").slice(0, 40) : kind === "lost" ? "lost" : "won", ...(kind === "review" ? { review: true } : {}) };
+    const changed = afterDisputeClose(r);
+    log(`[credits] key ${r.keyId}: dispute ${kind === "review" ? "closed with an outcome to review" : kind} (${paymentIntent}); ${r.disabled ? `kept ${r.disabledReason}` : "the key is usable"}`);
+    return changed ? r.keyId : null;
+  }
+  // The key a payment loaded, its record changed under its lock by `decide`
+  // ({ rec?, result }).
+  function onPayingKey(paymentIntent, decide) {
+    if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => paidBy(x.rec, paymentIntent)); return hit ? mutatePg(hit.hash, (r) => (paidBy(r, paymentIntent) ? decide(r) : { result: null })) : null; });
+    for (const { hash, rec } of allKeys()) { if (paidBy(rec, paymentIntent)) return mutateFile(hash, (r) => (paidBy(r, paymentIntent) ? decide(r) : { result: null })); }
     return null;
+  }
+
+  // A dispute closed in our favor (won, or an inquiry closed without a
+  // chargeback): its record closes, and a key it alone froze is enabled again
+  // once no other dispute on the key is open. A stronger cause (an operator
+  // disable, a refund, a fraud warning) keeps the key as it is. Returns the key
+  // id when the key thawed, or null.
+  function enableByPaymentIntent(paymentIntent, reason = "disputed") {
+    if (!paymentIntent || reason !== "disputed") return answer(null);
+    return onPayingKey(paymentIntent, (r) => (openOn(r, paymentIntent) ? { rec: r, result: closeOpenDispute(r, paymentIntent, "won") } : { result: null }));
   }
 
   // A dispute LOST: the card network returned the disputed amount to the
   // cardholder. That amount, never more than the payment has left, leaves the
   // balance once (the payment records it as `lostCents`, and a refund never
   // draws on it again). What the key's other payments funded stays the
-  // buyer's: a key the dispute alone froze is enabled again while any payment
-  // on it is left; one whose every payment is gone stays disabled. A stronger
-  // cause keeps the key as it is, and a fraud review the dispute held is owed
-  // again for what is left. Returns the key id or null.
+  // buyer's: once no dispute on the key is open, a key the disputes alone froze
+  // is enabled again while any payment on it is left; one whose every payment
+  // is gone stays disabled. A stronger cause keeps the key as it is, and a
+  // fraud review the disputes held is owed again for what is left. Returns the
+  // key id, or null.
   function disputeLostByPaymentIntent(paymentIntent, { amountCents = null } = {}) {
     if (!paymentIntent) return answer(null);
-    const match = (r) => paidBy(r, paymentIntent) && r.disputedPaymentIntent === paymentIntent && disputeOpen(r);
-    const take = (r) => {
-      const pays = Array.isArray(r.payments) && r.payments.length ? r.payments.map((p) => ({ ...p })) : (() => {
-        const first = Array.isArray(r.paymentIntents) ? r.paymentIntents[0] || null : null;
-        return [{ pi: first, cents: Math.round((Number(r.loadedMicro) || 0) / 10_000), refundedCents: Math.round((Number(r.refundedMicro) || 0) / 10_000), at: Date.parse(r.createdAt) || 0, kind: "purchase", session: Array.isArray(r.sessions) ? r.sessions[0] || null : null }];
-      })();
-      const pay = pays.find((p) => p.pi === paymentIntent);
-      if (pay) {
-        const left = Math.max(0, (Number(pay.cents) || 0) - (Number(pay.refundedCents) || 0) - (Number(pay.lostCents) || 0));
-        const asked = Number(amountCents);
-        const lost = Number.isFinite(asked) && asked > 0 ? Math.min(left, Math.round(asked)) : left;
-        pay.lostCents = (Number(pay.lostCents) || 0) + lost;
-        r.payments = pays;
-        const off = Math.min(Math.max(0, Number(r.balanceMicro) || 0), lost * 10_000);
-        r.balanceMicro = Math.max(0, (Number(r.balanceMicro) || 0) - lost * 10_000);
-        if (off > 0) note(r, { k: "dispute-lost", m: off });
-      }
-      closeDisputeOn(r, paymentIntent, "lost");
-      const anyLeft = pays.some((p) => (Number(p.cents) || 0) - (Number(p.refundedCents) || 0) - (Number(p.lostCents) || 0) > 0);
-      if (r.disabled === true && r.disabledReason === "disputed" && anyLeft) {
-        if (Array.isArray(r.fraudWarnings) && r.fraudWarnings.length) r.disabledReason = "fraud-warning";
-        else { r.disabled = false; r.disabledReason = null; }
-      }
-      if (r.fraudReview?.state === "owed" && !((Number(r.balanceMicro) || 0) + (Number(r.heldMicro) || 0) > 0)) r.fraudReview = { ...r.fraudReview, state: "nothing", decidedAt: now() };
-      log(`[credits] key ${r.keyId}: dispute lost (${paymentIntent}); ${r.disabled ? `kept ${r.disabledReason}` : "the other payments' share is usable again"}`);
-      return r.keyId;
-    };
-    if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => match(x.rec)); return hit ? mutatePg(hit.hash, (r) => (r && match(r) ? { rec: r, result: take(r) } : { result: null })) : null; });
-    for (const { hash, rec: r } of allKeys()) {
-      if (match(r)) { const id = take(r); save(hash, r); return id; }
-    }
-    return null;
+    return onPayingKey(paymentIntent, (r) => {
+      if (!openOn(r, paymentIntent)) return { result: null };
+      closeOpenDispute(r, paymentIntent, "lost", { amountCents });
+      return { rec: r, result: r.keyId };
+    });
   }
-  /** The charge.dispute.closed hook: won (or an inquiry closed) lifts what the
-   *  dispute alone held; lost takes the disputed payment off the balance. */
-  function disputeClosed(paymentIntent, { won = false, status = null, amountCents = null } = {}) {
-    if (won) return enableByPaymentIntent(paymentIntent, "disputed");
-    if (status === "lost") return disputeLostByPaymentIntent(paymentIntent, { amountCents });
-    return answer(null);
+  /** The charge.dispute.closed hook. Won (or an inquiry closed, or a dispute
+   *  prevented) lifts what the dispute alone held; lost takes the disputed
+   *  payment off the balance; any other status lifts the hold and lists the
+   *  dispute for a person (disputesToReview). A close that arrives before its
+   *  create is applied now and recorded, so the create freezes nothing. */
+  function disputeClosed(paymentIntent, { won = false, status = null, amountCents = null, disputeId = null } = {}) {
+    if (!paymentIntent) return answer(null);
+    const kind = outcomeKind(won, status);
+    return onPayingKey(paymentIntent, (r) => {
+      const d = disputesOf(r)[paymentIntent];
+      if (openOn(r, paymentIntent)) {
+        const changed = closeOpenDispute(r, paymentIntent, kind, { status, amountCents });
+        return { rec: r, result: kind === "lost" ? r.keyId : changed };
+      }
+      if (d && d.review === true && kind !== "review") {
+        // A later close with a known outcome resolves one waiting on a person.
+        return { rec: r, result: resolveOn(r, paymentIntent, kind, amountCents) };
+      }
+      if (d) return { result: null }; // delivered again
+      // The close came first: apply it and remember it for the create.
+      const ds = disputeMap(r);
+      if (kind === "lost") takeLost(r, paymentIntent, amountCents);
+      ds[paymentIntent] = { id: disputeId ? String(disputeId).slice(0, 64) : null, at: null, closedAt: isoNow(), outcome: kind === "review" ? String(status || "unknown").slice(0, 40) : kind, early: true, ...(kind === "review" ? { review: true } : {}) };
+      log(`[credits] key ${r.keyId}: dispute ${kind === "review" ? "closed with an outcome to review" : kind} before its create (${paymentIntent}); its create freezes nothing`);
+      return { rec: r, result: kind === "lost" ? r.keyId : null };
+    });
+  }
+  // A dispute waiting on a person, resolved: lost takes its payment, won takes
+  // nothing. Either way it leaves the review list.
+  function resolveOn(r, paymentIntent, kind, amountCents = null) {
+    const ds = disputeMap(r);
+    const d = ds[paymentIntent];
+    if (!d || d.review !== true) return null;
+    if (kind === "lost") takeLost(r, paymentIntent, amountCents);
+    ds[paymentIntent] = { ...d, review: false, resolved: kind, resolvedAt: isoNow() };
+    afterDisputeClose(r);
+    log(`[credits] key ${r.keyId}: dispute on ${paymentIntent} resolved as ${kind}`);
+    return r.keyId;
+  }
+  /** Operator: resolve a dispute listed for review as "won" or "lost". */
+  async function resolveDispute(keyId, paymentIntent, outcome) {
+    if (outcome !== "won" && outcome !== "lost") return null;
+    const hit = (await keysByKeyId(String(keyId || ""))).find((x) => disputesOf(x.rec)[paymentIntent]?.review === true);
+    if (!hit) return null;
+    return mutate(hit.hash, (r) => (r && r.keyId === keyId && disputesOf(r)[paymentIntent]?.review === true ? { rec: r, result: resolveOn(r, paymentIntent, outcome) } : { result: null }));
+  }
+  /** Disputes closed with an outcome a person has to resolve, by key. */
+  async function disputesToReview() {
+    const out = [];
+    for (const { rec } of await allKeysLite()) {
+      for (const [pi, d] of Object.entries(disputesOf(rec))) if (d && d.review === true) out.push({ keyId: rec.keyId, paymentIntent: pi, outcome: d.outcome || null, closedAt: d.closedAt || null });
+    }
+    return out;
   }
 
   // REFUND ON REQUEST. The holder of a key asks for its unspent balance back
@@ -1571,7 +1658,6 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // next request under a new idempotency key. A key the operator switched off
   // keeps its unspent balance refundable; a key whose payment is under an open
   // dispute answers "disputed" (the dispute settles what goes back).
-  const disputeOpen = (rec) => Boolean(rec.disputedPaymentIntent) && (!rec.disputeClosedAt || String(rec.disputeAt || "") > String(rec.disputeClosedAt));
   // A request is sent as one card refund per payment it draws on (a key
   // topped up holds more than one payment). Part 0 keeps the idempotency key
   // a one-payment request always had.
@@ -1610,7 +1696,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       const rr = rec.refundRequest;
       if (rr && rr.state === "done") return { result: { status: "refunded", keyId: rec.keyId, refundedUsd: (Number(rr.cents) || 0) / 100 } };
       if (rr) return { result: { status: "retry", keyId: rec.keyId, rr: { ...rr, parts: partsOf(rec) } } };
-      if (rec.disabled && (rec.disabledReason === "disputed" || disputeOpen(rec))) return { result: { status: "disputed", keyId: rec.keyId } };
+      if ((rec.disabled && rec.disabledReason === "disputed") || disputeHolds(rec)) return { result: { status: "disputed", keyId: rec.keyId } };
       if ((Number(rec.heldMicro) || 0) > 0) return { result: { status: "in_flight", keyId: rec.keyId } };
       // The amount, and the charge total each part brings its charge to, are
       // fixed here, under the lock, so every send of this request is the same one.
@@ -1702,10 +1788,11 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const t = now();
     return (await allKeysLite()).filter(({ rec }) => {
       // A frozen key whose refund waits for a person's approval, listed until
-      // the review is resolved; only an open dispute (which decides what goes
-      // back) holds it off the list.
+      // the review is resolved; only a dispute that decides what goes back
+      // (open, or closed and waiting on a person, itself listed in
+      // disputesToReview) holds it off this list.
       const review = rec?.fraudReview?.state;
-      if ((review === "owed" || review === "disputed") && !rec.refundRequest && (Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0) > 0) return !disputeOpen(rec);
+      if ((review === "owed" || review === "disputed") && !rec.refundRequest && (Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0) > 0) return !disputeHolds(rec);
       const rr = rec?.refundRequest;
       if (!rr || rr.state === "done") return false;
       if (rr.state === "failed") return true;
@@ -1713,7 +1800,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     }).map(({ rec }) => rec.keyId);
   }
 
-  // The one word /api/gateway-status shows for owed card refunds. Both reads
+  // The one word /api/gateway-status shows for owed card refunds. Its reads
   // walk every key record, and that surface is public and uncached, so the
   // word is computed at most once per OWED_WORD_TTL_MS and concurrent readers
   // share one walk; a failed walk is not kept.
@@ -1722,7 +1809,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   function refundsOwedWord(ttlMs = OWED_WORD_TTL_MS) {
     const t = Date.now();
     if (owedWordMemo && t - owedWordMemo.at < ttlMs) return owedWordMemo.p;
-    const p = Promise.all([refusalsToRefund(), refundRequestsOwed()]).then(([a, b]) => (a.length || b.length ? "owed" : "ok"));
+    // A dispute closed with an outcome a person has to resolve reads owed too.
+    const p = Promise.all([refusalsToRefund(), refundRequestsOwed(), disputesToReview()]).then(([a, b, c]) => (a.length || b.length || c.length ? "owed" : "ok"));
     owedWordMemo = { at: t, p };
     p.catch(() => { if (owedWordMemo?.p === p) owedWordMemo = null; });
     return p;
@@ -2372,5 +2460,5 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { authorizeGrant, grantSpentToday, sessionOwner, refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, fraudWarning, approveFraudRefund, fraudReviews, disputeClosed, disputeLostByPaymentIntent, revokeByKey, revokeFor, setLimits, notePaymentFailed, sourceTag, badKeyHeld, failedLookup, _internals: { boughtInDayCents, refuseAndRefund, refuseSession, purchasesIn }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { authorizeGrant, grantSpentToday, sessionOwner, refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, fraudWarning, approveFraudRefund, fraudReviews, disputeClosed, disputeLostByPaymentIntent, disputesToReview, resolveDispute, revokeByKey, revokeFor, setLimits, notePaymentFailed, sourceTag, badKeyHeld, failedLookup, _internals: { boughtInDayCents, refuseAndRefund, refuseSession, purchasesIn }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }
