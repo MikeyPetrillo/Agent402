@@ -12583,7 +12583,8 @@ function* indexedToolsSteps({ search = "", category = "", network = "", offset =
     if (src === "ours" && !t.ours) return false;
     if (src === "third-party" && t.ours) return false;
     if (cat && String(t.category || "").toLowerCase() !== cat) return false;
-    if (net && !(t.networks || []).some((n) => String(n).toLowerCase().includes(net))) return false;
+    // One CAIP-2 id, matched whole: eip155:10 must not take eip155:100's rows.
+    if (net && !(t.networks || []).some((n) => String(n).toLowerCase() === net)) return false;
     if (!terms.length) return true;
     const hay = directoryHayOf(t);
     return terms.every((term) => hay.includes(term));
