@@ -184,9 +184,14 @@ export function robotsTxt(baseUrl) {
     "Disallow: /api/credits/",
     "Disallow: /api/convert/",
     "Disallow: /api/monitors/",
-    "Disallow: /api/pow/",
     "Disallow: /api/buy",
   ];
+  // The proof-of-work challenge is the first step of the free path that
+  // /agents.md, /llms.txt and every free tool page tell an agent to take
+  // (GET /api/pow/challenge?slug=<tool>), so the AI agents named above may
+  // fetch it. It answers JSON, not a page, so the search engines and the
+  // unnamed crawler are still kept off it.
+  const powSearch = ["Disallow: /api/pow/"];
   // PRICED ROUTES ARE NOT PAGES. Every /api/<tool> answers an unpaid crawler
   // 402, which a search console files as a crawl error ("other 4xx") against
   // a healthy site, and a search crawler that walks the catalog spends its
@@ -240,7 +245,7 @@ export function robotsTxt(baseUrl) {
   // quotes as before; a paying client never consults this file.
   const SEARCH_ENGINES = new Set(["Googlebot", "Bingbot", "Applebot", "DuckDuckBot"]);
   const rules = [...catalog, ...priv, ...costly, ...sellerScoped, ...traps].join("\n");
-  const searchRules = [...catalog, ...priv, ...costly, ...sellerScoped, ...traps, ...priced].join("\n");
+  const searchRules = [...catalog, ...priv, ...powSearch, ...costly, ...sellerScoped, ...traps, ...priced].join("\n");
   const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${SEARCH_ENGINES.has(a) ? searchRules : rules}`).join("\n\n");
   return `${blocks}
 
