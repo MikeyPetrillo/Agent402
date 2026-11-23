@@ -61,6 +61,7 @@ jobs:
           echo "code=$code" >> "$GITHUB_OUTPUT"
           # Exit 3 is reported by its issue, not by a failed run each day.
           if [ "$code" = "3" ]; then exit 0; fi
+          if [ "$code" = "4" ]; then echo "::warning title=402 Index unavailable::The index did not answer (no answer, 429 or 5xx, asked twice); recorded as its outage, nothing of ours failed. The next run corrects what is left."; exit 0; fi
           exit "$code"
 
       # An open issue this check filed under a previous title gets the current
@@ -84,7 +85,9 @@ jobs:
           set -euo pipefail
           # No code means the step never finished (a job limit, a setup failure).
           CODE="${CODE:-1}"
-          NOW="$(date -u +%FT%TZ)"
+          # 4: the index did not answer. Its outage pages nothing and closes
+          # nothing (the sync was not proven); the step above left a warning.
+          if [ "$CODE" = "4" ]; then echo "The index was unavailable on this run: nothing opened or closed."; exit 0; fi
           FAIL_TITLE="Scheduled check needs review: index-price-sync"
           BACK_TITLE="Scheduled check needs review: index-price-writeback"
           # Only this workflow's own issues and comments count: an issue or a

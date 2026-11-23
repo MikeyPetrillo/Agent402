@@ -35,6 +35,13 @@
 // fails, so the run ends itself inside the job's limit), INDEX402_FLAG_REWRITTEN (above),
 // INDEX402_WAIT_SCALE (tests only: multiplies a 429's named wait).
 // DRY_RUN=1 prints the plan and writes nothing.
+//
+// The index being unavailable is its outage, not our failure: a listing read
+// or a write that still gets no answer, a 429 or a 5xx after the second ask
+// is named on a line starting INDEX UNAVAILABLE, the other writes go on, and
+// the run exits 4 (the workflow records a warning and pages nothing). Our own
+// failures (the pricing read, a refusal, a write that does not hold, the run
+// budget) still exit 1, and outrank it.
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -92,6 +99,10 @@ export function rewrittenByImporter(updates) {
   return updates.filter((u) => u.imported && !u.quoted);
 }
 
+/** An error from the index that is its outage: no answer, a 429 or a 5xx,
+ *  after the second ask. A refusal (any other 4xx) is not. */
+export const isIndexOutage = (e) => e?.again === true && e?.outage !== false;
+
 /** Does a listing read back from the index carry the price we set? */
 export function holdsPrice(listing, to) {
   const got = microUsd(listing?.price_usd);
@@ -138,7 +149,9 @@ async function askOnce(url, init) {
     text = await res.text();
   } catch (e) {
     const why = e?.name === "TimeoutError" ? `no answer within ${timeoutMs()} ms` : (e?.cause?.code || e?.message || "request failed");
-    throw Object.assign(new Error(withoutToken(`${method} ${url} -> ${why}`)), { again: true });
+    // A redirect we refused is our rule, not the index failing to answer.
+    const redirect = /unexpected redirect/i.test(String(e?.cause?.message || ""));
+    throw Object.assign(new Error(withoutToken(`${method} ${url} -> ${why}`)), { again: true, ...(redirect ? { outage: false } : {}) });
   }
   let body; try { body = JSON.parse(text); } catch { body = { raw: withoutToken(text).slice(0, 200) }; }
   // Redacted before it is cut, so a cut never leaves part of the token.
@@ -174,7 +187,13 @@ async function main() {
   const listings = [];
   for (let offset = 0; offset < 20_000; offset += 200) {
     if (Date.now() > stopWritesAt) throw new Error(`run budget of ${runBudgetMs()} ms spent while reading listings (offset ${offset}); nothing was written`);
-    const page = (await getJson(`${api}/services?q=${encodeURIComponent(domain)}&limit=200&offset=${offset}`)).services || [];
+    let page;
+    try { page = (await getJson(`${api}/services?q=${encodeURIComponent(domain)}&limit=200&offset=${offset}`)).services || []; } catch (e) {
+      if (!isIndexOutage(e)) throw e;
+      console.error(`INDEX UNAVAILABLE ${e.message}`);
+      console.error("The index did not answer the listing read; nothing was written. Recorded as its outage, not a failure of ours.");
+      process.exit(4);
+    }
     listings.push(...page);
     if (page.length < 200) break;
   }
@@ -182,7 +201,7 @@ async function main() {
   console.log(`${listings.length} listings read, ${prices.size} live prices, ${updates.length} to correct, ${unknown.length} priced listing(s) on routes we no longer sell`);
   for (const l of unknown) console.log(`  not sold: ${plain(l.protocol)} ${plain(l.url)} (listed $${plain(l.price_usd)})`);
 
-  let failed = 0;
+  let failed = 0, unavailable = 0;
   for (const [i, u] of updates.entries()) {
     if (!dry && Date.now() > stopWritesAt) {
       const left = updates.length - i;
@@ -200,13 +219,18 @@ async function main() {
       });
       const after = await getJson(`${api}/services/${u.id}`);
       if (!holdsPrice(after, u.to)) { failed++; console.error(`  NOT HELD ${plain(u.url)}: set $${u.to}, the index reads $${plain(after?.price_usd)}`); }
-    } catch (e) { failed++; console.error(`  FAILED ${plain(u.url)}: ${e.message}`); }
+    } catch (e) {
+      if (isIndexOutage(e)) { unavailable++; console.error(`  INDEX UNAVAILABLE ${plain(u.url)} (${u.id}): ${e.message}`); }
+      else { failed++; console.error(`  FAILED ${plain(u.url)}: ${e.message}`); }
+    }
   }
+  if (unavailable) console.error(`${unavailable} write(s) the index could not take (no answer, 429 or 5xx, asked twice): left for the next run, recorded as its outage.`);
   const rewritten = process.env.INDEX402_FLAG_REWRITTEN === "1" ? rewrittenByImporter(updates) : [];
   for (const u of rewritten) console.error(`  REWRITTEN ${plain(u.url)}: the index's own source carries $${u.from}, the catalog price is $${u.to}`);
   if (rewritten.length) console.error(`${rewritten.length} imported listing(s) of a fixed-price route were off the catalog price on the daily run: most likely the importer's source still carries an old price for them (or the run after the last deploy did not complete). A paid call to the route through that source refreshes it (bazaar-keepalive.yml with slugs, stale_days=0 and max_price_usd and max_spend_usd at or above the route's price).`);
   if (failed) process.exit(1);
   if (rewritten.length) process.exit(3);
+  if (unavailable) process.exit(4);
 }
 
 const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
