@@ -119,7 +119,7 @@ export const FLAGSHIP_WRITERS = new Set(["memory-write", "decide-execute"]);
 
 /** initialize.serverInfo description (MCP Implementation.description). */
 export const MCP_SERVER_DESCRIPTION =
-  "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Flagships: live web search and cited answers, news, browser render, market data, speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
+  "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Flagships: live web search and cited answers, news, browser render, speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
 
 /** initialize.serverInfo.websiteUrl */
 export const MCP_SERVER_WEBSITE = "https://agent402.tools";

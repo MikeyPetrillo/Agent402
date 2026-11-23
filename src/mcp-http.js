@@ -73,6 +73,7 @@ import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredFromPrice, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
 import { receiptsServed, RECEIPT_HEADER } from "./receipt-signing.js";
+import { stockDataEnabled } from "./tools/stock-provider.js";
 
 /** The `_meta` key a paid tools/call result carries the route's signed
  *  receipt under (src/receipt-signing.js): the compact JWS the paid HTTP
@@ -729,7 +730,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         name: profile?.serverName || "agent402",
         version: VERSION,
         title: "Agent402",
-        description: mcpServerDescription({ mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed() }),
+        description: mcpServerDescription({ mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed(), stock: stockDataEnabled() }),
         websiteUrl: baseUrl || MCP_SERVER_WEBSITE,
       },
       {

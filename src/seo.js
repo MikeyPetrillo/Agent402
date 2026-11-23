@@ -48,6 +48,7 @@ import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION, UNCONFIRMED_R
 import { connectorPayShort, connectorWires } from "./connector-pay.js";
 import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 import { BASE_NO_GAS_SENTENCE } from "./base-no-gas.js";
+import { stockDataEnabled } from "./tools/stock-provider.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
 const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${fromPriceLabel(t)}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
@@ -689,7 +690,7 @@ ${flatTiersLine()}
 
 ## Connect via MCP
 - [Start here](${baseUrl}/start): one step per app (Claude desktop, Claude Code, Cursor), what runs with no wallet, and funding a first wallet with USDC on Base
-- [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/data/transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
+- [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/${stockDataEnabled() ? "quote/" : ""}transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
   - Claude Code: \`claude mcp add --transport http agent402 ${baseUrl}/mcp\`
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - ${connectorPayShort()}
