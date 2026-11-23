@@ -54,7 +54,8 @@
 
 import { redactSecrets } from "./redact.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
-import { takeHardCap, releaseHardCap, hardCapError, neverReachedUpstream } from "../upstream-hard-caps.js";
+import { takeHardCap, releaseHardCap, releaseHardCapRefused, hardCapError, neverReachedUpstream } from "../upstream-hard-caps.js";
+import { currentDispatchCaller } from "../dispatch-caller.js";
 import { scanCoverage } from "../partial-answer.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
@@ -1045,7 +1046,9 @@ export const ALCHEMY_DATA_TOOLS = [
         data = await alchemyFetch(`https://api.g.alchemy.com/data/v1/${key}/transfers/by-address`, { method: "POST", body: JSON.stringify(body) }, { step: "multichain transfers" });
       } catch (e) {
         // The upstream refused before any work (a 4xx), or the call never left: the network reads are given back.
-        if ((e?.upstreamStatus >= 400 && e.upstreamStatus < 500) || neverReachedUpstream(e)) giveBack();
+        // A refusal's give-back is held to the hourly bounds (releaseHardCapRefused).
+        if (neverReachedUpstream(e)) giveBack();
+        else if (e?.upstreamStatus >= 400 && e.upstreamStatus < 500) { const caller = currentDispatchCaller(); for (let k = 0; k < taken; k++) releaseHardCapRefused("alchemy-multichain", takenAt, { caller }); }
         throw e;
       }
       if (!data || typeof data !== "object" || !Array.isArray(data.transfers)) throw bad("Chain data upstream returned a malformed response", 502);

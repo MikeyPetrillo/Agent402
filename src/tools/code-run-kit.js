@@ -11,7 +11,7 @@ import { redactSecrets } from "./redact.js";
 import { callerKeyOf, currentDispatchCaller } from "../dispatch-caller.js";
 import { isRouteCall } from "../not-charged.js";
 import { perReplica } from "../rate-limit.js";
-import { takeHardCap, hardCapError, releaseHardCap, neverReachedUpstream, upstreamRefusedBeforeWork, hardCapHold } from "../upstream-hard-caps.js";
+import { takeHardCap, hardCapError, releaseHardCap, releaseHardCapRefused, neverReachedUpstream, upstreamRefusedBeforeWork, hardCapHold } from "../upstream-hard-caps.js";
 import { settleBeforeUpstreamHolding } from "../settle-first.js";
 
 let Sandbox;
@@ -131,9 +131,11 @@ async function runInSandbox(code, language, tierSlug) {
     } catch (e) {
       // A create that never reached the sandbox service, or that the service
       // refused (our key, a rate limit, its busy answer, a 4xx), started
-      // nothing: its unit goes back. Any other failure keeps it (a sandbox may
+      // nothing: its unit goes back (a refusal within the hourly bounds,
+      // src/upstream-hard-caps.js releaseHardCapRefused). Any other failure keeps it (a sandbox may
       // have started).
-      if (neverReachedUpstream(e) || upstreamRefusedBeforeWork(e)) releaseHardCap("e2b", capTakenAt);
+      if (neverReachedUpstream(e)) releaseHardCap("e2b", capTakenAt);
+      else if (upstreamRefusedBeforeWork(e)) releaseHardCapRefused("e2b", capTakenAt, { caller: currentDispatchCaller() });
       // The SDK text wraps the upstream error body (account state, the key):
       // log it redacted, answer the buyer generically.
       console.warn(`[code-run] sandbox creation failed: ${redactSecrets(String(e?.message || e)).slice(0, 300)}`);

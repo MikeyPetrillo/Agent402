@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1123 variables in 114 groups.
+1125 variables in 114 groups.
 
 ## Contents
 
@@ -538,6 +538,8 @@ holds it.
 | `HARDCAP_BRAVE_CALLS` | Hardcap brave calls. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_E2B_SANDBOXES` | Hardcap e2b sandboxes. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_OPENAI_CALLS` | Hardcap openai calls. |  | `src/upstream-hard-caps.js` |
+| `HARDCAP_REFUSED_RELEASES_PER_CALLER_HOUR` | Units one caller may give back to a ceiling in an hour for calls the upstream refused before any work (a 4xx); past it the refused call counts (default 30). |  | `src/upstream-hard-caps.js` |
+| `HARDCAP_REFUSED_RELEASES_PER_HOUR` | Units an upstream's ceiling gives back in an hour for calls it refused before any work, across callers; past it the refused call counts (default 600). |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_SYNC_MS` | Hardcap sync, in milliseconds. |  | `src/upstream-hard-caps.js` |
 
 ## HTML

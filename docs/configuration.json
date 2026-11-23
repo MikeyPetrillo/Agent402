@@ -449,6 +449,8 @@
     "HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS": "Network reads a day by the multichain wallet transfers tool, one per network a call asks for (default 30000; off disables, 0 refuses all).",
     "HARDCAP_OPENAI_CALLS": "Hardcap openai calls.",
     "HARDCAP_SYNC_MS": "Hardcap sync, in milliseconds.",
+    "HARDCAP_REFUSED_RELEASES_PER_CALLER_HOUR": "Units one caller may give back to a ceiling in an hour for calls the upstream refused before any work (a 4xx); past it the refused call counts (default 30).",
+    "HARDCAP_REFUSED_RELEASES_PER_HOUR": "Units an upstream's ceiling gives back in an hour for calls it refused before any work, across callers; past it the refused call counts (default 600).",
     "HEAP_SAMPLING": "Heap sampling.",
     "HL_STALE_MAX_MS": "Hl stale maximum, in milliseconds.",
     "HOST_FIGURES_TTL_MS": "Host figures lifetime, in milliseconds.",
