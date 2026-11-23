@@ -228,7 +228,9 @@ export function idValidate(input) {
   const base = { normalized, registryChecked: false };
   if (!normalized) throw bad(`"value" has no characters left once spaces and separators are removed`);
   if (typeRaw !== null) {
-    const type = ID_TYPE_ALIASES[typeRaw.trim().toLowerCase()];
+    const key = typeRaw.trim().toLowerCase();
+    // Own entries only: "constructor" or "__proto__" names no type.
+    const type = Object.hasOwn(ID_TYPE_ALIASES, key) ? ID_TYPE_ALIASES[key] : null;
     if (!type) throw bad(`"type" must be one of ${ID_TYPE_NAMES.join(", ")} (or omit it to detect)`);
     const { format, ...r } = ID_TYPES[type].check(normalized);
     return { type, label: ID_TYPES[type].label, ...r, ...base };

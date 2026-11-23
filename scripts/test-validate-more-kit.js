@@ -301,5 +301,12 @@ const SIG = "5".repeat(87);
   ok(types.length >= 9 && missing.length === 0, `id-validate's description names each of the ${types.length} types it checks (${missing.join(", ") || "all named"})`);
 }
 
+// ---- id-validate: a type named like an object's own property is unknown ----
+for (const t of ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf"]) {
+  let e = null;
+  try { tool("id-validate").handler({ value: "DEUTDEFF", type: t }); } catch (x) { e = x; }
+  ok(e && e.statusCode === 400 && /"type" must be one of/.test(e.message), `id-validate type ${JSON.stringify(t)} answers 400 (${e?.statusCode})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
