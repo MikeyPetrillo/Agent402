@@ -246,9 +246,13 @@ const strictJson = (events) => events.every((e) => e.data === "[DONE]" || (() =>
     if (!req.creditsSettled || typeof req.creditsDebitId !== "string") return null;
     return { rail: "credits", network: null, payer: req.creditsKeyId, settlement: req.creditsDebitId, priceUsd: req.creditsCharged, slug: "hash", replay: false };
   };
+  const store = await import("../src/receipt-store.js");
+  const { RECEIPT_URL_HEADER } = await import("../src/receipt-signing.js");
   const app = express();
   app.use(express.json());
-  app.use(receiptSignerMiddleware({ describe, signer: () => signer, onError: (e) => { throw e; } }));
+  // A credits debit is read only as the answer ends: pendingRail names the
+  // rail at the head, so a credits stream names its receipt address too.
+  app.use(receiptSignerMiddleware({ describe, signer: () => signer, onError: (e) => { throw e; }, onStreamed: store.keepStreamedReceiptOnFinalOk, fetchUrl: (k) => `https://x.test/api/receipt/${k}`, pendingRail: (req) => (req.creditsSettled === true ? "credits" : null) }));
   app.use(cr.gate(() => ({ priceUsd: 0.01, slug: "hash" }), { settleBeforeEnd: () => on }));
   app.post("/hash", (_req, res) => res.json({ sha256: "x" }));
   app.post("/boom", (_req, res) => res.status(500).json({ error: "x" }));
@@ -273,6 +277,19 @@ const strictJson = (events) => events.every((e) => e.data === "[DONE]" || (() =>
     const s = await call(port, "/stream", { headers: auth });
     const sv = await verifyStreamedReceipt(s.body, { keys });
     await ok(s.status === 200 && sv.valid && sv.record.rail === "credits" && hist().filter((e) => e.k === "charge").at(-1)?.d === sv.record.settlement && bal().balanceUsd === 0.98, `a credits stream ends with a receipt line naming its debit (${sv.reason})`);
+    {
+      const url = String(s.headers[RECEIPT_URL_HEADER.toLowerCase()] || "");
+      const tok = url.split("/").pop();
+      await ok(/^https:\/\/x\.test\/api\/receipt\/[A-Za-z0-9_-]{22}$/.test(url) && tok !== sv.record.settlement, `a credits stream's head names a receipt address, a random token (the debit is read only at the end): ${url.replace(/[^/]+$/, "<token>")}`);
+      await new Promise((res) => setTimeout(res, 50));
+      const kept = await store.streamedReceipt(tok);
+      const { receipt } = splitStreamedReceipt(s.body);
+      await ok(kept && kept === receipt && verifyReceipt(kept, { keys, responseBody: splitStreamedReceipt(s.body).body }).valid, "the token answers the receipt the stream carried");
+      await ok((await store.streamedReceipt(sv.record.settlement)) === kept, "and the debit id the receipt names answers it too");
+    }
+    {
+      await ok(!(await call(port, "/stream")).headers[RECEIPT_URL_HEADER.toLowerCase()], "a stream with no credits key names no receipt address");
+    }
 
     const b = await call(port, "/boom", { headers: auth });
     await new Promise((res) => setTimeout(res, 50));
@@ -384,6 +401,13 @@ try {
     const sbytes = Buffer.from(await s.arrayBuffer());
     const sv = await verifyStreamedReceipt(sbytes, { keys: keyDoc.keys, request: { method: "POST", path: CHAT.path, body: CHAT.body } });
     await ok(s.status === 200 && sv.valid && sv.record.rail === "credits", `credits: a streamed chat answer ends with a receipt line that verifies (${s.status}, ${sv.reason})`);
+    {
+      const url = s.headers.get("x-agent402-receipt-url") || "";
+      let got = null;
+      for (let i = 0; i < 20 && !got && url; i++) { const g = await fetch(url.replace(/^https?:\/\/[^/]+/, rig.url)); if (g.status === 200) got = await g.json(); else await new Promise((res) => setTimeout(res, 100)); }
+      const { body: sb, receipt: sr } = splitStreamedReceipt(sbytes);
+      await ok(/\/api\/receipt\/[A-Za-z0-9_-]{22}$/.test(url) && got?.receipt === sr && verifyReceipt(got.receipt, { keys: keyDoc.keys, responseBody: sb }).valid, `credits: the stream's head names GET /api/receipt/<token>, which answers the receipt the stream carried (${url ? "named" : "no header"})`);
+    }
     const cl = await clientVerify(v.record ? r.headers.get(RECEIPT_HEADER) : "", { baseUrl: rig.url, body: text });
     await ok(cl.valid, "credits: the client fetches the keys and agrees");
     // An answer served without a run (a keyed replay of the same call) is

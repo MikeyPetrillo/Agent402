@@ -481,7 +481,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `GET /api/receipt/<key>` (rate limited 60/min, 1200/hour per address; 404 unknown, 400 malformed),
   deleted after `RECEIPT_FETCH_DAYS` (30) or past `RECEIPT_FETCH_MAX_ROWS` (500,000) by the hourly sweep,
   the newest `RECEIPT_FETCH_MEMORY` (2000) also in memory; a credits stream, whose debit lands at the end,
-  is kept under its debit id with no head address. Nothing for a call `receiptFieldsOf` does not sign. A card-bought report is signed at delivery
+  names a random token in its head (the signer's `pendingRail`, `pendingReceiptRailOf` in server.js) and is
+  kept under that token and its debit id. Nothing for a call `receiptFieldsOf` does not sign. A card-bought report is signed at delivery
   (`createCheckoutReceipt`, rail `card-checkout`, stored on the record, shown on `/r/<session>` and in the
   ready email; none on a 100%-off session). A monitor subscription's paid period, the first and every
   renewal, is signed once its payment is final (`createSubscriptionReceipt`: rail `card-subscription` on
