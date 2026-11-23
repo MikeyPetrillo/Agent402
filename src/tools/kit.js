@@ -588,6 +588,15 @@ export const CSV_DELIMITER_NOTE = "unrecognized delimiter value; comma used (use
 // size is estimated from the parsed grid first and a larger one is refused
 // 413 before it is built.
 export const CSV_ANSWER_MAX_BYTES = 5_000_000;
+// Rows times columns a CSV tool may read or write in one call, checked
+// before the work: a header of many columns over short rows, which the tool
+// pads, multiplies the text far past its size.
+export const CSV_CELL_MAX = 200_000;
+export function csvCellsTooMany(rows, cols, hint) {
+  const n = rows * cols;
+  if (!(n > CSV_CELL_MAX)) return null;
+  return Object.assign(new Error(`The CSV holds ${n.toLocaleString("en-US")} row-by-column cells, over this tool's ${CSV_CELL_MAX.toLocaleString("en-US")}; ${hint}`), { statusCode: 413 });
+}
 export function csvAnswerTooLarge(estimate, hint) {
   if (!(estimate > CSV_ANSWER_MAX_BYTES)) return null;
   const err = new Error(`The answer would be about ${Math.ceil(estimate / 1e6)} MB, over the ${CSV_ANSWER_MAX_BYTES / 1e6} MB limit for this tool; ${hint}`);

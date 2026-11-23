@@ -353,5 +353,23 @@ ok(tool("log-timestamps").description.startsWith("Find each timestamp in the for
   ok(fine.rows === 5000 && fine.matched === 50, "csv-aggregate: an ordinary table inside the budget is summarized");
 }
 
+// ---- csv-to-md bounds its cells before it pads and writes them ----
+{
+  const { KIT2 } = await import("../src/tools/kit2.js");
+  const md = KIT2.find((t) => t.slug === "csv-to-md");
+  const errOf = (fn) => { try { fn(); return null; } catch (e) { return e; } };
+  const wide = Array.from({ length: 2000 }, (_, i) => `column_name_${i}`).join(",") + "\n" + "1\n".repeat(2000);
+  const t0 = performance.now();
+  const e = errOf(() => md.handler({ csv: wide }));
+  const ms = performance.now() - t0;
+  ok(e && e.statusCode === 413 && ms < 50, `csv-to-md: 2,000 columns over 2,000 rows answers 413 before it pads them (${e?.statusCode ?? "answered"}, ${ms.toFixed(1)} ms)`);
+  let dg = ["g", ...Array.from({ length: 199 }, (_, i) => `c${i}`)].join(",") + "\n";
+  for (let i = 0; dg.length < 95_000; i++) dg += `k${i}\n`;
+  const e2 = errOf(() => md.handler({ csv: dg }));
+  ok(e2 && e2.statusCode === 413, `csv-to-md: short rows padded to 200 columns past the cell budget answer 413 (${e2?.statusCode ?? "answered"})`);
+  const r = md.handler({ ...md.discovery.input });
+  ok(typeof r.markdown === "string" && r.rows === 2, "csv-to-md: its published example is still answered");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

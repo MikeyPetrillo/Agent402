@@ -7,7 +7,7 @@
 // All pure CPU: no network, no key, no model -> proof-of-work eligible
 // (src/free-tier.js). Every reader is one pass over a capped input.
 import { gunzipSync, inflateSync } from "node:zlib";
-import { parseCsv, csvDelimiterOf, csvAnswerTooLarge } from "./kit.js";
+import { parseCsv, csvDelimiterOf, csvAnswerTooLarge, CSV_CELL_MAX } from "./kit.js";
 import { partialFields } from "../partial-answer.js";
 
 function bad(message, statusCode = 400) {
@@ -478,7 +478,7 @@ const CSV_AGG_MAX = 100_000;
 const CSV_AGG_COLS = 200;
 // Rows times summarized columns, and groups times summarized columns: the
 // work a call may ask for, checked before any statistics are made.
-const CSV_AGG_CELL_MAX = 200_000;
+const CSV_AGG_CELL_MAX = CSV_CELL_MAX;
 const CSV_AGG_GROUP_CELL_MAX = 50_000;
 const NUM_RE = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
 const NUM_COMMAS_RE = /^[-+]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
