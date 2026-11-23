@@ -8,6 +8,7 @@
 // wish board and append, the revenue ledger's first load).
 // Requires STATE_DATABASE_URL (CI fails without it).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
+import "./lib/credits-guards-table.js"; // a random test credits table (src/credits-guards.js): without one every charge reads flagged
 import { fileURLToPath } from "node:url";
 import net from "node:net";
 import { spawn } from "node:child_process";
