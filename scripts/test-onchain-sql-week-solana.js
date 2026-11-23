@@ -13,8 +13,9 @@
 //   - days slow enough that the week cannot fit end the walk on time: the
 //     answer is still inside the budget, partial in fields (complete false,
 //     windowed.stoppedBy "time", coveredFrom/coveredTo), settled once;
-//   - a walk with no rows in the days it could read is the uncharged 422:
-//     nothing settled;
+//   - a walk that read days with no rows in them answers no rows, partial,
+//     with the range left, settled once; only a walk that read no day is
+//     the uncharged 422;
 //   - an aggregate is answered as onchain-sql answers it.
 //
 //   node scripts/test-onchain-sql-week-solana.js     (offline)
@@ -174,12 +175,12 @@ try {
     ok(r.ms < SQL_WEEK_BUDGET_MS + 2_000 && r.settles === 1 && r.charged, `answered in ${r.ms} ms, inside the Solana budget plus its answer, settled once (${r.settles})`);
     ok((r.json?.longerRange || []).map((x) => x.path).join(",") === "/api/onchain-sql-range", `and names the long-range route (${JSON.stringify(r.json?.longerRange)})`);
   }
-  // ---- nothing read: the uncharged 422 ----
+  // ---- days read, no rows in them: an answer, settled once ----
   {
     dayRows = 0;
     const r = await pay(walk().replace(`INTERVAL ${SQL_WEEK_MAX_DAYS} DAY`, "INTERVAL 20 DAY"));
     dayRows = 2;
-    ok(r.status === 422 && r.settles === 0 && !r.charged, `no rows in the days the week route may read: the uncharged 422, nothing settled (${r.status}, ${r.settles})`);
+    ok(r.status === 200 && r.settles === 1 && r.charged && Array.isArray(r.json?.rows) && r.json.rows.length === 0 && r.json.complete === false && r.json.windowed?.daysRead >= 1 && r.json.windowed.coveredTo, `no rows in the days the week route read: no rows, partial, with what was covered, settled once (${r.status}, ${r.settles}, ${JSON.stringify(r.json?.windowed)})`);
   }
   // ---- an aggregate, as onchain-sql ----
   {

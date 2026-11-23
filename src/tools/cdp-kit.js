@@ -1323,7 +1323,10 @@ async function dayWindowAnswer(plan, body, queries, whole, route = SQL_ROUTE) {
     read++;
     for (const r of got) { if (rows.length >= target) break; rows.push(r); }
   }
-  if (!rows.length && read < plan.spans.length) throw whole;
+  // Nothing delivered only when no day was read: that is the uncharged 422.
+  // Days read with no rows in them are an answer (no rows, partial, with the
+  // range left), the same as days read with rows.
+  if (!read) throw whole;
   const allRead = read === plan.spans.length;
   const reachedCap = rows.length >= target;
   const list = rows.length > SQL_MAX_ROWS ? rows.slice(0, SQL_MAX_ROWS) : rows;
@@ -1349,7 +1352,9 @@ async function dayWindowAnswer(plan, body, queries, whole, route = SQL_ROUTE) {
   const longer = !complete && (stopped === "query-limit" || stopped === "time") ? route.longer.filter((r) => rangeDays <= r.maxDays) : [];
   return {
     rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS,
-    ...(complete ? partialFields(list.length, list.length) : { ...partialFields(list.length + 1, list.length), matchedIsLowerBound: true }),
+    // A partial answer's matched is a floor: the rows found so far, or (with
+    // none found) zero, never complete.
+    ...(complete ? partialFields(list.length, list.length) : list.length ? { ...partialFields(list.length + 1, list.length), matchedIsLowerBound: true } : { returned: 0, matched: 0, complete: false, truncated: true, matchedIsLowerBound: true }),
     windowed: { by: "day", days: plan.spans.length, daysRead: read, order: plan.direction, from: iso(plan.lo), to: iso(plan.hi), ...(covered && !complete ? { coveredFrom: covered.from, coveredTo: covered.to } : {}), ...(why && !complete ? { stoppedBy: stopped } : {}) },
     ...(longer.length ? { longerRange: longer.map((r) => ({ ...r })) } : {}),
     note: longer.length ? `${note} ${longerSentence(longer)}` : note,

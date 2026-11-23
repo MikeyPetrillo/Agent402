@@ -208,8 +208,9 @@ try {
     ok(Array.isArray(r.rows) && r.rows.length === 0 && r.complete === true && r.windowed.daysRead === 2, "every day read and none matched: a complete answer with no rows");
     reset();
     rowsPerDay = 0;
-    const e = await sql(days(7)).catch((x) => x);
-    ok(e?.statusCode === 422 && e?.charged === false && sent.length === 1 + D, `no rows in the days the limit allows: the uncharged 422, not an empty answer that reads complete (${e?.statusCode}, ${sent.length} queries)`);
+    const r0 = await sql(days(7)).catch((x) => x);
+    ok(!(r0 instanceof Error) && Array.isArray(r0.rows) && r0.rows.length === 0 && r0.complete === false && r0.truncated === true && r0.matched === 0 && r0.matchedIsLowerBound === true && sent.length === 1 + D, `no rows in the days the limit allows: an answer with no rows, marked partial, never complete (${r0?.statusCode ?? "200"}, ${sent.length} queries)`);
+    ok(r0.windowed?.daysRead === D && r0.windowed.coveredFrom && r0.windowed.coveredTo && /for the rest/.test(r0.note || ""), `...with the days read, what they cover and the range left (${JSON.stringify(r0.windowed)})`);
   }
   // ---- ORDER BY is read on the same positions as the clauses ----
   {
@@ -363,6 +364,15 @@ try {
     const r = await sqlRange(days(SQL_RANGE_MAX_DAYS));
     const n = dayWindowPlan(days(SQL_RANGE_MAX_DAYS), Date.now()).spans.length;
     ok(Array.isArray(r.rows) && r.rows.length === 0 && r.complete === true && r.windowed.daysRead === n && sent.length === 1 + n, `every day read and none matched: a complete answer with no rows (${sent.length} queries)`);
+  }
+  {
+    reset();
+    rowsPerDay = 0;
+    dayDelayMs = 1200;
+    process.env.UPSTREAM_HANDLER_BUDGET_MS = "6000";
+    const r = await sqlRange(days(SQL_RANGE_MAX_DAYS)).catch((x) => x);
+    delete process.env.UPSTREAM_HANDLER_BUDGET_MS;
+    ok(!(r instanceof Error) && r.rows.length === 0 && r.complete === false && r.matchedIsLowerBound === true && r.windowed.stoppedBy === "time" && r.windowed.daysRead >= 1 && r.windowed.coveredTo && /for the rest/.test(r.note), `range: days read with no rows before the time ran out answer no rows, partial, with the range left (${r?.statusCode ?? JSON.stringify(r?.windowed)})`);
   }
   {
     reset();
