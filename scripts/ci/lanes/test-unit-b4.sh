@@ -345,6 +345,8 @@ t node scripts/test-worker-deploy-step.js
 t node scripts/test-decide-deploy-step.js
 # variable upsert never starts its own deploy; ClawHub publishes last (offline)
 t node scripts/test-deploy-release-order.js
+# sbom job: CycloneDX SBOMs of the server and published packages uploaded on every main push, gating nothing (offline)
+t node scripts/test-sbom-ci.js
 # ClawHub release helper: retries only the write rate limit, never publishes after a failed inspect (fake CLI, offline)
 t node scripts/test-clawhub-release.js
 t node scripts/test-heap-sampling.js
