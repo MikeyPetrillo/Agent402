@@ -6764,9 +6764,17 @@ function operatorWriteRefused(req) {
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
   if (!readCookie(req, OPERATOR_COOKIE)) return false;
   // A header credential cannot be set by another site's page (CORS keeps
-  // /__operator closed), so its presence skips the origin check; the route's
-  // gate then validates it and counts a wrong one against the guessing budget.
-  if (getOperatorToken(req)) return false;
+  // /__operator closed), so a VALID one skips the origin check. A wrong one
+  // does not: the request is then the cookie's, held to the origin check like
+  // a cookie alone (the gate still counts the wrong token as a guess).
+  const headerToken = getOperatorToken(req);
+  if (headerToken) {
+    if (operatorTokenOk(headerToken)) return false;
+    // A wrong header token is a guess wherever it is read, so it spends the
+    // same per-address budget here as at the gate (operatorAuthed).
+    operatorAttemptLimiter.check(operatorAttemptIp(req));
+    noteOperatorAuthFailure();
+  }
   if (String(req.headers["sec-fetch-site"] || "").toLowerCase() === "same-origin") return false;
   const origin = req.headers.origin;
   return !(OPERATOR_SITE_ORIGIN && typeof origin === "string" && origin === OPERATOR_SITE_ORIGIN);

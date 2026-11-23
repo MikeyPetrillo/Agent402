@@ -139,11 +139,15 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     ok(sameOrigin === hdrOnly, `a same-origin cookie POST reaches the action like the header token (${sameOrigin})`);
     const originOnly = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: base, "content-type": "text/plain" }, body: "x" });
     ok(originOnly === hdrOnly, `a cookie POST whose Origin is this site (no Sec-Fetch-Site) reaches the action (${originOnly})`);
-    // A header credential is never validated by the origin check (another site cannot set one); the gate
-    // reads it, so a wrong one is a counted guess there (see the write-guessing lockout below), and the
-    // live session cookie still decides this request.
-    const wrongHdr = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", "content-type": "text/plain" }, body: "x" });
-    ok(wrongHdr !== 403 && wrongHdr === hdrOnly, `a header token with a live cookie goes to the gate, not the origin check (${wrongHdr})`);
+    // Only a VALID header token skips the origin check: a wrong one beside the
+    // session cookie is held to it like the cookie alone, so a cross-site write
+    // carrying junk in the header is refused.
+    const wrongHdr = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", origin: "https://evil.example", "sec-fetch-site": "cross-site", "content-type": "text/plain" }, body: "x" });
+    ok(wrongHdr === 403, `a wrong header token with a live cookie from another site is refused by the origin check (${wrongHdr})`);
+    const wrongHdrSame = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", origin: base, "sec-fetch-site": "same-origin", "content-type": "text/plain" }, body: "x" });
+    ok(wrongHdrSame !== 403 && wrongHdrSame !== 404, `a wrong header token with a live cookie from this site goes to the gate (${wrongHdrSame})`);
+    const goodHdr = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": TOKEN, origin: "https://evil.example", "content-type": "text/plain" }, body: "x" });
+    ok(goodHdr === hdrOnly, `a valid header token skips the origin check (${goodHdr})`);
     ok((await status("/__operator/monitors/run", { method: "POST" })) === 404, "with no credential at all the route's own gate answers (404)");
     ok((await status("/__operator", { headers: { cookie, origin: "https://evil.example", "sec-fetch-site": "cross-site" } })) === 200, "a read (GET) is not an operator write and keeps working");
   }
