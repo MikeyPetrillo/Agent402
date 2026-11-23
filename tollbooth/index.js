@@ -12,7 +12,7 @@
 // The proof-of-work rail works out of the box with zero configuration. To also
 // accept USDC, set `payTo` and supply `verifyX402` (wire it to the standard
 // x402 server middleware / your facilitator, see README).
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
@@ -146,6 +146,9 @@ export function tempoFromEnv(env = process.env) {
   };
 }
 
+// Set when the CLI has already warned that its payTo has no facilitator.
+let cliWarnedUnsettled = false;
+
 export function createTollbooth(config = {}) {
   const {
     price = process.env.TOLLBOOTH_PRICE || "$0.001",
@@ -205,6 +208,12 @@ export function createTollbooth(config = {}) {
     message = "This resource charges automated / AI clients per request. Humans browse free; bots pay in USDC via x402 or by solving a proof-of-work.",
   } = config;
 
+  // A quote nothing can settle: payTo with no x402 middleware and no
+  // verifier advertises USDC that no request can pay. Said once at start (the
+  // CLI says it in its own words, so it is not repeated there).
+  if (payTo && !x402 && typeof verifyX402 !== "function" && !cliWarnedUnsettled) {
+    console.warn("[agent402-tollbooth] WARNING: payTo is set but there is no x402 middleware (createTollbooth({ x402: paymentMiddleware(...) }) with a facilitator) and no verifyX402, so nothing can verify or settle a USDC payment: the 402 advertises a quote that every paid request is refused on. Pass a settling x402 middleware, or drop payTo.");
+  }
   const isBot = makeBotMatcher(botUserAgents);
   const powEngine = pow ? createPow({ difficulty: powDifficulty, secret: powSecret, replayStore }) : null;
   if (x402 && typeof x402 !== "function") throw new TypeError("createTollbooth: `x402` must be an Express middleware function");
@@ -270,7 +279,10 @@ export function createTollbooth(config = {}) {
     // strict: a known AI crawler pays even when it sends a browser-like UA and
     // an HTML Accept; anything else that does not look like a browser pays too.
     if (mode === "strict") return isBot(req.headers["user-agent"] || "") || !looksHuman(req);
-    return isBot(req.headers["user-agent"] || ""); // "bots" (default)
+    // "bots" (default): a listed AI crawler pays, and so does a request with
+    // no User-Agent at all (no browser sends none: the strict-mode rule).
+    const ua = String(req.headers["user-agent"] || "");
+    return !ua.trim() || isBot(ua);
   };
 
   // Sliding-window of recent charged requests → adaptive PoW difficulty.
@@ -717,6 +729,7 @@ export async function buildCliX402Middleware(env = process.env) {
   const cdpKeys = env.TOLLBOOTH_CDP_API_KEY_ID && env.TOLLBOOTH_CDP_API_KEY_SECRET;
   if (!payTo) return null;
   if (!facilitatorUrl && !cdpKeys) {
+    cliWarnedUnsettled = true;
     console.warn("⚠ TOLLBOOTH_PAYTO is set without TOLLBOOTH_FACILITATOR_URL (or TOLLBOOTH_CDP_API_KEY_ID/SECRET): the 402 advertises a USDC quote but nothing here can verify or settle a payment, so every paid request is refused. Set TOLLBOOTH_FACILITATOR_URL (a public x402 facilitator that settles your network - keyless free tiers exist; https://x402.org/facilitator for base-sepolia) to actually charge, over x402 and MPP.");
     return null;
   }
@@ -1010,4 +1023,33 @@ async function startCli() {
 function invokedDirectly() {
   try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href; } catch { return false; }
 }
-if (process.argv[1] && invokedDirectly()) startCli();
+const CLI_USAGE = `Usage: agent402-tollbooth [--help] [--version]
+
+Runs the tollbooth as a reverse proxy (or a bare gate) configured from the
+environment: AI crawlers pay per request, humans browse free.
+
+  TOLLBOOTH_UPSTREAM          the site to proxy to (unset: a bare gate)
+  TOLLBOOTH_SECRET            a stable secret for proof-of-work tokens (openssl rand -hex 32)
+  TOLLBOOTH_PAYTO             the wallet a USDC quote pays
+  TOLLBOOTH_FACILITATOR_URL   the x402 facilitator that settles it (needed with TOLLBOOTH_PAYTO)
+  TOLLBOOTH_NETWORK           the chain (default base)
+  TOLLBOOTH_MODE              who pays: bots (default), all or strict
+  PORT                        the port to listen on (default 4021; 0 picks a free one)
+
+The README lists every setting: https://www.npmjs.com/package/agent402-tollbooth`;
+
+/** The CLI's flags, answered before anything starts; false when none was given. */
+function answerCliFlags(argv = process.argv.slice(2)) {
+  if (argv.some((a) => a === "--help" || a === "-h")) { process.stdout.write(`${CLI_USAGE}\n`); return true; }
+  if (argv.some((a) => a === "--version" || a === "-v")) {
+    const { version } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+    process.stdout.write(`${version}\n`);
+    return true;
+  }
+  return false;
+}
+
+if (process.argv[1] && invokedDirectly()) {
+  if (answerCliFlags()) process.exit(0);
+  startCli();
+}

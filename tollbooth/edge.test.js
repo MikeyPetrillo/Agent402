@@ -32,6 +32,15 @@ const BOT = "Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)";
   console.log("0. strict mode charges a listed crawler that looks like a browser ✓");
 }
 
+// 0b. An empty User-Agent pays in the default mode too (no browser sends none).
+{
+  const bots = createEdgeTollbooth({ secret: "test-secret", powDifficulty: 8 });
+  const none = await bots(new Request("https://site.test/a"));
+  const blank = await bots(new Request("https://site.test/a", { headers: { "user-agent": " " } }));
+  if (!none || none.status !== 402 || !blank || blank.status !== 402) fail(`bots: an empty or absent User-Agent must be charged, got ${none && none.status}, ${blank && blank.status}`);
+  console.log("0b. an empty User-Agent is charged in the default mode ✓");
+}
+
 // 1. Human allowed (gate returns null).
 let res = await gate(req(HUMAN));
 if (res !== null) fail("human should be allowed (null)");

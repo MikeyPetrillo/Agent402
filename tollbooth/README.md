@@ -111,6 +111,9 @@ TOLLBOOTH_FACILITATOR_URL=https://x402.org/facilitator \
 npx agent402-tollbooth          # listens on :4021, proxies humans free, charges bots
 ```
 
+`npx agent402-tollbooth --help` lists the main settings and `--version` prints
+the installed version; neither starts a gate.
+
 For real money, drop `TOLLBOOTH_NETWORK` (Base is the default) and point
 `TOLLBOOTH_FACILITATOR_URL` at a facilitator that settles Base mainnet, or set
 `TOLLBOOTH_CDP_API_KEY_ID` and `TOLLBOOTH_CDP_API_KEY_SECRET` to settle through
@@ -407,7 +410,9 @@ By default (`mode: "bots"`) it charges requests whose `User-Agent` matches a kno
 CCBot, PerplexityBot, Perplexity-User, MistralAI-User, Bytespider,
 Google-Extended, GoogleOther, Amazonbot, …; the full list is `AI_BOTS`). Classic
 search indexers (Googlebot, Bingbot) are intentionally **not** charged so your
-SEO indexing stays free.
+SEO indexing stays free. A request with no `User-Agent` at all is charged in every mode: no browser
+sends none, so it falls under the same rule as `mode: "strict"` (a request that
+is not a real-browser request pays).
 
 **Don't want to play whack-a-mole with bot detection?** That's the point of the
 other modes - you stop trying to *identify* bots and instead make access *cost
