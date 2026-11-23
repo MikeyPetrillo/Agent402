@@ -39,7 +39,7 @@ import { SKIP_UPDATE } from "./json-document.js";
 import { shared, createMemoryLimits } from "./shared-limits.js";
 import { envPositive } from "./env-num.js";
 import { escapeHtml, headerText } from "./email-text.js";
-import { creditsSalesEnabled, creditsBalanceMaxCents, mcpOAuthSwitch, CONNECTED_APP_KEEP_DAYS } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsBalanceMaxCents, mcpOAuthSwitch, CONNECTED_APP_KEEP_DAYS, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
 import { sellablePacks } from "./credits.js";
 import { normEmail, validEmail, sameOriginWrite, readCookie, ACCOUNT_PATH, ACCOUNT_COOKIE } from "./credits-account.js";
 import { consentPage, consentErrorPage, OAUTH_CONSENT_PATH } from "./mcp-oauth-page.js";
@@ -47,7 +47,7 @@ import { consentPage, consentErrorPage, OAUTH_CONSENT_PATH } from "./mcp-oauth-p
 export const ACCESS_PREFIX = "a402m_";
 export const REFRESH_PREFIX = "a402r_";
 export const SCOPE = "credits:spend";
-export const AUTH_MCP_PATH = "/mcp/credits";
+export const AUTH_MCP_PATH = CREDITS_CONNECTOR_PATH;
 const OAUTH_COOKIE = "a402_oauth";
 const CHALLENGE_RE = /^[A-Za-z0-9_-]{43}$/;
 const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/;
@@ -290,18 +290,19 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
   // ---- the consent request -------------------------------------------------------
   const csrfOf = (rid, cookie) => mac("csrf", `${rid}|${digest(cookie)}`);
   async function sendCode(rid, email, ip, appName) {
-    // Sent only to an address that holds a balance; the answer is the same either way.
+    // Every address gets a code, as every address gets a sign-in link on the
+    // balance page: a purchase is made signed in, so a first purchase starts
+    // here the same way. The answer is the same for every address.
     if (await over("send-ip", ip, cfg.sendsPerIp()) || await over("send-email", email, cfg.sendsPerEmail()) || await locked(email)) return false;
-    const held = await credits.balancesForEmail(email).catch(() => []);
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
     const set = await change((b) => {
       const r = b.reqs[rid];
       if (!r) return false;
-      r.otp = held.length ? { h: mac("otp", `${rid}|${email}|${code}`), email, exp: t + cfg.emailCodeTtlMs(), tries: 0 } : { h: null, email, exp: t + cfg.emailCodeTtlMs(), tries: 0 };
+      r.otp = { h: mac("otp", `${rid}|${email}|${code}`), email, exp: t + cfg.emailCodeTtlMs(), tries: 0 };
       return true;
     });
-    if (!set || !held.length) return false;
+    if (!set) return false;
     const m = buildCodeEmail({ code, appName });
     const sent = await sendEmail({ to: email, subject: headerText(m.subject), html: m.html, text: m.text }).catch(() => false);
     if (!sent) log("[mcp-oauth] a sign-in code email was not sent");
@@ -445,7 +446,7 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       pageHeaders(res, originOf(r.redirectUri)).status(status).type("html").send(consentPage(baseUrl, {
         step, rid, csrf: csrfOf(rid, cookie), client: { name: client.name, returnHost: hostOf(r.redirectUri) },
         email: r.email || r.otp?.email || "", balances, packs, salesOn: creditsSalesEnabled(), capUsd: cfg.defaultCapUsd(), capMaxUsd: creditsBalanceMaxCents() / 100,
-        message: message || (step === "code" ? "If this email holds a credits balance, a six-digit code is on its way." : ""), error,
+        message: message || (step === "code" ? "A six-digit code is on its way to this email." : ""), error,
       }));
     }
     const expired = (res) => errPage(res, 400, "This sign-in has expired", "Go back to the app and connect again.");
@@ -468,13 +469,13 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       if (!p) return expired(res);
       const session = String(req.query.session || "");
       let message = "";
-      if (!p.r.email && /^cs_[A-Za-z0-9_]{1,200}$/.test(session)) {
+      if (p.r.email && /^cs_[A-Za-z0-9_]{1,200}$/.test(session)) {
         const c = await credits.claim(session).catch(() => ({ status: "error" }));
         const owner = c && (c.status === "minted" || c.status === "claimed") ? await credits.sessionOwner(session).catch(() => null) : null;
-        if (owner) {
-          const email = normEmail(owner.email);
-          await sendCode(rid, email, clientIp(req), p.client.name);
-          message = "Your credits are ready. A six-digit code is on its way to the email you paid with.";
+        if (owner && normEmail(owner.email) === p.r.email) {
+          message = "Your credits are ready. Pick the balance below.";
+        } else if (owner) {
+          message = "That purchase was made with another email. Sign in with it to use the balance.";
         } else {
           message = c?.status === "unpaid" || c?.status === "error" ? "The purchase is not confirmed yet. Reload this page in a moment." : "The purchase did not load a balance. Check your email for the receipt or refund.";
         }
@@ -539,12 +540,16 @@ export function createMcpOAuth({ credits, account = null, store, secret, baseUrl
       }
       if (action === "buy") {
         if (!creditsSalesEnabled()) return render(res, rid, p, { error: "Credits are not on sale right now.", status: 400 });
+        // A purchase is made signed in (the emailed code), bound to that email,
+        // through the same checkout the balance page starts: the purchase
+        // checks, card authentication and limits in credits.createCheckout.
+        if (!r.email) return render(res, rid, p, { error: "Sign in with your email first.", status: 400 });
         if (await over("buy", ip, cfg.sendsPerIp())) return render(res, rid, p, { error: "Too many requests. Try again later.", status: 429 });
         try {
-          const co = await credits.createCheckout(String(req.body?.pack || ""), { returnTo: { success: `${baseUrl}${OAUTH_CONSENT_PATH}/bought?rid=${rid}&session={CHECKOUT_SESSION_ID}`, cancel: `${baseUrl}${OAUTH_CONSENT_PATH}?rid=${rid}` } });
+          const co = await credits.createCheckout(String(req.body?.pack || ""), { email: r.email, ip, returnTo: { success: `${baseUrl}${OAUTH_CONSENT_PATH}/bought?rid=${rid}&session={CHECKOUT_SESSION_ID}`, cancel: `${baseUrl}${OAUTH_CONSENT_PATH}?rid=${rid}` } });
           return noStore(res).redirect(303, co.url);
         } catch (e) {
-          if (e?.buyerSafe) return render(res, rid, p, { error: String(e.message).slice(0, 200), status: 400 });
+          if (e?.buyerSafe) return render(res, rid, p, { error: String(e.message).slice(0, 200), status: e.statusCode === 429 ? 429 : 400 });
           log(`[mcp-oauth] checkout failed: ${String(e?.message || e).slice(0, 120)}`);
           return render(res, rid, p, { error: "Could not start checkout. Try again in a moment.", status: 503 });
         }

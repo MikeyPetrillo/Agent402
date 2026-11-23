@@ -88,8 +88,13 @@ Loaded when a connector or front-door file is read.
   by dynamic registration (https or localhost redirect URIs), authorize with PKCE S256 only, exact redirect_uri,
   state required; the consent page (no framing, CSRF token plus same-origin on every form, its own CSP whose
   form-action names this site, the card checkout and the app's return origin) signs the person in with a code
-  emailed only to an address that holds a balance (single use, tries, lockout), offers buying a pack by card
-  (back to the same sign-in), and binds one key id and a daily cap. Codes single-use and short-lived, access
+  emailed to any address, as the balance page's link is (single use, tries, lockout), offers buying a pack by
+  card only once signed in, through `credits.createCheckout` with the email and client address (the purchase
+  checks, card authentication and limits of `POST /credits/account/buy`; back to the same sign-in, which claims
+  the session and accepts it only for that email), and binds one key id and a daily cap. A key frozen by a
+  dispute or fraud warning (`disabled` with a `FROZEN` reason) is not offered and pays nothing under a grant
+  (`authorizeOn` answers `frozen`). `/start` and `payment.info` name `/mcp/credits` only while both
+  `CREDITS_SALES` and `MCP_OAUTH` are on (`creditsConnectorOn`, `src/credits-sales.js`). Codes single-use and short-lived, access
   tokens short-lived, refresh tokens rotated; a spent code or refresh token presented again revokes the whole
   grant. Tokens and codes are stored as digests in one json-document (`mcp-oauth`). The `/mcp` reader is
   mounted before the connector: a token of ours resolves to a grant (`req.mcpCreditsGrant`) or answers 401

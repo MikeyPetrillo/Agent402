@@ -8,7 +8,9 @@
 // Offline half (src/credits.js, file backend): a grant's hold counts against
 // its daily cap under the key's own lock, a settle moves the hold into the
 // day's spend, a release gives it back, a new UTC day starts from zero, a
-// frozen or disabled key refuses, and a key's own Bearer calls never meet a
+// key frozen by a fraud warning or a dispute (src/credits.js FROZEN: disabled
+// with that reason) refuses a grant's call with reason frozen and is not
+// offered on the consent page, and a key's own Bearer calls never meet a
 // grant's cap.
 // Booted half (the REAL server in paid mode, Stripe answered by a local stub,
 // mail captured by a local sink, every other egress refused):
@@ -18,8 +20,10 @@
 //   - authorize: PKCE S256 only, exact redirect_uri, state required, an
 //     unknown app or return address never redirected to
 //   - the consent page: never framed, CSRF and same-origin on every form,
-//     buy credits by card, email code (single use, tries, lockout), pick a
-//     balance and a cap, approve
+//     email code to any address (single use, tries, lockout), buy credits by
+//     card only once signed in, through the balance page's checkout (bound
+//     to the email, card authentication, purchase checks), pick a balance
+//     and a cap, approve
 //   - token: codes single-use and short-lived (a reused or refused code ends
 //     the grant), refresh rotation with reuse detection (ends the grant)
 //   - /mcp with the token: a paid tool is held and debited from credits, the
@@ -76,16 +80,22 @@ process.on("exit", () => rmSync(TMP, { recursive: true, force: true }));
   clock += 86_400_000;
   ok(await cr.grantSpentToday(K.keyId, "g1") === 0, "a new UTC day starts from zero");
   ok((await cr.authorizeGrant(K.keyId, 0.009, g)).ok, "and takes a full cap again");
-  // A key frozen while a payment that loaded it is reviewed spends nothing.
-  const { readFileSync, writeFileSync, readdirSync } = await import("node:fs");
-  const f = readdirSync(join(TMP, "offline")).find((n) => n.startsWith("k_"));
-  const rec = JSON.parse(readFileSync(join(TMP, "offline", f), "utf8"));
-  rec.frozen = true;
-  writeFileSync(join(TMP, "offline", f), JSON.stringify(rec));
-  const cr2 = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: join(TMP, "offline"), log: () => {}, now: () => clock });
-  const fz = await cr2.authorizeGrant(K.keyId, 0.001, g);
-  ok(!fz.ok && fz.reason === "frozen", "a frozen key refuses a grant's call (reason frozen)");
-  ok((await cr2.authorizeGrant("000000000000", 0.001, g)).reason === "unknown", "a grant naming no key is refused");
+  // A key frozen while a payment that loaded it is reviewed spends nothing:
+  // frozen the way the payment webhooks freeze it (fraudWarning, a dispute).
+  const fw = await cr.fraudWarning("pi_cs_capone");
+  ok(fw && fw.status !== "unknown", "an early fraud warning on the payment that loaded the key freezes it");
+  const fz = await cr.authorizeGrant(K.keyId, 0.001, g);
+  ok(!fz.ok && fz.reason === "frozen", "a key frozen by a fraud warning refuses a grant's call (reason frozen)");
+  ok(!cr.authorize(K.key, 0.001).ok, "and refuses the key's own Bearer call");
+  const held = await cr.balancesForEmail("cap@x.com");
+  const { consentPage } = await import("../src/mcp-oauth-page.js");
+  const consent = consentPage("https://agent402.tools", { step: "choose", rid: "r", csrf: "c", client: { name: "App", returnHost: "claude.ai" }, email: "cap@x.com", balances: held, packs: [], salesOn: false });
+  ok(held.length === 1 && held[0].disabled === true && !consent.includes(`value="${K.keyId}"`) && /No open balance/.test(consent), "the consent page does not offer the frozen balance for a grant");
+  const K2 = await cr.claim("cs_captwo");
+  await cr.disableByPaymentIntent("pi_cs_captwo", "disputed");
+  const dz = await cr.authorizeGrant(K2.keyId, 0.001, g);
+  ok(!dz.ok && dz.reason === "frozen", "a key frozen by a dispute refuses a grant's call (reason frozen)");
+  ok((await cr.authorizeGrant("000000000000", 0.001, g)).reason === "unknown", "a grant naming no key is refused");
   delete process.env.CREDITS_DIR;
 }
 
@@ -101,7 +111,7 @@ const stripeStub = createServer((req, res) => {
     if (req.method === "POST" && u.pathname === "/v1/checkout/sessions") {
       const f = new URLSearchParams(body);
       const id = `cs_test_${randomBytes(6).toString("hex")}`;
-      sessions.set(id, { id, object: "checkout.session", mode: "payment", payment_status: "paid", payment_intent: `pi_${id}`, customer_details: { email: nextEmail }, metadata: { credits_pack: f.get("metadata[credits_pack]") }, success_url: f.get("success_url"), cancel_url: f.get("cancel_url") });
+      sessions.set(id, { id, object: "checkout.session", mode: "payment", payment_status: "paid", payment_intent: `pi_${id}`, customer_email: f.get("customer_email"), customer_details: { email: f.get("customer_email") || nextEmail }, metadata: { credits_pack: f.get("metadata[credits_pack]"), ...(f.get("metadata[credits_account]") ? { credits_account: f.get("metadata[credits_account]") } : {}) }, success_url: f.get("success_url"), cancel_url: f.get("cancel_url"), form: f });
       return send(200, { id, object: "checkout.session", url: `https://checkout.stripe.com/c/${id}` });
     }
     let m = /^\/v1\/checkout\/sessions\/(cs_[A-Za-z0-9_]+)$/.exec(u.pathname);
@@ -248,34 +258,41 @@ try {
   ok((await post(S, { action: "email", email: "x@y.com", csrf: "nope" })).status === 403, "a form without the CSRF token is refused");
   ok((await post(S, { action: "email", email: "x@y.com", csrf }, { "sec-fetch-site": "cross-site", origin: "https://evil.example" })).status === 403, "a cross-site form is refused");
 
-  // An email with no balance: the same answer, no mail.
+  // Any address gets a code (a first purchase is made signed in), with the same answer.
   r = await post(S, { action: "email", email: "nobody@example.com", csrf });
   let html = await r.text();
-  ok(r.status === 200 && /If this email holds a credits balance/.test(html), "an email with no balance gets the same answer");
-  await new Promise((res) => setTimeout(res, 300));
-  ok(!mails.some((m) => m.to === "nobody@example.com"), "and no code is sent to it");
-  // Buy credits by card from the consent page.
+  ok(r.status === 200 && /A six-digit code is on its way/.test(html), "an email with no balance gets the same answer");
+  ok(await waitMail("nobody@example.com", 1), "and a code, so a first purchase can start signed in");
   await post(S, { action: "restart", csrf });
-  nextEmail = "buyer@example.com";
   pg = await page(S);
-  const pack = (/name="pack"><option value="([^"]+)"/.exec(pg.html) || [])[1];
-  r = await post(S, { action: "buy", pack, csrf: csrfIn(pg.html) });
-  const checkout = r.headers.get("location") || "";
-  ok(r.status === 303 && checkout.startsWith("https://checkout.stripe.com/"), `buying a pack goes to the card checkout (${pack})`);
-  const sess = [...sessions.values()].at(-1);
-  ok(sess.success_url.startsWith(`${SITE}/oauth/consent/bought?rid=${S.rid}&session=`), "and returns to this sign-in");
-  r = await get(`${B}/oauth/consent/bought?rid=${S.rid}&session=${sess.id}`, { cookie: S.cookie });
-  html = await r.text();
+  ok(!/name="pack"/.test(pg.html), "no purchase is offered before sign-in");
+  r = await post(S, { action: "buy", pack: "credits-5", csrf: csrfIn(pg.html) });
+  ok(r.status === 400 && /Sign in with your email first/.test(await r.text()) && !sessions.size, "a purchase before sign-in is refused and starts no checkout");
+  // Sign in with no balance yet, then buy by card from the consent page.
+  pg = await page(S);
+  html = await (await post(S, { action: "email", email: "buyer@example.com", csrf: csrfIn(pg.html) })).text();
   const codeMail = await waitMail("buyer@example.com", 1);
   const code1 = (/\b(\d{6})\b/.exec(codeMail?.text || "") || [])[1];
-  ok(r.status === 200 && /Six-digit code/.test(html) && code1, "back from the purchase, a code is mailed to the email that paid");
-  ok(!/a402_[A-Za-z0-9_-]{20}/.test(html) && !/a402_[A-Za-z0-9_-]{20}/.test(codeMail.text), "no key is shown or mailed");
+  ok(/Six-digit code/.test(html) && code1, "a code is mailed to the email");
   const wrong = code1 === "000000" ? "111111" : "000000";
   r = await post(S, { action: "code", code: wrong, csrf: csrfIn(html) });
   ok(r.status === 400 && /did not match/.test(await r.text()), "a wrong code is refused");
   r = await post(S, { action: "code", code: code1, csrf: csrfIn(html) });
   html = await r.text();
-  ok(r.status === 200 && /Allow this app to pay/.test(html) && /Daily spending cap/.test(html) && /value="5\.00"/.test(html), "the right code signs in; a balance and a $5.00 default cap are offered");
+  ok(r.status === 200 && /No open balance/.test(html) && /name="pack"/.test(html), "the right code signs in; with no balance yet, a pack is offered");
+  nextEmail = "someone-else@example.com";
+  const pack = (/name="pack"><option value="([^"]+)"/.exec(html) || [])[1];
+  r = await post(S, { action: "buy", pack, csrf: csrfIn(html) });
+  const checkout = r.headers.get("location") || "";
+  ok(r.status === 303 && checkout.startsWith("https://checkout.stripe.com/"), `buying a pack goes to the card checkout (${pack})`);
+  const sess = [...sessions.values()].at(-1);
+  ok(sess.success_url.startsWith(`${SITE}/oauth/consent/bought?rid=${S.rid}&session=`), "and returns to this sign-in");
+  ok(sess.customer_email === "buyer@example.com" && sess.metadata.credits_account === "buyer@example.com", "the checkout is bound to the signed-in email (the balance page's purchase path)");
+  ok(sess.form.get("payment_method_options[card][request_three_d_secure]") === "any" && sess.form.get("payment_intent_data[metadata][ref_buyer]") && sess.form.get("payment_intent_data[metadata][ref_source]"), "with card authentication requested and the purchase-check tags");
+  r = await get(`${B}/oauth/consent/bought?rid=${S.rid}&session=${sess.id}`, { cookie: S.cookie });
+  html = await r.text();
+  ok(r.status === 200 && /Your credits are ready/.test(html) && /Allow this app to pay/.test(html) && /Daily spending cap/.test(html) && /value="5\.00"/.test(html), "back from the purchase, the new balance and a $5.00 default cap are offered");
+  ok(!/a402_[A-Za-z0-9_-]{20}/.test(html) && !mails.some((m) => /a402_[A-Za-z0-9_-]{20}/.test(m.text || "") && isCode(m)), "no key is shown or put in a code mail");
   const keyId = (/name="keyId" value="([0-9a-f]{12})"/.exec(html) || [])[1];
   r = await post(S, { action: "approve", keyId, capUsd: "0", csrf: csrfIn(html) });
   ok(r.status === 400, "a cap of zero is refused");

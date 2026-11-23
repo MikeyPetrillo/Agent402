@@ -55,7 +55,7 @@ export function consentPage(baseUrl, v) {
         <button class="btn btn-primary" type="submit">Email me a code</button>
       </form>
       ${msg}
-      ${buy("No credits yet? Buy a balance by card, then sign in with the email you paid with.")}`;
+      ${salesOn && packs.length ? `<p class="note">No credits yet? Sign in with your email, then buy a balance by card.</p>` : ""}`;
   } else if (step === "code") {
     inner = `
       <div class="k">Enter your code</div>
@@ -69,7 +69,7 @@ export function consentPage(baseUrl, v) {
       </form>
       <form method="post" action="${OAUTH_CONSENT_PATH}" class="oc-row">${hidden(rid, csrf, "restart")}<button class="btn btn-secondary btn-sm" type="submit">Use another email</button></form>`;
   } else {
-    const usable = balances.filter((b) => !b.disabled && !b.refund && !b.frozen);
+    const usable = balances.filter((b) => !b.disabled && !b.refund);
     inner = `
       <div class="k">Allow this app to pay from your credits</div>
       ${appBlock(client)}
