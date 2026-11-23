@@ -76,6 +76,8 @@ for (const k of ["toolFailures", "upstreamHealth"]) {
 }
 ok(["ok", "low", "unknown", "refused", "demoted"].includes(pubBody?.facilitatorFunds?.status) && Object.keys(pubBody.facilitatorFunds).join(",") === "status,alert" && ["ok", "sustained"].includes(pubBody.facilitatorFunds.alert), `facilitatorFunds publishes its word and its alert word only (${JSON.stringify(pubBody?.facilitatorFunds)})`);
 ok(Array.isArray(opBody?.toolFailures?.tools) && Array.isArray(opBody?.upstreamHealth?.upstreams) && typeof opBody?.facilitatorFunds?.refusals1h === "number", "the operator view of the failure words carries the rows and counts");
+ok(["ok", "low", "empty", "unknown", "off"].includes(pubBody?.solanaFeePayer?.status) && Object.keys(pubBody.solanaFeePayer).join(",") === "status", `solanaFeePayer publishes its word only (${JSON.stringify(pubBody?.solanaFeePayer)})`);
+ok(Array.isArray(opBody?.solanaFeePayer?.feePayers), `the operator view of solanaFeePayer carries the fee payer rows (${JSON.stringify(opBody?.solanaFeePayer)})`);
 ok(["ok", "degraded"].includes(pubBody?.toolAnswers?.status) && Object.keys(pubBody.toolAnswers).join(",") === "status", `toolAnswers publishes its word only (${JSON.stringify(pubBody?.toolAnswers)})`);
 ok(Array.isArray(opBody?.toolAnswers?.tools), "the operator view of toolAnswers carries its rows");
 ok(["ok", "repeating"].includes(pubBody?.containedTurns?.status) && Object.keys(pubBody.containedTurns).join(",") === "status", `containedTurns publishes its word only (${JSON.stringify(pubBody?.containedTurns)})`);

@@ -4765,6 +4765,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // out-of-funds or billing settle refusal inside the hour) / demoted (a
     // facilitator in its settle cool-down). One word each publicly; slugs, upstreams and counts
     // are on /__operator/tool-failures.json.
+    // solanaFeePayer reads ok / low / empty / unknown / off: the SOL runway of
+    // the fee payers of the Solana facilitators that take a share of quotes
+    // (src/facilitator-gas.js); low and empty page through facilitatorFunds=low.
+    // Balances, runways and shares are on the operator view only.
     // toolAnswers reads ok / degraded: one slug's outside 200s were empty
     // or error-shaped (src/answer-shape.js) at or above TOOL_ANSWER_BAD_RATE.
     // buyerRefusals reads ok / refusing: the settle breaker refused a key that
@@ -4883,7 +4887,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // The word publicly; the figures for the operator.
     directUpstreamSpend: (() => { try { return directUpstreamSpendStatus({ full }); } catch { return { status: "unknown" }; } })(),
     directUpstreamBalance: (() => { try { return directUpstreamBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
-    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
+    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, solanaFeePayer: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
