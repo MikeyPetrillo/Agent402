@@ -37,6 +37,8 @@ t node scripts/test-mcp-x402-connector.js
 t node scripts/test-mcp-loopback-cut.js
 # Connector sign-in (OAuth 2.1, MCP_OAUTH=on): a grant's daily cap on the key's own record, frozen and disabled keys refuse; switch off = every route 404 and unauthenticated /mcp byte-identical; PKCE S256 only, exact redirect_uri, state, single-use short-lived codes, refresh rotation with reuse revoking the grant, consent page unframed with CSRF, email code tries and lockout, buy by card, paid calls held and debited from credits, cap and identity-bound and third-party refusals, connected apps list, cap and revoke, limits from the environment (paid boot, Stripe stub, mail sink)
 t node scripts/test-mcp-oauth.js
+# Connector sign-in pages as a person and a screen reader meet them: one h1 per step and on the error page, error lines with role=alert tied to their field and in the error color after the cascade, a lockout that disables the code form and offers a new code, Allow before Deny, the balance page linked, no key named (paid boot, Stripe stub, mail sink)
+t node scripts/test-mcp-oauth-pages.js
 
 # @step 2: Offline suites (21 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
