@@ -127,6 +127,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   not subscribed never arrives): `checkout.session.completed`, `payment_intent.payment_failed`,
   `radar.early_fraud_warning.created`, `charge.dispute.created`, `charge.dispute.closed`,
   `charge.refunded`, `refund.updated` and the subscription and invoice events the monitors read.
+- **Before listing OUSD** (`ousd` in `TEMPO_CURRENCY`): make one real OUSD payment through Tempo's relay
+  (testnet 42431, then mainnet) and fund the Tempo refund wallet with OUSD; the suites stub the relay. The
+  Visa CLI sentence on /what-is-mpp and /how-to-pay stays gated on OUSD being listed (`visaCliMppSentence`).
 - **Rollback notes:** before rolling back past this batch, rewrite `TEMPO_CURRENCY` names as
   addresses (an earlier build reads only addresses: write the OUSD address, or remove `ousd`), and read
   `fraudReviews` on `/__operator/credits.json` (an earlier build has no fraud-review state: settle owed
