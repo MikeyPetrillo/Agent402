@@ -5726,7 +5726,21 @@ if (_credits) {
   });
   app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return operatorNotFound(req, res);
-    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund(), refundRequestsOwed: await _credits.refundRequestsOwed(), fraudReviews: await _credits.fraudReviews() });
+    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund(), refundRequestsOwed: await _credits.refundRequestsOwed(), fraudReviews: await _credits.fraudReviews(), disputesToReview: await _credits.disputesToReview() });
+  });
+  // After reading a dispute's outcome in Stripe (one closed with a status
+  // neither won nor lost, listed as disputesToReview): records it, lost takes
+  // that payment off the balance, and clears it from creditsRefunds.
+  // Body { keyId, paymentIntent, outcome: "won" | "lost" }.
+  app.post("/__operator/credits/dispute-reviewed", express.json(), async (req, res) => {
+    if (!operatorAuthed(req)) return operatorNotFound(req, res);
+    const keyId = String(req.body?.keyId || ""), pi = String(req.body?.paymentIntent || ""), outcome = String(req.body?.outcome || "");
+    if (!/^[0-9a-f]{12}$/.test(keyId) || !/^pi_[A-Za-z0-9_]+$/.test(pi) || (outcome !== "won" && outcome !== "lost")) return res.status(400).json({ error: "keyId (12-character key id), paymentIntent (pi_...) and outcome (won or lost) are required" });
+    try {
+      const done = await _credits.resolveDispute(keyId, pi, outcome);
+      if (!done) return res.status(404).json({ error: "no dispute on that key and payment is waiting for review" });
+      res.json({ ok: true, keyId, paymentIntent: pi, outcome });
+    } catch (e) { res.status(503).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
   });
   // After refunding a refused purchase by hand in Stripe: clears it from
   // creditsRefunds. Body { session: "cs_..." }.

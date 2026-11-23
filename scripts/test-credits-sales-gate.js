@@ -157,7 +157,8 @@ try {
     const res = await fetch(`${B}/terms`);
     const html = await res.text();
     const clause = (html.match(/<li><b>Prepaid credits:<\/b>([\s\S]*?)<\/li>/) || [])[1] || "";
-    const access = (html.match(/<li>No account\.([\s\S]*?)<\/li>/) || [])[1] || "";
+    // The access line, found by its stable sentence (its opening words follow the switch).
+    const access = (html.match(/<li>((?:(?!<li>)[\s\S])*?Access is by paying per call[\s\S]*?)<\/li>/) || [])[1] || "";
     return { status: res.status, clause, access };
   };
   const OFFERS_CREDITS = /\b(?:are|is) sold\b|\bbuy\b|\bpurchase\b|href="\/credits"/i;
@@ -182,7 +183,19 @@ try {
   // --- explicitly on: selling works again, so this is a switch and not a deletion
   // The daily purchase limit is wide here so every pack is on offer (a pack
   // above it is not; scripts/test-credits-terms.js).
-  ok(await boot({ CREDITS_SALES: "on", CREDITS_DAILY_MAX_USD: "1000" }), "server booted with CREDITS_SALES=on");
+  const OP = `op-${process.pid}-sales-gate-token`;
+  ok(await boot({ CREDITS_SALES: "on", CREDITS_DAILY_MAX_USD: "1000", AGENT402_OPERATOR_TOKEN: OP }), "server booted with CREDITS_SALES=on");
+  // The operator's dispute review: listed on the credits view, and recorded
+  // only for a dispute that waits on a person.
+  {
+    const opH = { "content-type": "application/json", "x-operator-token": OP };
+    const view = await (await fetch(`${B}/__operator/credits.json`, { headers: opH })).json().catch(() => ({}));
+    ok(Array.isArray(view.disputesToReview), "/__operator/credits.json lists the disputes waiting on a person");
+    const post = (body) => fetch(`${B}/__operator/credits/dispute-reviewed`, { method: "POST", headers: opH, body: JSON.stringify(body) });
+    ok((await post({ keyId: "0123456789ab", paymentIntent: "pi_x", outcome: "maybe" })).status === 400, "a review outcome other than won or lost is refused");
+    ok((await post({ keyId: "0123456789ab", paymentIntent: "pi_none", outcome: "lost" })).status === 404, "a review of a dispute that waits on nobody records nothing");
+    ok((await fetch(`${B}/__operator/credits/dispute-reviewed`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status === 404, "without the operator token the route is not there");
+  }
   const on = await fetch(`${B}/api/credits/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "credits-20" }) });
   const onBody = await on.json().catch(() => ({}));
   ok(on.status === 401 && /\/credits\/account$/.test(String(onBody.signIn)) && /\/credits\/account\/buy$/.test(String(onBody.buy?.url)), `selling is reachable when explicitly enabled, signed in: the API checkout points at the balance page (got ${on.status})`);

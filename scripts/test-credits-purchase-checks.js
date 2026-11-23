@@ -17,7 +17,7 @@ import { EventEmitter } from "node:events";
 
 delete process.env.CREDITS_SALES;
 delete process.env.CREDITS_EFW_AUTO_REFUND;
-const { createCredits, CREDIT_PACKS, sellablePacks, KEY_RE, KEY_PREFIX, KEY_SCAN_RE, chargeFlagged } = await import("../src/credits.js");
+const { createCredits, CREDIT_PACKS, sellablePacks, KEY_RE, KEY_PREFIX, KEY_SCAN_RE, chargeFlagged, hashKey } = await import("../src/credits.js");
 const { PURCHASE_REFUSED, creditsDailyMaxCents } = await import("../src/credits-sales.js");
 const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");
 const { urlCarriesCreditsKey } = await import("../src/credits-key-url.js");
@@ -388,6 +388,153 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   const hBal = cr.balance(H.key).balanceUsd, hu = cr.authorize(H.key, 0.001);
   ok(hu.ok === true && hBal === 16, `webhook: a dispute lost for part of a payment takes that part off and keeps the rest usable (${hBal})`);
   if (hu.ok) cr.release(hu.hash, hu.heldMicro);
+  delete process.env.STRIPE_WEBHOOK_SECRET;
+}
+
+// ---- two disputes on one key, a close before its create, an outcome not recognized ----------------
+// Dispute state is kept per payment: a second dispute never overwrites the
+// first, a lost dispute takes only its own payment, a won one restores only
+// what it held, and the key thaws only when no dispute on it is open. A store
+// of its own, so the owed word reads only these keys.
+{
+  const cr = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: join(DIR, "two-disputes"), log: () => {}, now: () => clock, tagSecret: Buffer.from("test-tag-secret") });
+  const reasonOf = async (keyId) => (await cr.status()).rows.find((x) => x.keyId === keyId)?.disabledReason;
+  const P = CREDIT_PACKS["credits-10"].cents;
+  const usd = P / 100;
+  // A key loaded by two payments, both disputed.
+  const twoPaid = async (tag) => {
+    paid(`cs_2${tag}a`, "credits-10", `pi_2${tag}a`, `two${tag}@x.com`);
+    const K = await cr.claim(`cs_2${tag}a`);
+    paid(`cs_2${tag}b`, "credits-10", `pi_2${tag}b`, `two${tag}@x.com`, { meta: { credits_topup: K.keyId, credits_account: `two${tag}@x.com` } });
+    ok((await cr.claim(`cs_2${tag}b`)).status === "topped_up", `guard: key ${tag} holds two payments`);
+    cr.disableByPaymentIntent(`pi_2${tag}a`, "disputed");
+    cr.disableByPaymentIntent(`pi_2${tag}b`, "disputed");
+    ok(cr.authorize(K.key, 0.001).reason === "frozen", `guard: both disputes froze key ${tag}`);
+    return K;
+  };
+  const owed = async (K) => (await cr.refundRequestsOwed()).includes(K.keyId);
+  // lost, then lost: both payments leave the balance; nothing is left, the key stays off.
+  const LL = await twoPaid("ll");
+  await cr.disputeClosed("pi_2lla", { won: false, status: "lost" });
+  ok(cr.balance(LL.key).balanceUsd === usd && cr.authorize(LL.key, 0.001).reason === "frozen", `lost+lost: the first loss takes its payment and the key stays frozen for the dispute still open (${cr.balance(LL.key).balanceUsd})`);
+  await cr.disputeClosed("pi_2llb", { won: false, status: "lost" });
+  ok(cr.balance(LL.key).balanceUsd === 0 && cr.authorize(LL.key, 0.001).ok === false && await reasonOf(LL.keyId) === "disputed" && !(await owed(LL)), `lost+lost: the second loss takes its own payment; nothing is left, the key stays disabled and nothing is owed (${cr.balance(LL.key).balanceUsd})`);
+  // lost, then won: only the lost payment leaves; the won one's share is usable again.
+  const LW = await twoPaid("lw");
+  await cr.disputeClosed("pi_2lwa", { won: false, status: "lost" });
+  ok(cr.authorize(LW.key, 0.001).reason === "frozen", "lost+won: the key stays frozen while the second dispute is open");
+  await cr.disputeClosed("pi_2lwb", { won: true, status: "won" });
+  const lwBal = cr.balance(LW.key).balanceUsd, lwUse = cr.authorize(LW.key, 0.001);
+  ok(lwUse.ok === true && lwBal === usd && await reasonOf(LW.keyId) == null && !(await owed(LW)), `lost+won: the win restores only what its dispute held (${lwBal})`);
+  if (lwUse.ok) cr.release(lwUse.hash, lwUse.heldMicro);
+  // won, then lost: the win thaws nothing while the other dispute is open; the loss takes only its payment.
+  const WL = await twoPaid("wl");
+  await cr.disputeClosed("pi_2wla", { won: true, status: "won" });
+  ok(cr.authorize(WL.key, 0.001).reason === "frozen" && cr.balance(WL.key).balanceUsd === 2 * usd, "won+lost: a win on one payment keeps the key frozen while the other dispute is open");
+  await cr.disputeClosed("pi_2wlb", { won: false, status: "lost" });
+  const wlBal = cr.balance(WL.key).balanceUsd, wlUse = cr.authorize(WL.key, 0.001);
+  ok(wlUse.ok === true && wlBal === usd && !(await owed(WL)), `won+lost: the loss takes only its payment and the key thaws (${wlBal})`);
+  if (wlUse.ok) cr.release(wlUse.hash, wlUse.heldMicro);
+  // The later dispute closes first: the earlier one, still open, keeps the key frozen.
+  const RV = await twoPaid("rv");
+  await cr.disputeClosed("pi_2rvb", { won: true, status: "won" });
+  ok(cr.authorize(RV.key, 0.001).reason === "frozen" && cr.balance(RV.key).balanceUsd === 2 * usd, "the second dispute won first keeps the key frozen while the first is open");
+  await cr.disputeClosed("pi_2rva", { won: false, status: "lost" });
+  const rvBal = cr.balance(RV.key).balanceUsd, rvUse = cr.authorize(RV.key, 0.001);
+  ok(rvUse.ok === true && rvBal === usd, `...and the first one lost then takes only its payment and the key thaws (${rvBal})`);
+  if (rvUse.ok) cr.release(rvUse.hash, rvUse.heldMicro);
+  // A fraud review held while both disputes ran is owed only once neither is open.
+  process.env.CREDITS_EFW_AUTO_REFUND = "off";
+  const FR = await twoPaid("fr");
+  await cr.fraudWarning("pi_2fra");
+  ok((await cr.approveFraudRefund(FR.keyId)).status === "disputed" && (await cr.fraudReviews()).find((f) => f.keyId === FR.keyId)?.state === "disputed", "guard: an approval while the disputes run sends nothing and holds the review");
+  await cr.disputeClosed("pi_2fra", { won: true, status: "won" });
+  ok(!(await owed(FR)) && cr.authorize(FR.key, 0.001).reason === "frozen", "a review is not listed as owed while another dispute on the key is open");
+  await cr.disputeClosed("pi_2frb", { won: false, status: "lost" });
+  ok(await owed(FR) && await reasonOf(FR.keyId) === "fraud-warning" && cr.balance(FR.key).balanceUsd === usd, `...and is owed once no dispute is open, for the share left (${cr.balance(FR.key).balanceUsd})`);
+  const frAp = await cr.approveFraudRefund(FR.keyId);
+  ok(frAp.status === "refunded" && charges.pi_2fra.amount_refunded === P && charges.pi_2frb.amount_refunded === 0 && !(await owed(FR)), "...and the approval refunds it to the payment not lost");
+  delete process.env.CREDITS_EFW_AUTO_REFUND;
+  ok((await cr.refundsOwedWord(0)) === "ok", "guard: nothing is owed before the webhook cases");
+
+  // A record an older build wrote: its single dispute slot, or a dispute
+  // freeze that names no payment, is read as one dispute and settled by a close.
+  for (const [tag, legacy] of [["og", () => ({ disputedPaymentIntent: "pi_2oga", disputeAt: new Date(clock).toISOString() })], ["on", () => ({})]]) {
+    const OG = await twoPaid(tag);
+    const file = join(DIR, "two-disputes", `k_${hashKey(OG.key)}.json`);
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    delete rec.disputes;
+    writeFileSync(file, JSON.stringify({ ...rec, ...legacy() }));
+    const fresh = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: join(DIR, "two-disputes"), log: () => {}, now: () => clock, tagSecret: Buffer.from("test-tag-secret") });
+    ok(fresh.authorize(OG.key, 0.001).reason === "frozen", `guard: the older record (${tag}) is frozen`);
+    if (tag === "og") {
+      await fresh.disputeClosed("pi_2ogb", { won: true, status: "won" });
+      ok(fresh.authorize(OG.key, 0.001).reason === "frozen", "an older record's slot names its payment: a close on another payment thaws nothing");
+    }
+    await fresh.disputeClosed(`pi_2${tag}a`, { won: true, status: "won" });
+    const ogUse = fresh.authorize(OG.key, 0.001);
+    ok(ogUse.ok === true, `an older record's dispute (${tag === "og" ? "its single slot" : "a freeze naming no payment"}) closed in our favor thaws the key`);
+    if (ogUse.ok) fresh.release(ogUse.hash, ogUse.heldMicro);
+  }
+
+  // Through the webhook, wired as the server wires it, with each dispute's id.
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
+  const wh = createStripeSubscriptions({ stripe: { ...stripe, webhooks: { constructEvent: (body, sig) => { if (sig !== "goodsig") throw new Error("bad signature"); return JSON.parse(body.toString()); } } }, baseUrl: "https://agent402.tools", storePath: join(DIR, "subs-two.json"),
+    onChargeReversed: (pi, type, reversal) => cr.disableByPaymentIntent(pi, type === "charge.dispute.created" ? "disputed" : "refunded", reversal), onDisputeClosed: (pi, o) => cr.disputeClosed(pi, o) });
+  const ev = (id, type, object) => Buffer.from(JSON.stringify({ id, type, data: { object } }));
+  const pair = async (tag) => {
+    paid(`cs_e${tag}a`, "credits-10", `pi_e${tag}a`, `e${tag}@x.com`);
+    const K = await cr.claim(`cs_e${tag}a`);
+    paid(`cs_e${tag}b`, "credits-10", `pi_e${tag}b`, `e${tag}@x.com`, { meta: { credits_topup: K.keyId, credits_account: `e${tag}@x.com` } });
+    await cr.claim(`cs_e${tag}b`);
+    return K;
+  };
+  // The close arrives before its create: the outcome is applied and the late create freezes nothing.
+  const CL = await pair("cl");
+  await wh.handleWebhook(ev("evt_cl_x", "charge.dispute.closed", { id: "dp_cl", charge: "ch_cl", payment_intent: "pi_ecla", status: "lost", amount: P }), "goodsig");
+  const clBal0 = cr.balance(CL.key).balanceUsd, clUse0 = cr.authorize(CL.key, 0.001);
+  ok(clBal0 === usd && clUse0.ok === true, `a loss that arrives before its dispute's create takes its payment (${clBal0})`);
+  if (clUse0.ok) cr.release(clUse0.hash, clUse0.heldMicro);
+  await wh.handleWebhook(ev("evt_cl_c", "charge.dispute.created", { id: "dp_cl", charge: "ch_cl", payment_intent: "pi_ecla", amount: P }), "goodsig");
+  const clBal = cr.balance(CL.key).balanceUsd, clUse = cr.authorize(CL.key, 0.001);
+  ok(clUse.ok === true && clBal === usd && !(await owed(CL)) && (await cr.refundsOwedWord(0)) === "ok", "...and its create, arriving after, leaves the key usable and nothing owed");
+  if (clUse.ok) cr.release(clUse.hash, clUse.heldMicro);
+  const CW = await pair("cw");
+  await wh.handleWebhook(ev("evt_cw_x", "charge.dispute.closed", { id: "dp_cw", charge: "ch_cw", payment_intent: "pi_ecwb", status: "won" }), "goodsig");
+  await wh.handleWebhook(ev("evt_cw_c", "charge.dispute.created", { id: "dp_cw", charge: "ch_cw", payment_intent: "pi_ecwb", amount: P }), "goodsig");
+  const cwBal = cr.balance(CW.key).balanceUsd, cwUse = cr.authorize(CW.key, 0.001);
+  ok(cwUse.ok === true && cwBal === 2 * usd, "a win that arrives before its create leaves the key usable when the create comes");
+  if (cwUse.ok) cr.release(cwUse.hash, cwUse.heldMicro);
+  // A closed status that is neither won nor lost: the hold lifts, the dispute is listed for a person, and refunds wait on it.
+  const UN = await pair("un");
+  await wh.handleWebhook(ev("evt_un_c", "charge.dispute.created", { id: "dp_un", charge: "ch_un", payment_intent: "pi_eunb", amount: P }), "goodsig");
+  ok(cr.authorize(UN.key, 0.001).reason === "frozen", "guard: the dispute froze the key");
+  await wh.handleWebhook(ev("evt_un_x", "charge.dispute.closed", { id: "dp_un", charge: "ch_un", payment_intent: "pi_eunb", status: "status-not-known" }), "goodsig");
+  const unBal = cr.balance(UN.key).balanceUsd, unUse = cr.authorize(UN.key, 0.001);
+  ok(unUse.ok === true && unBal === 2 * usd, "a dispute closed with a status not recognized lifts the hold and takes nothing");
+  if (unUse.ok) cr.release(unUse.hash, unUse.heldMicro);
+  const toReview = await cr.disputesToReview();
+  ok(toReview.some((d) => d.keyId === UN.keyId && d.paymentIntent === "pi_eunb") && (await cr.refundsOwedWord(0)) === "owed", "...is listed for review and the status word reads owed");
+  const unRefunds = refunds.length;
+  ok((await cr.requestRefund(UN.key)).status === "disputed" && refunds.length === unRefunds, "...and a refund on request waits on it (nothing sent)");
+  ok((await cr.resolveDispute(UN.keyId, "pi_eunb", "lost")) === UN.keyId && cr.balance(UN.key).balanceUsd === usd, `a person's resolution as lost takes that payment (${cr.balance(UN.key).balanceUsd})`);
+  ok(!(await cr.disputesToReview()).some((d) => d.keyId === UN.keyId) && (await cr.refundsOwedWord(0)) === "ok", "...and the word clears");
+  ok((await cr.resolveDispute(UN.keyId, "pi_eunb", "lost")) === null && cr.balance(UN.key).balanceUsd === usd, "a second resolution takes nothing more");
+  // The same status, closed before its create.
+  const UE = await pair("ue");
+  await wh.handleWebhook(ev("evt_ue_x", "charge.dispute.closed", { id: "dp_ue", charge: "ch_ue", payment_intent: "pi_euea", status: "status-not-known" }), "goodsig");
+  await wh.handleWebhook(ev("evt_ue_c", "charge.dispute.created", { id: "dp_ue", charge: "ch_ue", payment_intent: "pi_euea", amount: P }), "goodsig");
+  const ueUse = cr.authorize(UE.key, 0.001);
+  ok(ueUse.ok === true && (await cr.disputesToReview()).some((d) => d.keyId === UE.keyId) && (await cr.refundsOwedWord(0)) === "owed", "an unrecognized close before its create freezes nothing and is listed for review");
+  if (ueUse.ok) cr.release(ueUse.hash, ueUse.heldMicro);
+  ok((await cr.resolveDispute(UE.keyId, "pi_euea", "won")) === UE.keyId && cr.balance(UE.key).balanceUsd === 2 * usd && (await cr.refundsOwedWord(0)) === "ok", "a resolution as won takes nothing and clears the word");
+  // prevented: the network stopped the dispute; the hold lifts with nothing to review.
+  const PV = await pair("pv");
+  await wh.handleWebhook(ev("evt_pv_c", "charge.dispute.created", { id: "dp_pv", charge: "ch_pv", payment_intent: "pi_epva", amount: P }), "goodsig");
+  await wh.handleWebhook(ev("evt_pv_x", "charge.dispute.closed", { id: "dp_pv", charge: "ch_pv", payment_intent: "pi_epva", status: "prevented" }), "goodsig");
+  const pvUse = cr.authorize(PV.key, 0.001);
+  ok(pvUse.ok === true && !(await cr.disputesToReview()).some((d) => d.keyId === PV.keyId), "a prevented dispute lifts the hold with nothing to review");
+  if (pvUse.ok) cr.release(pvUse.hash, pvUse.heldMicro);
   delete process.env.STRIPE_WEBHOOK_SECRET;
 }
 

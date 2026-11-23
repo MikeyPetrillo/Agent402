@@ -642,7 +642,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
           const pi = idOf(obj?.payment_intent);
           const reversal = event.type === "charge.refunded"
             ? { amountRefundedCents: Number.isFinite(Number(obj?.amount_refunded)) ? Number(obj.amount_refunded) : null, fullyRefunded: obj?.refunded === true }
-            : { amountRefundedCents: null, fullyRefunded: true };
+            : { amountRefundedCents: null, fullyRefunded: true, disputeId: typeof obj?.id === "string" ? obj.id : null };
           if (pi && typeof onChargeReversed === "function") { try { await onChargeReversed(pi, event.type, reversal); } catch { /* never fail the webhook on a hook */ } }
           // A disputed subscription payment stops its fulfillment: the record
           // is marked (its status still follows Stripe) and listActive drops it.
@@ -698,13 +698,15 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
           // (warning_closed): the money stayed, so the hold on fulfillment ends
           // and the credits key the dispute disabled is enabled again (the
           // hook). Lost: the record stays disputed and the outcome is noted;
-          // the hook takes the disputed amount off a credits balance.
+          // the hook takes the disputed amount off a credits balance. The
+          // credits hook settles every other status too (src/credits.js
+          // disputeClosed), and a close that arrives before its create.
           const obj = event.data.object;
           const pi = idOf(obj?.payment_intent);
           const outcome = typeof obj?.status === "string" ? obj.status.slice(0, 40) : "unknown";
           const won = outcome === "won" || outcome === "warning_closed";
           const amountCents = Number.isFinite(Number(obj?.amount)) ? Number(obj.amount) : null;
-          if (pi && typeof onDisputeClosed === "function") { try { await onDisputeClosed(pi, { won, status: outcome, amountCents }); } catch { /* never fail the webhook on a hook */ } }
+          if (pi && typeof onDisputeClosed === "function") { try { await onDisputeClosed(pi, { won, status: outcome, amountCents, disputeId: typeof obj?.id === "string" ? obj.id : null }); } catch { /* never fail the webhook on a hook */ } }
           const ids = { pi, charge: idOf(obj?.charge), invoiceId: idOf(obj?.invoice) };
           await reload().catch(() => 0);
           for (const [subId, rec] of [...store]) {
