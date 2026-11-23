@@ -577,6 +577,7 @@
     "onchain-sql": "src/tools/cdp-kit.js",
     "onchain-sql-range": "src/tools/cdp-kit.js",
     "onchain-sql-schema": "src/tools/cdp-kit.js",
+    "onchain-sql-week": "src/tools/cdp-kit.js",
     "onramp-link": "src/tools/cdp-kit.js",
     "openapi-diff": "src/tools/api-kit.js",
     "openapi-extract": "src/tools/api-kit.js",
