@@ -314,6 +314,18 @@
     {
       "q": "check if a domain name is registered",
       "top": "domain-availability"
+    },
+    {
+      "q": "query a month of solana instructions",
+      "top": [
+        "onchain-sql-range"
+      ]
+    },
+    {
+      "q": "backfill solana instructions with sql",
+      "top": [
+        "onchain-sql-range"
+      ]
     }
   ],
   "gaps": [
