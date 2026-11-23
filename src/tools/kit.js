@@ -756,7 +756,7 @@ const dataTools = [
     slug: "csv-to-json", aliases: ["csv-parse", "csv-column"],
     category: "conversion",
     price: "$0.002",
-    description: "Parse CSV (quoted fields supported) into a JSON array of objects, using the first row as headers (header=false for arrays). Comma by default, or delimiter: semicolon, tab, pipe, or any single character.",
+    description: "Parse CSV (quoted fields supported) into a JSON array of objects, using the first row as headers (header=false for arrays). Comma by default, or delimiter: semicolon, tab, pipe, or any single character other than a quote or a line break.",
     tags: ["csv", "json", "convert", "parse"],
     discovery: {
       bodyType: "json",
@@ -764,7 +764,7 @@ const dataTools = [
       inputSchema: {
         properties: {
           csv: { type: "string", description: "CSV text (max 100KB)" },
-          delimiter: { type: "string", description: "comma (default), semicolon, tab, pipe, or any single character" },
+          delimiter: { type: "string", description: "comma (default), semicolon, tab, pipe, or any single character other than a quote or a line break" },
           header: { type: "boolean", description: "First row is headers (default true)" },
         },
         required: ["csv"],
@@ -1339,11 +1339,11 @@ const TIME_CONVERT_MAX_ZONES = 50;
 function zoneList(raw) {
   if (raw === undefined || raw === null || raw === "") return null;
   const list = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",") : null;
-  if (!list || list.length > TIME_CONVERT_MAX_ZONES) throw bad(`"zones" must be a list of at most ${TIME_CONVERT_MAX_ZONES} IANA timezones`);
+  if (!list || list.length > TIME_CONVERT_MAX_ZONES) throw bad(`"zones" must be a list of at most ${TIME_CONVERT_MAX_ZONES} IANA time zones`);
   const zones = [];
   for (const z of list) {
-    if (typeof z !== "string" || !z.trim() || z.length > 64) throw bad('"zones" must hold IANA timezone names, like Asia/Tokyo');
-    try { new Intl.DateTimeFormat("en-US", { timeZone: z.trim() }); } catch { throw bad(`"zones" holds an unknown timezone: ${z.trim()}`); }
+    if (typeof z !== "string" || !z.trim() || z.length > 64) throw bad('"zones" must hold IANA time zone names, like Asia/Tokyo');
+    try { new Intl.DateTimeFormat("en-US", { timeZone: z.trim() }); } catch { throw bad(`"zones" holds an unknown time zone: ${z.trim()}`); }
     zones.push(z.trim());
   }
   return zones;
@@ -1417,7 +1417,7 @@ const timeTools = [
     slug: "time-convert",
     category: "time",
     price: "$0.001",
-    description: "Convert between epoch (s or ms), ISO 8601, and any IANA timezone. Give a value (epoch seconds or milliseconds, an ISO string, or 'now'), get every representation back: utc, epochSeconds, epochMillis and, with tz, timezone, localIso (ISO 8601 with the zone's offset, e.g. 2026-06-11T19:00:00+09:00), utcOffset and local (a display string). zones takes a list of up to 50 IANA timezones and returns the same instant in each, in one answer. A bare number under 1e12 is read as seconds, otherwise as milliseconds.",
+    description: "Convert between epoch (s or ms), ISO 8601, and any IANA time zone. Give a value (epoch seconds or milliseconds, an ISO string, or 'now'), get every representation back: utc, epochSeconds, epochMillis and, with tz, timezone, localIso (ISO 8601 with the zone's offset, e.g. 2026-06-11T19:00:00+09:00), utcOffset and local (a display string). zones takes a list of up to 50 IANA time zones and returns the same instant in each, in one answer. A bare number under 1e12 is read as seconds, otherwise as milliseconds.",
     tags: ["time", "epoch", "timezone", "convert", "iso8601"],
     discovery: {
       bodyType: "json",
@@ -1426,7 +1426,7 @@ const timeTools = [
         properties: {
           value: { description: "Epoch seconds/ms, ISO string, or 'now'" },
           tz: { type: "string", description: "IANA timezone to render in (optional)" },
-          zones: { type: "array", items: { type: "string" }, description: `Up to ${TIME_CONVERT_MAX_ZONES} IANA timezones to render the same instant in (optional); a comma-separated string also works` },
+          zones: { type: "array", items: { type: "string" }, description: `Up to ${TIME_CONVERT_MAX_ZONES} IANA time zones to render the same instant in (optional); a comma-separated string also works` },
         },
         required: ["value"],
       },

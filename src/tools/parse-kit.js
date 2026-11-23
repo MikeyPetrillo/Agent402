@@ -359,11 +359,26 @@ const STAMP_RE = new RegExp([
 ].join("|"), "g");
 const EPOCH_MIN_MS = Date.UTC(2000, 0, 1), EPOCH_MAX_MS = Date.UTC(2100, 0, 1);
 
+// One formatter per zone, kept (building one costs far more than using it):
+// a log in a non-UTC zone converts every stamp twice. Bounded: past the cap
+// the oldest zone is dropped.
+const ZONE_FORMATTERS = new Map();
+const ZONE_FORMATTERS_MAX = 64;
+function zoneFormatter(tz) {
+  let f = ZONE_FORMATTERS.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    if (ZONE_FORMATTERS.size >= ZONE_FORMATTERS_MAX) ZONE_FORMATTERS.delete(ZONE_FORMATTERS.keys().next().value);
+    ZONE_FORMATTERS.set(tz, f);
+  }
+  return f;
+}
 function zoneOffsetMinutes(utcMs, tz) {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
-    timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-  }).formatToParts(new Date(utcMs)).map((p) => [p.type, p.value]));
+  const parts = {};
+  for (const p of zoneFormatter(tz).formatToParts(new Date(utcMs))) parts[p.type] = p.value;
   const wall = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute, +parts.second);
   return Math.round((wall - Math.floor(utcMs / 1000) * 1000) / 60000);
 }
@@ -556,6 +571,12 @@ function csvAggregate(input) {
 // ============================================================================
 const LINT_MAX = 100_000;
 const DUP_MAX = 100;
+// A duplicate's key is listed up to DUP_KEY_MAX characters (keyTruncated and
+// keyLength say when it was cut); a path names each key up to PATH_KEY_MAX
+// characters and stops at PATH_MAX (pathTruncated).
+const DUP_KEY_MAX = 200;
+const PATH_KEY_MAX = 64;
+const PATH_MAX = 300;
 
 class LintError extends Error {
   constructor(message, offset) { super(message); this.offset = offset; }
@@ -623,13 +644,35 @@ function lintJson(text) {
   const stack = [];
   const dups = [];
   let dupCount = 0, maxDepth = 0, rootType = null;
-  const pathOf = () => "$" + stack.map((f) => (f.type === "array" ? `[${f.index}]` : f.key === undefined ? "" : /^[A-Za-z_$][\w$]*$/.test(f.key) ? `.${f.key}` : `[${JSON.stringify(f.key)}]`)).join("");
+  // A path names each key up to PATH_KEY_MAX characters and is cut at
+  // PATH_MAX, so a long key cannot repeat into every duplicate's path.
+  const keyPart = (k) => {
+    const cut = k.length > PATH_KEY_MAX ? k.slice(0, PATH_KEY_MAX) : k;
+    if (cut === k && /^[A-Za-z_$][\w$]*$/.test(k)) return `.${k}`;
+    return `[${JSON.stringify(cut)}${cut === k ? "" : "..."}]`;
+  };
+  const pathInfo = () => {
+    let p = "$", cut = false;
+    for (const f of stack) {
+      if (f.type === "object" && f.key !== undefined && f.key.length > PATH_KEY_MAX) cut = true;
+      p += f.type === "array" ? `[${f.index}]` : f.key === undefined ? "" : keyPart(f.key);
+      if (p.length > PATH_MAX) { p = p.slice(0, PATH_MAX - 3) + "..."; cut = true; break; }
+    }
+    return { path: p, cut };
+  };
+  const pathOf = () => pathInfo().path;
   // An object key, its duplicate check and the colon after it.
   const readKey = (f) => {
     const at = i;
     const k = readString();
     f.key = k;
-    if (f.keys.has(k)) { dupCount++; if (dups.length < DUP_MAX) dups.push({ key: k, offset: at, path: pathOf() }); }
+    if (f.keys.has(k)) {
+      dupCount++;
+      if (dups.length < DUP_MAX) {
+        const { path, cut } = pathInfo();
+        dups.push({ key: k.length > DUP_KEY_MAX ? k.slice(0, DUP_KEY_MAX) : k, ...(k.length > DUP_KEY_MAX ? { keyTruncated: true, keyLength: k.length } : {}), offset: at, path, ...(cut ? { pathTruncated: true } : {}) });
+      }
+    }
     f.keys.add(k);
     ws();
     if (text[i] !== ":") unexpected('":" after the object key');
@@ -730,7 +773,7 @@ function jsonLint(text) {
   const offsets = [...r.dups.map((d) => d.offset)];
   if (!r.valid) offsets.push(r.error.offset);
   const pos = positionsOf(text, offsets);
-  const duplicateKeys = r.dups.map((d, k) => ({ key: d.key, path: d.path, line: pos[k].line, column: pos[k].column, offset: d.offset }));
+  const duplicateKeys = r.dups.map((d, k) => ({ key: d.key, ...(d.keyTruncated ? { keyTruncated: true, keyLength: d.keyLength } : {}), path: d.path, ...(d.pathTruncated ? { pathTruncated: true } : {}), line: pos[k].line, column: pos[k].column, offset: d.offset }));
   const dupFields = { duplicateKeyCount: r.dupCount, duplicateKeys, duplicateKeysTruncated: r.dupCount > duplicateKeys.length };
   if (r.valid) return { valid: true, type: r.type, maxDepth: r.maxDepth, chars: text.length, ...dupFields };
   const p = pos[pos.length - 1];
@@ -773,7 +816,7 @@ export const PARSE_TOOLS = [
     category: "encoding",
     price: "$0.001",
     description:
-      "Find out how a string is encoded. Tries hex, base64, base64url, base32, base58, URL (percent) encoding and quoted-printable, and inflates gzip or zlib data found inside (a decoded size cap guards against compression bombs). Each plausible decoding comes back ranked by confidence, from how much of it reads as text, with the decoded text (first 2,000 characters) or a hex preview of binary bytes. Input up to 100,000 characters.",
+      "Find out how a string is encoded. Tries hex, base64, base64url, base32, base58, URL (percent) encoding and quoted-printable, and inflates gzip or zlib data found inside (a decoded size cap guards against compression bombs). Each plausible decoding comes back ranked by confidence, from how much of it reads as text, with the decoded text (first 2,000 characters) or a hex preview of binary bytes. Input up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes).",
     tags: ["encoding", "detect", "decode", "base64", "hex", "base32", "base58", "url-decode", "gzip", "identify"],
     discovery: {
       bodyType: "json",
@@ -795,7 +838,7 @@ export const PARSE_TOOLS = [
     category: "time",
     price: "$0.001",
     description:
-      "Find every timestamp in log text and write each as ISO 8601 UTC, with its line, column and character span in the original. Reads ISO 8601, RFC 2822, syslog, Apache and nginx access-log stamps, and epoch seconds or milliseconds (2000 to 2100). Stamps without a zone are read in assumeZone (an IANA name, default UTC); syslog stamps carry no year and take year (default the current UTC year). Also reports the first and last stamp, the span, stamps out of order and the largest gap. Text up to 100,000 characters; up to 2,000 stamps listed.",
+      "Find every timestamp in log text and write each as ISO 8601 UTC, with its line, column and character span in the original. Reads ISO 8601, RFC 2822, syslog, Apache and nginx access-log stamps, and epoch seconds or milliseconds (2000 to 2100). Stamps without a zone are read in assumeZone (an IANA name, default UTC); syslog stamps carry no year and take year (default the current UTC year). Also reports the first and last stamp, the span, stamps out of order and the largest gap. Text up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes); up to 2,000 stamps listed.",
     tags: ["log", "timestamp", "parse", "iso8601", "syslog", "epoch", "normalize", "utc"],
     discovery: {
       bodyType: "json",
@@ -830,7 +873,7 @@ export const PARSE_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      "Summarize CSV columns: count, empty cells, distinct values, and for numbers sum, mean, min and max, over the whole table or per group with groupBy (a column name). The first row is the header. columns picks the columns to summarize (default all). Comma by default, or delimiter: semicolon, tab, pipe or any single character. CSV up to 100,000 characters and 200 columns; up to 1,000 groups listed, largest first.",
+      "Summarize CSV columns: count, empty cells, distinct values, and for numbers sum, mean, min and max, over the whole table or per group with groupBy (a column name). The first row is the header. columns picks the columns to summarize (default all). Comma by default, or delimiter: semicolon, tab, pipe or any single character other than a quote or a line break. CSV up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes) and 200 columns; up to 1,000 groups listed, largest first.",
     tags: ["csv", "aggregate", "group-by", "sum", "count", "mean", "average", "min", "max", "distinct", "column", "summary", "pivot"],
     discovery: {
       bodyType: "json",
@@ -840,7 +883,7 @@ export const PARSE_TOOLS = [
           csv: { type: "string", description: "CSV text with a header row (at most 100,000 characters)" },
           groupBy: { type: "string", description: "Column to group rows by (optional)" },
           columns: { type: "array", items: { type: "string" }, description: "Columns to summarize (default every column but groupBy); a comma-separated string also works" },
-          delimiter: { type: "string", description: "comma (default), semicolon, tab, pipe, or any single character" },
+          delimiter: { type: "string", description: "comma (default), semicolon, tab, pipe, or any single character other than a quote or a line break" },
           limit: { type: "number", description: "Groups to list, 1-1000 (default 100), largest first" },
         },
         required: ["csv"],
@@ -856,7 +899,7 @@ export const PARSE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Check JSON text and point at the first syntax error: its line, column, character position (offset), the path in the document where it stopped, and a short excerpt with a marker under the spot, with a clear message for trailing commas, comments, single quotes, unclosed brackets and bad escapes. Also lists duplicate object keys, which JSON.parse accepts silently. Input up to 100,000 characters.",
+      "Check JSON text and point at the first syntax error: its line, column, character position (offset), the path in the document where it stopped, and a short excerpt with a marker under the spot, with a clear message for trailing commas, comments, single quotes, unclosed brackets and bad escapes. Also lists duplicate object keys, which JSON.parse accepts silently. Input up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes).",
     tags: ["json", "lint", "validate", "syntax", "error", "line", "column", "duplicate-keys"],
     discovery: {
       bodyType: "json",

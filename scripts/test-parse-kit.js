@@ -265,5 +265,42 @@ await refuses("json-lint", { json: { a: 1 } }, "json", "an object");
   ok(/semicolon, tab, pipe/.test(cj.description) && /semicolon, tab, pipe/.test(cj.discovery.inputSchema.properties.delimiter.description), "csv-to-json: the description and schema name the delimiters");
 }
 
+// ---- review round: loop time, answer size and stated limits ---------------
+{
+  // A non-UTC zone converts every stamp: a dense log stays fast (one
+  // formatter per zone, not two per stamp). Best of three.
+  const lt = tool("log-timestamps");
+  for (const [tz, unit] of [["America/New_York", "2026-11-02 14:03:07 x\n"], ["Asia/Kolkata", "Nov  2 14:05:11 host a\n"]]) {
+    const text = unit.repeat(Math.floor(95_000 / unit.length));
+    let best = Infinity, r = null;
+    for (let i = 0; i < 3; i++) { const t = performance.now(); r = lt.handler({ text, assumeZone: tz, year: 2026 }); best = Math.min(best, performance.now() - t); }
+    ok(r.count > 4000 && best < 120, `log-timestamps: ${r.count} stamps in ${tz} in ${best.toFixed(0)} ms (under 120)`);
+  }
+  // json-lint: a long key does not repeat into every duplicate's path.
+  const big = "k".repeat(98_000);
+  const doc = `{"${big}":{${Array.from({ length: 150 }, () => '"a":1').join(",")}}}`;
+  const jr = tool("json-lint").handler({ json: doc });
+  const size = JSON.stringify(jr).length;
+  ok(jr.duplicateKeyCount === 149 && size < 150_000, `json-lint: 149 duplicates under a 98,000-character key answer ${size.toLocaleString("en-US")} characters (under 150,000)`);
+  ok(jr.duplicateKeys.every((d) => d.path.length <= 300) && jr.duplicateKeys[0].pathTruncated === true, "json-lint: each duplicate's path is capped and marked");
+  const dupLong = tool("json-lint").handler({ json: `{"${"q".repeat(40_000)}":1,"${"q".repeat(40_000)}":2}` });
+  ok(dupLong.duplicateKeys[0].key.length <= 200 && dupLong.duplicateKeys[0].keyTruncated === true && dupLong.duplicateKeys[0].keyLength === 40_000, "json-lint: a long duplicate key is cut to 200 characters, marked, with its length");
+  // The request body limit is stated where the text limit is.
+  for (const slug of ["log-timestamps", "csv-aggregate", "json-lint", "encoding-detect"]) {
+    const d = tool(slug).description;
+    if (!/100,000 characters/.test(d)) continue;
+    ok(/request body of at most 100 KB/.test(d), `${slug}: the description states the 100 KB request body beside its character limit`);
+  }
+  // Delimiters: any single character other than a quote or a line break.
+  for (const slug of ["csv-to-json", "csv-aggregate"]) {
+    const t = tool(slug);
+    ok(t.description.includes("any single character other than a quote or a line break") && t.discovery.inputSchema.properties.delimiter.description.includes("any single character other than a quote or a line break"), `${slug}: the delimiter text names what a delimiter cannot be`);
+  }
+  // One spelling of "time zones" in the prose of the new descriptions.
+  const tc = tool("time-convert");
+  const prose = [tc.description, tc.discovery.inputSchema.properties.zones.description, lt.description, lt.discovery.inputSchema.properties.assumeZone.description].join(" ");
+  ok(!/\btimezones?\b(?!,)/i.test(prose.replace(/with tz, timezone,/, "")), "the new descriptions write time zone(s), never timezone(s)");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
