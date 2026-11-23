@@ -87,7 +87,7 @@
     "src/tools/date-time-kit.js": "2026-11-09",
     "src/tools/decide-kit.js": "2026-11-21",
     "src/tools/demand-kit.js": "2026-10-07",
-    "src/tools/derivatives-kit.js": "2026-11-21",
+    "src/tools/derivatives-kit.js": "2026-11-23",
     "src/tools/dex-kit.js": "2026-11-16",
     "src/tools/dns-name-filter.js": "2026-11-21",
     "src/tools/dns.js": "2026-11-21",
