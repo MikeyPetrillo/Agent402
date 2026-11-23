@@ -30,7 +30,6 @@ import { createHash } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
 
 // ---- thresholds -----------------------------------------------------------
 // 30 buyers: the concurrency the service is asked to hold without a replica.
@@ -145,9 +144,12 @@ const childEnv = { ...process.env, TRUST_PROXY_HOPS: "1" }; // buyers are told a
 for (const k of Object.keys(childEnv)) if (SPEND_KEYS.includes(k) || /_API_KEY$/.test(k)) delete childEnv[k];
 const TOKEN = "load-concurrency-operator-token-0123456789";
 const dir = mkdtempSync(join(tmpdir(), "a402-load-"));
-const port = await getFreePort();
+// Port 0: the kernel picks the port as the server binds it, and the test reads
+// it back from the listening line (no port is reserved ahead of the boot). The
+// child is spawned here, not through scripts/lib/boot-server.js, so its log
+// stays capped below for the length of the load.
 Object.assign(childEnv, {
-  FREE_MODE: "true", PORT: String(port),
+  FREE_MODE: "true", PORT: "0",
   X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0",
   AGENT402_OPERATOR_TOKEN: TOKEN,
   POW_DB_PATH: join(dir, "pow.db"),
@@ -168,7 +170,8 @@ let serverLog = "";
 const onLog = (d) => { serverLog += d; if (serverLog.length > 4_000_000) serverLog = serverLog.slice(-2_000_000); };
 proc.stdout.on("data", onLog);
 proc.stderr.on("data", onLog);
-const base = `http://127.0.0.1:${port}`;
+let port = 0;
+let base = "";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -242,11 +245,14 @@ const SLOW_B = randomText(SLOW_INPUT_CHARS, 9);
 
 try {
   // ---- boot --------------------------------------------------------------
+  let bound = null;
+  for (let i = 0; i < 1200 && !bound && proc.exitCode === null; i++) { bound = serverLog.match(/listening on :(\d+)/); if (!bound) await sleep(100); }
+  port = Number(bound?.[1] || 0);
+  base = `http://127.0.0.1:${port}`;
   let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
+  for (let i = 0; i < 120 && !up && port; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
   ok(up, `server booted on :${port}`);
-  const bound = serverLog.match(/listening on :(\d+)/);
-  ok(bound && Number(bound[1]) === port, `the server reports the port the test chose (${bound?.[1]})`);
+  ok(bound && port > 0, `the server reports the port it bound (${bound?.[1]}), and answers there`);
 
   // Published examples, read from the server's own /openapi.json the way
   // scripts/test-all.js does (query params' `example`, requestBody example).
