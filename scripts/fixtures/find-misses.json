@@ -400,6 +400,12 @@
       "top": [
         "onchain-sql-range"
       ]
+    },
+    {
+      "q": "query a week of solana instructions",
+      "top": [
+        "onchain-sql-week"
+      ]
     }
   ],
   "gaps": [
