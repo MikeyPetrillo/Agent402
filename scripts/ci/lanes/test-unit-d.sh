@@ -387,6 +387,8 @@ t node scripts/test-third-party-notices.js
 # Metered settlement pricing rule (upto only, never above the ceiling, missing cost is not free - offline)
 t node scripts/test-gateway-meter.js
 t node scripts/test-metered-quote-binding.js
+# The metered quote counts each piece at no fewer tokens than one per 8 characters; prose, code and CJK quote unchanged (offline)
+t node scripts/test-quote-token-floor.js
 t node scripts/test-model-catalog.js
 # Metered settlement is wired and fails safe (sentinel never reaches a buyer - offline)
 t node scripts/test-gateway-meter-wiring.js
