@@ -198,7 +198,7 @@ export async function solanaJsonRpc(method, params, { fetchImpl } = {}) {
         lastErr = e; continue;
       }
       if (bytes.truncated) {
-        throw bad(`Result too large (over ${SOLANA_RPC_MAX_BODY_BYTES} bytes from the node, cap ${SOLANA_RPC_MAX_RESULT_BYTES}) - narrow the query (a dataSlice, a mint filter, a smaller limit)`, 413);
+        throw bad(`Result too large (over ${SOLANA_RPC_MAX_BODY_BYTES} bytes from the node, cap ${SOLANA_RPC_MAX_RESULT_BYTES}); narrow the query (a dataSlice, a mint filter, a smaller limit)`, 413);
       }
       let data;
       try { data = JSON.parse(decodeUtf8(bytes.bytes)); } catch { lastErr = new Error(`non-JSON from upstream (HTTP ${res.status})`); continue; }
@@ -225,7 +225,7 @@ export function checkSolanaRpcRequest(input) {
   const rawMethod = typeof input?.method === "string" ? input.method.trim() : "";
   const method = METHOD_BY_LOWER.get(rawMethod.toLowerCase());
   if (!method) {
-    throw bad(`${rawMethod ? `Method "${rawMethod.slice(0, 60)}" is not allowed - read-only allowlist only` : `"method" is required`}. Allowed: ${SOLANA_RPC_METHODS.join(", ")}`);
+    throw bad(`${rawMethod ? `Method "${rawMethod.slice(0, 60)}" is not allowed: read-only allowlist only` : `"method" is required`}. Allowed: ${SOLANA_RPC_METHODS.join(", ")}`);
   }
   if (input.network !== undefined && input.network !== null && input.network !== "" && String(input.network).toLowerCase() !== "mainnet" && String(input.network).toLowerCase() !== "solana") {
     throw bad(`"network" must be "mainnet" (Solana mainnet is the only network served)`);
@@ -249,7 +249,7 @@ export const SOLANA_RPC_TOOLS = [
     category: "crypto",
     price: "$0.004",
     description:
-      `Read-only JSON-RPC against Solana mainnet with multi-endpoint failover - one paid call, no node or API key of your own. Allowlisted reads only: ${SOLANA_RPC_METHODS.join(", ")}. getProgramAccounts and every send, simulate, airdrop and subscription method are refused. Heavy reads stay small: getBlock returns signatures or no transaction list (never full bodies) and no rewards unless asked, getSignaturesForAddress returns 20 rows by default and 100 at most, getSignatureStatuses takes up to 20 signatures. Results over 200KB serialized return 413 - narrow the query (a dataSlice, a mint filter, a smaller limit).`,
+      `Read-only JSON-RPC against Solana mainnet with multi-endpoint failover: one paid call, no node or API key of your own. Allowlisted reads only: ${SOLANA_RPC_METHODS.join(", ")}. getProgramAccounts and every send, simulate, airdrop and subscription method are refused. Heavy reads stay small: getBlock returns signatures or no transaction list (never full bodies) and no rewards unless asked, getSignaturesForAddress returns 20 rows by default and 100 at most, getSignatureStatuses takes up to 20 signatures. Results over 200KB serialized return 413; narrow the query (a dataSlice, a mint filter, a smaller limit).`,
     tags: ["crypto", "solana", "rpc", "json-rpc", "svm", "spl", "account", "transaction", "balance", "slot"],
     discovery: {
       bodyType: "json",
@@ -273,7 +273,7 @@ export const SOLANA_RPC_TOOLS = [
       const resultBytes = resultJson === undefined ? 0 : Buffer.byteLength(resultJson, "utf8");
       if (resultBytes > SOLANA_RPC_MAX_RESULT_BYTES) {
         throw bad(
-          `Result too large (${resultBytes} bytes serialized, cap ${SOLANA_RPC_MAX_RESULT_BYTES}) - narrow the query (a dataSlice, a mint filter, a smaller limit)`,
+          `Result too large (${resultBytes} bytes serialized, cap ${SOLANA_RPC_MAX_RESULT_BYTES}); narrow the query (a dataSlice, a mint filter, a smaller limit)`,
           413,
         );
       }

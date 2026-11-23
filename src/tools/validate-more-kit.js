@@ -823,7 +823,7 @@ export const VALIDATE_MORE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Repair broken JSON text and list every fix with its line, column and offset: trailing and extra commas, single or typographic quotes, unquoted keys, // and /* */ comments, missing closing brackets, unclosed strings, raw line breaks inside strings, NaN, Infinity and undefined (to null), Python True, False and None, and a Markdown code fence around the JSON. The answer always parses as strict JSON; when a fix would mean guessing (an unquoted word as a value, a mismatched bracket) it answers 400 with the reason and position instead. Input up to 100,000 characters.",
+      "Repair broken JSON text and list every fix with its line, column and offset: trailing and extra commas, single or typographic quotes, unquoted keys, // and /* */ comments, missing closing brackets, unclosed strings, raw line breaks inside strings, NaN, Infinity and undefined (to null), Python True, False and None, and a Markdown code fence around the JSON. The answer always parses as strict JSON; when a fix would mean guessing (an unquoted word as a value, a mismatched bracket) it answers 400 with the reason and position instead. A trailing comma fix points at the comma itself; json-lint reports the same error at the bracket after it, one character later. Input up to 100,000 characters.",
     tags: ["json", "repair", "fix", "clean", "parse", "llm-output", "trailing-comma", "comments", "lenient"],
     discovery: {
       bodyType: "json",

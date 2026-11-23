@@ -899,7 +899,7 @@ export const PARSE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Check JSON text and point at the first syntax error: its line, column, character position (offset), the path in the document where it stopped, and a short excerpt with a marker under the spot, with a clear message for trailing commas, comments, single quotes, unclosed brackets and bad escapes. Also lists duplicate object keys, which JSON.parse accepts silently. Input up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes).",
+      "Check JSON text and point at the first syntax error: its line, column, character position (offset), the path in the document where it stopped, and a short excerpt with a marker under the spot, with a clear message for trailing commas, comments, single quotes, unclosed brackets and bad escapes. Also lists duplicate object keys, which JSON.parse accepts silently. A trailing comma is reported at the bracket after it; json-repair points its fix at the comma itself, one character earlier. Input up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes).",
     tags: ["json", "lint", "validate", "syntax", "error", "line", "column", "duplicate-keys"],
     discovery: {
       bodyType: "json",

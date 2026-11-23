@@ -267,5 +267,29 @@ const SIG = "5".repeat(87);
   delete process.env.SOLANA_RPCS;
 }
 
+// ---- json-repair and json-lint point at the same place ---------------------
+// For the common broken inputs json-repair's first fix sits where json-lint
+// reports the error; the one difference, a trailing comma (json-repair at the
+// comma, json-lint at the bracket after it), is stated in both descriptions.
+{
+  const { PARSE_TOOLS } = await import("../src/tools/parse-kit.js");
+  const lint = PARSE_TOOLS.find((t) => t.slug === "json-lint"), rep = tool("json-repair");
+  for (const j of ["{'a':1}", "{a:1}", '{"a":1 // c\n}', '{"a":[1,2', '{"a":NaN}', "[1,,2]", '{"a":"x\ny"}', '{"a":True}']) {
+    const l = lint.handler({ json: j }).syntaxError, r = (await rep.handler({ json: j })).fixes[0];
+    ok(l && r && l.offset === r.offset && l.line === r.line && l.column === r.column, `same location for ${JSON.stringify(j)} (lint ${l?.offset}, repair ${r?.offset})`);
+  }
+  for (const j of ["[1,2,]", '{"a":1,}']) {
+    const l = lint.handler({ json: j }).syntaxError, r = (await rep.handler({ json: j })).fixes[0];
+    ok(r.kind === "trailing-comma" && l.offset === r.offset + 1 && j[r.offset] === ",", `trailing comma: repair at the comma, lint one character later at the bracket (${JSON.stringify(j)})`);
+  }
+  const phrase = /trailing comma[^.]*at the comma[^.]*json-lint[^.]*bracket after it|trailing comma[^.]*bracket after it[^.]*json-repair[^.]*at the comma/i;
+  ok(phrase.test(lint.description) && phrase.test(rep.description), "both descriptions state where each reports a trailing comma");
+}
+// ---- solana-rpc reads without a spaced hyphen as a dash ---------------------
+{
+  const t = tool("solana-rpc");
+  ok(!/ - /.test(t.description), "solana-rpc's description uses no spaced hyphen as a dash");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
