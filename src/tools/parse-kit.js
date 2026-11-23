@@ -847,7 +847,7 @@ export const PARSE_TOOLS = [
     category: "time",
     price: "$0.001",
     description:
-      "Find every timestamp in log text and write each as ISO 8601 UTC, with its line, column and character span in the original. Reads ISO 8601, RFC 2822, syslog, Apache and nginx access-log stamps, and epoch seconds or milliseconds (2000 to 2100). Stamps without a zone are read in assumeZone (an IANA name, default UTC); syslog stamps carry no year and take year (default the current UTC year). Also reports the first and last stamp, the span, stamps out of order and the largest gap. Text up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes); up to 2,000 stamps listed.",
+      "Find each timestamp in the formats below in log text and write each as ISO 8601 UTC, with its line, column and character span in the original. Reads ISO 8601, RFC 2822, syslog, Apache and nginx access-log stamps, and epoch seconds or milliseconds (2000 to 2100). Stamps without a zone are read in assumeZone (an IANA name, default UTC); syslog stamps carry no year and take year (default the current UTC year). Also reports the first and last stamp, the span, stamps out of order and the largest gap. Text up to 100,000 characters (in a request body of at most 100 KB; JSON escaping counts, so a newline takes two bytes); up to 2,000 stamps listed.",
     tags: ["log", "timestamp", "parse", "iso8601", "syslog", "epoch", "normalize", "utc"],
     discovery: {
       bodyType: "json",

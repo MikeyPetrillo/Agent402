@@ -327,5 +327,13 @@ for (const t of ["__proto__", "constructor", "toString", "hasOwnProperty", "valu
   ok(e && e.statusCode === 400 && /"type" must be one of/.test(e.message), `id-validate type ${JSON.stringify(t)} answers 400 (${e?.statusCode})`);
 }
 
+// ---- the descriptions claim only what the tools do ----
+{
+  const id = tool("id-validate").description;
+  ok(id.includes("the check digits where the type has them (BIC and NINO carry none)") && !/^Check the format and check digits of/.test(id), "id-validate: check digits are claimed only where a type has them");
+  const jr = tool("json-repair").description;
+  ok(jr.includes(`list its fixes with their line, column and offset (the first ${_test.FIXES_SHOWN} in full; fixCount and fixKinds count all)`) && !/list every fix/.test(jr), "json-repair: the listed fixes are bounded and the counts cover all");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

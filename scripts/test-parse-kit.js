@@ -324,5 +324,8 @@ await refuses("json-lint", { json: { a: 1 } }, "json", "an object");
   }
 }
 
+// ---- log-timestamps claims the formats it reads ----
+ok(tool("log-timestamps").description.startsWith("Find each timestamp in the formats below in log text"), "log-timestamps: the description claims the listed formats, not every timestamp");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

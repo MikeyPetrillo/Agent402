@@ -771,7 +771,7 @@ export const VALIDATE_MORE_TOOLS = [
     category: "validation",
     price: "$0.001",
     description:
-      "Check the format and check digits of a financial or national identifier: BIC/SWIFT code, UK National Insurance number, Brazil CPF and CNPJ (numeric and alphanumeric), Australian ABN, SEDOL, ISIN, LEI (ISO 17442, MOD 97-10) and Norwegian organization number. Pass type, or omit it and the tool tries every type and lists the candidates. Answers type, valid, normalized and the reason. Offline: format and check digits only, with no registry lookup, so a valid answer does not mean the number is issued or active.",
+      "Check the format, and the check digits where the type has them (BIC and NINO carry none), of a financial or national identifier: BIC/SWIFT code, UK National Insurance number, Brazil CPF and CNPJ (numeric and alphanumeric), Australian ABN, SEDOL, ISIN, LEI (ISO 17442, MOD 97-10) and Norwegian organization number. Pass type, or omit it and the tool tries every type and lists the candidates. Answers type, valid, normalized and the reason. Offline: format and check digits only, with no registry lookup, so a valid answer does not mean the number is issued or active.",
     tags: ["validate", "verify", "check-digit", "checksum", "bic", "swift", "isin", "lei", "sedol", "cpf", "cnpj", "abn", "nino", "national-insurance", "organization-number", "norwegian", "identifier", "finance"],
     discovery: {
       bodyType: "json",
@@ -843,7 +843,7 @@ export const VALIDATE_MORE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Repair broken JSON text and list every fix with its line, column and offset: trailing and extra commas, single or typographic quotes, unquoted keys, // and /* */ comments, missing closing brackets, unclosed strings, raw line breaks inside strings, NaN, Infinity and undefined (to null), Python True, False and None, and a Markdown code fence around the JSON. The answer always parses as strict JSON; when a fix would mean guessing (an unquoted word as a value, a mismatched bracket) it answers 400 with the reason and position instead. For a trailing comma, json-repair points at the comma and json-lint at the bracket after it. Input up to 100,000 characters.",
+      `Repair broken JSON text and list its fixes with their line, column and offset (the first ${FIXES_SHOWN} in full; fixCount and fixKinds count all): trailing and extra commas, single or typographic quotes, unquoted keys, // and /* */ comments, missing closing brackets, unclosed strings, raw line breaks inside strings, NaN, Infinity and undefined (to null), Python True, False and None, and a Markdown code fence around the JSON. The answer always parses as strict JSON; when a fix would mean guessing (an unquoted word as a value, a mismatched bracket) it answers 400 with the reason and position instead. For a trailing comma, json-repair points at the comma and json-lint at the bracket after it. Input up to 100,000 characters.`,
     tags: ["json", "repair", "fix", "clean", "parse", "llm-output", "trailing-comma", "comments", "lenient"],
     discovery: {
       bodyType: "json",
@@ -877,4 +877,4 @@ export const VALIDATE_MORE_TOOLS = [
   },
 ];
 
-export const _test = { idValidate, buildLogTriage, repairJson, jsonRepair, ID_TYPES };
+export const _test = { idValidate, buildLogTriage, repairJson, jsonRepair, ID_TYPES, FIXES_SHOWN };
