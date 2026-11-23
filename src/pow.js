@@ -346,7 +346,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // solana-rpc-kit.js: the Solana sibling of evm-rpc, on the shared Solana RPC
   // list whose keyed lane counts against the provider's daily ceiling.
   "solana-rpc",
-  // Contract-kit: Sourcify (contract-source / contract-abi), openchain.xyz +
+  // Contract-kit: Sourcify (contract-source / contract-abi), its signature DB +
   // 4byte.directory signature DBs (selector-lookup, and calldata-decode's
   // no-ABI fallback path), and the shared keyless public RPC pool
   // (tx-simulate — same per-IP quota as evm-rpc). solidity-scan and

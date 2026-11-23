@@ -184,7 +184,12 @@ for (const [mod, call] of MODULES) {
   const out = await t.handler({ a: 7 });
   ok(JSON.stringify(out) === JSON.stringify({ a: 7, nested: { b: 2 }, credit: "Credit (https://example.test)." }), "creditAnswers: every field kept, credit added");
   ok(JSON.stringify(t.discovery.output.example) === JSON.stringify({ a: 1, credit: "Credit (https://example.test)." }), "creditAnswers: example gains the credit");
-  ok(JSON.stringify(withCredit([1], "c")) === "[1]" && withCredit(null, "c") === null && withCredit({ credit: "own" }, "c").credit === "own", "withCredit: arrays, null and an answer with its own credit are left as they are");
+  ok(JSON.stringify(withCredit([1], "c")) === "[1]" && withCredit(null, "c") === null, "withCredit: arrays and null are left as they are");
+  // An answer built from several sources credits each: its own credit is
+  // kept and the new sentence follows it, once.
+  ok(withCredit({ credit: "Own." }, "C.").credit === "Own. C.", "withCredit: an answer's own credit is kept and the new source's sentence follows it");
+  ok(withCredit({ credit: "Own. C." }, "C.").credit === "Own. C.", "withCredit: a sentence the credit already holds is not added twice");
+  const n = { credit: 7 }; ok(withCredit(n, "C.") === n, "withCredit: a credit that is not a string is left as it is");
 }
 
 // Skill packs: the credit is printed once on the envelope, not per step.

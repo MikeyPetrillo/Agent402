@@ -340,7 +340,60 @@ await returns(
 );
 
 // ----------------------------------------------------------------------------
-// Live opt-in — exercises the real upstreams (Sourcify / openchain / RPC pool).
+// Stubbed upstreams (no egress): the signature lookups read Sourcify's
+// signature database first and credit it; 4byte.directory answers carry no
+// credit; contract-source carries each file's SPDX license and the license
+// note; Sourcify's verified answers carry its credit, a Blockscout one does not.
+// ----------------------------------------------------------------------------
+{
+  const { spdxLicenseOf, LICENSE_NOTE, SIGDB_HOST } = await import("../src/tools/contract-kit.js");
+  const { SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION } = await import("../src/data-attribution.js");
+  ok(spdxLicenseOf("// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;") === "MIT", "spdxLicenseOf: MIT");
+  ok(spdxLicenseOf("/* SPDX-License-Identifier: GPL-3.0-or-later */\n") === "GPL-3.0-or-later", "spdxLicenseOf: block comment form");
+  ok(spdxLicenseOf("// SPDX-License-Identifier: MIT OR Apache-2.0") === "MIT OR Apache-2.0", "spdxLicenseOf: an expression is kept whole");
+  ok(spdxLicenseOf("pragma solidity ^0.8.0;") === null && spdxLicenseOf("") === null && spdxLicenseOf(undefined) === null, "spdxLicenseOf: none stated is null");
+  ok(spdxLicenseOf("x".repeat(5000) + "// SPDX-License-Identifier: MIT") === null, "spdxLicenseOf: only the head of a file is read");
+  ok(SIGDB_HOST === "api.4byte.sourcify.dev", "the signature database host is Sourcify's");
+
+  const realFetch = globalThis.fetch;
+  const asked = [];
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  let mode = "sigdb";
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url)); asked.push(u.host);
+    if (u.host === "api.4byte.sourcify.dev") {
+      if (mode !== "sigdb") return json({ ok: true, result: { function: {}, event: {} } });
+      const fn = u.searchParams.get("function"), ev = u.searchParams.get("event");
+      return json({ ok: true, result: { function: fn ? { [fn]: [{ name: "transfer(address,uint256)", filtered: false }] } : {}, event: ev ? { [ev]: [{ name: "Transfer(address,address,uint256)", filtered: false }] } : {} } });
+    }
+    if (u.host === "www.4byte.directory") return json({ results: [{ id: 1, text_signature: "transfer(address,uint256)" }] });
+    if (u.host === "sourcify.dev" && u.searchParams.get("fields") === "compilation,sources") {
+      return json({ match: "exact_match", verifiedAt: "2024-01-01T00:00:00Z", compilation: { language: "Solidity", compilerVersion: "0.8.20" }, sources: { "a/A.sol": { content: "// SPDX-License-Identifier: MIT\ncontract A {}" }, "b/B.sol": { content: "contract B {}" } } });
+    }
+    if (u.host === "sourcify.dev") return json({ match: "match", abi: [{ type: "function", name: "f", inputs: [], outputs: [] }] });
+    return new Response("not found", { status: 404 });
+  };
+  try {
+    asked.length = 0;
+    const sel = await h("selector-lookup")({ selector: "0xa9059cbb" });
+    ok(sel.found && sel.source === "4byte.sourcify.dev" && sel.credit === SOURCIFY_SIGDB_ATTRIBUTION && asked[0] === "api.4byte.sourcify.dev" && !asked.some((x) => /openchain/.test(x)), `selector-lookup: Sourcify's signature database answers and is credited (asked ${asked.join(", ")})`);
+    const dec = await h("calldata-decode")({ data: XFER });
+    ok(dec.decoded && dec.signature === "transfer(address,uint256)" && dec.credit === SOURCIFY_SIGDB_ATTRIBUTION, "calldata-decode: a decode from Sourcify's database carries its credit");
+    mode = "fallback";
+    const sel2 = await h("selector-lookup")({ selector: "0xa9059cbb" });
+    ok(sel2.found && sel2.source === "4byte.directory" && !Object.hasOwn(sel2, "credit"), "selector-lookup: a 4byte.directory answer carries no Sourcify credit");
+    const src = await h("contract-source")({ address: ADDR, network: "base" });
+    ok(src.verified && src.licenses?.["a/A.sol"] === "MIT" && src.licenses["b/B.sol"] === null && src.licenseNote === LICENSE_NOTE, `contract-source: each file's SPDX license and the note (${JSON.stringify(src.licenses)})`);
+    ok(src.credit === SOURCIFY_ATTRIBUTION && typeof src.sources["a/A.sol"] === "string", "contract-source: Sourcify credited, sources keep their shape");
+    const abi = await h("contract-abi")({ address: ADDR, network: "base" });
+    ok(abi.verified && abi.credit === SOURCIFY_ATTRIBUTION, "contract-abi: Sourcify credited");
+  } finally { globalThis.fetch = realFetch; }
+  const ex = CONTRACT_TOOLS.find((t) => t.slug === "contract-source").discovery.output.example;
+  ok(ex.licenses && ex.licenseNote === LICENSE_NOTE && ex.credit === SOURCIFY_ATTRIBUTION, "contract-source: published example shows licenses, the note and the credit");
+}
+
+// ----------------------------------------------------------------------------
+// Live opt-in — exercises the real upstreams (Sourcify / its signature DB / RPC pool).
 // ----------------------------------------------------------------------------
 async function live(slug, args, check, label) {
   try {
