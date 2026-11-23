@@ -151,6 +151,8 @@ const UNAUTH_PROBES = [
   rpc(4, "tools/call", { name: "catalog.call", arguments: { slug: "base64", params: { text: "hello" } } }),
 ];
 // Fields that differ between two boots of the same build (nonces, times, ports).
+// The answer's headers, less the ones that vary between any two answers.
+const headerSet = (h) => [...h.entries()].filter(([k]) => !["date", "etag", "x-request-id", "content-length", "keep-alive", "connection"].includes(k)).map(([k, v]) => `${k}: ${normalize(v)}`).sort().join("\n");
 const normalize = (t) => String(t).replace(/127\.0\.0\.1:\d+/g, "HOST").replace(/"(nonce|validAfter|validBefore|timestamp|id|expires|issuedAt|requestId|maxTimeoutSeconds)":\s*("[^"]*"|\d+)/g, '"$1":X').replace(/0x[0-9a-fA-F]{64}/g, "0xH").replace(/\d{13}/g, "T");
 
 // ---- switch off: nothing here exists, /mcp unchanged -------------------------------------
@@ -178,7 +180,7 @@ try {
   // Unauthenticated /mcp: the same bytes as the switch-off boot.
   for (let i = 0; i < UNAUTH_PROBES.length; i++) {
     const r = await mcp(B, UNAUTH_PROBES[i]);
-    ok(r.status === offAnswers[i].status && normalize(r.text) === normalize(offAnswers[i].text), `switch on: unauthenticated /mcp ${UNAUTH_PROBES[i].method}${i >= 2 ? ` (${UNAUTH_PROBES[i].params.arguments.slug})` : ""} answers as with the switch off`);
+    ok(r.status === offAnswers[i].status && normalize(r.text) === normalize(offAnswers[i].text) && headerSet(r.headers) === headerSet(offAnswers[i].headers), `switch on: unauthenticated /mcp ${UNAUTH_PROBES[i].method}${i >= 2 ? ` (${UNAUTH_PROBES[i].params.arguments.slug})` : ""} answers as with the switch off (status, headers, body)`);
   }
   ok((await (await fetch(`${B}/privacy`)).text()).includes('id="connected-apps"'), "switch on: the privacy page says what a connected app keeps");
   const otherBearer = await mcp(B, UNAUTH_PROBES[2], { token: "sk-something-else" });
