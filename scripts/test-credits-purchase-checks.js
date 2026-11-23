@@ -435,6 +435,14 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   const wlBal = cr.balance(WL.key).balanceUsd, wlUse = cr.authorize(WL.key, 0.001);
   ok(wlUse.ok === true && wlBal === usd && !(await owed(WL)), `won+lost: the loss takes only its payment and the key thaws (${wlBal})`);
   if (wlUse.ok) cr.release(wlUse.hash, wlUse.heldMicro);
+  // The later dispute closes first: the earlier one, still open, keeps the key frozen.
+  const RV = await twoPaid("rv");
+  await cr.disputeClosed("pi_2rvb", { won: true, status: "won" });
+  ok(cr.authorize(RV.key, 0.001).reason === "frozen" && cr.balance(RV.key).balanceUsd === 2 * usd, "the second dispute won first keeps the key frozen while the first is open");
+  await cr.disputeClosed("pi_2rva", { won: false, status: "lost" });
+  const rvBal = cr.balance(RV.key).balanceUsd, rvUse = cr.authorize(RV.key, 0.001);
+  ok(rvUse.ok === true && rvBal === usd, `...and the first one lost then takes only its payment and the key thaws (${rvBal})`);
+  if (rvUse.ok) cr.release(rvUse.hash, rvUse.heldMicro);
   // A fraud review held while both disputes ran is owed only once neither is open.
   process.env.CREDITS_EFW_AUTO_REFUND = "off";
   const FR = await twoPaid("fr");

@@ -515,6 +515,12 @@ try {
     await W1.disputeClosed("pi_twlb", { won: false, status: "lost" });
     const wlRow = await rowRec(hashKey(WL.key));
     ok(wlRow.balanceMicro === 20_000_000 && wlRow.disabled === false, `pg: won+lost: the loss takes only its payment and the key thaws (${wlRow.balanceMicro})`);
+    const RV = await two("rv");
+    await W1.disputeClosed("pi_trvb", { won: true, status: "won" });
+    ok((await W2.authorize(RV.key, 0.001)).reason === "frozen", "pg: the second dispute won first keeps the key frozen while the first is open");
+    await W2.disputeClosed("pi_trva", { won: false, status: "lost" });
+    const rvRow = await rowRec(hashKey(RV.key));
+    ok(rvRow.balanceMicro === 20_000_000 && rvRow.disabled === false, `pg: ...and the first one lost then takes only its payment and the key thaws (${rvRow.balanceMicro})`);
     // A close before its create, and a status not recognized.
     pay("cs_tea", "pi_tea", "te@x.com");
     const TE = await W1.claim("cs_tea");
