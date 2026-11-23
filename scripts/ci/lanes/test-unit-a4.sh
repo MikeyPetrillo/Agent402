@@ -220,6 +220,8 @@ t node scripts/test-bazaar-quality.js
 t node scripts/test-seller-field-types.js
 # A stored index of sellers with non-text fields boots and serves every seller page and API; entries are cleaned as the cache stores them
 t node scripts/test-seller-field-types-serve.js
+# A seller field that is an object (an x402 v2 resource object, an object name) never becomes "[object Object]" in a route or name; a malformed route is never stored or routed
+t node scripts/test-seller-object-fields.js
 # Seller price keys: every entry priced before the snake_case keys were read keeps its price; the keys only fill gaps (offline table)
 t node scripts/test-seller-price-keys-differential.js
 # A route's off-seller verdict is decided from its text and equals the parsed answer for every input

@@ -325,6 +325,7 @@ import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
 import { noteTurn } from "./active-jobs.js";
+import { sellerText, firstSellerText, resourceUrlText, malformedRoute } from "./seller-text.js";
 // A seller's host for a span name (bounded; the origin itself when it does not parse).
 const hostOfOriginForSpan = (origin) => { try { return new URL(origin).host.slice(0, 60); } catch { return String(origin || "").slice(0, 60); } };
 
@@ -741,6 +742,9 @@ function cleanTextKeys(o, keys) {
 }
 function cleanSellerTool(t) {
   if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+  // A row whose route is not a usable path (an object coerced to text, a
+  // non-string, no leading "/") is never stored, so nothing lists or routes it.
+  if (t.route !== undefined && malformedRoute(typeof t.route === "number" ? String(t.route) : t.route)) return null;
   let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
   const camel = withCamelPriceKeys(out || t, true);
   if (camel !== (out || t)) out = camel;
@@ -2304,7 +2308,7 @@ export function itemHasMainnetAccept(item) {
   const accepts = Array.isArray(item?.accepts) ? item.accepts : [];
   if (!accepts.length) return true; // no accepts info → don't over-filter it out
   return accepts.some((a) => {
-    const n = String(a?.network || "");
+    const n = sellerText(a?.network);
     if (!n) return false;
     // Algorand's testnet CAIP-2 id is a genesis hash (algorand:SGO1GKSz...),
     // not a "testnet"-labeled string, so the EVM-shaped checks below can't
@@ -2368,7 +2372,7 @@ async function discoverOneSource(source, selfOrigin) {
     // Folds one batch of listings into this pass's accumulators. Nothing here
     // touches published state: the swap below runs only once every page is in.
     const foldItem = (item) => {
-      const url = item.resource || item.resourceUrl || item.url || item.endpoint || item.homepage;
+      const url = firstSellerText(resourceUrlText(item.resource), item.resourceUrl, item.url, item.endpoint, item.homepage);
       const hostOrigin = extractOrigin(url);
       if (!hostOrigin || hostOrigin === selfOrigin) return;
       const origin = pathSellerOwning(url, hostOrigin, pathSellers) || hostOrigin;
@@ -2839,8 +2843,10 @@ function paymentRowFields(pay) {
 
 export function bazaarItemToTool(item, originUrl) {
   // `resource` = CDP Bazaar; `resourceUrl` = GoPlausible's AVM registry.
-  const resource = item.resource || item.resourceUrl || item.url;
-  if (typeof resource !== "string") return null;
+  // An x402 v2 `resource` is an object whose `url` is the resource; any
+  // other value that is not text names no route.
+  const resource = firstSellerText(resourceUrlText(item.resource), item.resourceUrl, item.url);
+  if (!resource) return null;
   // A segment boundary after the key: "https://host" must not own
   // "https://hostile.example/...", nor a path seller "/app/x" own "/app/x2".
   // The host compares case-insensitively (a registry may record "API.Host").
@@ -2864,7 +2870,7 @@ export function bazaarItemToTool(item, originUrl) {
     if (scoped == null || (scoped === "/" && !rowDeclaresPayment(pay))) return null;
     pathStr = scoped;
   }
-  const tags = Array.isArray(item.tags) ? item.tags : [];
+  const tags = Array.isArray(item.tags) ? item.tags.filter((t) => typeof t === "string") : [];
   // The verb the item states (non-empty text, upper-cased), or null when it
   // states none and the row's verb is a guess.
   const statedVerb = typeof item.method === "string" && item.method !== "" ? item.method.toUpperCase() : null;
@@ -2876,8 +2882,8 @@ export function bazaarItemToTool(item, originUrl) {
     methodInferred: statedVerb === null,
     route: pathStr,
     slug: pathStr.replace(/^\//, "").replace(/\//g, "-") || originUrl.replace(/^https?:\/\//, ""),
-    name: item.serviceName || pathStr,
-    description: item.description || "",
+    name: firstSellerText(item.serviceName) || pathStr,
+    description: sellerText(item.description),
     category: tags[0] || "other",
     tags,
     price: pay.price,
@@ -3192,11 +3198,11 @@ function* normaliseOpenapiToolsSteps(openapi, originUrl) {
         method: method.toUpperCase(),
         route: pathStr,
         slug: cleanListingSlug(op.operationId) || pathStr.replace(/^\//, "").replace(/\//g, "-"),
-        name: op.summary || op.operationId || pathStr,
+        name: firstSellerText(op.summary, op.operationId) || pathStr,
         // Capped like the Bazaar and llms.txt paths (400): the description feeds
         // the route haystack and the postings vocabulary, and an OpenAPI document
         // is the one ingest path where a seller controls a field of any length.
-        description: String(op.description || "").slice(0, 400),
+        description: sellerText(op.description).slice(0, 400),
         category: tags[0] || "other",
         tags,
         price: pay.price,
@@ -3557,7 +3563,7 @@ function manifestPathsCatalogue(manifest) {
   for (const [path, e] of Object.entries(p).slice(0, 1000)) {
     if (!e || typeof e !== "object" || Array.isArray(e)) continue;
     if (Object.keys(e).some((k) => OPENAPI_PATH_ITEM_KEYS.has(k.toLowerCase()))) continue;
-    const x402Entry = (e.payment && typeof e.payment === "object") || typeof e.resource === "string"
+    const x402Entry = (e.payment && typeof e.payment === "object") || resourceUrlText(e.resource) !== ""
       || Array.isArray(e.methods) || typeof e.method === "string" || Array.isArray(e.accepts) || e.price != null;
     if (!x402Entry) continue;
     out.push({ ...e, path: typeof e.path === "string" && e.path ? e.path : path });
@@ -3764,6 +3770,19 @@ function adoptPathPayment(row, pathPay) {
     if (!row[field] && pathPay[field]) row[field] = pathPay[field];
   }
 }
+/** An entry that declares its resource as an object (`{ url }`) beside its own
+ *  `path` names the route by the path: the URL is the resource instance, and
+ *  its query (a quantity, an example parameter) is not part of the route. Only
+ *  when both name the same path on the same host; otherwise `ref` stands. */
+function declaredPathOverResourceUrl(raw, ref, origin) {
+  if (!raw.resource || typeof raw.resource !== "object" || ref !== resourceUrlText(raw.resource)) return ref;
+  const path = sellerText(raw.path).trim();
+  if (!path.startsWith("/") || path.startsWith("//") || /[?#]/.test(path)) return ref;
+  try {
+    const a = new URL(ref, origin), b = new URL(path, origin);
+    return a.host === b.host && a.pathname === b.pathname ? path : ref;
+  } catch { return ref; }
+}
 function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   if (!manifest || typeof manifest !== "object") return [];
   let origin;
@@ -3814,9 +3833,13 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
       if (typeof raw === "string") {
         ref = raw.trim();
       } else if (raw && typeof raw === "object") {
-        ref = String(raw.endpoint || raw.resource || raw.url || raw.route || raw.path || "").trim();
-        name = String(raw.name || raw.title || raw.operationId || "").trim();
-        description = String(raw.summary || raw.description || "").trim();
+        // Text only: an x402 v2 `resource` object gives its `url`, and a
+        // field that is not text is skipped, never coerced (String() on an
+        // object reads "[object Object]", which then parsed as a route).
+        ref = firstSellerText(raw.endpoint, resourceUrlText(raw.resource), raw.url, raw.route, raw.path);
+        ref = declaredPathOverResourceUrl(raw, ref, origin);
+        name = firstSellerText(raw.name, raw.title, raw.operationId);
+        description = firstSellerText(raw.summary, raw.description);
         price = parseManifestPrice(raw);
         if (manifestAtomic && bareAmountEntry(raw)) {
           const usd = baseUnitReading(manifestAtomic, raw.amount);
@@ -3968,7 +3991,7 @@ export function dropDeclaredFreeEndpoints(tools = [], manifest) {
   const free = new Set();
   for (const item of raw) {
     let ref = typeof item === "string" ? item.trim()
-      : String(item?.path || item?.route || item?.url || "").trim();
+      : firstSellerText(item?.path, item?.route, item?.url);
     if (!ref) continue;
     const verb = /^([A-Za-z]+)\s+(\/.*)$/.exec(ref);
     if (verb) ref = verb[2];
@@ -7680,7 +7703,8 @@ function stripListingMarkup(s) {
  *  at `max` code points (never splitting a pair). */
 export function cleanListingText(text, max = 0) {
   if (text == null) return text;
-  let s = stripListingMarkup(stripHiddenCharacters(String(text)).replace(CONTROL_CHARS, "").trim());
+  // sellerText: an object or array is no text, never "[object Object]".
+  let s = stripListingMarkup(stripHiddenCharacters(sellerText(text)).replace(CONTROL_CHARS, "").trim());
   if (max > 0 && s.length > max) {
     const cps = Array.from(s);
     if (cps.length > max) s = cps.slice(0, max).join("").trimEnd();
@@ -10978,9 +11002,7 @@ function screenedInjection(text) {
   }
   return v;
 }
-// A seller field as text: a crawled listing can carry a number, an object or
-// an array where a string belongs, and reading it as one must not throw.
-const sellerText = (v) => (typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "");
+// sellerText (src/seller-text.js) reads a seller field as text without throwing.
 // --- per-listing containment ---------------------------------------------------
 // One seller's listing whose rows cannot be read (a tool whose statics or
 // decoration throws) fails alone. The tool is remembered as broken (a sentinel
