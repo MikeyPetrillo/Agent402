@@ -503,8 +503,13 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       signer: r?.signer ? String(r.signer).slice(0, 64) : null,
       ...(r?.own === true ? { own: true } : {}),
       balanceEth: Number.isFinite(r?.balanceEth) ? r.balanceEth : null,
+      // A Solana fee payer's row (createSvmFeePayerGasCheck): its SOL balance,
+      // its facilitator's share of Solana quotes, and standby at share 0.
+      ...(Number.isFinite(r?.balanceSol) ? { balanceSol: r.balanceSol } : {}),
+      ...(Number.isFinite(r?.share) ? { share: Math.min(100, Math.max(0, r.share)) } : {}),
+      ...(r?.standby === true ? { standby: true } : {}),
       runway: Number.isFinite(r?.runway) ? r.runway : null,
-      status: ["ok", "low", "unread", "unknown"].includes(r?.status) ? r.status : "unread",
+      status: ["ok", "low", "empty", "unread", "unknown"].includes(r?.status) ? r.status : "unread",
       ...(r?.error ? { error: String(r.error).slice(0, 120) } : {}),
       ...(r?.reason ? { reason: String(r.reason).slice(0, 40) } : {}),
       ...(["gasUsd", "floorUsd", "sharePct", "ethUsd"].reduce((o, k) => (Number.isFinite(r?.[k]) ? { ...o, [k]: r[k] } : o), {})),
@@ -831,9 +836,20 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     // first, so the word does not wait on a wallet we do not fund. Our own
     // relayer low or unread, and the gas-against-floor row, are never covered.
     const ownOk = new Set(gas.filter((r) => r.own && r.status === "ok").map((r) => r.network));
-    const covered = gas.filter((r) => !r.own && !r.reason && r.facilitator !== "price floor" && (r.status === "low" || r.status === "unread") && ownOk.has(r.network));
-    const gasLow = gas.filter((r) => r.status === "low" && !covered.includes(r));
-    const gasUnread = gas.filter((r) => r.status === "unread" && !covered.includes(r));
+    const covered = gas.filter((r) => !r.own && !r.reason && r.facilitator !== "price floor" && (r.status === "low" || r.status === "empty" || r.status === "unread") && ownOk.has(r.network));
+    // A Solana fee payer whose facilitator takes no share of quotes (standby)
+    // is reported and never pages; empty (cannot pay one settlement) reads low.
+    const gasLow = gas.filter((r) => (r.status === "low" || r.status === "empty") && !r.standby && !covered.includes(r));
+    const gasUnread = gas.filter((r) => r.status === "unread" && !r.standby && !covered.includes(r));
+    // solanaFeePayer: the worst of the Solana fee payers that take a share of
+    // quotes (empty, low, unknown for unread or no fee payer named, ok); off
+    // with no Solana row. A word only; it pages through facilitatorFunds.
+    const svmRows = gas.filter((r) => String(r.network).startsWith("solana:"));
+    const svmPaging = svmRows.filter((r) => !r.standby);
+    const svmWord = !svmRows.length ? "off"
+      : svmPaging.some((r) => r.status === "empty") ? "empty"
+        : svmPaging.some((r) => r.status === "low") ? "low"
+          : svmPaging.some((r) => r.status === "unread" || r.status === "unknown") ? "unknown" : "ok";
     const fundsWord = demoted.length ? "demoted" : recent.length ? "refused" : gasLow.length ? "low" : gasUnread.length ? "unknown" : "ok";
     // unknown held past gasUnreadPageMs: the oldest unread signer's first
     // unread reading (a row from before this field reads from its own time).
@@ -907,7 +923,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     upRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.failures - a.hour.failures || a.upstream.localeCompare(b.upstream));
     ansRows.sort((a, b) => rank[a.status] - rank[b.status] || b.day.outsideBad - a.day.outsideBad || a.slug.localeCompare(b.slug));
     return {
-      toolFailures: toolWord, upstreamHealth: upWord, upstreamUnanswered: unansweredDetail, facilitatorFunds: fundsWord, facilitatorFundsAlert: fundsAlert, facilitatorFundsUnreadSince: unreadSince, toolAnswers: ansWord, buyerRefusals: buyerWord,
+      toolFailures: toolWord, upstreamHealth: upWord, upstreamUnanswered: unansweredDetail, facilitatorFunds: fundsWord, facilitatorFundsAlert: fundsAlert, facilitatorFundsUnreadSince: unreadSince, solanaFeePayer: svmWord, toolAnswers: ansWord, buyerRefusals: buyerWord,
       buyerRefusalsWindow, buyerRefusalsDay,
       replays: replayRows, replayTotals, byPath, byRail, fundingRefusals: fundingRows,
       pendingSettles: { rows: pendingRows, totals: pendingTotals, dropped: pendingDropped, maxKeys: MAX_PENDING_KEYS },
@@ -942,13 +958,15 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
    *  now instead of reading the cache (tests and one-off reads). */
   async function status({ full = false, t = now(), fresh = false } = {}) {
     const e = fresh ? await recompute(t) : await cachedEvaluation(t);
-    if (!full) return { toolFailures: { status: e.toolFailures }, upstreamHealth: { status: e.upstreamHealth }, facilitatorFunds: { status: e.facilitatorFunds, alert: e.facilitatorFundsAlert }, toolAnswers: { status: e.toolAnswers }, buyerRefusals: { status: e.buyerRefusals } };
+    if (!full) return { toolFailures: { status: e.toolFailures }, upstreamHealth: { status: e.upstreamHealth }, facilitatorFunds: { status: e.facilitatorFunds, alert: e.facilitatorFundsAlert }, solanaFeePayer: { status: e.solanaFeePayer }, toolAnswers: { status: e.toolAnswers }, buyerRefusals: { status: e.buyerRefusals } };
     const failingTools = e.tools.filter((r) => r.status !== "ok");
     const badUps = e.upstreams.filter((r) => r.status !== "ok");
     return {
       toolFailures: { status: e.toolFailures, tools: failingTools.map((r) => ({ slug: r.slug, status: r.status, outside5xx: r.hour.outside5xx, outsideCalls: r.hour.outsideCalls })) },
       upstreamHealth: { status: e.upstreamHealth, upstreams: badUps.map((r) => ({ upstream: r.upstream, status: r.status, failures: r.hour.failures, calls: r.hour.calls, ...(r.unanswered ? { unanswered: r.unanswered.note } : {}) })), ourSide: !!e.upstreamUnanswered?.ourSide },
-      facilitatorFunds: { status: e.facilitatorFunds, alert: e.facilitatorFundsAlert, ...(e.facilitatorFundsUnreadSince !== null ? { unreadSince: new Date(e.facilitatorFundsUnreadSince).toISOString() } : {}), refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => r.status === "low" && !r.coveredByOwnRelayer).length, relayersCovered: e.relayerGas.filter((r) => r.coveredByOwnRelayer).length, relayersUnread: e.relayerGas.filter((r) => r.status === "unread" && !r.coveredByOwnRelayer).length, gasNearFloor: e.relayerGas.some((r) => r.reason === "gasNearFloor") },
+      facilitatorFunds: { status: e.facilitatorFunds, alert: e.facilitatorFundsAlert, ...(e.facilitatorFundsUnreadSince !== null ? { unreadSince: new Date(e.facilitatorFundsUnreadSince).toISOString() } : {}), refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => (r.status === "low" || r.status === "empty") && !r.standby && !r.coveredByOwnRelayer).length, relayersCovered: e.relayerGas.filter((r) => r.coveredByOwnRelayer).length, relayersUnread: e.relayerGas.filter((r) => r.status === "unread" && !r.standby && !r.coveredByOwnRelayer).length, gasNearFloor: e.relayerGas.some((r) => r.reason === "gasNearFloor") },
+      // Operator only: each Solana fee payer's balance, runway and share.
+      solanaFeePayer: { status: e.solanaFeePayer, feePayers: e.relayerGas.filter((r) => String(r.network).startsWith("solana:")).map((r) => ({ facilitator: r.facilitator, feePayer: r.signer, share: r.share ?? null, standby: r.standby === true, status: r.status, balanceSol: r.balanceSol ?? null, runway: r.runway, ...(r.error ? { error: r.error } : {}), at: r.at })) },
       toolAnswers: { status: e.toolAnswers, tools: e.answers.filter((r) => r.status !== "ok").map((r) => ({ slug: r.slug, status: r.status, outsideBad1h: r.hour.outsideBad, outsideChecked1h: r.hour.outsideChecked, outsideBad24h: r.day.outsideBad, outsideChecked24h: r.day.outsideChecked })) },
       // Counts only: no key, no address, no slug.
       buyerRefusals: { status: e.buyerRefusals, refusalsWindow: e.buyerRefusalsWindow, refusals24h: e.buyerRefusalsDay, windowMinutes: e.thresholds.buyerRefusalWindowMs / 60_000 },
@@ -980,7 +998,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       issueSummary: {
         tools: e.tools.filter((r) => r.status !== "ok").map((r) => `${r.slug} (${r.status})`),
         upstreams: e.upstreams.filter((r) => r.status !== "ok").map((r) => `${r.upstream.startsWith("facilitator:") ? "facilitator" : r.upstream} (${r.status})`),
-        facilitatorNetworks: [...new Set([...e.facilitatorRefusals.map((r) => r.network), ...e.relayerGas.filter((r) => (r.status === "low" || r.status === "unread") && !r.coveredByOwnRelayer).map((r) => r.network)])],
+        facilitatorNetworks: [...new Set([...e.facilitatorRefusals.map((r) => r.network), ...e.relayerGas.filter((r) => (r.status === "low" || r.status === "empty" || r.status === "unread") && !r.standby && !r.coveredByOwnRelayer).map((r) => r.network)])],
         answers: e.answers.filter((r) => r.status !== "ok").map((r) => `${r.slug} (${r.status})`),
         identicalAnswers: identical.slugs.map((r) => r.slug),
       },

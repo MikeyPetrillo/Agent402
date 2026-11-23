@@ -27,6 +27,8 @@ t node scripts/test-llms-route-execute-tiers.js
 t node scripts/test-status-probe-worker.js
 # Tool and upstream failure monitor (counting by class and origin, the word thresholds, the replica merge, the Celo settle demotion and its safety rule, words-only public view,
 t node scripts/test-tool-failure-monitor.js
+# Solana fee payer gas runway (ok, low, empty, unread, standby at share 0, words only publicly, one log per state change) and the EVM fallback log rule - offline
+t node scripts/test-facilitator-gas-svm.js
 # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
 t node scripts/test-heartbeat-failure-words.js
 # Three gateway-status words and their two observers

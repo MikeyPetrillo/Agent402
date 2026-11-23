@@ -723,9 +723,12 @@ Auto-closes when nothing is owed.`,
   {
     // A facilitator's settlement signer short of gas before it starts
     // refusing (low, src/facilitator-gas.js). Title matches heartbeat.yml's.
+    // A Solana fee payer short of SOL reads facilitatorFunds=low too, and
+    // solanaFeePayer low or empty pages here even while a refusal outranks
+    // low on facilitatorFunds.
     title: "Scheduled check needs review: facilitator-funds (b)",
-    verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["low"], ["ok"]),
-    body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor (relayersLow). A balance our checker could not read reads unknown and pages under its own title only once that has held for hours; the operator detail counts it (relayersUnread).`,
+    verdict: ({ gateway: b }) => (["low", "empty"].includes(b.solanaFeePayer?.status) ? "bad" : wordVerdict(b.facilitatorFunds?.status, ["low"], ["ok"])),
+    body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor (relayersLow); solanaFeePayer reads low or empty when a Solana fee payer's runway is short. A balance our checker could not read reads unknown and pages under its own title only once that has held for hours; the operator detail counts it (relayersUnread).`,
   },
   {
     // A settlement signer's balance our checker could not read, held past
