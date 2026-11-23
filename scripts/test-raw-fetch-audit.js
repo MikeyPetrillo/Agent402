@@ -84,6 +84,7 @@ const CALLS = {
   "src/tools/crawl-kit.js": [I("crawl hop: asserted per hop, pinned, redirect manual, budget signal")],
   "src/tools/cve-kit.js": [F("pass-through default; NVD is the only host", { t: "init" })],
   "src/tools/domain-audit-kit.js": [F("DNS over HTTPS resolver")],
+  "src/tools/domain-availability-kit.js": [I("pass-through default: IANA's RDAP bootstrap and the registry base it names (data, not the caller's host); pinned to a validated public address, redirect refused (bootstrap) or read by hand (registry), the timeout rides in each call's init", { t: "init" })],
   "src/tools/embed-kit.js": [F("embeddings vendor")],
   "src/tools/fetch-guard.js": [{ cls: "guard", note: "probePublicUrl" }, { cls: "guard", note: "safeFetch" }, { cls: "guard", note: "safeFetch redirect hop: asserted per hop, pinned, redirect manual" }],
   "src/tools/image-gen-kit.js": [F("image vendor")],
