@@ -5175,6 +5175,24 @@ export function isRevertedAuthorizationTransfer(err) {
   return /\btransferWithAuthorization\b"?\s+reverted/i.test(text);
 }
 
+/**
+ * A settler's node refused the transaction before it was sent, and the answer
+ * names no transaction: a failed gas estimate ("gas required exceeds
+ * allowance", "failed to estimate gas", "gas estimation failed") or a
+ * submission refused for its own signer's nonce ("nonce too high"). Nothing
+ * reached the chain, so the authorization is unused, like a reverted transfer.
+ * "nonce too low" is not this (it can follow the settler's own landed send).
+ * Timeouts, transport errors and any answer naming a transaction never are.
+ */
+const NOTHING_SENT_NODE_WORDS = /\bgas required exceeds allowance\b|\b(?:failed|unable|cannot|could not) (?:to )?estimate gas\b|\bgas estimation (?:failed|error)\b|\bestimateGas\b[^.]{0,40}\b(?:failed|reverted|error)\b|\bnonce too high\b/i;
+export function isNothingSentNodeRefusal(err) {
+  if (!err || typeof err !== "object") return false;
+  if (typeof err.transaction === "string" && err.transaction.trim()) return false;
+  if (err.name === "AbortError" || err.name === "TimeoutError" || err.code || err.cause) return false;
+  if (isUnreadableSettleAnswer(err)) return false;
+  return NOTHING_SENT_NODE_WORDS.test(`${err.errorReason || ""} ${err.errorMessage || ""} ${err.message || ""}`);
+}
+
 // Networks settled through an operator-listed facilitator list, where the
 // reverted-transfer answer and a graceful refusal with no verdict pass to the
 // next listed facilitator. Their facilitators settle by EIP-3009 only and each
@@ -5219,7 +5237,7 @@ export function gracefulRefusalOf(payload) {
 /** May this settle refusal go to the next facilitator on `network`? */
 export function isRetryableSettleRefusal(err, network) {
   if (isPreBroadcastSettleRejection(err)) return true;
-  return REVERT_RETRY_NETWORKS.has(String(network || "")) && isRevertedAuthorizationTransfer(err);
+  return REVERT_RETRY_NETWORKS.has(String(network || "")) && (isRevertedAuthorizationTransfer(err) || isNothingSentNodeRefusal(err));
 }
 
 /**

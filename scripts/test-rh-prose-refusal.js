@@ -80,6 +80,28 @@ async function run({ network = RH, primary, listed = [], withOwn = true, outage 
   const out = await hooks.fail({ requirements: p.requirements, paymentPayload: p.paymentPayload, error });
   return { out, asked, handled, error, p };
 }
+/** The same run, with our relayer's answer given and the failure context returned. */
+async function runWith({ network = RH, primary, listed = [], own = null, outage = null }) {
+  __resetSettlementClaims();
+  const asked = [];
+  const p = payment(network);
+  const prim = markGracefulRefusals({ settle: async () => { asked.push("primary"); return primary(); } });
+  let error;
+  try { const r = await prim.settle(p.paymentPayload, p.requirements); error = asCoreError(r); } catch (e) { error = e; }
+  const stub = (name, answer, extra = {}) => ({ name, ...extra, client: { settle: async () => { asked.push(name); return answer(); } } });
+  const candidates = [
+    ...listed.map(([name, answer]) => stub(name, answer, { revertRetry: true, confirmed: true })),
+    ...(own ? [stub(own[0], own[1], { revertRetry: true, confirmed: true, own: true })] : []),
+    stub("Solvador", () => ({ success: true, transaction: txh(`default-${seq}`), network })),
+  ];
+  const hooks = {};
+  const server = { onVerifyFailure() { return this; }, onAfterVerify() { return this; }, onAfterSettle() { return this; }, onSettleFailure(fn) { hooks.fail = fn; return this; } };
+  const outageStub = outage ? { network: RH, handle: async () => { asked.push("outage"); return outage(p); } } : null;
+  registerFacilitatorFailureHooks(server, null, null, { [network]: () => candidates }, { outageFor: (n) => (n === RH ? outageStub : null) });
+  const ctx = { requirements: p.requirements, paymentPayload: p.paymentPayload, error };
+  const out = await hooks.fail(ctx);
+  return { out, asked, ctx };
+}
 const ok = (name) => () => ({ success: true, transaction: txh(`${name}-${seq}`), network: RH });
 const served = (p) => ({ served: true, result: { success: true, transaction: txh(`chain-${seq}`), network: RH, payer: p.paymentPayload.payload.authorization.from } });
 
@@ -219,6 +241,42 @@ await check("another network keeps its rules: a no-verdict refusal in words ther
   const { out, asked } = await run({ network: CELO, primary: () => graceful(NO_VERDICT, CELO), listed: [["Celo2", () => ({ success: true, transaction: txh("celo"), network: CELO })]], outage: served });
   assert.equal(out, undefined);
   assert.deepEqual(asked, ["primary"]);
+});
+
+// ------------------------------------------------------------- nothing sent: a failed gas estimate
+// A listed facilitator whose node refused the transaction before it was sent
+// (a failed gas estimate such as "gas required exceeds allowance", or "nonce
+// too high" at submission) and that names no transaction sent nothing: the
+// chain hands it on like a pre-broadcast refusal, and when nothing settles
+// the buyer gets a plain 402, never settlement-unconfirmed.
+const GAS_EST = "gas required exceeds allowance (0)";
+await check("a failed gas estimate or a nonce-too-high submission with no transaction is nothing-sent, on 4663 and Ink only", async () => {
+  const { isRetryableSettleRefusal, isNothingSentNodeRefusal } = await import("../src/payments.js");
+  for (const [reason, msg] of [["unexpected_settle_error", GAS_EST], ["invalid_exact_evm_transaction_failed", "failed to estimate gas: execution reverted"], ["", "Error: nonce too high: address 0xabc, tx: 7 state: 5"], [GAS_EST, ""]]) {
+    const e = asCoreError({ success: false, errorReason: reason, errorMessage: msg, transaction: "", network: RH });
+    assert.equal(isNothingSentNodeRefusal(e), true, `${reason} ${msg}`);
+    assert.equal(isRetryableSettleRefusal(e, RH), true, `4663: ${msg}`);
+    assert.equal(isRetryableSettleRefusal(e, "eip155:57073"), true, `Ink: ${msg}`);
+    assert.equal(isRetryableSettleRefusal(e, "eip155:8453"), false, `Base keeps its rule: ${msg}`);
+  }
+  assert.equal(isNothingSentNodeRefusal(asCoreError({ success: false, errorReason: "unexpected_settle_error", errorMessage: GAS_EST, transaction: txh("named"), network: RH })), false, "names a transaction");
+  assert.equal(isNothingSentNodeRefusal(Object.assign(new Error(GAS_EST), { code: "ETIMEDOUT" })), false, "transport");
+  assert.equal(isNothingSentNodeRefusal(asCoreError(graceful(NO_VERDICT))), false, "other words");
+  assert.equal(isNothingSentNodeRefusal(asCoreError(graceful("nonce too low"))), false, "nonce too low may follow a landed send");
+});
+await check("the reported sequence: primary refuses pre-broadcast (nonce too high), the next listed fails its gas estimate, our relayer is under its minimum -> plain 402, never unconfirmed", async () => {
+  const p0 = { primary: () => { throw new SettleError(402, { success: false, errorReason: "unexpected_settle_error", errorMessage: "nonce too high", transaction: "", network: RH }); } };
+  const ownUnder = ["own", () => ({ success: false, errorReason: "own_relayer_below_minimum", errorMessage: "under the minimum", transaction: "", network: RH, nothingSent: true })];
+  const r = await runWith({ ...p0, listed: [["RH2", () => ({ success: false, errorReason: "unexpected_settle_error", errorMessage: GAS_EST, transaction: "", network: RH })]], own: ownUnder, outage: () => ({ refused: true, lateAuth: null, reason: "stub refused" }) });
+  assert.equal(r.out, undefined, "the earlier refusal stands: a plain 402");
+  assert.deepEqual(r.asked, ["primary", "RH2", "own"], "the relayer is asked after the nothing-sent gas refusal; no chain read, no default chain");
+  assert.equal(r.ctx.__a402UnconfirmedStop, undefined, "never settlement-unconfirmed");
+  assert.equal(r.ctx.__a402LateAuth, undefined, "nothing booked");
+});
+await check("a failed gas estimate from the primary hands on to the next listed, which settles", async () => {
+  const r = await runWith({ primary: () => ({ success: false, errorReason: "unexpected_settle_error", errorMessage: GAS_EST, transaction: "", network: RH }), listed: [["RH2", ok("rh2")]], outage: served });
+  assert.equal(r.out?.recovered, true);
+  assert.deepEqual(r.asked, ["primary", "RH2"]);
 });
 
 console.log(failures ? `\ntest-rh-prose-refusal: FAILED (${failures})` : "\ntest-rh-prose-refusal: all passed");
