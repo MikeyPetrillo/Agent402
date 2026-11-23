@@ -287,8 +287,9 @@ export function claimUntilMs(paymentToken, nowMs = Date.now()) {
 /**
  * Per-client rate limits on /aws (one fixed minute window each, in this
  * process; keys are digests, never the address or the buyer id itself):
- *   - an unpaid request (a quote or a refusal) per client address (an IPv6
- *     address by its /64): `quotesPerMin`;
+ *   - an unpaid request (a quote or a refusal, and a request whose payment
+ *     header does not verify) per client address (an IPv6 address by its
+ *     /64): `quotesPerMin`;
  *   - a paid request whose payment has not been accepted for a run yet, per
  *     AWS buyer (the verified token's `sub`) and per client address:
  *     `paidPerMin` each.
@@ -584,6 +585,33 @@ export async function createAwsMarketplaceGate({
     }
   }
 
+  // Watches the paywall's own answer to a request that carries a payment:
+  // its 402 status is counted as an unpaid request, and when that is past the
+  // limit, the 402's headers and body are replaced by the 429. Returns the
+  // function that ends the watch (called when the payment verified).
+  function limitUnverified(req, res, slug) {
+    const OWN = ["status", "setHeader", "json", "send"];
+    let wait = 0, watching = true;
+    const end = () => { if (!watching) return; watching = false; for (const m of OWN) delete res[m]; };
+    res.status = function status(code) {
+      if (watching && Number(code) === 402 && !wait) wait = limits.quote(clientKey(req));
+      if (wait > 0) return res;
+      return Object.getPrototypeOf(res).status.call(res, code);
+    };
+    res.setHeader = function setHeader(...args) {
+      if (wait > 0) return res;
+      return Object.getPrototypeOf(res).setHeader.apply(res, args);
+    };
+    const finish = (m) => function (...args) {
+      if (wait > 0) { end(); counters.limitedUnpaid++; tooMany(res, slug, wait, false); return res; }
+      end();
+      return res[m](...args);
+    };
+    res.json = finish("json");
+    res.send = finish("send");
+    return end;
+  }
+
   async function handler(req, res, next) {
     const slug = awsSlugOfPath(req.path, defs);
     if (!slug) return next();
@@ -604,8 +632,14 @@ export async function createAwsMarketplaceGate({
       }
       counters.quotes++;
     }
+    // A payment header that does not verify is answered the paywall's 402
+    // (a fresh quote). That answer is counted against the unpaid limit, and
+    // past it the client gets the 429 instead of the quote, so a header of
+    // junk is no way around the limit. A payment that verifies never reaches
+    // this: its run starts (next) before anything is written.
+    const unlimit = carriesPayment(req) ? limitUnverified(req, res, slug) : () => {};
     try {
-      await mw(req, res, () => runPaid(req, res, def));
+      await mw(req, res, () => { unlimit(); return runPaid(req, res, def); });
     } catch (err) {
       try { log(`[aws-marketplace] ${slug}: ${String(redact(String(err?.message || err))).slice(0, 160)}`); } catch { /* never throws */ }
       if (!res.headersSent) res.status(500).json({ error: "The request could not be completed.", tool: slug });

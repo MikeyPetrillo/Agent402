@@ -400,6 +400,20 @@ await new Promise((r) => srv.close(r));
     const resend = await send("/aws/flaky2", { text: "a" }, "198.51.100.77", { "payment-signature": acc.hdr });
     await new Promise((r) => setTimeout(r, 20));
     ok(resend.status === 200 && sold.filter((s) => s.tx === acc.id).length === 1, `the accepted payment's resend is served with its buyer past the limit (${resend.status})`);
+    // A payment header that does not verify is counted as an unpaid request:
+    // junk headers get no fresh quote past the limit; a payment that verifies
+    // from the same address is still served.
+    clock.t += 61_000;
+    const junk = [];
+    for (const h of [{ "x-payment": "garbage" }, { "payment-signature": "not-base64!" }, { "x-payment": Buffer.from(JSON.stringify({ x402Version: 2, payload: {} })).toString("base64") }, { "x-payment": "garbage" }]) {
+      const r = await send("/aws/echo", { text: "x" }, "198.51.100.200", h);
+      junk.push([r.status, r.headers.get("payment-required") ? "quote" : "none", await r.json().catch(() => ({}))]);
+    }
+    ok(junk[0][0] === 402 && junk[1][0] === 402 && junk[2][0] === 429 && junk[3][0] === 429 && junk[2][1] === "none" && junk[2][2].errorReason === "rate_limited" && !("paymentUsed" in junk[2][2]), `payment headers that do not verify count against the unpaid limit (${junk.map((j) => `${j[0]}/${j[1]}`).join(",")})`);
+    const okPay = await freshPay("/aws/echo", "198.51.100.201", { sub: "junk-neighbor" });
+    const served = await send("/aws/echo", { text: "x" }, "198.51.100.200", { "payment-signature": okPay.hdr });
+    await new Promise((r) => setTimeout(r, 20));
+    ok(served.status === 200 && sold.filter((s) => s.tx === okPay.id).length === 1, `a payment that verifies is served from an address past the unpaid limit (${served.status})`);
     ok(g2.stats().limitedPaid >= 2 && g2.stats().limitedUnpaid >= 2, "the operator counters record both kinds of refusal");
   } finally { await new Promise((r) => srv2.close(r)); }
 }
