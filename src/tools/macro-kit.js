@@ -22,7 +22,7 @@
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingLeftMs } from "../run-ceiling.js";
-import { US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION, WORLD_BANK_LICENSE, WORLD_BANK_LICENSE_URL, worldBankCredit } from "../data-attribution.js";
+import { attribute, US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION, WORLD_BANK_LICENSE, WORLD_BANK_LICENSE_URL, worldBankCredit } from "../data-attribution.js";
 import { notChargedOn } from "../not-charged.js";
 import { usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
@@ -887,7 +887,7 @@ MACRO_TOOLS.push(
     // inputs through src/tools/us-macro-series.js (BLS and the New York Fed),
     // never FRED; each answer carries the publisher's credit, the retrieval
     // date and the publisher's terms.
-    route: "GET /api/sahm-rule", name: "Sahm Rule recession indicator", slug: "sahm-rule", category: "data", price: "$0.005",
+    route: "GET /api/sahm-rule", name: "Sahm Rule recession indicator", slug: "sahm-rule", category: "data", attribution: "bls", price: "$0.005",
     upstreamHosts: ["api.bls.gov"],
     description:
       "Sahm Rule recession indicator, computed from the U.S. Bureau of Labor Statistics unemployment rate (series LNS14000000): it triggers when the 3-month moving average of US unemployment rises ≥0.50 percentage points above the lowest 3-month average of the prior 12 months. No params. Each answer carries the BLS retrieval date and the BLS statement on derived data.",
@@ -917,7 +917,7 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/cpi-yoy", name: "US CPI year-over-year inflation", slug: "cpi-yoy", aliases: ["us-cpi-year-over-year-inflation", "cpi-inflation", "inflation-rate"], category: "data", price: "$0.005",
+    route: "GET /api/cpi-yoy", name: "US CPI year-over-year inflation", slug: "cpi-yoy", aliases: ["us-cpi-year-over-year-inflation", "cpi-inflation", "inflation-rate"], category: "data", attribution: "bls", price: "$0.005",
     upstreamHosts: ["api.bls.gov"],
     description:
       "Latest US Consumer Price Index year-over-year inflation rate (headline CPI-U, seasonally adjusted) plus the trailing 12 months of YoY readings - the headline inflation number. A month with no published value is listed in missingDates rather than dropped silently. Computed from the U.S. Bureau of Labor Statistics CPI-U index (series CUSR0000SA0). No params. Each answer carries the BLS retrieval date and the BLS statement on derived data.",
@@ -954,7 +954,7 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/unemployment-rate", name: "US unemployment rate (UNRATE)", slug: "unemployment-rate", category: "data", price: "$0.005",
+    route: "GET /api/unemployment-rate", name: "US unemployment rate (UNRATE)", slug: "unemployment-rate", category: "data", attribution: "bls", price: "$0.005",
     upstreamHosts: ["api.bls.gov"],
     description:
       "Latest US unemployment rate (current, as of date) plus a trailing N-month history of {date, value} for trend, seasonally adjusted, in percent. Source: U.S. Bureau of Labor Statistics (series LNS14000000, the series known as UNRATE). A month with no published value is listed in missingDates rather than dropped silently. ?months=12 (1-120, default 12). Each answer carries the BLS retrieval date and statement.",
@@ -990,10 +990,10 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/fed-funds", name: "Effective federal funds rate", slug: "fed-funds", aliases: ["effective-federal-funds-rate", "federal-funds-rate", "fed-funds-rate"], category: "data", price: "$0.005",
+    route: "GET /api/fed-funds", name: "Effective federal funds rate", slug: "fed-funds", aliases: ["effective-federal-funds-rate", "federal-funds-rate", "fed-funds-rate"], category: "data", attribution: "nyfed", price: "$0.005",
     upstreamHosts: ["markets.newyorkfed.org"],
     description:
-      "Current effective federal funds rate (current, as of date, in percent) plus a trailing N-day history of {date, value} over calendar days, a weekend or holiday carrying the rate of the business day before it. Source: the Federal Reserve Bank of New York's Effective Federal Funds Rate (EFFR), with its notice. ?days=30 (1-365, default 30). Agent402 is not affiliated with the New York Fed.",
+      "Current effective federal funds rate (current, as of date, in percent) plus a trailing N-day history of {date, value} over calendar days, a weekend or holiday carrying the rate of the business day before it. Source: the Federal Reserve Bank of New York's Effective Federal Funds Rate (EFFR), with its notice. ?days=30 (1-365, default 30). Each answer carries the New York Fed notice and the retrieval date.",
     tags: ["fed-funds", "interest-rates", "monetary-policy", "fomc", "fed", "macro", "effr"],
     discovery: {
       input: { days: 30 },
@@ -1022,6 +1022,11 @@ MACRO_TOOLS.push(
     },
   },
 );
+
+// The computed tools' descriptions end with their publisher's sentence
+// (src/data-attribution.js): BLS for the labor and price series, the New York
+// Fed for the funds rate.
+for (const t of MACRO_TOOLS) if (t.attribution === "bls" || t.attribution === "nyfed") attribute(t, t.attribution);
 
 // ---- month and day helpers for the computed tools ----------------------------
 const isoMonth = (y, m) => new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);

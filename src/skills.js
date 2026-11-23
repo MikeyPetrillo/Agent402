@@ -188,7 +188,7 @@ const SKILL_PACKS_ALL = [
     slug: "fixed-income-desk",
     title: "Fixed-income desk",
     tagline:
-      "Read the rate environment and price a bond in one workflow: the live Treasury curve, the 2s10s and 3M-10Y spreads, inflation context, then price and yield a specific coupon bond at current rates.",
+      "Read the rate environment and price a bond in one workflow: the live Treasury curve, the 2s10s and 3M-10Y spreads, the year-over-year CPI inflation from the U.S. Bureau of Labor Statistics for context, then price and yield a specific coupon bond at current rates.",
     useCase:
       "Evaluating a bond or building a rates view - you want the current curve, the 2s10s spread as a cycle signal, real-yield context from inflation, and the price/yield math on a specific coupon bond, all grounded in live Treasury data.",
     promptArgs: [
@@ -363,7 +363,7 @@ const SKILL_PACKS_ALL = [
     slug: "macro-economics",
     title: "Macro economics",
     tagline:
-      "Pull the canonical US macro dataset - the Treasury yield curve and its spreads, CPI, unemployment, fed funds, Sahm rule - without an API key, each figure with its as-of date.",
+      "Pull the canonical US macro dataset - the Treasury yield curve and its spreads, CPI, unemployment, fed funds, Sahm rule - no API key, each figure dated.",
     useCase:
       "Producing a weekly macro note, charting a macro indicator dashboard, or feeding a model with the latest BLS, New York Fed and Treasury data.",
     promptArgs: [],
@@ -390,7 +390,7 @@ const SKILL_PACKS_ALL = [
     slug: "macro-dashboard",
     title: "Macro dashboard refresh",
     tagline:
-      "The full macro + crypto dashboard in one call: 4 BLS and New York Fed indicators, 5 Treasury reads, yield-curve spread, crypto market/trending/global, and live gas - a 13-tool macro + crypto basket, bundled below its a la carte price.",
+      "The full US macro and crypto dashboard in one call, below a la carte prices. 4 BLS and New York Fed indicators, 5 Treasury reads, yield-curve spread, crypto market/trending/global and live gas: a 13-tool macro + crypto basket.",
     useCase:
       // The price is read from PACK_PRICES (generated from the catalog), never typed.
       `An agent keeping a live macro dashboard warm needs the same basket of reads every refresh cycle. Buying the tools one at a time costs more per cycle than the bundle; this pack is $${fmtPackUsd(PACK_PRICES["macro-dashboard"])} for one call, one payment, every series in one JSON envelope.`,

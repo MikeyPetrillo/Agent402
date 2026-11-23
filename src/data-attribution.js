@@ -88,8 +88,14 @@ export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, the New York Fed and 
 // in src/tools/macro-kit.js) read the same publishers through
 // src/tools/us-macro-series.js: each answer's `credit` opens with its
 // publisher's source line, then that publisher's own statement or notice.
+// Their descriptions end with the publisher's sentence (keys "bls" and
+// "nyfed"; the New York Fed's carries the disclaimer its terms ask of a
+// product described with its rates), so a skill pack that runs them names
+// each publisher too.
 export const BLS_ATTRIBUTION = "Source: U.S. Bureau of Labor Statistics (https://www.bls.gov).";
 export const NYFED_ATTRIBUTION = "Source: Federal Reserve Bank of New York (https://www.newyorkfed.org).";
+export const BLS_SOURCE_SENTENCE = "Source: U.S. Bureau of Labor Statistics.";
+export const NYFED_SOURCE_SENTENCE = "Source: Federal Reserve Bank of New York. Agent402 is not affiliated with the New York Fed.";
 export const CAMS_ATTRIBUTION = "Contains modified Copernicus Atmosphere Monitoring Service information (CAMS ENSEMBLE data provider).";
 export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
 // GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place
@@ -178,6 +184,8 @@ export const ATTRIBUTIONS = Object.freeze({
   ecb: ECB_ATTRIBUTION,
   "us-treasury": US_TREASURY_ATTRIBUTION,
   "us-agencies": US_AGENCIES_ATTRIBUTION,
+  bls: BLS_SOURCE_SENTENCE,
+  nyfed: NYFED_SOURCE_SENTENCE,
   "open-meteo-cams": `${OPEN_METEO_ATTRIBUTION} ${CAMS_CREDIT}`,
   "open-meteo-c3s": `${OPEN_METEO_ATTRIBUTION} ${C3S_CREDIT}`,
   "open-meteo-copernicus-geonames": `${OPEN_METEO_ATTRIBUTION} ${GEONAMES_ATTRIBUTION} ${CAMS_C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`,
