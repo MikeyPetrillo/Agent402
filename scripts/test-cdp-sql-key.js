@@ -48,7 +48,9 @@ const subOf = (token) => JSON.parse(Buffer.from(token.split(".")[1], "base64url"
 const fresh = () => { calls.length = 0; status = 200; _resetSqlPacerForTest(0); _setQueryHealthForTest(true); _resetCdpLogThrottleForTest?.(); };
 const sqlRun = () => tool("onchain-sql").handler({ sql: "SELECT block_number FROM base.blocks LIMIT 1" });
 const schema = () => tool("onchain-sql-schema").handler({});
-const balances = () => tool("wallet-balances").handler({ address: "0x" + "1".repeat(40), network: "base" });
+// A CDP call outside the SQL API, through the transport itself: no tool reads
+// the balances API now (wallet-balances reads our own RPC lanes).
+const balances = () => kit._cdpFetchForTest("GET", `/platform/v2/evm/token-balances/base/0x${"1".repeat(40)}?pageSize=100`);
 const by = (re) => calls.filter((c) => re.test(c.path));
 
 try {
@@ -57,14 +59,14 @@ try {
   await sqlRun(); await schema(); await cdpSql("SELECT 1"); await balances();
   const q = by(/\/data\/query\/run$/), sc = by(/\/data\/query\/schema$/), tb = by(/\/token-balances\//);
   ok(q.length >= 2 && q.every((c) => signer(c.token) === "sql") && q.every((c) => subOf(c.token) === SQL.id), `a buyer's query and this server's own SQL read sign with the SQL pair (${q.map((c) => signer(c.token)).join()})`);
-  ok(sc.length === 1 && signer(sc[0].token) === "sql", "the query schema read signs with the SQL pair");
+  ok(sc.length === 0, "the schema answer reads nothing from the service (it is kept here)");
   ok(tb.length === 1 && signer(tb[0].token) === "main" && subOf(tb[0].token) === MAIN.id, "a call outside the SQL API keeps the main pair");
   ok(cdpCredentialsFor("/platform/v2/data/query/run").source === "sql" && cdpCredentialsFor("/platform/v2/data/query/schema").source === "sql" && cdpCredentialsFor("/platform/v2/evm/faucet").source === "main" && cdpCredentialsFor("/platform/v2/onramp/sessions").source === "main" && cdpCredentialsFor("/platform/v2/data/queryx").source === "main", "only the SQL API paths take the SQL pair");
 
   // No SQL pair: every call signs with the main pair, as before.
   setEnv(MAIN, null); fresh();
   await sqlRun(); await schema(); await balances();
-  ok(calls.length >= 3 && calls.every((c) => signer(c.token) === "main"), `with no SQL pair every call signs with the main pair (${calls.map((c) => signer(c.token)).join()})`);
+  ok(calls.length >= 2 && calls.every((c) => signer(c.token) === "main"), `with no SQL pair every call signs with the main pair (${calls.map((c) => signer(c.token)).join()})`);
 
   // Half a pair is not a pair: the main pair signs, never a mix of the two.
   for (const [label, half] of [["id only", { id: SQL.id, pem: null }], ["secret only", { id: null, pem: SQL.pem }], ["blank id", { id: "   ", pem: SQL.pem }]]) {
