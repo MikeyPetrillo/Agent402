@@ -181,6 +181,15 @@ export class Agent402 {
 }
 export default Agent402;
 
+/** A wallet-only tool was called with no way to pay (no `fetch` that pays
+ *  over x402 or MPP, no `creditsKey`). Nothing was signed or charged. */
+export class WalletRequiredError extends Error {
+  name: "WalletRequiredError";
+  code: "WALLET_REQUIRED";
+  slug: string;
+  status: 402;
+  paid: false;
+}
 export class SpendingLimitError extends Error {
   /** Which cap refused: "maxPerCallUsd", "dailyLimitUsd", "maxPerHostUsd", "knownAsset" or "signing". */
   limit: string;

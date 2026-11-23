@@ -903,7 +903,8 @@ export class Agent402 {
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
       if (r.ok) return this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: false });
-      throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (a prepaid credits key; routes that buy from an outside seller need a wallet)`);
+      if (r.status === 402) throw new WalletRequiredError(slug);
+      throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; ${WALLET_REQUIRED_HINT}`);
     }
 
     // Free (compute-payable) tool: succeeds plainly on a FREE_MODE instance,
@@ -1324,6 +1325,22 @@ export class OutputValidationError extends Error {
     this.contractId = contractId;
     this.paid = Boolean(paid);
     this.cacheHit = Boolean(cacheHit);
+  }
+}
+
+const WALLET_REQUIRED_HINT = "construct with { fetch: payFetch } (a fetch that pays over x402, wrapped by @x402/fetch, or over MPP, wrapped by mppx) or { creditsKey } (a prepaid credits key; routes that buy from an outside seller need a wallet)";
+
+/** A wallet-only tool was called with no way to pay: no `fetch` that pays over
+ *  x402 or MPP and no `creditsKey`. Nothing was signed and nothing was charged.
+ *  `code` is "WALLET_REQUIRED", so a caller can branch without reading the text. */
+export class WalletRequiredError extends Error {
+  constructor(slug) {
+    super(`call "${slug}" needs payment: HTTP 402 - wallet-only tool; ${WALLET_REQUIRED_HINT}`);
+    this.name = "WalletRequiredError";
+    this.code = "WALLET_REQUIRED";
+    this.slug = slug;
+    this.status = 402;
+    this.paid = false;
   }
 }
 
