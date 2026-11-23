@@ -227,6 +227,17 @@ const SIG = "5".repeat(87);
   ok(await status(() => checkSolanaRpcRequest({ method: "getSlot", params: [1, 2, 3, 4, 5] })) === 400, "solana-rpc: more than 4 params is refused");
   ok(await status(() => checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: [ADDR, { mint: ADDR, programId: ADDR }] })) === 400, "solana-rpc: a token filter must be exactly one of mint or programId");
   ok(await status(() => checkSolanaRpcRequest({ method: "getSlot", network: "devnet" })) === 400, "solana-rpc: only mainnet is served");
+  // Heavy reads are refused or bounded before any egress.
+  ok(await status(() => checkSolanaRpcRequest({ method: "getSlot", network: { toString: 1 } })) === 400 && await status(() => checkSolanaRpcRequest({ method: "getSlot", network: 1 })) === 400, "solana-rpc: a network that is not text is a 400");
+  ok(await status(() => checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: [ADDR, { programId: ADDR }] })) === 400, "solana-rpc: an owner-wide programId scan is refused (name the mint)");
+  ok(checkSolanaRpcRequest({ method: "getTokenAccountsByOwner", params: [ADDR, { mint: ADDR }] }).params[1].mint === ADDR, "solana-rpc: a mint filter is read");
+  for (const enc of [undefined, "base64", "base58", "base64+zstd"]) {
+    const cfg = enc ? { encoding: enc } : undefined;
+    ok(await status(() => checkSolanaRpcRequest({ method: "getAccountInfo", params: cfg ? [ADDR, cfg] : [ADDR] })) === 400, `solana-rpc: getAccountInfo in ${enc || "the default base64"} without a dataSlice is refused`);
+    ok(await status(() => checkSolanaRpcRequest({ method: "getAccountInfo", params: [ADDR, { ...(cfg || {}), dataSlice: { offset: 0, length: 70_000 } }] })) === 400, `solana-rpc: a dataSlice over 64 KB in ${enc || "base64"} is refused`);
+    ok(checkSolanaRpcRequest({ method: "getAccountInfo", params: [ADDR, { ...(cfg || {}), dataSlice: { offset: 0, length: 1024 } }] }).params[1].dataSlice.length === 1024, `solana-rpc: getAccountInfo in ${enc || "base64"} with a dataSlice is read`);
+  }
+  ok(checkSolanaRpcRequest({ method: "getAccountInfo", params: [ADDR, { encoding: "jsonParsed" }] }).params[1].encoding === "jsonParsed", "solana-rpc: getAccountInfo in jsonParsed is read without a slice");
 
   process.env.SOLANA_RPCS = "https://rpc-a.example.com,https://rpc-b.example.com";
   _resetHardCaps();
@@ -243,9 +254,17 @@ const SIG = "5".repeat(87);
   ok(e?.statusCode === 502 && /Node error: Slot 1 was skipped/.test(e.message) && seen.length === 1, "solana-rpc: a node's own error is a 502 answer, not a walk");
 
   inner = async () => rpcOk({ value: "x".repeat(210_000) });
-  ok((await errOf(() => run("solana-rpc", { method: "getAccountInfo", params: [ADDR] })))?.statusCode === 413, "solana-rpc: a result over 200KB is 413");
+  ok((await errOf(() => run("solana-rpc", { method: "getAccountInfo", params: [ADDR, { encoding: "jsonParsed" }] })))?.statusCode === 413, "solana-rpc: a result over 200KB is 413");
   inner = async () => new Response("{\"result\":\"" + "y".repeat(2_100_000) + "\"}", { status: 200 });
-  ok((await errOf(() => run("solana-rpc", { method: "getAccountInfo", params: [ADDR] })))?.statusCode === 413, "solana-rpc: a node body over the read cap is cut off and answers 413");
+  ok((await errOf(() => run("solana-rpc", { method: "getAccountInfo", params: [ADDR, { encoding: "jsonParsed" }] })))?.statusCode === 413, "solana-rpc: a node body over the read cap is cut off and answers 413");
+
+  // A block's signature list is served cut and marked, never a 413.
+  inner = async () => rpcOk({ blockHeight: 1, blockhash: ADDR, signatures: Array.from({ length: 3000 }, () => SIG) });
+  const big = await run("solana-rpc", { method: "getBlock", params: [250000000, { transactionDetails: "signatures" }] });
+  ok(big.result.signatures.length === 1000 && big.signaturesTotal === 3000 && big.complete === false && big.truncated === true && big.returned === 1000 && big.matched === 3000, `solana-rpc: a block's 3,000 signatures are served as the first 1,000, marked partial (${big.result?.signatures?.length}, ${big.signaturesTotal})`);
+  inner = async () => rpcOk({ blockHeight: 1, signatures: [SIG, SIG] });
+  const small = await run("solana-rpc", { method: "getBlock", params: [250000000, { transactionDetails: "signatures" }] });
+  ok(small.result.signatures.length === 2 && !("signaturesTotal" in small), "solana-rpc: a small block is served whole and unmarked");
 
   inner = async () => { throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); };
   const down = await errOf(() => run("solana-rpc", { method: "getSlot" }));

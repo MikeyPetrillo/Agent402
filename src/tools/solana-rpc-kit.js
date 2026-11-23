@@ -24,6 +24,7 @@
 
 import { ssrfDispatcher } from "./fetch-guard.js";
 import { redactSecrets } from "./redact.js";
+import { partialFields } from "../partial-answer.js";
 import { readBytesCapped, decodeUtf8 } from "../capped-body.js";
 import { SOLANA_RPCS } from "../solana-history-rpc.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, isUpstreamFailure, budgetSpentError, budgetSpent, currentBudget } from "../upstream-deadline.js";
@@ -78,6 +79,18 @@ function dataSlice(c) {
   if (!isPlainObject(d) || !Number.isSafeInteger(d.offset) || !Number.isSafeInteger(d.length) || d.offset < 0 || d.length < 0) throw bad(`dataSlice must be { offset, length } with whole numbers`);
   return c;
 }
+// An account's raw bytes are read only through a slice: an account can hold
+// megabytes, which the node would send whole before the result cap refused
+// them. jsonParsed answers are read without one.
+const ACCOUNT_SLICE_MAX = 65_536;
+function rawSliceRequired(c) {
+  if (c.encoding === "jsonParsed") return c;
+  if (c.dataSlice === undefined) throw bad(`getAccountInfo in ${c.encoding} needs a dataSlice { offset, length } of at most ${ACCOUNT_SLICE_MAX} bytes (or encoding "jsonParsed")`);
+  if (c.dataSlice.length > ACCOUNT_SLICE_MAX) throw bad(`dataSlice.length is capped at ${ACCOUNT_SLICE_MAX} bytes`);
+  return c;
+}
+// A block's signature list is served up to this many, marked partial past it.
+const BLOCK_SIGNATURES_MAX = 1000;
 const noParams = (what) => (p) => {
   if (p.length > 1) throw bad(`${what} takes at most one parameter (a config object)`);
   return p.length ? [config(p[0], "the config", ["commitment", "minContextSlot"])] : [];
@@ -98,7 +111,7 @@ const METHODS = {
   },
   getAccountInfo: (p) => {
     if (p.length < 1 || p.length > 2) throw bad(`getAccountInfo takes [address, config?]`);
-    return [address(p[0], "the address"), dataSlice(encoding(config(p[1], "the config", ["commitment", "minContextSlot", "encoding", "dataSlice"]), "base64"))];
+    return [address(p[0], "the address"), rawSliceRequired(dataSlice(encoding(config(p[1], "the config", ["commitment", "minContextSlot", "encoding", "dataSlice"]), "base64")))];
   },
   getTokenAccountBalance: (p) => {
     if (p.length < 1 || p.length > 2) throw bad(`getTokenAccountBalance takes [tokenAccount, config?]`);
@@ -112,7 +125,10 @@ const METHODS = {
     if (p.length < 2 || p.length > 3) throw bad(`getTokenAccountsByOwner takes [owner, { mint } or { programId }, config?]`);
     const f = p[1];
     if (!isPlainObject(f) || Object.keys(f).length !== 1 || !(f.mint !== undefined || f.programId !== undefined)) throw bad(`the filter must be exactly one of { mint } or { programId }`);
-    const filter = f.mint !== undefined ? { mint: address(f.mint, "the mint") } : { programId: address(f.programId, "the programId") };
+    // An owner's accounts under a whole token program is an unbounded scan:
+    // the filter names one mint.
+    if (f.mint === undefined) throw bad(`the filter must be { mint }; a { programId } filter reads every account the owner holds under the program and is not served`);
+    const filter = { mint: address(f.mint, "the mint") };
     return [address(p[0], "the owner"), filter, dataSlice(encoding(config(p[2], "the config", ["commitment", "minContextSlot", "encoding", "dataSlice"]), "jsonParsed"))];
   },
   getSignaturesForAddress: (p) => {
@@ -227,7 +243,8 @@ export function checkSolanaRpcRequest(input) {
   if (!method) {
     throw bad(`${rawMethod ? `Method "${rawMethod.slice(0, 60)}" is not allowed: read-only allowlist only` : `"method" is required`}. Allowed: ${SOLANA_RPC_METHODS.join(", ")}`);
   }
-  if (input.network !== undefined && input.network !== null && input.network !== "" && String(input.network).toLowerCase() !== "mainnet" && String(input.network).toLowerCase() !== "solana") {
+  if (input.network !== undefined && input.network !== null && typeof input.network !== "string") throw bad(`"network" must be text: "mainnet"`);
+  if (input.network !== undefined && input.network !== null && input.network !== "" && input.network.toLowerCase() !== "mainnet" && input.network.toLowerCase() !== "solana") {
     throw bad(`"network" must be "mainnet" (Solana mainnet is the only network served)`);
   }
   const params = input.params === undefined || input.params === null ? [] : input.params;
@@ -249,7 +266,7 @@ export const SOLANA_RPC_TOOLS = [
     category: "crypto",
     price: "$0.004",
     description:
-      `Read-only JSON-RPC against Solana mainnet with multi-endpoint failover: one paid call, no node or API key of your own. Allowlisted reads only: ${SOLANA_RPC_METHODS.join(", ")}. getProgramAccounts and every send, simulate, airdrop and subscription method are refused. Heavy reads stay small: getBlock returns signatures or no transaction list (never full bodies) and no rewards unless asked, getSignaturesForAddress returns 20 rows by default and 100 at most, getSignatureStatuses takes up to 20 signatures. Results over 200KB serialized return 413; narrow the query (a dataSlice, a mint filter, a smaller limit).`,
+      `Read-only JSON-RPC against Solana mainnet with multi-endpoint failover: one paid call, no node or API key of your own. Allowlisted reads only: ${SOLANA_RPC_METHODS.join(", ")}. getProgramAccounts and every send, simulate, airdrop and subscription method are refused. Heavy reads stay small: getBlock returns signatures (the first ${BLOCK_SIGNATURES_MAX.toLocaleString("en-US")}, marked partial past that) or no transaction list (never full bodies) and no rewards unless asked, getAccountInfo reads raw account bytes through a dataSlice of at most ${ACCOUNT_SLICE_MAX.toLocaleString("en-US")} bytes (or jsonParsed), getTokenAccountsByOwner takes a mint filter, getSignaturesForAddress returns 20 rows by default and 100 at most, getSignatureStatuses takes up to 20 signatures. Results over 200KB serialized return 413; narrow the query (a dataSlice, a mint filter, a smaller limit).`,
     tags: ["crypto", "solana", "rpc", "json-rpc", "svm", "spl", "account", "transaction", "balance", "slot"],
     discovery: {
       bodyType: "json",
@@ -268,7 +285,15 @@ export const SOLANA_RPC_TOOLS = [
     },
     handler: async (i) => {
       const { method, params } = checkSolanaRpcRequest(i || {});
-      const result = await solanaJsonRpc(method, params);
+      let result = await solanaJsonRpc(method, params);
+      // A large block's signature list is cut, not refused: the node already
+      // answered, so the buyer gets the first signatures, marked partial.
+      let cut = {};
+      if (method === "getBlock" && Array.isArray(result?.signatures) && result.signatures.length > BLOCK_SIGNATURES_MAX) {
+        const total = result.signatures.length;
+        result = { ...result, signatures: result.signatures.slice(0, BLOCK_SIGNATURES_MAX) };
+        cut = { signaturesTotal: total, ...partialFields(total, BLOCK_SIGNATURES_MAX) };
+      }
       const resultJson = JSON.stringify(result);
       const resultBytes = resultJson === undefined ? 0 : Buffer.byteLength(resultJson, "utf8");
       if (resultBytes > SOLANA_RPC_MAX_RESULT_BYTES) {
@@ -277,7 +302,7 @@ export const SOLANA_RPC_TOOLS = [
           413,
         );
       }
-      return { network: "mainnet", method, result };
+      return { network: "mainnet", method, result, ...cut };
     },
   },
 ];
