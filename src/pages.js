@@ -17,6 +17,7 @@ import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
 import { captureNote } from "./tool-output-examples.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
+import { getWalletHtml } from "./get-a-wallet.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
@@ -291,6 +292,38 @@ export function powSnippetRequest(baseUrl, tool) {
   };
 }
 
+/** The page's Python sample, standard library only: on a proof-of-work tool
+ *  the free call (the same request as the JavaScript snippet), on any other
+ *  the 402 and the quote its PAYMENT-REQUIRED header carries. */
+export function pythonExample(baseUrl, tool, { computePayable = false } = {}) {
+  const req = powSnippetRequest(baseUrl, tool);
+  const send = (headers) => `req = urllib.request.Request(${JSON.stringify(req.url)}, method=${JSON.stringify(req.method)}${req.body != null ? `, data=${JSON.stringify(req.body)}.encode()` : ""}, headers={${[...headers, ...(req.body != null ? ['"Content-Type": "application/json"'] : [])].join(", ")}})`;
+  if (computePayable) return `import hashlib, json, urllib.request
+
+def zero_bits(digest):
+    n = 0
+    for b in digest:
+        if b:
+            return n + 8 - b.bit_length()
+        n += 8
+    return n
+
+c = json.load(urllib.request.urlopen(${JSON.stringify(`${baseUrl}/api/pow/challenge?slug=${tool.slug}`)}))
+n = 0
+while zero_bits(hashlib.sha256(f"{c['challenge']}:{n}".encode()).digest()) < c["difficulty"]:
+    n += 1
+${send(['"X-Pow-Solution": f"{c[\'token\']}:{n}"'])}
+print(json.load(urllib.request.urlopen(req)))`;
+  return `import base64, json, urllib.error, urllib.request
+
+${send([])}
+try:
+    urllib.request.urlopen(req)
+except urllib.error.HTTPError as e:
+    quote = json.loads(base64.b64decode(e.headers["PAYMENT-REQUIRED"]))
+    print(e.code, [(a["network"], a["amount"]) for a in quote["accepts"]])  # the price, per chain, in base units`;
+}
+
 function curlExample(baseUrl, tool) {
   const input = tool.discovery?.input ?? {};
   if (tool.method === "GET") {
@@ -541,6 +574,21 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   <h2 class="tp-h2">Parameters</h2>
   ${paramRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>${paramRows}</table></div>` : `<p class="tp-sub">${e(tool.name)} takes no parameters.</p>`}
 
+  ${
+    computePayable
+      ? `<h2 class="tp-h2">Free call, no wallet</h2>
+  <p class="tp-sub">This tool runs free with proof of work: fetch a challenge, solve the sha256 puzzle (${e(String(powDifficulty))} leading zero bits, a fraction of a second of CPU), and resend with the <code>X-Pow-Solution</code> header. JavaScript:</p>
+  ${codeBlock(`import { createHash } from "node:crypto";
+const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${tool.slug}")).json();
+let n = 0;
+while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
+await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`, { name: "the proof-of-work call" })}
+  <p class="tp-sub">Python, standard library only:</p>
+  ${codeBlock(pythonExample(baseUrl, tool, { computePayable }), { name: "the Python proof-of-work call" })}`
+      : ""
+  }
+
   <h2 class="tp-h2">Example request</h2>
   ${codeBlock(curlExample(baseUrl, tool), { name: "the request" })}
   <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2${orMpp} client pays it and retries.</p>
@@ -569,23 +617,15 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
 client.setSpendControls?.({ maxAmountPerPayment: "${spendCap}" }); // refuse any quote above this tool's price
-registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
 ${payExample(baseUrl, tool)}`, { name: "the paid call" })}
-
-  ${
-    computePayable
-      ? `<h2 class="tp-h2">No wallet? Pay with compute</h2>
-  <p class="tp-sub">Fetch a challenge, solve the sha256 puzzle (${e(String(powDifficulty))} leading zero bits, a fraction of a second of CPU), and resend with the <code>X-Pow-Solution</code> header:</p>
-  ${codeBlock(`import { createHash } from "node:crypto";
-const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
-const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${tool.slug}")).json();
-let n = 0;
-while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
-await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`, { name: "the proof-of-work call" })}`
-      : ""
-  }
+  <p class="tp-sub">${getWalletHtml()}</p>
+${computePayable ? "" : `
+  <h2 class="tp-h2">The quote (Python)</h2>
+  <p class="tp-sub">Standard library only: the 402 and the price its <code>PAYMENT-REQUIRED</code> header quotes on each chain. To pay from Python, sign it with any x402 client.</p>
+  ${codeBlock(pythonExample(baseUrl, tool), { name: "the Python quote" })}`}
 
   ${packsHtml}
 

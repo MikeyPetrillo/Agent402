@@ -92,6 +92,35 @@ for (const computePayable of [true, false]) {
   ok(!/<h1>(Title|headings|Hi|HTML)/.test(html), `hostile def (pow=${computePayable}): example <h1> text is escaped`);
   ok(html.includes("&lt;h1&gt;Title&lt;/h1&gt;"), `hostile def (pow=${computePayable}): example rendered as escaped text`);
 }
+// The first-call path: on a proof-of-work tool the free call comes before the
+// 402 example, in JavaScript and Python; the paid JavaScript sample reads the
+// key from AGENT_KEY with the get-a-wallet step under it; a wallet-only tool
+// shows its quote from Python. Each Python sample parses (python3 required
+// under CI).
+{
+  const { pythonExample } = await import("../src/pages.js");
+  const { execFileSync } = await import("node:child_process");
+  const getDef = { ...hostile, route: "GET /api/fake-get", method: "GET", path: "/api/fake-get", slug: "fake-get", discovery: { ...hostile.discovery, input: { text: "a 'quoted' \"value\"" } } };
+  for (const def of [hostile, getDef]) {
+    const free = toolPage("https://example.test", def, [], { computePayable: true, powDifficulty: 16 });
+    const paid = toolPage("https://example.test", def, [], { computePayable: false });
+    const at = (h, s) => h.indexOf(s);
+    ok(at(free, ">Free call, no wallet<") > 0 && at(free, ">Free call, no wallet<") < at(free, ">Example request<"), `${def.method} proof-of-work page: the free call comes before the 402 example`);
+    ok(at(paid, ">Free call, no wallet<") === -1 && at(paid, ">The quote (Python)<") > at(paid, ">Paid call (JavaScript agent)<"), `${def.method} wallet-only page: no free call, and a Python quote after the paid call`);
+    for (const h of [free, paid]) {
+      ok(decode(h).includes("privateKeyToAccount(process.env.AGENT_KEY)") && !/privateKeyToAccount\(KEY\)/.test(h) && h.includes('href="/start#fund"') && /wallet new/.test(h), `${def.method}: the paid sample reads AGENT_KEY, with the get-a-wallet step`);
+    }
+    ok(decode(free).includes("import hashlib, json, urllib.request") && decode(free).includes(`/api/pow/challenge?slug=${def.slug}`) && decode(paid).includes('e.headers["PAYMENT-REQUIRED"]'), `${def.method}: each page carries its Python sample`);
+    for (const computePayable of [true, false]) {
+      const py = pythonExample("https://example.test", def, { computePayable });
+      let parsed = null;
+      try { execFileSync("python3", ["-c", "import ast,sys; ast.parse(sys.stdin.read())"], { input: py, stdio: ["pipe", "ignore", "pipe"] }); parsed = true; }
+      catch (e) { parsed = e.code === "ENOENT" ? (process.env.CI ? false : null) : false; }
+      if (parsed !== null) ok(parsed, `${def.method} Python sample (pow ${computePayable}) parses`);
+      ok(py.includes(powSnippetRequest("https://example.test", def).url.replace(/"/g, '\\"')) || py.includes(JSON.stringify(powSnippetRequest("https://example.test", def).url)), `${def.method} Python sample (pow ${computePayable}) sends the published request`);
+    }
+  }
+}
 // A tool page quotes only its own catalog price: against an odd price a typed
 // figure cannot match by coincidence.
 {
