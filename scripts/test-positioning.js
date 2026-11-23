@@ -9,7 +9,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LEAD_SENTENCE, CATEGORY_LINE, SUPPORT_LINE, leadSentence } from "../src/positioning.js";
+import { LEAD_SENTENCE, CATEGORY_LINE, SUPPORT_LINE, leadSentence, categoryLine } from "../src/positioning.js";
 import { receiptsServed } from "../src/receipt-signing.js";
 import { ledgerHomePage } from "../src/ledger-home.js";
 import { llmsTxt } from "../src/seo.js";
@@ -45,12 +45,16 @@ ok(leadSentence({ receipts: false }) === "Agent402 is the payment and trust laye
 ok(!/signed receipt/.test(leadSentence({ mpp: false, receipts: false })) && /across x402\.$/.test(leadSentence({ mpp: false, receipts: false })), "MPP off and receipts off: x402 alone, no receipt clause");
 ok(receiptsServed() === false, "control: this offline process loads no signing key, so the served surfaces below render the key-off line");
 ok(/^[A-Z][^.]*\.$/.test(CATEGORY_LINE) && !/Agentic Finance|AIFI/.test(CATEGORY_LINE), "the category line is one plain sentence, not the category acronym");
+ok(/\bx402 and MPP\b/.test(CATEGORY_LINE) && categoryLine({ mpp: false }) === "Payments and trust for AI agents, over x402." , "the category line names the wires (x402, and MPP only while it is offered)");
 
 // --- home page: h1 is the category line, the lede is the sentence ----------------
 {
   const html = ledgerHomePage("https://agent402.tools", {}, {}, {}, []);
   const h1 = (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || "";
   ok(pageText(h1).trim() === CATEGORY_LINE, `home h1 is the category line (got "${pageText(h1).trim()}")`);
+  const noMpp = ledgerHomePage("https://agent402.tools", {}, {}, {}, [], { mpp: false });
+  const h1NoMpp = pageText((noMpp.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || "").trim();
+  ok(h1NoMpp === categoryLine({ mpp: false }) && !/MPP/.test(h1NoMpp), `with MPP off the home h1 offers x402 alone ("${h1NoMpp}")`);
   const lede = (html.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "";
   ok(pageText(stripInlineTags(lede)).trim() === leadSentence({ receipts: false }), "home hero lede is the lead sentence, word for word (no signing key: no receipt clause)");
   const signed = ledgerHomePage("https://agent402.tools", {}, {}, {}, [], { receipts: true });
@@ -128,6 +132,17 @@ for (const file of ["CHANGELOG.md", "src/changelog.js"]) {
 {
   const reg = JSON.parse(read("mcp/server.json")).description;
   ok(/^Payment and trust layer for agentic commerce/.test(reg) && reg.length <= 100 && !/\d+\+? (agent |ready )?tools/.test(reg), `mcp/server.json description leads with the layer, no tool count, 100 characters at most (${reg.length})`);
+}
+
+// /company names the product it operates in its title and h1, and the wires in its description.
+{
+  const { companyPage } = await import("../src/company.js");
+  const html = companyPage("https://agent402.tools");
+  const title = (html.match(/<title>([^<]*)<\/title>/) || [])[1] || "";
+  const h1 = pageText((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || "").trim();
+  const desc = (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  ok(/Havok Holdings LLC/.test(title) && /Agent402/.test(title) && /Havok Holdings LLC/.test(h1) && /Agent402/.test(h1), `/company title and h1 name the company and Agent402 ("${title}" / "${h1}")`);
+  ok(/x402 and MPP/.test(desc) && /payment and trust layer for agentic commerce/.test(desc), "/company description states the layer and its wires");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

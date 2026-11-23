@@ -43,7 +43,8 @@ const catalog = {
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
   for (const receipts of [true, false]) {
     const h = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, [], { receipts });
-    ok(new RegExp(`<a href="/trust#verify"[^>]*>verify</a> ${receipts ? "every paid call" : "paid calls"}`).test(h), `the lead links "verify" to /trust#verify (receipts ${receipts ? "on" : "off"})`);
+    // The lead says "verify paid calls" with receipts on or off (src/positioning.js).
+    ok(/<a href="\/trust#verify"[^>]*>verify<\/a> paid calls/.test(h), `the lead links "verify" to /trust#verify (receipts ${receipts ? "on" : "off"})`);
   }
 
   // The hero's paid figure is external payments only (src/home-proof.js); the
