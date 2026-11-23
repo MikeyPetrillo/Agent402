@@ -4007,7 +4007,8 @@ jobs:
               # the ref.
               echo "--- npm exchange verdict, every publishable package ---"
               UNMATCHED_PENDING=""
-              for DIR in mcp tollbooth client adapters/*/; do
+              # Every directory a publish step below enters (scripts/test-deploy-release-order.js holds the two lists equal).
+              for DIR in mcp tollbooth client openclaw adapters/*/; do
                 [ -f "$DIR/package.json" ] || continue
                 PKG=$(node -p "const p=require('./$DIR/package.json'); p.private ? '' : (p.name || '')" 2>/dev/null || echo "")
                 [ -n "$PKG" ] || continue
