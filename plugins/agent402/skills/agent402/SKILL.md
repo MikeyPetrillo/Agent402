@@ -1,13 +1,13 @@
 ---
 name: agent402
-description: "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with a signed receipt on each successful paid answer a direct route sends in one piece. 500+ ready tools on the same rails. This skill covers the Agent402 MCP server in a coding agent: when a task needs live data or a capability the agent does not have (web search, page rendering, PDFs and OCR, SEC filings, market and crypto data, conversions and utilities), find the matching tool with catalog.find and call it with catalog.call, reading its price before the call."
+description: "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. This skill covers the Agent402 MCP server in a coding agent: when a task needs live data or a capability the agent does not have (web search, page rendering, PDFs and OCR, SEC filings, market and crypto data, conversions and utilities), find the matching tool with catalog.find and call it with catalog.call, reading its price before the call."
 ---
 
 # Agent402 in a coding agent
 
 Agent402 is the payment and trust layer for agentic commerce: agents find, pay
-for and verify paid calls to Agent402, across x402 and MPP, with a signed
-receipt on each successful paid answer a direct route sends in one piece. 500+ ready tools on the same rails.
+for and verify paid calls to Agent402, across x402 and MPP, with signed
+receipts on successful direct calls. 500+ ready tools on the same rails.
 
 This plugin adds the hosted Agent402 MCP server (`https://agent402.tools/mcp`).
 The skill below is how a coding agent uses it well.

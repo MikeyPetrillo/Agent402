@@ -1,6 +1,6 @@
 # agent402-client
 
-Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with a signed receipt on each successful paid answer a direct route sends in one piece. 500+ ready tools on the same rails.
+Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails.
 
 ![A paid call on Agent402: the request, the 402 with its price, the signature, the settlement, the answer and the signed receipt](https://raw.githubusercontent.com/MikeyPetrillo/Agent402/main/docs/media/agent402-call.gif)
 
