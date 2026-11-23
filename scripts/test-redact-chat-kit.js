@@ -195,6 +195,20 @@ const ORIGINALS = {
   ok(r.result === "a [EMAIL] b [PHONE] c [CARD] d [SSN] e [IP]" && JSON.stringify(r.counts) === JSON.stringify({ email: 1, card: 1, ssn: 1, phone: 1, ip: 1 }), `redact answers its labels and counts as before (${r.result})`);
   ok(JSON.stringify(redactDef.handler(redactDef.discovery.input)) === JSON.stringify(redactDef.discovery.output.example), "redact's published example is unchanged");
   ok(PII_TYPES.join(",") === "email,card,ssn,phone,ip", "one pattern list, in redact's order");
+  // The description names exactly what is masked, and names forms that pass:
+  // each claim is held to the patterns.
+  {
+    const d = tool.description;
+    for (const [named, sample, type] of [["Email addresses", "ada@example.com", "email"], ["card-like runs of 13 to 16 digits", "4111 1111 1111 1111", "card"], ["US SSNs written 123-45-6789", "123-45-6789", "ssn"], ["US-style phone numbers", "(555) 123-4567", "phone"], ["IPv4 addresses", "192.0.2.10", "ip"]]) {
+      ok(d.includes(named) && (redactText(`x ${sample} y`).counts[type] || 0) === 1, `the description names ${named}, and the pattern masks ${sample}`);
+    }
+    for (const [named, sample] of [["international phone numbers", "+44 20 7946 0958"], ["SSNs without dashes", "SSN 123456789"], ["IPv6 addresses", "2001:db8::1"], ["IBANs", "DE89 3704 0044 0532 0130 00"]]) {
+      const r = redactText(`x ${sample} y`);
+      ok(d.includes(named), `the description says ${named} can pass`);
+      ok(r.text.includes(sample.split(" ").slice(-1)[0]) , `and the patterns do let part of ${sample} through (so the warning stays true)`);
+    }
+    ok(!tool.aliases.some((a) => /safe/i.test(a)) && !tool.tags.includes("anonymize") && !/\b(safe|anonymi[sz]e)\b/i.test(d), "no alias, tag or description word claims the text is safe or anonymized");
+  }
 }
 
 // --- price, flags and lists -----------------------------------------------------------------

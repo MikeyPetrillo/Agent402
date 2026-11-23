@@ -149,18 +149,18 @@ export const REDACT_CHAT_TOOLS = [
     route: "POST /api/redact-chat",
     name: "Redact, then chat",
     slug: REDACT_CHAT_SLUG,
-    aliases: ["redacted-chat", "pii-safe-chat"],
+    aliases: ["redacted-chat"],
     category: "ai",
     price: priceLabel(),
     modelBacked: true,
     description:
-      `Mask personal details in a text on this server, then send only the masked text to a chat model, in one paid call. Emails, phone numbers, card-like numbers, US SSNs and IPv4 addresses are replaced with numbered placeholders ([EMAIL_1], [PHONE_1]) by the same pattern matching as /api/redact, before the model call; the model receives the masked instruction and text, not the values that were masked. Pattern matching can miss details written in other forms (names, street addresses, numbers split oddly), so review the text for anything else sensitive. restoreInAnswer: true puts the originals back into the answer on this server after the model replies. includeRedactedInput: true also returns the masked text that was sent. The chat runs on the ${chatPath} gateway tier with its default model; the price is the sum of /api/redact and that tier. Text up to ${TEXT_MAX_CHARS} chars and instruction up to ${INSTRUCTION_MAX_CHARS}, checked before any model call. A failed chat step answers an error and is not charged on x402, card and credits. ${SETTLE_FIRST_SENTENCE} Model-backed.`,
-    tags: ["redact", "pii", "privacy", "mask", "chat", "llm", "anonymize"],
+      `Mask personal details in a text on this server, then send only the masked text to a chat model, in one paid call. Email addresses, card-like runs of 13 to 16 digits, US SSNs written 123-45-6789, US-style phone numbers (ten digits, with an optional short country prefix) and IPv4 addresses are replaced with numbered placeholders ([EMAIL_1], [PHONE_1]) by the same pattern matching as /api/redact, before the model call; the model receives the masked instruction and text, not the values that were masked. Pattern matching can miss details written in other forms: international phone numbers, SSNs without dashes, IPv6 addresses, longer card or account numbers such as IBANs, names and street addresses pass unmasked, so review the text for anything else sensitive. restoreInAnswer: true puts the originals back into the answer on this server after the model replies. includeRedactedInput: true also returns the masked text that was sent. The chat runs on the ${chatPath} gateway tier with its default model; the price is the sum of /api/redact and that tier. Text up to ${TEXT_MAX_CHARS} chars and instruction up to ${INSTRUCTION_MAX_CHARS}, checked before any model call. A failed chat step answers an error and is not charged on x402, card and credits. ${SETTLE_FIRST_SENTENCE} Model-backed.`,
+    tags: ["redact", "pii", "privacy", "mask", "chat", "llm"],
     discovery: {
       bodyType: "json",
       input: {
         instruction: "Write a short, polite reply confirming the new meeting time.",
-        text: "Hi, this is Ada (ada@example.com, 555-123-4567). Can we move our call to Friday at 2pm?",
+        text: "Hi, this is ada@example.com (555-123-4567). Can we move our call to Friday at 2pm?",
         restoreInAnswer: true,
       },
       inputSchema: {

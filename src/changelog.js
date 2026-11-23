@@ -59,7 +59,7 @@ const ENTRIES = [
     date: "2026-11-23",
     title: "Redact, then chat",
     items: [
-      "Tools: POST /api/redact-chat masks emails, phone numbers, card-like numbers, US SSNs and IPv4 addresses on this server with numbered placeholders, then sends only the masked text to a chat model in one paid call. It is model-backed; the masking is pattern-based and can miss details written in other forms, so review the text for anything else sensitive. Its price is the sum of /api/redact and the chat tier it calls.",
+      "Tools: POST /api/redact-chat masks email addresses, card-like runs of 13 to 16 digits, US SSNs written 123-45-6789, US-style phone numbers and IPv4 addresses on this server with numbered placeholders, then sends only the masked text to a chat model in one paid call. It is model-backed; the masking is pattern-based, and other forms (international phone numbers, SSNs without dashes, IPv6 addresses, IBANs, names) pass unmasked, so review the text for anything else sensitive. Its price is the sum of /api/redact and the chat tier it calls.",
     ],
   },
   {
