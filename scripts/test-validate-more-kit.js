@@ -270,7 +270,8 @@ const SIG = "5".repeat(87);
 // ---- json-repair and json-lint point at the same place ---------------------
 // For the common broken inputs json-repair's first fix sits where json-lint
 // reports the error; the one difference, a trailing comma (json-repair at the
-// comma, json-lint at the bracket after it), is stated in both descriptions.
+// comma, json-lint at the bracket after it, past any spaces), is stated in
+// both descriptions.
 {
   const { PARSE_TOOLS } = await import("../src/tools/parse-kit.js");
   const lint = PARSE_TOOLS.find((t) => t.slug === "json-lint"), rep = tool("json-repair");
@@ -278,11 +279,12 @@ const SIG = "5".repeat(87);
     const l = lint.handler({ json: j }).syntaxError, r = (await rep.handler({ json: j })).fixes[0];
     ok(l && r && l.offset === r.offset && l.line === r.line && l.column === r.column, `same location for ${JSON.stringify(j)} (lint ${l?.offset}, repair ${r?.offset})`);
   }
-  for (const j of ["[1,2,]", '{"a":1,}']) {
+  for (const j of ["[1,2,]", '{"a":1,}', "[1, ]", "[1,\n  ]", '{"a":1 ,  }']) {
     const l = lint.handler({ json: j }).syntaxError, r = (await rep.handler({ json: j })).fixes[0];
-    ok(r.kind === "trailing-comma" && l.offset === r.offset + 1 && j[r.offset] === ",", `trailing comma: repair at the comma, lint one character later at the bracket (${JSON.stringify(j)})`);
+    const bracketAfter = r ? r.offset + 1 + /^\s*/.exec(j.slice(r.offset + 1))[0].length : -1;
+    ok(r && r.kind === "trailing-comma" && j[r.offset] === "," && l.offset === bracketAfter && "]}".includes(j[l.offset]), `trailing comma: repair at the comma (${r?.offset}), lint at the bracket after it (${l?.offset}) in ${JSON.stringify(j)}`);
   }
-  const phrase = /trailing comma[^.]*at the comma[^.]*json-lint[^.]*bracket after it|trailing comma[^.]*bracket after it[^.]*json-repair[^.]*at the comma/i;
+  const phrase = /For a trailing comma, json-repair points at the comma and json-lint at the bracket after it\./;
   ok(phrase.test(lint.description) && phrase.test(rep.description), "both descriptions state where each reports a trailing comma");
 }
 // ---- solana-rpc reads without a spaced hyphen as a dash ---------------------
