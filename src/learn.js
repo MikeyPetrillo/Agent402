@@ -50,7 +50,7 @@ WWW-Authenticate: Payment id="Hq2dT0mB...", realm="agent402.tools", method="temp
   Payment id="8w5V62E3...", realm="agent402.tools", method="evm",
   intent="charge", request="eyJhbW91bnQiOiIxMDAwIi...", expires="2026-09-24T12:41:07.520Z",
   opaque="eyJ4NDAyIjoie1wic2NoZW1l..."
-  (one challenge per currency and chain: USDC.e then PathUSD on Tempo, USDC on Base then Celo)
+  (one challenge per currency and chain: each Tempo token this server takes, then USDC on Base and Celo)
 X-Pow-Challenge: https://agent402.tools/api/pow/challenge?slug=hash
 
 {"altPayment":{"protocol":"proof-of-work", ...},"x402Version":2,"error":"Payment required","resource":{...},"accepts":[...],"extensions":{...}}`;

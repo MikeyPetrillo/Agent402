@@ -89,7 +89,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > Protocol, the IETF-track `Payment` HTTP auth scheme co-authored by Tempo and
 > Stripe): the same 402 carries both, an [`mppx`](https://www.npmjs.com/package/mppx)
 > client pays out of the box, and MPP settles on Base and Celo (USDC), natively
-> on [Tempo](https://tempo.xyz) (USDC.e or PathUSD via Tempo's relay), or by
+> on [Tempo](https://tempo.xyz) (in a dollar token the 402 names, via Tempo's relay), or by
 > card over MPP (Stripe `stripe/charge`, offered on routes priced $0.50 and up
 > when the operator configures it). The
 > [MPP marketplace](https://agent402.tools/mpp-marketplace) lists every MPP
@@ -169,7 +169,7 @@ The button creates the service from this repository; it adds no database or cach
 
 Every paid route answers `402` with both an x402 offer and MPP challenges, so either client pays it. No API key, no signup: the wallet is the account.
 
-**MPP** (USDC.e or PathUSD on Tempo, listed first in the 402, or USDC on Base or Celo) with [`mppx`](https://www.npmjs.com/package/mppx):
+**MPP** (a dollar token on Tempo, listed first in the 402, or USDC on Base or Celo) with [`mppx`](https://www.npmjs.com/package/mppx):
 
 ```js
 import { Mppx, tempo, evm } from "mppx/client";

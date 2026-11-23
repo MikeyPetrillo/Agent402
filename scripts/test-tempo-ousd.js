@@ -107,4 +107,15 @@ try {
   await ok(r.status !== 200 && rig.outcomesOf(w).settled === 0 && rig.st.verifies === 0, `an OUSD credential is refused when OUSD is not listed, nothing checked or broadcast (${r.status})`);
 } finally { await rig.stop(); }
 
+// No public surface types the Tempo token list: payment.info, the AgentCore
+// page, /learn, the skill file, the FAQ and the README name the configured
+// tokens (src/mpp-tempo.js tempoCurrencyPhrase) or none at all.
+{
+  const { readFileSync } = await import("node:fs");
+  const TYPED = /USDC\.e (or|and|\(and) PathUSD|USDC\.e\/PathUSD|PathUSD (or|and) USDC\.e/;
+  for (const f of ["src/mcp-http.js", "src/agentcore-page.js", "src/learn.js", "src/skill-md.js", "src/agentic-finance.js", "README.md"]) {
+    await ok(!TYPED.test(readFileSync(new URL(`../${f}`, import.meta.url), "utf8")), `${f} types no Tempo token list`);
+  }
+}
+
 console.log(`\n${pass} checks passed`);

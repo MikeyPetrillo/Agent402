@@ -18,6 +18,7 @@ import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { isComputePayable, POW_DIFFICULTY, powCostPhrase } from "./pow.js";
 import { RAILS } from "./rails.js";
 import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
+import { tempoCurrencyPhrase } from "./mpp-tempo.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
 // (isComputePayable + POW_DIFFICULTY both live in pow.js - same import seo.js uses)
 
@@ -92,7 +93,7 @@ Pick ONE payment mode. Ask the user which before spending money.
 |------|---------------|--------|
 | Proof-of-work (free) | Nothing. CPU per call: ${powCostPhrase()}. | ${powCount} pure-compute tools |
 | x402 (USDC) | ${x402Need} | every tool on EVM; identity-bound and long-running routes take EVM only |
-| MPP (USDC / Tempo) | An EVM private key with USDC on Base/Celo, or USDC.e/PathUSD on Tempo | every tool on Base/Celo; Tempo is not offered on identity-bound or long-running routes |
+| MPP (USDC / Tempo) | An EVM private key with USDC on Base/Celo, or ${tempoCurrencyPhrase("/")} on Tempo | every tool on Base/Celo; Tempo is not offered on identity-bound or long-running routes |
 
 Gas is sponsored on EVM chains: the wallet only needs the stablecoin. Never
 paste a private key into a prompt, log or file; read it from an environment

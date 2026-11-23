@@ -64,7 +64,7 @@ import { IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "./dispatch-caller.js";
 import { limiterKey } from "./rate-limit.js";
 import { chargeSponsorAccount, chargeSponsorPolicy, isSponsoredChallengeRequest, sponsorChargeFor, runWithSponsorContext, runSponsoredBroadcast, withholdSponsorshipForCurrentClient, withSponsorBooking, PATH_USD_ADDRESS as SPONSOR_FEE_TOKEN } from "./tempo-charge-sponsor.js";
 import { signingHalted } from "./signing-halt.js";
-import { TEMPO_USDC_E_ADDRESS, TEMPO_OUSD_ADDRESS, resolveTempoCurrency } from "./tempo-currencies.js";
+import { TEMPO_USDC_E_ADDRESS, TEMPO_OUSD_ADDRESS, resolveTempoCurrency, tempoTokenLabel } from "./tempo-currencies.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -106,6 +106,11 @@ function envCurrencies() {
   const list = raw.length ? raw : [PATH_USD_ADDRESS];
   return [...new Set(list.map(resolveTempoCurrency))];
 }
+/** The labels of the Tempo tokens this server's challenges name, in order
+ *  (TEMPO_CURRENCY, or its default): what copy says a Tempo payment takes. */
+export function tempoCurrencyLabels() { return envCurrencies().map((a) => tempoTokenLabel(a) || a); }
+/** The same, as a phrase: "USDC.e or OUSD". */
+export function tempoCurrencyPhrase(joiner = " or ") { return tempoCurrencyLabels().join(joiner); }
 function envCurrency() {
   return envCurrencies()[0];
 }

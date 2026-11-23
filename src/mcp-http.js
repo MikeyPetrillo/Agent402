@@ -52,7 +52,7 @@ import {
 import { SKILLS_EXTENSION, mcpSkillsEnabled, clientDeclaresSkills, isSkillMethod, buildSkillSet, handleSkillsRpc } from "./mcp-skills.js";
 import { EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug } from "./composite-spend-guard.js";
 import { registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
-import { tempoEnabled, pushHashOf, tempoOfferedFor } from "./mpp-tempo.js";
+import { tempoEnabled, pushHashOf, tempoOfferedFor, tempoCurrencyPhrase } from "./mpp-tempo.js";
 import { isIdentityBoundRoute } from "./payments.js";
 import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
 import { stripeEnabled } from "./mpp-stripe.js";
@@ -1746,7 +1746,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 tagline: p.tagline,
               })),
             },
-            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key${creditsKeyQualifier()} (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools ${TYPICAL_PRICE_RANGE.text} per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
+            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key${creditsKeyQualifier()} (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or ${tempoCurrencyPhrase()} natively on Tempo. No signup, no API key; most tools ${TYPICAL_PRICE_RANGE.text} per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
             ...(sellersListed ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
             missingATool: "Call demand.request (or POST /api/wish) with what you needed. We cluster and track demand - repeated requests get built.",
             docs: `${baseUrl}/llms.txt`,
@@ -1881,7 +1881,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             },
             pay: {
               model: "HTTP 402 + x402, settled in USDC on-chain, non-custodial (you hold the key)",
-              mpp: `every paid endpoint also accepts MPP (Machine Payments Protocol, the Payment HTTP auth scheme): the same 402 carries a WWW-Authenticate: Payment challenge, an mppx client pays out of the box, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo - see ${baseUrl}/what-is-mpp${mppOfferGateClauseIfOffered({ code: (x) => x }) ? `; ${mppOfferGateClauseIfOffered({ code: (x) => x })}` : ""}`,
+              mpp: `every paid endpoint also accepts MPP (Machine Payments Protocol, the Payment HTTP auth scheme): the same 402 carries a WWW-Authenticate: Payment challenge, an mppx client pays out of the box, settling USDC on Base/Celo or ${tempoCurrencyPhrase()} natively on Tempo - see ${baseUrl}/what-is-mpp${mppOfferGateClauseIfOffered({ code: (x) => x }) ? `; ${mppOfferGateClauseIfOffered({ code: (x) => x })}` : ""}`,
               rails: RAILS_PAREN,
               baseGas: BASE_NO_GAS_SENTENCE,
               start: `${baseUrl}/start`,
