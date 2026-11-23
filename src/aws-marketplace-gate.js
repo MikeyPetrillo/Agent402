@@ -36,9 +36,9 @@
 //   - A run that does not end in a delivered 200 (a handler error, a timeout,
 //     a buyer gone before the answer) gives the payment back for another
 //     attempt, up to AWS_MARKETPLACE_RETRY_MAX more, inside its validity. The
-//     attempt that exhausts it is recorded for the operator (charged without
-//     an answer: a billing adjustment is the owner's, through AWS
-//     Marketplace).
+//     attempt that exhausts it is recorded for the operator in a store a
+//     deploy keeps (src/aws-unanswered.js: charged without an answer; a
+//     billing adjustment is the owner's, through AWS Marketplace).
 //   - The sale is booked once, on the final response (`finish`, status 200),
 //     on the private rail "aws" (src/paid-rails.js): no public reader returns
 //     it and no public figure counts it. Its transaction is the payment id.
@@ -54,6 +54,7 @@ import { withoutChargeSentences } from "./not-charged.js";
 import { resaleBarredReason, refAnswerOf } from "./resale-terms.js";
 import { createHash } from "node:crypto";
 import { AWS_LISTING_SLUGS } from "./aws-listing.js";
+import { createAwsUnansweredBook } from "./aws-unanswered.js";
 
 export const AWS_NETWORK = "aws:base";
 export const AWS_RAIL = "aws";
@@ -72,8 +73,6 @@ export const AWS_DPOP_KEEP_SECONDS = 71;
 /** The longest a payment claim is kept when its token's expiry cannot be read. */
 const CLAIM_FALLBACK_MS = 30 * 60_000;
 const CLAIM_SKEW_MS = 60_000;
-/** Operator record of charged runs that ended without an answer. */
-const FAILED_KEEP = 200;
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const PRODUCT_ID = /^prod-[A-Za-z0-9]{6,40}$/;
@@ -421,7 +420,8 @@ export function awsRouteTable(config, defs, describe = (def) => def.description)
 
 /**
  * Build the gate (async: it imports the seller SDK). Returns
- * { handler(req, res, next), jwks, stats(), failed(), slugs(), endpointSlug }.
+ * { handler(req, res, next), jwks, stats(), failed(), slugs(), endpointSlug }
+ * (failed() resolves to the unanswered record, src/aws-unanswered.js).
  * `sdk`, `core`, `express` are injectable for tests; the defaults are the
  * installed packages.
  */
@@ -429,7 +429,7 @@ export async function createAwsMarketplaceGate({
   config, defs, claims,
   recordSale, preValidate = () => null, runAsCaller = (_req, fn) => fn(), handlerInputOf = (req) => (req.method === "GET" ? { ...(req.query || {}) } : (req.body && typeof req.body === "object" ? req.body : {})),
   isSynthetic = () => false, redact = (s) => s, ownHosts = [], ownPaths = [], onServed = null, onToolError = null,
-  clientKey = (req) => String(req.ip || ""), rateLimits = null, describe = (def) => def.description,
+  clientKey = (req) => String(req.ip || ""), rateLimits = null, describe = (def) => def.description, unanswered = null,
   sdk = null, core = null, express = null, now = Date.now, log = (m) => console.warn(m),
 }) {
   if (!config || !defs || !defs.size || !claims || typeof recordSale !== "function") throw new Error("aws gate: missing a dependency");
@@ -479,7 +479,7 @@ export async function createAwsMarketplaceGate({
       ...(paid ? { paymentUsed: false, note: "This payment was not used. Send the request again with the same payment after Retry-After, while it is valid." } : {}),
     });
   };
-  const failedLog = [];
+  const unansweredBook = unanswered || createAwsUnansweredBook({ file: null, now, log });
   // A pointer at this server's other surfaces: its host, or a path one of
   // its direct routes answers on (`POST /api/sql-cert-verify`, `/mcp`). A
   // path is read as a whole token, so a word that merely starts like one is not.
@@ -549,9 +549,8 @@ export async function createAwsMarketplaceGate({
         counters.failedAttempts++;
         if (retriesLeft <= 0) {
           counters.chargedWithoutAnswer++;
-          failedLog.push({ at: new Date(now()).toISOString(), slug: def.slug, paymentId: pay.paymentId, status, priceUsd: flatUsdOf(def) });
-          if (failedLog.length > FAILED_KEEP) failedLog.shift();
-          try { log(`[aws-marketplace] a paid ${def.slug} call ended without an answer (status ${status}) and its payment has no attempts left`); } catch { /* never throws */ }
+          try { log(`[aws-marketplace] a paid ${def.slug} call ended without an answer (status ${status}) and payment ${String(pay.paymentId).slice(0, 200)} has no attempts left`); } catch { /* never throws */ }
+          await unansweredBook.record({ at: now(), paymentId: pay.paymentId, slug: def.slug, status, priceUsd: flatUsdOf(def) });
         }
       }
       return retriesLeft;
@@ -659,6 +658,7 @@ export async function createAwsMarketplaceGate({
     endpointSlug: defs.keys().next().value,
     slugs: () => [...defs.keys()],
     stats: () => ({ ...counters }),
-    failed: () => failedLog.slice(),
+    failed: async () => (await unansweredBook.list()).entries,
+    unanswered: () => unansweredBook.list(),
   };
 }

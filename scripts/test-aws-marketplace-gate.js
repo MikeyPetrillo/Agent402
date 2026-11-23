@@ -283,7 +283,8 @@ async function quote(path = "/aws/echo") {
   await new Promise((res) => setTimeout(res, 20));
   ok(outs.join(",") === "502,502,502,409" && !sales.some((s) => s.tx === t2.id), "three failed attempts spend it: the fourth is refused, nothing booked");
   ok(bodies[2].paymentUsed === true && !/\b(?:not|never) charged\b|nothing (?:was|is) charged/i.test(JSON.stringify(bodies[2])), "the attempt that spends the payment says it was used and never that nothing was charged");
-  ok(gate.failed().some((f) => f.paymentId === t2.id) && gate.stats().chargedWithoutAnswer === 1, "the spent payment is on the operator record of paid runs without an answer");
+  const rec = (await gate.failed()).find((f) => f.paymentId === t2.id);
+  ok(rec && rec.slug === "flaky" && rec.status === 502 && rec.reason === "tool_error" && typeof rec.at === "string" && gate.stats().chargedWithoutAnswer === 1, `the spent payment is on the operator record of paid runs without an answer (${JSON.stringify(rec)})`);
   flakyFailures = 0;
 }
 
@@ -317,6 +318,36 @@ async function quote(path = "/aws/echo") {
   ok((await broken.begin("p2", until, 0)) === "ok" && (await broken.begin("p2", until, 0)) === "used", "Redis failing: this process's record still takes each payment once");
 }
 await new Promise((r) => srv.close(r));
+
+// ---- the record of paid calls without an answer: durable and bounded ---------------
+{
+  const { createAwsUnansweredBook, unansweredEntry, AWS_UNANSWERED_REASONS } = await import("../src/aws-unanswered.js");
+  const { mkdtempSync, readFileSync: rf } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const file = join(mkdtempSync(join(tmpdir(), "aws-unanswered-")), "aws-unanswered.json");
+  let t = Date.parse("2026-11-23T12:00:00Z");
+  const book = createAwsUnansweredBook({ file, now: () => t, max: 3, log: () => {} });
+  ok(await book.record({ paymentId: "pay-1", slug: "echo", status: 502, priceUsd: 0.003 }), "an entry is recorded");
+  const again = createAwsUnansweredBook({ file, now: () => t, max: 3, log: () => {} });
+  const l1 = await again.list();
+  ok(l1.ok && l1.entries.length === 1 && l1.entries[0].paymentId === "pay-1" && l1.entries[0].slug === "echo" && l1.entries[0].at === "2026-11-23T12:00:00.000Z" && l1.entries[0].reason === "tool_error" && l1.entries[0].status === 502 && l1.entries[0].priceUsd === 0.003, `a new book over the same store reads it back (a deploy keeps it) (${JSON.stringify(l1.entries[0])})`);
+  ok(Object.keys(l1.entries[0]).sort().join() === "at,paymentId,priceUsd,reason,slug,status", "an entry holds the payment id, tool, time, status, reason and price, and nothing about the buyer");
+  for (const [i, st] of [[2, 499], [3, 500], [4, 504]].entries()) { t += 1000; await book.record({ paymentId: `pay-${st[0]}`, slug: "echo", status: st[1], priceUsd: 0.003 }); void i; }
+  const l2 = await book.list();
+  ok(l2.entries.length === 3 && l2.entries[0].paymentId === "pay-2" && l2.entries[0].reason === AWS_UNANSWERED_REASONS.closed, `the record keeps its newest entries up to its bound (${l2.entries.map((e) => e.paymentId).join(",")})`);
+  t += 401 * 86_400_000;
+  ok((await book.list()).entries.length === 0, "entries past the keep window are not read back");
+  ok(unansweredEntry({ paymentId: "", slug: "echo", status: 500 }) === null && unansweredEntry({ paymentId: "p", slug: "../x", status: 500 }) === null, "an entry without a usable payment id or slug is not recorded");
+  ok(/"entries"/.test(rf(file, "utf8")), "the record is written to its store");
+  const broken = createAwsUnansweredBook({ doc: { update: async () => ({ ok: false, error: "down" }), read: async () => ({ ok: false }) }, log: () => {} });
+  ok((await broken.record({ paymentId: "p9", slug: "echo", status: 500 })) === false && (await broken.list()).ok === false, "a store that does not answer: the record says so, never throws");
+  // The buyer-facing wording names exactly what the record holds.
+  const startSrc = rf(new URL("../src/aws-start-page.js", import.meta.url), "utf8");
+  const termsSrc = rf(new URL("../src/terms.js", import.meta.url), "utf8");
+  const SAYS = "is recorded with its payment id, the tool, the time and why it ended";
+  ok(startSrc.includes(SAYS) && termsSrc.includes(SAYS), "/aws/start and /terms say what the record holds, in the same words");
+}
 
 // ---- per-client rate limits and the pointer scrub, on a gate of their own -------------
 {

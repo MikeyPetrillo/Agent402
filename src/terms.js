@@ -312,8 +312,8 @@ ${awsOn ? `<h2 id="aws-marketplace">AWS Marketplace purchases</h2>
 <p>Tools bought through AWS Marketplace are paid through AWS and billed on your AWS invoice. AWS's standard
 contract for AWS Marketplace governs those purchases together with our refund rule for them: an input we refuse
 before running the tool does not use the payment, a call that does not complete can be sent again with the same
-payment while it is valid, and a paid call that ends without an answer is reviewed, and an approved correction is made as a billing
-adjustment on your AWS invoice through AWS Marketplace.</p>
+payment while it is valid, and a paid call that ends without an answer is recorded with its payment id, the tool, the time and why it ended,
+is reviewed, and an approved correction is made as a billing adjustment on your AWS invoice through AWS Marketplace.</p>
 ` : ""}
 <h2>Availability & changes</h2>
 <p>The service may change, be rate-limited, or be discontinued at any time. We may update these terms;

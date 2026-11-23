@@ -1075,6 +1075,7 @@ import { hangupForgiven, hangupTicketDenial, hangupTicketAbandoned, hangupDebtRe
 import { referralConfig, referralConfigProblem, referralTimingWarnings, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
 import { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsRoutes, awsSlugOfPath, createAwsPaymentClaims, createAwsMarketplaceGate, AWS_JWKS_PATH } from "./aws-marketplace-gate.js";
+import { createAwsUnansweredBook } from "./aws-unanswered.js";
 import { awsDescriptionOf } from "./aws-listing.js";
 import { awsStartPage, AWS_START_PATH, AWS_OPENAPI_PATH } from "./aws-start-page.js";
 import { awsOpenapi } from "./aws-openapi.js";
@@ -12085,6 +12086,7 @@ if (AWS_ROUTES && AWS_ROUTES.defs.size) {
     describe: AWS_DESCRIBE,
     onServed: (req) => { try { QUOTE_TRUST.mark(quoteClientKeyOf(req)); } catch { /* trust is best effort */ } },
     onToolError: (slug, status, err) => logToolError(slug, status, redactSecrets(String(err?.message || "")), undefined, false),
+    unanswered: createAwsUnansweredBook(),
   }).then((g) => { AWS_GATE = g; console.log(`AWS Marketplace gate ready: ${g.slugs().join(", ")}`); return g; })
     .catch((err) => { console.warn(`WARNING: AWS Marketplace gate is off: it could not be built (${redactSecrets(String(err?.message || err)).slice(0, 120)})`); return null; });
   addApiHeaderPrefix("/aws");
@@ -12116,10 +12118,12 @@ if (AWS_ROUTES && AWS_ROUTES.defs.size) {
   app.all(["/aws", "/aws/:slug"], awsRoute);
 }
 // The AWS Marketplace gate's counters and the paid runs that ended without an answer (operator only).
-app.get("/__operator/aws.json", (req, res) => {
+app.get("/__operator/aws.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  // chargedWithoutAnswer is the durable record (src/aws-unanswered.js), kept across deploys.
+  const record = AWS_GATE ? await AWS_GATE.unanswered() : null;
   res.set("Cache-Control", "private, no-store").json(AWS_GATE
-    ? { enabled: true, routes: AWS_GATE.slugs(), endpointSlug: AWS_GATE.endpointSlug, notServed: AWS_ROUTES.refused, sinceBoot: AWS_GATE.stats(), chargedWithoutAnswer: AWS_GATE.failed() }
+    ? { enabled: true, routes: AWS_GATE.slugs(), endpointSlug: AWS_GATE.endpointSlug, notServed: AWS_ROUTES.refused, sinceBoot: AWS_GATE.stats(), chargedWithoutAnswerReadable: record.ok, chargedWithoutAnswer: record.entries }
     : { enabled: false, ...(AWS_ROUTES ? { notServed: AWS_ROUTES.refused } : {}) });
 });
 // The referral gate's counters and its open settlements (operator only).
