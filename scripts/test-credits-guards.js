@@ -50,13 +50,14 @@ const table = guardsTable();
   const want = new Set(G.CREDITS_GUARD_KEYS);
   const reads = [
     ...[...src("src/mcp-oauth.js").matchAll(/\bguard\("([A-Za-z]+)"\)/g)].map((m) => `mcpOAuth.${m[1]}`),
+    ...[...src("src/credits-account.js").matchAll(/\baccountGuard\("([A-Za-z]+)"\)/g)].map((m) => `account.${m[1]}`),
     ...[...src("src/credits.js").matchAll(/\bbadKeyBound\(\)\?\.([A-Za-z]+)/g)].map((m) => `badKey.${m[1]}`),
     ...[...src("src/credits.js").matchAll(/creditsGuards\(\)\?\.([A-Za-z]+)\?\.([A-Za-z]+)/g)].map((m) => `${m[1]}.${m[2]}`),
     ...[...src("src/credits.js").matchAll(/\bc\.((?:buyer|source)Per(?:Hour|Day)|failed(?:Max|WindowMs|HoldMs))\b/g)].map((m) => `purchase.${m[1]}`),
   ];
   const uniq = [...new Set(reads)].sort();
   const missing = uniq.filter((k) => !want.has(k));
-  ok(uniq.length >= 26 && uniq.some((k) => k.startsWith("badKey.")) && uniq.some((k) => k.startsWith("mcpOAuth.")), `guard: the scan finds the code's table reads (${uniq.length})`);
+  ok(uniq.length >= 26 && uniq.some((k) => k.startsWith("badKey.")) && uniq.some((k) => k.startsWith("mcpOAuth.")) && uniq.some((k) => k.startsWith("account.")), `guard: the scan finds the code's table reads (${uniq.length})`);
   ok(missing.length === 0, `every table key the code reads is one the loader requires and the example holds${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
 }
 

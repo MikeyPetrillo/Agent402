@@ -13,7 +13,11 @@
 // every well-formed address and every address gets the link (a new buyer
 // signs in before a first purchase); the send runs after the answer, so
 // neither the body nor the timing says whether an address holds a balance. Requests are rate-limited per address and per
-// client address.
+// client address, and the sends draw on hourly budgets from the private
+// table (src/credits-guards.js account): one per client network (an IPv6
+// /64) and one for the whole service, kept in the shared store so every
+// replica meets one ceiling. Past a budget the answer is the same and no mail
+// goes; the first send refused in a window is logged.
 //
 // The session is an opaque random id in an HttpOnly, SameSite=Strict cookie
 // scoped to /credits/account (Secure on an https site); the server keeps only
@@ -28,12 +32,16 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { readFileSync } from "node:fs";
 import { SKIP_UPDATE } from "./json-document.js";
 import { escapeHtml, headerText } from "./email-text.js";
+import { creditsGuards } from "./credits-guards.js";
+import { shared, createMemoryLimits } from "./shared-limits.js";
+import { limiterKey } from "./rate-limit.js";
 
 export const ACCOUNT_PATH = "/credits/account";
 export const ACCOUNT_COOKIE = "a402_acct";
 import { SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS, signInLifeWords, lowBalanceWords, lowBalanceUsd } from "./credits-figures.js";
 export { SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS };
 const TOUCH_MS = 60_000;
+const HOUR_MS = 3_600_000;
 /** A new key is issued only to a session whose sign-in link was used this recently. */
 export const NEW_KEY_FRESH_SIGN_IN_MS = 10 * 60_000;
 /** How often ended sessions and expired link records are deleted from the store. */
@@ -130,8 +138,9 @@ export function buildNewKeyEmail({ keyId, accountUrl }) {
  * @param {object} d.store        a json-document (createJsonDocument) for sessions and spent tokens
  * @param {{check:(k:string)=>{limited:boolean}}} d.ipLimiter
  * @param {{check:(k:string)=>{limited:boolean}}} d.emailLimiter
+ * @param {object} [d.limits]     the shared counters the send budgets are kept in (src/shared-limits.js)
  */
-export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, store, ipLimiter, emailLimiter, termsVersion = () => null, now = () => Date.now(), log = console.log, sweepEveryMs = ACCOUNT_SWEEP_MS }) {
+export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, store, ipLimiter, emailLimiter, limits = shared, termsVersion = () => null, now = () => Date.now(), log = console.log, sweepEveryMs = ACCOUNT_SWEEP_MS }) {
   const mac = (purpose, body) => createHmac("sha256", secret).update(`${purpose}|${body}`).digest("base64url");
   const accountUrl = `${baseUrl}${ACCOUNT_PATH}`;
 
@@ -152,6 +161,27 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     return c;
   }
   const signInLink = (email) => `${accountUrl}/verify?t=${encodeURIComponent(signInToken(email))}`;
+
+  // ---- the sign-in email's send budgets (private table; none set: no send) ----
+  const accountGuard = (k) => { const v = Number(creditsGuards()?.account?.[k]); return v > 0 ? v : null; };
+  const local = createMemoryLimits({ keyCap: 20_000 });
+  async function spend(name, key) {
+    const k = digest(`${name}|${key}`).slice(0, 40);
+    let r = await limits.counterAdd(`acct-${name}`, k, 1, HOUR_MS).catch(() => ({ ok: false }));
+    if (!r?.ok) r = await local.counterAdd(`acct-${name}`, k, 1, HOUR_MS);
+    return Number(r.value) || 0;
+  }
+  // The network's budget first, the service-wide one last, so a send the
+  // network's budget refused does not spend the service's.
+  async function sendRoom(ip) {
+    const perNet = accountGuard("sendsPerNetHour"), global = accountGuard("sendsGlobalPerHour");
+    if (!perNet || !global) return "unset";
+    const n = await spend("send-net", limiterKey(String(ip || "?")));
+    if (n > perNet) return n === perNet + 1 ? "net-first" : "net";
+    const g = await spend("send-global", "all");
+    if (g > global) return g === global + 1 ? "global-first" : "global";
+    return "ok";
+  }
 
   // Low-balance notice off, by link: signed over the key id, no expiry (an
   // unsubscribe link keeps working).
@@ -196,6 +226,12 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     if (emailLimiter?.check(`e:${digest(email).slice(0, 32)}`).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
     const work = (async () => {
       await sweepQuietly();
+      const room = await sendRoom(ip);
+      if (room !== "ok") {
+        if (room === "unset") log("[credits-account] a sign-in email was not sent: the send budgets are not set");
+        else if (room.endsWith("-first")) log(`[credits-account] sign-in emails are being held: the ${room === "global-first" ? "service-wide" : "per-network"} hourly send budget is spent`);
+        return false;
+      }
       const sent = await sendEmail({ to: email, ...buildSignInEmail({ link: signInLink(email) }) });
       if (!sent) log("[credits-account] a sign-in email was not sent");
       return sent;

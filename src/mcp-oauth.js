@@ -33,16 +33,19 @@
 // writes), one per kind, so no kind anyone can add to fills another: the
 // registered apps (each document held to a size cap; a registration past it
 // lets go of the oldest app that never signed anyone in), the pending
-// sign-ins (capped per client address and per app, each letting go of its
-// own oldest, with a service-wide cap as the last resort), and the grants
+// sign-ins (capped per browser, per client address, per wider network and
+// per app: a requester over a cap lets go of its own oldest, or its new one
+// is refused, never another requester's; a full map lets go of the oldest of
+// the network or app holding the most and refuses no one), and the grants
 // with their codes and tokens (made only by a person signed in by email).
 // An app that never completed a sign-in is let go after a short idle.
 // Tokens carry a tag keyed by this server, so a made-up token is refused
 // without a store read, and one found bad is held as bad for a short while.
 // Limits: counters in the shared store (src/shared-limits.js), each falling
 // back to this process's own count when the shared store does not answer.
-// A wrong email code is counted before it is compared, so parallel guesses
-// meet the per-email bound together. Thresholds come from the private table;
+// A wrong email code is counted before it is compared, per requester address
+// and per emailed code, so parallel guesses meet both bounds together and no
+// one else's guesses refuse an email's owner. Thresholds come from the private table;
 // a refusal never says which check refused.
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { SKIP_UPDATE } from "./json-document.js";
@@ -102,6 +105,7 @@ const cfg = {
   pendingMax: () => guard("pendingMax"),
   pendingPerAddress: () => guard("pendingPerAddress"),
   pendingPerClient: () => guard("pendingPerClient"),
+  pendingPerNetwork: () => guard("pendingPerNetwork"),
   sendsGlobalPerHour: () => guard("sendsGlobalPerHour"),
   sendsPerEmailDay: () => guard("sendsPerEmailDay"),
   unusedClientIdleMs: () => guard("unusedClientIdleMs"),
@@ -109,6 +113,12 @@ const cfg = {
 };
 // A client address is counted by its limiter key (an IPv6 address by its /64).
 const netKey = (ip) => limiterKey(String(ip || "?"));
+// A wider network for the pending sign-ins: an IPv6 /48 (an IPv4 address stands alone).
+const wideNetKey = (ip) => {
+  const k = netKey(ip);
+  const m = /^([0-9a-f]{1,4}):([0-9a-f]{1,4}):([0-9a-f]{1,4}):[0-9a-f]{1,4}::\/64$/i.exec(k);
+  return m ? `${m[1]}:${m[2]}:${m[3]}::/48` : k;
+};
 const GRANTS_PER_EMAIL = 20;
 const CLIENTS_MAX = 20_000;
 const CLIENT_IDLE_MS = 30 * 86_400_000;
@@ -195,25 +205,38 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
   const waiting = () => mcpOAuthSwitch() && creditsSalesSwitch() && !creditsSalesEnabled();
 
   // ---- limits: one hit on a shared fixed-window counter (local on a miss) ----
+  // One key per counter, read and written through this one function.
+  const counterKey = (name, key) => digest(`${name}|${key}`).slice(0, 40);
   async function add(name, key, delta, windowMs) {
-    const k = digest(`${name}|${key}`).slice(0, 40);
+    const k = counterKey(name, key);
     let r = await limits.counterAdd(`mcpo-${name}`, k, delta, windowMs).catch(() => ({ ok: false }));
     if (!r?.ok) r = await local.counterAdd(`mcpo-${name}`, k, delta, windowMs);
     return Number(r.value) || 0;
   }
   const over = async (name, key, limit, windowMs = cfg.windowMs()) => (await add(name, key, 1, windowMs)) > limit;
-  async function locked(email) {
-    const k = digest(`lock|${email}`).slice(0, 40);
+  // A code attempt is counted BEFORE the code is compared, on two shared
+  // counters: the requester's address (every sign-in it holds together) and
+  // the emailed code (the pending sign-in it was mailed to). Parallel attempts
+  // each take a number, and one numbered past either bound is refused without
+  // a comparison. Nothing is counted per email, so a stranger's guesses never
+  // refuse the owner's own sign-in; an email's guesses are bounded by its
+  // sends, each code mailed carrying its own tries. A right code gives its
+  // numbers back, so signing in never counts toward a lockout.
+  const addressFails = (ip) => `net|${netKey(ip)}`;
+  const codeFails = (rid, h) => `code|${rid}|${h}`;
+  async function locked(ip) {
+    const k = counterKey("fails", addressFails(ip));
     let r = await limits.counterGet("mcpo-fails", k).catch(() => ({ ok: false }));
     if (!r?.ok) r = await local.counterGet("mcpo-fails", k);
     return Number(r.value) >= cfg.failsPerEmail();
   }
-  // A code attempt is counted BEFORE the code is compared, on one shared
-  // counter: parallel attempts each take a number, and an attempt numbered
-  // past the bound is refused without a comparison. A right code gives its
-  // number back, so signing in never counts toward a lockout.
-  const takeAttempt = async (email) => (await add("fails", `lock|${email}`, 1, cfg.lockoutMs())) <= cfg.failsPerEmail();
-  const giveBack = (email) => add("fails", `lock|${email}`, -1, cfg.lockoutMs()).catch(() => {});
+  /** "ok" (compare it), "locked" (the address is past its bound) or "spent" (the code is). */
+  async function takeAttempt(ip, rid, h) {
+    if ((await add("fails", addressFails(ip), 1, cfg.lockoutMs())) > cfg.failsPerEmail()) return "locked";
+    if ((await add("fails", codeFails(rid, h), 1, cfg.emailCodeTtlMs())) > cfg.emailCodeTries()) return "spent";
+    return "ok";
+  }
+  const giveBack = (ip, rid, h) => Promise.all([add("fails", addressFails(ip), -1, cfg.lockoutMs()), add("fails", codeFails(rid, h), -1, cfg.emailCodeTtlMs())]).catch(() => {});
 
   // ---- the stores: one document per kind ----------------------------------------
   const unavailable = () => Object.assign(new Error("connector sign-in store unavailable"), { statusCode: 503 });
@@ -397,7 +420,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     // "limited" (refused by a limit; no code made), "gone" (no such sign-in)
     // or whether the mail was sent. The service-wide budget is read last, so
     // a send another limit refused does not spend it.
-    if (await locked(email) || await over("send-ip", netKey(ip), cfg.sendsPerIp()) || await over("send-email", email, cfg.sendsPerEmail())
+    if (await locked(ip) || await over("send-ip", netKey(ip), cfg.sendsPerIp()) || await over("send-email", email, cfg.sendsPerEmail())
       || await over("send-email-day", email, cfg.sendsPerEmailDay(), DAY_MS) || await over("send-global", "all", cfg.sendsGlobalPerHour(), HOUR_MS)) return "limited";
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
@@ -544,24 +567,54 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       if (q.resource != null && (!resource || !resources.has(resource))) return bad("invalid_target", "resource must name this server's MCP connector.");
       const rid = hex(16);
       const cookie = b64url(randomBytes(32));
-      // The client address, keyed so the store never holds it.
-      const net = mac("net", netKey(clientIp(req))).slice(0, 22);
+      // The sign-in cookie this browser already holds: when it is one of a
+      // pending request, the new request has that request's owner, so the
+      // caps below let go of this browser's own sign-ins and no one else's.
+      const prior = readCookie(req, CONSENT_COOKIE);
+      const priorDigest = COOKIE_RE.test(prior) ? digest(prior) : null;
+      // The client address and its wider network, keyed so the store never holds either.
+      const ip = clientIp(req);
+      const net = mac("net", netKey(ip)).slice(0, 22);
+      const wide = mac("wide", wideNetKey(ip)).slice(0, 22);
+      let refused = false;
       try {
-        // Pending requests are capped per client address and per app, each
-        // letting go of its own oldest; past the service-wide cap, which
-        // stays as the last resort, no new one starts (503).
         await requests.change((b) => {
+          refused = false;
           const t = now();
+          const ownerOf = (r) => r.owner || r.cookie;
           const oldestFirst = (pick) => Object.entries(b.reqs).filter(([, r]) => pick(r)).sort((x, y) => (Number(x[1].at) || 0) - (Number(y[1].at) || 0));
-          for (const [pick, cap] of [[(r) => r.net === net, cfg.pendingPerAddress()], [(r) => r.clientId === clientId, cfg.pendingPerClient()]]) {
-            const mine = oldestFirst(pick);
-            while (mine.length >= cap) delete b.reqs[mine.shift()[0]];
+          const held = priorDigest ? Object.values(b.reqs).find((r) => r.cookie === priorDigest) : null;
+          const owner = held ? ownerOf(held) : digest(cookie);
+          const mineIn = (group) => group.filter(([, r]) => ownerOf(r) === owner);
+          // The browser's own cap: its oldest goes.
+          const own = oldestFirst((r) => ownerOf(r) === owner);
+          while (own.length >= cfg.pendingPerAddress()) delete b.reqs[own.shift()[0]];
+          // The shared caps (the address, its wider network, the app): a
+          // requester over one lets go of its own oldest there, or its new
+          // request is refused; another requester's is never let go.
+          for (const [pick, cap] of [[(r) => r.net === net, cfg.pendingPerAddress()], [(r) => r.wide === wide, cfg.pendingPerNetwork()], [(r) => r.clientId === clientId, cfg.pendingPerClient()]]) {
+            const group = oldestFirst(pick);
+            const mine = mineIn(group);
+            let n = group.length;
+            while (n >= cap && mine.length) { delete b.reqs[mine.shift()[0]]; n--; }
+            if (n >= cap) { refused = true; return SKIP_UPDATE; }
           }
-          if (Object.keys(b.reqs).length >= cfg.pendingMax()) return FULL;
-          b.reqs[rid] = { clientId, clientName: client.name, redirectUri, challenge: q.code_challenge, state, resource, net, cookie: digest(cookie), at: t, exp: t + cfg.requestTtlMs() };
+          // A full map refuses no one: the oldest request of the network or
+          // app holding the most goes, so a flood lets go of its own first.
+          while (Object.keys(b.reqs).length >= cfg.pendingMax()) {
+            const counts = new Map();
+            for (const r of Object.values(b.reqs)) for (const g of [`w|${r.wide || r.net}`, `c|${r.clientId}`]) counts.set(g, (counts.get(g) || 0) + 1);
+            let top = null, most = 0;
+            for (const [g, n] of counts) if (n > most) { top = g; most = n; }
+            const first = oldestFirst((r) => `w|${r.wide || r.net}` === top || `c|${r.clientId}` === top)[0];
+            if (!first) break;
+            delete b.reqs[first[0]];
+          }
+          b.reqs[rid] = { clientId, clientName: client.name, redirectUri, challenge: q.code_challenge, state, resource, net, wide, owner, cookie: digest(cookie), at: t, exp: t + cfg.requestTtlMs() };
           return true;
         }, { grows: true });
       } catch { return errPage(res, 503, "Sign-in is unavailable", "Try again in a moment."); }
+      if (refused) return errPage(res, 429, "Too many requests", "Try again later.");
       touchClient(clientId);
       res.setHeader("Set-Cookie", cookieOut(cookie, Math.floor(cfg.requestTtlMs() / 1000)));
       noStore(res).redirect(303, `${OAUTH_CONSENT_PATH}?rid=${rid}`);
@@ -575,13 +628,13 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       const s = await requests.view();
       const r = ownRow(s.reqs, rid);
       if (!r || !(r.exp > now()) || !sameBytes(r.cookie, digest(cookie))) return null;
-      return { r, client: { name: r.clientName || "An app" }, cookie };
+      return { r, client: { name: r.clientName || "An app" }, cookie, ip: clientIp(req) };
     }
     async function render(res, rid, p, { message = "", error = "", status = 200, lockedOut = null } = {}) {
       const { r, client, cookie } = p;
       const step = r.email ? "choose" : r.otp && r.otp.exp > now() ? "code" : "email";
-      // A locked email's code form is shown disabled, with a new code offered.
-      const isLocked = step === "code" && (lockedOut ?? await locked(r.otp.email).catch(() => false));
+      // A locked address's code form is shown disabled, with a new code offered.
+      const isLocked = step === "code" && (lockedOut ?? await locked(p.ip).catch(() => false));
       const balances = r.email ? await credits.balancesForEmail(r.email).catch(() => []) : [];
       const packs = Object.entries(sellablePacks()).map(([id, x]) => ({ id, usd: x.cents / 100 }));
       pageHeaders(res, originOf(r.redirectUri)).status(status).type("html").send(consentPage(baseUrl, {
@@ -658,7 +711,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
         const again = await pending(req, rid);
         if (!again) return expired(res);
         if (sent === "limited" || !again.r.otp) {
-          const lockedOut = sent === "limited" && await locked(email).catch(() => false);
+          const lockedOut = sent === "limited" && await locked(ip).catch(() => false);
           return render(res, rid, again, { error: lockedOut ? LOCKED_TEXT : BUSY_TEXT, status: 429, lockedOut });
         }
         return render(res, rid, again);
@@ -667,8 +720,15 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
         const otp = r.otp;
         const code = String(req.body?.code || "").trim();
         if (!otp || !(otp.exp > now())) return render(res, rid, p, { error: "That code has expired. Ask for a new one.", status: 400 });
-        // Counted first, compared after: an attempt past the bound is refused uncompared.
-        if (!(await takeAttempt(otp.email))) return render(res, rid, p, { error: LOCKED_TEXT, status: 429, lockedOut: true });
+        // Counted first, compared after: an attempt past either bound is refused uncompared.
+        const turn = await takeAttempt(ip, rid, otp.h);
+        if (turn === "locked") return render(res, rid, p, { error: LOCKED_TEXT, status: 429, lockedOut: true });
+        if (turn === "spent") {
+          await requests.change((b) => { const x = ownRow(b.reqs, rid); if (!x?.otp || x.otp.h !== otp.h) return SKIP_UPDATE; x.lastEmail = x.otp.email; delete x.otp; return true; }).catch(() => {});
+          const again = await pending(req, rid);
+          if (!again) return expired(res);
+          return render(res, rid, again, { error: "That code no longer works. Ask for a new one.", status: 400 });
+        }
         let verdict = "bad";
         await requests.change((b) => {
           const rr = ownRow(b.reqs, rid);
@@ -679,7 +739,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
           if (rr.otp.tries >= cfg.emailCodeTries()) { rr.lastEmail = rr.otp.email; delete rr.otp; verdict = "spent"; } else verdict = "bad";
           return true;
         }).catch(() => { verdict = "error"; });
-        if (verdict === "ok" || verdict === "error") await giveBack(otp.email);
+        if (verdict === "ok" || verdict === "error") await giveBack(ip, rid, otp.h);
         if (verdict === "error") return errPage(res, 503, "Sign-in is unavailable", "Try again in a moment.");
         const again = await pending(req, rid);
         if (!again) return expired(res);
