@@ -390,8 +390,12 @@ try {
   ok(/research monitor sends no alerts/.test(strip(await (await fetch(`${BASE}/monitors`)).text())), "/monitors says the research monitor waits past the cap");
   // /playground: the picker lists free tools; a paid tool's setup link is
   // never inside a disabled button.
+  // The picker's index is served with the page (free tools only); a tool's
+  // form data is fetched when it is picked.
   const pg = await (await fetch(`${BASE}/js/playground.js`)).text();
-  ok(/tools=tools\.filter\(function\(t\)\{return t\.computePayable\}\)/.test(pg) && !/dbtn\.disabled=true/.test(pg), "/playground lists free tools and puts the setup link outside any disabled button");
+  const pgPage = await (await fetch(`${BASE}/playground`)).text();
+  const pgIndex = (JSON.parse((pgPage.match(/<script type="application\/json" id="pg-tools-data">([\s\S]*?)<\/script>/) || [])[1] || "{}").index) || [];
+  ok(pgIndex.length > 0 && pgIndex.every((t) => bySlug.get(t.slug)?.computePayable === true) && !/dbtn\.disabled=true/.test(pg), `/playground lists free tools and puts the setup link outside any disabled button (${pgIndex.length})`);
 }
 
 // --- home: no stats strip under the two doors --------------------------------

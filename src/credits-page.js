@@ -2,7 +2,7 @@
 // key) and /credits/thanks (claims the key ONCE and shows it). Shared ledger
 // shell + REPORTS_CSS; external JS (site CSP drops inline script).
 import { sellablePacks } from "./credits.js";
-import { creditsBalanceMaxCents } from "./credits-sales.js";
+import { creditsBalanceMaxCents, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 
@@ -21,7 +21,11 @@ export function creditsExample(catalog = {}, slug = "whois", startUsd = 20) {
   return { method, path, price, input, after };
 }
 
-export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
+/** The connector line: an MCP app (Claude, Cursor) signs in by email and pays
+ *  from the balance, with no key to paste. Only while the connector is on. */
+const connectorNote = (baseUrl) => `<p class="note">Using Claude, Cursor or another MCP app? Give it the connector address <span style="font-family:var(--font-mono);overflow-wrap:anywhere;">${esc(baseUrl)}${CREDITS_CONNECTOR_PATH}</span>: it asks for your purchase email, then pays from your balance under a daily cap you set, with no key to paste. Each app's setup is on <a href="/start">the start page</a>.</p>`;
+
+export function creditsPage(baseUrl, salesEnabled = false, catalog = {}, { connector = creditsConnectorOn() } = {}) {
   const ex = creditsExample(catalog);
   const exCall = ex
     ? (ex.method === "GET"
@@ -62,8 +66,9 @@ export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
   </section>
   <section>
     <div class="products">${salesEnabled ? cards : closed}</div>
+    ${salesEnabled && connector ? connectorNote(baseUrl) : ""}
     ${salesEnabled ? `<p class="note">Already bought credits? <a href="/credits/account">Sign in with your purchase email</a> to see your balance and its history, add to it, ask for the unspent balance back or issue a new key.</p>
-    ` : ""}<p class="note">${salesEnabled ? `You sign in by email before you pay, and your bank may ask you to confirm the payment · your key is shown once after paying and emailed to you · a balance holds at most $${(creditsBalanceMaxCents() / 100).toFixed(0)} · refund the unspent balance to your card with <span style="font-family:var(--font-mono);">POST /api/credits/refund</span> and the key, or from your balance page · ` : ""}keep it secret · balance at <span style="font-family:var(--font-mono);">GET /api/credits/balance</span> · agents with a wallet pay per call over x402 / MPP</p>
+    ` : ""}<p class="note">${salesEnabled ? `You sign in by email before you pay, and your bank may ask you to confirm the payment · your key is shown once after paying and emailed to you · a balance holds at most $${(creditsBalanceMaxCents() / 100).toFixed(0)} · refund the unspent balance to your card with <span style="font-family:var(--font-mono);white-space:nowrap;">POST /api/credits/refund</span> and the key, or from your balance page · ` : ""}keep it secret · balance at <span style="font-family:var(--font-mono);white-space:nowrap;">GET /api/credits/balance</span> · agents with a wallet pay per call over x402 / MPP</p>
   </section>
   <section>
     <div class="hm-obsidian" style="border-radius:var(--radius);background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-panel);padding:26px 28px;">
@@ -110,10 +115,10 @@ function dollarList(ps) {
   return d.length > 1 ? `${d.slice(0, -1).join(", ")} or ${d[d.length - 1]}` : d[0] || "";
 }
 
-export function creditsThanksPage(sessionId, baseUrl) {
+export function creditsThanksPage(sessionId, baseUrl, { connector = creditsConnectorOn() } = {}) {
   const body = `
 <div class="wrap" style="padding-top:28px;">
-  <div id="app" data-session="${esc(sessionId)}"><div class="status"><h2><span class="spin"></span>Minting your key…</h2><p>One moment.</p></div></div>
+  <div id="app" data-session="${esc(sessionId)}"${connector ? ` data-connector="${esc(baseUrl)}${CREDITS_CONNECTOR_PATH}"` : ""}><div class="status"><h2><span class="spin"></span>Minting your key…</h2><p>One moment.</p></div></div>
 </div>
 ${ledgerFooterCompact()}
 <script src="/js/credits-thanks.js"></script>`;

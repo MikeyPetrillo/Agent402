@@ -3,6 +3,7 @@
 // never a person (house rule), and every claim links to the surface that
 // shows it.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { fitTitle } from "./seo-meta.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 
@@ -35,8 +36,10 @@ export function companyPage(baseUrl) {
   const identityText = agentId
     ? `The operator is identified on-chain as well as on this page: Agent402 is <strong>agent ${esc(agentId)}</strong> in the ${regLink} on Base, owned by the treasury wallet that receives payment. The registration points at ${files}. An agent can resolve who operates this catalog from the chain rather than taking a web page's word for it.`
     : `This instance publishes ${files}. It has no on-chain registration in the ${regLink} configured, so the file carries no agent id.`;
-  const title = "Havok Holdings LLC";
-  const description = `Agent402.Tools is built and operated by Havok Holdings LLC: the payment and trust layer for agentic commerce, with per-call tools, reports and monitors.`;
+  // The entity page names the product it operates, so a search for either
+  // name finds it; the h1 says the same.
+  const title = fitTitle(["Havok Holdings LLC, the company behind Agent402.Tools", "Havok Holdings LLC, the company behind Agent402"]);
+  const description = `Agent402.Tools is built and operated by Havok Holdings LLC: the payment and trust layer for agentic commerce over x402 and MPP, with per-call tools, reports and monitors.`;
   const row = (h, body, links = []) => `
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
   <div class="co-2col" style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);">
@@ -68,7 +71,7 @@ export function companyPage(baseUrl) {
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">company</span></nav>
-    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);max-width:900px;">Havok Holdings LLC.</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);max-width:900px;text-wrap:balance;">Havok Holdings LLC, the company behind Agent402.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools, the payment and trust layer for agentic commerce, is built and operated by Cardhavok LLC (doing business as <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings LLC</a>), a North Carolina company. We run the hosted service at agent402.tools, publish the server under AGPL-3.0 and the client packages under MIT, and settle paid calls on public blockchains, or by card through Stripe.</p>
   </div>
 </header>

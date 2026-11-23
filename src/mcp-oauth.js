@@ -187,6 +187,20 @@ export function buildCodeEmail({ code, appName }) {
   return { subject, html, text };
 }
 
+/** The notice sent once an app is connected: a record of what was allowed
+ *  and where to undo it. */
+export function buildConnectedEmail({ appName, capUsd, manageUrl }) {
+  const subject = "An app was connected to your Agent402 credits";
+  const lead = `${appName} can now pay for Agent402 tool calls from the credits balance on this email, up to $${Number(capUsd).toFixed(2)} a day, only when a call succeeds.`;
+  const manage = `Change its daily cap or disconnect it at any time on your balance page: ${manageUrl}`;
+  const why = "You are getting this because this email's sign-in code was used to connect the app. If that was not you, disconnect it on the balance page; a disconnected app stops paying at once.";
+  // design-tokens: literal-start (email HTML)
+  const html = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:560px;margin:0 auto;color:#111315"><h2 style="font-weight:700">${escapeHtml(subject)}</h2><p style="color:#3A3F45;line-height:1.55">${escapeHtml(lead)}</p><p style="color:#3A3F45;line-height:1.55">Change its daily cap or disconnect it at any time on <a href="${escapeHtml(manageUrl)}" style="color:#0F5E43">your balance page</a>.</p><p style="color:#626970;font-size:12px;margin-top:26px">${escapeHtml(why)}</p></div>`;
+  // design-tokens: literal-end
+  const text = `${subject}\n\n${lead}\n\n${manage}\n\n${why}\n\nAgent402`;
+  return { subject, html, text };
+}
+
 /**
  * @param {object} d
  * @param {object} d.credits   createCredits() (balancesForEmail, createCheckout, claim, sessionOwner, grantSpentToday)
@@ -867,6 +881,12 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
         await touchClient(rr.clientId, { done: true });
         res.setHeader("Set-Cookie", cookieOut("", 0));
         log(`[mcp-oauth] a connector grant was made for key ${keyId}`);
+        // A record for the person, sent after the grant is made; a send that
+        // fails never holds up or undoes the sign-in.
+        try {
+          const m = buildConnectedEmail({ appName: headerText(String(rr.clientName || "An app")).slice(0, 80), capUsd: cap, manageUrl: `${baseUrl}${ACCOUNT_PATH}` });
+          Promise.resolve(sendEmail({ to: r.email, subject: headerText(m.subject), html: m.html, text: m.text })).catch(() => {});
+        } catch { /* a notice never breaks a sign-in */ }
         return redirectWith(res, r.redirectUri, { code, state: r.state, iss: baseUrl });
       }
       return render(res, rid, p, { status: 400 });
@@ -983,7 +1003,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       if (!enabled()) return next();
       const email = await who(req, res);
       if (!email) return;
-      try { noStore(res).json({ apps: await grantsForEmail(email), capMaxUsd: creditsBalanceMaxCents() / 100 }); }
+      try { noStore(res).json({ apps: await grantsForEmail(email), capMaxUsd: creditsBalanceMaxCents() / 100, connectorUrl: `${baseUrl}${CREDITS_CONNECTOR_PATH}` }); }
       catch { noStore(res).status(503).json({ error: "Could not read connected apps right now." }); }
     });
     app.post(`${ACCOUNT_PATH}/connected/revoke`, json, async (req, res, next) => {

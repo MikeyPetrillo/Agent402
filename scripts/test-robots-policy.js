@@ -93,7 +93,6 @@ try {
   // which a search console reports back as a crawl error on a healthy site.
   const REFUSED = [
     ["/api/memory", "wallet-keyed rows, one owner each"],
-    ["/api/pow/challenge?slug=hash", "a proof-of-work challenge is not a page"],
     ["/r/x", "a paid report, the session id is the bearer"],
     ["/m/x", "a monitor report, same"],
     ["/__operator", "the operator surfaces"],
@@ -147,6 +146,17 @@ try {
     for (const p of PRICED) ok(!allows(ua, p), `${ua} is refused the priced route ${p}`);
     for (const p of SURFACES) ok(allows(ua, p), `${ua} is allowed the documented surface ${p}`);
     ok(!allows(ua, "/api/index?seller=example.test") && !allows(ua, "/api/index?limit=1&seller=example.test") && !allows(ua, "/base?seller=example.test"), `${ua} is refused the seller-scoped views`);
+  }
+  // The free path's first step: /agents.md tells an agent to GET the
+  // proof-of-work challenge, so every named AI agent may fetch it, while the
+  // search engines and the unnamed crawler stay off it (JSON, not a page).
+  const POW = ["/api/pow/challenge?slug=hash", "/api/pow"];
+  for (const ua of [...AI_AGENTS, "Claude-User", "Perplexity-User", "OAI-SearchBot", "SmitheryBot"]) for (const p of POW) ok(allows(ua, p), `${ua} may fetch ${p}, the step agents.md names`);
+  for (const ua of SEARCH) ok(!allows(ua, "/api/pow/challenge?slug=hash"), `${ua} is refused the proof-of-work challenge (not a page)`);
+  {
+    const agentsMd = await (await fetch(`${BASE}/agents.md`)).text();
+    const told = [...agentsMd.matchAll(/\/api\/pow\/[A-Za-z0-9_/?=.-]*/g)].map((m) => m[0]);
+    ok(told.length > 0 && told.every((p) => ["GPTBot", "ClaudeBot", "Claude-User", "ChatGPT-User"].every((ua) => allows(ua, p))), `every /api/pow/ path agents.md tells an agent to fetch is open to the named AI agents (${told.join(", ")})`);
   }
   // The AI agents keep reading per-route quotes: the close is a search-engine rule.
   for (const ua of AI_AGENTS) {

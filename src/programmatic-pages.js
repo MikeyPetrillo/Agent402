@@ -131,8 +131,23 @@ export const entityLastmod = (path) => entityDates.get(path) || null;
 const degradedEntities = new Set();
 export const entityDegraded = (path) => degradedEntities.has(path);
 export function markEntityDegraded(kind, slug) { degradedEntities.add(`/reports/${kind}/${slug}`); }
+
+/** A page whose free data stays too thin to stand on its own: an insider page
+ *  with fewer than THIN_INSIDER_ROWS transactions (or detail EDGAR could not
+ *  read), a fund page with no holdings table, a company page with no annual
+ *  results and no filing activity. Such a page is still served, but noindex
+ *  and out of the sitemap, until a build with the data replaces it. */
+export const THIN_INSIDER_ROWS = 3;
+export function entityThin(kind, data) {
+  if (!data) return true;
+  if (kind === "insider") return Boolean(data.partial) || (data.rows || []).length < THIN_INSIDER_ROWS;
+  if (kind === "fund") return !data.holdingsAvailable || !(data.holdings || []).length;
+  if (kind === "dossier") return !(data.financials?.rows || []).length && !Number(data.activity?.total);
+  return false;
+}
 function recordEntityDate(kind, slug, data) {
   degradedEntities.delete(`/reports/${kind}/${slug}`);
+  if (entityThin(kind, data)) degradedEntities.add(`/reports/${kind}/${slug}`);
   const d = data && !data.partial ? teaserLastmod(kind, data) : null;
   if (d) entityDates.set(`/reports/${kind}/${slug}`, d);
 }
@@ -458,6 +473,7 @@ export const FAMILIES = {
 export const PROGRAMMATIC_CSS = `
 .pg-glance{margin:18px 0 22px;}
 .pg-glance h2{font-size:var(--fs-lg);margin:0 0 8px;}
+.pg-h2{font-size:var(--fs-lg);font-weight:700;margin:22px 0 8px;}
 .pg-glance p{margin:0 0 10px;line-height:1.6;}
 .pg-chg{color:var(--muted);font-size:var(--fs-xs);}
 
@@ -563,6 +579,16 @@ function shell({ title, description, canonical, baseUrl, body, jsonLd, degraded 
   });
 }
 
+/** Per insider: the lines filed, and the open-market value sold and bought,
+ *  from the rows on the page (insiderSummary). Nothing when one insider filed. */
+function byInsiderTable(rows) {
+  const people = insiderSummary(rows).people || [];
+  if (people.length < 2) return "";
+  return `<h2 class="pg-h2">By insider</h2><div class="pg-table-wrap"><table class="pg-table">
+<thead><tr><th>Insider and role</th><th>Lines filed</th><th>Sold on the market</th><th>Bought on the market</th></tr></thead>
+<tbody>${people.map((p) => `<tr><td class="who"><span class="pg-who-name">${esc(p.insider)}</span>${p.role ? `<span class="pg-who-role">${esc(p.role)}</span>` : ""}</td><td class="num">${esc(String(p.lines))}</td><td class="num">${p.sold ? esc(fmtMoney(p.sold)) : ""}</td><td class="num">${p.bought ? esc(fmtMoney(p.bought)) : ""}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
 // --- insider page -----------------------------------------------------------
 export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
   const family = FAMILIES.insider;
@@ -597,6 +623,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
 <section>
   ${table}
   ${(() => { const paras = insiderNarrative(name, ticker, data, insiderSummary(rows), { maxFilings: INSIDER_TIERS["insider-report"].maxFilings }); return paras.length ? `<div class="pg-glance"><h2>What the filings show</h2>${paras.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : ""; })()}
+  ${byInsiderTable(rows)}
   ${rows.length ? `<div class="pg-meta">Transaction codes: P is an open-market purchase, S an open-market sale, A a grant or award, M an option exercise, F shares surrendered for tax. ${buys} open-market buy${buys === 1 ? "" : "s"} and ${sells} open-market sale${sells === 1 ? "" : "s"} in the rows above.</div>` : ""}
   ${buySection({ family, alertKind: "insider", input: ticker, headline: `The Form 4 flow against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads the newest Form 4 filings of the last ${INSIDER_DEFAULT_DAYS} days (up to ${INSIDER_TIERS["insider-report"].maxFilings}), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
   ${crossLinks([
@@ -609,7 +636,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
   <p class="pg-note">${esc(DISCLAIMER)}</p>
 </section>`;
   return shell({
-    title, description, canonical, baseUrl, body, degraded: degraded || !data,
+    title, description, canonical, baseUrl, body, degraded: degraded || !data || entityThin("insider", data),
     jsonLd: [
       datasetLd(baseUrl, { name: `${ticker} Form 4 insider transactions`, description, canonical, modified: teaserLastmod("insider", data) }),
       breadcrumbLd(baseUrl, [{ name: "Reports", path: "/reports" }, { name: "Insider filings", path: "/reports/insider" }, { name: ticker, path: `/reports/insider/${ticker}` }]),
@@ -667,7 +694,7 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
   <p class="pg-note">${esc(DISCLAIMER)}</p>
 </section>`;
   return shell({
-    title, description, canonical, baseUrl, body, degraded: degraded || !data,
+    title, description, canonical, baseUrl, body, degraded: degraded || !data || entityThin("fund", data),
     jsonLd: [
       datasetLd(baseUrl, { name: `${name} Form 13F-HR holdings`, description, canonical, modified: teaserLastmod("fund", data) }),
       breadcrumbLd(baseUrl, [{ name: "Reports", path: "/reports" }, { name: "Fund 13F holdings", path: "/reports/fund" }, { name, path: `/reports/fund/${slug}` }]),
@@ -751,7 +778,7 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
   <p class="pg-note">${esc(DISCLAIMER)}</p>
 </section>`;
   return shell({
-    title, description, canonical, baseUrl, body, degraded: degraded || !data,
+    title, description, canonical, baseUrl, body, degraded: degraded || !data || entityThin("dossier", data),
     jsonLd: [
       datasetLd(baseUrl, { name: `${name} SEC filing profile`, description, canonical, modified: teaserLastmod("dossier", data) }),
       breadcrumbLd(baseUrl, [{ name: "Reports", path: "/reports" }, { name: "Company profiles", path: "/reports/dossier" }, { name: ticker, path: `/reports/dossier/${ticker}` }]),

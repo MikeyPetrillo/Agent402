@@ -1275,7 +1275,19 @@ function canonicalPath(canonical, baseUrl) {
  *  and the Base marketplace page, the two pages it describes. */
 export const BASE_APP_LD_PATHS = new Set(["/", "/base"]);
 
-export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large", mpp = mppOffered(), article = null }) {
+// The header a page in the middle of a sign-in draws in place of the site nav
+// (`minimal`): the brand alone, no link and no menu, so nothing on it leads
+// the person away before the step is done.
+function minimalHeader() {
+  return `<header style="border-bottom:1px solid var(--hairline);background:var(--nav-bg);">
+  <div style="max-width:1180px;margin:0 auto;padding:15px 30px;display:flex;align-items:center;gap:11px;color:var(--ink);">
+    ${brandMark(24, "n")}
+    <span style="font-weight:600;font-size:var(--fs-lg);letter-spacing:-.01em;">Agent402</span>
+  </div>
+</header>`;
+}
+
+export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large", mpp = mppOffered(), article = null, minimal = false }) {
   // The snippet is derived here, once, for every page (see seo-meta.js): a
   // page author writes the paragraph, the shell serves what a search result
   // and a link preview can actually show.
@@ -1380,7 +1392,7 @@ ${gaSnippet(canonical)}
 </head>
 <body style="overflow-x:clip;"><!--email_off-->
 <a class="ml-skip" href="#main">Skip to content</a>
-${nav(activePath)}
+${minimal ? minimalHeader() : nav(activePath)}
 <main id="main" tabindex="-1">${body}</main>
 <!--/email_off--></body>
 </html>`;

@@ -260,7 +260,7 @@ export function insiderSummary(rows) {
   const ranked = [...people.values()].sort((a, b) => (b.sold + b.bought) - (a.sold + a.bought) || b.lines - a.lines);
   // Insiders with an open-market line (P or S), as distinct from every filer.
   const traders = new Set(rs.filter((r) => r.code === "P" || r.code === "S").map((r) => r.insider || "?")).size;
-  return { sells: agg("S"), buys: agg("P"), insiders: people.size, traders, top: ranked[0] || null };
+  return { sells: agg("S"), buys: agg("P"), insiders: people.size, traders, top: ranked[0] || null, people: ranked };
 }
 
 /** maxFilings: how many filings the paid report reads (INSIDER_TIERS), so the

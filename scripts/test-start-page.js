@@ -26,7 +26,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { bootServer } from "./lib/boot-server.js";
 
 const { startPage, startApps, START_PATH } = await import("../src/start-page.js");
-const { BASE_NO_GAS_SENTENCE, BASE_NO_GAS_SHORT } = await import("../src/base-no-gas.js");
+const { BASE_NO_GAS_SENTENCE, BASE_NO_GAS_SHORT, BASE_NO_GAS_PLAIN } = await import("../src/base-no-gas.js");
 const { mcpInstallHints, AGENT402_MCP_VERSION } = await import("../src/mcp-flagship.js");
 const { HUMAN_PRODUCTS } = await import("../src/human-checkout.js");
 const { NAV_PRIMARY_ACTION } = await import("../src/ledger-chrome.js");
@@ -69,7 +69,8 @@ ok(!/ChatGPT/i.test(allOn), "names no app without a documented path");
   const src = readFileSync(join(ROOT, "src/start-page.js"), "utf8");
   ok(!/agent402-mcp@\d/.test(src) && !src.includes(AGENT402_MCP_VERSION) && !/https:\/\/agent402\.tools/.test(src), "the page module types no package version and no host");
 }
-ok(powCount > 0 && allOn.includes(`${powCount} tools run free with proof of work`), `the free tool count is the catalog's proof-of-work count (${powCount})`);
+ok(powCount > 0 && allOn.includes(`${powCount} tools run free on the connector above`), `the free tool count is the catalog's proof-of-work count (${powCount})`);
+ok(!/proof of work|proof-of-work|EIP-3009|facilitator/i.test(plain(allOn) + plain(allOff)), "the page a newcomer reads names no proof of work, EIP or facilitator");
 ok(allOn.includes(`Credits by card.`) && allOn.includes("/credits"), "credits on sale: the credits line is there");
 ok(!/credits/i.test(allOff), "credits not on sale: the page says nothing about credits");
 ok(allOn.includes(CONNECTOR_URL), "credits on sale and the connector sign-in on: the credits line names the credits connector address");
@@ -114,7 +115,19 @@ ok(allOn.includes("Pay from a wallet") && allOn.includes("Buy USDC on Base") && 
   ok(plain(on).includes(install.hostedUrl) && /free tools/i.test(plain(on)), "the hosted /mcp address is still named, for the free tools");
   ok(/class="ml-code[^"]*"[^>]*data-name="Claude desktop setup"/.test(on) && /data-name="Wallet setup"/.test(on), "commands sit in code blocks (each gets a copy button)");
 }
-ok(allOn.includes(BASE_NO_GAS_SENTENCE) && allOff.includes(BASE_NO_GAS_SENTENCE), "the page states the Base gas sentence");
+ok(allOn.includes(BASE_NO_GAS_PLAIN) && allOff.includes(BASE_NO_GAS_PLAIN) && !allOn.includes(BASE_NO_GAS_SENTENCE), "the page states the Base gas fact in plain words (the technical sentence stays on /base)");
+
+// ---- the credits pages name the connector while it is on ----------------------
+{
+  const { creditsPage, creditsThanksPage } = await import("../src/credits-page.js");
+  const { balanceName } = await import("../src/credits-account-page.js");
+  const on = creditsPage(ORIGIN, true, catalog, { connector: true });
+  const off = creditsPage(ORIGIN, true, catalog, { connector: false });
+  ok(plain(on).includes(CONNECTOR_URL) && !plain(off).includes(CONNECTOR_URL), "/credits names the credits connector address only while the connector is on");
+  ok(creditsThanksPage("cs_x", ORIGIN, { connector: true }).includes(`data-connector="${CONNECTOR_URL}"`) && !/data-connector=/.test(creditsThanksPage("cs_x", ORIGIN, { connector: false })), "the page after purchase carries the connector address only while it is on");
+  const a = { keyId: "025c9fb4de8f", createdAt: "2026-11-23T10:00:00Z" }, b = { keyId: "7a1100aa9e01", createdAt: "2026-11-23T20:00:00Z" }, c = { keyId: "00aa11bb22cc", createdAt: "2026-10-01T00:00:00Z" };
+  ok(balanceName(a, [a, c]) === "Balance bought Nov 23, 2026" && balanceName(a, [a, b]) === "Balance bought Nov 23, 2026 (de8f)" && balanceName(b, [a, b]) === "Balance bought Nov 23, 2026 (9e01)", "a balance is named by its purchase day, with the key id's last four only beside a same-day twin");
+}
 
 // ---- the static trees --------------------------------------------------------
 for (const f of ["README.md", "wiki/Paying-with-x402.md", "wiki/Getting-Started.md", "client/README.md"]) {
@@ -135,7 +148,7 @@ try {
   const startText = plain(start.text);
   ok(/claude mcp add --transport http -s user agent402 https?:\/\/\S+\/mcp/.test(startText), "the served page carries the Claude Code line");
   ok(!/Credits by card/.test(startText), "the served page offers no credits while CREDITS_SALES is unset");
-  ok(start.text.includes(BASE_NO_GAS_SENTENCE), "the served page states the Base gas sentence");
+  ok(start.text.includes(BASE_NO_GAS_PLAIN), "the served page states the Base gas fact in plain words");
 
   const home = await get("/");
   ok(/href="\/start" class="mlnav-row"/.test(home.text), "the docs nav panel links /start");

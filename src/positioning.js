@@ -21,8 +21,14 @@
 //
 // The catalog's size is a supporting line, never the lead: SUPPORT_LINE.
 
-/** The home page h1: the category, in the words a stranger uses. */
-export const CATEGORY_LINE = "Payments and trust for AI agents.";
+/** The home page h1: the category, in the words a stranger uses, and the
+ *  wires it runs on (MPP follows the MPP switch, as in the lead sentence). */
+export function categoryLine({ mpp = true } = {}) {
+  return `Payments and trust for AI agents, over ${mpp ? "x402 and MPP" : "x402"}.`;
+}
+
+/** The published category line (both wires). */
+export const CATEGORY_LINE = categoryLine();
 
 /** The lead sentence, with the wires this server offers and, when it signs
  *  them, the receipt clause. */

@@ -26,7 +26,7 @@ import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 import { REPO_URL } from "./repo-link.js";
 import { powCostPhrase } from "./pow.js";
 import { METERED_WIRES, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
-import { CATEGORY_LINE, leadSentence, SUPPORT_LINE } from "./positioning.js";
+import { categoryLine, leadSentence, SUPPORT_LINE } from "./positioning.js";
 import { receiptsServed } from "./receipt-signing.js";
 // PRICES IN COPY ARE DERIVED, NEVER TYPED.
 //
@@ -282,7 +282,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   <div style="max-width:1180px;margin:0 auto;padding:84px 30px 56px;position:relative;">
     <div class="hm-hero">
       <div class="ml-stagger" style="display:flex;flex-direction:column;gap:26px;">
-        <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">${esc(CATEGORY_LINE)}</h1>
+        <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">${esc(categoryLine({ mpp }))}</h1>
         <p class="hm-lede" style="margin:0;text-wrap:pretty;">${leadHtml}</p>
         <p class="hm-support" style="margin:0;font-size:var(--fs-base);line-height:1.55;color:var(--muted);text-wrap:pretty;">Pay over x402${mpp ? ", MPP" : ""} or proof of work: an x402 payment settles after a successful answer, and a charged failure is booked and repaid against the chain record. ${esc(SUPPORT_LINE.replace(/\.$/, ""))}, beside an <a href="/marketplace" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">index of outside x402 sellers</a> and a router that buys from proven ones.</p>
         <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
