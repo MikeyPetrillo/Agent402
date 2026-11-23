@@ -359,13 +359,61 @@ const signedIn = (html) => /name="keyId"|No open balance/.test(html);
     let last;
     for (let i = 0; i < L.badTokenMax + 5; i++) last = await mcpPost("a402m_" + randomBytes(32).toString("base64url"));
     ok(h.stores.grants.reads === before, `${L.badTokenMax + 5} made-up tokens read the store ${h.stores.grants.reads - before} times`);
-    ok(last.status === 429, `and past the bound they are answered 429 (${last.status})`);
+    ok(last.status === 401 && /error="invalid_token"/.test(last.headers.get("www-authenticate") || "") && last.headers.get("retry-after") === "60", `and past the bound they are still answered 401 invalid_token, slowed with Retry-After (${last.status}, ${last.headers.get("retry-after")})`);
     const minted = h.oa._mintAccessForTest();
     const r0 = h.stores.grants.reads;
     const m1 = await fetch(`${h.U}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${minted}`, "x-test-ip": "198.18.50.2" }, body: "{}" });
     await mcpPost(minted);
-    ok([401, 429].includes(m1.status) && h.stores.grants.reads - r0 === 1, `a well-formed token that is not on file is read once, then held as bad for a while (${h.stores.grants.reads - r0} reads)`);
+    ok(m1.status === 401 && h.stores.grants.reads - r0 === 1, `a well-formed token that is not on file is read once, then held as bad for a while (${h.stores.grants.reads - r0} reads)`);
   } finally { h.close(); }
+}
+
+// G3b: a revoked or unknown token is answered 401 invalid_token whatever the
+// bad-token count reads: at the table's minimum (every value 1, and a bound of
+// one with a long window), and at this run's random table. The count only adds
+// Retry-After past its bound; it never replaces the reason.
+{
+  const tables = [
+    ["the minimum table", Object.fromEntries(Object.keys(BASE_TABLE.mcpOAuth).map((k) => [k, 1]))],
+    ["a bound of one", { badTokenMax: 1, windowMs: 3_600_000 }],
+    ["this run's random table", {}],
+  ];
+  for (const [label, table] of tables) {
+    const h = await harness({ table });
+    try {
+      const L = { ...BASE_TABLE.mcpOAuth, ...table };
+      const mcpPost = (token) => fetch(`${h.U}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: "{}" });
+      const invalid = (r) => r.status === 401 && /error="invalid_token"/.test(r.headers.get("www-authenticate") || "");
+      // A live grant with one access token, seeded as the token endpoint writes them.
+      const gid = randomBytes(16).toString("hex"), email = "owner@example.com";
+      const live = h.oa._mintAccessForTest();
+      const t0 = h.clock.t;
+      h.stores.grants.body = {
+        codes: {},
+        grants: { [gid]: { email, keyId: "abcdef123456", capUsd: 1, clientId: "c_" + "2".repeat(32), scope: "credits:spend", createdAt: new Date(t0).toISOString(), lastUsedAt: new Date(t0).toISOString() } },
+        tokens: { [createHash("sha256").update(live).digest("hex")]: { g: gid, k: "a", exp: t0 + 3_600_000 } },
+      };
+      const served = await mcpPost(live);
+      ok(served.status === 404 && (await served.json()).fellThrough === true, `${label}: setup, the live token passes the sign-in check (${served.status})`);
+      // Past the bound with tokens that are not ours.
+      const n = Math.min(L.badTokenMax + 3, 200);
+      const made = [];
+      for (let i = 0; i < n; i++) made.push(await mcpPost("a402m_" + randomBytes(32).toString("base64url")));
+      ok(made.every(invalid), `${label}: ${n} made-up tokens are each answered 401 invalid_token (${[...new Set(made.map((r) => r.status))].join(",")})`);
+      if (L.windowMs >= 60_000) ok(made.at(-1).headers.get("retry-after") === "60" && !made[0].headers.get("retry-after"), `${label}: only a lookup past the bound carries Retry-After`);
+      // The grant's owner disconnects it; its token is now revoked, and the count is past its bound.
+      ok(await h.oa.revokeForEmail(email, gid), `${label}: setup, the owner revokes the grant`);
+      const revoked = await mcpPost(live);
+      const body = await revoked.json();
+      ok(invalid(revoked) && /expired or revoked/.test(body.error?.message || ""), `${label}: the revoked token is answered 401 invalid_token, the reason named, not 429 (${revoked.status}, ${body.error?.message})`);
+      const again = await mcpPost(live);
+      ok(invalid(again), `${label}: and again while it is held as bad (${again.status})`);
+      const unknown = await mcpPost(h.oa._mintAccessForTest());
+      ok(invalid(unknown), `${label}: a well-formed token that is not on file is answered 401 invalid_token (${unknown.status})`);
+      const credits = await fetch(`${h.U}/mcp/credits`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${live}` }, body: "{}" });
+      ok(invalid(credits), `${label}: /mcp/credits answers the revoked token 401 invalid_token too (${credits.status})`);
+    } finally { h.close(); }
+  }
 }
 
 // Code sends: a service-wide hourly budget and a per-address daily total, refused with the same answer.
@@ -743,7 +791,7 @@ try {
     ok(typeof Tb.access_token === "string", "setup: a fresh access token for the bad-token check");
     let last = null;
     for (let i = 0; i < OL.badTokenMax + 60; i++) last = await mcp(B, rpc(1, "tools/list", {}), { token: "a402m_" + randomBytes(32).toString("base64url") });
-    ok(last.status === 429, `past the bound, failed token lookups from one client are answered 429 (${last.status})`);
+    ok(last.status === 401 && /error="invalid_token"/.test(last.headers.get("www-authenticate") || "") && last.headers.get("retry-after") === "60", `past the bound, failed token lookups from one client are answered 401 invalid_token with Retry-After (${last.status}, ${last.headers.get("retry-after")})`);
     const good = await mcp(B, rpc(1, "tools/list", {}), { token: Tb.access_token });
     ok(good.status === 200 && Array.isArray(good.json?.result?.tools), `a valid token from the same client is still served after ${OL.badTokenMax + 60} bad ones`);
   }

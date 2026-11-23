@@ -315,13 +315,16 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
   async function resolveBearer(req) {
     const tok = bearerShape(req.headers?.authorization);
     if (tok === null) return null;
-    // A failed lookup is counted per client address, and past the bound it
-    // is answered 429. A token that fails the tag check, or that was found
-    // bad a moment ago, is refused here without a store read; a valid token
-    // passes both and is never refused by this count.
+    // A failed lookup is counted per client address. Every failed lookup is
+    // answered 401 invalid_token, the reason it failed (expired, revoked or
+    // unknown), and past the bound the 401 also carries Retry-After: the
+    // count slows a client that keeps presenting bad tokens and never
+    // replaces the reason. A token that fails the tag check, or that was
+    // found bad a moment ago, is refused here without a store read; a valid
+    // token passes both and is never refused by this count.
     const bad = async () => {
       const over = await add("bearer-bad", `bad|${netKey(req.ip)}`, 1, cfg.windowMs()) > cfg.badTokenMax();
-      return over ? { invalid: true, busy: true } : { invalid: true };
+      return over ? { invalid: true, slowed: true } : { invalid: true };
     };
     if (!tok || !minted(tok)) return bad();
     const key = digest(tok);
@@ -423,8 +426,9 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     const busy = (res) => { noStore(res).set("Retry-After", "60"); return res.status(429).json({ error: "invalid_request", error_description: "Too many requests. Try again later." }); };
     const resourceMeta = (resource) => ({ resource, authorization_servers: [baseUrl], scopes_supported: [SCOPE], bearer_methods_supported: ["header"], resource_name: "Agent402 MCP connector", resource_documentation: `${baseUrl}/llms.txt` });
     const challenge = (path, invalid) => `Bearer realm="agent402", resource_metadata="${baseUrl}/.well-known/oauth-protected-resource${path}", scope="${SCOPE}"${invalid ? ', error="invalid_token"' : ""}`;
-    const unauthorized = (res, path, invalid) => {
-      noStore(res).set("WWW-Authenticate", challenge(path, invalid)).set("Access-Control-Allow-Origin", "*").set("Access-Control-Expose-Headers", "WWW-Authenticate");
+    const unauthorized = (res, path, invalid, slowed = false) => {
+      noStore(res).set("WWW-Authenticate", challenge(path, invalid)).set("Access-Control-Allow-Origin", "*").set("Access-Control-Expose-Headers", slowed ? "WWW-Authenticate, Retry-After" : "WWW-Authenticate");
+      if (slowed) res.set("Retry-After", "60");
       return res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: invalid ? "The access token is expired or revoked. Sign in again." : "Sign in to pay for tool calls from your Agent402 credits." }, id: null });
     };
     // The consent answers: never framed, forms only to this site, the card
@@ -815,8 +819,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       const r = await resolveBearer(req);
       if (!r) return next();
       if (r.unavailable) return noStore(res).status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "Sign-in is unavailable right now; retry shortly. Nothing was charged." }, id: req.body?.id ?? null });
-      if (r.busy) { noStore(res).set("Retry-After", "60"); return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests. Try again later." }, id: req.body?.id ?? null }); }
-      if (r.invalid) return unauthorized(res, "/mcp", true);
+      if (r.invalid) return unauthorized(res, "/mcp", true, Boolean(r.slowed));
       req.mcpCreditsGrant = r.grant;
       next();
     });
@@ -825,8 +828,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       const rest = req.url.slice(AUTH_MCP_PATH.length);
       if (req.method !== "OPTIONS") {
         const r = await resolveBearer(req);
-        if (r?.busy) { noStore(res).set("Retry-After", "60"); return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests. Try again later." }, id: req.body?.id ?? null }); }
-        if (!r || r.invalid) return unauthorized(res, AUTH_MCP_PATH, Boolean(r?.invalid));
+        if (!r || r.invalid) return unauthorized(res, AUTH_MCP_PATH, Boolean(r?.invalid), Boolean(r?.slowed));
         if (r.unavailable) return noStore(res).status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "Sign-in is unavailable right now; retry shortly. Nothing was charged." }, id: req.body?.id ?? null });
         req.mcpCreditsGrant = r.grant;
       }
