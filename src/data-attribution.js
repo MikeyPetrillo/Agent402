@@ -57,6 +57,10 @@ export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0
 export const OPEN_METEO_SITE_URL = "https://open-meteo.com/";
 export const CC_BY_4_URL = "https://creativecommons.org/licenses/by/4.0/";
 export const OPEN_METEO_LICENSE_FIELDS = Object.freeze({ attributionText: OPEN_METEO_ATTRIBUTION, sourceUrl: OPEN_METEO_SITE_URL, licenseUrl: CC_BY_4_URL });
+// place-lookup reads Open-Meteo's geocoding API, whose place data is
+// GeoNames': the same links, with a credit that says what the data is.
+export const OPEN_METEO_PLACE_ATTRIBUTION = "Place data by Open-Meteo.com geocoding (GeoNames, CC BY 4.0).";
+export const OPEN_METEO_PLACE_LICENSE_FIELDS = Object.freeze({ attributionText: OPEN_METEO_PLACE_ATTRIBUTION, sourceUrl: OPEN_METEO_SITE_URL, licenseUrl: CC_BY_4_URL });
 // OpenFEMA's terms (https://www.fema.gov/about/openfema/terms-conditions)
 // require this disclaimer wherever its data is used, and ask that the
 // endpoint (with its version) and the access date be cited: the
@@ -236,9 +240,24 @@ export function licensedAnswers(tool, fields) {
 }
 
 /** Every tool in `tools` that serves Open-Meteo data (an "open-meteo"
- *  attribution key, or place data read through its geocoding API) carries
- *  the Open-Meteo licence fields on every answer. */
-export function openMeteoLicensed(tools, alsoSlugs = []) {
-  for (const t of tools) if (String(t.attribution || "").startsWith("open-meteo") || alsoSlugs.includes(t.slug)) licensedAnswers(t, OPEN_METEO_LICENSE_FIELDS);
+ *  attribution key) carries the Open-Meteo licence fields on every answer;
+ *  each of `placeSlugs` (place data read through its geocoding API) carries
+ *  them with the place credit. */
+export function openMeteoLicensed(tools, placeSlugs = []) {
+  for (const t of tools) {
+    if (placeSlugs.includes(t.slug)) licensedAnswers(t, OPEN_METEO_PLACE_LICENSE_FIELDS);
+    else if (String(t.attribution || "").startsWith("open-meteo")) licensedAnswers(t, OPEN_METEO_LICENSE_FIELDS);
+  }
   return tools;
+}
+
+/** `example` without the licence fields licensedAnswers adds (each removed
+ *  only where it holds one of those constant values): the sample a 402
+ *  listing carries, whose room goes to the description and the answer's own
+ *  fields. Anything that is not a plain object is returned as it is. */
+export function withoutLicenseFields(example) {
+  if (!isPlainAnswer(example)) return example;
+  const sets = [OPEN_METEO_LICENSE_FIELDS, OPEN_METEO_PLACE_LICENSE_FIELDS];
+  const drop = new Set(Object.keys(example).filter((k) => sets.some((f) => Object.hasOwn(f, k) && example[k] === f[k])));
+  return drop.size ? Object.fromEntries(Object.entries(example).filter(([k]) => !drop.has(k))) : example;
 }

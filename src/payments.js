@@ -14,7 +14,7 @@ import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
-import { attributionTailOf, ATTRIBUTIONS, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION, OPEN_METEO_LICENSE_FIELDS } from "./data-attribution.js";
+import { attributionTailOf, ATTRIBUTIONS, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION, withoutLicenseFields } from "./data-attribution.js";
 import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema, binaryListingsEnabled, withBinaryOutputType, JSON_MIME } from "./tool-media-type.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
@@ -995,24 +995,6 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
   if (tail) {
     const fit = d.length - (size(b, d) - max);
     if (fit >= tail.length + 1 + ATTRIBUTION_MIN_LEAD) { d = bazaarCapDescription(d, fit); trimmed.push("description-lead"); }
-  }
-  // The Open-Meteo licence fields every answer of those tools carries
-  // (src/data-attribution.js) are the same on every answer and in
-  // /openapi.json's example: in a sample output over the budget they give way
-  // before the sample itself does, and the real sample stays.
-  if (b?.output && size(b, d) > max) {
-    const ex = b.output.example;
-    const keys = Object.keys(OPEN_METEO_LICENSE_FIELDS).filter((k) => ex && typeof ex === "object" && !Array.isArray(ex) && ex[k] === OPEN_METEO_LICENSE_FIELDS[k]);
-    if (keys.length) {
-      const example = Object.fromEntries(Object.entries(ex).filter(([k]) => !keys.includes(k)));
-      let schema = b.output.schema;
-      if (schema && typeof schema === "object" && schema.properties) {
-        schema = { ...schema, properties: Object.fromEntries(Object.entries(schema.properties).filter(([k]) => !keys.includes(k))) };
-        if (Array.isArray(schema.required)) schema.required = schema.required.filter((k) => !keys.includes(k));
-      }
-      b = { ...b, output: { ...b.output, example, ...(schema ? { schema } : {}) } };
-      trimmed.push("output-license-fields");
-    }
   }
   toPointer();
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
@@ -2920,7 +2902,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         slim.output = { example: binaryOutputExample(item), schema: binaryOutputSchema(item) };
         return boundDiscoveryBlock(slim, BAZAAR_DISCOVERY_MAX_BYTES);
       }
-      const example = slim.output.example;
+      // The licence fields every answer of the Open-Meteo tools carries
+      // (src/data-attribution.js) are the same on every answer and stay in
+      // /openapi.json's example; the 402 sample is read without them, so they
+      // never take room from the listing's description or its sample.
+      const example = withoutLicenseFields(slim.output.example);
       const oversized = example !== undefined && JSON.stringify(example).length > 2048;
       const schema = oversized ? null : boundedResponseSchemaFor(path, example, BAZAAR_SCHEMA_MAX_BYTES, slim.output.optional);
       slim.output = {

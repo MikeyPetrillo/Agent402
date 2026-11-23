@@ -19,7 +19,7 @@ import { WEATHER_PLAN_TOOLS } from "../src/tools/weather-plan-kit.js";
 import { BUNDLE_TOOLS } from "../src/tools/bundle-kit.js";
 import { GOV_TOOLS } from "../src/tools/gov-kit.js";
 import { refAnswerOf } from "../src/resale-terms.js";
-import { OPEN_METEO_LICENSE_FIELDS, OPEN_METEO_ATTRIBUTION, OPEN_METEO_SITE_URL, CC_BY_4_URL, GEONAMES_ATTRIBUTION, C3S_CREDIT, FEMA_NOTICE, ATTRIBUTIONS } from "../src/data-attribution.js";
+import { OPEN_METEO_LICENSE_FIELDS, OPEN_METEO_PLACE_LICENSE_FIELDS, OPEN_METEO_PLACE_ATTRIBUTION, withoutLicenseFields, OPEN_METEO_ATTRIBUTION, OPEN_METEO_SITE_URL, CC_BY_4_URL, GEONAMES_ATTRIBUTION, C3S_CREDIT, FEMA_NOTICE, ATTRIBUTIONS } from "../src/data-attribution.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -32,27 +32,25 @@ const ALL = [...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOO
 const meteo = ALL.filter((t) => String(t.attribution || "").startsWith("open-meteo") || t.slug === "place-lookup");
 const EXPECT = ["weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality", "place-lookup", "weather-probability", "weather-market-brackets", "weather-market-board", "weather-window", "weather-thresholds", "weather-risk-brief"];
 ok(EXPECT.every((s) => meteo.some((t) => t.slug === s)) && meteo.length === EXPECT.length, `the twelve tools that serve Open-Meteo data are found (${meteo.map((t) => t.slug).join(", ")})`);
-const carries = (a) => a && a.attributionText === OPEN_METEO_ATTRIBUTION && a.sourceUrl === OPEN_METEO_SITE_URL && a.licenseUrl === CC_BY_4_URL;
-const missingEx = meteo.filter((t) => !carries(t.discovery?.output?.example)).map((t) => t.slug);
+const carries = (a, text = OPEN_METEO_ATTRIBUTION) => a && a.attributionText === text && a.sourceUrl === OPEN_METEO_SITE_URL && a.licenseUrl === CC_BY_4_URL;
+const textOf = (t) => (t.slug === "place-lookup" ? OPEN_METEO_PLACE_ATTRIBUTION : OPEN_METEO_ATTRIBUTION);
+const missingEx = meteo.filter((t) => !carries(t.discovery?.output?.example, textOf(t))).map((t) => t.slug);
 ok(missingEx.length === 0, `every one's published example carries the credit text and both links (missing: ${missingEx.join(", ") || "none"})`);
 ok(meteo.every((t) => typeof t.discovery.output.example.source === "string" || t.slug === "weather-risk-brief"), "the examples keep their source field");
 ok(ALL.filter((t) => !meteo.includes(t)).every((t) => !("licenseUrl" in (t.discovery?.output?.example || {}))), "a tool on another source carries no Open-Meteo links");
 
-// A 402 whose listing is over its byte budget gives up these constant fields
-// from its sample output before the sample itself becomes a pointer.
+// The 402 sample is read without these constant fields, so they never take
+// room from a listing's description or sample; /openapi.json keeps them.
 {
-  const { fitChallenge, isExamplePointer } = await import("../src/payments.js");
-  const ex = { lat: 1, lon: 2, days: [{ date: "2025-06-01", tempMax: 20 }], source: "x", ...OPEN_METEO_LICENSE_FIELDS };
-  const block = { input: { lat: 1, lon: 2 }, output: { type: "json", example: ex, schema: { type: "object", properties: Object.fromEntries(Object.keys(ex).map((k) => [k, {}])) } } };
-  const declare = (b) => b;
-  const full = JSON.stringify(block).length;
-  const fieldsBytes = JSON.stringify(OPEN_METEO_LICENSE_FIELDS).length;
-  const f = fitChallenge(block, "", declare, full - 20);
-  ok(!isExamplePointer(f.slim.output.example) && f.slim.output.example.days?.length === 1 && !("licenseUrl" in f.slim.output.example) && !("licenseUrl" in f.slim.output.schema.properties) && f.trimmed.includes("output-license-fields"), `over the budget, the 402 sample drops the licence fields and keeps the real sample (${f.trimmed.join(", ")})`);
-  const g = fitChallenge(block, "", declare, full + 10);
-  ok(g.slim.output.example.licenseUrl === CC_BY_4_URL && !g.trimmed.length, "under the budget, the 402 sample keeps them");
-  const h = fitChallenge(block, "", declare, full - fieldsBytes - 200);
-  ok(isExamplePointer(h.slim.output.example), "far over the budget, the sample still becomes the pointer");
+  const ex = { lat: 1, days: [], source: "x", ...OPEN_METEO_LICENSE_FIELDS };
+  const w = withoutLicenseFields(ex);
+  ok(!("licenseUrl" in w) && !("sourceUrl" in w) && !("attributionText" in w) && w.source === "x" && "licenseUrl" in ex, "withoutLicenseFields drops the three fields from a copy and keeps the rest");
+  const p = withoutLicenseFields({ q: 1, ...OPEN_METEO_PLACE_LICENSE_FIELDS });
+  ok(Object.keys(p).join() === "q", "and the place credit's fields");
+  const own = { sourceUrl: "https://example.com/x", licenseUrl: "https://example.com/l" };
+  ok(withoutLicenseFields(own) === own, "a field of the same name with another value is the answer's own and stays");
+  const { readFileSync } = await import("node:fs");
+  ok(/const example = withoutLicenseFields\(slim\.output\.example\);/.test(readFileSync(new URL("../src/payments.js", import.meta.url), "utf8")), "the 402 listing builder reads the sample without them, before its byte bounds");
 }
 
 // Real handlers against a stubbed upstream.
@@ -79,8 +77,8 @@ try {
   const hist = await tool("weather-history").handler({ lat: 51.5, lon: -0.13, start: "2025-06-01", end: "2025-06-01" });
   ok(carries(hist) && hist.credit === C3S_CREDIT, "weather-history: the Open-Meteo credit and links sit beside the Copernicus credit");
   const place = await tool("place-lookup").handler({ q: "Paris", query: "Paris", name: "Paris" });
-  ok(carries(place) && place.credit === GEONAMES_ATTRIBUTION, `place-lookup: the GeoNames credit is unchanged and the Open-Meteo links are added (${JSON.stringify(place).slice(0, 160)})`);
-  ok(carries(refAnswerOf(tool("place-lookup"), place)), "place-lookup: a /ref copy serves them too");
+  ok(carries(place, OPEN_METEO_PLACE_ATTRIBUTION) && /^Place data/.test(place.attributionText) && place.credit === GEONAMES_ATTRIBUTION, `place-lookup: the GeoNames credit is unchanged and the Open-Meteo links are added (${JSON.stringify(place).slice(0, 160)})`);
+  ok(carries(refAnswerOf(tool("place-lookup"), place), OPEN_METEO_PLACE_ATTRIBUTION), "place-lookup: a /ref copy serves them too");
 
   // --- 2. OpenFEMA ---------------------------------------------------------------
   const fema = tool("fema-disasters");
