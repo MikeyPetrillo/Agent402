@@ -239,7 +239,7 @@ export const DOMAIN_AVAILABILITY_TOOLS = [
     aliases: ["domain-available", "domain-name-availability", "is-domain-registered"],
     category: "network",
     price: "$0.001",
-    description: "Is a domain name registered? Asks the TLD's own registry over RDAP, the IETF registration data protocol (IANA's bootstrap names the registry): registered true or false, the registry status codes and the registrar when it is taken, and when the registry was read. Availability can change at any moment; registration happens at a registrar.",
+    description: "Is a domain name registered? Asks the TLD's own registry over RDAP, the IETF registration data protocol (IANA's bootstrap names the registry): registered true, false, or null for a name under a registered domain (registeredParent names it), the registry status codes and the registrar when it is taken, and when the registry was read. Availability can change at any moment; registration happens at a registrar.",
     tags: ["domain", "availability", "rdap", "registration", "available", "whois"],
     discovery: {
       bodyType: "json",

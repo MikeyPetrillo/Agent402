@@ -202,5 +202,11 @@ try {
   srv.closeAllConnections?.();
   await new Promise((r) => srv.close(r));
 }
+// The description names all three answers, the null one with its field.
+{
+  const d = DOMAIN_AVAILABILITY_TOOLS.find((t) => t.slug === "domain-availability").description;
+  ok(d.includes("registered true, false, or null for a name under a registered domain (registeredParent names it)"), "the description names registered null and registeredParent");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
