@@ -25,14 +25,24 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // ---- a small reading of the page: tags, the open-element chain, the cascade ----
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 const attrsOf = (s) => Object.fromEntries([...String(s).matchAll(/([a-zA-Z-]+)(?:="([^"]*)")?/g)].map((m) => [m[1].toLowerCase(), m[2] ?? ""]));
+/** The text with every HTML comment cut out by position (an unclosed one runs to the end), no pattern. */
+function withoutComments(text) {
+  let out = "", i = 0;
+  for (;;) {
+    const open = text.indexOf("<!--", i);
+    if (open < 0) return out + text.slice(i);
+    out += text.slice(i, open);
+    const close = text.indexOf("-->", open + 4);
+    if (close < 0) return out;
+    i = close + 3;
+  }
+}
 /** Every element with its attributes and the chain of open elements above it. */
 function elements(html) {
   // Comments, scripts and styles out, repeated until nothing changes, so a
   // fragment one pass would splice back together cannot survive.
-  let body = String(html), prev;
-  do { prev = body; body = stripScripts(body.replace(/<!--[\s\S]*?-->/g, ""), ""); } while (body !== prev);
-  // An unclosed comment opener left after the loop is dropped too, so no fragment of one reaches the tag reader.
-  body = body.replace(/<!--|--!?>/g, "");
+  let body = withoutComments(String(html)), prev;
+  do { prev = body; body = withoutComments(stripScripts(body, "")); } while (body !== prev);
   const out = [], stack = [];
   for (const m of body.matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g)) {
     const tag = m[2].toLowerCase();
