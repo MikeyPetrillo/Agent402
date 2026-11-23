@@ -71,21 +71,21 @@ const crawledPayTo = (detail, network) => {
   const a = detail?.payToByNetwork?.[network];
   return typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a) ? a.toLowerCase() : null;
 };
-export const WALLET_MISMATCH_NOTE = "measured at a wallet your 402 does not pay; the router counts history only at the payTo your live 402 names";
+export const WALLET_MISMATCH_NOTE = "measured at a wallet other than the payTo this seller's 402 named at our last crawl; the router counts history only at the payTo the seller's live 402 names";
 
 /** routerGate's wallet fields: where its figures were measured, the payTo the
- *  seller's 402 named, and that payTo's own counted figures. Reporting only:
- *  the gate's figures and every verdict are unchanged. */
-export function gateWalletFields({ evidence, livePayTo }) {
+ *  seller's 402 named at our last crawl, and the calls counted at that payTo.
+ *  Reporting only: the gate's figures and every verdict are unchanged, and no
+ *  per-wallet payer count is published. */
+export function gateWalletFields({ evidence, crawledPayTo }) {
   const measuredAt = typeof evidence?.wallet === "string" ? evidence.wallet : null;
-  const own = livePayTo && evidence?.byWallet instanceof Map ? evidence.byWallet.get(livePayTo) : null;
-  const same = measuredAt && livePayTo ? measuredAt === livePayTo : null;
+  const own = crawledPayTo && evidence?.byWallet instanceof Map ? evidence.byWallet.get(crawledPayTo) : null;
+  const same = measuredAt && crawledPayTo ? measuredAt === crawledPayTo : null;
   return {
     measuredAtWallet: measuredAt,
-    livePayTo: livePayTo || null,
-    measuredAtLivePayTo: same,
-    livePayToSettledCalls: livePayTo ? Number(own?.settled || 0) : null,
-    ...(livePayTo && own?.payers !== undefined && own?.payers !== null ? { livePayToPayers: Number(own.payers) } : {}),
+    crawledPayTo: crawledPayTo || null,
+    measuredAtCrawledPayTo: same,
+    crawledPayToSettledCalls: crawledPayTo ? Number(own?.settled || 0) : null,
     ...(same === false ? { walletNote: WALLET_MISMATCH_NOTE } : {}),
   };
 }
@@ -136,7 +136,7 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getGate
           priceRangeUsd: { min: 0.005, max: 0.02 },
           advertisedNetworks: ["eip155:8453"],
           settledCallsObserved: 3,
-          routerGate: { settledCalls: 3, settlementThreshold: 50, meetsSettlementThreshold: false, advertisesSettlementNetwork: true, cheapestPaidToolUsd: 0.005, routerUnderlyingCapUsd: 0.005, hasToolWithinRouterCap: true, measuredAtWallet: "0x1111111111111111111111111111111111111111", livePayTo: "0x1111111111111111111111111111111111111111", measuredAtLivePayTo: true, livePayToSettledCalls: 3 },
+          routerGate: { settledCalls: 3, settlementThreshold: 50, meetsSettlementThreshold: false, advertisesSettlementNetwork: true, cheapestPaidToolUsd: 0.005, routerUnderlyingCapUsd: 0.005, hasToolWithinRouterCap: true, measuredAtWallet: "0x1111111111111111111111111111111111111111", crawledPayTo: "0x1111111111111111111111111111111111111111", measuredAtCrawledPayTo: true, crawledPayToSettledCalls: 3 },
           lanes: {
             proven: { eligible: false, chain: "base", toolCount: 0, cheapestUsd: null, cheapestTier: null, tiers: [], blockers: ["fewer than 50 settled calls observed on-chain"] },
             unproven: exampleUnprovenLane({ priceUsd: 0.005, execTiers }),
@@ -224,7 +224,7 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getGate
         // receiving money. A claim is not a receipt.
         ...(typeof getPayToEvidence === "function" ? { advertisedPayTo: getPayToEvidence(detail) } : {}),
         routerGate: typeof getGateEvidence === "function"
-          ? { ...a.gate, ...gateWalletFields({ evidence: getGateEvidence(detail.origin), livePayTo: crawledPayTo(detail, settlementNetwork) }) }
+          ? { ...a.gate, ...gateWalletFields({ evidence: getGateEvidence(detail.origin), crawledPayTo: crawledPayTo(detail, settlementNetwork) }) }
           : a.gate,
         lanes: isSelf
           ? { proven: { ...lanes.proven, eligible: false, blockers: ["this host is the local catalog"] }, unproven: { ...lanes.unproven, eligible: false, reason: "this host is the local catalog" } }
@@ -249,7 +249,7 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getGate
           "healthScore measures whether the manifest parsed, NOT whether paid routes work - read it with `paywall`, never instead of it",
           "routableByOurRouter is true when either lane can pay; the unproven lane read here is the Base one, tried after every proven seller for the task, and flagged unproven on the buyer's receipt - read routableAsProven for the proven-only answer",
           "routerGate.routerUnderlyingCapUsd is the cheapest route-execute tier's cap; lanes.proven.tiers lists every tier that can pay a proven route",
-          ...(typeof getGateEvidence === "function" ? ["routerGate.settledCalls was measured at routerGate.measuredAtWallet; routerGate.livePayTo is the Base payTo your 402 named at our last crawl, and the router reads the live 402 again before it pays"] : []),
+          ...(typeof getGateEvidence === "function" ? ["routerGate.settledCalls was measured at routerGate.measuredAtWallet; routerGate.crawledPayTo is the Base payTo the seller's 402 named at our last crawl, and the router reads the live 402 again before it pays"] : []),
         ],
         evidenceSource: "x402 seller crawl + on-chain settlement counts + the router's per-route dispatch verdicts",
       };

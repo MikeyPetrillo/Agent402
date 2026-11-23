@@ -104,12 +104,12 @@ const dossier = async (base, origin) => {
 
     // routerGate names the wallet its figures were measured at.
     const mg = m.body.routerGate;
-    ok(mg.measuredAtWallet === W_MID.toLowerCase() && mg.livePayTo === W_MID.toLowerCase() && mg.measuredAtLivePayTo === true && mg.livePayToSettledCalls === mg.settledCalls && !("walletNote" in mg), `match: routerGate names the wallet, which is the 402's payTo, and carries no note (${JSON.stringify(mg)})`);
+    ok(mg.measuredAtWallet === W_MID.toLowerCase() && mg.crawledPayTo === W_MID.toLowerCase() && mg.measuredAtCrawledPayTo === true && mg.crawledPayToSettledCalls === mg.settledCalls && !("livePayToPayers" in mg) && !("crawledPayToPayers" in mg) && !("walletNote" in mg), `match: routerGate names the wallet, which is the 402's payTo, and carries no note (${JSON.stringify(mg)})`);
     const mv = await trust(base, MOVED);
     const g = mv.body.routerGate;
     ok(mv.status === 200 && g.settledCalls === 145 && g.meetsSettlementThreshold === true, `mismatch: the gate's figures are unchanged (${JSON.stringify(g)})`);
-    ok(g.measuredAtWallet === W_OLD.toLowerCase() && g.livePayTo === W_LIVE.toLowerCase() && g.measuredAtLivePayTo === false, `mismatch: routerGate names both wallets (${JSON.stringify(g)})`);
-    ok(g.livePayToSettledCalls === 0 && /measured at a wallet your 402 does not pay; the router counts history only at the payTo your live 402 names/.test(g.walletNote || ""), `mismatch: the 402's own payTo figures and the note (${g.walletNote})`);
+    ok(g.measuredAtWallet === W_OLD.toLowerCase() && g.crawledPayTo === W_LIVE.toLowerCase() && g.measuredAtCrawledPayTo === false, `mismatch: routerGate names both wallets (${JSON.stringify(g)})`);
+    ok(g.crawledPayToSettledCalls === 0 && /measured at a wallet other than the payTo this seller's 402 named at our last crawl; the router counts history only at the payTo the seller's live 402 names/.test(g.walletNote || ""), `mismatch: the crawled payTo's own calls and the note (${g.walletNote})`);
     ok(mv.body.routableAsProven === false, "mismatch: the verdict is unchanged (not proven)");
     const cg = (await trust(base, CHEAP)).body.routerGate;
     ok(cg.measuredAtWallet === null && cg.settledCalls === 0 && !("walletNote" in cg), `no history: no wallet named (${JSON.stringify(cg)})`);

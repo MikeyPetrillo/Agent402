@@ -394,16 +394,17 @@ check("the example's unproven lane equals the live lane under the default env", 
   const moved = { ...PROVEN, origin: "https://moved.example", payToByNetwork: { "eip155:8453": W_LIVE.toUpperCase().replace("0X", "0x") } };
   const evidence = { wallet: W_OLD, settled: 145, byWallet: new Map([[W_OLD, { settled: 145, payers: 12 }], [W_LIVE, { settled: 4, payers: 2 }]]) };
   const tool = (ev, details) => build(details, { [details[0].origin]: ev?.settled || 0 }, { getGateEvidence: () => ev });
-  check("mismatch: routerGate names both wallets, the 402 payTo's own figures and the note; figures and verdict unchanged", () => {
+  check("mismatch: routerGate names both wallets, the crawled payTo's own calls and the note; figures and verdict unchanged", () => {
     const withWallet = tool(evidence, [moved]).handler({ origin: "moved.example" });
     const without = build([moved], { [moved.origin]: 145 }).handler({ origin: "moved.example" });
     const g = withWallet.routerGate;
     assert.equal(g.measuredAtWallet, W_OLD);
-    assert.equal(g.livePayTo, W_LIVE);
-    assert.equal(g.measuredAtLivePayTo, false);
-    assert.equal(g.livePayToSettledCalls, 4);
-    assert.equal(g.livePayToPayers, 2);
+    assert.equal(g.crawledPayTo, W_LIVE);
+    assert.equal(g.measuredAtCrawledPayTo, false);
+    assert.equal(g.crawledPayToSettledCalls, 4);
+    assert.ok(!("livePayToPayers" in g) && !("crawledPayToPayers" in g), "no per-wallet payer count is published");
     assert.equal(g.walletNote, WALLET_MISMATCH_NOTE);
+    assert.ok(/a wallet other than the payTo this seller's 402 named at our last crawl/.test(g.walletNote) && !/your 402/.test(g.walletNote), "the note is written for a reader vetting a seller");
     for (const k of Object.keys(without.routerGate)) assert.deepEqual(g[k], without.routerGate[k], `routerGate.${k} unchanged`);
     for (const k of ["routableByOurRouter", "routableAsProven", "routableVia", "blockers", "provenBlockers", "lanes"]) assert.deepEqual(withWallet[k], without[k], `${k} unchanged`);
   });
@@ -411,19 +412,19 @@ check("the example's unproven lane equals the live lane under the default env", 
     const same = { ...PROVEN, origin: "https://same.example", payToByNetwork: { "eip155:8453": W_OLD } };
     const g = tool({ wallet: W_OLD, settled: 145, byWallet: new Map([[W_OLD, { settled: 145, payers: 12 }]]) }, [same]).handler({ origin: "same.example" }).routerGate;
     assert.equal(g.measuredAtWallet, W_OLD);
-    assert.equal(g.measuredAtLivePayTo, true);
-    assert.equal(g.livePayToSettledCalls, 145);
+    assert.equal(g.measuredAtCrawledPayTo, true);
+    assert.equal(g.crawledPayToSettledCalls, 145);
     assert.ok(!("walletNote" in g));
   });
   check("no evidence, or no readable payTo: nothing is claimed", () => {
     const g = tool(null, [moved]).handler({ origin: "moved.example" }).routerGate;
     assert.equal(g.measuredAtWallet, null);
-    assert.equal(g.measuredAtLivePayTo, null);
+    assert.equal(g.measuredAtCrawledPayTo, null);
     assert.ok(!("walletNote" in g));
     const g2 = tool(evidence, [{ ...PROVEN, origin: "https://nopay.example" }]).handler({ origin: "nopay.example" }).routerGate;
-    assert.equal(g2.livePayTo, null);
-    assert.equal(g2.measuredAtLivePayTo, null);
-    assert.equal(g2.livePayToSettledCalls, null);
+    assert.equal(g2.crawledPayTo, null);
+    assert.equal(g2.measuredAtCrawledPayTo, null);
+    assert.equal(g2.crawledPayToSettledCalls, null);
   });
 }
 
