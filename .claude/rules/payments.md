@@ -35,6 +35,7 @@ paths:
   - "src/first-call-allowance.js"
   - "src/returning-wallet.js"
   - "src/sale-repeats.js"
+  - "src/sale-repeats-correction.js"
   - "src/sale-source.js"
   - "src/push-refusal-body.js"
   - "src/unpaid-quote-budget.js"
@@ -57,7 +58,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   with and without repeat rows; add a new summing reader to its READERS). The rule is not an EVM
   hash's, a card invoice's or a private-rail transaction's: each can stand behind several sales.
   `scripts/sale-repeats.js` lists stored repeats (dry run by default); its `--apply` is the
-  owner's call.
+  owner's call. The same read and correction (`src/sale-repeats-correction.js`) run on the
+  server's own ledger at `GET /__operator/sale-repeats.json` (counts, dates, tools and held-back
+  reasons; never a payer or a settlement id) and `POST /__operator/sale-repeats/apply`
+  `{"expect": <rows>}` (409 unless `expect` is the count a read now finds; one transaction under
+  the lease `sale-repeats-apply`; attested or feedback-named rows held back; a second call moves
+  nothing; `scripts/test-sale-repeats-routes.js`).
 - **Idempotency:** opt-in `Idempotency-Key` (and x402 `payment-identifier` as an alias), bound
   to credential + route + query + body, committed only after a settled 200. With no explicit key, an
   x402 EVM payment's identity (network, signed payer, nonce; `paymentNonceIdentityOf`) is the
@@ -733,7 +739,18 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
   `/supported`) for gas runway every 10 minutes under a lease, one check per listed-facilitator
   rail whose readings replace only that network's rows (`scripts/test-settle-fallback.js`,
-  `scripts/test-tool-failure-monitor.js`). There is no extra Solana settle fallback by design: a
+  `scripts/test-tool-failure-monitor.js`). On Solana it reads each listed facilitator's fee
+  payers' SOL balance and counts the runway in settlements: the balance less a plain account's
+  rent-exempt reserve, divided by `FACILITATOR_SVM_LAMPORTS_PER_SETTLEMENT` (default 20000:
+  two 5,000-lamport signatures and a 10,000-lamport priority allowance). A row reads low under
+  `FACILITATOR_SVM_GAS_MIN_SETTLEMENTS` (default 500) and empty under
+  `FACILITATOR_SVM_GAS_EMPTY_SETTLEMENTS` (default 1); `/api/gateway-status` carries the worst row
+  of the facilitators that take a share of Solana quotes as `solanaFeePayer` (ok, low, empty,
+  unknown, or off with no Solana row), one word with balances, runways and shares on the
+  operator view only. Low and empty page through `facilitatorFunds=low`; a standby facilitator
+  (share 0) is reported but never pages (`scripts/test-facilitator-gas-svm.js`,
+  `scripts/test-tool-failure-monitor.js`).
+  There is no extra Solana settle fallback by design: a
   Solana payment names the quoted facilitator's fee payer, and any other facilitator refuses it.
   `SOLANA_FACILITATOR_URL` (ordered list; unset = unchanged) adds a second Solana mainnet
   facilitator that is never a routing client (`src/svm-facilitator-split.js`): it names

@@ -68,6 +68,9 @@ try {
     // Reads the settlement signers' gas balances into our own alarm store; a
     // second container reading at the same time reads the same balances twice.
     "facilitator-gas-${network}",
+    // The same for the Solana fee payers' SOL balances: read into the alarm
+    // store only, so a second container reads the same balances twice.
+    "facilitator-gas-${SVM_SPLIT_NETWORK}",
     // The shared live rail scan; without the lease each container scans for
     // itself, which is how every container worked before the scan was shared.
     "revenue-snapshot-refresh"]);

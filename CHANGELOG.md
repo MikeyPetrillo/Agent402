@@ -4,6 +4,117 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.13.0 - 2026-11-22
+
+### 2026-11-22 (speech model headers)
+Gateway:
+- Every speech answer names the model that produced it in the
+  `X-Agent402-Model` header; a call that named a model and was served by
+  another also carries `X-Agent402-Model-Fallback: 1`. An idempotent replay
+  of the answer carries the same headers.
+
+### 2026-11-22 (named speech model length)
+Gateway:
+- On a server that lists it in `NAMED_AUDIO_MODELS`,
+  `elevenlabs/eleven-v3-conversational` takes up to 1,000 characters on
+  `/v1/audio/speech`, listed on its `/v1/models` entry.
+
+### 2026-11-22 (chain names on the router and index)
+Router:
+- `/api/route?network=` and `/api/index/tools?network=` now accept the short
+  name of every chain we list (celo, monad, avalanche, sei, optimism,
+  stellar, algorand and the rest), so a chain's sellers show under its name
+  exactly as the router sees them.
+
+### 2026-11-22 (MCP connector JSON answers)
+MCP:
+- The hosted MCP connector answers JSON to clients that accept JSON without
+  naming an event stream, and the `memory.read` MCP listing now carries
+  example arguments.
+
+### 2026-11-22 (parse tools)
+Tools:
+- Five new tools, free through proof of work: number-words, encoding-detect,
+  log-timestamps, csv-aggregate and json-lint.
+- time-convert takes a `zones` list and returns one instant in up to 50 time
+  zones in one answer.
+- csv-to-json takes delimiter names (semicolon, tab, pipe) or any single
+  character other than a quote or a line break.
+- json-lint lists a duplicate key up to 200 characters and its path up to
+  300 (`keyTruncated`, `keyLength` and `pathTruncated` say when one was cut).
+- csv-to-json and csv-aggregate answer 413 before building an answer that
+  would pass 5 MB (a long column name repeated per row or per group).
+
+### 2026-11-22 (domain availability)
+Tools:
+- New domain-availability tool: asks the TLD's own registry over RDAP
+  whether a domain name is registered. A name under a registration, however
+  many labels deep, reads registered null with the registration in
+  `registeredParent`; the registry's notices pass through as links in
+  `registryNotices`, and lookups to each registry are paced.
+
+### 2026-11-22 (onchain-sql day reads)
+Tools:
+- onchain-sql: a long-range plain row select on `solana.instructions` that
+  runs past the query service's time window is now read one day at a time,
+  with partial answers marked in fields.
+- onchain-sql: a call read one day at a time sends at most 3 queries in
+  all, the whole-range send included; a range with more days answers the
+  first ones, and its fields name the limit and where to continue.
+- onchain-sql: only a query whose ORDER BY starts with block_time (quoted or
+  not) is read one day at a time; any other first key is answered as before.
+- A walk that read at least one day is a served answer and is charged at
+  this route's price, even when it is partial or holds no rows; a walk that
+  read no day answers 422 and is not charged (a Tempo push payment is final
+  before the call and is booked as owed). A caller who leaves mid-walk gets no
+  further day sent.
+
+### 2026-11-22 (seller-trust wallets)
+Router:
+- seller-trust's `routerGate` names the wallet its settled calls were
+  measured at (`measuredAtWallet`), the Base payTo the seller's 402 named at
+  our last crawl (`crawledPayTo`) with that wallet's own counted calls, and a
+  `walletNote` when the two differ, since the router counts history only at
+  the payTo the live 402 names.
+
+### 2026-11-22 (regex time limit)
+Tools:
+- The regex tool's 750 ms limit covers the pattern's own run, so a busy
+  server no longer times out an ordinary pattern; a catastrophic pattern is
+  still stopped and not charged.
+
+### 2026-11-22 (directory network filter)
+Index:
+- The tool directory's network filter (`/api/index/tools?network=`) now
+  matches a chain ID exactly, so eip155:10 no longer also returns eip155:100
+  listings.
+
+### 2026-11-22 (identifier checks, build logs, JSON repair, Solana RPC)
+Tools:
+- New tools: id-validate checks the format, and the check digits where the
+  type has them, of BIC, NINO, CPF, CNPJ, ABN, SEDOL, ISIN, LEI and Norwegian
+  organization numbers. build-log-triage finds the first real error in a CI
+  log and classifies it. json-repair fixes broken JSON and lists its fixes
+  (the first 200 in full; the counts cover all). solana-rpc offers read-only
+  Solana mainnet JSON-RPC.
+- solana-rpc reads raw account bytes through a dataSlice of at most 64 KB
+  (or jsonParsed), takes getTokenAccountsByOwner with a mint filter, and
+  serves a large block's signatures as the first 1,000, marked partial.
+
+### 2026-11-22 (onchain-sql range and week)
+Tools:
+- New: onchain-sql-range reads up to 31 days of a plain row select on
+  solana.instructions in one call (x402 exact on EVM chains, as a job), and
+  onchain-sql-week up to 7 days on every payment rail, Solana included;
+  a partial onchain-sql walk lists the routes that cover its range in
+  `longerRange`.
+
+### 2026-11-22 (Solana fee payer status)
+Operations:
+- `/api/gateway-status` adds `solanaFeePayer` (ok, low, empty, unknown or
+  off): a status word for whether the fee payers of the Solana facilitators
+  that take quotes can cover settlements; no balances are shown.
+
 ## v2.12.1 - 2026-11-22
 
 ### 2026-11-22 (agentic commerce)

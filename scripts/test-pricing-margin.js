@@ -379,6 +379,39 @@ console.log("\n# STT — cap-before-spend (local duration probe)");
 }
 
 // ---------------------------------------------------------------------------
+// 5a. The named speech and transcription models (src/speech-additions.js):
+//     each is held to its own cap where it declares one, else the route's,
+//     and that cap times its private row must sit inside the margin bound of
+//     the route's price. A model that declares a cap is one meant to be
+//     served at it, so a declared cap past the bound fails here; a model with
+//     no cap of its own that does not fit is simply not served (checked as
+//     not admitted). Only PASS/FAIL is printed: the rows are private.
+console.log("\n# Named audio models: each one's cap vs the route's price");
+{
+  const A = await import("../src/speech-additions.js");
+  const G = await import("../src/tools/llm-gateway-kit.js");
+  const S = await import("../src/tools/stt-kit.js");
+  const speechPrice = Number(LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-audio-speech").price.replace("$", ""));
+  const costs = upstreamCosts();
+  for (const m of A.SPEECH_ADDITIONS) {
+    const cap = A.speechMaxCharsFor(m, G.SPEECH_MAX_CHARS);
+    const fits = A.withinMargin(cap, costs.speech?.[m.id], speechPrice);
+    if (m.maxChars) ok(fits, `${m.id}: its own cap of ${cap} chars stays within the margin bound of /v1/audio/speech`);
+    const admitted = A.admittedSpeechAdditions({ priceUsd: speechPrice, maxChars: G.SPEECH_MAX_CHARS, env: { NAMED_AUDIO_MODELS: "all" } }).some((x) => x.id === m.id);
+    ok(admitted === fits, `${m.id}: admitted on /v1/audio/speech exactly when its cap (${cap} chars) fits the bound`);
+  }
+  for (const m of A.STT_ADDITIONS) {
+    for (const [tier, t] of Object.entries(S.STT_TIERS)) {
+      const cap = A.sttMaxMinutesFor(m, tier, t.maxMinutes);
+      const fits = A.withinMargin(cap, costs.sttPerMinute?.[m.id], t.priceUsd);
+      if (m.maxMinutes) ok(fits, `${m.id}: its own cap of ${cap} minutes on ${tier} stays within the margin bound`);
+      const admitted = A.admittedSttAdditions({ priceUsd: t.priceUsd, maxMinutes: t.maxMinutes, tierSlug: tier, env: { NAMED_AUDIO_MODELS: "all" } }).some((x) => x.id === m.id);
+      ok(admitted === fits, `${m.id} on ${tier}: admitted exactly when its cap (${cap} minutes) fits the bound`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 5b. onchain-sql: the query service meters every query, and one call may
 //     send SQL_QUERY_BUDGET of them (the buyer's query, then the row-size
 //     measure and the filtered run or one small re-run). That many at the
@@ -397,7 +430,7 @@ console.log("\n# onchain-sql: the call's query budget vs price");
 // MARGIN. Every other tool keeps MARGIN.
 const SQL_WORST_CASE_BOUND = 0.87;
 {
-  const { CDP_TOOLS, SQL_QUERY_BUDGET } = await import("../src/tools/cdp-kit.js");
+  const { CDP_TOOLS, SQL_QUERY_BUDGET, SQL_WINDOW_MAX_QUERIES, SQL_RANGE_MAX_QUERIES, SQL_RANGE_MAX_DAYS, SQL_WEEK_MAX_QUERIES, SQL_WEEK_MAX_DAYS } = await import("../src/tools/cdp-kit.js");
   const { PACK_PRICES, SKILL_PACKS } = await import("../src/skills.js");
   const { vendorRate } = await import("../src/upstream-costs.js");
   const rate = vendorRate("cdp", "sqlQuery");
@@ -415,6 +448,27 @@ const SQL_WORST_CASE_BOUND = 0.87;
     ok(SQL_QUERY_BUDGET >= 3 && Number.isFinite(sqlPrice) && sqlPrice > 0, `onchain-sql: a list price and a query budget of ${SQL_QUERY_BUDGET} to price against`);
     ok(cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12, `onchain-sql: ${SQL_QUERY_BUDGET} queries at the table rate plus a settlement keep at least 13% of the list price: ${cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
     table.push({ tier: "onchain-sql", price: sqlPrice, worst: cost, model: `${SQL_QUERY_BUDGET} queries (query service)` });
+    // A call read one day at a time sends at most SQL_WINDOW_MAX_QUERIES
+    // queries in all (the whole-range send and its days), held to the same bound.
+    const windowed = SQL_WINDOW_MAX_QUERIES * rate + (Number.isFinite(settle) ? settle : 0);
+    ok(Number.isInteger(SQL_WINDOW_MAX_QUERIES) && SQL_WINDOW_MAX_QUERIES >= 2, `onchain-sql: a windowed call has a whole number of queries, room for at least one day (${SQL_WINDOW_MAX_QUERIES})`);
+    ok(windowed <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12, `onchain-sql: a day-windowed call's ${SQL_WINDOW_MAX_QUERIES} queries at the table rate plus a settlement keep at least 13% of the list price: ${windowed <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
+    table.push({ tier: "onchain-sql (day windows)", price: sqlPrice, worst: windowed, model: `${SQL_WINDOW_MAX_QUERIES} queries (whole range and its days)` });
+    // onchain-sql-range and onchain-sql-week (owner approved 2026-11-22): the
+    // same handler with a day walk of up to maxDays days, so each one's worst
+    // case is its query limit (the whole-range send, its retry and one query a
+    // day) plus a settlement, held to the same bound at its own price. Each
+    // price is the lowest whole cent that holds this; a cent less fails.
+    for (const [slug, maxQueries, maxDays] of [["onchain-sql-range", SQL_RANGE_MAX_QUERIES, SQL_RANGE_MAX_DAYS], ["onchain-sql-week", SQL_WEEK_MAX_QUERIES, SQL_WEEK_MAX_DAYS]]) {
+      const price = priceOf(slug);
+      const worst = maxQueries * rate + (Number.isFinite(settle) ? settle : 0);
+      const holds = (p) => worst <= SQL_WORST_CASE_BOUND * p + 1e-12;
+      ok(Number.isInteger(maxQueries) && maxQueries >= maxDays + 1 && maxQueries >= SQL_QUERY_BUDGET && Number.isFinite(price) && price > 0, `${slug}: a list price and a query limit of ${maxQueries} to price against`);
+      ok(holds(price), `${slug}: ${maxQueries} queries at the table rate plus a settlement keep at least 13% of the list price: ${holds(price) ? "PASS" : "FAIL"}`);
+      const centLess = Math.round(price * 100 - 1) / 100;
+      ok(Number.isInteger(Math.round(price * 1e6) / 1e4) && !holds(centLess), `${slug}: the list price is the lowest whole cent that holds the bound: ${!holds(centLess) ? "PASS" : "FAIL"}`);
+      table.push({ tier: slug, price, worst, model: `${maxQueries} queries (whole range and up to ${maxDays + 1} days)` });
+    }
     // The only other route that sends a buyer's query to the query service is
     // the onchain-analyst pack (skill-runner.js runs onchain-sql once); the
     // schema step reads the schema endpoint, which is not a query.

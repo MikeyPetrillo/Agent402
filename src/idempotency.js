@@ -17,8 +17,18 @@ import { SETTLE_FIRST_MAX_RESENDS } from "./settle-first.js";
 // delivered (the buyer left while the payment settled), the body under this
 // marker with the charge the server booked for it, so the replay can name it.
 const STORED = "__a402Stored";
-const wrapStored = (body, charged) => ({ [STORED]: 1, body, charged });
-const unwrapStored = (hit) => (hit && typeof hit === "object" && !Array.isArray(hit) && hit[STORED] === 1 ? { body: hit.body, charged: hit.charged || null } : { body: hit, charged: null });
+// It also carries the answer's own headers a replay must repeat (KEPT_HEADERS),
+// when the answer had any.
+const wrapStored = (body, charged, headers = null) => ({ [STORED]: 1, body, charged, ...(headers ? { headers } : {}) });
+const unwrapStored = (hit) => (hit && typeof hit === "object" && !Array.isArray(hit) && hit[STORED] === 1 ? { body: hit.body, charged: hit.charged || null, headers: hit.headers && typeof hit.headers === "object" ? hit.headers : null } : { body: hit, charged: null, headers: null });
+// Headers that describe the answer itself (the model that spoke it,
+// src/speech-served.js), kept with it so a replay says the same.
+const KEPT_HEADERS = Object.freeze(["X-Agent402-Model", "X-Agent402-Model-Fallback"]);
+const keptHeadersOf = (res) => {
+  const out = {};
+  for (const h of KEPT_HEADERS) { const v = res.getHeader(h); if (typeof v === "string" && v && v.length <= 200) out[h] = v; }
+  return Object.keys(out).length ? out : null;
+};
 
 // THE SAME PAYMENT AFTER AN UNCONFIRMED SETTLE. A payment whose settle chain
 // ended on an answer that does not show whether the transfer was sent is
@@ -549,7 +559,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       // Answered here, before the paywall and the dispatcher: no handler, no
       // settlement, and none of the finish-time bookkeeping behind the gates
       // (the sale, the served-call tally, the tool-answer classes) sees it.
-      const { body, charged } = unwrapStored(hit);
+      const { body, charged, headers: keptHeaders } = unwrapStored(hit);
       if (typeof onReplay === "function") {
         // The hook runs before the body goes out and may refuse the replay
         // ({ serve: false, status, body }: the charge behind the stored
@@ -563,6 +573,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       }
       res.setHeader("X-Idempotent-Replay", "true");
       if (implicit) res.setHeader("X-Replayed-Answer", "1");
+      if (keptHeaders) for (const h of KEPT_HEADERS) { if (typeof keptHeaders[h] === "string") res.setHeader(h, keptHeaders[h]); }
       return res.status(200).json(body);
     }
     // The same keyed call is still running (a client that timed out and retried
@@ -693,7 +704,8 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       if (powVerified && kind !== "pow") return;
       const paid = Boolean(paymentHeaderOf(req)) || req.creditsSettled === true || req.tempoSettled === true;
       if (!freeMode && !paid && !powVerified) return;
-      const stored = charged ? wrapStored(captured, charged) : captured;
+      const keptHeaders = keptHeadersOf(res);
+      const stored = charged || keptHeaders ? wrapStored(captured, charged || null, keptHeaders) : captured;
       let bytes = 0;
       try { bytes = Buffer.byteLength(JSON.stringify(stored), "utf8"); } catch { bytes = 0; }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
@@ -704,7 +716,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     chargedLaterOf.set(req, (charged) => {
       if (!committed) { lateCharged = charged; return true; }
       if (!stored0 || storedCharged) return false;
-      const wrapped = wrapStored(captured, charged);
+      const wrapped = wrapStored(captured, charged, keptHeadersOf(res));
       let bytes = 0;
       try { bytes = Buffer.byteLength(JSON.stringify(wrapped), "utf8"); } catch { bytes = 0; }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return false;

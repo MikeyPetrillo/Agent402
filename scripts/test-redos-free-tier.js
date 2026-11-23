@@ -105,6 +105,12 @@ function structuredCorpus() {
     farPast: "-271821-04-20",
     yearOne: "0001-01-01",
     lastInstant: 8.64e15,
+    // A CSV whose header names thousands of columns over thousands of short
+    // rows: an answer that repeats each column name per row grows far past
+    // its input.
+    wideCsv: Array.from({ length: 2000 }, (_, i) => `column_name_${i}`).join(",") + "\n" + "1\n".repeat(2000),
+    // A header of control characters, each six bytes once written as JSON.
+    controlHeaderCsv: "\u0001".repeat(4000) + "\n" + "1\n".repeat(1200),
   };
 }
 // Above the largest answer a tool may write (16 MB of resolved spec or of CSV, plus its envelope).
@@ -352,6 +358,50 @@ try {
     jobs.push({ slug: name, pure: true, method: "POST", url: path, body: JSON.stringify({ q: spaces }), label: `${name} q spacesLetter (body)` });
     jobs.push({ slug: name, pure: true, method: "POST", url: path, body: JSON.stringify({ q: { toString: 1 } }), label: `${name} q noToString (body)` });
     jobs.push({ slug: name, pure: true, method: "GET", url: `${path}?q%5BtoString%5D=1`, label: `${name} q noToString` });
+  }
+  // The route's network filter is read as text too: a long run of
+  // separators around a mainnet word, in the query and in the body.
+  if (!ONLY || ONLY.has("_route")) {
+    const sep = "-".repeat(40_000) + "main" + "-".repeat(40_000) + "x";
+    jobs.push({ slug: "_route", pure: true, method: "POST", url: "/api/route", body: JSON.stringify({ q: "weather forecast", network: sep }), label: "_route network separators (body)" });
+    const short = "-".repeat(3_000) + "main" + "-".repeat(3_000) + "x";
+    jobs.push({ slug: "_route", pure: true, method: "GET", url: `/api/route?${new URLSearchParams({ q: "weather forecast", network: short })}`, label: "_route network separators" });
+    for (const [pn, pv] of Object.entries(corpus(4_000))) jobs.push({ slug: "_route", pure: true, method: "GET", url: `/api/route?${new URLSearchParams({ q: "weather forecast", network: pv })}`, label: `_route network ${pn}` });
+  }
+  // Inputs the published example does not reach: a tool whose cost grows
+  // with a setting the example leaves at its cheapest (log-timestamps reads
+  // its example in UTC; any other zone converts every stamp) gets the corpus
+  // again under that setting, and a body dense with what it parses.
+  // A CSV with one very long column name and a thousand groups.
+  let distinctGroupsCsv = ["g", ...Array.from({ length: 199 }, (_, i) => `c${i}`)].join(",") + "\n";
+  for (let i = 0; distinctGroupsCsv.length < 95_000; i++) distinctGroupsCsv += `k${i}\n`;
+  const manyGroupsCsv = `g,${"x".repeat(90_000)}\n` + Array.from({ length: 1000 }, (_, i) => `k${i},1`).join("\n");
+  const VARIANTS = {
+    "csv-aggregate": [
+      { set: { groupBy: "g", limit: 1000 }, dense: { field: "csv", unit: manyGroupsCsv, chars: manyGroupsCsv.length } },
+      // A distinct group on every row over 199 columns: the work, not the
+      // answer, grows past the input.
+      { set: { groupBy: "g", limit: 1 }, dense: { field: "csv", unit: distinctGroupsCsv, chars: distinctGroupsCsv.length } },
+    ],
+    "log-timestamps": [
+      { set: { assumeZone: "America/New_York" }, dense: { field: "text", unit: "2026-11-02 14:03:07 x\n", chars: 95_000 } },
+      { set: { assumeZone: "Asia/Kolkata" }, dense: { field: "text", unit: "Nov  2 14:05:11 host a\n", chars: 95_000 } },
+    ],
+  };
+  for (const e of targets) {
+    const op = openapi.paths?.[e.path]?.[e.method.toLowerCase()];
+    const c = op?.requestBody?.content?.["application/json"];
+    if (!c || !VARIANTS[e.slug]) continue;
+    for (const v of VARIANTS[e.slug]) {
+      const ex = { ...(c.example || {}), ...v.set };
+      const tag = Object.entries(v.set).map(([k, x]) => `${k}=${x}`).join(",");
+      const d = v.dense;
+      jobs.push({ slug: e.slug, pure: true, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [d.field]: d.unit.repeat(Math.floor(d.chars / d.unit.length)) }), label: `${e.slug} ${d.field} dense (${tag})` });
+      for (const [k, sv] of Object.entries(c.schema?.properties || {})) {
+        if (![].concat(sv.type || []).includes("string")) continue;
+        for (const [pn, pv] of Object.entries(longCorpus(80_000))) jobs.push({ slug: e.slug, pure: true, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [k]: pv }), label: `${e.slug} ${k} ${pn} (${tag})` });
+      }
+    }
   }
   const slugs = new Set(jobs.map((j) => j.slug));
   ok(slugs.size >= (ONLY ? 1 : 100), `${jobs.length} adversarial calls across ${slugs.size} tools and skills`);

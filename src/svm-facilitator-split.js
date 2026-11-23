@@ -246,6 +246,20 @@ export function createSvmFacilitatorSplit({ entries, share, network = SOLANA_MAI
       return { active: a ? a.label : null, share, entries: list.map((e) => ({ label: e.label, ok: e.state?.ok === true, reason: e.state?.ok ? null : e.state?.reason || "not read" })) };
     },
     /**
+     * Each facilitator a Solana quote can name, with the fee payer of its last
+     * confirmed /supported read (no new read) and its share of quotes now:
+     * the active listed entry takes `share`, the boot-order facilitator
+     * (label "boot-order") the rest, every other listed entry none. Read by
+     * the fee payer gas check (src/facilitator-gas.js).
+     */
+    feePayers() {
+      const a = active();
+      const out = list.map((e) => ({ label: e.label, url: e.url || null, feePayer: e.state?.kind?.extra?.feePayer || null, share: a === e ? share : 0 }));
+      const boot = defaultKind()?.extra?.feePayer;
+      out.push({ label: BOOT_ORDER, url: null, feePayer: isSolanaAddress(boot) ? boot : null, share: a ? 100 - share : 100 });
+      return out;
+    },
+    /**
      * A paid request's facilitator refused it before broadcast: its identity's
      * next quotes avoid that facilitator. Returns { requote, handler, other }
      * (handler and other are labels; other is null when no other facilitator

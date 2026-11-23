@@ -43,18 +43,22 @@ const PRICEY = "https://unproven-pricey.example";
 const EDGE = "https://unproven-edge.example";
 const MID = "https://proven-mid.example", HUGE = "https://proven-huge.example";
 const W_MID = "0x1111111111111111111111111111111111111111", W_HUGE = "0x2222222222222222222222222222222222222222";
+// A seller whose history was measured at a wallet its 402 no longer pays.
+const MOVED = "https://moved-wallet.example";
+const W_OLD = "0x5555555555555555555555555555555555555555", W_LIVE = "0x6666666666666666666666666666666666666666";
 
 async function boot(ceiling) {
   const dir = mkdtempSync(join(tmpdir(), "a402-trust-lanes-"));
-  const entries = [seller(CHEAP, "$0.005"), seller(PRICEY, "$0.06"), seller(EDGE, "$0.05", "0x4444444444444444444444444444444444444444"), seller(MID, "$0.04", W_MID), seller(HUGE, `$${OVER_TOP}`, W_HUGE)];
+  const entries = [seller(CHEAP, "$0.005"), seller(PRICEY, "$0.06"), seller(EDGE, "$0.05", "0x4444444444444444444444444444444444444444"), seller(MID, "$0.04", W_MID), seller(HUGE, `$${OVER_TOP}`, W_HUGE), seller(MOVED, "$0.004", W_LIVE)];
   const lbFile = join(dir, "leaderboard-snapshot.json");
   writeFileSync(lbFile, JSON.stringify({
     spec: "x402-leaderboard/1", asOf: new Date(now).toISOString(), windowLabel: "7d",
     leaderboard: [
       { rank: 1, homepage: MID, origins: [MID], wallet: W_MID, wallets: [W_MID], callsSettled: 500, uniqueBuyers: 40 },
       { rank: 2, homepage: HUGE, origins: [HUGE], wallet: W_HUGE, wallets: [W_HUGE], callsSettled: 500, uniqueBuyers: 40 },
+      { rank: 3, homepage: MOVED, origins: [MOVED], wallet: W_OLD, wallets: [W_OLD], callsSettled: 145, uniqueBuyers: 12 },
     ],
-    walletEvidence: { [W_MID]: { callsSettled: 500, uniqueBuyers: 40, origins: [MID] }, [W_HUGE]: { callsSettled: 500, uniqueBuyers: 40, origins: [HUGE] } },
+    walletEvidence: { [W_MID]: { callsSettled: 500, uniqueBuyers: 40, origins: [MID] }, [W_HUGE]: { callsSettled: 500, uniqueBuyers: 40, origins: [HUGE] }, [W_OLD]: { callsSettled: 145, uniqueBuyers: 12, origins: [MOVED] } },
   }));
   writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: entries.length }), ...entries.map((e) => JSON.stringify(e))].join("\n") + "\n");
   const port = await getFreePort();
@@ -97,6 +101,18 @@ const dossier = async (base, origin) => {
     ok(mRow?.routerDispatchByChain?.base?.eligible === true, `control: the $0.04 seller's index row is proven-eligible (${JSON.stringify(mRow?.routerDispatchByChain?.base)})`);
     ok(m.body.routableAsProven === true && m.body.routableVia === "proven" && m.body.lanes.proven.cheapestTier === "route-execute-plus" && tierFor(0.04).slug === "route-execute-plus", `a proven $0.04 seller is paid via route-execute-plus (${JSON.stringify(m.body.lanes?.proven)})`);
     ok(!m.body.lanes.proven.tiers.some((t) => t.slug === "route-execute"), "...and not via route-execute");
+
+    // routerGate names the wallet its figures were measured at.
+    const mg = m.body.routerGate;
+    ok(mg.measuredAtWallet === W_MID.toLowerCase() && mg.crawledPayTo === W_MID.toLowerCase() && mg.measuredAtCrawledPayTo === true && mg.crawledPayToSettledCalls === mg.settledCalls && !("livePayToPayers" in mg) && !("crawledPayToPayers" in mg) && !("walletNote" in mg), `match: routerGate names the wallet, which is the 402's payTo, and carries no note (${JSON.stringify(mg)})`);
+    const mv = await trust(base, MOVED);
+    const g = mv.body.routerGate;
+    ok(mv.status === 200 && g.settledCalls === 145 && g.meetsSettlementThreshold === true, `mismatch: the gate's figures are unchanged (${JSON.stringify(g)})`);
+    ok(g.measuredAtWallet === W_OLD.toLowerCase() && g.crawledPayTo === W_LIVE.toLowerCase() && g.measuredAtCrawledPayTo === false, `mismatch: routerGate names both wallets (${JSON.stringify(g)})`);
+    ok(g.crawledPayToSettledCalls === 0 && /measured at a wallet other than the payTo this seller's 402 named at our last crawl; the router counts history only at the payTo the seller's live 402 names/.test(g.walletNote || ""), `mismatch: the crawled payTo's own calls and the note (${g.walletNote})`);
+    ok(mv.body.routableAsProven === false, "mismatch: the verdict is unchanged (not proven)");
+    const cg = (await trust(base, CHEAP)).body.routerGate;
+    ok(cg.measuredAtWallet === null && cg.settledCalls === 0 && !("walletNote" in cg), `no history: no wallet named (${JSON.stringify(cg)})`);
 
     const h = await trust(base, HUGE);
     const line = (h.body.lanes?.proven?.blockers || []).find((b) => /highest route-execute tier/.test(b));

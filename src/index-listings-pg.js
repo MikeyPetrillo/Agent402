@@ -361,7 +361,9 @@ export function createListingsStore({ rowsForOrigin, keyForOrigin = null, projec
     const cat = String(category || "").trim().toLowerCase();
     if (cat) add("category = ?", cat);
     const net = String(network || "").trim().toLowerCase();
-    if (net) add("networks LIKE ? ESCAPE '\\'", `%${likeEscape(net)}%`);
+    // One CAIP-2 id matched whole against the row's newline-joined list, as
+    // the in-memory filter does: eip155:10 never takes eip155:100's rows.
+    if (net) add("? = ANY(string_to_array(networks, E'\\n'))", net);
     const q = String(search || "").trim().toLowerCase();
     for (const term of q ? terms(q) : []) add("hay LIKE ? ESCAPE '\\'", `%${likeEscape(term)}%`);
     return { sql: parts.length ? `WHERE ${parts.join(" AND ")}` : "", params };

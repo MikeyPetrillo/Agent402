@@ -584,7 +584,7 @@ import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SC
 import { setAlgorandCrawlSources, makeIndexerInboundCount } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
-import { submissionSlotStatus } from "./x402-index.js";
+import { submissionSlotStatus, NETWORK_VALUE_MAX } from "./x402-index.js";
 import { sellerLoad, sellerLoadStatus, sendRouterProbe } from "./seller-load.js";
 import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
@@ -676,6 +676,8 @@ import { SQL_GUARD_TOOLS } from "./tools/sql-guard-kit.js";
 import { BARCODE_TOOLS } from "./tools/barcode-kit.js";
 import { DATA_TOOLS } from "./tools/data-kit.js";
 import { HOLIDAY_TOOLS } from "./tools/holidays-kit.js";
+import { VALIDATE_MORE_TOOLS } from "./tools/validate-more-kit.js";
+import { SOLANA_RPC_TOOLS } from "./tools/solana-rpc-kit.js";
 import { IMAGE_TOOLS } from "./tools/image-kit.js";
 import { X402_TOOLS } from "./tools/x402-kit.js";
 import { B20_TOOLS } from "./tools/b20-kit.js";
@@ -702,6 +704,7 @@ import { DOSSIER_TOOLS } from "./tools/dossier-kit.js";
 import { TICKER_PACK_TOOLS } from "./tools/ticker-pack-kit.js";
 import { NETWORK_TOOLS } from "./tools/network-kit.js";
 import { NETWORK_TOOLS2 } from "./tools/network-kit2.js";
+import { DOMAIN_AVAILABILITY_TOOLS } from "./tools/domain-availability-kit.js";
 import { HTML_TOOLS } from "./tools/html-kit.js";
 import { COMPRESSION_TOOLS } from "./tools/compression-kit.js";
 import { STATS_TOOLS } from "./tools/stats-kit.js";
@@ -732,6 +735,7 @@ import * as analyticsDbModule from "./analytics-db.js";
 import { wholesalePage } from "./wholesale-page.js";
 import { WEATHER_CALC_TOOLS } from "./tools/weather-calc-kit.js";
 import { DATE_TIME_TOOLS } from "./tools/date-time-kit.js";
+import { PARSE_TOOLS } from "./tools/parse-kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "./tools/text-analysis-kit.js";
 import { VALIDATION_TOOLS } from "./tools/validation-kit.js";
 import { CRYPTO_HASH_TOOLS } from "./tools/crypto-hash-kit.js";
@@ -885,7 +889,8 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats } from "./sales-ledger.js";
+import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats, salesLedgerFilePath } from "./sales-ledger.js";
+import { correctServerLedger, summaryOf as saleRepeatsSummary } from "./sale-repeats-correction.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -911,7 +916,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...VALIDATE_MORE_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...DOMAIN_AVAILABILITY_TOOLS, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...PARSE_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...SOLANA_RPC_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -2510,6 +2515,9 @@ for (const tier of EXEC_TIERS) {
   const tool = buildSellerTrustTool({
     getSellerDetail: (host) => sellerDetail(host),
     getSettledCalls: (origin) => dispatchEvidence().settled.get(norm(origin)) || 0,
+    // The same binding entry: the wallet those figures were measured at and
+    // every wallet's own figures, so routerGate can name where it counted.
+    getGateEvidence: (origin) => dispatchEvidence().binding.get(norm(origin)) || null,
     // Evidence for the address the seller ADVERTISES, from the cached on-chain
     // merchant scan. Never fetches — a cold cache reports "not checked", never
     // a clean bill.
@@ -3975,7 +3983,7 @@ const LARGE_BODY_ROUTES = [
   ["/api/html-frames", 12 * MB], ["/v1/images/edits", 34 * MB],
   // onchain-sql takes SQL to 60,000 characters (SQL_MAX_CHARS), which JSON
   // escaping can double on the wire past the global 100 KB parser.
-  ["/api/onchain-sql", 256 * 1024],
+  ["/api/onchain-sql", 256 * 1024], ["/api/onchain-sql-range", 256 * 1024], ["/api/onchain-sql-week", 256 * 1024],
   // The Office builders take 100,000 characters of text or 50,000 cells
   // (OFFICE_LIMITS.requestBytes), past the global parser once JSON-escaped.
   ["/api/xlsx-create", 2 * MB], ["/api/docx-create", 2 * MB], ["/api/pptx-create", 2 * MB],
@@ -4029,7 +4037,7 @@ app.use("/v1/judge/long", unlessBodyUnread(express.json({ limit: "2mb", inflate:
 app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", inflate: false })));
 // onchain-sql: a 60,000-character query is up to 120 KB once JSON-escaped;
 // the handler's own cap (SQL_MAX_CHARS) checks the text again.
-app.use("/api/onchain-sql", unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
+app.use(["/api/onchain-sql", "/api/onchain-sql-range", "/api/onchain-sql-week"], unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
 // Office builders: the caps in OFFICE_LIMITS are checked again by each handler.
 app.use(["/api/xlsx-create", "/api/docx-create", "/api/pptx-create"], unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
@@ -4757,6 +4765,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // out-of-funds or billing settle refusal inside the hour) / demoted (a
     // facilitator in its settle cool-down). One word each publicly; slugs, upstreams and counts
     // are on /__operator/tool-failures.json.
+    // solanaFeePayer reads ok / low / empty / unknown / off: the SOL runway of
+    // the fee payers of the Solana facilitators that take a share of quotes
+    // (src/facilitator-gas.js); low and empty page through facilitatorFunds=low.
+    // Balances, runways and shares are on the operator view only.
     // toolAnswers reads ok / degraded: one slug's outside 200s were empty
     // or error-shaped (src/answer-shape.js) at or above TOOL_ANSWER_BAD_RATE.
     // buyerRefusals reads ok / refusing: the settle breaker refused a key that
@@ -4875,7 +4887,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // The word publicly; the figures for the operator.
     directUpstreamSpend: (() => { try { return directUpstreamSpendStatus({ full }); } catch { return { status: "unknown" }; } })(),
     directUpstreamBalance: (() => { try { return directUpstreamBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
-    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
+    ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, solanaFeePayer: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
@@ -6752,12 +6764,28 @@ function operatorWriteRefused(req) {
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
   if (!readCookie(req, OPERATOR_COOKIE)) return false;
   // A header credential cannot be set by another site's page (CORS keeps
-  // /__operator closed), so its presence skips the origin check; the route's
-  // gate then validates it and counts a wrong one against the guessing budget.
-  if (getOperatorToken(req)) return false;
+  // /__operator closed), so a VALID one skips the origin check. A wrong one
+  // does not: the request is then the cookie's, held to the origin check like
+  // a cookie alone (the gate still counts the wrong token as a guess).
+  const headerToken = getOperatorToken(req);
+  let wrongToken = false;
+  if (headerToken) {
+    // The budget is read before the token, as at the gate: past it the token
+    // is not evaluated, so a right and a wrong one answer alike.
+    const ip = operatorAttemptIp(req);
+    if (operatorAttemptLimiter.peek(ip).limited) wrongToken = false;
+    else if (operatorTokenOk(headerToken)) return false;
+    else wrongToken = true;
+  }
   if (String(req.headers["sec-fetch-site"] || "").toLowerCase() === "same-origin") return false;
   const origin = req.headers.origin;
-  return !(OPERATOR_SITE_ORIGIN && typeof origin === "string" && origin === OPERATOR_SITE_ORIGIN);
+  const refused = !(OPERATOR_SITE_ORIGIN && typeof origin === "string" && origin === OPERATOR_SITE_ORIGIN);
+  // A wrong header token on a write this check refuses is a guess, charged
+  // here once, only while the address's budget accepts it (as at the gate):
+  // past it, nothing moves the shared count. A write this check lets through
+  // is left to the gate, so no request is charged twice.
+  if (refused && wrongToken && !operatorAttemptLimiter.check(operatorAttemptIp(req)).limited) noteOperatorAuthFailure();
+  return refused;
 }
 // Operator auth: a raw token via header (curl/API), OR a valid session cookie
 // (browser). Both funnel through here so every gated route agrees.
@@ -7401,6 +7429,36 @@ app.post("/__operator/refunds/backfill-sales", async (req, res) => {
   } catch (e) {
     res.status(e?.statusCode === 400 ? 400 : 500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
   }
+});
+// Sales rows that repeat a Solana settlement (src/sale-repeats.js): the dry
+// run and the correction of scripts/sale-repeats.js, run against this
+// server's own ledger (src/sale-repeats-correction.js, the same code). The
+// answer is counts, dates and tools, never a payer or a settlement id. The
+// correction runs only when `expect` equals the repeat-row count a dry run
+// reads now, in one transaction under a lease; a second one moves nothing.
+const saleRepeatsError = (res, e) => res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
+app.get("/__operator/sale-repeats.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorHeavyLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const r = await correctServerLedger({ filePath: salesLedgerFilePath });
+    res.json({ dryRun: true, ...saleRepeatsSummary(r.plan), apply: { method: "POST", path: "/__operator/sale-repeats/apply", body: { expect: r.plan.rows } } });
+  } catch (e) { saleRepeatsError(res, e); }
+});
+app.post("/__operator/sale-repeats/apply", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorHeavyLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  const expect = req.body && typeof req.body === "object" ? req.body.expect : undefined;
+  if (!Number.isInteger(expect) || expect < 0) return res.status(400).json({ error: "expect must be the repeat-row count the dry run answered (an integer)" });
+  try {
+    const r = await correctServerLedger({ filePath: salesLedgerFilePath, apply: true, expect });
+    if (r.busy) return res.status(409).json({ error: "a correction is already running", reason: r.busy });
+    const summary = saleRepeatsSummary(r.plan);
+    if (r.refused) return res.status(409).json({ error: `expect ${expect} but the ledger holds ${r.plan.rows} repeat row(s); read the dry run again`, applied: false, ...summary });
+    res.json({ applied: true, moved: r.moved, ...summary, note: "a running server leaves the moved rows out of its own figures already; its in-memory copy drops them at its next restart, and they stay out after it (a boot never copies a moved row back from the ledger file)" });
+  } catch (e) { saleRepeatsError(res, e); }
 });
 app.get("/__operator/dataset.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
@@ -10293,12 +10351,16 @@ async function computeRouteJudged(q, k, include, net, ip = null, meter = null) {
 }
 const routeCachePath = "/api/route";
 const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
+// A route's network value as read: a string, cut to the longest network
+// name (the index's own bound), so nothing longer reaches a reader or the
+// cache key; anything else is no filter.
+const networkParamOf = (v) => (typeof v === "string" ? v.slice(0, NETWORK_VALUE_MAX) : undefined);
 app.get("/api/route", (req, res) => {
   withRouteAnswerNote(req, res, "route");
   const q = readableAsText(req.query.q ?? req.query.task ?? req.query.query);
   const top = req.query.top ?? req.query.k;
   const include = req.query.include;
-  const net = req.query.network;
+  const net = networkParamOf(req.query.network);
   return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include, network: net }, (meter) => computeRouteJudged(q, top, include, net, clientIp(req), meter), "_route", req, res);
 });
 app.post("/api/route", (req, res) => {
@@ -10306,7 +10368,7 @@ app.post("/api/route", (req, res) => {
   const q = readableAsText(req.body?.q ?? req.body?.task ?? req.body?.query);
   const top = req.body?.top ?? req.body?.k;
   const include = req.body?.include;
-  const net = req.body?.network;
+  const net = networkParamOf(req.body?.network);
   return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include, network: net }, (meter) => computeRouteJudged(q, top, include, net, clientIp(req), meter), "_route", req, res);
 });
 // Operator-only: why does the SOR external resolver keep/drop each candidate for
@@ -11556,7 +11618,7 @@ const asyncProfileBySlug = (slug) => {
 };
 const asyncRouteOf = (req) => { const def = CATALOG[`POST ${req.path}`]; return def && def.asyncProfile ? def : null; };
 const asyncJobs = createAsyncJobs({
-  port: PORT, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
+  port: () => loopbackPort, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
   asyncRouteOf,
   profileOfSlug: (slug) => asyncProfileBySlug(slug),
   // A job's debt books what the buyer paid: the gated price (list or the

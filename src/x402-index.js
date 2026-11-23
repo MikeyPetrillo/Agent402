@@ -2617,15 +2617,23 @@ function priceRank(p) {
 // chain's real mainnet id) rather than a hand-maintained list, so a future
 // chain addition is covered automatically with no second edit required here.
 const NETWORK_SHORTHAND = new Map(Object.values(CHAIN_PAGES).map((C) => [C.networkParam, C.acceptNetwork]));
-function normalizeNetwork(n) {
+// The longest network value read: a CAIP-2 id or a chain's display name fits
+// well inside it; a longer value names no chain and is not folded.
+export const NETWORK_VALUE_MAX = 128;
+export function normalizeNetwork(n) {
   if (typeof n !== "string") return n;
   const exact = NETWORK_SHORTHAND.get(n.toLowerCase());
   if (exact) return exact;
   // Display names for a mainnet ("Algorand MainNet", "Base Mainnet",
   // "solana-mainnet-beta") fold onto the same chain; a testnet never does.
-  if (!n.includes(":")) {
-    const folded = n.toLowerCase().trim().replace(/[\s_-]*main[\s_-]*net([\s_-]*beta)?$/, "").replace(/[\s_-]+/g, "");
-    if (folded !== n.toLowerCase() && NETWORK_SHORTHAND.has(folded)) return NETWORK_SHORTHAND.get(folded);
+  // Linear: the separators go first (one pass), then a fixed suffix is cut
+  // (a pattern with a separator run before the suffix backtracked
+  // quadratically on a long run of separators).
+  if (!n.includes(":") && n.length <= NETWORK_VALUE_MAX) {
+    const lower = n.toLowerCase();
+    const compact = lower.trim().replace(/[\s_-]+/g, "");
+    const folded = compact.endsWith("mainnetbeta") ? compact.slice(0, -11) : compact.endsWith("mainnet") ? compact.slice(0, -7) : compact;
+    if (folded !== lower && NETWORK_SHORTHAND.has(folded)) return NETWORK_SHORTHAND.get(folded);
   }
   return n;
 }
@@ -3514,7 +3522,7 @@ function entryPaymentBlockAccepts(p) {
   if (Array.isArray(p.accepts) && p.accepts.length) return p.accepts;
   const nets = [...new Set(
     [p.network, p.chain, ...(Array.isArray(p.networks) ? p.networks : [])]
-      .filter((v) => typeof v === "string" && v.trim())
+      .filter((v) => typeof v === "string" && v.trim() && v.length <= NETWORK_VALUE_MAX)
       .map((v) => normalizeNetwork(v.trim())),
   )].slice(0, 16);
   if (!nets.length) return [];
@@ -3592,7 +3600,7 @@ function manifestX402BlockAccepts(p) {
   const payTo = typeof x.payTo === "string" ? x.payTo.trim() : (typeof x.pay_to === "string" ? x.pay_to.trim() : "");
   const nets = [...new Set(
     [...(Array.isArray(x.networks) ? x.networks : []), x.network, x.primaryNetwork]
-      .filter((v) => typeof v === "string" && v.trim())
+      .filter((v) => typeof v === "string" && v.trim() && v.length <= NETWORK_VALUE_MAX)
       .map((v) => normalizeNetwork(v.trim())),
   )].slice(0, 16);
   return nets.map((network) => ({
@@ -10804,11 +10812,17 @@ const VALID_INCLUDE = new Set(["all", "external", "local"]);
  * non-Agent402 sellers (`external`) — the same router, used as a neutral
  * discovery API over the whole x402 ecosystem.
  */
-// Short chain names buyers may pass to ?network= — resolved to CAIP-2.
-const ROUTE_NETWORKS = {
-  base: "eip155:8453", polygon: "eip155:137", arbitrum: "eip155:42161",
-  robinhood: "eip155:4663", arc: "eip155:5042", ink: "eip155:57073", solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-};
+// ?network= on /api/route and /api/index/tools: a chain's short name resolves
+// to its CAIP-2 id through the chain-page table (normalizeNetwork), which names
+// every chain the router pays on, so a new chain needs no second list here. A
+// hand-kept table here once named seven chains: ?network=celo passed through
+// as "celo", matched no row's eip155:42220, and hid every Celo seller the
+// Celo router call would buy from. Case, spaces and a mainnet suffix fold; a
+// raw CAIP-2 id or an unknown name passes through as given.
+export function resolveNetworkParam(v) {
+  const s = typeof v === "string" ? v.slice(0, NETWORK_VALUE_MAX).trim() : "";
+  return s ? normalizeNetwork(s) : null;
+}
 
 // The decorated remote pool per entry and the per-tool statics (lowercased
 // haystack, injection verdict, price rank) are memoized by object identity
@@ -11840,7 +11854,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // advertises that chain. Positive-signal filter: local tools and sellers
   // whose crawl source carries no accepts (networks unknown) are kept — the
   // filter is "exclude sellers known NOT to settle there", not a guarantee.
-  const wantNet = networkFilter ? (ROUTE_NETWORKS[String(networkFilter).trim().toLowerCase()] || String(networkFilter).trim()) : null;
+  const wantNet = networkFilter ? resolveNetworkParam(String(networkFilter)) : null;
   // The same envelope on the empty answer: a consumer must not have to learn
   // one shape for a hit and another for a miss.
   if (!terms.length) return { query: q, count: 0, results: [], sellers: 0, sellersMatched: 0, include: inc, topMax: ROUTE_TOP_MAX, truncated: false, ...partialFields(0, 0), ...(wantNet ? { network: wantNet } : {}) };
@@ -12543,7 +12557,10 @@ function directoryHayOf(t) {
 }
 /** How many row search texts have been built (a repeat search builds none). */
 export function _directoryHayBuildsForTest() { return directoryHayBuilds; }
+// The directory's network filter reads a chain's short name as /api/route does.
+const withResolvedNetwork = (args) => (args && args.network ? { ...args, network: resolveNetworkParam(String(args.network)) || "" } : args);
 export function allIndexedTools(args = {}) {
+  args = withResolvedNetwork(args);
   // One index of the whole ecosystem WITH provenance on every row. Ours are
   // NOT floated to the top: 515 of them would fill the first six pages and bury
   // the third-party index this page exists to show, which would read as a
@@ -12558,6 +12575,7 @@ export function allIndexedTools(args = {}) {
 /** allIndexedTools, the filter run across turns of at most DIRECTORY_SLICE_MS
  *  (a search is one pass over the whole directory). Same answer. */
 export function allIndexedToolsAsync(args = {}) {
+  args = withResolvedNetwork(args);
   if (listingsOn()) return listings.directory(args);
   return runSlicedAsync(indexedToolsSteps(args));
 }
@@ -12573,7 +12591,8 @@ function* indexedToolsSteps({ search = "", category = "", network = "", offset =
     if (src === "ours" && !t.ours) return false;
     if (src === "third-party" && t.ours) return false;
     if (cat && String(t.category || "").toLowerCase() !== cat) return false;
-    if (net && !(t.networks || []).some((n) => String(n).toLowerCase().includes(net))) return false;
+    // One CAIP-2 id, matched whole: eip155:10 must not take eip155:100's rows.
+    if (net && !(t.networks || []).some((n) => String(n).toLowerCase() === net)) return false;
     if (!terms.length) return true;
     const hay = directoryHayOf(t);
     return terms.every((term) => hay.includes(term));

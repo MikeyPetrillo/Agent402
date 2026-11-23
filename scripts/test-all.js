@@ -95,7 +95,7 @@ const NETWORK = new Set([
   "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup", "/api/x-post-counts", "/api/x-trends",
   "/api/hunter-domain-search", "/api/hunter-email-finder", "/api/hunter-email-verify", "/api/hunter-company", "/api/apollo-people-search", "/api/apollo-org-enrich", "/api/apollo-person-match",
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
-  "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
+  "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/domain-availability", "/api/robots-check", "/api/sitemap",
   "/api/email-validate", "/api/ip-info", "/api/search", "/api/search-lite", "/api/search-news", "/api/search-images", "/api/search-videos", "/api/search-suggest", "/api/answer", "/api/multi-search",
   "/api/llm-context",  // llm-context-kit.js (Brave grounding context - live egress, skipped by BRAVE_ROUTES)
   // Web-content kit: archive.org (archive-snapshot), caller feed URLs
@@ -139,6 +139,8 @@ const NETWORK = new Set([
   "/api/image-exif", "/api/image-dominant-color", "/api/image-crop",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
   "/api/public-holidays",
+  // solana-rpc-kit.js: live Solana mainnet JSON-RPC, the same upstream class as evm-rpc.
+  "/api/solana-rpc",
   // Holidays kit: the same holiday-source egress as public-holidays.
   "/api/bank-holidays", "/api/school-holidays", "/api/next-holidays", "/api/long-weekends",
   "/api/country-business-days", "/api/business-day-planner", "/api/settlement-calendar",
@@ -163,7 +165,7 @@ const NETWORK = new Set([
   // (503 without them — the CI test env has none; scripts/test-cdp-live.js
   // covers the real calls where the secrets exist).
   "/api/wallet-balances", "/api/testnet-fund", "/api/onramp-link",
-  "/api/onchain-sql", "/api/onchain-sql-schema",
+  "/api/onchain-sql", "/api/onchain-sql-schema", "/api/onchain-sql-range", "/api/onchain-sql-week",
   "/api/x402-quote", "/api/usdc-balance", "/api/tx-status", "/api/gas-estimate", "/api/x402-verify", "/api/ens-resolve",
   // Macro-kit: all routes hit live upstreams (FRED, Treasury Fiscal Data, ECB,
   // World Bank). FRED-keyed routes return 503 without FRED_API_KEY — the

@@ -139,11 +139,15 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     ok(sameOrigin === hdrOnly, `a same-origin cookie POST reaches the action like the header token (${sameOrigin})`);
     const originOnly = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: base, "content-type": "text/plain" }, body: "x" });
     ok(originOnly === hdrOnly, `a cookie POST whose Origin is this site (no Sec-Fetch-Site) reaches the action (${originOnly})`);
-    // A header credential is never validated by the origin check (another site cannot set one); the gate
-    // reads it, so a wrong one is a counted guess there (see the write-guessing lockout below), and the
-    // live session cookie still decides this request.
-    const wrongHdr = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", "content-type": "text/plain" }, body: "x" });
-    ok(wrongHdr !== 403 && wrongHdr === hdrOnly, `a header token with a live cookie goes to the gate, not the origin check (${wrongHdr})`);
+    // Only a VALID header token skips the origin check: a wrong one beside the
+    // session cookie is held to it like the cookie alone, so a cross-site write
+    // carrying junk in the header is refused.
+    const wrongHdr = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", origin: "https://evil.example", "sec-fetch-site": "cross-site", "content-type": "text/plain" }, body: "x" });
+    ok(wrongHdr === 403, `a wrong header token with a live cookie from another site is refused by the origin check (${wrongHdr})`);
+    const wrongHdrSame = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", origin: base, "sec-fetch-site": "same-origin", "content-type": "text/plain" }, body: "x" });
+    ok(wrongHdrSame !== 403 && wrongHdrSame !== 404, `a wrong header token with a live cookie from this site goes to the gate (${wrongHdrSame})`);
+    const goodHdr = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": TOKEN, origin: "https://evil.example", "content-type": "text/plain" }, body: "x" });
+    ok(goodHdr === hdrOnly, `a valid header token skips the origin check (${goodHdr})`);
     ok((await status("/__operator/monitors/run", { method: "POST" })) === 404, "with no credential at all the route's own gate answers (404)");
     ok((await status("/__operator", { headers: { cookie, origin: "https://evil.example", "sec-fetch-site": "cross-site" } })) === 200, "a read (GET) is not an operator write and keeps working");
   }
@@ -206,6 +210,14 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     if ((await status("/__operator", { headers: bearer })) === 404) { writeLocked = true; break; }
   }
   ok(writeLocked, "guesses sent as operator writes with a cookie exhaust the same budget");
+  // Past the limit the write check no longer reads the header token: with a
+  // junk cookie and no Origin, the right token and a wrong one answer alike.
+  {
+    const junk = "a402_op=junk-session-value";
+    const right = await status("/__operator/monitors/run", { method: "POST", headers: { cookie: junk, "x-operator-token": TOKEN, "content-type": "text/plain" }, body: "x" });
+    const wrong = await status("/__operator/monitors/run", { method: "POST", headers: { cookie: junk, "x-operator-token": "wrong-past-limit", "content-type": "text/plain" }, body: "x" });
+    ok(right === wrong, `past the limit a right and a wrong header token answer the same status (${right}, ${wrong})`);
+  }
   const reLogin2 = await fetch(`${base}/__operator/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN }) });
   ok(reLogin2.status === 200 && (await status("/__operator", { headers: bearer })) === 200, "...and a login clears that lockout too");
 
@@ -397,6 +409,28 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
       const tlsOut = await fetch(`${base2}/__operator/logout`, { method: "POST", headers: { cookie: tlsCookie.split(";")[0], "x-forwarded-proto": "https", "sec-fetch-site": "same-origin", origin: base2 }, redirect: "manual" });
       ok(tlsOut.status === 303 && /;\s*Secure(;|$)/i.test(tlsOut.headers.get("set-cookie") || "") && /Max-Age=0/.test(tlsOut.headers.get("set-cookie") || ""), "the logout over HTTPS clears the cookie with the same Secure attribute");
     } finally { try { child2.kill("SIGKILL"); } catch { /* */ } }
+  }
+
+  // Junk operator writes from one address past its attempt budget do not move
+  // the global wrong-credential counter: a write is charged only while the
+  // address's budget accepts it, and once per request.
+  {
+    const port3 = await getFreePort();
+    const child3 = spawn(process.execPath, ["src/server.js"], {
+      env: { ...process.env, FREE_MODE: "true", PORT: String(port3), AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "1", LATE_SETTLE_RECONCILE: "off" },
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    try {
+      const base3 = `http://127.0.0.1:${port3}`;
+      for (let i = 0; i < 120; i++) { try { if ((await fetch(`${base3}/health`)).ok) break; } catch { /* booting */ } await new Promise((r) => setTimeout(r, 500)); }
+      const failures = async () => (await (await fetch(`${base3}/api/gateway-status`, { headers: { "x-operator-token": TOKEN, "x-forwarded-for": "10.8.8.8" } })).json())?.operatorAuth?.failures1h;
+      const before = await failures();
+      for (let i = 0; i < 80; i++) {
+        await fetch(`${base3}/__operator/monitors/run`, { method: "POST", headers: { cookie: "a402_op=junk", "x-operator-token": `junk-${i}`, "x-forwarded-for": "10.9.9.9", "content-type": "text/plain" }, body: "x" }).then((r) => r.arrayBuffer());
+      }
+      const after = await failures();
+      ok(Number.isFinite(before) && Number.isFinite(after) && after - before <= 12, `80 junk writes from one address move the global counter by at most its budget (${before} -> ${after})`);
+    } finally { try { child3.kill("SIGKILL"); } catch { /* */ } }
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

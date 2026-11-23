@@ -235,7 +235,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "page-speed", "html-frames",
   "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
-  "http-check", "tls-cert", "whois", "robots-check", "sitemap",
+  "http-check", "tls-cert", "whois", "domain-availability", "robots-check", "sitemap",
   "email-validate", "ip-info", "search", "search-lite", "search-news", "search-images", "search-videos", "search-suggest", "answer",
   "llm-context",  // llm-context-kit.js - spends the Brave subscription per call (never PoW-eligible)
   "pdf-info", "pdf-merge", "pdf-extract-pages", "pdf-rotate", "images-to-pdf",
@@ -343,6 +343,9 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Named chain-read primitives (2026-07-29): same shared public-RPC pool +
   // Alchemy lane as evm-rpc — PoW would let one client farm the quota.
   "block-number", "chain-info", "block-info", "erc721-owner", "contract-code", "event-logs",
+  // solana-rpc-kit.js: the Solana sibling of evm-rpc, on the shared Solana RPC
+  // list whose keyed lane counts against the provider's daily ceiling.
+  "solana-rpc",
   // Contract-kit: Sourcify (contract-source / contract-abi), openchain.xyz +
   // 4byte.directory signature DBs (selector-lookup, and calldata-decode's
   // no-ABI fallback path), and the shared keyless public RPC pool
@@ -528,7 +531,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // testnet-fund additionally spends a shared per-account faucet budget —
   // PoW would let one client drain it for free. onchain-sql burns real SQL
   // engine quota (100GB reads / 30s per query).
-  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
+  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema", "onchain-sql-range", "onchain-sql-week",
 ]);
 
 /** Wallet-only slugs that make no network call and read no stored state: they

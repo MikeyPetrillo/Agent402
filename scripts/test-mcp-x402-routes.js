@@ -72,6 +72,14 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   ok(ext?.info?.input?.type === "mcp" && ext.info.input.toolName === "browser.render" && ext.info.input.transport === "streamable-http"
     && same(ext.info.input.example, { url: "https://example.com" }) && ext.info.input.inputSchema?.type === "object", "the declared extension names the tool, transport, schema and example");
   ok(validateDiscoveryExtension(ext).valid && validateDiscoveryExtensionSpec(ext).valid, "the protocol's validators accept it");
+  // The Bazaar calls an MCP tool with its example as the arguments, and an
+  // empty example is not indexed: memory-read's route publishes {} (list
+  // mode), so its twin lists the key memory-write's example writes.
+  const memExt = twins.mcpX402DiscoveryExtension(entries[1]).bazaar;
+  ok(entries[1].slug === "memory-read" && same(memExt?.info?.input?.example, { key: "research/task-42" }) && validateDiscoveryExtension(memExt).valid,
+    "a twin whose route publishes an empty example lists arguments the Bazaar can call it with");
+  ok(twins.mcpX402Example({ slug: "uuid", discovery: { input: {} } }) === undefined && same(twins.mcpX402Example({ slug: "memory-read", discovery: { input: { key: "k" } } }), { key: "k" }),
+    "a published example with an argument is kept; an empty one with no fallback lists none");
 
   const gate = twins.createMcpX402Gate({ getCatalog: () => fakeCatalog });
   const reqOf = (url, { method = "GET", headers = {}, addr = "127.0.0.1" } = {}) => {
@@ -291,8 +299,8 @@ try {
     const bz = m.extensions?.bazaar;
     const info = bz && extractDiscoveryInfoFromExtension(bz, true);
     ok(bz?.info?.input?.type === "mcp" && bz.info.input.toolName === FLAGSHIP_MCP_NAMES[slug] && bz.info.input.transport === "streamable-http"
-      && bz.info.input.inputSchema?.type === "object" && bz.info.input.example && typeof bz.info.input.example === "object" && !("method" in bz.info.input),
-    `${slug}: an MCP extension for ${FLAGSHIP_MCP_NAMES[slug]} with schema, example and transport`);
+      && bz.info.input.inputSchema?.type === "object" && bz.info.input.example && typeof bz.info.input.example === "object" && Object.keys(bz.info.input.example).length > 0 && !("method" in bz.info.input),
+    `${slug}: an MCP extension for ${FLAGSHIP_MCP_NAMES[slug]} with schema, a non-empty example and transport`);
     ok(validateDiscoveryExtension(bz).valid && validateDiscoveryExtensionSpec(bz).valid && info?.input?.type === "mcp", `${slug}: the protocol's validators accept the twin's extension`);
     ok(same(m.accepts, h.accepts) && m.accepts.length >= 3, `${slug}: every accept equals the HTTP route's (${m.accepts.length} accepts)`);
     ok(same([...new Set(m.accepts.map((a) => a.network))].sort(), [BASE_NET, OP, RH].sort()), `${slug}: priced on every offered chain`);

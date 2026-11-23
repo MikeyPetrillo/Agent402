@@ -2577,6 +2577,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // that name a facilitator read the request's scope first; an untagged
   // request takes the vendor's own lookup (src/settle-preference.js).
   installSettlePreference(server);
+  // SOL runway of every Solana fee payer a quote can name (the split's listed
+  // facilitators and the boot-order one), read on the gas check's cadence.
+  if (svmCaip2.includes(SVM_SPLIT_NETWORK) && syncOnStart && !/^off$/i.test(String(process.env.FACILITATOR_GAS_CHECK || "").trim())) {
+    const kindServer = server;
+    startSvmFeePayerGasCheck({
+      split: () => svmSplit,
+      bootFeePayer: () => { try { return kindServer.getSupportedKind(2, SVM_SPLIT_NETWORK, "exact")?.extra?.feePayer || null; } catch { return null; } },
+    }).catch((e) => console.warn(`WARNING: Solana fee payer gas check did not start (${String(e?.message || e).slice(0, 120)})`));
+  }
   // A batched payment is verified and settled by the Gateway client; every
   // other payment takes the vendor's own lookup (installed after the settle
   // preference, so a tagged plain request still reads its own scope).
@@ -4248,7 +4257,7 @@ function startRobinhoodOrderRefresh(order, { intervalMs = Number(process.env.ROB
 
 export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true, readEthUsd = ethUsdFromCryptoPrice, onReadings = null } = {}) {
   const { leased } = await import("./state-db.js");
-  const { createRelayerGasCheck, gasCheckSettings, createFloorGasCheck } = await import("./facilitator-gas.js");
+  const { createRelayerGasCheck, gasCheckSettings, createFloorGasCheck, evmGasLogLines } = await import("./facilitator-gas.js");
   const { evmRpcFor } = await import("./evm-rpcs.js");
   const settings = gasCheckSettings();
   // Settlement gas against the least price a settler of ours is paid for:
@@ -4257,6 +4266,7 @@ export async function startFacilitatorGasCheck({ network, urls, ownSigners = [],
   const gasRefUsd = () => networkFloorUsd(network) || (network === ROBINHOOD_CAIP2 && ownSigners.length ? robinhoodRelayerMinPriceUsd() : 0);
   const floorCheck = gasRefUsd() > 0 ? createFloorGasCheck({ network, floorUsd: gasRefUsd, readEthUsd }) : null;
   const checkers = new Map(); // url-list key -> checker (keeps each signer's failure count)
+  const logSeen = new Map(); // a fallback signer's last logged state (evmGasLogLines)
   const tick = leased(`facilitator-gas-${network}`, { ttlMs: 5 * 60_000, failOpen: true }, async () => {
     const list = (typeof urls === "function" ? urls() : urls || []).filter(Boolean);
     if (!list.length && !ownSigners.length) return [];
@@ -4266,9 +4276,43 @@ export async function startFacilitatorGasCheck({ network, urls, ownSigners = [],
     // Each network's check replaces its own rows only (Robinhood and Ink run one each).
     toolFailureMonitor().noteRelayerGas(readings, { network });
     if (typeof onReadings === "function") { try { onReadings(readings); } catch { /* the order is advisory */ } }
-    for (const r of readings) {
-      if ((r.status === "low" || r.status === "unread") && r.facilitator !== "price floor") console.warn(`[facilitator-gas] ${r.facilitator} signer ${r.signer || "(unknown)"} on ${network}: ${r.status}${r.runway !== null && r.runway !== undefined ? ` (runway ${r.runway} settlements)` : ""}${r.error ? ` - ${r.error}` : ""}`);
-    }
+    // The first facilitator in the settle order logs every low or unread
+    // reading; a later fallback logs once per state change.
+    for (const line of evmGasLogLines(readings, { network, primary: hostOfUrl(list[0]) || null, seen: logSeen })) console.warn(line);
+    return readings;
+  });
+  if (schedule) {
+    const run = () => { tick().catch(() => {}); };
+    const first = setTimeout(run, 30_000);
+    first.unref?.();
+    const t = setInterval(run, settings.intervalMs);
+    t.unref?.();
+  }
+  return tick;
+}
+
+/**
+ * The Solana fee payers' SOL runway (src/facilitator-gas.js
+ * createSvmFeePayerGasCheck) on the gas check's cadence, one replica at a time
+ * (a lease). Each tick reads which facilitators a Solana quote can name now
+ * and their shares (`split()` and `bootFeePayer()`, both from cached
+ * /supported reads), then one getBalance per fee payer over the shared Solana
+ * RPC list. Its rows replace the Solana rows of facilitatorFunds and the
+ * solanaFeePayer word. Returns the tick (tests run it).
+ */
+export async function startSvmFeePayerGasCheck({ split = () => null, bootFeePayer = () => null, bootLabel = () => facilitatorLabelFor(SVM_SPLIT_NETWORK), rpcUrls = null, fetchImpl = undefined, schedule = true } = {}) {
+  const { leased } = await import("./state-db.js");
+  const { createSvmFeePayerGasCheck, svmFeePayerTargets, svmGasCheckSettings } = await import("./facilitator-gas.js");
+  const urls = rpcUrls || (await import("./solana-history-rpc.js")).SOLANA_RPCS;
+  const settings = svmGasCheckSettings();
+  const targets = () => {
+    const s = typeof split === "function" ? split() : split;
+    return svmFeePayerTargets({ split: s && typeof s.feePayers === "function" ? s.feePayers() : null, bootFeePayer: bootFeePayer(), bootLabel: bootLabel() });
+  };
+  const checker = createSvmFeePayerGasCheck({ targets, rpcUrls: urls, network: SVM_SPLIT_NETWORK, settings, ...(fetchImpl ? { fetchImpl } : {}) });
+  const tick = leased(`facilitator-gas-${SVM_SPLIT_NETWORK}`, { ttlMs: 5 * 60_000, failOpen: true }, async () => {
+    const readings = await checker.check();
+    toolFailureMonitor().noteRelayerGas(readings, { network: SVM_SPLIT_NETWORK });
     return readings;
   });
   if (schedule) {

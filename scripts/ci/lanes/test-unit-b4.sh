@@ -4,13 +4,15 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (46 scripts, one process each)
+# @step 1: Offline suites (47 scripts, one process each)
 # "Router Sybil resistance (M6 — Attack IV: per-seller diversity cap, metadata-injection listings dropped)"
 t node scripts/test-router-sybil.js
 # Data-kit tests (barcode-lookup, fx-rate, weather-forecast — live keyless APIs)
 t node scripts/test-data-kit.js
 # Holidays kit: public-holidays v4 contract, cache bounds, business-day math on published calendars, rails, exchanges (offline)
 t node scripts/test-holidays-kit.js
+# id-validate, build-log-triage, json-repair vectors and bounds; solana-rpc allowlist, failover, size caps and the keyed provider's ceiling (offline)
+t node scripts/test-validate-more-kit.js
 # The sweeps' server answers examples naming its own /samples/ and /fixtures/ files from itself, never production (offline)
 t node scripts/test-own-examples-preload.js
 # A keyless upstream's 5xx is excused only when the runner's direct read of the same request fails too (offline, loopback)
@@ -322,6 +324,8 @@ t node scripts/test-weather-null-precip.js
 t node scripts/test-weather-probability.js
 # Weather calculators against published values: sun times, heat index and wind chill, EPA AQI breakpoints, degree days, WMO codes (offline, no fetch)
 t node scripts/test-weather-calc-kit.js
+# Parse kit: number-words, encoding-detect, log-timestamps, csv-aggregate, json-lint; time-convert zones; csv-to-json delimiters (offline)
+t node scripts/test-parse-kit.js
 # IPO filings list each accession once across pages (offline)
 t node scripts/test-ipo-dedupe.js
 # 13F amendments apply oldest first (offline)

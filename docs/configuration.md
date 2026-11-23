@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1112 variables in 113 groups.
+1115 variables in 113 groups.
 
 ## Contents
 
@@ -440,6 +440,9 @@ holds it.
 | `FACILITATOR_PUBLIC_INDEX_NAME` | Facilitator public index name. |  | `src/facilitator-public-index.js` |
 | `FACILITATOR_PUBLIC_INDEX_POLICY_URL` | Facilitator public index policy URL. |  | `src/facilitator-public-index.js` |
 | `FACILITATOR_PUBLIC_INDEX_SINCE` | Facilitator public index since. |  | `src/facilitator-public-index.js` |
+| `FACILITATOR_SVM_GAS_EMPTY_SETTLEMENTS` | Solana fee payer runway, in settlements, under which it reads empty (default 1). |  | `src/facilitator-gas.js` |
+| `FACILITATOR_SVM_GAS_MIN_SETTLEMENTS` | Solana fee payer runway, in settlements, under which it reads low (default 500). |  | `src/facilitator-gas.js` |
+| `FACILITATOR_SVM_LAMPORTS_PER_SETTLEMENT` | Lamports one Solana settlement is budgeted at: two signatures of base fee plus a priority-fee allowance (default 20000). |  | `src/facilitator-gas.js` |
 | `FACILITATOR_UNREAD_PAGE_HOURS` | Facilitator unread page, in hours. |  | `src/tool-failure-monitor.js` |
 | `FACILITATOR_URL` | An x402 facilitator URL to use instead of the built-in facilitator list. |  | `src/payments.js` |
 
@@ -1207,7 +1210,7 @@ holds it.
 | `SOLANA_LB_STUCK_READ_SCANS` | Solana lb stuck read scans. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LB_TX_CONCURRENCY` | Transaction reads in flight per payTo in a Solana board scan (1 to 32). Unset = 2, which keeps the paced public lane's queue short for other readers. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LEADERBOARD` | Solana leaderboard. | `on` | `src/solana-leaderboard.js` |
-| `SOLANA_RPCS` | Solana RPC endpoints. |  | `src/solana-history-rpc.js` |
+| `SOLANA_RPCS` | Solana RPC endpoints. |  | `src/solana-history-rpc.js`, `src/tools/solana-rpc-kit.js` |
 | `SOLANA_RPC_URL` | Solana RPC endpoint URL. | `https://api.mainnet-beta.solana.com` | `src/solana-buyer.js`, `src/solana-history-rpc.js`, `src/tools/solana-intel-kit.js` |
 | `SOLANA_UPSTREAM_BUYER_KEY` | Private key of the Solana spending wallet route-execute buys with (a credential, set on the host). |  | `src/solana-buyer.js` |
 | `SOLANA_UPSTREAM_BUYER_LOW_USD` | Solana upstream buyer low, in USD. | `0.5` | `src/solana-buyer.js` |

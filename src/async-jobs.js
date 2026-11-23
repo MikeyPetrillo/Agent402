@@ -223,7 +223,9 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     const progressSink = registerProgressSink(progressWriter);
     headers[PROGRESS_HEADER] = progressSink.key;
     const body = JSON.stringify(req.body ?? {});
-    const url = `http://${host}:${port}${req.originalUrl}`;
+    // `port` may be a function: the bound port, read once the server listens
+    // (a boot on PORT=0 binds another).
+    const url = `http://${host}:${typeof port === "function" ? port() : port}${req.originalUrl}`;
     // The price this request is gated at, read now: the replay is priced the
     // same way, and a debt for a lost answer books what was paid.
     let quotedUsd;

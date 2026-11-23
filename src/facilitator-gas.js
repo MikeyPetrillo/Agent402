@@ -258,3 +258,202 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
 
   return { check, _state: state };
 }
+
+/**
+ * Log lines for one EVM gas check's readings. The facilitator settled first
+ * (`primary`, the first in the settle order) and our own relayer log every
+ * low or unread reading on every check, as before. A later fallback in the
+ * order logs once per state change only (low, unread, and back to ok), since
+ * a fallback that never takes a settlement while the first one answers is a
+ * spare, not an outage; its readings stay on the operator detail every
+ * check. `seen` keeps each fallback signer's last logged state across checks.
+ */
+export function evmGasLogLines(readings, { network, primary = null, seen = new Map() } = {}) {
+  const lines = [];
+  for (const r of Array.isArray(readings) ? readings : []) {
+    if (!r || r.facilitator === "price floor") continue;
+    const bad = r.status === "low" || r.status === "unread";
+    const line = `[facilitator-gas] ${r.facilitator} signer ${r.signer || "(unknown)"} on ${network}: ${r.status}${r.runway !== null && r.runway !== undefined ? ` (runway ${r.runway} settlements)` : ""}${r.error ? ` - ${r.error}` : ""}`;
+    if (r.own || !primary || r.facilitator === primary) { if (bad) lines.push(line); continue; }
+    const key = `${r.facilitator}|${r.signer || ""}`;
+    const state = bad ? r.status : "ok";
+    const prev = seen.get(key);
+    if (prev === state || (prev === undefined && !bad)) { seen.set(key, state); continue; }
+    seen.set(key, state);
+    lines.push(`${line} (a fallback after ${primary} in the settle order; logged once per state change)`);
+  }
+  return lines;
+}
+
+// ---- Solana fee payers ------------------------------------------------------
+//
+// A Solana x402 payment settles only at the facilitator whose fee payer the
+// buyer's transaction names (src/svm-facilitator-split.js), and that fee
+// payer pays the transaction's fee in SOL. When it runs dry every Solana
+// payment quoted with it is refused (uncharged) until it is refilled. So each
+// fee payer a quote can name is read: its address from the facilitator's
+// cached /supported answer (extra.feePayer of exact on Solana mainnet), its
+// SOL balance from getBalance over the shared Solana RPC list (the keyed lane
+// first, so its calls count under that provider's daily ceiling), once per
+// check, never per payment.
+//
+// Runway is the settlements the balance still pays for at a fixed fee per
+// settlement. The estimate (FACILITATOR_SVM_LAMPORTS_PER_SETTLEMENT, default
+// 20,000 lamports): an exact Solana payment carries two signatures (the fee
+// payer's and the buyer's), each 5,000 lamports of base fee, plus a
+// priority-fee allowance of 10,000 lamports. The exact client asks for a
+// 20,000 compute unit limit at 1 microlamport per unit (well under one
+// lamport of priority fee), so the allowance holds for a compute unit price
+// up to 500,000 microlamports. The fee payer also keeps a rent-exempt minimum
+// for a plain account (890,880 lamports) that fees cannot spend, so that much
+// is subtracted before the runway is counted.
+//
+// Each row reads ok, low (runway under FACILITATOR_SVM_GAS_MIN_SETTLEMENTS),
+// empty (runway under FACILITATOR_SVM_GAS_EMPTY_SETTLEMENTS), unread (the
+// balance could not be read FACILITATOR_GAS_FAIL_AFTER times running; one
+// failed read keeps the last reading) or unknown (the facilitator names no
+// fee payer). A row carries its facilitator's share of Solana quotes; a
+// facilitator with share 0 is marked standby: it is reported but never pages.
+
+/** The rent-exempt minimum of a plain system account, in lamports. */
+export const SOL_RENT_RESERVE_LAMPORTS = 890_880;
+const SOLANA_MAINNET_NET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+const SOL_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const MAX_FEE_PAYERS = 6;
+
+/** Defaults, env-tunable (see the block above). */
+export function svmGasCheckSettings(env = process.env) {
+  return {
+    minRunway: num(env.FACILITATOR_SVM_GAS_MIN_SETTLEMENTS, 500),
+    emptyRunway: num(env.FACILITATOR_SVM_GAS_EMPTY_SETTLEMENTS, 1),
+    lamportsPerSettlement: num(env.FACILITATOR_SVM_LAMPORTS_PER_SETTLEMENT, 20_000),
+    failAfter: num(env.FACILITATOR_GAS_FAIL_AFTER, 3),
+    intervalMs: num(env.FACILITATOR_GAS_CHECK_MS, 10 * 60_000),
+  };
+}
+
+/** Settlements a balance still pays for once the rent reserve is kept. */
+export function svmRunwayOf(lamports, perSettlement, reserve = SOL_RENT_RESERVE_LAMPORTS) {
+  const per = Math.max(1, Math.round(Number(perSettlement) || 0));
+  const usable = Math.max(0, Number(lamports) - reserve);
+  return Number.isFinite(usable) ? Math.floor(usable / per) : null;
+}
+
+const shareOf = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(100, Math.max(0, Math.round(n))) : 0; };
+
+/**
+ * The Solana facilitators a quote can name now, with each one's fee payer and
+ * share of quotes: the listed ones from the split (src/svm-facilitator-split.js
+ * feePayers(); the active one takes its share, the others none) and the
+ * boot-order facilitator, which takes the rest (all of it with no split).
+ * @param {object} o
+ * @param {Array<{label:string,url:string|null,feePayer:string|null,share:number}>|null} o.split - split.feePayers(), or null with no split
+ * @param {string|null} o.bootFeePayer - the boot-order facilitator's fee payer (its cached /supported)
+ * @param {string} o.bootLabel - the boot-order facilitator's label
+ */
+export function svmFeePayerTargets({ split = null, bootFeePayer = null, bootLabel = "boot-order" } = {}) {
+  const out = [];
+  if (Array.isArray(split)) {
+    for (const e of split) {
+      if (!e) continue;
+      if (e.label === "boot-order") { out.push({ facilitator: bootLabel, feePayer: e.feePayer || bootFeePayer || null, share: shareOf(e.share) }); continue; }
+      out.push({ facilitator: hostOf(e.url || e.label), feePayer: e.feePayer || null, share: shareOf(e.share) });
+    }
+    if (!out.some((t) => t.facilitator === bootLabel)) out.push({ facilitator: bootLabel, feePayer: bootFeePayer || null, share: 100 - out.reduce((a, t) => a + t.share, 0) });
+  } else {
+    out.push({ facilitator: bootLabel, feePayer: bootFeePayer || null, share: 100 });
+  }
+  return out.slice(0, MAX_FEE_PAYERS);
+}
+
+/**
+ * One checker for the Solana fee payers.
+ * @param {object} o
+ * @param {() => (Array|Promise<Array>)} o.targets - svmFeePayerTargets() shape, read each check
+ * @param {string[]} o.rpcUrls - Solana JSON-RPC endpoints, tried in order
+ */
+export function createSvmFeePayerGasCheck({ targets, rpcUrls = [], network = SOLANA_MAINNET_NET, fetchImpl = globalThis.fetch, settings = svmGasCheckSettings(), timeoutMs = 10_000, now = Date.now, log = console.warn } = {}) {
+  const state = new Map(); // `${facilitator}|${feePayer}` -> { failures, last }
+  const logged = new Map(); // same key -> last logged state
+  let rpcId = 0;
+
+  async function readLamports(address) {
+    let lastError = null;
+    for (const url of (Array.isArray(rpcUrls) ? rpcUrls : []).slice(0, 4)) {
+      try {
+        const r = await fetchImpl(url, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "getBalance", params: [address, { commitment: "confirmed" }] }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const body = await r.json();
+        if (body?.error) throw new Error(String(body.error?.message || "rpc error").slice(0, 120));
+        const v = body?.result?.value;
+        if (!Number.isSafeInteger(v) || v < 0) throw new Error("rpc answered no balance");
+        return v;
+      } catch (e) {
+        // Never the URL: a keyed lane carries its key in the path.
+        lastError = new Error(String(e?.name === "TimeoutError" ? "timed out" : e?.message || e).replace(/https?:\/\/\S+/g, "(rpc)").slice(0, 120));
+      }
+    }
+    throw lastError || new Error("no Solana RPC configured");
+  }
+
+  function noteLog(r) {
+    const key = `${r.facilitator}|${r.signer || ""}`;
+    const st = `${r.status}|${r.standby ? "standby" : "paging"}`;
+    const prev = logged.get(key);
+    logged.set(key, st);
+    if (prev === st || (prev === undefined && r.status === "ok")) return;
+    try {
+      log(`[facilitator-gas] Solana fee payer ${r.signer || "(none named)"} of ${r.facilitator} (${r.share}% of Solana quotes${r.standby ? ", standby: does not page" : ""}): ${r.status}${Number.isFinite(r.runway) ? ` (runway ${r.runway} settlements)` : ""}${r.error ? ` - ${r.error}` : ""}`);
+    } catch { /* logging only */ }
+  }
+
+  /** Read every fee payer once; resolves to the readings (never throws). */
+  async function check() {
+    const at = now();
+    let list = [];
+    try { list = await (typeof targets === "function" ? targets() : targets); } catch { list = []; }
+    const readings = [];
+    for (const t of (Array.isArray(list) ? list : []).slice(0, MAX_FEE_PAYERS)) {
+      const facilitator = String(t?.facilitator || "unknown").slice(0, 120);
+      const share = shareOf(t?.share);
+      const base = { network, facilitator, share, ...(share > 0 ? {} : { standby: true }) };
+      const feePayer = SOL_ADDRESS.test(String(t?.feePayer || "")) ? String(t.feePayer) : null;
+      let reading;
+      if (!feePayer) {
+        reading = { ...base, signer: null, balanceSol: null, runway: null, status: "unknown", error: "no fee payer named in its /supported", at };
+      } else {
+        const key = `${facilitator}|${feePayer}`;
+        const s = state.get(key) || { failures: 0, last: null };
+        try {
+          const lamports = await readLamports(feePayer);
+          const runway = svmRunwayOf(lamports, settings.lamportsPerSettlement);
+          const status = runway < settings.emptyRunway ? "empty" : runway < settings.minRunway ? "low" : "ok";
+          reading = { ...base, signer: feePayer, balanceSol: lamports / 1e9, runway, status, at };
+          s.failures = 0;
+          s.last = reading;
+        } catch (e) {
+          s.failures++;
+          const error = String(e?.message || e).slice(0, 120);
+          if (s.failures >= settings.failAfter || !s.last) {
+            reading = s.failures >= settings.failAfter
+              ? { ...base, signer: feePayer, balanceSol: s.last?.balanceSol ?? null, runway: s.last?.runway ?? null, status: "unread", failures: s.failures, error, at }
+              : null;
+          } else {
+            reading = { ...s.last, ...base, failures: s.failures, error };
+          }
+        }
+        state.set(key, s);
+      }
+      if (!reading) continue;
+      readings.push(reading);
+      noteLog(reading);
+    }
+    return readings;
+  }
+
+  return { check, _state: state };
+}

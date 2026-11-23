@@ -62,7 +62,8 @@ import { evmCredentialSettleableMs, evmCredentialExpiry } from "../evm-validity.
 import { noteChatAttemptBound } from "../slow-paid-calls.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
-import { admittedSpeechAdditions } from "../speech-additions.js";
+import { admittedSpeechAdditions, speechMaxCharsFor } from "../speech-additions.js";
+import { servedModelHeaders, logSpeechServed } from "../speech-served.js";
 import { cacheGet, cacheSet } from "../cache.js";
 import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
 import { stripControlChars } from "../prepayment-refusal.js";
@@ -4398,7 +4399,13 @@ function speechVoiceFor(entry, requested) {
   return entry.map[requested] || (entry.voices.has(requested) ? requested : entry.legacyVoices?.[requested] || entry.map.alloy);
 }
 
-export function validateSpeechRequest(input) {
+/** A served model's id, with its own character cap where it is under the route's. */
+const speechModelLabel = (e) => {
+  const cap = speechMaxCharsFor(e, SPEECH_MAX_CHARS);
+  return cap < SPEECH_MAX_CHARS ? `${e.id} (up to ${cap.toLocaleString("en-US")} chars)` : e.id;
+};
+
+export function validateSpeechRequest(input, req = null) {
   if (input == null || typeof input !== "object") throw bad("Request body must be a JSON object");
   const text = typeof input.input === "string" ? input.input : "";
   if (!text.trim()) throw bad('"input" is required - the text to speak');
@@ -4412,6 +4419,7 @@ export function validateSpeechRequest(input) {
   // as fallbacks (same semantics as the chat tiers: a buyer's pick should
   // not turn a provider outage into their 502).
   let chain = SPEECH_MODELS;
+  let named = null;
   const additions = speechAdditions();
   if (input.model !== undefined) {
     // The caller's own spelling is matched too: canonicalModel prefixes some
@@ -4423,8 +4431,15 @@ export function validateSpeechRequest(input) {
     // named one goes first and the whole chain stays behind it as fallbacks.
     const hit = [...SPEECH_MODELS, ...additions].find((e) => m === e.id || e.aliases.includes(m) || raw === e.id || e.aliases.includes(raw));
     if (!hit) {
-      throw bad(`"model" must be one of: ${[...SPEECH_MODELS, ...additions].map((e) => e.id).join(", ")} (or omit it for the default chain)`);
+      throw bad(`"model" must be one of: ${[...SPEECH_MODELS, ...additions].map(speechModelLabel).join(", ")} (or omit it for the default chain)`);
     }
+    // A named model with its own cap under the route's (src/speech-additions.js)
+    // takes no more than that cap, before any upstream call.
+    const ownCap = speechMaxCharsFor(hit, SPEECH_MAX_CHARS);
+    if (text.length > ownCap) {
+      throw bad(`Input too long for ${hit.id} (${text.length} chars): ${hit.id} takes up to ${ownCap} chars on /v1/audio/speech. Send a shorter input, or omit "model" for up to ${SPEECH_MAX_CHARS} chars on the default chain.${notChargedOn(req)}`);
+    }
+    named = hit.id;
     chain = [hit, ...SPEECH_MODELS.filter((e) => e !== hit)];
   }
   const voice = input.voice === undefined ? "alloy" : String(input.voice);
@@ -4463,13 +4478,15 @@ export function validateSpeechRequest(input) {
     ...(input.speed !== undefined ? { speed: Number(input.speed) } : {}),
     provider: audioProviderPolicy(entry.id, { zdr }),
   }));
-  return { bodies, contentType: SPEECH_FORMATS[format] };
+  // `requested`: the model the buyer named (null: none), read back against
+  // the model that served (X-Agent402-Model-Fallback, src/speech-served.js).
+  return { bodies, contentType: SPEECH_FORMATS[format], requested: named };
 }
 
 const SPEECH_TIMEOUT_MS = 60_000;
 async function speechHandler(input, req) {
   await gatewaySettleBreakerCheck(req);
-  const { bodies, contentType } = validateSpeechRequest(input);
+  const { bodies, contentType, requested } = validateSpeechRequest(input, req);
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
   await settleBeforeUpstream(req); // the settle point (src/settle-first.js)
@@ -4518,7 +4535,10 @@ async function speechHandler(input, req) {
         const upstreamUsd = rate != null && chars > 0 ? Math.round(chars * rate * 1e6) / 1e6 : null;
         import("../posthog.js").then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({ tier: "v1-audio-speech", model: body.model, priceUsd: SPEECH_PRICE, upstreamUsd, source: "speech" })).catch(() => {});
       }
-      return { __binary: buffer, contentType };
+      // The answer names the model that spoke, and says so when it is not the
+      // one the buyer named (src/speech-served.js).
+      logSpeechServed({ route: SPEECH_PATH, requested, served: body.model });
+      return { __binary: buffer, contentType, headers: servedModelHeaders({ requested, served: body.model }) };
     } catch (e) {
       // Walk on anything upstream-shaped (throwUpstreamError maps every
       // upstream failure to 502/503; timeouts and network errors are 504).
@@ -5487,7 +5507,8 @@ export function modelsList() {
       id: m.id,
       object: "model",
       owned_by: m.id.split("/")[0],
-      x402: { tier: "v1-audio-speech", endpoint: SPEECH_PATH, priceUsd: SPEECH_PRICE, maxInputChars: SPEECH_MAX_CHARS, voices: [...m.voices] },
+      // A named model with its own cap lists that cap (src/speech-additions.js).
+      x402: { tier: "v1-audio-speech", endpoint: SPEECH_PATH, priceUsd: SPEECH_PRICE, maxInputChars: speechMaxCharsFor(m, SPEECH_MAX_CHARS), voices: [...m.voices] },
     });
   }
   return { object: "list", data, terms_of_service: "https://agent402.tools/terms", note: "Prefixes ending in /* allow the whole vendor family. Pay per call over x402 or MPP (every 402 lists the accepted rails) - no API key. Bare OpenAI-style names (gpt-4o-mini) are accepted and mapped. Use constitutes acceptance of the terms_of_service (acceptable-use policy included)." };

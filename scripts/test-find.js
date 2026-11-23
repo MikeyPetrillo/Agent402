@@ -448,6 +448,21 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   ok(r2.rarestTermCovered === true, `"generate uuids" reads as served (rarest ${r2.rarestTerm})`);
 }
 {
+  // A plural whose singular the query also writes is not read a second time
+  // as that name: "URLs and PDFs ... PDF pages" scored the pdf tool once for
+  // "pdf" and again for "pdfs", which carried it over pdf-extract-pages.
+  const P = {
+    "POST /api/pdf": { name: "PDF to text", slug: "pdf", category: "web", price: "$0.001", description: "Fetch a PDF and extract its text (up to 20MB PDFs).", tags: ["pdf", "documents"], discovery: { example: {} } },
+    "POST /api/pdf-extract-pages": { name: "Extract PDF pages", slug: "pdf-extract-pages", category: "web", price: "$0.003", description: "Pull a subset of pages into a new PDF.", tags: ["pdf", "pages", "extract"], discovery: { example: {} } },
+    "POST /api/pdf-merge": { name: "Merge PDF files", slug: "pdf-merge", category: "web", price: "$0.003", description: "Merge PDF files.", tags: ["pdf"], discovery: { example: {} } },
+  };
+  for (const [i, w] of ["alpha", "beta", "gamma", "delta", "omega", "sigma"].entries()) P[`GET /api/p${i}`] = { name: w, slug: w, category: "misc", price: "$0.001", description: `The ${w} tool.`, tags: [w], discovery: { example: {} } };
+  const pt = (q) => findTools(P, q, {}).results?.[0]?.slug;
+  ok(pt("turn PDFs into text: PDF pages") === "pdf-extract-pages", `a plural beside its written singular counts once (got ${pt("turn PDFs into text: PDF pages")})`);
+  // The plural alone still reads as the name.
+  ok(pt("pdfs") === "pdf", `"pdfs" alone -> pdf (got ${pt("pdfs")})`);
+}
+{
   // The singular is not read where it would mislead: a verb's -s form the
   // catalog also writes as a verb, and a word the catalog writes more often
   // than its singular ("https" against "http").
@@ -619,6 +634,31 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   }
   const named = ["convert", "dollars", "euros"];
   ok(applyCurrencyTerms(named) === true && named.includes("usd") && named.includes("eur") && named.includes("forex"), `currency names read as their codes in a conversion (terms ${named.join(" ")})`);
+}
+
+// A query that is exactly a tool's slug or one of its aliases ranks that tool first.
+{
+  const mk = (slug, extra = {}) => ({ route: `POST /api/${slug}`, slug, name: slug.replace(/-/g, " "), category: "validation", price: "$0.001", description: `${slug.replace(/-/g, " ")} validate check digits identifier`, tags: ["validate", "check-digit"], ...extra });
+  const cat = Object.fromEntries([
+    mk("uuid-validate", { tags: ["validate", "uuid", "id"] }), mk("card-validate", { tags: ["validate", "card", "id"] }), mk("gtin-validate", { tags: ["validate", "gtin", "id"] }),
+    mk("iban-validate", { tags: ["validate", "iban", "id"] }), mk("isbn-validate", { tags: ["validate", "isbn", "id"] }), mk("id-validate"),
+    mk("eth-call", { description: "eth_call balance read getbalance", tags: ["eth", "balance", "rpc"] }), mk("wallet-balance", { aliases: ["eth_getbalance"], description: "wallet balance", tags: ["balance"] }),
+  ].map((t) => [t.route, t]));
+  const top = (q) => findTools(cat, q, { k: 5 }).results.map((x) => x.slug);
+  ok(top("id-validate")[0] === "id-validate", `"id-validate" ranks id-validate first (${top("id-validate").join(", ")})`);
+  ok(top("ID-Validate ")[0] === "id-validate", "the match ignores case and surrounding space");
+  ok(top("eth_getbalance")[0] === "wallet-balance", `a query that is a tool's alias ranks it first (${top("eth_getbalance").join(", ")})`);
+  ok(top("validate an id")[0] !== undefined, "an ordinary query is ranked as before");
+  // A one-word alias is a word, not an identifier: it keeps normal ranking.
+  const cat2 = Object.fromEntries([
+    mk("fx-rate", { category: "data", description: "currency exchange rate", tags: ["fx", "rate", "currency"] }),
+    mk("feedback", { category: "agent", description: "leave a verdict on a call", tags: ["feedback"], aliases: ["rate", "review", "verdict"] }),
+    mk("x402-audit", { category: "x402", description: "audit an x402 seller", tags: ["audit", "x402"] }),
+    mk("audit-report", { category: "research", description: "a report", tags: ["report"], aliases: ["audit"] }),
+  ].map((t) => [t.route, t]));
+  const top2 = (q) => findTools(cat2, q, { k: 5 }).results.map((x) => x.slug);
+  ok(top2("rate")[0] === "fx-rate", `"rate" (a one-word alias of feedback) still ranks fx-rate first (${top2("rate").join(", ")})`);
+  ok(top2("audit")[0] === "x402-audit", `"audit" (a one-word alias of audit-report) still ranks x402-audit first (${top2("audit").join(", ")})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

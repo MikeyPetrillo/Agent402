@@ -74,7 +74,7 @@ const ourTools = Array.from({ length: 40 }, (_, i) => ({
 const QUERIES = [
   {}, { offset: 100 }, { offset: 900, limit: 250 }, { limit: 500, offset: 2000 },
   { search: "weather" }, { search: "stock price" }, { search: "agents lookups", offset: 50 }, { search: "nomatchzzz" },
-  { category: "finance" }, { category: "other" }, { network: "4663" }, { network: "solana", search: "token" },
+  { category: "finance" }, { category: "other" }, { network: "robinhood" }, { network: "solana", search: "token" },
   { source: "ours" }, { source: "third-party", offset: 300 }, { source: "third-party", category: "ai", search: "chat" },
   { search: "Shared" }, { search: "100%_" },
 ];
@@ -150,6 +150,48 @@ try {
   ok(same2 === 8, `after the change and the removal the pages still match (${same2}/8)`);
   ok(x._flatBuildsForTest() > flatOff, "switched off, the same process answers from the in-memory directory again (the switch is read per request)");
   process.env.INDEX_LISTINGS_STORE = "pg";
+
+  // ---- the network filter matches one CAIP-2 id whole, as in memory ---------
+  // eip155:10 (OP mainnet) must not take eip155:100's or eip155:1088's rows,
+  // a short name resolves to its id first, and a seller listing several
+  // networks matches each one exactly.
+  {
+    const netTool = (networks) => ({ route: "/api/net-probe", method: "POST", name: "net probe", description: "a network probe for agents", category: "web", tags: [], price: "$0.001", networks });
+    const netOrigins = {
+      "https://net-op.example": ["eip155:10"],
+      "https://net-100.example": ["eip155:100"],
+      "https://net-1088.example": ["eip155:1088"],
+      "https://net-several.example": ["eip155:8453", "eip155:10", "eip155:100"],
+    };
+    for (const [o, n] of Object.entries(netOrigins)) cache.set(o, { manifest: { name: `Net ${o.slice(8, 16)}`, slimmed: true }, tools: [netTool(n)], fetchedAt: 1_800_000_000_000, error: null, history: [1, 1, 1] });
+    await store.flush();
+    const sellersOf = async (network) => (await run({ network, search: "probe", limit: 500 })).results.map((r) => r.seller);
+    const exact = (got, want) => JSON.stringify([...got].sort()) === JSON.stringify([...want].sort());
+    const cases = [
+      ["eip155:10", ["https://net-op.example", "https://net-several.example"]],
+      ["optimism", ["https://net-op.example", "https://net-several.example"]],
+      [" Optimism ", ["https://net-op.example", "https://net-several.example"]],
+      ["eip155:100", ["https://net-100.example", "https://net-several.example"]],
+      ["eip155:1088", ["https://net-1088.example"]],
+      ["base", ["https://net-several.example"]],
+      ["eip155:1", []], ["eip155", []], ["8453", []], ["%", []], ["_", []],
+    ];
+    const onAnswers = [];
+    for (const [network, want] of cases) {
+      const got = await sellersOf(network);
+      onAnswers.push(JSON.stringify(got));
+      ok(exact(got, want), `pg: network=${JSON.stringify(network)} returns exactly ${want.length} sellers (${got.join(", ") || "none"})`);
+    }
+    delete process.env.INDEX_LISTINGS_STORE;
+    x._resetFlatCacheForTest(); x._resetIndexRowsForTest();
+    let agree = 0;
+    for (let i = 0; i < cases.length; i++) if (JSON.stringify(await sellersOf(cases[i][0])) === onAnswers[i]) agree++;
+    ok(agree === cases.length, `the in-memory directory gives the same network answers (${agree}/${cases.length})`);
+    process.env.INDEX_LISTINGS_STORE = "pg";
+    for (const o of Object.keys(netOrigins)) cache.delete(o);
+    await store.flush();
+    x._resetFlatCacheForTest(); x._resetIndexRowsForTest();
+  }
 
   // ---- a second container's identical write is a hash compare ----------------
   const writes = store.status().writes;

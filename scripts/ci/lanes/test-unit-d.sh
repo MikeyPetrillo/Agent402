@@ -27,6 +27,8 @@ t node scripts/test-llms-route-execute-tiers.js
 t node scripts/test-status-probe-worker.js
 # Tool and upstream failure monitor (counting by class and origin, the word thresholds, the replica merge, the Celo settle demotion and its safety rule, words-only public view,
 t node scripts/test-tool-failure-monitor.js
+# Solana fee payer gas runway (ok, low, empty, unread, standby at share 0, words only publicly, one log per state change) and the EVM fallback log rule - offline
+t node scripts/test-facilitator-gas-svm.js
 # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
 t node scripts/test-heartbeat-failure-words.js
 # Three gateway-status words and their two observers
@@ -228,6 +230,8 @@ t node scripts/test-sync-count-floor.js
 t node scripts/test-invariants.js
 # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
 t node scripts/test-cdp-kit.js
+# onchain-sql day windows for a long-range select, against a stub query service (offline)
+t node scripts/test-onchain-sql-windows.js
 # onchain SQL reads sign with their own CDP key pair, the main pair when it is unset (offline)
 t node scripts/test-cdp-sql-key.js
 # onchain-sql busy answer spread, in-flight place wait (first come first served), pairs back to back, monotonic pacer clock (offline)
@@ -309,6 +313,8 @@ t node scripts/test-egress-proxy.js
 t node scripts/test-code-run-caps.js
 # Safe-regex guard (rejects ReDoS patterns for caller-supplied regexes — DoS lock — offline)
 t node scripts/test-safe-regex.js
+# Regex tool budget covers the run, not the thread start: the published example answers under a slow worker start, a catastrophic pattern still ends as an uncharged 400, a worker that never starts answers 503 (offline)
+t node scripts/test-regex-budget.js
 # Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
 t node scripts/test-sales-ledger.js
 # One settlement, one sale: the writer does not write a second sale for a Solana signature, every counting reader reads a file with repeat rows as the file without them, the operator script's dry run changes nothing (offline)
@@ -482,6 +488,8 @@ t node scripts/test-redis-persistence.js
 t node scripts/test-sql-guard.js
 # Whois RDAP bootstrap parser (IANA dns.json → TLD map — offline)
 t node scripts/test-whois-bootstrap.js
+# domain-availability against a stub RDAP bootstrap and registries (offline)
+t node scripts/test-domain-availability.js
 # B20 decode unit tests (offline, synthetic logs in both indexed layouts)
 t node scripts/test-b20-decode.js
 # Base activity via CDP SQL — guard/fail-safe paths (offline)

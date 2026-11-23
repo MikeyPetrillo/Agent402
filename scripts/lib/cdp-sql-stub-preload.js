@@ -18,8 +18,13 @@
 //                  same way under the id "own" (one "[cdp-sql-stub] held own"
 //                  line), so a test can keep one of the server's own reads,
 //                  whose SQL it does not write, in flight;
+//   walk_days      the whole-range query answers the service's 408
+//                  (timed_out) and a query carrying one day's block_time
+//                  bounds (the day walk) answers two rows inside that day;
+//   walk_empty     the same, every day answering no rows;
 //   anything else  one row (the health probe's known-good query included).
-// Every query answered prints one "[cdp-sql-stub] query" line, so a test can
+// Every query answered prints one "[cdp-sql-stub] query" line ("query walk"
+// for a walk_ marker), so a test can
 // count what reached the service apart from what the server recorded. Any
 // other path on the host answers 404.
 //
@@ -39,7 +44,7 @@ globalThis.fetch = async function cdpSqlStubFetch(input, init) {
   if (new URL(url).pathname !== "/platform/v2/data/query/run") return J(404, { errorMessage: "not stubbed" });
   let sql = "";
   try { sql = String(JSON.parse(init?.body || "{}").sql || ""); } catch { /* an empty query */ }
-  console.log("[cdp-sql-stub] query");
+  console.log(`[cdp-sql-stub] query${/walk_(days|empty)/.test(sql) ? " walk" : ""}`);
   if (/nope_column/.test(sql)) return J(400, { errorMessage: "Unknown identifier" });
   if (/fail_upstream/.test(sql)) return J(503, { errorMessage: "unavailable" });
   const holdText = process.env.CDP_SQL_STUB_HOLD_TEXT;
@@ -54,6 +59,18 @@ globalThis.fetch = async function cdpSqlStubFetch(input, init) {
       await new Promise((r) => setTimeout(r, 20));
     }
     return J(200, { result: [{ n: 1 }] });
+  }
+  const walk = /walk_(days|empty)/.exec(sql)?.[1];
+  if (walk) {
+    const ge = /block_time >= toDateTime\('([^']+)', 'UTC'\)/.exec(sql);
+    const lt = /block_time < toDateTime\('([^']+)', 'UTC'\)/.exec(sql);
+    if (!ge && !lt) return J(408, { errorType: "timed_out", errorMessage: "query timed out" });
+    if (walk === "empty") return J(200, { result: [] });
+    const DAY = 86_400_000;
+    const from = ge ? Date.parse(ge[1].replace(" ", "T") + "Z") : Date.parse(lt[1].replace(" ", "T") + "Z") - DAY;
+    const rows = [1, 2].map((i) => ({ block_slot: Math.floor(from / 400) + i, block_time: new Date(from + i * DAY / 3).toISOString() }));
+    if (/ORDER BY block_time DESC/i.test(sql)) rows.reverse();
+    return J(200, { result: rows });
   }
   const id = /rowsize_(\w+)/.exec(sql)?.[1];
   if (id) {
