@@ -23,11 +23,10 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 process.env.X402_INDEX_CRAWL = "off";
 process.env.ROUTER_WORKERS = "1";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { personalDataMatch, routeExcludedCategory, PERSONAL_DATA_PATTERNS } from "../src/route-category.js";
 import { dispatchEligibility, DISPATCH_REASONS } from "../src/dispatch-eligibility.js";
 import { buildRouteExecuteTool } from "../src/tools/route-execute.js";
@@ -35,7 +34,7 @@ import { buildRouteExecuteTool } from "../src/tools/route-execute.js";
 let pass = 0;
 const procs = new Set();
 const ok = (c, m) => {
-  if (!c) { console.error(`FAIL - ${m}`); for (const p of procs) p.kill("SIGTERM"); process.exit(1); }
+  if (!c) { console.error(`FAIL - ${m}`); for (const p of procs) { console.error(p.log().slice(-2000)); p.child.kill("SIGTERM"); } process.exit(1); }
   pass++; console.log(`ok - ${m}`);
 };
 
@@ -206,19 +205,19 @@ const pool = await import("../src/router-pool.js");
     walletEvidence: { [PAYTO.toLowerCase()]: { callsSettled: 500, uniqueBuyers: 40, origins: [ORIGIN] } },
   }));
   writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: 1 }), JSON.stringify(sellerEntry)].join("\n") + "\n");
-  const port = await getFreePort();
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), LEADERBOARD_SNAPSHOT_FILE: lbFile, ROUTER_WORKERS: "1", HUNTER_API_KEY: "test-placeholder", APOLLO_API_KEY: "test-placeholder" },
-    stdio: ["ignore", "ignore", "inherit"],
+  // Ready once the index answers for the seeded seller (the cache loads after listen).
+  const srv = await bootServer({
+    stores: false,
+    readyPath: `/api/index?seller=${encodeURIComponent(ORIGIN)}`,
+    timeoutMs: 90_000,
+    env: { FREE_MODE: "true", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), LEADERBOARD_SNAPSHOT_FILE: lbFile, ROUTER_WORKERS: "1", HUNTER_API_KEY: "test-placeholder", APOLLO_API_KEY: "test-placeholder" },
   });
-  procs.add(proc);
-  const base = `http://127.0.0.1:${port}`;
+  procs.add(srv);
+  const proc = srv.child;
+  const base = srv.url;
   try {
-    let detail = null;
-    for (let i = 0; i < 180 && !detail; i++) {
-      try { const r = await fetch(`${base}/api/index?seller=${encodeURIComponent(ORIGIN)}`); if (r.ok) detail = await r.json(); } catch {}
-      if (!detail) await new Promise((r) => setTimeout(r, 500));
-    }
+    const dr = await fetch(`${base}/api/index?seller=${encodeURIComponent(ORIGIN)}`);
+    const detail = dr.ok ? await dr.json() : null;
     ok(detail && detail.origin === ORIGIN && detail.tools?.length === 2, "the seller is listed with both routes on /api/index?seller=");
     const pRow = detail.tools.find((t) => t.slug === "people-search");
     const cRow = detail.tools.find((t) => t.slug === "company-enrich");
