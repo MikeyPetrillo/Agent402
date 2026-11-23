@@ -377,7 +377,7 @@ export const X402_TOOLS = [
   {
     route: "GET /api/usdc-balance", name: "USDC balance", slug: "usdc-balance", category: "payments", price: "$0.001",
     description:
-      "Read the USDC balance of any address on Base, Polygon, Arbitrum, Optimism, Ethereum, Celo, Avalanche, Sei, or Arc. Read-only on-chain call. The minimal single-token read for payment flows - for EVERY token a wallet holds in one call use wallet-balance. ?address=0x…&network=base",
+      "Read the USDC balance of any address on Base, Polygon, Arbitrum, Optimism, Ethereum, Celo, Avalanche, Sei, or Arc (Monad has no read lane). Read-only on-chain call. The minimal single-token read for payment flows - for EVERY token a wallet holds in one call use wallet-balance. ?address=0x…&network=base",
     tags: ["usdc", "balance", "wallet", "erc20", "multichain"],
     discovery: {
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" },
@@ -397,7 +397,7 @@ export const X402_TOOLS = [
   {
     route: "GET /api/tx-status", name: "Transaction status", slug: "tx-status", category: "payments", price: "$0.001",
     description:
-      "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Celo/Avalanche/Sei/Arc/Robinhood Chain: success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
+      "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Celo/Avalanche/Sei/Arc/Robinhood Chain (Monad has no read lane): success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
     tags: ["transaction", "status", "receipt", "confirmation", "multichain", "robinhood", "usdg"],
     discovery: {
       // A real Base transaction, so the documented call returns the shown
@@ -425,7 +425,7 @@ export const X402_TOOLS = [
   {
     route: "GET /api/gas-estimate", name: "Gas price", slug: "gas-estimate", category: "payments", price: "$0.001",
     description:
-      "Current gas price on Base, Polygon, Arbitrum, Optimism, Ethereum, Celo, Avalanche, Sei, Arc, or Robinhood Chain - for an agent budgeting a transaction: returns network, gasPriceGwei and gasPriceWei (decimal strings) from the chain's own eth_gasPrice, the node's suggested all-in price per gas unit. Multiply by the gas a transaction uses (21000 for a plain transfer) for its fee. Read-only. ?network=base",
+      "Current gas price on Base, Polygon, Arbitrum, Optimism, Ethereum, Celo, Avalanche, Sei, Arc, or Robinhood Chain (Monad has no read lane) - for an agent budgeting a transaction: returns network, gasPriceGwei and gasPriceWei (decimal strings) from the chain's own eth_gasPrice, the node's suggested all-in price per gas unit. Multiply by the gas a transaction uses (21000 for a plain transfer) for its fee. Read-only. ?network=base",
     tags: ["gas", "gas-price", "fees", "gwei", "multichain", "robinhood", "usdg"],
     discovery: {
       input: { network: "base" },

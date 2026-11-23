@@ -23,7 +23,7 @@
 //
 // Covered by scripts/test-onchain-identity-kit.js (offline + opt-in live).
 
-import { attribute, creditAnswers, EAS_ATTRIBUTION } from "../data-attribution.js";
+import { creditAnswers, EAS_ATTRIBUTION } from "../data-attribution.js";
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget, isUpstreamFailure, budgetSpentError } from "../upstream-deadline.js";
@@ -501,8 +501,8 @@ export const __test = {
 };
 
 // The attestations are read from the EAS indexer (easscan.org), credited by
-// name and link on the description and on every answer (src/data-attribution.js).
-for (const t of ONCHAIN_IDENTITY_TOOLS) if (t.slug === "eas-attestations") creditAnswers(attribute(t, "eas"), EAS_ATTRIBUTION);
+// name and link on every answer (src/data-attribution.js).
+for (const t of ONCHAIN_IDENTITY_TOOLS) if (t.slug === "eas-attestations") creditAnswers(t, EAS_ATTRIBUTION);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(ONCHAIN_IDENTITY_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -143,7 +143,7 @@ export const CHAIN_RPC_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Read one 32-byte storage slot from a contract, the raw state under whatever the source code calls it. Returns the word as hex plus three readings of the same bytes - unsigned integer, address (low 20 bytes) and boolean - because a slot is untyped on chain and only the caller knows which it meant. Useful for proxy implementation slots, paused flags and any value the ABI does not expose. Reads Base (network \"base\"); other chains answer 400.",
+      "Read one 32-byte storage slot from a contract, the raw state under whatever the source code calls it. Returns the word as hex plus three readings of the same bytes - unsigned integer, address (low 20 bytes) and boolean - because a slot is untyped on chain and only the caller knows which it meant. Useful for proxy implementation slots, paused flags and any value the ABI does not expose. Reads Base (network \"base\"); every other chain answers 400 naming Base.",
     tags: ["evm", "storage", "slot", "rpc", "contract"],
     aliases: ["eth_getStorageAt", "storage-at", "slot"],
     discovery: {

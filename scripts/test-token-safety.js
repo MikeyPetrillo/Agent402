@@ -70,13 +70,13 @@ for (const [label, g] of [
      "the verdict carries no number: a score invites a ranking, and a ranking over vendor flags reads as a measurement we did not make");
 }
 
-// --- GoPlus credited on the description and on every answer -----------------
+// --- GoPlus credited on every answer; the catalog text is unchanged --------
 {
   const { TOKEN_SAFETY_TOOLS } = await import("../src/tools/token-safety-kit.js");
   const { TOKEN_RISK_TOOLS } = await import("../src/tools/token-risk-kit.js");
   const { GOPLUS_ATTRIBUTION } = await import("../src/data-attribution.js");
   for (const t of [...TOKEN_SAFETY_TOOLS, ...TOKEN_RISK_TOOLS]) {
-    ok(t.attribution === "goplus" && t.description.endsWith(GOPLUS_ATTRIBUTION) && /https:\/\/gopluslabs\.io/.test(GOPLUS_ATTRIBUTION), `${t.slug}: description ends with the GoPlus credit and its link`);
+    ok(t.credit === GOPLUS_ATTRIBUTION && !t.description.includes(GOPLUS_ATTRIBUTION) && /^Powered by GoPlus Security \(https:\/\/gopluslabs\.io\)\.$/.test(GOPLUS_ATTRIBUTION), `${t.slug}: answers carry "Powered by GoPlus" with its link`);
     ok(t.discovery.output.example.credit === GOPLUS_ATTRIBUTION, `${t.slug}: published example carries the credit`);
   }
   const realFetch = globalThis.fetch;

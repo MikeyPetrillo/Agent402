@@ -1447,15 +1447,9 @@ const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-price", "sol-swap-quote"
 for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) attribute(t, "jupiter");
 // RugCheck's report is the source of these three answers (the safety read's
 // summary, the trimmed report, the holder table and count), credited by name
-// and link on every answer; the two read from it alone also end their
-// description with the credit (src/data-attribution.js). sol-token-safety's
-// description carries Jupiter's sentence, its other source.
+// and link on every answer (src/data-attribution.js).
 const RUGCHECK_CREDITED = new Set(["sol-token-safety", "sol-token-report", "sol-token-holders"]);
-for (const t of SOLANA_INTEL_TOOLS) {
-  if (!RUGCHECK_CREDITED.has(t.slug)) continue;
-  if (!t.attribution) attribute(t, "rugcheck");
-  creditAnswers(t, RUGCHECK_ATTRIBUTION);
-}
+for (const t of SOLANA_INTEL_TOOLS) if (RUGCHECK_CREDITED.has(t.slug)) creditAnswers(t, RUGCHECK_ATTRIBUTION);
 
 // Exported for offline unit tests (pure shaping, no network).
 export const __test = { PAIR_SIGNAL_FLAGS, pairSignals, takeMint, takeLimit, searchKeys, pairMatchesQuery, mergeFallbackRows, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,

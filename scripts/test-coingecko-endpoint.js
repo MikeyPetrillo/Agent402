@@ -194,6 +194,14 @@ for (const [mod, call] of MODULES) {
   ok(withCredit({ credit: "Own." }, "C.").credit === "Own. C.", "withCredit: an answer's own credit is kept and the new source's sentence follows it");
   ok(withCredit({ credit: "Own. C." }, "C.").credit === "Own. C.", "withCredit: a sentence the credit already holds is not added twice");
   const n = { credit: 7 }; ok(withCredit(n, "C.") === n, "withCredit: a credit that is not a string is left as it is");
+  // The 402 sample is read without the answer-only source credits and the
+  // source license fields; a CoinGecko credit (keyed, listed) stays.
+  const { withoutAnswerOnlyFields, HYPERLIQUID_ATTRIBUTION: HL, SOURCIFY_ATTRIBUTION: SRC, SOURCE_LICENSE_NOTE } = await import("../src/data-attribution.js");
+  ok(!("credit" in withoutAnswerOnlyFields({ a: 1, credit: HL })) && withoutAnswerOnlyFields({ a: 1, credit: HL }).a === 1, "withoutAnswerOnlyFields: an answer-only credit leaves the sample");
+  ok(withoutAnswerOnlyFields({ credit: `${COINGECKO_CREDIT} ${HL}` }).credit === `${COINGECKO_CREDIT} ${HL}`, "withoutAnswerOnlyFields: a credit holding a listed source's sentence stays whole");
+  const lic = withoutAnswerOnlyFields({ sources: {}, licenses: { "a.sol": "MIT" }, licenseNote: SOURCE_LICENSE_NOTE, credit: SRC });
+  ok(!("licenses" in lic) && !("licenseNote" in lic) && !("credit" in lic) && "sources" in lic, "withoutAnswerOnlyFields: the source license fields and Sourcify's credit leave the sample");
+  const own = { licenses: { x: 1 }, licenseNote: "their own" }; ok(withoutAnswerOnlyFields(own) === own, "withoutAnswerOnlyFields: fields of the same names with other values stay");
 }
 
 // Skill packs: the credit is printed once on the envelope, not per step.
