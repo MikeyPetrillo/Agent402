@@ -3,6 +3,11 @@
 // existing keys keep spending either way.
 /** The connector sign-in's switch (src/mcp-oauth.js): MCP_OAUTH=on exactly. */
 export const mcpOAuthSwitch = () => String(process.env.MCP_OAUTH || "").trim() === "on";
+/** The connector address an app signs in at to pay from credits (src/mcp-oauth.js). */
+export const CREDITS_CONNECTOR_PATH = "/mcp/credits";
+/** Whether a surface names that address: only while credits are on sale AND the
+ *  connector sign-in is on (both switches), the same pair src/mcp-oauth.js reads. */
+export const creditsConnectorOn = () => creditsSalesEnabled() && mcpOAuthSwitch();
 /** Days a disconnected app's record is kept (src/mcp-oauth.js). */
 export const CONNECTED_APP_KEEP_DAYS = 30;
 export const creditsSalesEnabled = () => /^(1|true|on|yes)$/i.test(String(process.env.CREDITS_SALES || "").trim());

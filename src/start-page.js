@@ -9,13 +9,15 @@
 //
 // Each offer reads the switch that sells it: the card report line only while
 // the storefront is on (humanCheckoutEnabled), the credits line only while
-// credits are on sale (creditsSalesEnabled). Counts and prices come from the
+// credits are on sale (creditsSalesEnabled), and the credits connector address
+// only while credits are on sale and the connector sign-in is on
+// (creditsConnectorOn). Counts and prices come from the
 // catalog and the product table at render time.
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { siteOrgRef } from "./site-org.js";
 import { mcpInstallHints } from "./mcp-flagship.js";
 import { isComputePayable } from "./pow.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
 import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
 import { cardReportPriceRange } from "./report-tiers.js";
 import { BASE_NO_GAS_SENTENCE } from "./base-no-gas.js";
@@ -42,11 +44,11 @@ export function startApps(baseUrl) {
 }
 
 /**
- * The page. `catalog` gives the proof-of-work count; `credits` and
- * `storefront` default to this boot's switches, and a test passes them to
+ * The page. `catalog` gives the proof-of-work count; `credits`, `connector`
+ * and `storefront` default to this boot's switches, and a test passes them to
  * render each variant.
  */
-export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled(), storefront = humanCheckoutEnabled() } = {}) {
+export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled(), connector = creditsConnectorOn(), storefront = humanCheckoutEnabled() } = {}) {
   const canonical = `${baseUrl}${START_PATH}`;
   const title = "Start here - add Agent402 to Claude or Cursor";
   const description = "Add Agent402 to Claude desktop, Claude Code or Cursor in one step, see what runs with no wallet, and fund a first wallet with USDC on Base.";
@@ -65,7 +67,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   const noWallet = [
     powCount ? `<li><strong>Free tools.</strong> ${powCount} tools run free with proof of work on the connector above, rate-limited, with no wallet and no signup. <a href="/tools" ${A}>Browse the tools</a>.</li>` : "",
     reportRange ? `<li><strong>Reports by card.</strong> Finished, model-backed reports at <a href="/reports" ${A}>/reports</a>, ${esc(reportRange.text)} by card.</li>` : "",
-    credits ? `<li><strong>Credits by card.</strong> Prepaid credits at <a href="/credits" ${A}>/credits</a>: a credits key pays for paid tools with no wallet.</li>` : "",
+    credits ? `<li><strong>Credits by card.</strong> Prepaid credits at <a href="/credits" ${A}>/credits</a>: a credits key pays for paid tools with no wallet.${connector ? ` Or add ${code(`${baseUrl}${CREDITS_CONNECTOR_PATH}`)} as the connector address: you sign in with your email, and the app pays from your balance under a daily cap you set, with no key to copy.` : ""}</li>` : "",
   ].filter(Boolean).join("\n        ");
 
   const pageLd = { "@context": "https://schema.org", "@type": "HowTo", name: title, description, url: canonical, author: siteOrgRef(baseUrl),
@@ -90,7 +92,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
     </section>` : ""}
 
     <section id="fund" style="margin-bottom:24px;">
-      <h2 ${H2}>Fund your first $5</h2>
+      <h2 ${H2}>Fund a first wallet</h2>
       <ol class="ml-measure" style="padding-left:22px;margin:0 0 16px;color:var(--ink);font-size:var(--fs-base);line-height:1.6;">
         <li style="margin:0 0 8px;">Buy USDC on Base. Where you buy it, choose Base as the network.</li>
         <li style="margin:0 0 8px;">Send it to your wallet address. Use a new wallet for your agent and keep only a few dollars in it.</li>

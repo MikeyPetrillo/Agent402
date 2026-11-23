@@ -108,7 +108,7 @@ import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
-import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsKeyQualifier, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import { redactSecrets } from "./tools/redact.js";
 import { STOCK_SLUGS, stockNotOffered } from "./tools/stock-provider.js";
@@ -1859,7 +1859,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (name === "payment.info") {
           return mcpJsonResult({
             connector: "hosted free tier - no wallet is held on this connector (authless)",
-            credits: { onSale: creditsSalesEnabled(), how: `${creditsSalesEnabled() ? `packs are sold by card at ${baseUrl}/credits` : "new credits are not on sale; a key already issued keeps working"}: Authorization: Bearer a402_<key> on any paid HTTP route except the wallet-identity-bound ones and the routes that buy from an outside seller (the router's execute tiers, seller-payability, decide-execute and the flight routes), which take a wallet payment, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success`, balance: `${baseUrl}/api/credits/balance` },
+            credits: { onSale: creditsSalesEnabled(), how: `${creditsSalesEnabled() ? `packs are sold by card at ${baseUrl}/credits` : "new credits are not on sale; a key already issued keeps working"}: Authorization: Bearer a402_<key> on any paid HTTP route except the wallet-identity-bound ones and the routes that buy from an outside seller (the router's execute tiers, seller-payability, decide-execute and the flight routes), which take a wallet payment, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success`, balance: `${baseUrl}/api/credits/balance`,
+              // Named only while credits are on sale and the connector sign-in is on.
+              ...(creditsConnectorOn() ? { connector: `${baseUrl}${CREDITS_CONNECTOR_PATH}`, connectorHow: "add this address as the connector instead of /mcp: the app asks you to sign in with your email and pays for paid tool calls from your credits balance under a daily cap you set, with no key or wallet" } : {}) },
             // DERIVED, never typed. This block quoted the pre-2026-08-23 ladder
             // for three weeks - every figure understated 1.7x to 3.4x - and an
             // agent budgeting from a machine surface under-budgets, pays, and

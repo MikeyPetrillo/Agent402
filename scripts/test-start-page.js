@@ -48,8 +48,10 @@ const powCount = Object.values(catalog).filter(isComputePayable).length;
 const install = mcpInstallHints(ORIGIN);
 const range = cardReportPriceRange(HUMAN_PRODUCTS);
 
-const allOn = plain(startPage(ORIGIN, catalog, { credits: true, storefront: true }));
-const allOff = plain(startPage(ORIGIN, catalog, { credits: false, storefront: false }));
+const allOn = plain(startPage(ORIGIN, catalog, { credits: true, connector: true, storefront: true }));
+const allOff = plain(startPage(ORIGIN, catalog, { credits: false, connector: false, storefront: false }));
+const creditsOnly = plain(startPage(ORIGIN, catalog, { credits: true, connector: false, storefront: true }));
+const CONNECTOR_URL = `${ORIGIN}/mcp/credits`;
 
 const apps = startApps(ORIGIN);
 ok(apps.map((a) => a.name).join() === "Claude desktop,Claude Code,Cursor", `one step per app, in order (${apps.map((a) => a.name).join(", ")})`);
@@ -64,10 +66,29 @@ ok(!/ChatGPT/i.test(allOn), "names no app without a documented path");
 ok(powCount > 0 && allOn.includes(`${powCount} tools run free with proof of work`), `the free tool count is the catalog's proof-of-work count (${powCount})`);
 ok(allOn.includes(`Credits by card.`) && allOn.includes("/credits"), "credits on sale: the credits line is there");
 ok(!/credits/i.test(allOff), "credits not on sale: the page says nothing about credits");
+ok(allOn.includes(CONNECTOR_URL), "credits on sale and the connector sign-in on: the credits line names the credits connector address");
+ok(creditsOnly.includes("Credits by card.") && !creditsOnly.includes("/mcp/credits"), "credits on sale, connector sign-in off: no credits connector address");
+{
+  // The switches themselves: the default render reads both, and names the address only with both on.
+  const keep = { CREDITS_SALES: process.env.CREDITS_SALES, MCP_OAUTH: process.env.MCP_OAUTH };
+  const render = (sales, oauth) => {
+    if (sales == null) delete process.env.CREDITS_SALES; else process.env.CREDITS_SALES = sales;
+    if (oauth == null) delete process.env.MCP_OAUTH; else process.env.MCP_OAUTH = oauth;
+    return plain(startPage(ORIGIN, catalog));
+  };
+  ok(render("on", "on").includes(CONNECTOR_URL), "CREDITS_SALES=on and MCP_OAUTH=on: the default render names the credits connector");
+  ok(!render("on", null).includes("/mcp/credits"), "MCP_OAUTH unset: the default render does not name it");
+  ok(!render(null, "on").includes("/mcp/credits"), "CREDITS_SALES unset: the default render does not name it");
+  for (const [k, v] of Object.entries(keep)) { if (v == null) delete process.env[k]; else process.env[k] = v; }
+}
+{
+  const src = readFileSync(join(ROOT, "src/start-page.js"), "utf8");
+  ok(!/\$\d/.test(src.replace(/\$\{/g, "")), "the page module types no dollar amount");
+}
 ok(range && allOn.includes(`Reports by card.`) && allOn.includes(`${range.text} by card`) && allOn.includes("model-backed"), `storefront on: the report line quotes the product table's range (${range?.text}) and says model-backed`);
 ok(!/Reports by card/.test(allOff) && !allOff.includes("/reports"), "storefront off: no report line");
 ok(allOff.includes("Without a wallet") && allOff.includes("Free tools."), "the free tools stay with both switches off");
-ok(allOn.includes("Fund your first $5") && allOn.includes("Buy USDC on Base") && allOn.includes("basescan.org/address/<your address>"), "the funding section: buy USDC on Base, send it, check the balance");
+ok(allOn.includes("Fund a first wallet") && allOn.includes("Buy USDC on Base") && allOn.includes("basescan.org/address/<your address>"), "the funding section: buy USDC on Base, send it, check the balance");
 ok(allOn.includes(BASE_NO_GAS_SENTENCE) && allOff.includes(BASE_NO_GAS_SENTENCE), "the page states the Base gas sentence");
 
 // ---- the static trees --------------------------------------------------------
@@ -117,9 +138,26 @@ try {
   const info = pi.structuredContent || JSON.parse(pi.content?.[0]?.text || "{}");
   ok(info.pay?.baseGas === BASE_NO_GAS_SENTENCE, "payment.info states the Base gas sentence (pay.baseGas)");
   ok(/\/start$/.test(String(info.pay?.start || "")), "payment.info points at /start");
+  ok(info.credits && !("connector" in info.credits), "payment.info names no credits connector while CREDITS_SALES and MCP_OAUTH are unset");
 } finally {
   try { await client?.close(); } catch {}
   await srv.stop();
+}
+
+// ---- a boot with both switches on: payment.info names the credits connector ----
+const srv2 = await bootServer({ stores: "start-page-connector", env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", CREDITS_SALES: "on", MCP_OAUTH: "on", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999" } });
+let client2;
+try {
+  client2 = new Client({ name: "test-start-page", version: "0.0.0" });
+  await client2.connect(new StreamableHTTPClientTransport(new URL(`${srv2.url}/mcp`)));
+  const pi = await client2.callTool({ name: "payment.info", arguments: {} });
+  const info = pi.structuredContent || JSON.parse(pi.content?.[0]?.text || "{}");
+  ok(/\/mcp\/credits$/.test(String(info.credits?.connector || "")), `payment.info names the credits connector with both switches on (${info.credits?.connector})`);
+  const r = await fetch(`${srv2.url}${START_PATH}`);
+  ok(/\/mcp\/credits/.test(await r.text()), "the served /start names the credits connector with both switches on");
+} finally {
+  try { await client2?.close(); } catch {}
+  await srv2.stop();
 }
 
 console.log(`\n${pass} passed, ${failed} failed`);
