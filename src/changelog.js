@@ -57,6 +57,13 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 const ENTRIES = [
   {
     date: "2026-11-23",
+    title: "Redact, then chat",
+    items: [
+      "Tools: POST /api/redact-chat masks emails, phone numbers, card-like numbers, US SSNs and IPv4 addresses on this server with numbered placeholders, then sends only the masked text to a chat model in one paid call. It is model-backed; the masking is pattern-based and can miss details written in other forms, so review the text for anything else sensitive. Its price is the sum of /api/redact and the chat tier it calls.",
+    ],
+  },
+  {
+    date: "2026-11-23",
     title: "Start here page",
     items: [
       "Site: A new /start page gives the one step that adds Agent402 to Claude desktop, Claude Code or Cursor, lists what runs with no wallet, and shows how to fund a first wallet with USDC on Base.",
