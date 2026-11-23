@@ -24,6 +24,7 @@
 // College Scorecard + FEC use the api.data.gov key (DATA_GOV_API_KEY, DEMO_KEY
 // fallback); the rest are keyless. (Treasury debt/rates live in macro-kit; don't
 // dup here.)
+import { attribute, FEMA_NOTICE } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { partialFields, clampFields } from "../partial-answer.js";
@@ -385,6 +386,12 @@ export function mdrRow(r) {
   };
 }
 const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+// The two OpenFEMA datasets fema-disasters reads, each named with its
+// version as the terms ask an answer to cite it.
+const FEMA_SUMMARIES_ENDPOINT = "https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries";
+const FEMA_WEB_ENDPOINT = "https://www.fema.gov/api/open/v1/FemaWebDisasterDeclarations";
+const femaCitation = (endpoint, accessed) => ({ disclaimer: FEMA_NOTICE, endpoint, accessed });
+
 export const GOV_TOOLS = [
   {
     route: "GET /api/gov-data", name: "US gov dataset search", slug: "gov-data", aliases: ["us-gov-dataset-search", "dataset-search", "data-gov"], category: "data", price: "$0.002",
@@ -1322,7 +1329,7 @@ export const GOV_TOOLS = [
   {
     route: "GET /api/fema-disasters", name: "FEMA disaster declarations", slug: "fema-disasters", category: "data", price: "$0.004",
     description:
-      "Recent FEMA disaster declarations for a US state (openFEMA): title, incident type, declaration type, and date - the federal emergency picture by state, de-duplicated by disaster. Live gov data, no key. ?state=CA&limit=5",
+      "Recent FEMA disaster declarations for a US state (openFEMA): title, incident type, declaration type, and date - the federal emergency picture by state, de-duplicated by disaster. Live gov data, no key. ?state=CA&limit=5.",
     tags: ["fema", "disaster", "emergency", "declarations", "openfema", "government"],
     discovery: {
       input: { state: "CA", limit: 5 },
@@ -1338,6 +1345,9 @@ export const GOV_TOOLS = [
           state: "CA", count: 1,
           disasters: [{ title: "WILDFIRES", incidentType: "Fire", declarationType: "Major Disaster", declared: "2026-01-08", disasterNumber: 4812 }],
           source: "fema.gov openFEMA (public domain)",
+          disclaimer: FEMA_NOTICE,
+          endpoint: FEMA_SUMMARIES_ENDPOINT,
+          accessed: "2026-11-23",
         },
       },
     },
@@ -1353,7 +1363,8 @@ export const GOV_TOOLS = [
       // openFEMA returns one row PER COUNTY per disaster, so over-fetch the recent
       // window and de-duplicate by disasterNumber to get N distinct disasters.
       const window = Math.min(limit * 25, 300);
-      const url = `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=state eq '${st}'&$top=${window}&$orderby=declarationDate desc&$select=declarationTitle,incidentType,declarationType,declarationDate,disasterNumber`;
+      const accessed = new Date().toISOString().slice(0, 10);
+      const url = `${FEMA_SUMMARIES_ENDPOINT}?$filter=state eq '${st}'&$top=${window}&$orderby=declarationDate desc&$select=declarationTitle,incidentType,declarationType,declarationDate,disasterNumber`;
       const data = await getJson(encodeURI(url), { headers: { Accept: "application/json" } });
       const items = Array.isArray(data?.DisasterDeclarationsSummaries) ? data.DisasterDeclarationsSummaries : [];
       // 2026-10-04: DisasterDeclarationsSummaries began answering count 0 for
@@ -1364,7 +1375,7 @@ export const GOV_TOOLS = [
       // record but reads empty from both is FEMA's outage: a 502, never charged.
       // A code outside the known list keeps the plain empty answer it always had.
       if (!items.length) {
-        const webUrl = `https://www.fema.gov/api/open/v1/FemaWebDisasterDeclarations?$filter=stateCode eq '${st}'&$top=${limit}&$orderby=declarationDate desc&$select=disasterName,incidentType,declarationType,declarationDate,disasterNumber`;
+        const webUrl = `${FEMA_WEB_ENDPOINT}?$filter=stateCode eq '${st}'&$top=${limit}&$orderby=declarationDate desc&$select=disasterName,incidentType,declarationType,declarationDate,disasterNumber`;
         const web = await getJson(encodeURI(webUrl), { headers: { Accept: "application/json" } });
         const rows = Array.isArray(web?.FemaWebDisasterDeclarations) ? web.FemaWebDisasterDeclarations : [];
         if (rows.length) {
@@ -1375,7 +1386,7 @@ export const GOV_TOOLS = [
             declared: (r.declarationDate || "").slice(0, 10) || null,
             disasterNumber: r.disasterNumber ?? null,
           }));
-          return { state: st, count: disasters.length, disasters, source: "fema.gov openFEMA FemaWebDisasterDeclarations (public domain)" };
+          return { state: st, count: disasters.length, disasters, source: "fema.gov openFEMA FemaWebDisasterDeclarations (public domain)", ...femaCitation(FEMA_WEB_ENDPOINT, accessed) };
         }
         if (KNOWN_STATE_CODES.has(st)) throw bad(`openFEMA returned no disaster declarations for ${st} from either dataset; every state has declarations on record, so this is an outage at FEMA. Nothing was charged.`, 502);
       }
@@ -1394,7 +1405,7 @@ export const GOV_TOOLS = [
         });
         if (disasters.length >= limit) break;
       }
-      return { state: st, count: disasters.length, disasters, source: "fema.gov openFEMA (public domain)" };
+      return { state: st, count: disasters.length, disasters, source: "fema.gov openFEMA (public domain)", ...femaCitation(FEMA_SUMMARIES_ENDPOINT, accessed) };
     },
   },
 ];
@@ -1403,4 +1414,9 @@ export const GOV_TOOLS = [
 // read helper and its retry), which ends at a run's ceiling when one is set
 // (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
 // can serve them. A handler that gains another kind of wait leaves this list.
+// OpenFEMA's terms ask for their disclaimer wherever the data is used, and
+// for a citation of the endpoint (with its version) and the access date: the
+// description ends with the disclaimer, and every answer carries all three.
+attribute(GOV_TOOLS.find((t) => t.slug === "fema-disasters"), "fema");
+
 markEndsAtCeiling(GOV_TOOLS, ["device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-orange-book", "drug-recalls", "drug-shortages", "earthquakes", "fec-candidates", "federal-awards", "fema-disasters", "food-recalls", "geo-lookup", "vehicle-recalls", "vin-decode", "weather-alerts"]);

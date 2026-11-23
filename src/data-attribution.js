@@ -50,6 +50,18 @@ export const COINGECKO_ATTRIBUTION = `Data provided by CoinGecko (${COINGECKO_AP
 export const COINGECKO_CREDIT = COINGECKO_ATTRIBUTION;
 export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
 export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0).";
+// The licence (https://open-meteo.com/en/licence) asks for a link to
+// Open-Meteo and a link to the licence next to its data: every answer of a
+// tool that serves Open-Meteo data carries both (licensedAnswers below), with
+// the credit text, beside any `credit` of the sources behind it.
+export const OPEN_METEO_SITE_URL = "https://open-meteo.com/";
+export const CC_BY_4_URL = "https://creativecommons.org/licenses/by/4.0/";
+export const OPEN_METEO_LICENSE_FIELDS = Object.freeze({ attributionText: OPEN_METEO_ATTRIBUTION, sourceUrl: OPEN_METEO_SITE_URL, licenseUrl: CC_BY_4_URL });
+// OpenFEMA's terms (https://www.fema.gov/about/openfema/terms-conditions)
+// require this disclaimer wherever its data is used, and ask that the
+// endpoint (with its version) and the access date be cited: the
+// fema-disasters answer carries all three (src/tools/gov-kit.js).
+export const FEMA_NOTICE = "This product uses the Federal Emergency Management Agency's OpenFEMA API, but is not endorsed by FEMA.";
 export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD.";
 export const ECB_ATTRIBUTION = "Source: European Central Bank.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
@@ -84,6 +96,7 @@ export const ATTRIBUTIONS = Object.freeze({
   "open-meteo-copernicus-geonames": `${OPEN_METEO_ATTRIBUTION} ${GEONAMES_ATTRIBUTION} ${CAMS_C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`,
   geonames: GEONAMES_ATTRIBUTION,
   nager: NAGER_ATTRIBUTION,
+  fema: FEMA_NOTICE,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */
@@ -196,4 +209,36 @@ export function termsAnswers(tool, terms) {
     Object.defineProperty(tool.handler, "toString", { value: () => String(inner) });
   }
   return tool;
+}
+
+/** Mark `tool` as one whose answers carry `fields` (a source's licence
+ *  fields: its credit text and links): set `tool.licenseFields`, add each
+ *  field the published example lacks, and wrap the handler so every
+ *  plain-object answer carries each field it does not already hold.
+ *  Additive (no field is renamed or replaced), and idempotent per tool. */
+export function licensedAnswers(tool, fields) {
+  if (!fields || typeof fields !== "object" || !Object.keys(fields).length) throw new Error("licensedAnswers: fields must name at least one field");
+  if (tool.licenseFields === fields) return tool;
+  tool.licenseFields = fields;
+  const add = (v) => {
+    if (!isPlainAnswer(v)) return v;
+    const missing = Object.keys(fields).filter((k) => !Object.hasOwn(v, k));
+    return missing.length ? { ...v, ...Object.fromEntries(missing.map((k) => [k, fields[k]])) } : v;
+  };
+  const ex = tool.discovery?.output?.example;
+  if (isPlainAnswer(ex)) tool.discovery.output.example = add(ex);
+  const inner = tool.handler;
+  if (typeof inner === "function") {
+    tool.handler = async function licensed(...args) { return add(await inner.apply(this, args)); };
+    Object.defineProperty(tool.handler, "toString", { value: () => String(inner) });
+  }
+  return tool;
+}
+
+/** Every tool in `tools` that serves Open-Meteo data (an "open-meteo"
+ *  attribution key, or place data read through its geocoding API) carries
+ *  the Open-Meteo licence fields on every answer. */
+export function openMeteoLicensed(tools, alsoSlugs = []) {
+  for (const t of tools) if (String(t.attribution || "").startsWith("open-meteo") || alsoSlugs.includes(t.slug)) licensedAnswers(t, OPEN_METEO_LICENSE_FIELDS);
+  return tools;
 }

@@ -4,7 +4,7 @@
 //   weather-thresholds  when each of the caller's rules is met in the forecast
 // Both take lat/lon or a place name (src/tools/weather-kit.js).
 import { markEndsAtCeiling } from "../run-ceiling.js";
-import { OPEN_METEO_ATTRIBUTION } from "../data-attribution.js";
+import { OPEN_METEO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 import { bad, openMeteoJson, resolveLocation, locationFields, tempUnitOf, LOCATION_PROPERTIES, cacheNote } from "./weather-kit.js";
 
 export const PLAN_SOURCE = "computed from Open-Meteo forecast data, api.open-meteo.com (CC BY 4.0)";
@@ -323,4 +323,7 @@ export const WEATHER_PLAN_TOOLS = [
 // Every upstream wait here is a safeFetch through the weather kit's read
 // helper (the forecast read, and a place lookup before it), so each ends at a
 // run's ceiling (src/run-ceiling.js).
+// Open-Meteo's licence asks for links to Open-Meteo and to the licence beside
+// its data: every answer of these tools carries them (src/data-attribution.js).
+openMeteoLicensed(WEATHER_PLAN_TOOLS);
 markEndsAtCeiling(WEATHER_PLAN_TOOLS, ["weather-thresholds", "weather-window"]);
