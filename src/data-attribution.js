@@ -69,6 +69,16 @@ export const FEMA_NOTICE = "This product uses the Federal Emergency Management A
 export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD.";
 export const ECB_ATTRIBUTION = "Source: European Central Bank.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
+// Network sources, each credited by name and link on the answers it serves
+// (the `credit` field; no key in ATTRIBUTIONS, so a tool's catalog text and
+// listing are unchanged, and the 402 sample is read without the field:
+// withoutAnswerOnlyFields below). crt.sh (Sectigo's public Certificate
+// Transparency search) on the cert-transparency answers it served and the
+// domain-audit-pro reports whose certificate probe it answered
+// (src/tools/network-kit2.js, domain-audit-kit.js); Team Cymru's IP to ASN
+// Mapping service on every asn-info answer (src/tools/network-kit2.js).
+export const CRTSH_ATTRIBUTION = "Certificate data from crt.sh by Sectigo (https://crt.sh).";
+export const CYMRU_ATTRIBUTION = "IP to ASN data from Team Cymru IP to ASN Mapping (https://team-cymru.com/community-services/ip-asn-mapping/).";
 export const CAMS_ATTRIBUTION = "Contains modified Copernicus Atmosphere Monitoring Service information (CAMS ENSEMBLE data provider).";
 export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
 // GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place
@@ -304,7 +314,7 @@ export function withoutLicenseFields(example) {
 // without them (withoutAnswerOnlyFields), so they never take room from the
 // listing's description or the answer's own fields.
 export const SOURCE_LICENSE_NOTE = "Each file is its authors' work, under the license its SPDX-License-Identifier states (licenses, by file; null where a file states none). Reuse of a file follows its license.";
-const ANSWER_ONLY_CREDITS = Object.freeze([GOPLUS_ATTRIBUTION, EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION]);
+const ANSWER_ONLY_CREDITS = Object.freeze([GOPLUS_ATTRIBUTION, EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION]);
 
 /** `example` without a `credit` made only of the credits above, and without
  *  the source license fields (the note and the per-file map beside it).

@@ -2,7 +2,9 @@
 // set, complementing network-kit.js (DNS + email auth). All upstreams are free
 // public infrastructure:
 //
-//   • cert-transparency — crt.sh (Sectigo's public CT log search) returns JSON
+//   • cert-transparency — crt.sh (Sectigo's public CT log search) returns JSON;
+//     Cert Spotter (SSLMate) is a second leg only where CERTSPOTTER_API_KEY is
+//     set, read under its key and held to CERTSPOTTER_HOURLY_MAX reads an hour
 //   • http-headers — direct fetch with the shared SSRF dispatcher
 //   • tech-stack — safeFetch + signature scan against a small built-in table
 //   • asn-info — Team Cymru's DNS-based whois (TXT records on a special zone)
@@ -18,6 +20,7 @@ import { assertQueryableName } from "./dns-name-filter.js";
 import { normalizeHost } from "./network-kit.js";
 import { FETCH_UA } from "../user-agents.js";
 import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
+import { creditAnswers, withCredit, CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION } from "../data-attribution.js";
 
 const USER_AGENT =
   (process.env.NETWORK_KIT_USER_AGENT || "").trim() ||
@@ -50,6 +53,30 @@ function pickHost(input, keys = ["domain", "host", "hostname", "url", "email"]) 
 
 // ───────────────────────────────────────────────────────────── cert-transparency
 
+// The Cert Spotter leg runs only under this deployment's own key (keyless
+// queries are not offered for this use), and at most CERTSPOTTER_HOURLY_MAX
+// reads in any rolling hour in this process, shared by every caller of the
+// handler (domain-audit-pro's certificate probe included). No key, or the
+// hour's reads spent: crt.sh alone answers.
+export const CERTSPOTTER_HOURLY_MAX = 100;
+// With crt.sh alone, a failure inside this long is asked once more.
+const CRT_RETRY_WITHIN_MS = 3000;
+const HOUR_MS = 3_600_000;
+const certspotterReads = []; // send times (ms) inside the last hour, oldest first
+export function certspotterKey(env = process.env) {
+  const k = String(env.CERTSPOTTER_API_KEY ?? "").trim();
+  return k || null;
+}
+/** Take one read from the hour's budget; false when it is spent. */
+export function takeCertspotterRead(now = Date.now()) {
+  while (certspotterReads.length && now - certspotterReads[0] >= HOUR_MS) certspotterReads.shift();
+  if (certspotterReads.length >= CERTSPOTTER_HOURLY_MAX) return false;
+  certspotterReads.push(now);
+  return true;
+}
+/** Test seam: forget the hour's reads. */
+export function resetCertspotterReads() { certspotterReads.length = 0; }
+
 async function certTransparencyHandler(body) {
   const domain = pickHost(body);
   if (!domain) throw bad('Missing "domain". Send {"domain":"example.com"} (also accepts host/hostname/url/email)');
@@ -59,14 +86,14 @@ async function certTransparencyHandler(body) {
   // A JSON GET on the shared SSRF dispatcher with a hard timeout. Maps a non-ok
   // upstream to a retryable 502 (5xx, and crt.sh's mislabelled 404 — see below)
   // or a client 422; a timeout throws a bare AbortError.
-  async function fetchJson(url, label) {
+  async function fetchJson(url, label, extraHeaders = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
       const res = await fetch(url, {
         signal: controller.signal,
         dispatcher: ssrfDispatcher,
-        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json", ...extraHeaders },
       });
       // crt.sh's nginx front-end mislabels backend failures: a timed-out query
       // comes back as HTTP 404 whose BODY is a "502 Bad Gateway" page. A real
@@ -115,27 +142,45 @@ async function certTransparencyHandler(body) {
 
   // crt.sh (richer, but chronically SLOW — routinely 8-9s even when healthy, and
   // has outages) and certspotter (faster, smaller window) are two independent CT
-  // logs. We HEDGE so the endpoint is ALWAYS fast and never depends on one flaky
-  // upstream: fire crt.sh, and if it hasn't answered within HEDGE_MS also fire
-  // certspotter, then take whichever SUCCEEDS first. A slow or down source never
-  // delays the answer past the other source's latency — the tool returns as soon
-  // as either CT log responds, not "eventually". Only 502 if BOTH fail.
+  // logs. With a Cert Spotter key we HEDGE: fire crt.sh, and if it hasn't
+  // answered within HEDGE_MS also fire certspotter (when the hour's reads
+  // allow), then take whichever SUCCEEDS first; 502 only if BOTH fail. With no
+  // key the certspotter leg never runs and crt.sh alone answers.
   const q = encodeURIComponent("%." + domain);
   const crtUrl = `https://crt.sh/?q=${q}&output=json${includeExpired ? "" : "&exclude=expired"}`;
   const csUrl = `https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(domain)}&include_subdomains=true&expand=dns_names&expand=issuer`;
   const HEDGE_MS = 1500;
 
-  const crtP = fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(Array.isArray(rows) ? rows : []) }));
+  const csKey = certspotterKey();
+  const crtRead = () => fetchJson(crtUrl, "crt.sh").then((rows) => ({ source: "crt.sh", ...mapCrtSh(Array.isArray(rows) ? rows : []) }));
+  const crtStarted = Date.now();
+  const crtP = crtRead();
   let csP = null;
-  const fireCertspotter = () => (csP ??= fetchJson(csUrl, "certspotter").then((rows) => ({ source: "certspotter", ...mapCertspotter(Array.isArray(rows) ? rows : []) })));
+  const fireCertspotter = () => (csP ??= takeCertspotterRead()
+    ? fetchJson(csUrl, "certspotter", { Authorization: `Bearer ${csKey}` }).then((rows) => ({ source: "certspotter", ...mapCertspotter(Array.isArray(rows) ? rows : []) }))
+    : Promise.reject(Object.assign(bad("the second CT search's hourly reads are spent", 502), { budget: true })));
   // Resolve on the FIRST fulfillment; reject with the first error only once ALL reject.
   const firstSuccess = (ps) => new Promise((resolve, reject) => {
     let pending = ps.length, firstErr = null;
-    for (const p of ps) p.then(resolve, (e) => { firstErr ??= e; if (--pending === 0) reject(firstErr); });
+    // A leg that was never sent (the hour's reads spent) reports only when nothing else failed.
+    for (const p of ps) p.then(resolve, (e) => { if (!firstErr || firstErr.budget) firstErr = e; if (--pending === 0) reject(firstErr); });
   });
 
   let result, hedgeTimer;
-  try {
+  if (!csKey) {
+    // crt.sh alone. A fast upstream failure (its front end answers a backend
+    // failure in well under a second) is asked once more; then its failure is
+    // the answer's.
+    let err = null;
+    try { result = await crtP; } catch (e) { err = e; }
+    if (!result && err?.statusCode === 502 && Date.now() - crtStarted < CRT_RETRY_WITHIN_MS) {
+      try { result = await crtRead(); err = null; } catch (e) { err = e; }
+    }
+    if (!result) {
+      if (err?.statusCode) throw err;
+      throw bad(err?.name === "AbortError" ? "cert transparency log did not respond - try again later" : `Could not reach a cert transparency log: ${err?.message}`, 502);
+    }
+  } else try {
     // Give crt.sh a head start; if it wins within HEDGE_MS, certspotter never fires.
     result = await Promise.race([
       crtP,
@@ -165,7 +210,7 @@ async function certTransparencyHandler(body) {
     }
   }
 
-  return {
+  const answer = {
     domain,
     count: certs.length,
     truncated: total > certs.length,
@@ -174,6 +219,8 @@ async function certTransparencyHandler(body) {
     source,
     queriedAt: new Date().toISOString(),
   };
+  // crt.sh's credit rides the answers it served.
+  return source === "crt.sh" ? withCredit(answer, CRTSH_ATTRIBUTION) : answer;
 }
 
 // ───────────────────────────────────────────────────────────── http-headers
@@ -550,7 +597,7 @@ export const NETWORK_TOOLS2 = [
     category: "network",
     price: "$0.005",
     description:
-      "Search public Certificate Transparency logs for every cert issued to a domain. Two independent public CT search services are queried, the second only if the first is slow or fails, and `source` names the one that answered (their coverage windows differ). Returns the cert list plus a deduped subdomain set extracted from the SANs - the fastest way to enumerate subdomains for a security audit. No key required.",
+      "Search public Certificate Transparency logs for every cert issued to a domain. A public CT search service is queried first; a second, independent one is asked only where this deployment holds its key and only if the first is slow or fails, and `source` names the one that answered (their coverage windows differ). Returns the cert list plus a deduped subdomain set extracted from the SANs - the fastest way to enumerate subdomains for a security audit. No key required.",
     tags: ["security", "ssl", "tls", "certificates", "subdomain-discovery", "audit"],
     discovery: {
       bodyType: "json",
@@ -587,6 +634,7 @@ export const NETWORK_TOOLS2 = [
           ],
           source: "crt.sh",
           queriedAt: "2026-06-19T22:00:00.000Z",
+          credit: CRTSH_ATTRIBUTION,
         },
       },
     },
@@ -704,3 +752,7 @@ export const NETWORK_TOOLS2 = [
     handler: asnInfoHandler,
   },
 ];
+
+// Every asn-info answer is Team Cymru's IP to ASN Mapping data: its credit
+// rides each answer and the published example.
+creditAnswers(NETWORK_TOOLS2.find((t) => t.slug === "asn-info"), CYMRU_ATTRIBUTION);

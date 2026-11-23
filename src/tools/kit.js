@@ -10,6 +10,7 @@ import { markEndsAtCeiling, capByCeiling, atCeiling, ceilingPassed, ceilingCutEr
 import { isIP } from "node:net";
 import { FETCH_UA } from "../user-agents.js";
 import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
+import { registryLimits } from "./rdap-registry-limits.js";
 import tls from "node:tls";
 import { assertQueryableName, canonicalDnsName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
@@ -2179,6 +2180,45 @@ export function rdapSaysNotFound(status, contentType, body = "") {
 }
 let rdapBootstrap = { at: 0, map: null };
 
+// whois answers what is computed from the registry's RDAP record, not the
+// record: registered, the age in days (from its registration date), the days
+// to expiry (from its expiration date), DNSSEC and the transfer lock (from its
+// flags). The record's own fields keep their keys and read null, so a reader
+// of the earlier shape finds every key it read.
+export const WHOIS_NOTE = "Computed from the registry's RDAP record at checkedAt; the record's own fields are not copied and read null.";
+const DAY_MS = 86_400_000;
+/** The whois answer for a registered domain's RDAP object `data`, read at
+ *  `nowMs`. Dates are inputs to the day counts only. */
+export function whoisAnswerOf(domain, data, nowMs = Date.now()) {
+  const events = Array.isArray(data?.events) ? data.events : [];
+  const at = (name) => {
+    const d = events.find((e) => e && e.eventAction === name)?.eventDate;
+    const t = typeof d === "string" ? Date.parse(d) : NaN;
+    return Number.isFinite(t) ? t : null;
+  };
+  const created = at("registration");
+  const expires = at("expiration");
+  const status = Array.isArray(data?.status) ? data.status.filter((x) => typeof x === "string").map((x) => x.toLowerCase().replace(/[\s_]+/g, "")) : null;
+  const signed = data?.secureDNS?.delegationSigned;
+  return {
+    domain,
+    registered: true,
+    ageDays: created == null ? null : Math.max(0, Math.floor((nowMs - created) / DAY_MS)),
+    daysToExpiry: expires == null ? null : Math.floor((expires - nowMs) / DAY_MS),
+    dnssec: typeof signed === "boolean" ? signed : null,
+    transferLocked: status ? status.some((x) => x === "clienttransferprohibited" || x === "servertransferprohibited") : null,
+    registrar: null,
+    created: null,
+    updated: null,
+    expires: null,
+    status: null,
+    nameservers: null,
+    source: "RDAP",
+    checkedAt: new Date(nowMs).toISOString(),
+    note: WHOIS_NOTE,
+  };
+}
+
 async function rdapAuthoritativeBase(tld) {
   const now = Date.now();
   if (!rdapBootstrap.map || now - rdapBootstrap.at >= RDAP_BOOTSTRAP_TTL_MS) {
@@ -2379,7 +2419,7 @@ const networkTools = [
     slug: "whois",
     category: "network",
     price: "$0.001",
-    description: "Domain registration data via RDAP (the structured WHOIS successor): registrar, creation/expiry dates, status, nameservers.",
+    description: "Domain registration facts computed from the registry's RDAP record (the structured WHOIS successor): registered, the domain's age in days, days until it expires, DNSSEC and transfer lock. The record's own fields (registrar, dates, status, nameservers) keep their keys and read null. Lookups to each registry are paced and held to a daily limit.",
     tags: ["whois", "rdap", "domain", "registration"],
     discovery: {
       bodyType: "json",
@@ -2388,7 +2428,7 @@ const networkTools = [
         properties: { domain: { type: "string", description: "Domain name (registrable, e.g. example.com)" } },
         required: ["domain"],
       },
-      output: { example: { domain: "example.com", registrar: "IANA", created: "1995-08-14", expires: "2026-08-13", nameservers: ["a.iana-servers.net"], status: ["client transfer prohibited"] } },
+      output: { example: { domain: "example.com", registered: true, ageDays: 11424, daysToExpiry: 263, dnssec: true, transferLocked: true, registrar: null, created: null, updated: null, expires: null, status: null, nameservers: null, source: "RDAP", checkedAt: "2026-11-23T12:00:00.000Z", note: WHOIS_NOTE } },
     },
     handler: async (input) => {
       // Be permissive about what callers send. Agents routinely pass `url`,
@@ -2416,6 +2456,10 @@ const networkTools = [
         `https://rdap.org/domain/${domain}`,
       ];
       async function rdapFetch(url) {
+        // The per-registry pacing and daily ceiling domain-availability
+        // shares (./rdap-registry-limits.js): a refusal is our own 503,
+        // nothing sent.
+        await registryLimits.admit(new URL(url).host);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), capByCeiling(12_000));
         try {
@@ -2454,6 +2498,9 @@ const networkTools = [
         } catch (err) {
           // A 404 is an authoritative "unregistered" — an answer, not an outage.
           if (err.statusCode === 404) throw err;
+          // Our own pacing or daily ceiling: the redirector would reach the
+          // same registry, so it is not asked in its place.
+          if (err.attribution === "ours") throw err;
           // Keep the evidence: a failed paid call must leave a log line with
           // the upstream host and status, not vanish into a bare 502.
           console.warn(`[whois] RDAP upstream failed for ${domain}: ${new URL(url).host} → ${err.upstreamStatus ?? err.name ?? err.message}`);
@@ -2468,19 +2515,7 @@ const networkTools = [
           : `RDAP lookup failed: ${lastErr?.message}`;
         throw Object.assign(new Error(why), { statusCode: 502 });
       }
-      const event = (name) => data.events?.find((e) => e.eventAction === name)?.eventDate ?? null;
-      const registrar = data.entities?.find((e) => e.roles?.includes("registrar"));
-      const registrarName = registrar?.vcardArray?.[1]?.find((f) => f[0] === "fn")?.[3] ?? registrar?.handle ?? null;
-      return {
-        domain,
-        registrar: registrarName,
-        created: event("registration"),
-        updated: event("last changed"),
-        expires: event("expiration"),
-        status: data.status ?? [],
-        nameservers: (data.nameservers ?? []).map((n) => n.ldhName?.toLowerCase()).filter(Boolean),
-        dnssec: data.secureDNS?.delegationSigned ?? null,
-      };
+      return whoisAnswerOf(domain, data);
     },
   },
   {

@@ -24,7 +24,7 @@ const FIXTURES = {
   "stock-quote":        { good: { symbol: "AAPL", price: 200.5 }, bad: { symbol: "AAPL", price: 0 } },
   "treasury-debt":      { good: { totalPublicDebtOutstanding: 39e12 }, bad: { totalPublicDebtOutstanding: 5 } },
   "crypto-global":      { good: { totalMarketCap: 2e12, btcDominancePct: 52 }, bad: { totalMarketCap: 0, btcDominancePct: 0 } },
-  "whois":              { good: { domain: "example.com", nameservers: ["a.iana-servers.net"] }, bad: { domain: "", nameservers: null } },
+  "whois":              { good: { domain: "example.com", registered: true, ageDays: 11424 }, bad: { domain: "example.com", registered: true, ageDays: null } },
 };
 
 // Every invariant must have a fixture — guards against shipping an untested one.

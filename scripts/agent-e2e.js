@@ -112,7 +112,7 @@ const CASES = [
   { slug: "dns", method: "GET", path: "/api/dns", query: { name: "google.com", type: "A" }, check: (b) => b.records?.length > 0, show: (b) => `${b.records.length} A records` },
   { slug: "http-check", method: "POST", path: "/api/http-check", body: { url: "https://example.com" }, check: (b) => b.status === 200, show: (b) => `HTTP ${b.status} in ${b.latencyMs}ms` },
   { slug: "tls-cert", method: "POST", path: "/api/tls-cert", body: { host: "github.com" }, check: (b) => b.daysRemaining > 0 && b.chainTrusted === true, show: (b) => `${b.issuer}, ${b.daysRemaining}d left` },
-  { slug: "whois", method: "POST", path: "/api/whois", body: { domain: "github.com" }, check: (b) => !!b.registrar, show: (b) => `${b.registrar}, expires ${b.expires?.slice(0, 10)}` },
+  { slug: "whois", method: "POST", path: "/api/whois", body: { domain: "github.com" }, check: (b) => b.registered === true && b.ageDays > 0, show: (b) => `${b.ageDays}d old, expires in ${b.daysToExpiry}d` },
   { slug: "robots-check", method: "POST", path: "/api/robots-check", body: { url: "https://www.google.com/search", userAgent: "TestBot" }, check: (b) => b.allowed === false, show: (b) => b.matchedRule },
   { slug: "sitemap", method: "POST", path: "/api/sitemap", body: { url: "https://www.sitemaps.org/sitemap.xml" }, check: (b) => b.count > 0, show: (b) => `${b.type}, ${b.count} urls` },
   // --- Encoding & crypto (7) ---

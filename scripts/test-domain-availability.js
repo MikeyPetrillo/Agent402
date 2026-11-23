@@ -95,12 +95,14 @@ try {
     const d = make();
     hits.length = 0;
     const a = await d.check({ domain: "taken.test" });
-    ok(a.registered === true && a.registrar === "Example Registrar" && a.status.join() === "client transfer prohibited", `a 200 domain object is registered with its registrar and status (${JSON.stringify(a).slice(0, 120)})`);
+    ok(a.registered === true && "registrar" in a && a.registrar === null && "status" in a && a.status === null, `a 200 domain object is registered; registrar and status keep their keys and read null (${JSON.stringify(a).slice(0, 120)})`);
+    ok(!JSON.stringify(a).includes("Example Registrar") && !JSON.stringify(a).includes("client transfer prohibited"), "no field of the registry's record is copied into the answer");
+    ok(/registrar and status read null/.test(a.note), "the note says registrar and status read null");
     ok(a.source === "RDAP" && a.checkedAt === new Date(clock).toISOString() && a.domain === "taken.test", "source, checkedAt and the domain are stated");
     ok(/can change/i.test(a.note) && /registrar/i.test(a.note), "the note says availability can change and registration happens at a registrar");
     ok(hits.includes("/iana/dns.json") && hits.includes("/a/domain/taken.test"), "the registry the bootstrap names was asked");
     const n = await d.check({ domain: "free-name.test" });
-    ok(n.registered === false && Array.isArray(n.status) && n.status.length === 0 && !("registrar" in n), "an RDAP 404 is not registered, with no registrar");
+    ok(n.registered === false && n.status === null && !("registrar" in n), "an RDAP 404 is not registered, status null, with no registrar");
     const b = await d.check({ domain: "bare.test" });
     ok(b.registered === false, "a bare empty 404 is not registered");
     const o = await errOf(d.check({ domain: "outage.test" }));
@@ -200,8 +202,8 @@ try {
     hits.length = 0;
     const again = await d.check({ domain: "TAKEN.test" });
     ok(again.registered === true && hits.length === 0, "a repeat inside the cache window is answered without asking the registry");
-    again.status.push("mutated");
-    ok((await d.check({ domain: "taken.test" })).status.length === 1, "a caller cannot change a kept answer");
+    again.note = "mutated";
+    ok((await d.check({ domain: "taken.test" })).note !== "mutated", "a caller cannot change a kept answer");
     clock += CACHE_TTL_MS + 1;
     await d.check({ domain: "taken.test" });
     ok(hits.includes("/a/domain/taken.test"), "after the window the registry is asked again");
@@ -243,6 +245,29 @@ try {
     bootstrapStatus = 200;
   }
 
+  // ---- the per-registry daily ceiling ----
+  {
+    const d = make({ dailyMax: 2 });
+    await d.check({ domain: "taken.test" }); // bootstrap + lookup 1 at registry A
+    hits.length = 0;
+    await d.check({ domain: "day2.test" }); // lookup 2
+    const e = await errOf(d.check({ domain: "day3.test" }));
+    ok(e?.statusCode === 503 && e.attribution === "ours" && e.registryDailyLimit === true && /daily limit/.test(e.message) && /not sent/.test(e.message), `a lookup past the registry's daily ceiling is our own retryable 503 (${e?.statusCode} ${e?.message})`);
+    ok(!hits.includes("/a/domain/day3.test"), "the refused lookup never reached the registry");
+    const untilMidnight = Math.ceil((Math.ceil(clock / 86_400_000) * 86_400_000 - clock) / 1000);
+    ok(e?.retryAfter === untilMidnight, `retryAfter names the UTC day's turn (${e?.retryAfter} vs ${untilMidnight})`);
+    ok((await d.check({ domain: "free-b.slow" })).registered === false, "another registry keeps its own count");
+    ok((await d.check({ domain: "taken.test" })).registered === true, "a kept answer is served past the ceiling without a lookup");
+    clock = (Math.floor(clock / 86_400_000) + 1) * 86_400_000 + 1000;
+    ok((await d.check({ domain: "day3.test" })).registered === false, "the next UTC day the registry is asked again");
+    const lifted = make({ dailyMax: null });
+    await lifted.check({ domain: "taken.test" });
+    for (const n of ["l1", "l2", "l3"]) await lifted.check({ domain: `${n}.test` });
+    ok(true, "a lifted ceiling (null) never refuses");
+    const { registryDailyMax, DEFAULT_REGISTRY_DAILY_MAX } = await import("../src/tools/rdap-registry-limits.js");
+    ok(registryDailyMax({}) === DEFAULT_REGISTRY_DAILY_MAX && registryDailyMax({ RDAP_REGISTRY_DAILY_MAX: "50" }) === 50 && registryDailyMax({ RDAP_REGISTRY_DAILY_MAX: "off" }) === null && registryDailyMax({ RDAP_REGISTRY_DAILY_MAX: "-3" }) === DEFAULT_REGISTRY_DAILY_MAX, "RDAP_REGISTRY_DAILY_MAX: a positive integer, off, else the default");
+  }
+
   // ---- the run's ceiling ends a hung registry ----
   {
     const d = make();
@@ -263,7 +288,8 @@ try {
     ok(!FREE_TIER_SLUGS.has(t.slug) && WALLET_ONLY_SLUGS.has(t.slug), "wallet-only: not in the free tier and listed wallet-only (it has egress)");
     ok(t.endsAtCeiling === true, "every wait ends at the run's ceiling (marked)");
     const ex = t.discovery.output.example;
-    ok(ex.registered === true && ex.source === "RDAP" && typeof ex.checkedAt === "string" && Array.isArray(ex.status), "the published example has the answer's shape");
+    ok(ex.registered === true && ex.source === "RDAP" && typeof ex.checkedAt === "string" && ex.status === null && ex.registrar === null, "the published example has the answer's shape (registrar and status null)");
+    ok(!/status codes|the registrar when/.test(t.description) && /registrar and status read null/.test(t.description) && /daily limit/.test(t.description), "the description no longer offers the record's fields and names the daily limit");
   }
 } finally {
   srv.closeAllConnections?.();

@@ -212,7 +212,6 @@ const KITS = [
   ["x-data-kit.js", "X_DATA_TOOLS", "x-search-recent", { query: "x402 -is:retweet", max_results: 10 }, /^X API$/, /^tweets search recent$/],
   ["cve-kit.js", "CVE_TOOLS", "cve-lookup", { cve: "CVE-2024-3094" }, /^The NVD API$/, /^lookup$/],
   ["llm-context-kit.js", "LLM_CONTEXT_TOOLS", "llm-context", { query: "x402 payment protocol", maxTokens: 2048 }, /^LLM context$/, /^context$/],
-  ["web-kit.js", "WEB_TOOLS", "archive-snapshot", { url: "https://example.com" }, /^Wayback Machine$/, /^availability$/],
   ["edgar-kit.js", "EDGAR_TOOLS", "edgar-filings", { ticker: "AAPL", form: "10-K", limit: 5 }, /^EDGAR$/, /^document$/],
   ["crypto-kit.js", "CRYPTO_TOOLS", "crypto-price", { coins: "BTC,ETH,SOL", currency: "usd" }, /^[\w .-]+$/, /^query$/],
   ["captcha-kit.js", "CAPTCHA_TOOLS", "captcha-verify", { provider: "turnstile", secret: "test-secret", token: "test-token" }, /^Captcha provider$/, /^siteverify$/],

@@ -138,5 +138,15 @@ ok(/const wantsJson = \(req\)/.test(srv2) && /app\.get\("\/r\/:sessionId", \(req
   } finally { dnsPromises.resolve = realResolve; }
 }
 
+// The pro tier's registration line: computed facts only, no record text.
+{
+  const { registrationLine } = await import("../src/tools/domain-audit-kit.js");
+  ok(registrationLine(null) === "WHOIS probe unavailable.", "no whois answer: the probe is unavailable");
+  const line = registrationLine({ registered: true, ageDays: 3650, daysToExpiry: 45, dnssec: true, transferLocked: false, registrar: "Some Registrar", created: "2016-01-01", status: ["active"], nameservers: ["ns1.x.test"] });
+  ok(/domain age 3650 days; expires in 45 days; transfer lock OFF; DNSSEC per RDAP signed/.test(line), `computed facts are stated (${line})`);
+  ok(!/Some Registrar|2016-01-01|active|ns1\.x\.test/.test(line), "no registrar, date, status or nameserver text from a record is copied");
+  ok(/expired 3 days ago/.test(registrationLine({ ageDays: 10, daysToExpiry: -3 })) && /age unknown; days to expiry unknown; transfer lock unknown; DNSSEC per RDAP unknown/.test(registrationLine({})), "a past expiry and missing facts are worded plainly");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
