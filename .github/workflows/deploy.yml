@@ -4276,7 +4276,12 @@ jobs:
       # of a transitive dependency that grows an install hook is skipped, not
       # run, beside the OIDC credential. The CLI itself still runs (verified:
       # `--help` under NPM_CONFIG_IGNORE_SCRIPTS=true).
+      # A ClawHub refusal never holds production: the deploy job waits on this
+      # job, and the install lines it ships need only npm and the MCP Registry.
+      # So this step alone continues on error, and the next one warns.
       - name: Publish agent402-openclaw to ClawHub
+        id: clawhub
+        continue-on-error: true
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
           CLAWHUB_CONFIG_PATH: ${{ runner.temp }}/clawhub-config.json
@@ -4290,6 +4295,9 @@ jobs:
           # The version is the sole input, passed through env (scripts/clawhub-release.js).
           VERSION="$VERSION" node scripts/clawhub-release.js || { rm -f "$CLAWHUB_CONFIG_PATH"; exit 1; }
           rm -f "$CLAWHUB_CONFIG_PATH"
+      - name: Warn when the ClawHub release did not go through
+        if: steps.clawhub.outcome == 'failure'
+        run: echo "::warning::The ClawHub release did not go through; npm and the MCP Registry are published. Re-run the ClawHub release by hand."
 
   probe:
     needs: markers

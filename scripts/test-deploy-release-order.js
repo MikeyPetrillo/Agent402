@@ -111,6 +111,20 @@ const registryAt = pub.findIndex((n) => /MCP Registry/.test(n));
 const npmAt = pub.map((n, i) => (/to npm$/.test(n) ? i : -1)).filter((i) => i >= 0);
 ok(clawAt >= 0 && registryAt >= 0, "the publish job holds the ClawHub and MCP Registry steps");
 ok(clawAt > registryAt && npmAt.every((i) => i < clawAt), "ClawHub runs after every npm publish and the MCP Registry");
+// A ClawHub refusal never holds production (the deploy waits on the publish
+// job, and install lines need only npm and the MCP Registry): only the ClawHub
+// step continues on error, and a failure there is a visible warning. Every npm
+// publish and the MCP Registry step still fail the job.
+{
+  const steps = wf.jobs?.publish?.steps || [];
+  const claw = steps[clawAt] || {};
+  ok(claw["continue-on-error"] === true && typeof claw.id === "string" && claw.id, "the ClawHub step continues on error and has an id");
+  const warn = steps.find((s, i) => i > clawAt && new RegExp(`steps\\.${claw.id}\\.outcome == 'failure'`).test(String(s.if || "")));
+  ok(!!warn && /::warning::/.test(String(warn.run || "")), "a ClawHub failure is reported as a ::warning:: by the step after it");
+  const blocking = [...npmAt, registryAt].map((i) => steps[i]);
+  ok(blocking.length >= 2 && blocking.every((s) => !s["continue-on-error"]), `every npm publish and the MCP Registry step still fail the job (${blocking.length} steps)`);
+  ok(steps.filter((s) => s["continue-on-error"]).length === 1, "the ClawHub step is the only publish step that continues on error");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
