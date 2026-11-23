@@ -402,7 +402,7 @@ const TE_TRAILERS_RE = /(?:^|,)\s*trailers\s*(?:;|,|$)/i;
  * receipt as it is attached. Never throws into the response: a failure to
  * sign sends the answer without a receipt.
  */
-export function receiptSignerMiddleware({ describe, iss = null, signer = () => receiptKeys().signer, onError = null, onSigned = null, onStreamed = null, fetchUrl = (key) => `${RECEIPT_FETCH_PATH}/${key}` } = {}) {
+export function receiptSignerMiddleware({ describe, iss = null, signer = () => receiptKeys().signer, onError = null, onSigned = null, onStreamed = null, fetchUrl = (key) => `${RECEIPT_FETCH_PATH}/${key}`, pendingRail = null } = {}) {
   return function receiptSignerMw(req, res, next) {
     if (!signer() || req.method === "HEAD" || req.method === "OPTIONS") return next();
     // The method the buyer sent, before the POST/GET alias (src/server.js)
@@ -465,8 +465,13 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
         // settlement where it is the call's own, else a random token.
         if (onStreamed && !oneShot && status === 200 && !res.headersSent) {
           const d = describe(req, res);
-          if (d && RESPONSE_RAILS.includes(d.rail)) {
-            fetchKey = receiptFetchKey(d) || b64u(Buffer.from(randomUUID().replace(/-/g, ""), "hex"));
+          // A paid answer whose settlement is read only as it ends (a credits
+          // debit lands before the last byte): `pendingRail` names its rail at
+          // the head, and the address is a random token, as for a batched payment.
+          let pending = null;
+          if (!d && typeof pendingRail === "function") { try { pending = pendingRail(req, res); } catch { pending = null; } }
+          if ((d && RESPONSE_RAILS.includes(d.rail)) || RESPONSE_RAILS.includes(pending)) {
+            fetchKey = (d && receiptFetchKey(d)) || b64u(Buffer.from(randomUUID().replace(/-/g, ""), "hex"));
             res.setHeader(RECEIPT_URL_HEADER, fetchUrl(fetchKey));
           }
         }
@@ -503,8 +508,10 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
           hash = null;
           // Kept for GET RECEIPT_FETCH_PATH/<key>, under the key the head named
           // (or, a credits debit read at the end, its settlement).
-          const key = jws ? fetchKey || receiptFetchKey(lastRecord) : null;
-          if (jws && key && onStreamed) { try { onStreamed(key, jws, lastRecord, req, res); } catch (e) { try { onError?.(e); } catch { /* never break the answer */ } } }
+          // A token the head named for a settlement read at the end (a credits
+          // debit) keeps it under that settlement too.
+          const keys = jws ? [...new Set([fetchKey, receiptFetchKey(lastRecord)].filter(Boolean))] : [];
+          if (onStreamed) for (const key of keys) { try { onStreamed(key, jws, lastRecord, req, res); } catch (e) { try { onError?.(e); } catch { /* never break the answer */ } } }
           if (jws) {
             if (trailerDeclared) res.addTrailers({ [RECEIPT_HEADER]: jws });
             if (eventStream) {

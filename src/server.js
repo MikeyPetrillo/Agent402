@@ -256,6 +256,17 @@ function tempoPushHashOf(req) {
 // ended (src/credits.js req.creditsDebitId). Null for anything else (a free,
 // trial or allowance answer, a credits call whose debit has not landed, a
 // referral copy, an unpriced route).
+// A credits-paid answer that will be signed once its debit lands (the debit
+// id is read only as the answer ends): its streamed head names a receipt
+// address all the same (receiptSignerMiddleware pendingRail).
+function pendingReceiptRailOf(req, res) {
+  if (FREE_MODE || String(req.path || "").startsWith("/ref/") || req.creditsSettled !== true) return null;
+  const def = CATALOG[`${req.method} ${req.path}`];
+  if (!def || allowanceServed(req)) return null;
+  if (res.getHeader("X-Pow-Accepted") === "true" || res.getHeader("X-Trial-Accepted") === "true") return null;
+  if (String(res.getHeader("X-Replayed-Answer") ?? "") === "1" || String(res.getHeader("X-Idempotent-Replay") ?? "") === "true") return null;
+  return "credits";
+}
 function receiptFieldsOf(req, res) {
   if (FREE_MODE || String(req.path || "").startsWith("/ref/")) return null;
   const def = CATALOG[`${req.method} ${req.path}`];
@@ -12151,6 +12162,7 @@ if (!FREE_MODE) {
       // finished 200; its head names the address (X-Agent402-Receipt-Url).
       onStreamed: keepStreamedReceiptOnFinalOk,
       fetchUrl: (key) => `${BASE_URL}${RECEIPT_FETCH_PATH}/${encodeURIComponent(key)}`,
+      pendingRail: pendingReceiptRailOf,
     }));
     markGateMounted("receiptSigner");
     startReceiptStoreSweep();
