@@ -3264,6 +3264,9 @@ jobs:
       - name: Hamburger menu aria-label toggles with aria-expanded (real browser click, not a static string check)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-burger-aria-label.js
 
+      - name: Copied text carries no word joiner or no-break space the widow pass put in (real browser copy event)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-copy-joiners.js
+
       - name: Input labels (every text input has an accessible name; session replay stays off)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-input-labels.js
 

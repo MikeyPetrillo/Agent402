@@ -234,6 +234,8 @@ var a402BindPass=function(root){try{
   });
 }catch(e){}};
 document.addEventListener('DOMContentLoaded',function(){window.a402BindWidows(document);});
+/* Copied text reads as the page does: the joiners and no-break spaces the pass above put in are layout, not text, so a copy drops the joiners and gives the spaces back. */
+document.addEventListener('copy',function(e){try{var sel=window.getSelection();if(!sel||sel.isCollapsed||!e.clipboardData)return;var t=sel.toString();if(!/[\u2060\u00A0]/.test(t))return;e.clipboardData.setData('text/plain',t.replace(/\u2060/g,'').replace(/\u00A0/g,' '));e.preventDefault();}catch(err){}});
 
 /* Keyboard access to sideways-scrolling code and tables (WCAG 2.1.1): a <pre>
    or table wrapper wider than its box gets tabindex=0, so arrow keys scroll it once it has focus. Checked
