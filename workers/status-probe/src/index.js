@@ -655,7 +655,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
       if (w === "owed") return "bad";
       return w === "ok" ? "good" : "quiet";
     },
-    body: () => `/api/gateway-status reports creditsRefunds.status=owed: a credits purchase was refused (the daily purchase limit, or an EU or UK billing address without a VAT number), issued no key, and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {"session":"cs_..."}. The same word reads owed when a key holder asked for the unspent balance back and the card refund could not be sent: the key ids are on /__operator/credits.json (refundRequestsOwed); refund each in the Stripe dashboard and the charge.refunded webhook records it.
+    body: () => `/api/gateway-status reports creditsRefunds.status=owed: a credits purchase was refused (the daily purchase limit, or an EU or UK billing address without a VAT number), issued no key, and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {"session":"cs_..."}. The same word reads owed when a key holder asked for the unspent balance back and the card refund could not be sent: the key ids are on /__operator/credits.json (refundRequestsOwed); refund each in the Stripe dashboard and the charge.refunded webhook records it. It also reads owed when a card dispute closed with an outcome that is neither won nor lost: those are on /__operator/credits.json (disputesToReview); read each in Stripe, then POST /__operator/credits/dispute-reviewed {"keyId":"...","paymentIntent":"pi_...","outcome":"won" or "lost"}.
 
 Auto-closes when nothing is owed.`,
   },
@@ -1157,6 +1157,15 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     verdict: ({ gateway: b }) => wordVerdict(b.email?.status, ["exhausted", "failing"], ["ok"]),
     body: ({ gateway: b }) =>
       `/api/gateway-status reports email.status=${b.email?.status === "failing" ? "failing" : "exhausted"}. exhausted: the provider refused the last send for credits or quota - top up the email provider's prepaid credits. failing: another refusal; the provider's error code is on the operator read of /api/gateway-status and in the [email] log line. Report links, credits keys, alert confirmations and monitor emails do not reach buyers while this is open. Auto-closes when a send is delivered.`,
+  },
+  {
+    // The private credits guards table (src/credits-guards.js): attention while
+    // CREDITS_SALES or MCP_OAUTH asks for it and it is missing or lacks a key,
+    // so credit sales and the connector sign-in stay off.
+    title: "Scheduled check needs review: credits-guards",
+    verdict: ({ gateway: b }) => wordVerdict(b.creditsGuards?.status, ["attention"], ["ok"]),
+    body: () =>
+      "/api/gateway-status reports creditsGuards.status=attention: CREDITS_SALES or MCP_OAUTH is on and the private credits guards table (CREDITS_GUARDS_JSON or CREDITS_GUARDS_FILE) is missing or lacks a key the loader requires (src/credits-guards.js; docs/example-credits-guards.json shows every key with placeholder values), so credit sales and the connector sign-in stay off. Update the table on Railway. Auto-closes when it reads ok.",
   },
   {
     title: "Scheduled check needs review: cost-table",

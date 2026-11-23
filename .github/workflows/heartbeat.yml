@@ -2085,6 +2085,36 @@ jobs:
               ;;
           esac
 
+      # Private credits guards table (src/credits-guards.js). attention while
+      # CREDITS_SALES or MCP_OAUTH asks for it and it is missing or lacks a key
+      # the loader requires (credit sales and the connector sign-in stay off).
+      # One word only, never a value. Two readings 30 s apart, as above.
+      - name: Credits guards table check (alarm when a switch asks for it and it is not complete)
+        if: always()
+        continue-on-error: true
+        run: |
+          read_cg() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.creditsGuards.status // "unknown"' 2>/dev/null || echo unknown; }
+          WORD=$(read_cg)
+          if [ "$WORD" = "attention" ]; then sleep 30; WORD=$(read_cg); fi
+          case "$WORD" in attention|ok|unknown) ;; *) WORD=unknown ;; esac
+          echo "credits guards: $WORD"
+          TITLE="Scheduled check needs review: credits-guards"
+          OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            attention)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Private upstream-cost table (src/upstream-costs.js). Without it the
       # metered tier, embeddings, images and X reads refuse and the flat
       # tiers price at their caps. "partial" means it loaded without a key some

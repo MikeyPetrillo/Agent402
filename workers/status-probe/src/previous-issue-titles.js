@@ -36,6 +36,7 @@ export const PREVIOUS_TITLES = Object.freeze({
   "corpus": ["Correctness corpus FAILING"],
   "cost-table": ["Upstream cost table missing or incomplete in production"],
   "coverage-balance-reads": ["Coverage balance reads DEGRADED (calls in flight)"],
+  "credits-guards": [],
   "credits-refund": ["A refused credits purchase was not refunded"],
   "dataset": ["Dataset record UNHEALTHY"],
   "direct-upstream": ["directUpstream: the direct upstream is degraded"],
