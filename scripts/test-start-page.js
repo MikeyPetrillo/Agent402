@@ -25,7 +25,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { bootServer } from "./lib/boot-server.js";
 
 const { startPage, startApps, START_PATH } = await import("../src/start-page.js");
-const { BASE_NO_GAS_SENTENCE } = await import("../src/base-no-gas.js");
+const { BASE_NO_GAS_SENTENCE, BASE_NO_GAS_SHORT } = await import("../src/base-no-gas.js");
 const { mcpInstallHints, AGENT402_MCP_VERSION } = await import("../src/mcp-flagship.js");
 const { HUMAN_PRODUCTS } = await import("../src/human-checkout.js");
 const { cardReportPriceRange } = await import("../src/report-tiers.js");
@@ -143,8 +143,8 @@ try {
 
   const llms = await get("/llms.txt");
   const baseLine = llms.text.split("\n").find((l) => l.startsWith("- [Base](")) || "";
-  ok(baseLine.endsWith(BASE_NO_GAS_SENTENCE), `the Base line of /llms.txt ends with the sentence (${baseLine.slice(0, 80)})`);
-  ok(llms.text.split("\n").filter((l) => l.includes(BASE_NO_GAS_SENTENCE)).length === 1, "only the Base line of /llms.txt carries it");
+  ok(baseLine.endsWith(BASE_NO_GAS_SHORT), `the Base line of /llms.txt ends with the short gas sentence (${baseLine.slice(0, 80)})`);
+  ok(llms.text.split("\n").filter((l) => l.includes(BASE_NO_GAS_SHORT)).length === 1, "only the Base line of /llms.txt carries it");
   ok(/^- \[Start here\]\(\S+\/start\): /m.test(llms.text), "/llms.txt links /start under Connect via MCP");
 
   const pages = await get("/sitemap-pages.xml");
