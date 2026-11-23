@@ -130,7 +130,12 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   // Read only with MCP_OAUTH=on and credits on sale (off on the boots below).
   const mcpOAuth = await import("../src/mcp-oauth.js");
   const creditsAccount = await import("../src/credits-account.js");
+  // Read only while the load gate sheds (src/discovery-snapshots.js), which the boots below never do.
+  const snapshots = (await import("../src/discovery-snapshots.js")).createDiscoverySnapshots();
+  snapshots.keep("/llms.txt", Buffer.from("x"), { etag: '"a"' });
+  const snapRes = { set() { return this; }, status() { return this; }, end() { return this; } };
   const readers = {
+    "discovery-snapshots serve (if-none-match)": (v) => snapshots.serve({ method: "GET", path: "/llms.txt", originalUrl: "/llms.txt", headers: { "if-none-match": v } }, snapRes),
     "mcp-oauth bearerShape (authorization)": (v) => mcpOAuth.bearerShape(v),
     "credits-account readCookie (cookie)": (v) => creditsAccount.readCookie({ headers: { cookie: v } }, "a402_oauth"),
     "mpp-offer-gate requestOptsIntoMppOffers (x-payment-offers)": (v) => offerGate.requestOptsIntoMppOffers({ headers: { "x-payment-offers": v } }),

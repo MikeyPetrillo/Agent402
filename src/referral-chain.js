@@ -201,7 +201,7 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
             if (used.tx) {
               const d = await proveDetail(used.tx, { from, nonce, payTo, amount, minNet, productId }, { budget: Math.max(250, deadline - now()) });
               const v = d.verdict;
-              return { used: true, paid: v === "paid" ? true : v === "unpaid" ? false : null, transaction: used.tx, complete: false, receiptRead: d.read === true, why: d.why, routedToUs: d.routedToUs === true, net: v === "paid" ? d.net ?? null : null, moved: d.moved === true, product: d.product || null };
+              return { used: true, paid: v === "paid" ? true : v === "unpaid" ? false : null, transaction: used.tx, complete: false, receiptRead: d.read === true, why: d.why, routedToUs: d.routedToUs === true, net: v === "paid" ? d.net ?? null : null, split: v === "paid" ? d.split ?? null : null, moved: d.moved === true, product: d.product || null };
             }
             const canceled = await findLog(AUTHORIZATION_CANCELED_TOPIC, from, nonce, fromBlock, deadline);
             if (canceled.tx) return { used: true, paid: false, transaction: canceled.tx, complete: false };

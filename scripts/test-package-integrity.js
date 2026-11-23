@@ -190,5 +190,15 @@ for (const d of dirs) {
   }
 }
 
+// --- repository.url in the form npm keeps ----------------------------------
+// npm rewrites a bare https URL to git+https at publish and warns on every
+// package; the manifest carries the form npm keeps, so what we publish is
+// what we wrote (the root manifest included).
+for (const d of [...dirs, "."]) {
+  const pkg = JSON.parse(readFileSync(join(ROOT, d, "package.json"), "utf8"));
+  const url = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
+  ok(typeof url === "string" && /^git\+https:\/\/github\.com\/[^/]+\/[^/]+\.git$/.test(url), `${pkg.name || d}: repository.url is git+https (${url})`);
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

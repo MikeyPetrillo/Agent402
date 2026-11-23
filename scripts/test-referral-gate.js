@@ -672,6 +672,8 @@ const TOOLS = {
 const logLines = [];
 const log = { log: (l) => logLines.push(String(l)), warn: (l) => logLines.push(String(l)), error: (l) => logLines.push(String(l)) };
 const sales = [];
+// The split legs each proven sale records (operator only; src/referral-legs.js).
+const splitLegs = [];
 const responses = [];
 const trusted = [];
 const skew = { ms: 0 };
@@ -708,6 +710,7 @@ function mount(envOverride = {}, depOverride = {}) {
     prePaymentRefusal: (def, input) => (def.slug === "chat" && input && input.model === "no-such-model" ? { status: 400, body: { error: { message: `unknown model${routeHint("; GET /v1/models lists them")}`, code: "unknown_model" }, tool: def.slug } } : null),
     sendToolError: (res, err, slug) => res.status(err?.statusCode || 502).json({ error: String(err?.message || "request failed"), tool: slug }),
     recordSale: (row) => { sales.push(row); return ledger.recordSale(row); },
+    recordSplitLegs: (row) => { splitLegs.push(row); },
     saleBooked: (tx, payer, slug) => ledger.privateRailSaleCount(tx, "referral", payer, slug),
     amendSaleNet: ({ tx, netUsd, payer, slug, grossUsd }) => ledger.amendPrivateRailSaleNet(tx, "referral", netUsd, payer, slug, grossUsd),
     payerScreen: async (req, res) => {
@@ -915,7 +918,7 @@ try {
     const r = await send(R("echo"), { body: { text: "x" }, headers: { "payment-signature": (await signPayment(accept, { account: SCREENED })).header } });
     ok(r.status === 403 && r.json?.reason === "payer-not-accepted" && r.json.charged === false && fac.calls.length === before && runs.echo === ran, `a payer the screen refuses gets the screen's own 403 before the handler, with no facilitator call (${r.status})`);
   }
-  fac.reset(); sales.length = 0; trusted.length = 0;
+  fac.reset(); sales.length = 0; trusted.length = 0; splitLegs.length = 0;
 
   // --- a paid call ---------------------------------------------------------------
   const paid = await signPayment(accept);
@@ -938,6 +941,13 @@ try {
   ok(sales.length === 1 && sales[0].rail === "referral" && sales[0].wire === "referral" && sales[0].network === "base" && sales[0].payer === buyer.address.toLowerCase() && sales[0].tx === good.json.transaction && sales[0].priceUsd === 0.026298 && sales[0].quoteUsd === 0.03, `one sale: rail referral, wire referral, network base, the signed payer, the settle transaction, net $0.026298 of gross $0.03 (${JSON.stringify(sales[0])})`);
   ok(row && row.rail === "referral" && row.netUsd === 0.026298 && row.grossUsd === 0.03 && row.payer === buyer.address.toLowerCase() && row.internal === false && row.responseSha256 === createHash("sha256").update(good.text, "utf8").digest("hex"), `the ledger row reads the same, with the digest of the bytes answered (${JSON.stringify(row)})`);
   ok(app1.book.get(paidKey) === null && app1.book.list().length === 0, "a settled and delivered call leaves nothing in the book");
+  {
+    const leg = splitLegs[splitLegs.length - 1];
+    const toPayout = leg?.split?.recipients?.find((x) => x.to === PAYOUT.toLowerCase());
+    ok(splitLegs.length === 1 && leg.tx === good.json.transaction && leg.slug === "echo" && leg.payer === buyer.address.toLowerCase() && leg.key === paidKey
+      && leg.split.gross === "30000" && leg.split.merchant === "26298" && Array.isArray(leg.split.legs) && leg.split.legs.length === 4 && leg.split.legs.every((v) => /^\d+$/.test(v))
+      && toPayout?.amount === "26298", `the proven sale records the routed event's gross, its four split legs and each transfer out of the contract with its recipient (${JSON.stringify(leg)})`);
+  }
   ok(trusted.length === 1 && trusted[0] === "7.7.7.7", "a settled call earns its client address the paid-client allowance");
 
   // --- a re-send of a settled payment: the kept answer, no second run ---------------
@@ -2742,6 +2752,13 @@ try {
     const args = { tx: fx.transaction.hash, from: fx.payer, nonce: fx.nonce, payTo: fx.splitContract, amount: fx.amount, merchantId: fx.merchantId, payoutAddress: fx.payoutAddress, minNet: fx.minNet };
     const real = proveReceipt(fx.receipt, args);
     ok(real.verdict === "paid" && real.moved === true && real.read === true, `the fixture receipt proves the payment with its merchant id, payout wallet, amount and minimum net (${real.verdict}: ${real.why})`);
+    {
+      const w = (i) => BigInt(`0x${fx.receipt.logs[6].data.slice(2 + i * 64, 2 + (i + 1) * 64)}`).toString();
+      const outs = fx.receipt.logs.slice(2, 6).filter((l) => l.topics[0] === fx.receipt.logs[1].topics[0] && l.topics[1] === `0x${"0".repeat(24)}${fx.splitContract.slice(2).toLowerCase()}`).map((l) => ({ to: `0x${l.topics[2].slice(26)}`, amount: BigInt(l.data).toString() }));
+      ok(real.split && real.split.gross === "5000" && real.split.merchant === "4250" && JSON.stringify(real.split.legs) === JSON.stringify([w(4), w(5), w(6), w(7)]) && JSON.stringify(real.split.recipients) === JSON.stringify(outs) && outs.some((x) => x.to === fx.payoutAddress.toLowerCase() && x.amount === "4250"),
+        `a paid proof carries the routed event's split: gross, the four leg words, the merchant amount and every transfer out of the contract with its recipient (${JSON.stringify(real.split)})`);
+      ok(proveReceipt(fx.receipt, { ...args, merchantId: "1" }).split === undefined, "an unpaid proof carries no split");
+    }
     {
       // The fixture holds TEST values only: a real wallet, hash or id put back fails here.
       const CONTRACTS = new Set([REFERRAL_ASSET.toLowerCase().slice(2), fx.splitContract.slice(2).toLowerCase(), "672f9e44b7ab65bde0285cc7a4f1d22559bfe0cb"]);

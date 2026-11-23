@@ -3,6 +3,11 @@
 // carry BEFORE any payment gate (src/model-catalog.js; server.js mounts the
 // check ahead of the gates), and fails open with no fresh list.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+// Its quotes and caps read the private upstream-cost table: without it they
+// fall to the floor and the checks fail for that reason, so a missing table is
+// named (a failure under CI, a skip locally) instead.
+const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+requireUpstreamCosts("test-model-catalog");
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

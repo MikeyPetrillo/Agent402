@@ -153,7 +153,8 @@ for (const [name, j] of Object.entries(jobs)) {
 {
   const wfText = expandedDeployWorkflow();
   const mog = readFileSync(new URL("./merge-on-green.sh", import.meta.url), "utf8");
-  const subjectsOnly = /git log[^\n]*--format='%s'/.test(wfText);
+  const subjectsSrc = readFileSync(new URL("./marker-subjects.js", import.meta.url), "utf8");
+  const subjectsOnly = /node scripts\/marker-subjects\.js/.test(wfText) && /"--format=%H%x00%P%x00%s"/.test(subjectsSrc) && !/%b|%B/.test(subjectsSrc);
   ok(subjectsOnly, "markers parses commit SUBJECT lines (the constraint the docs have to match)");
   const mergeStyle = /gh pr merge[^\n]*--squash/.test(mog) ? "squash" : "merge";
   ok(mergeStyle === "merge", "merge-on-green.sh merges with --merge (PR title lands in the BODY)");
@@ -351,6 +352,22 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(calls.every((c) => { const m = /--max-time\s+(\d+)/.exec(c.cmd); return m && Number(m[1]) <= 60; }), "each platform API call is bounded at a minute or less");
 }
 
+// --- the purl job hands the burner key only to a pinned, checked binary ---
+// The key goes to `purl wallet add`, so the binary is one release checked
+// against its SHA-256: no tap, no clone of the default branch, no build that
+// resolves its dependencies fresh.
+{
+  const purl = jobs.purl || {};
+  const steps = purl.steps || [];
+  const install = steps.find((st) => /Install Stripe purl/.test(String(st.name || ""))) || {};
+  const runs = steps.map((st) => String(st.run || "")).join("\n");
+  ok(/^v\d+\.\d+\.\d+$/.test(String(install.env?.PURL_VERSION || "")) && /^[0-9a-f]{64}$/.test(String(install.env?.PURL_SHA256 || "")), "the purl install names one release and its SHA-256");
+  ok(/sha256sum -c -/.test(String(install.run || "")) && /releases\/download\/\$\{PURL_VERSION\}\//.test(String(install.run || "")), "...downloads that release and fails on a checksum mismatch");
+  ok(!/brew install|git clone|cargo install|npx |npm i(nstall)? /.test(runs), "no step of the purl job installs from a tap, a clone or a fresh dependency resolution");
+  const keyed = steps.filter((st) => /secrets\.BURNER_KEY/.test(JSON.stringify(st.env || {})));
+  ok(keyed.length > 0 && keyed.every((st) => steps.indexOf(st) > steps.indexOf(install)) && !JSON.stringify(purl.env || {}).includes("BURNER_KEY"), "the burner key reaches only steps after the checked install, never the job's env");
+}
+
 // --- a replaced queued release keeps its markers ---------------------------
 // Nothing on main is canceled in progress and GitHub keeps one pending run per
 // group, so of two merges queued behind a running release only the newer run
@@ -367,6 +384,7 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(JSON.stringify(markersJob.permissions) === JSON.stringify({ contents: "read", actions: "read" }), `the markers job's token reads the tree and the workflow's runs, nothing else (${JSON.stringify(markersJob.permissions)})`);
   ok(!runText.includes("${{") && (markersJob.steps || []).every((s) => !String(s.run || "").includes("${{")), "no markers step interpolates an expression into its script");
   ok(/node scripts\/marker-base\.js/.test(runText) && /refs\/heads\/main/.test(runText), "the parse step asks scripts/marker-base.js where to read from, on main only");
+  ok(!/git log[^\n]*--format='%s'/.test(runText) && (runText.match(/node scripts\/marker-subjects\.js/g) || []).length >= 3, "every subject the parse step reads comes through scripts/marker-subjects.js (outside contributors' commits left out)");
   ok(/merge-base --is-ancestor/.test(runText), "...and reads on from that commit only when it is an ancestor of the push");
 
   const { mkdtempSync, rmSync, writeFileSync, mkdirSync, copyFileSync } = await import("node:fs");
@@ -379,7 +397,8 @@ for (const [name, j] of Object.entries(jobs)) {
   git("init", "-q", "-b", "main");
   mkdirSync(join(repo, "scripts"));
   copyFileSync(new URL("./marker-base.js", import.meta.url), join(repo, "scripts", "marker-base.js"));
-  git("add", "scripts/marker-base.js");
+  copyFileSync(new URL("./marker-subjects.js", import.meta.url), join(repo, "scripts", "marker-subjects.js"));
+  git("add", "scripts/marker-base.js", "scripts/marker-subjects.js");
   const commit = (subject, body = "") => { git("commit", "-q", "--allow-empty", "-m", subject, ...(body ? ["-m", body] : [])); return git("rev-parse", "HEAD"); };
   const base = commit("[test] base");
   // Three pushes (each a branch commit and its merge, the way merge-on-green
@@ -466,6 +485,35 @@ for (const [name, j] of Object.entries(jobs)) {
     state.runs = []; state.jobs = {}; ran(1, A); replaced(2, B); state.hits = 0;
     const dev = await step(3, B, C, { ref: "refs/heads/claude/sweet-brown-i99jl3" });
     ok(dev.code === 0 && dev.on === "test" && state.hits === 0, `a push to the dev branch reads its pushed range and makes no API read (${dev.on}; ${state.hits} reads)`);
+    // An outside contributor's commits never start a job: a merge of another
+    // account's pull request (on main or nested in a merge of ours) and a
+    // squash merge's title are not read; our own merged branch still is.
+    {
+      git("checkout", "-q", "-b", "outside", D);
+      commit("[publish] [drain] outside change");
+      git("checkout", "-q", "-b", "dev", D);
+      commit("[probe] our change");
+      git("merge", "-q", "--no-ff", "outside", "-m", "Merge pull request #6 from outsider/feature");
+      git("checkout", "-q", "main");
+      git("merge", "-q", "--no-ff", "dev", "-m", "Merge pull request #7 from o/dev");
+      const E = git("rev-parse", "HEAD");
+      git("checkout", "-q", "-b", "outside2", E);
+      commit("[paytest] another outside change");
+      git("checkout", "-q", "main");
+      git("merge", "-q", "--no-ff", "outside2", "-m", "Merge pull request #8 from Outsider2/x");
+      commit("[purl] Outside pull request title (#9)");
+      const F = git("rev-parse", "HEAD");
+      const ext = await step(5, D, F, { ref: "refs/heads/claude/sweet-brown-i99jl3" });
+      ok(ext.code === 0 && ext.on === "probe", `an outside pull request's commits and a squash title start nothing; our merged commit's marker is read (${ext.on}; exit ${ext.code})`);
+      ok(/not read for markers: [0-9a-f]{12} \(brought in by outsider's pull request\)/.test(ext.log) && /squash-merged pull request title/.test(ext.log), "each commit left out is named in the log");
+      state.runs = []; state.jobs = {}; state.hits = 0;
+      const extMain = await step(5, D, F);
+      ok(extMain.code === 0 && extMain.on === "probe", `...and the same on main (${extMain.on})`);
+      const { selectSubjects, mergedFrom } = await import("./marker-subjects.js");
+      ok(mergedFrom("Merge pull request #12 from some-one/branch") === "some-one" && mergedFrom("[test] Merge pull request #1 from x/y") === null && mergedFrom("Merge branch 'x'") === null, "the merged-from owner is read only from GitHub's merge subject");
+      const sel = selectSubjects({ owner: "O", firstParent: ["m"], broughtIn: () => ["b"], commits: [{ sha: "m", parents: ["a", "b"], subject: "Merge pull request #1 from o/dev" }, { sha: "b", parents: ["a"], subject: "[publish] ours" }] });
+      ok(sel.subjects.length === 2 && sel.left.size === 0, "the repository owner's own merge is read whatever the letter case");
+    }
     // GitHub unreadable: the pushed range stands and the job still passes.
     state.status = 403;
     const down = await step(3, B, C);

@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1126 variables in 113 groups.
+1128 variables in 113 groups.
 
 ## Contents
 
@@ -378,6 +378,7 @@ holds it.
 | `DISCOVERY_REFUSALS_FILE` | Discovery refusals file path. | `/data/discovery-refusals.json` | `src/discovery-refusals.js` |
 | `DISCOVERY_REFUSALS_FLUSH_MS` | Discovery refusals flush, in milliseconds. |  | `src/discovery-refusals.js` |
 | `DISCOVERY_REFUSALS_MAX_CLIENTS` | Discovery refusals maximum clients. |  | `src/discovery-refusals.js` |
+| `DISCOVERY_SNAPSHOT_MAX_AGE_MS` | Oldest copy of a discovery document (manifest, openapi.json, llms.txt, llms-full.txt, /api/pricing) answered while the load gate sheds, in milliseconds (default one hour). |  | `src/discovery-snapshots.js` |
 | `DISCOVERY_TEST_HANG_QUERY` | Discovery test hang query. |  | `src/server.js` |
 
 ## EMAIL
@@ -426,6 +427,7 @@ holds it.
 | `FACILITATOR_FUNDS_WINDOW_MS` | Facilitator funds window, in milliseconds. |  | `src/tool-failure-monitor.js` |
 | `FACILITATOR_GAS_CHECK` | Facilitator gas check. |  | `src/payments.js` |
 | `FACILITATOR_GAS_CHECK_MS` | Facilitator gas check, in milliseconds. |  | `src/facilitator-gas.js` |
+| `FACILITATOR_GAS_CLEAR_MARGIN` | Share past the settlement-gas threshold (0 to 1, default 0.2) a low reading must reach before facilitatorFunds reads ok again. |  | `src/facilitator-gas.js` |
 | `FACILITATOR_GAS_FAIL_AFTER` | Facilitator gas fail after. |  | `src/facilitator-gas.js` |
 | `FACILITATOR_GAS_FRESH_MS` | Facilitator gas fresh, in milliseconds. |  | `src/robinhood-order.js`, `src/tool-failure-monitor.js` |
 | `FACILITATOR_GAS_MIN_SETTLEMENTS` | Facilitator gas minimum settlements. |  | `src/facilitator-gas.js` |

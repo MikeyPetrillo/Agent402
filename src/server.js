@@ -52,6 +52,7 @@ import { salePathOf, saleRunKeyOf } from "./sale-path.js";
 import { requestIdMiddleware } from "./request-id.js";
 import { answerContractOf, classifyAnswer, observeJsonAnswer } from "./answer-shape.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
+import { createDiscoverySnapshots } from "./discovery-snapshots.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
 import { createInFlightGauge, raceDeadline } from "./inflight-gauge.js";
 import { posthogProxyPathAllowed, posthogProxyTypeAllowed, noteRefusedPosthogPath } from "./posthog-proxy.js";
@@ -1085,6 +1086,7 @@ import { getSharedRedisClient } from "./shared-limit.js";
 import { boundedRedisClient } from "./bounded-redis.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
+import { createReferralLegs } from "./referral-legs.js";
 import { createReferralAnswerStore, ANSWER_DIR_NAME as REFERRAL_ANSWER_DIR_NAME } from "./referral-answers.js";
 import { referralReconciliation, reconcileDays } from "./referral-reconcile.js";
 import { join as joinPath, dirname as dirnamePath } from "node:path";
@@ -3216,6 +3218,10 @@ function knownRouteSegments() {
   return set;
 }
 setStallContext(({ fromMs } = {}) => requestsDuring(fromMs, 3));
+// The free discovery documents' last good copies (src/discovery-snapshots.js):
+// kept as they are served (the capture is mounted after the compressor) and
+// answered from while the gate below sheds, so reading how to buy is never shed.
+const DISCOVERY_SNAPSHOTS = createDiscoverySnapshots();
 // Paid calls first (src/load-shed.js). When the event loop is lagging or too
 // many requests are in flight, anything unprotected is refused 503 before it
 // is parsed, so the thread stays free for payment verification and paid
@@ -3250,6 +3256,8 @@ app.use((req, res, next) => {
   if (referralDefOfPath(cp)) return next();
   // So is a tool sold through the AWS Marketplace front door.
   if (awsDefOfPath(path)) return next();
+  // A discovery document is answered from its last good copy rather than shed.
+  if (DISCOVERY_SNAPSHOTS.serve(req, res)) return;
   noteShed(why);
   // A search turned away here is counted with the discovery rules' own
   // refusals (src/discovery-refusals.js), under the rule "load-gate".
@@ -3941,6 +3949,9 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
+// After the compressor: the discovery documents' plain bytes are kept for the
+// load gate above (src/discovery-snapshots.js).
+app.use(DISCOVERY_SNAPSHOTS.capture);
 // Anthropic-SDK base-URL convention: every Anthropic client (the SDK, Claude
 // Code, the Agent SDK) appends `/v1/messages` to ANTHROPIC_BASE_URL, so a
 // buyer pointing one at a TIER (`https://agent402.tools/v1/metered`) posts to
@@ -7333,7 +7344,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ stateQueries: stateQueryStats(), loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), containedTurns: containedTurnsSummary(), brokenListings: brokenListingsSummary(),
+  res.set("Cache-Control", "no-store").json({ stateQueries: stateQueryStats(), loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), discoverySnapshots: DISCOVERY_SNAPSHOTS.status(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), containedTurns: containedTurnsSummary(), brokenListings: brokenListingsSummary(),
     // Counts and labels only: the signed-receipt store's backend and its
     // stored, skipped, failed and dropped counts; the reputation pass's state;
     // the Solana facilitator split's health (null when it is not configured).
@@ -11963,9 +11974,12 @@ function recordReferralSale(row) {
 }
 let REFERRAL_GATE = null;
 let REFERRAL_BOOK = null;
+// The split legs of each proven /ref sale (src/referral-legs.js), operator only.
+let REFERRAL_LEGS = null;
 if (REFERRAL_ROUTES) {
   try {
     REFERRAL_BOOK = createReferralBook();
+    REFERRAL_LEGS = createReferralLegs();
     // The owed answers, a file each on this process's disk, apart from the
     // book's index and never in the state database (the nightly backup copies
     // that; the directory's name is one the file backup leaves out).
@@ -12018,6 +12032,7 @@ if (REFERRAL_ROUTES) {
       runAsCaller: runAsCallerOf,
       sendToolError,
       recordSale: recordReferralSale,
+      recordSplitLegs: (row) => REFERRAL_LEGS?.record(row),
       saleBooked: (tx, payer, slug) => privateRailSaleCount(tx, "referral", payer, slug),
       isSynthetic: isSyntheticRequest,
       salePathOf,
@@ -12158,8 +12173,19 @@ app.get("/__operator/aws.json", async (req, res) => {
 app.get("/__operator/referral.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store").json(REFERRAL_GATE
-    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), openTotal: REFERRAL_BOOK.list().length, openByState: REFERRAL_BOOK.counts(), bookWrites: REFERRAL_BOOK.writeStats(), droppedRefused: (({ count, evictedEarly, unresolved }) => ({ count, evictedEarly, unresolved }))(REFERRAL_BOOK.droppedRefused()), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50), shortNet: REFERRAL_GATE.shortSales() }
+    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), openTotal: REFERRAL_BOOK.list().length, openByState: REFERRAL_BOOK.counts(), bookWrites: REFERRAL_BOOK.writeStats(), droppedRefused: (({ count, evictedEarly, unresolved }) => ({ count, evictedEarly, unresolved }))(REFERRAL_BOOK.droppedRefused()), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50), shortNet: REFERRAL_GATE.shortSales(), splitLegs: REFERRAL_LEGS ? REFERRAL_LEGS.view() : null }
     : { enabled: false });
+});
+// Per recipient address, the transfers the split contract made for our /ref
+// sales in one UTC year (?year=, default this year), from the split legs each
+// proven sale recorded (src/referral-legs.js). Operator only.
+app.get("/__operator/referral-legs.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store");
+  if (!REFERRAL_LEGS) return res.json({ enabled: false });
+  const thisYear = new Date().getUTCFullYear();
+  const y = /^\d{4}$/.test(String(req.query?.year || "")) ? Number(req.query.year) : thisYear;
+  try { res.json({ enabled: true, ...(await REFERRAL_LEGS.totals(y)), recorded: REFERRAL_LEGS.view() }); } catch (e) { res.status(503).json({ error: "the split records could not be read", detail: String(e?.message || e).slice(0, 160) }); }
 });
 // Per tool over one window (?days=, default 30, at most 90): the answers the
 // referral copy served, the sales booked for it in the sales ledger (gross and

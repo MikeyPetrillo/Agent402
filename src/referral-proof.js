@@ -36,7 +36,7 @@ function decodeRouted(log) {
   // The buyer wallet is an address word: its upper twelve bytes are zero.
   if (!/^0{24}/.test(word(0))) return null;
   try {
-    return { buyer: `0x${word(0).slice(24).toLowerCase()}`, merchantId: BigInt(`0x${word(1)}`), productId: `0x${word(2).toLowerCase()}`, gross: BigInt(`0x${word(3)}`), merchantAmt: BigInt(`0x${word(8)}`) };
+    return { buyer: `0x${word(0).slice(24).toLowerCase()}`, merchantId: BigInt(`0x${word(1)}`), productId: `0x${word(2).toLowerCase()}`, gross: BigInt(`0x${word(3)}`), legs: [4, 5, 6, 7].map((i) => BigInt(`0x${word(i)}`)), merchantAmt: BigInt(`0x${word(8)}`) };
   } catch { return null; }
 }
 const valueOf = (log) => { try { return BigInt(log.data); } catch { return null; } };
@@ -132,7 +132,14 @@ export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, am
     if (sentElsewhere) return out("unknown", "the transaction was not sent to the pay-to contract", true, true, true);
     if (B32.test(String(productId || "")) && mine[0].productId !== lc(productId)) return { ...out("unknown", "routed to this merchant for another product than the one this route sells", true, true, true), product: { configured: lc(productId), received: mine[0].productId } };
     const under = floor !== null && mine[0].merchantAmt < floor;
-    return { ...out("paid", under ? "routed to this merchant and paid out, under the minimum net" : "routed to this merchant and paid out", true, true, true, mine[0].merchantAmt.toString()), underFloor: under };
+    // The split as the receipt shows it, for the operator's books: the event's
+    // gross, its four leg words and merchant amount, and every transfer out of
+    // the contract in this payment's logs with its recipient.
+    const recipients = segment
+      .filter((l) => lc(l.address) === lc(TOKEN) && lc(l.topics?.[0]) === TRANSFER_TOPIC && lc(l.topics?.[1]) === topicOf(payTo) && /^0x0{24}[0-9a-f]{40}$/.test(lc(l.topics?.[2])) && valueOf(l) !== null)
+      .map((l) => ({ to: `0x${lc(l.topics[2]).slice(26)}`, amount: valueOf(l).toString() }));
+    const split = { gross: mine[0].gross.toString(), legs: mine[0].legs.map((v) => v.toString()), merchant: mine[0].merchantAmt.toString(), recipients };
+    return { ...out("paid", under ? "routed to this merchant and paid out, under the minimum net" : "routed to this merchant and paid out", true, true, true, mine[0].merchantAmt.toString()), underFloor: under, split };
   };
 
   const candidates = [];

@@ -111,7 +111,10 @@ example: [`0xae8e3e40…f826`](https://robinhoodchain.blockscout.com/tx/0xae8e3e
   facilitator's settlement signer (from its `/supported`) and that signer's
   balance on the chain. Fewer settlements left than
   `FACILITATOR_GAS_MIN_SETTLEMENTS` (default 500) reads
-  `facilitatorFunds=low` on `/api/gateway-status`; a balance that cannot be
+  `facilitatorFunds=low` on `/api/gateway-status`, which reads ok again only
+  once the runway is back above the minimum by `FACILITATOR_GAS_CLEAR_MARGIN`
+  (default 0.2 of it), so a runway moving with the gas price does not flap
+  the word; a balance that cannot be
   read three times running reads `facilitatorFunds=unknown`, which pages
   only once it has held past `FACILITATOR_UNREAD_PAGE_HOURS` (default 6). The
   detail is on the operator endpoint.

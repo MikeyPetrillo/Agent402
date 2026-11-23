@@ -4,6 +4,7 @@
 // scripts/test-algorand-canary-classify.js.
 import { railsReportSubcentPause, sponsorshipRowMonth } from "../src/avm-sponsorship.js";
 import { REJECTION_REASONS } from "../src/payment-reject.js";
+import { refusalReason } from "../src/refusal-reason.js";
 import algosdk from "algosdk";
 
 /**
@@ -59,6 +60,26 @@ export const isThrottle = (status, body) =>
 export const isUpstreamOutage = (status, body) =>
   status === 502 || status === 503 || status === 504 ||
   /Seller rejected the paid retry|upstream error|operation was aborted|aborted due to timeout|ECONNRESET|ETIMEDOUT|socket hang up|Bad Gateway|Gateway Time-?out|fetch failed/i.test(String(body || ""));
+
+// The edge stopped waiting for our origin (504; 524 is the edge's own "a
+// timeout occurred"). The request reached the origin, which may still finish
+// it and settle the payment: a route with a lasting effect (the router tiers)
+// holds no hang-up forgiveness ticket, so a 200 there after the edge gave up
+// is settled and booked as owed (src/hangup-settlement.js). The answer says
+// nothing about the payment; the chain decides, as for no answer at all.
+export const isEdgeTimeout = (status) => status === 504 || status === 524;
+
+// A router tier that found no outside seller doing the task on the paying
+// chain: the indexed seller set, not our rail or our handler. A 4xx, so
+// nothing was settled. Read by the server's own refusal rules
+// (src/refusal-reason.js) from the error text.
+const NO_SELLER_REASONS = new Set(["no_seller_matched", "judged_no_match"]);
+export const isNoSellerMatched = (status, body) => {
+  if (!(status >= 400 && status < 500) || status === 402) return false;
+  let text = String(body || "");
+  try { const d = JSON.parse(text); if (d && typeof d.error === "string") text = d.error; } catch { /* plain text */ }
+  return NO_SELLER_REASONS.has(refusalReason(text, status));
+};
 
 // OUR OWN gate refusing the credential before any facilitator is asked: the
 // body names the refusal class in a top-level `reason` (requirements-mismatch,
