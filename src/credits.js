@@ -2035,7 +2035,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
    */
   const efwAutoRefund = () => !/^(0|false|off|no)$/i.test(String(process.env.CREDITS_EFW_AUTO_REFUND || "").trim());
   // The day's automatic total, from the private table; none without it (every such refund waits for approval).
-  const efwDayMaxCents = () => { const n = Number(creditsGuards()?.efw?.autoRefundDayMaxUsd); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : 0; };
+  const efwDayMaxCents = () => { const n = Number(creditsGuards()?.efw?.warningRefundDayMaxUsd); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : 0; };
   const setReview = (hash, patch) => mutate(hash, (rec) => (rec?.fraudReview ? { rec: (rec.fraudReview = { ...rec.fraudReview, ...patch }, rec), result: true } : { result: null }));
   async function fraudWarning(paymentIntent, { warningId = null } = {}) {
     if (!paymentIntent) return { status: "unknown" };

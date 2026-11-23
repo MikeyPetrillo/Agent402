@@ -18,7 +18,7 @@ export function makeGuardsTable() {
   return {
     purchase: { buyerPerHour: n(2, 4), buyerPerDay: n(5, 8), sourcePerHour: n(2, 4), sourcePerDay: n(5, 8), failedMax: n(2, 4), failedWindowMs: n(30, 90) * minute, failedHoldMs: n(3, 9) * 60 * minute },
     flagged: { outcomeTypes: [tag("type"), tag("type")], riskLevels: [tag("risk")] },
-    efw: { autoRefundDayMaxUsd: n(20, 80) },
+    efw: { warningRefundDayMaxUsd: n(20, 80) },
     mcpOAuth: { emailCodeTries: n(3, 5), sendsPerEmail: n(30, 40), sendsPerIp: n(40, 60), failsPerEmail: n(4, 7), lockoutMs: n(30, 90) * minute, tokenPerIp: n(25, 40), authorizePerIp: n(40, 60), registerPerIp: n(6, 10), windowMs: n(30, 90) * minute, badTokenMax: n(5, 10), pendingMax: n(200, 400), documentMaxBytes: n(4, 8) * 1024 * 1024 },
   };
 }

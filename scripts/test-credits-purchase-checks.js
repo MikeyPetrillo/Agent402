@@ -244,7 +244,7 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   // The day so far sent the two refunds above; the next one would pass this total.
   const sentToday = charges.pi_ef1.amount_refunded + charges.pi_ef2.amount_refunded;
   const dayTable = guardsTable();
-  useGuardsTable({ ...dayTable, efw: { autoRefundDayMaxUsd: (sentToday + CREDIT_PACKS["credits-10"].cents - 1) / 100 } });
+  useGuardsTable({ ...dayTable, efw: { warningRefundDayMaxUsd: (sentToday + CREDIT_PACKS["credits-10"].cents - 1) / 100 } });
   paid("cs_ef3", "credits-10", "pi_ef3", "ef3@x.com");
   const E3 = await cr.claim("cs_ef3");
   const r3 = await cr.fraudWarning("pi_ef3");
@@ -279,7 +279,7 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   const { shared } = await import("../src/shared-limits.js");
   const dayBefore = Number((await shared.counterGet("credits-efw-auto", day))?.value) || 0;
   // Room in the day for this refund, so only the dispute stands in its way.
-  useGuardsTable({ ...guardsTable(), efw: { autoRefundDayMaxUsd: (dayBefore + CREDIT_PACKS["credits-10"].cents) / 100 } });
+  useGuardsTable({ ...guardsTable(), efw: { warningRefundDayMaxUsd: (dayBefore + CREDIT_PACKS["credits-10"].cents) / 100 } });
   const r = await cr.fraudWarning("pi_dw", { warningId: "issfr_dw" });
   ok(r.status === "disputed" && r.auto !== true && refunds.length === before && charges.pi_dw.amount_refunded === 0, "a fraud warning on a disputed payment sends no refund (the dispute decides it)");
   ok((Number((await shared.counterGet("credits-efw-auto", day))?.value) || 0) === dayBefore, "...and gives back the day's automatic total");

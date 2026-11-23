@@ -8,7 +8,7 @@
 //   { purchase: { buyerPerHour, buyerPerDay, sourcePerHour, sourcePerDay,
 //                 failedMax, failedWindowMs, failedHoldMs },
 //     flagged:  { outcomeTypes: [string], riskLevels: [string] },
-//     efw:      { autoRefundDayMaxUsd },
+//     efw:      { warningRefundDayMaxUsd },
 //     mcpOAuth: { emailCodeTries, sendsPerEmail, sendsPerIp, failsPerEmail,
 //                 lockoutMs, tokenPerIp, authorizePerIp, registerPerIp, windowMs,
 //                 badTokenMax, pendingMax, documentMaxBytes } }
@@ -21,7 +21,7 @@ import { readFileSync } from "node:fs";
 
 const COUNTS = {
   purchase: ["buyerPerHour", "buyerPerDay", "sourcePerHour", "sourcePerDay", "failedMax", "failedWindowMs", "failedHoldMs"],
-  efw: ["autoRefundDayMaxUsd"],
+  efw: ["warningRefundDayMaxUsd"],
   mcpOAuth: ["emailCodeTries", "sendsPerEmail", "sendsPerIp", "failsPerEmail", "lockoutMs", "tokenPerIp", "authorizePerIp", "registerPerIp", "windowMs", "badTokenMax", "pendingMax", "documentMaxBytes"],
 };
 const LISTS = { flagged: ["outcomeTypes", "riskLevels"] };
@@ -50,7 +50,7 @@ function parse(text) {
     out[s] = {};
     for (const k of ks) {
       const n = Number(o[s]?.[k]);
-      if (!Number.isFinite(n) || n < 0 || (k !== "autoRefundDayMaxUsd" && n <= 0)) return { state: "partial", table: null };
+      if (!Number.isFinite(n) || n < 0 || (k !== "warningRefundDayMaxUsd" && n <= 0)) return { state: "partial", table: null };
       out[s][k] = n;
     }
     Object.freeze(out[s]);
