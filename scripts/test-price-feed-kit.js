@@ -89,6 +89,10 @@ await throws(h("price-coingecko")({ ids: " , " }), 400, "price-coingecko: blank 
     const r = await h("price-coingecko")({ ids: ["bitcoin", "ethereum", "solana", "not-a-coin-zz"] });
     const [btc, eth, sol, miss] = r.prices;
     ok(r.check === CHECK_SOURCE && r.check === "hyperliquid-oracle", `price-coingecko: check names the second source (${r.check})`);
+    {
+      const { COINGECKO_CREDIT, HYPERLIQUID_ATTRIBUTION } = await import("../src/data-attribution.js");
+      ok(r.credit === `${COINGECKO_CREDIT} ${HYPERLIQUID_ATTRIBUTION}`, `price-coingecko: a checked answer credits CoinGecko, then Hyperliquid (${r.credit})`);
+    }
     ok(btc.divergencePct === 0.05 && eth.divergencePct === -0.5, `price-coingecko: divergencePct is the gap to the second source, in percent (${btc.divergencePct}, ${eth.divergencePct})`);
     ok(btc.stale === false && eth.stale === true, "price-coingecko: stale reads the upstream timestamp against the 10 minute bound");
     ok(sol.divergencePct === null && sol.stale === false, "price-coingecko: a delisted reference market gives null, never a number");

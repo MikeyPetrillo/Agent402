@@ -22,7 +22,7 @@ import { buildSkillTools } from "../src/tools/skill-runner.js";
 import { SKILL_PACKS } from "../src/skills.js";
 import { missingExampleKeys } from "../src/answer-shape.js";
 import { responseSchemaFor } from "../src/openapi-schema.js";
-import { COINGECKO_CREDIT, COINGECKO_ATTRIBUTION, COINGECKO_API_URL, attributionTailOf, creditAnswers, withCredit } from "../src/data-attribution.js";
+import { COINGECKO_CREDIT, COINGECKO_ATTRIBUTION, COINGECKO_API_URL, HYPERLIQUID_ATTRIBUTION, attributionTailOf, creditAnswers, withCredit } from "../src/data-attribution.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
@@ -153,7 +153,11 @@ const CG_TOOLS = [
 ok(CG_TOOLS.length >= 24, `the CoinGecko-backed tools are read from the kits (${CG_TOOLS.length})`);
 for (const t of CG_TOOLS) {
   ok(t.attribution === "coingecko" && attributionTailOf(t.description) === COINGECKO_CREDIT && t.description.includes(COINGECKO_API_URL), `${t.slug}: description ends with the linked credit`);
-  ok(t.credit === COINGECKO_CREDIT && t.discovery?.output?.example?.credit === COINGECKO_CREDIT, `${t.slug}: published example carries the credit with the link`);
+  // A price answer whose check read the second source credits it after
+  // CoinGecko (crypto-kit checkCredited), as its example shows.
+  const exCredit = t.discovery?.output?.example?.credit;
+  const checked = t.discovery?.output?.example?.check === "hyperliquid-oracle";
+  ok(t.credit === COINGECKO_CREDIT && (checked ? exCredit === `${COINGECKO_CREDIT} ${HYPERLIQUID_ATTRIBUTION}` : exCredit === COINGECKO_CREDIT), `${t.slug}: published example carries the credit with the link`);
 }
 for (const t of [...CRYPTO_TOOLS, ...PRICE_FEED_TOOLS].filter((x) => !CG_TOOLS.includes(x))) {
   ok(t.credit === undefined && !Object.hasOwn(t.discovery?.output?.example || {}, "credit") && t.attribution !== "coingecko", `${t.slug}: not CoinGecko data, no CoinGecko credit`);
