@@ -38,7 +38,10 @@ const cr = createCredits({ stripe: {}, baseUrl: "https://agent402.tools", storeD
 const tagOf = (v) => createHmac("sha256", SECRET).update(`credits-badkey|${v}`).digest("hex").slice(0, 24);
 const settle = () => new Promise((r) => setTimeout(r, 50));
 
-for (const client of ["203.0.113.7", "2001:db8:1:2:aaaa::1"]) {
+// Fresh clients each run, so a store an earlier run wrote to reads nothing of theirs.
+const r8 = () => Math.floor(Math.random() * 250) + 1, h16 = () => Math.floor(Math.random() * 0xffff).toString(16);
+const V6 = `2001:db8:${h16()}:${h16()}`;
+for (const client of [`203.0.${r8()}.${r8()}`, `${V6}:aaaa::1`]) {
   const tag = tagOf(limiterKey(client));
   for (let i = 0; i < BAD; i++) { cr.noteBadKey(client); if (i % 500 === 0) await settle(); }
   await settle();
@@ -49,7 +52,7 @@ for (const client of ["203.0.113.7", "2001:db8:1:2:aaaa::1"]) {
   ok(await cr.badKeyHeld(client), `${redisUrl ? "redis" : "memory"}: the client is held past the bound`);
 }
 // The same /64 counts as one client.
-ok(await cr.badKeyHeld("2001:db8:1:2:bbbb::9"), "another address in the same IPv6 /64 is the same client");
+ok(await cr.badKeyHeld(`${V6}:bbbb::9`), "another address in the same IPv6 /64 is the same client");
 
 if (redisUrl) {
   const { getSharedRedisClient } = await import("../src/shared-limit.js");
