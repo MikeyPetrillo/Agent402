@@ -7,6 +7,7 @@
 // reload; operator status never exposes key material.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { looseCreditsChecks } from "./lib/credits-loose-checks.js"; // wide purchase checks (see the file)
+import { guardsTable } from "./lib/credits-guards-table.js";
 import { createCredits, CREDIT_PACKS, KEY_RE, usdToMicro, microToUsd } from "../src/credits.js";
 import { rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -342,10 +343,10 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   // A key in the right format that we never issued is unknown, however it was made.
   const forged = "a402_" + "A".repeat(32);
   ok(KEY_RE.test(forged) && cr.balance(forged) === null, "a well-formed key we never issued holds nothing (keys are checked against stored hashes)");
-  process.env.CREDITS_BAD_KEY_MAX = "3";
+  const badMax = guardsTable().badKey.failedMax; // the private table's bound, drawn for this run
   const g = cr.gate(() => ({ priceUsd: 0.001, slug: "hash" }));
   const tryKey = (k, ip = "203.0.113.9") => { const r = fakeRes(); let next = false; g({ method: "GET", path: "/api/hash", ip, headers: { authorization: `Bearer ${k}` } }, r, () => { next = true; }); return { r, next }; };
-  for (let i = 0; i < 3; i++) tryKey("a402_" + String(i).repeat(40));
+  for (let i = 0; i < badMax; i++) tryKey("a402_" + String(i).padStart(3, "0").repeat(14));
   const after = tryKey(KEY);
   ok(after.r.statusCode !== 429 && after.next === true, "past the failed-key bound a valid key from the same client is still served (a paying customer behind a shared address)");
   const wrong = tryKey("a402_" + "w".repeat(40)), wrong2 = tryKey("a402_" + "v".repeat(40));
@@ -354,10 +355,9 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   ok(!/\d/.test(String(wrong.r.body?.error)), "the 429 names no count or window");
   const fresh1 = tryKey("a402_" + "x".repeat(40), "198.51.100.7"), fresh2 = tryKey("a402_" + "y".repeat(40), "198.51.100.7");
   ok(fresh1.r.statusCode === 402 && JSON.stringify(fresh1.r.body) === JSON.stringify(fresh2.r.body), "under the bound an unknown key and a wrong key answer identically");
-  ok(cr.badKeyStats().failures >= 3 && cr.badKeyStats().clientsOverThreshold === 1, "a client past the threshold is counted for the operator view");
-  for (let i = 0; i < 3; i++) tryKey("a402_" + String(i + 5).repeat(40), `2001:db8:1:2::${i + 1}`);
+  ok(cr.badKeyStats().failures >= badMax && cr.badKeyStats().clientsOverThreshold === 1, "a client past the threshold is counted for the operator view");
+  for (let i = 0; i < badMax; i++) tryKey("a402_" + String(i + 500).repeat(14), `2001:db8:1:2::${i + 1}`);
   ok(cr.badKeyStats().clientsOverThreshold === 2, "IPv6 addresses in one /64 count as one client");
-  delete process.env.CREDITS_BAD_KEY_MAX;
 }
 
 // ---- daily purchase limit: one buyer, at most CREDITS_DAILY_MAX_USD in 24 hours ----

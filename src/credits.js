@@ -1779,20 +1779,23 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // stored record, so it cannot be made up. Refusing a client after failed
   // keys would also refuse a paying customer behind the same address, so a
   // valid key is ALWAYS served: only failed lookups are slowed. Per client
-  // (req.ip, an IPv6 address by its /64), a client that sends
-  // CREDITS_BAD_KEY_MAX unknown, malformed or revoked keys within
-  // CREDITS_BAD_KEY_WINDOW_MS is logged once, counted on the operator credits
-  // view, and its further failed lookups are answered 429 until that window
-  // ends (a key that works is answered as usual). The count is kept in the
-  // shared store too; this process's own map (bounded) answers when the store
-  // does not.
+  // (req.ip, an IPv6 address by its /64), a client that sends the private
+  // table's badKey.failedMax unknown, malformed or revoked keys within its
+  // badKey.windowMs (src/credits-guards.js) is logged once, counted on the
+  // operator credits view, and its further failed lookups are answered 429
+  // until that window ends (a key that works is answered as usual). The count
+  // is kept in the shared store too; this process's own map (bounded) answers
+  // when the store does not. Without the table nobody is held: a key cannot
+  // be guessed either way, and a valid key is served regardless.
   const badKeys = new Map(); // client -> { n, until }
-  const badKeyMax = () => { const n = Number(process.env.CREDITS_BAD_KEY_MAX); return Number.isFinite(n) && n > 0 ? n : 20; };
-  const badKeyWindowMs = () => { const n = Number(process.env.CREDITS_BAD_KEY_WINDOW_MS); return Number.isFinite(n) && n > 0 ? n : 10 * 60 * 1000; };
+  const badKeyBound = () => creditsGuards()?.badKey || null;
+  const badKeyMax = () => badKeyBound()?.failedMax ?? Infinity;
+  const badKeyWindowMs = () => badKeyBound()?.windowMs ?? 0;
   const badKeyStats = { failures: 0, clientsOverThreshold: 0 };
   function noteBadKey(client, at = now()) {
     const k = limiterKey(String(client || "?"));
     badKeyStats.failures++;
+    if (!badKeyBound()) return;
     let e = badKeys.get(k);
     if (!e || e.until <= at) { e = { n: 0, until: at + badKeyWindowMs() }; }
     e.n++;
@@ -1814,6 +1817,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     return Boolean(e && e.until > at && e.n >= badKeyMax());
   }
   async function badKeyHeld(client, at = now()) {
+    if (!badKeyBound()) return false;
     if (badKeyHeldHere(client, at)) return true;
     const r = await shared.flagGet("credits-badkey-hold", tagOf("badkey", limiterKey(String(client || "?"))), { now: at }).catch(() => null);
     return Boolean(r?.ok && r.until > at);
