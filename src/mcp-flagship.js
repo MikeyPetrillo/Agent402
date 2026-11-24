@@ -92,7 +92,22 @@ const LISTED_DOTTED = new Set([
   ...Object.values(FLAGSHIP_MCP_NAMES),
   ...Object.values(META_MCP_NAMES),
   ...Object.values(MCP_CALL_ALIASES),
+  "decide.feedback",
 ]);
+
+/** The /mcp query value (`?tool_names=underscore`) that lists plain names. */
+export const PLAIN_TOOL_NAMES_VALUE = "underscore";
+
+/**
+ * A listed name in letters, digits, _ and - only, for a host that refuses a
+ * dot in a tool name: the snake form when resolveListedName takes it back to
+ * the same tool, else the name as listed.
+ */
+export function plainToolName(name) {
+  if (typeof name !== "string" || !name.includes(".")) return name;
+  const plain = name.replace(/\./g, "_");
+  return resolveListedName(plain) === name ? plain : name;
+}
 
 /**
  * Resolve any CallTool name to the canonical listed dotted name: a prior

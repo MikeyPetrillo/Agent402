@@ -800,6 +800,8 @@ export function llmsTxt(baseUrl, catalog) {
   const shortChains = (text) => text.replace(/(\nPrices by chain: [^\n]*?\.) \/api\/pricing lists [^\n]*\./, "$1");
   const shortAdapters = (text) => text.split("\n").map((l) => l.replace(/^(- \[[^\]]+\]\([^)\s]+\)): ([^:]+): .+$/, "$1: $2")).join("\n");
   const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "");
+  const platformLinks = new Set(PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug})`));
+  const shortPlatforms = (text) => text.split("\n").map((l) => { const head = l.slice(0, l.indexOf("): ") + 1); return platformLinks.has(head) ? head : l; }).join("\n");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
   const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
   // Key machine surfaces: the short index names each surface in one clause
@@ -844,7 +846,8 @@ export function llmsTxt(baseUrl, catalog) {
     if (name === "Call a model (metered, the default)") return full.slice(start, end).join("\n").replace(" (OpenAI chat, Anthropic Messages and OpenAI Responses wires)", "").trimEnd();
     if (name === "Settlement chains") return shortChains(full.slice(start, end).join("\n").trimEnd());
     if (name === "Framework adapters (zero-dependency npm)") return shortAdapters(full.slice(start, end).join("\n").trimEnd());
-    if (name === "Connect via MCP") return shortHosts(full.slice(start, end).join("\n").trimEnd());
+    // A platform page keeps its link here; its setup clause is in /llms-full.txt.
+    if (name === "Connect via MCP") return shortPlatforms(shortHosts(full.slice(start, end).join("\n").trimEnd()));
     if (name !== "Key machine surfaces") return full.slice(start, end).join("\n").trimEnd();
     return [full[start], `Each in one clause; in full: ${baseUrl}/llms-full.txt`, ...full.slice(start + 1, end).map(surfaceBrief)].join("\n").trimEnd();
   }).filter(Boolean);
