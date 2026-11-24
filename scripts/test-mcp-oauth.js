@@ -518,7 +518,11 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
 
 // Code sends: a service-wide hourly budget and a per-address daily total, refused with the same answer.
 {
-  const h = await harness({ table: { sendsGlobalPerHour: 2, sendsPerEmailDay: 1 } });
+  // The block starts several sign-ins from one address and one network; the
+  // pending caps of this run's random table must hold them all (they are not
+  // what this block tests), or the oldest is evicted and its send reads 400.
+  const P = BASE_TABLE.mcpOAuth;
+  const h = await harness({ table: { sendsGlobalPerHour: 2, sendsPerEmailDay: 1, pendingPerAddress: Math.max(P.pendingPerAddress, 16), pendingPerNetwork: Math.max(P.pendingPerNetwork, 32), pendingPerClient: Math.max(P.pendingPerClient, 32) } });
   try {
     const client = await h.client("198.18.60.1");
     const send = async (ip, email) => { const s = await h.start(ip, client); const r = await h.post(s, { action: "email", email }); return { status: r.status, html: await r.text() }; };
