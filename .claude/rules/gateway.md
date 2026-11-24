@@ -299,5 +299,7 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `NAMED_AUDIO_MODELS` names it (a comma list of ids, or `all`; unset: none), its private row is present
   (`speech.<id>`, `sttPerMinute.<id>`, all in `REQUIRED`) and the route's cap on it is inside
   `ADDITION_MARGIN` of the price; no default chain holds one. A model is switched on only after a
-  supervised paid call proves it and measures what it bills (the listing's transcription unit differs by provider).
+  supervised paid call proves it and measures what it bills (the listing's transcription unit differs by provider);
+  the measured unit is declared on the model (`listedPer`: second, minute or hour), and the live guard
+  (`scripts/test-gateway-model-ids.js`) then holds its per-minute row to the dearest listed endpoint in that unit.
   Suite: `scripts/test-speech-additions.js`.
