@@ -495,15 +495,15 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(/language confidence/.test(transcribe.description) && /language_confidence/.test(transcribe.discovery.inputSchema.properties.diarize.description), "the description and the diarize schema name the language confidence it adds");
 }
 
-// wiki/TTS.md names the backup chain the kit walks: the last backup by its
-// current MAI-Voice version (read from TTS_BACKUP_MODELS), never the 2.0 ids.
+// wiki/TTS.md describes the tiers without naming the models or the backup
+// chain behind them (the answer's model field names the one that spoke), so
+// no model id there can go stale.
 {
   const { readFileSync } = await import("node:fs");
   const tts = readFileSync(new URL("../wiki/TTS.md", import.meta.url), "utf8");
-  const mai = TTS_BACKUP_MODELS.find((m) => /mai-voice-/i.test(m)) || "";
-  const ver = (mai.match(/mai-voice-([\d.]+)$/i) || [])[1];
-  ok(ver && tts.includes(`then MAI-Voice-${ver} (each of the ten names gets its own English voice)`), `wiki/TTS.md names MAI-Voice-${ver} as the last backup, as TTS_BACKUP_MODELS does (${mai})`);
-  ok(!/MAI-Voice-2(?![.\d])|mai-voice-2(?![.\d])/i.test(tts), "wiki/TTS.md names none of the MAI-Voice-2 (2.0) ids as current");
+  const ids = [...TTS_BACKUP_MODELS, ...Object.values(TTS_TIERS).flatMap((t) => [t.model, ...(t.chain || [])])].filter(Boolean);
+  ok(ids.every((id) => !tts.includes(id)), "wiki/TTS.md names no model id the kit walks");
+  ok(!/"provider":/.test(tts), "wiki/TTS.md's example answer names no provider");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
