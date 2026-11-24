@@ -214,7 +214,18 @@ try {
   // from 2026.11.5 (the same release is published to both). On a ClawHub-default
   // host the npm channel is proven too, with the explicit `npm:` prefix.
   const bareSource = /ClawHub by default/.test(installHelp.out) ? "clawhub" : "npm";
-  const registryInstalls = [["agent402-model-provider", bareSource], ...(bareSource === "npm" ? [] : [["npm:agent402-model-provider", "npm"]])];
+  // The name a user installs today: this package's name once a real release of
+  // it is on npm, and until then the earlier name it was published under
+  // (scripts/lib/package-renames.js), whose release is the full plugin. A
+  // claim placeholder (a "-claim." prerelease) is not a release.
+  const { PACKAGE_RENAMES } = await import("../scripts/lib/package-renames.js");
+  const ownName = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).name;
+  const earlier = PACKAGE_RENAMES.find((r) => r.registry === "npm" && r.name === ownName)?.old || null;
+  const latest = await sh("npm", ["view", ownName, "version"], { env });
+  const released = latest.status === 0 && /^\d+\.\d+\.\d+$/.test(latest.out.trim());
+  const pub = released || !earlier ? ownName : earlier;
+  if (pub !== ownName) console.log(`note - ${ownName} has no release on npm yet; the registry installs use ${pub}, the name its current release is under`);
+  const registryInstalls = [[pub, bareSource], ...(bareSource === "npm" ? [] : [[`npm:${pub}`, "npm"]])];
   for (const [spec, source] of registryInstalls) {
     const regHome = join(work, `home-registry-${source}`);
     await sh("mkdir", ["-p", regHome]);
