@@ -69,6 +69,15 @@ export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or 
 // src/tools/frankfurter.js).
 export const ECB_ATTRIBUTION = "Source: European Central Bank; the ECB reference rates are available free of charge at ecb.europa.eu.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
+// Government sources that ask for a credit line (public-domain data, carried
+// as each answer's `credit`, like the network sources below): the USGS asks
+// for "Credit: U.S. Geological Survey" on its data (earthquakes); the Census
+// Bureau asks a product using its API to say it is not endorsed or certified
+// (geo-lookup, on the answers the Census geocoder served); openFDA's credit
+// line names the FDA (the openFDA tools).
+export const USGS_CREDIT = "Credit: U.S. Geological Survey.";
+export const CENSUS_CREDIT = "This product uses the Census Bureau Data API but is not endorsed or certified by the Census Bureau.";
+export const OPENFDA_CREDIT = "Data provided by the U.S. Food and Drug Administration (https://open.fda.gov).";
 // Network sources, each credited by name and link on the answers it serves
 // (the `credit` field; no key in ATTRIBUTIONS, so a tool's catalog text and
 // listing are unchanged, and the 402 sample is read without the field:

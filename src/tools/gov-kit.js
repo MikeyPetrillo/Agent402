@@ -24,7 +24,7 @@
 // College Scorecard + FEC use the api.data.gov key (DATA_GOV_API_KEY, DEMO_KEY
 // fallback); the rest are keyless. (Treasury debt/rates live in macro-kit; don't
 // dup here.)
-import { attribute, FEMA_NOTICE } from "../data-attribution.js";
+import { attribute, creditAnswers, withCredit, FEMA_NOTICE, USGS_CREDIT, CENSUS_CREDIT, OPENFDA_CREDIT } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { partialFields, clampFields } from "../partial-answer.js";
@@ -1420,6 +1420,24 @@ export const GOV_TOOLS = [
 // for a citation of the endpoint (with its version) and the access date: the
 // description ends with the disclaimer, and every answer carries all three.
 attribute(GOV_TOOLS.find((t) => t.slug === "fema-disasters"), "fema");
+// Credit lines the sources ask for (src/data-attribution.js): USGS on every
+// earthquakes answer, the FDA on every openFDA answer, and the Census
+// Bureau's statement on a geo-lookup answer the Census geocoder served (a
+// fallback answer from another agency carries its own source only).
+creditAnswers(GOV_TOOLS.find((t) => t.slug === "earthquakes"), USGS_CREDIT);
+for (const slug of ["drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "drug-shortages", "drug-orange-book", "device-510k", "device-adverse-events", "device-recalls", "food-recalls"]) {
+  const t = GOV_TOOLS.find((x) => x.slug === slug);
+  if (t) creditAnswers(t, OPENFDA_CREDIT);
+}
+{
+  const geo = GOV_TOOLS.find((t) => t.slug === "geo-lookup");
+  const inner = geo.handler;
+  const censusCredit = (a) => (a && typeof a === "object" && /census\.gov/.test(String(a.source || "")) ? withCredit(a, CENSUS_CREDIT) : a);
+  geo.handler = async function geoCredited(...args) { return censusCredit(await inner.apply(this, args)); };
+  for (const k of Object.keys(inner)) geo.handler[k] = inner[k];
+  Object.defineProperty(geo.handler, "toString", { value: () => String(inner) });
+  geo.discovery.output.example = censusCredit(geo.discovery.output.example);
+}
 
 markEndsAtCeiling(GOV_TOOLS, ["device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-orange-book", "drug-recalls", "drug-shortages", "earthquakes", "fec-candidates", "federal-awards", "fema-disasters", "food-recalls", "geo-lookup", "vehicle-recalls", "vin-decode", "weather-alerts"]);
 
