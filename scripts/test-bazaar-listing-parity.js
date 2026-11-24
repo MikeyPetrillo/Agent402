@@ -24,7 +24,7 @@ import { mkdtempSync, rmSync, symlinkSync, existsSync, readFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { withoutLicenseFields } from "../src/data-attribution.js";
+import { withoutLicenseFields, ATTRIBUTION_TAILS, PREVIOUS_ATTRIBUTION_TAILS } from "../src/data-attribution.js";
 import { WITHDRAWN_SOURCE_FIELDS } from "../src/resale-terms.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -105,6 +105,13 @@ export const REMOVED_SAMPLE_FIELDS = Object.freeze({
   "token-safety": Object.freeze(["verdict", "because", "blocking", "warnings"]),
 });
 
+const CREDIT_TAILS = [...ATTRIBUTION_TAILS, ...PREVIOUS_ATTRIBUTION_TAILS].sort((a, b) => b.length - a.length);
+export function withoutCredits(text) {
+  let s = String(text || "");
+  for (const t of CREDIT_TAILS) s = s.split(t).join("");
+  return s.trim();
+}
+
 /** What `now` lost against `then` for one route ([] when nothing). A
  *  sample field named for the route's slug in `withdrawn` (a source figure a
  *  tool stopped answering, src/resale-terms.js WITHDRAWN_SOURCE_FIELDS) may
@@ -114,7 +121,9 @@ export function listingLosses(then, now, withdrawn = WITHDRAWN_SOURCE_FIELDS) {
   const lost = [];
   if (!then?.pr) return lost;
   if (!now?.pr) return [`no 402 listing (status ${now?.status ?? now?.err})`];
-  const da = String(then.pr.resource?.description || ""), db = String(now.pr.resource?.description || "");
+  // A source's credit sentence is set aside on both sides: its wording is the
+  // source's (and may change with its terms), not the listing's own text.
+  const da = withoutCredits(then.pr.resource?.description), db = withoutCredits(now.pr.resource?.description);
   if (db.length < da.length) lost.push(`description ${da.length} -> ${db.length} chars`);
   const ea = exampleOf(then.pr), eb = exampleOf(now.pr);
   if (ea !== undefined && eb === undefined) lost.push("sample output dropped");
@@ -153,6 +162,7 @@ export function listingLosses(then, now, withdrawn = WITHDRAWN_SOURCE_FIELDS) {
   ok(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1, rawShare: 3 }), { "z-tool": ["rawUsd"] }).length === 0, "control: a withdrawn source field may leave the sample");
   ok(/lost rawUsd/.test(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1 }), { "other-tool": ["rawUsd"] })[0] || ""), "control: a field withdrawn for another slug is still a loss");
   ok(/still carries withdrawn source field rawUsd/.test(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1, rawUsd: 2 }), { "z-tool": ["rawUsd"] }).join() || ""), "control: a withdrawn field left in the sample is a loss");
+  ok(listingLosses(pr(`Prices. ${PREVIOUS_ATTRIBUTION_TAILS[0]}`, { a: 1 }), pr(`Prices. ${ATTRIBUTION_TAILS.find((t) => /CoinGecko/.test(t))}`, { a: 1 })).length === 0 && /description/.test(listingLosses(pr(`Prices and more. ${PREVIOUS_ATTRIBUTION_TAILS[0]}`, { a: 1 }), pr(`Prices. ${PREVIOUS_ATTRIBUTION_TAILS[0]}`, { a: 1 }))[0] || ""), "control: a reworded source credit is not a lost description; a shorter text before it still is");
   ok(listingLosses({ pr: null }, pr("a", {})).length === 0 && /no 402/.test(listingLosses(pr("a", {}), { status: 410 })[0] || ""), "control: a route the base did not list is not compared; one that stopped listing is a loss");
   const withInput = (props, where = "body") => ({ pr: { resource: { description: "a" }, extensions: { bazaar: { info: {}, schema: { properties: { input: { properties: { [where]: { properties: props } } } } } } } } });
   const full = { url: { type: "string", maxLength: 2048, description: "The URL to look up" }, mode: { type: "string", enum: ["a", "b"] } };

@@ -490,12 +490,13 @@ const depegWatch = {
       example: {
         source: "coingecko", fetchedAt: "2026-11-16T12:00:00.000Z", cached: false,
         peg: "USD $1.00", minMarketCapUsd: 100000000, thresholdBps: 50,
-        screened: 38, assessed: 33, flaggedCount: 1, returned: 2, matched: 33, complete: false, truncated: true,
+        screened: 38, assessed: 33, flaggedCount: 1, returned: 1, matched: 33, complete: false, truncated: true,
         onPegMarketCapSharePct: 99.41,
         worstNow: { symbol: "XUSD", deviationBps: -92.1 },
+        // One row: the sample and the full description fit the 402's listing
+        // budget together (src/payments.js fitChallenge).
         coins: [
           { rank: 1, id: "example-usd", symbol: "XUSD", name: "Example USD", deviationBps: -92.1, maxDeviation24hBps: 117.2, maxDeviation7dBps: 131.5, marketCapSharePct: 0.07, status: "stressed", flags: ["off-peg-now", "off-peg-24h", "off-peg-7d"] },
-          { rank: 2, id: "tether", symbol: "USDT", name: "Tether", deviationBps: -6.49, maxDeviation24hBps: 9.1, maxDeviation7dBps: 14.3, marketCapSharePct: 61.2, status: "on-peg", flags: [] },
         ],
         notAssessed: { count: 5, reason: "7-day median price is more than 2% from $1: another currency's peg, a value-accruing token, or a peg lost more than a week ago", coins: [{ id: "example-euro", symbol: "XEUR", distanceFromUsdPct: 9.9 }] },
       },

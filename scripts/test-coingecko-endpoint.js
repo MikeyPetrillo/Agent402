@@ -137,13 +137,13 @@ for (const [mod, call] of MODULES) {
 ok(!printed.some((line) => line.includes(KEY)), "key never printed to the console");
 
 // ---------------------------------------------------------------------------
-// Source credit: CoinGecko's API terms ask for "Data provided by CoinGecko"
+// Source credit: CoinGecko's API terms (section 4.3) ask for "Powered by CoinGecko"
 // with a link to its API page, next to the data. Every CoinGecko-backed tool
 // ends its description with the linked sentence, publishes it as `credit` in
 // its example, and every answer carries it.
 // ---------------------------------------------------------------------------
 ok(COINGECKO_API_URL === "https://www.coingecko.com/en/api", "credit link is CoinGecko's API page");
-ok(COINGECKO_CREDIT === `Data provided by CoinGecko (${COINGECKO_API_URL}).` && COINGECKO_ATTRIBUTION === COINGECKO_CREDIT, "credit: the sentence with its link, the same text the descriptions end with");
+ok(COINGECKO_CREDIT === `Powered by CoinGecko (${COINGECKO_API_URL}).` && COINGECKO_ATTRIBUTION === COINGECKO_CREDIT, "credit: the sentence with its link, the same text the descriptions end with");
 const CG_TOOLS = [
   ...CRYPTO_TOOLS,
   ...CRYPTO_MARKETS_TOOLS,

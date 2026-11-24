@@ -199,7 +199,7 @@ function localRefill(now) {
 // Attribution the CoinGecko API terms require next to the data (API Terms of
 // Service clause 4.1.4, https://www.coingecko.com/en/api_terms, and the brand
 // attribution guide, https://brand.coingecko.com/resources/attribution-guide,
-// which lists "Data provided by CoinGecko" among the accepted forms). Every
+// whose section 4.3 asks for "Powered by CoinGecko" displayed prominently). Every
 // CoinGecko-backed tool's description ends with it; the vendor-name check in
 // scripts/test-no-third-party-names.js allows it there and nowhere else.
 // The sentence lives in src/data-attribution.js (key "coingecko").

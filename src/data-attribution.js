@@ -32,12 +32,13 @@
 // services in one short sentence, the disclaimer once, so that a listing's
 // shortest cut (300 characters, src/payments.js) keeps the run whole; its
 // answers carry each full credit.
-// CoinGecko's API terms ask for the credit with a link to its API page,
-// shown next to the data: the description sentence carries the link, and
+// CoinGecko's API terms (section 4.3) ask for "Powered by CoinGecko",
+// displayed prominently with a link to its API page next to the data: the
+// description sentence carries the link, and
 // every CoinGecko-backed answer carries the same sentence as `credit`
 // (creditAnswers below).
 export const COINGECKO_API_URL = "https://www.coingecko.com/en/api";
-export const COINGECKO_ATTRIBUTION = `Data provided by CoinGecko (${COINGECKO_API_URL}).`;
+export const COINGECKO_ATTRIBUTION = `Powered by CoinGecko (${COINGECKO_API_URL}).`;
 export const COINGECKO_CREDIT = COINGECKO_ATTRIBUTION;
 export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
 export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0).";
@@ -207,6 +208,12 @@ export const ATTRIBUTIONS = Object.freeze({
 
 /** Every sentence the listing cut keeps when a description ends with it. */
 export const ATTRIBUTION_TAILS = Object.freeze(Object.values(ATTRIBUTIONS));
+// Credit sentences a source's terms had us print before their current wording
+// (CoinGecko's "Data provided by", replaced by its section 4.3 "Powered by"):
+// the listing parity check (scripts/test-bazaar-listing-parity.js) sets them
+// aside with the current ones, so a credit reworded is not read as a listing
+// that lost its description. Never printed.
+export const PREVIOUS_ATTRIBUTION_TAILS = Object.freeze([`Data provided by CoinGecko (${COINGECKO_API_URL}).`]);
 
 const endsWithSentence = (s, t) => s.endsWith(t) && (s.length === t.length || /\s/.test(s[s.length - t.length - 1]));
 
