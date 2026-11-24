@@ -169,9 +169,7 @@ export const COUNTRIES_ODBL_NOTICE = "Contains information from world-countries,
 export const countriesDatabaseUrl = () => `${String(process.env.BASE_URL || "https://agent402.tools").replace(/\/+$/, "")}${COUNTRIES_DATABASE_PATH}`;
 
 // Chain and crypto data sources, each credited with a link wherever its data
-// is served. GoPlus's API terms ask for attribution "via a backlink or a
-// mention" (src/tools/token-risk-kit.js); the EAS indexer, RugCheck,
-// Hyperliquid's info API and Sourcify (verified source and its signature
+// is served. The EAS indexer, RugCheck, Hyperliquid's info API and Sourcify (verified source and its signature
 // database) are public services for builders, credited by name and link
 // (src/tools/onchain-identity-kit.js, solana-intel-kit.js, derivatives-kit.js,
 // contract-kit.js). Each is credited on the answers it serves, in the `credit`
@@ -181,7 +179,6 @@ export const countriesDatabaseUrl = () => `${String(process.env.BASE_URL || "htt
 // (addCredit). They have no key in ATTRIBUTIONS: a tool's catalog text and
 // its listing are unchanged, and the 402 sample is read without the field
 // (withoutAnswerOnlyFields below).
-export const GOPLUS_ATTRIBUTION = "Powered by GoPlus Security (https://gopluslabs.io).";
 export const EAS_ATTRIBUTION = "Indexed by EASSCAN (https://easscan.org).";
 export const RUGCHECK_ATTRIBUTION = "Data from RugCheck (https://rugcheck.xyz).";
 export const HYPERLIQUID_ATTRIBUTION = "Data from Hyperliquid (https://hyperliquid.xyz).";
@@ -385,7 +382,7 @@ export const SOURCE_LICENSE_NOTE = "Each file is its authors' work, under the li
 // The ECB sentence ends each FX description (read before payment) and rides
 // every answer, and the government credit lines ride every answer: none of
 // them takes the 402 sample's room either.
-const ANSWER_ONLY_CREDITS = Object.freeze([GOPLUS_ATTRIBUTION, EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION, ECB_ATTRIBUTION, USGS_CREDIT, CENSUS_CREDIT, OPENFDA_CREDIT]);
+const ANSWER_ONLY_CREDITS = Object.freeze([EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION, ECB_ATTRIBUTION, USGS_CREDIT, CENSUS_CREDIT, OPENFDA_CREDIT]);
 // A disclosure flag every answer of its tools carries, stated in the tool's
 // description before payment (the AI-generated voice, src/ai-voice.js).
 const ANSWER_ONLY_FLAGS = Object.freeze(["aiGeneratedVoice"]);

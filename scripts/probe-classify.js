@@ -3,7 +3,7 @@
 // scripts/avm-canary-classify.js).
 //
 // The distinction that matters: a THIRD PARTY being down is not our defect and
-// must never fail a build (EDGAR, openFDA, GoPlus and DexScreener all have bad
+// must never fail a build (EDGAR, openFDA, Sourcify and DexScreener all have bad
 // minutes). Our own code throwing is exactly the defect this lane exists to
 // find - the 2026-08-29 domain-audit outage was a `TypeError: ... is not
 // iterable` inside a probe, which answered HTTP 500 for every domain that

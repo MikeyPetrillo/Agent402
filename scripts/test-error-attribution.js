@@ -114,15 +114,15 @@ const realFetch = globalThis.fetch;
   const tool = () => async () => { throw Object.assign(new Error("not needed"), { statusCode: 404 }); };
   const chat = async () => { throw new Error("synthesis must not run"); };
   const input = { address: "0x4200000000000000000000000000000000000006", chain: "base" };
-  const run = (probeGoPlus) => makeTokenRiskHandler("token-risk-pro", { tool, chat, probeGoPlus, probeDexPairs: async () => ({ totalPairs: 0, pairs: [] }) })(input).then(() => null, (e) => e);
+  const run = (probeTokenFacts) => makeTokenRiskHandler("token-risk-pro", { tool, chat, probeTokenFacts })(input).then(() => null, (e) => e);
   const ours = await run(async () => { const o = undefined; return o.result; });
   ok(ours && !/source is unavailable/i.test(ours.message) && /internal error on our side/.test(ours.message) && ours.attribution === "ours" && ours.hint === "internal",
-    `token-risk: a throw of our own reads as our internal error, never "the token-security source is unavailable" (${ours?.message})`);
-  const lim = await run(async () => { throw upstreamDeadline("Token-security source", "token security", 12_000); });
+    `token-risk: a throw of our own reads as our internal error, never "the chain source is unavailable" (${ours?.message})`);
+  const lim = await run(async () => { throw upstreamDeadline("Chain RPC", "token reads", 12_000); });
   ok(lim && /our 12 s limit/.test(lim.message) && !/source is unavailable/i.test(lim.message) && lim.attribution === "ours",
     `token-risk: our read limit passing names our limit (${lim?.message})`);
   const up = await run(async () => { throw Object.assign(new Error("upstream HTTP 500"), { statusCode: 502, upstreamStatus: 500, attribution: "upstream" }); });
-  ok(up && /source answered with a failure \(upstream HTTP 500\)/.test(up.message) && up.statusCode === 502 && up.attribution === "upstream",
+  ok(up && /chain read answered with a failure \(upstream HTTP 500\)/.test(up.message) && up.statusCode === 502 && up.attribution === "upstream",
     `control: the source's own 5xx is named as the source's (${up?.message})`);
 }
 

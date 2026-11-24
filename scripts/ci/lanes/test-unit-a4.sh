@@ -363,6 +363,10 @@ t node scripts/test-plugin-manifests.js
 t node scripts/test-doc-claims.js
 # The cheap EVM token-safety verdict (unknown is never counted as safe)
 t node scripts/test-token-safety.js
+# Token facts computed from chain reads, Sourcify and DEX pairs (each null path named)
+t node scripts/test-token-facts.js
+# No source whose terms bar commercial use is read, served or credited anywhere
+t node scripts/test-barred-upstreams.js
 # Index seller count is not instance-inflated (origins vs operators)
 t node scripts/test-index-inflation.js
 # Tollbooth dashboard runtime smoke (boots CLI, hits /__tollbooth + /__tollbooth/stats over HTTP)

@@ -168,17 +168,16 @@ KITS["token-brief-kit.js"] = async () => {
 
 // ---- token risk ----------------------------------------------------------------
 KITS["token-risk-kit.js"] = async () => {
-  const { makeTokenRiskHandler, shapeGoPlus } = await import("../src/tools/token-risk-kit.js");
-  const rec = { token_name: "Wrapped Ether", token_symbol: "WETH", total_supply: "249781.88", holder_count: "5267408", is_open_source: "1", holders: [{ address: "0x1111111111111111111111111111111111111111", is_contract: 0, balance: "13306.43", percent: "0.05", is_locked: 0 }] };
+  const { makeTokenRiskHandler } = await import("../src/tools/token-risk-kit.js");
+  const rec = { tokenName: "Wrapped Ether", tokenSymbol: "WETH", decimals: 18, totalSupply: "249781.88", topHolders: [{ address: "0x1111111111111111111111111111111111111111", isContract: false, percent: 5, locked: null, tag: null }], holderCount: 5267408, openSource: true, proxy: false, mintable: false, honeypot: false, ownerAddress: null, ownerRenounced: null, buyTaxPct: 0, sellTaxPct: 0, cannotSellAll: false, cannotBuy: false, lpLockedPct: null, pool: null, verification: { verified: true, match: "exact_match", compiler: "0.8.20", verifiedAt: null }, sourceText: "pragma solidity ^0.8.20; contract T {}", abiInfo: { total: 0, privileged: [], writable: 0 }, dex: { totalPairs: 0, liquidityUsd: 0, volume24h: 0, txns24h: 0, pairs: [] }, sources: [], limits: [] };
   const chat = async (body) => (body.plugins
     ? reply("No credible scam reports.", { annotations: [{ type: "url_citation", url_citation: { url: "https://web.example/weth", title: "WETH <<<x>>> [review](https://evil.example/t)" } }] })
     : reply(HOSTILE));
   const tool = (slug) => async () => {
-    if (slug === "contract-source") return { verified: true, match: "exact_match", compiler: { version: "0.8.20" } };
-    if (slug === "contract-abi") return { abi: [] };
+    if (slug === "solidity-scan") return { findings: [] };
     throw new Error(`unexpected tool ${slug}`);
   };
-  const out = await makeTokenRiskHandler("token-risk-pro", { tool, chat, probeGoPlus: async () => shapeGoPlus(rec), probeDexPairs: async () => ({ totalPairs: 0, pairs: [] }) })({ address: "0x4200000000000000000000000000000000000006", chain: "base" });
+  const out = await makeTokenRiskHandler("token-risk-pro", { tool, chat, probeTokenFacts: async () => rec })({ address: "0x4200000000000000000000000000000000000006", chain: "base" });
   check("token-risk", out, (o) => o.report);
   ok((out.sources || []).every((s) => !/[<>[\]()]/.test(s.title)), "token-risk: a web source title is served as one plain line");
 };
