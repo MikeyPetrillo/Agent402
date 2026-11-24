@@ -24,6 +24,7 @@
 import { AI_VOICE_HEADER } from "./ai-voice.js";
 import { markMediaBytes, markMediaBase64 } from "./ai-media-mark.js";
 import { keepAnswerCharges } from "./answer-charges.js";
+import { reportIsModelWritten } from "./report-disclosure.js";
 
 export const AI_GENERATED_HEADER = AI_VOICE_HEADER; // "X-AI-Generated"
 export const AI_GENERATED_FIELD = "aiGenerated";
@@ -85,4 +86,14 @@ export function markAiGenerated(defs) {
     }
   }
   return defs;
+}
+
+/** A served report a model wrote (a card report at /api/r/:sessionId, a
+ *  monitor report at /api/m/:reportId) carries the mark like any model-backed
+ *  answer: the header on `res` and the field on the body. A report our own
+ *  code wrote, a pending or missing one, is returned as it is. */
+export function withReportAiMark(res, body) {
+  if (!isPlain(body) || body.status !== "done" || typeof body.report === "undefined" || !reportIsModelWritten(body.kind)) return body;
+  try { res?.setHeader?.(AI_GENERATED_HEADER, "true"); } catch { /* headers already sent */ }
+  return Object.hasOwn(body, AI_GENERATED_FIELD) ? body : { ...body, [AI_GENERATED_FIELD]: true };
 }

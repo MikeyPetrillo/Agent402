@@ -19,6 +19,19 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 const G = await import("../src/ai-generated.js");
+{
+  // Served reports: a model-written card or monitor report carries the header and the field.
+  const { CODE_WRITTEN_REPORT_KINDS } = await import("../src/report-disclosure.js");
+  const hdrs = {}; const res = { setHeader: (k, v) => { hdrs[k] = v; } };
+  const out = G.withReportAiMark(res, { status: "done", kind: "dossier", report: "text" });
+  ok(out.aiGenerated === true && hdrs["X-AI-Generated"] === "true", "a model-written report served at /api/r or /api/m carries aiGenerated and X-AI-Generated");
+  const h2 = {}; const pending = { status: "pending" };
+  ok(G.withReportAiMark({ setHeader: (k, v) => { h2[k] = v; } }, pending) === pending && !h2["X-AI-Generated"], "a pending report is answered as it is");
+  const codeKind = (CODE_WRITTEN_REPORT_KINDS || [])[0];
+  if (codeKind) { const h3 = {}; const c = { status: "done", kind: codeKind, report: "x" }; ok(G.withReportAiMark({ setHeader: (k, v) => { h3[k] = v; } }, c) === c && !h3["X-AI-Generated"], `a report our code wrote (${codeKind}) is not marked`); }
+  const server = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/json\(withReportAiMark\(res, await _humanCheckout\.fulfill\(/.test(server) && /res\.json\(v \? withReportAiMark\(res, v\)/.test(server), "both report routes send their body through withReportAiMark");
+}
 const { AI_VOICE_HEADER } = await import("../src/ai-voice.js");
 ok(G.AI_GENERATED_HEADER === AI_VOICE_HEADER && G.AI_GENERATED_HEADER === "X-AI-Generated", "one header name for every model-backed answer, the one speech already sends");
 {

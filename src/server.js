@@ -899,7 +899,7 @@ import { evidenceWatchList, LOW_VOLUME_USD } from "./evidence-watch.js";
 import { outboundDestinationStore } from "./outbound-destinations.js";
 import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores, stateQueryStats, stateQuery, stateDbSchema } from "./state-db.js";
 import { verifySubjectRequest, walletSubjectRun } from "./subject-wallet.js";
-import { markAiGenerated, AI_GENERATED_HEADER } from "./ai-generated.js";
+import { markAiGenerated, AI_GENERATED_HEADER, withReportAiMark } from "./ai-generated.js";
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
 import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-persistence.js";
 import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sharedLimitsEnabled, sharedWrite as sharedLimitsWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
@@ -6023,7 +6023,7 @@ if (humanCheckoutEnabled()) {
     });
     app.get("/api/r/:sessionId", async (req, res) => {
       if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
-      try { res.set("Cache-Control", "no-store").json(await _humanCheckout.fulfill(String(req.params.sessionId || ""))); }
+      try { res.set("Cache-Control", "no-store").json(withReportAiMark(res, await _humanCheckout.fulfill(String(req.params.sessionId || "")))); }
       catch (e) {
         // The detail (a database or driver message) is for the operator log only.
         console.warn("[human-checkout] report read failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
@@ -6123,7 +6123,7 @@ if (_subs) {
     res.set("Cache-Control", "no-store");
     const id = String(req.params.reportId || "");
     const v = _monitors && /^[A-Za-z0-9_-]{10,64}$/.test(id) ? await _monitors.reportViewFresh(id) : null;
-    res.json(v || { status: "not_found" });
+    res.json(v ? withReportAiMark(res, v) : { status: "not_found" });
   });
 }
 // Recurring monitors paid with a WALLET over MPP (src/mpp-subscriptions.js) -
