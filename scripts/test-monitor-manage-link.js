@@ -74,6 +74,12 @@ ok(created.consent_collection?.terms_of_service === "required" && created.custom
 {
   const ar = (created.custom_fields || []).find((f) => f.key === "autorenew");
   ok(ar && ar.optional === false && ar.type === "dropdown" && ar.dropdown.options.length === 1 && ar.dropdown.options[0].label.includes(`$${(dm.price / 100).toFixed(2)}`) && ar.dropdown.options[0].label.length <= 100 && ar.label.custom.length <= 50, "a separate, required automatic-renewal consent names the monthly price (within Stripe's field limits)");
+  const sn = (created.custom_fields || []).find((f) => f.key === "startnow");
+  ok(sn && sn.optional === false, "the monitor checkout takes the required start-now choice (the withdrawal acknowledgment)");
+  const { buildMonitorEmail } = await import("../src/email.js");
+  const { START_NOW_CONFIRMATION } = await import("../src/checkout-consent.js");
+  const base = { reason: "welcome", label: "Domain monitor", target: "example.com", reportUrl: "https://agent402.tools/m/r1", manageUrl: "https://agent402.tools/monitors/manage?report=r1&k=x", priceCents: dm.price };
+  ok(buildMonitorEmail({ ...base, startNow: true }).text.includes(START_NOW_CONFIRMATION) && !buildMonitorEmail(base).text.includes(START_NOW_CONFIRMATION) && !buildMonitorEmail({ ...base, reason: "scheduled", startNow: true }).text.includes(START_NOW_CONFIRMATION), "the welcome email confirms the start-now choice, only when made and only on the welcome");
 }
 // An account with no Terms URL in its public details: Stripe refuses the
 // checkbox, and the session is made again with a required terms dropdown, so
@@ -84,7 +90,7 @@ ok(created.consent_collection?.terms_of_service === "required" && created.custom
   const subsFb = createStripeSubscriptions({ stripe: refusing, baseUrl: "https://agent402.tools", storePath: STORE + ".fb" });
   const r = await subsFb.createCheckout("domain-monitor", "example.com");
   const second = calls[1] || {};
-  ok(r.id === "cs_fb" && calls.length === 2 && !second.consent_collection?.terms_of_service && second.custom_fields?.some((f) => f.key === "terms" && f.optional === false) && second.custom_fields?.some((f) => f.key === "autorenew"), "with no Terms URL set, the session is made with a required terms dropdown and keeps the renewal consent");
+  ok(r.id === "cs_fb" && calls.length === 2 && !second.consent_collection?.terms_of_service && second.custom_fields?.some((f) => f.key === "terms" && f.optional === false) && second.custom_fields?.some((f) => f.key === "autorenew") && second.custom_fields?.some((f) => f.key === "startnow") && second.custom_fields.length <= 3, "with no Terms URL set, the session is made with a required terms dropdown and keeps the renewal and start-now consents");
 }
 // The consent is kept with the subscription when it is provisioned.
 {

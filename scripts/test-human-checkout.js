@@ -94,6 +94,16 @@ ok(stripe._last.allow_promotion_codes === true, "one-shot Checkout accepts promo
   ok(a.custom_text?.submit?.message === REPORT_REFUND_LINE && /refunded automatically/.test(REPORT_REFUND_LINE) && /delivered report is final/.test(REPORT_REFUND_LINE), "the refund rule is shown above the pay button");
   const fu = (a.custom_fields || []).find((f) => f.key === "followups");
   ok(fu && fu.optional === true && fu.dropdown.default_value === "yes" && fu.dropdown.options.some((o) => o.value === "no") && fu.label.custom.length <= 50, "the buyer can turn the follow-up emails off at checkout");
+  const sn = (a.custom_fields || []).find((f) => f.key === "startnow");
+  ok(sn && sn.optional === false && sn.dropdown.options.length === 1 && /lose my right to withdraw/.test(sn.dropdown.options[0].label) && sn.dropdown.options[0].label.length <= 100 && sn.label.custom.length <= 50, "the report checkout takes the required start-now choice that acknowledges the withdrawal right (within Stripe's field limits)");
+  const { withTermsDropdown, START_NOW_CONFIRMATION, consentRecordOf } = await import("../src/checkout-consent.js");
+  const fb = withTermsDropdown(a);
+  ok(fb.custom_fields.length <= 3 && ["terms", "startnow", "followups"].every((k) => fb.custom_fields.some((f) => f.key === k)), "the terms-dropdown fallback keeps the start-now choice and the follow-up choice inside Stripe's three fields");
+  const { buildReportReadyEmail } = await import("../src/email.js");
+  const withSn = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_1", productLabel: "Dossier", subjectOf: "AAPL", startNow: true });
+  const noSn = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_1", productLabel: "Dossier", subjectOf: "AAPL" });
+  ok(withSn.text.includes(START_NOW_CONFIRMATION) && withSn.html.includes("right of withdrawal") && !noSn.text.includes(START_NOW_CONFIRMATION), "the report-ready email confirms the start-now choice, and only when it was made");
+  ok(consentRecordOf({ id: "cs_y", custom_fields: [{ key: "startnow", dropdown: { value: "agreed" } }] }).startNow === "agreed", "the consent record keeps the start-now choice");
 }
 // A buyer who chose "No follow-up emails" is delivered the report and passed as opted out.
 {

@@ -358,7 +358,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     if (rec.email) {
       // The manage link (a keyed bearer to the Stripe portal) rides ONLY in the
       // subscriber's email; the report JSON/page carry no bearer to the portal.
-      notify({ to: rec.email, reason, kind: p.kind, label: p.label, target: rec.target, changes, reportUrl: `${baseUrl}/m/${id}`, ...billingOf(rec, id), priceCents: p.price, ...promoOf(rec) }).catch(() => {});
+      notify({ to: rec.email, reason, kind: p.kind, label: p.label, target: rec.target, changes, reportUrl: `${baseUrl}/m/${id}`, ...billingOf(rec, id), priceCents: p.price, ...promoOf(rec), ...(rec?.consent?.startNow === "agreed" ? { startNow: true } : {}) }).catch(() => {});
     }
     return id;
   }

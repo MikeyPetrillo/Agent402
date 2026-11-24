@@ -38,7 +38,7 @@ const terms = termsPage(BASE), termsText = strip(terms);
 const privacy = privacyPage(BASE), privacyText = strip(privacy);
 
 // 1. Age
-ok(/at least 18/.test(termsText) && /not directed at children/.test(termsText) && /under 13/.test(termsText), "terms: 18 and older, not directed at children, nothing knowingly collected under 13");
+ok(/must be 18 or older/.test(termsText) && !/must be at least 18/.test(termsText) && /not directed at children/.test(termsText) && /under 13/.test(termsText), "terms: 18 and older, not directed at children, nothing knowingly collected under 13; the age rule stated once");
 ok(/18 and older/.test(privacyText) && /under 13/.test(privacyText) && /we will delete it/.test(privacyText), "privacy: children statement says how to have a child's data deleted");
 
 // 2. Externally loaded fonts and stylesheets
@@ -161,7 +161,12 @@ ok(/take reasonable steps to notify the person who provided it, where we can ide
 ok(/shared answer page deletes it, so it cannot be restored/.test(cr) && /for material we can restore, restore it/.test(cr), "terms: no restoration promised for a deleted shared answer");
 const subsTerms = termsText.slice(termsText.indexOf("Monitors renew automatically"));
 ok(/POST request to the cancel link/.test(subsTerms) && /revoking the authorization/.test(subsTerms) && /stays active until the end of the period you already paid for and is not renewed/.test(subsTerms) && /no partial refund for the remaining days/.test(subsTerms), "terms: each rail's cancel path and what canceling does");
-ok(/renews automatically at the price shown when you subscribed until you cancel/.test(subsTerms) && /Cancel anytime online/.test(subsTerms) && /at least 30 days before it applies/.test(subsTerms), "terms: automatic renewal, its price, online cancel and the price-change notice");
+ok(/renews automatically at the price shown when you subscribed until you cancel/.test(subsTerms) && /Cancel anytime online/.test(subsTerms) && /price of an active subscription does not change/.test(subsTerms) && !/email you the new price/.test(subsTerms), "terms: automatic renewal, its price, online cancel; no price-change notice the code has no path for");
+ok(/separate, required consent to the automatic renewal/.test(subsTerms) && /before the first full charge/.test(subsTerms), "terms: the renewal consent and the free-month notice");
+ok(/Cuba, Iran, North Korea and Syria, and the Crimea, Sevastopol, Donetsk and Luhansk regions of Ukraine/.test(termsText), "terms: the refused regions are named");
+ok(/No part of a payment is kept as a credit/.test(termsText) && !/service credit/.test(termsText), "terms: decide-execute keeps no credit");
+ok(/does not apply to\s+a claim by a consumer/.test(termsText) && !/permanently barred/.test(termsText), "terms: the one-year limit yields to consumer law");
+ok(/required choice, to request that we start at once/.test(termsText), "terms: the withdrawal sentence names the checkout choice");
 {
   const disputes = termsText.slice(termsText.indexOf("Governing law"));
   ok(/give up the right to a jury trial for any dispute that is arbitrated/.test(disputes) && !/waive the right to a jury trial/.test(disputes) && /Consumer Arbitration Rules/.test(disputes), "terms: the jury waiver covers arbitrated disputes only, under the AAA consumer rules");

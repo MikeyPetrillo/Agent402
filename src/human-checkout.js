@@ -84,7 +84,7 @@ import { priceUsdFor as agentPriceUsdFor } from "./report-tiers.js";
 import { randomBytes } from "node:crypto";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
 import { cleanSaleSource } from "./sale-source.js";
-import { createWithConsent, REPORT_REFUND_LINE, FOLLOWUPS_FIELD, followupsOptedOut } from "./checkout-consent.js";
+import { createWithConsent, REPORT_REFUND_LINE, FOLLOWUPS_FIELD, START_NOW_FIELD, followupsOptedOut, startNowAgreed } from "./checkout-consent.js";
 import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
 
 // ---- Public reports -------------------------------------------------------
@@ -719,12 +719,13 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (!input) { const e = new Error(`Please provide ${p.inputLabel}.`); e.statusCode = 400; throw e; }
     if (input.length > 2000) { const e = new Error("Input is too long."); e.statusCode = 400; throw e; }
     // The buyer accepts the terms (checkbox, naming arbitration and the class
-    // waiver), sees the refund rule above the pay button, and may turn the
+    // waiver), sees the refund rule above the pay button, asks for the report
+    // to start at once (the withdrawal acknowledgment), and may turn the
     // follow-up emails off (src/checkout-consent.js).
     const session = await createWithConsent(stripe, {
       mode: "payment",
       custom_text: { submit: { message: REPORT_REFUND_LINE } },
-      custom_fields: [FOLLOWUPS_FIELD],
+      custom_fields: [START_NOW_FIELD, FOLLOWUPS_FIELD],
       // Promotion codes are created in the Stripe dashboard (a first-report
       // code, a partner code); the one-shot flow accepted none until 2026-08-28.
       allow_promotion_codes: true,
@@ -1063,7 +1064,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     // this target prefilled (the retention loop); a kind with no monitor
     // simply gets no offer. See src/report-upgrade.js. The signed receipt of
     // the purchase rides along when one was signed.
-    if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl, receipt: typeof receipt === "string" && receipt ? receipt : null }).catch(() => {});
+    if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl, receipt: typeof receipt === "string" && receipt ? receipt : null, startNow: startNowAgreed(session) }).catch(() => {});
     // Post-purchase sequence (src/followups.js): the only moment the buyer's
     // address is in hand next to what they bought. Never stored on the record.
     // A buyer who chose "No follow-up emails" at checkout is passed as such,

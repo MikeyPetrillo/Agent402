@@ -7,8 +7,12 @@
 // naming the arbitration and class-action waiver, and a submit line stating
 // the refund rule (reports) or the renewal terms (monitors). A monitor also
 // takes a separate, required automatic-renewal consent naming the monthly
-// price and the price after any promotional first month. A report buyer can
-// turn the follow-up emails off at checkout (src/followups.js reads it).
+// price and the price after any promotional first month. Both take a
+// required "start now" choice: the buyer asks for delivery to begin at once
+// and acknowledges losing the EU/UK right of withdrawal once it has begun
+// (the /terms withdrawal clause); the report-ready and welcome emails confirm
+// it on a durable medium. A report buyer can turn the follow-up emails off at
+// checkout (src/followups.js reads it).
 //
 // Stripe shows the terms checkbox only when the account's public details name
 // a Terms of Service URL; without one it refuses the session. That refusal is
@@ -39,6 +43,24 @@ export const FOLLOWUPS_FIELD = Object.freeze({
   optional: true,
   dropdown: { default_value: "yes", options: [{ label: "Yes, send follow-up emails", value: "yes" }, { label: "No follow-up emails", value: "no" }] },
 });
+
+/** The express request to start at once and the withdrawal acknowledgment
+ *  (EU Consumer Rights Directive art. 16(m); UK CCR reg. 37): required. */
+export const START_NOW_FIELD = Object.freeze({
+  key: "startnow",
+  label: { type: "custom", custom: "Start now (right of withdrawal)" },
+  type: "dropdown",
+  optional: false,
+  dropdown: { options: [{ label: "Start at once; I lose my right to withdraw once delivery begins", value: "agreed" }] },
+});
+
+/** The confirmation the delivering email carries when the buyer made that choice. */
+export const START_NOW_CONFIRMATION = "At checkout you asked us to start at once and acknowledged that you lose your right of withdrawal for a report once its delivery has begun.";
+
+/** True when the completed session holds the start-now choice. */
+export function startNowAgreed(session) {
+  return customFieldValue(session, "startnow") === "agreed";
+}
 
 /** The monitor's separate automatic-renewal consent: required, one choice. */
 export function autoRenewField(priceCents) {
@@ -114,5 +136,6 @@ export function followupsOptedOut(session) {
 export function consentRecordOf(session, { priceCents = null } = {}) {
   const terms = session?.consent?.terms_of_service === "accepted" || customFieldValue(session, "terms") === "agreed" ? "accepted" : null;
   const autoRenew = customFieldValue(session, "autorenew") === "agreed" ? "agreed" : null;
-  return { terms, ...(autoRenew ? { autoRenew, autoRenewPriceCents: Number.isFinite(Number(priceCents)) ? Number(priceCents) : null } : {}), at: new Date((Number(session?.created) || Math.floor(Date.now() / 1000)) * 1000).toISOString(), session: typeof session?.id === "string" ? session.id : null };
+  const startNow = startNowAgreed(session) ? "agreed" : null;
+  return { terms, ...(startNow ? { startNow } : {}), ...(autoRenew ? { autoRenew, autoRenewPriceCents: Number.isFinite(Number(priceCents)) ? Number(priceCents) : null } : {}), at: new Date((Number(session?.created) || Math.floor(Date.now() / 1000)) * 1000).toISOString(), session: typeof session?.id === "string" ? session.id : null };
 }

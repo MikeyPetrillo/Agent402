@@ -22,7 +22,7 @@ import { rugcheckEnabled } from "./rugcheck-switch.js";
 import { cleanSaleSource } from "./sale-source.js";
 import { appendPeriodReceipt } from "./receipt-signing.js";
 import { shared } from "./shared-limits.js";
-import { createWithConsent, autoRenewField, monitorRenewalStatement, consentRecordOf } from "./checkout-consent.js";
+import { createWithConsent, autoRenewField, START_NOW_FIELD, monitorRenewalStatement, consentRecordOf } from "./checkout-consent.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).
@@ -408,7 +408,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     // subscription's record when it is provisioned.
     const session = await createWithConsent(stripe, {
       mode: "subscription",
-      custom_fields: [autoRenewField(p.price)],
+      custom_fields: [autoRenewField(p.price), START_NOW_FIELD],
       ...(String(process.env.STRIPE_AUTOMATIC_TAX || "").toLowerCase() === "true" ? { automatic_tax: { enabled: true } } : {}),
       line_items: [{
         quantity: 1,
