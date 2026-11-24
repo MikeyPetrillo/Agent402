@@ -65,6 +65,12 @@ const realFetch = globalThis.fetch;
   const r = await sellers.readListing("/discovery/resources", read, { onRows: (items) => { rows += items.length; } });
   ok(rows === 2805 && r.rows === 2805 && r.pages === 29 && !r.capped, `a 2,805-row listing served 100 a page is read whole (${rows} rows in ${r.pages} pages)`);
   ok(pages[1] === 100 && pages[28] === 2800, `each page advances by the rows the last one returned (offsets ${pages.slice(0, 3).join(",")}...${pages.at(-1)})`);
+  // The defect itself: asking for more rows than the facilitator serves a
+  // page (500 asked, 100 served) read the first page and stopped.
+  pages.length = 0;
+  let asked500 = 0;
+  const r500 = await sellers.readListing("/discovery/resources", read, { pageSize: 500, onRows: (items) => { asked500 += items.length; } });
+  ok(asked500 === 2805 && r500.pages === 29, `a page shorter than the one asked for does not end the listing while the total says more (${asked500} rows in ${r500.pages} pages)`);
 
   let hostileReads = 0;
   const hostile = async () => { hostileReads++; return { items: Array.from({ length: 100 }, (_, k) => ({ id: k })), pagination: { total: 1e12 } }; };
