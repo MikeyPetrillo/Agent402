@@ -176,6 +176,9 @@ jobs:
           ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
           UPSTREAM_COSTS_JSON: ${{ secrets.UPSTREAM_COSTS_JSON }}
+          # The keyed lane (src/rpc-terms.js): the only permitted RPC for the
+          # Monad funding read (CHAIN_FUNDING). Never printed; unset skips it.
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
           # Celo legs draw prepaid facilitator credits: the 13:17 run, hand
           # dispatches and any run whose gate found Celo stale buy on Celo;
           # the other scheduled runs skip it.

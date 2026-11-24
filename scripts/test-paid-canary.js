@@ -1,7 +1,7 @@
 // Unit tests for the paid-canary's decision logic — proves the canary pages on
 // real BUYING failures and only warns on upstream/data hiccups (the chronic
 // false-alarm fix). Pure, no network, no wallet.
-import { classifyResult, decideCanary, settleRejectReason, settleRejectDetail, classifyRailOutcome, errText, cacheRepeatOk, TOOLS, CANARY_MAX_USD_DEFAULT, CANARY_EXTRA_ASSETS } from "./paid-canary.js";
+import { classifyResult, decideCanary, settleRejectReason, settleRejectDetail, classifyRailOutcome, errText, cacheRepeatOk, rpcForLog, TOOLS, CANARY_MAX_USD_DEFAULT, CANARY_EXTRA_ASSETS } from "./paid-canary.js";
 import { checkAccept } from "./lib/buyer-guard.js";
 
 let pass = 0, fail = 0;
@@ -10,6 +10,13 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // Build a full 9-tool run, all settled, then override specific kits.
 const KITS = ["core", "edgar", "search", "macro", "finance", "crypto", "chain", "price-feed", "answer"];
 const run = (overrides = {}) => KITS.map((kit) => overrides[kit] || { kit, path: `/api/${kit}`, status: 200, shapeOk: true });
+
+// --- a keyed RPC lane never reaches the log ---
+{
+  const keyed = "https://monad-mainnet.g.alchemy.com/v2/SECRETKEY123";
+  ok(!rpcForLog(keyed).includes("SECRETKEY123") && rpcForLog(keyed).startsWith("https://monad-mainnet.g.alchemy.com/v2/"), "rpcForLog: a keyed lane's key is not printed, its host is");
+  ok(rpcForLog("https://forno.celo.org") === "https://forno.celo.org/", "CONTROL: rpcForLog: a public host prints as itself");
+}
 
 // --- classifyResult ---
 ok(classifyResult({ status: 200, shapeOk: true }) === "settled", "200 + good shape → settled");

@@ -751,10 +751,20 @@ const BASE_BALANCE_RPCS = [
 ];
 /** Stablecoin balance (6-decimal ERC-20) via an RPC fallback chain. null only
  *  when EVERY RPC fails; each failed attempt logs which endpoint and why. */
+/** An RPC address as a log line may print it: a keyed lane's key (a path
+ *  segment after /v2/ or /v3/, or a query value) is never written out. */
+export function rpcForLog(rpc) {
+  try {
+    const u = new URL(String(rpc));
+    const path = u.pathname.replace(/\/(v2|v3)\/[^/]+/g, "/$1/<key>");
+    return `${u.protocol}//${u.host}${path}${u.search ? "?<query>" : ""}`;
+  } catch { return "<rpc>"; }
+}
 async function erc20BalanceUsd(address, { token, rpcs, label = "" }) {
   const data = "0x70a08231" + address.toLowerCase().replace("0x", "").padStart(64, "0");
   const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: token, data }, "latest"] });
   for (const rpc of rpcs) {
+    const shown = rpcForLog(rpc);
     try {
       const r = await fetch(rpc, {
         method: "POST",
@@ -766,9 +776,9 @@ async function erc20BalanceUsd(address, { token, rpcs, label = "" }) {
       if (typeof j?.result === "string" && /^0x[0-9a-fA-F]*$/.test(j.result)) {
         return parseInt(j.result, 16) / 1e6;
       }
-      console.warn(`WARN  balance read${label ? ` (${label})` : ""}: ${rpc} returned no result (HTTP ${r.status}) — trying next RPC`);
+      console.warn(`WARN  balance read${label ? ` (${label})` : ""}: ${shown} returned no result (HTTP ${r.status}) — trying next RPC`);
     } catch (e) {
-      console.warn(`WARN  balance read${label ? ` (${label})` : ""}: ${rpc} failed (${(e?.message || e).toString().slice(0, 80)}) — trying next RPC`);
+      console.warn(`WARN  balance read${label ? ` (${label})` : ""}: ${shown} failed (${(e?.message || e).toString().split(rpc).join(shown).slice(0, 80)}) — trying next RPC`);
     }
   }
   return null;
