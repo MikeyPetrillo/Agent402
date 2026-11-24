@@ -8,7 +8,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { encodeAbiParameters, decodeFunctionData, parseAbi } from "viem";
 import {
   readTokenFacts, readSourcify, simulateTrade, rpcBatch, holderIndex, taxPct, decodeText, abiFlags, minimalProxyTarget,
-  tokenRpcLanes, TOKEN_CHAINS, SLOTS, SIM_BUYER, MAX_RPC_REQUESTS, HOLDER_LOG_CAP,
+  tokenRpcLanes, TOKEN_CHAINS, SLOTS, SIM_BUYER, MAX_RPC_REQUESTS, HOLDER_LOG_CAP, HOLDER_LOG_MAX_BYTES,
 } from "../src/tools/token-facts.js";
 import { isNonCommercialRpc } from "../src/rpc-terms.js";
 
@@ -258,6 +258,16 @@ const reason = (f, field) => f.limits.find((l) => l.field === field)?.reason || 
   ok(big.holderCount === null && reason(big, "holderCount") === "holder index not available for this token" && /or more transfers/.test(big.limits.find((l) => l.field === "holderCount").detail), "a history at the cap is not indexed: null with the reason");
   const refused = (await run(scenario({ logsError: { code: -32600, message: "query exceeds max results" } }), { holderLane: "https://keyed.test/k" })).f;
   ok(refused.holderCount === null && reason(refused, "topHolders") === "holder index not available for this token", "a refused history read: null with the reason");
+  // A history whose declared size is over the bound is refused before its body is read.
+  {
+    let read = false;
+    globalThis.fetch = async () => ({ ok: true, status: 200, headers: new Headers({ "content-length": String(HOLDER_LOG_MAX_BYTES + 1) }), body: { cancel: async () => {} }, json: async () => { read = true; return []; } });
+    try {
+      const st2 = { lanes: ["x"], requests: 0, deadline: Date.now() + 10_000 };
+      const r = await holderIndex(st2, { chain: "base", token: TOKEN, supplyBig: 1n, env: {}, lane: "https://keyed.test/k" });
+      ok(r.ok === false && /or more transfers/.test(r.why) && read === false && st2.requests === 1, `an oversized history is refused unread, in one request (${JSON.stringify(r)})`);
+    } finally { globalThis.fetch = realFetch; }
+  }
   const st = { lanes: ["x"], requests: 0, deadline: Date.now() + 10_000 };
   ok((await holderIndex(st, { chain: "base", token: TOKEN, supplyBig: 1n, env: {}, lane: undefined })).ok === false, "with no keyed lane configured, no history read is attempted");
 }

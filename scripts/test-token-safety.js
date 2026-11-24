@@ -70,6 +70,20 @@ ok(new Set(FLAG_IDS).size === FLAG_IDS.length, "flag ids are unique");
   ok(ex.facts.honeypot === false && ex.facts.buyTaxPct === 0 && ex.facts.openSource === true && ex.flags.map((f) => f.id).join() === "mintable", "the example is a real computed reading (AERO on Base: simulated, verified, mintable)");
   ok(t.resaleCleared === true && /chain reads/.test(t.resaleClearedBy), "cleared for resale: every source it reads is cleared");
   ok(/simulated buy and sell/.test(t.description) && /no verdict, level or score/.test(t.description) && /listed in unknown with its reason/.test(t.description), "the description says what is computed and how an uncomputed fact reads");
+  const { rugcheckEnabled } = await import("../src/rugcheck-switch.js");
+  ok(/see sol-token-safety/.test(t.description) === rugcheckEnabled(), "the description points to sol-token-safety only while the RugCheck tools are listed");
+  // token-safety, token-risk and token-risk-pro read through token-facts.js,
+  // so each declares the keyless hosts that module reads, as a literal list.
+  {
+    const { TOKEN_CHAIN_NAMES, tokenRpcLanes } = await import("../src/tools/token-facts.js");
+    const { TOKEN_RISK_TOOLS } = await import("../src/tools/token-risk-kit.js");
+    const want = new Set(["sourcify.dev", "api.dexscreener.com"]);
+    for (const c of TOKEN_CHAIN_NAMES) for (const u of tokenRpcLanes(c, {})) want.add(new URL(u).host);
+    for (const tool of [t, ...TOKEN_RISK_TOOLS]) {
+      const got = [...(tool.upstreamHosts || [])].sort().join(",");
+      ok(got === [...want].sort().join(","), `${tool.slug}: upstreamHosts lists the hosts token-facts.js reads (${got})`);
+    }
+  }
   const refused = await t.handler({ address: "0x940181a94A35A4569E4529A3CDfB74e38FD98631", chain: "avalanche" }).then(() => null, (e) => e);
   ok(refused?.statusCode === 422 && /celo/.test(refused.message) && /ethereum/.test(refused.message), "an unsupported chain is a 422 naming the supported chains");
   const bad = await t.handler({ address: "0x12", chain: "base" }).then(() => null, (e) => e);

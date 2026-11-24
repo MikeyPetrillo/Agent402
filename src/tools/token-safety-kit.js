@@ -19,6 +19,7 @@ import { readTokenFacts, TOKEN_CHAIN_NAMES } from "./token-facts.js";
 import { addCredit, SOURCIFY_ATTRIBUTION } from "../data-attribution.js";
 import { markResaleCleared } from "../resale-terms.js";
 import { TOKEN_FACTS_NOTICE } from "../token-claims.js";
+import { rugcheckEnabled } from "../rugcheck-switch.js";
 
 const CHAINS = TOKEN_CHAIN_NAMES;
 const bad = (m, statusCode = 422) => Object.assign(new Error(m), { statusCode });
@@ -88,8 +89,10 @@ export const TOKEN_SAFETY_TOOLS = [
     aliases: ["honeypot-check", "honeypot", "token-tax-check", "token-contract-facts", "evm-token-facts",
       "token-owner-powers", "evm-token-risk-facts", "token-security"],
     description:
-      "Risk facts for an EVM token contract, read on chain. One deterministic call lists each named fact it found (flags: an id, a description and the measured value), what it could not check and why (unknown), its sources, its limits and a fixed notice that these are on-chain facts only and not investment advice. Each fact is computed here: whether a simulated buy and sell against the token's deepest pool went through and what tax each kept (nothing is sent), owner and renounced state, upgradeable proxy from its storage slots, mint, pause, blacklist and fee-setting functions from the verified ABI, whether the source is publicly verified, owner share and the share of LP tokens held by burn addresses. Covers Base, Ethereum, Polygon, Arbitrum One, OP Mainnet, BSC, Gnosis and Celo. There is no verdict, level or score, and no flags is not a statement about the token. A fact it could not compute is null and listed in unknown with its reason. For the cited, model-written report see token-risk; for Solana mints see sol-token-safety.",
+      "Risk facts for an EVM token contract, read on chain. One deterministic call lists each named fact it found (flags: an id, a description and the measured value), what it could not check and why (unknown), its sources, its limits and a fixed notice that these are facts read from the chain and named public sources and not investment advice. Each fact is computed here: whether a simulated buy and sell against the token's deepest pool went through and what tax each kept (nothing is sent), owner and renounced state, upgradeable proxy from its storage slots, mint, pause, blacklist and fee-setting functions from the verified ABI, whether the source is publicly verified, owner share and the share of LP tokens held by burn addresses. Covers Base, Ethereum, Polygon, Arbitrum One, OP Mainnet, BSC, Gnosis and Celo. There is no verdict, level or score, and no flags is not a statement about the token. A fact it could not compute is null and listed in unknown with its reason. For the cited, model-written report see token-risk" + (rugcheckEnabled() ? "; for Solana mints see sol-token-safety." : "."),
     tags: ["token", "honeypot", "tax", "contract", "ownership", "evm", "onchain"],
+    // The keyless hosts token-facts.js reads (scripts/test-token-safety.js holds this to its lanes).
+    upstreamHosts: ["sourcify.dev", "api.dexscreener.com", "base-rpc.publicnode.com", "mainnet.base.org", "ethereum-rpc.publicnode.com", "polygon-bor-rpc.publicnode.com", "arbitrum-one-rpc.publicnode.com", "arb1.arbitrum.io", "optimism-rpc.publicnode.com", "bsc-rpc.publicnode.com", "gnosis-rpc.publicnode.com", "forno.celo.org"],
     discovery: {
       bodyType: "json",
       input: { chain: "base", address: "0x940181a94A35A4569E4529A3CDfB74e38FD98631" },
@@ -190,7 +193,7 @@ export const TOKEN_SAFETY_TOOLS = [
               "reason": "no counterfeit list is read"
             }
           ],
-          "notice": "These are on-chain facts only. No flags does not mean a token is legitimate; off-chain fraud cannot be detected here. Not investment advice.",
+          "notice": "These are facts read from the chain and named public sources. No flags does not mean a token is legitimate; off-chain fraud cannot be detected here. Not investment advice.",
           "credit": "Verified source from Sourcify (https://sourcify.dev)."
         },
       },

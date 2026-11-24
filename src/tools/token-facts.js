@@ -56,6 +56,9 @@ export const FACTS_BUDGET_MS = 16_000;
 export const RPC_READ_MS = 6_000;
 export const MAX_RPC_REQUESTS = 10;
 export const HOLDER_LOG_CAP = 10_000;
+// A Transfer log is about 0.5 KB as JSON; a history whose declared size passes
+// 2 KB a log holds HOLDER_LOG_CAP or more and is not parsed.
+export const HOLDER_LOG_MAX_BYTES = HOLDER_LOG_CAP * 2048;
 const SOURCIFY_READ_MS = 8_000;
 const DEX_READ_MS = 8_000;
 const OPTIONAL_FLOOR_MS = 2_500;
@@ -126,7 +129,7 @@ const LANE_REFUSAL = /rate|limit|too many|capacity|archive|personal token|unauth
 /** One JSON-RPC batch, lane by lane until one answers it whole. Each entry
  *  comes back as { result } or { error }; a lane that refuses the batch (an
  *  HTTP failure, a rate limit, an unreadable body) is passed over. */
-export async function rpcBatch(state, calls, step, { lanes = state.lanes, timeoutMs = RPC_READ_MS } = {}) {
+export async function rpcBatch(state, calls, step, { lanes = state.lanes, timeoutMs = RPC_READ_MS, maxBytes = null } = {}) {
   let last = null;
   for (const url of lanes) {
     if (state.requests >= MAX_RPC_REQUESTS) throw Object.assign(bad(`the chain read's request budget (${MAX_RPC_REQUESTS}) was spent before ${step}`, 503), { attribution: "ours", budgetSpent: true });
@@ -138,6 +141,12 @@ export async function rpcBatch(state, calls, step, { lanes = state.lanes, timeou
     try {
       const res = await upstreamFetch(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) }, ctx);
       if (!res.ok) { last = Object.assign(bad(`chain RPC answered HTTP ${res.status} for ${step}`, 502), { attribution: "upstream", upstreamStatus: res.status }); continue; }
+      // A declared body over the caller's bound is refused before it is read.
+      const declared = Number(res.headers.get("content-length"));
+      if (maxBytes != null && Number.isFinite(declared) && declared > maxBytes) {
+        try { await res.body?.cancel(); } catch { /* the refusal stands */ }
+        throw Object.assign(bad(`chain RPC answer for ${step} is larger than ${maxBytes} bytes`, 502), { attribution: "upstream", tooLarge: true });
+      }
       let j;
       try { j = await bodyUnderDeadline(res.json(), ctx); } catch (e) { last = e?.statusCode ? e : Object.assign(bad(`chain RPC returned an unreadable body for ${step}`, 502), { attribution: "upstream" }); continue; }
       if (!Array.isArray(j) || j.length !== calls.length) { last = Object.assign(bad(`chain RPC did not answer the batch for ${step}`, 502), { attribution: "upstream" }); continue; }
@@ -146,6 +155,7 @@ export async function rpcBatch(state, calls, step, { lanes = state.lanes, timeou
       if (out.some((e) => e?.error && LANE_REFUSAL.test(`${e.error.code ?? ""} ${e.error.message ?? ""}`))) { last = Object.assign(bad(`chain RPC refused ${step}`, 503), { attribution: "upstream" }); continue; }
       return out;
     } catch (e) {
+      if (e?.tooLarge) throw e;
       last = e;
     }
   }
@@ -468,10 +478,10 @@ export async function holderIndex(state, { chain, token, supplyBig, env, lane })
   if (state.deadline - Date.now() < OPTIONAL_FLOOR_MS) return { ok: false, why: "the request's time budget was spent" };
   let logs;
   try {
-    const r = await rpcBatch(state, [{ method: "eth_getLogs", params: [{ address: token, fromBlock: "0x0", toBlock: "latest", topics: [TRANSFER_TOPIC] }] }], "transfer history", { lanes: [url], timeoutMs: 8_000 });
+    const r = await rpcBatch(state, [{ method: "eth_getLogs", params: [{ address: token, fromBlock: "0x0", toBlock: "latest", topics: [TRANSFER_TOPIC] }] }], "transfer history", { lanes: [url], timeoutMs: 8_000, maxBytes: HOLDER_LOG_MAX_BYTES });
     if (r[0]?.error || !Array.isArray(r[0]?.result)) return { ok: false, why: `the history read was refused (${String(r[0]?.error?.message || "no result").slice(0, 120)})` };
     logs = r[0].result;
-  } catch (e) { return { ok: false, why: String(e?.message || e).slice(0, 160) }; }
+  } catch (e) { return { ok: false, why: e?.tooLarge ? `the history holds ${HOLDER_LOG_CAP} or more transfers` : String(e?.message || e).slice(0, 160) }; }
   if (logs.length >= HOLDER_LOG_CAP) return { ok: false, why: `the history holds ${HOLDER_LOG_CAP} or more transfers` };
   const bal = new Map();
   const add = (a, v) => bal.set(a, (bal.get(a) || 0n) + v);
