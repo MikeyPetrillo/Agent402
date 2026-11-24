@@ -19,7 +19,7 @@ import { stripMcpMarker, watchLoopbackOutcome, loopbackCallCut, noteLoopbackCoun
 import { createMcpOAuth } from "./mcp-oauth.js";
 import { createMcpX402Gate, mcpX402PaymentSpecs } from "./mcp-x402-routes.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
-import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
+import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor, chainDisplayName } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 // The networks a PUBLIC surface names (src/public-networks.js): the
 // configured ones minus any gated rail that is not in the live offer.
@@ -9983,7 +9983,7 @@ function hostEntryFigures(chainKey = null) {
   if (hit && Date.now() - hit.at < HOST_FIGURES_TTL_MS && hit.figures === ledgerFigures) return hit.value;
   let value = null;
   try {
-    value = hostFigures({ summaryFn: sharedSummary, byNetworkFn: sharedByNetwork, network: chainKey || null, networkLabel: chainKey ? (SNAPSHOT_RAIL_LABEL[chainKey] || chainKey.charAt(0).toUpperCase() + chainKey.slice(1)) : null, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL });
+    value = hostFigures({ summaryFn: sharedSummary, byNetworkFn: sharedByNetwork, network: chainKey || null, networkLabel: chainKey ? chainDisplayName(chainKey) : null, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL });
   } catch { value = hit ? hit.value : null; } // a failed rebuild keeps the last good figures
   hostFiguresCache.set(key, { at: Date.now(), value, figures: ledgerFigures });
   return value;

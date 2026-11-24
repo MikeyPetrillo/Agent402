@@ -87,6 +87,10 @@ ok(sumBefore === sumAfter, `merging conserves the total (${sumBefore} -> ${sumAf
   ok(pub.rails.every((r, i) => r.rail === labels[i]), "/api/revenue keeps each rail's label unchanged (a join key)");
   ok(pub.rails.every((r) => official.has(r.name)), `/api/revenue gives each rail its official name (${pub.rails.filter((r) => !official.has(r.name)).map((r) => r.rail).join(", ") || "all"})`);
   ok(pub.rails.find((r) => r.rail === "Optimism")?.name === "OP Mainnet" && chainDisplayName("optimism") === "OP Mainnet", "OP Mainnet is read from the one name source");
+  // A chain page's host line ("outside buyers on <chain> only") reads the same source.
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/networkLabel: chainKey \? chainDisplayName\(chainKey\) : null/.test(server), "the chain pages' host figures name the chain with chainDisplayName");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
