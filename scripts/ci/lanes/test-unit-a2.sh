@@ -180,6 +180,8 @@ t node scripts/test-refund-ledger-pg.js
 t node scripts/test-resend-void-pg.js
 # A payment cut at its settle deadline, landed and booked owed, then sent again: served the kept answer with its debt void and its evidence marked, the sale booked once on its real rail and wire, one served call; another call keeps the 402 (REAL postgres; redis when set)
 t node scripts/test-settle-deadlines-pg.js
+# Data requests by wallet: only on a request the wallet signed (EIP-191, Ed25519, SEP-53); erase and export on a real Postgres, ledgers kept, the first-call grant kept under a keyed hash
+t node scripts/test-subject-wallet.js
 t node scripts/test-sales-ledger-pg.js
 # A receipt check on one container finds a sale another just recorded.
 t node scripts/test-sale-lookup-crosscontainer-pg.js

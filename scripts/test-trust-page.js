@@ -114,7 +114,7 @@ ok(subs.some((s) => s.name === "Cloudflare") && /Cloudflare[\s\S]{0,200}IP addre
   const stripe = subs.find((s) => s.name === "Stripe")?.gets || "";
   ok(/ledger mirror/.test(stripe) && /wallet address, transaction id, amount/.test(stripe) && /optional Stripe ledger mirror[\s\S]*wallet address, transaction id, amount/.test(privacy), "the Stripe row names the optional ledger mirror and its fields, as the privacy policy does");
   const ph = subs.find((s) => s.providers.includes("PostHog"))?.gets || "";
-  for (const field of ["paying wallet address", "first word of the caller's User-Agent", "keyed hash of one declared input field", "error message"]) {
+  for (const field of ["keyed hash of the paying wallet", "first word of the caller's User-Agent", "keyed hash of one declared input field", "error message"]) {
     ok(ph.includes(field) && privacy.includes(field), `the PostHog row names the server's service events: ${field} (as /privacy does)`);
   }
 }
