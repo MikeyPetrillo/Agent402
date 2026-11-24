@@ -38,7 +38,8 @@
 //     the source of the information" (https://www.federalreserve.gov/disclaimer.htm);
 //     nothing here implies membership in or endorsement by the Federal
 //     Reserve. The Board retires the preformatted packages on 2027-03-31 (the
-//     program on 2027-07-01); H6_PACKAGE_URL moves to the release's XML before then.
+//     program on 2027-07-01): FED_DDP_PACKAGE_READS below (H.6, H.10 and
+//     H.15) move to each release's own files before then.
 //   - U.S. Bureau of Economic Analysis, National Income and Product Accounts
 //     (apps.bea.gov flat file of quarterly NIPA series, keyless): GDP
 //     (A191RC) and GDPC1 (A191RX), millions in the file, billions here as
@@ -52,7 +53,8 @@
 //     Rates (daily noon buying rates and the nominal dollar indexes) and H.15
 //     Selected Interest Rates (the monthly package: prime rate, Treasury bill
 //     and constant-maturity rates), from the same Data Download Program and
-//     under the same Board policy as H.6 (public domain, cite the Board).
+//     under the same Board policy as H.6 (public domain, cite the Board), and
+//     on the same package retirement date (FED_DDP_PACKAGES_RETIRE_ON).
 //   - U.S. Treasury Daily Treasury Par Real Yield Curve Rates (the TIPS real
 //     yields, DFII5 ... DFII30, from 2003), and the breakeven inflation rates
 //     T5YIE and T10YIE computed here as the nominal less the real yield, the
@@ -478,6 +480,13 @@ async function treasuryYields(s, fromYear, toYear) {
 
 // ---- Federal Reserve Board H.6 -----------------------------------------------------
 // The monthly package (M1, M2 and other release data), every column of it.
+/** The Board's Data Download Program retires its preformatted packages on
+ *  this date (the program itself on 2027-07-01). Every package read here
+ *  (FED_DDP_PACKAGE_READS) moves to the release's own files before it;
+ *  scripts/test-fred-series-sources.js fails from FED_DDP_MOVE_BY while any
+ *  package read remains. */
+export const FED_DDP_PACKAGES_RETIRE_ON = "2027-03-31";
+export const FED_DDP_MOVE_BY = "2027-03-01";
 export const H6_PACKAGE_URL = "https://www.federalreserve.gov/datadownload/Output.aspx?rel=H6&series=798e2796917702a5f8423426ba7e6b42&lastobs=&from=&to=&filetype=csv&label=include&layout=seriescolumn&type=package";
 /** A Data Download Program package -> { "<column>": [{ date, value }], ... },
  *  by the header row; monthly periods (YYYY-MM) are dated the 1st, daily
@@ -523,6 +532,8 @@ const H10_PACKAGES = Object.freeze({ rates: "60f32914ab61dfab590e0e470153e3ae", 
 export const H15_MONTHLY_URL = "https://www.federalreserve.gov/datadownload/Output.aspx?rel=H15&series=d7e27b7b09a3a7feae95b9c61781fcd8&lastobs=&from=&to=&filetype=csv&label=include&layout=seriescolumn&type=package";
 export const h10FirstYear = (nowYear = new Date().getUTCFullYear()) => nowYear - H10_YEARS;
 export const h10Url = (pkg, nowYear = new Date().getUTCFullYear()) => `https://www.federalreserve.gov/datadownload/Output.aspx?rel=H10&series=${H10_PACKAGES[pkg]}&lastobs=&from=01/01/${h10FirstYear(nowYear)}&to=12/31/${nowYear}&filetype=csv&label=include&layout=seriescolumn&type=package`;
+/** The package reads that the 2027-03-31 retirement ends: H.6, H.10, H.15. */
+export const FED_DDP_PACKAGE_READS = Object.freeze(["H6", "H10", "H15"].filter((rel) => [H6_PACKAGE_URL, H15_MONTHLY_URL, h10Url(Object.keys(H10_PACKAGES)[0])].some((u) => u.includes(`rel=${rel}&`) && u.includes("type=package"))));
 function frbPackage(k, url, what, ttl) {
   const hit = cached(k);
   if (hit) return Promise.resolve(hit);

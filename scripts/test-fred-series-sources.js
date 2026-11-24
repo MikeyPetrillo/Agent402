@@ -34,6 +34,15 @@ ok(JSON.stringify(tool.upstreamHosts) === JSON.stringify(PUBLISHER_HOSTS), "us-m
 for (const id of ["DGS1MO", "DGS3MO", "DGS6MO", "DGS1", "DGS2", "DGS3", "DGS5", "DGS7", "DGS10", "DGS20", "DGS30", "T10Y2Y", "T10Y3M", "M1SL", "M2SL", "M1NS", "M2NS", "GDP", "GDPC1"]) ok(SUPPORTED_IDS.includes(id), `${id} is served`);
 ok(tool.discovery.input.seriesId === "GDPC1", "the published example is GDPC1 again, the example buyers had");
 ok(!METERED_SLUGS.has("us-macro-series"), "us-macro-series is keyless, so the catalog sweeps drive it");
+// The Board retires its Data Download Program packages on 2027-03-31: the
+// H.6, H.10 and H.15 reads all use them, and must move to each release's own
+// files first. From FED_DDP_MOVE_BY this fails while any package read remains.
+{
+  const M = await import("../src/tools/us-macro-series.js");
+  ok(M.FED_DDP_PACKAGES_RETIRE_ON === "2027-03-31" && JSON.stringify([...M.FED_DDP_PACKAGE_READS].sort()) === JSON.stringify(["H10", "H15", "H6"].filter((r) => M.FED_DDP_PACKAGE_READS.includes(r)).sort()), `the dated note names the package reads it covers (${M.FED_DDP_PACKAGE_READS.join(", ") || "none left"})`);
+  const today = new Date().toISOString().slice(0, 10);
+  ok(today < M.FED_DDP_MOVE_BY || M.FED_DDP_PACKAGE_READS.length === 0, `REMINDER: move ${M.FED_DDP_PACKAGE_READS.join(", ")} off the Data Download Program packages before ${M.FED_DDP_PACKAGES_RETIRE_ON} (src/tools/us-macro-series.js)`);
+}
 // The route carries no third party's mark: renamed from fred-series, which
 // answers 410 naming it; the snapshot pack moved with it.
 {
@@ -264,12 +273,12 @@ try {
     for (const f of files) {
       if (!existsSync(root + f)) continue;
       readFileSync(root + f, "utf8").split("\n").forEach((line, n) => {
-        for (const m of line.matchAll(/\b(\d+) (?:common )?FRED series/g)) typed.push({ at: `${f}:${n + 1}`, n: Number(m[1]) });
+        for (const m of line.matchAll(/\b(\d+) (?:common (?:FRED )?series|FRED series)/g)) typed.push({ at: `${f}:${n + 1}`, n: Number(m[1]) });
       });
     }
     ok(typed.length >= 2, `the typed series counts are found (${typed.map((t) => t.at).join(", ")})`);
     const wrong = typed.filter((t) => t.n !== SUPPORTED_IDS.length);
-    ok(wrong.length === 0, `every typed FRED series count is the supported list's length, ${SUPPORTED_IDS.length} (${wrong.map((t) => `${t.at} says ${t.n}`).join("; ") || "all match"})`);
+    ok(wrong.length === 0, `every typed series count is the supported list's length, ${SUPPORTED_IDS.length} (${wrong.map((t) => `${t.at} says ${t.n}`).join("; ") || "all match"})`);
   }
 
   // 3: not served
