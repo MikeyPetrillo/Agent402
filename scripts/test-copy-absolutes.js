@@ -1093,7 +1093,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "src/tempo-buyer.js": "1407c610e202",
     "src/tools/attest-kit.js": "7f4fe318f486",
     "src/tools/cdp-kit.js": "a081d5aac2f7",
-    "src/tools/decide-kit.js": "4fb91fed53e3",
+    "src/tools/decide-kit.js": "c75892754664",
     "src/tools/dub-kit.js": "1dd69d7461ab",
     "src/tools/image-gen-kit.js": "6880524cbf4f",
     "src/tools/llm-gateway-kit.js": "fecc02fa0e5c",
