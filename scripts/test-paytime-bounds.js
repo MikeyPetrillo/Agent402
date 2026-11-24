@@ -72,38 +72,52 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
 {
   _resetHangupForgiveness();
   const seen = [];
+  // Each hang-up waits for the handler to start before the buyer leaves, and
+  // each read waits for the listeners it expects (then a little longer, so a
+  // second hearing would show): a fixed abort and a fixed sleep raced the
+  // request and the gate's timer on a loaded host, and nothing was heard.
+  const started = new Map();
+  const startedOn = (path) => { if (!started.has(path)) { let r; const p = new Promise((x) => { r = x; }); started.set(path, { p, r }); } return started.get(path); };
   const app = express();
   app.use(createHangupSettlementHook({ onUndelivered: () => {} }));
   // A buffered "gate": the handler's answer is held, then the gate ends the
   // response with the status settlement produced.
-  const gate = (status, { forgive = false } = {}) => (req, res) => {
+  // A gate for a buyer who leaves writes once the buyer has gone (the
+  // response's close), never on a timer that a loaded loop can run first.
+  const gate = (status, { forgive = false, afterLeave = false } = {}) => (req, res) => {
+    startedOn(req.path).r();
     if (forgive) reserveHangupForgiveness(req, { keys: ["0xseam", "ip:seam"], priceUsd: 0.001 });
     onSettleOutcome(req, res, (info) => seen.push({ path: req.path, kind: "settle", status: res.statusCode, ...info }));
     onResponseEnd(req, res, (info) => seen.push({ path: req.path, kind: "always", status: res.statusCode, ...info }));
-    setTimeout(() => { try { res.status(status).json({}); } catch { /* socket gone */ } }, 250);
+    const write = () => { try { res.status(status).json({}); } catch { /* socket gone */ } };
+    if (afterLeave) res.once("close", () => setTimeout(write, 20)); else setTimeout(write, 250);
   };
-  app.get("/fail", gate(402));
+  app.get("/fail", gate(402, { afterLeave: true }));
   app.get("/ok", gate(200));
-  app.get("/forgiven", gate(402, { forgive: true }));
+  app.get("/forgiven", gate(402, { forgive: true, afterLeave: true }));
   app.get("/stream", (req, res) => {
     onSettleOutcome(req, res, (info) => seen.push({ path: req.path, kind: "settle", status: res.statusCode, ...info }));
     res.writeHead(200, { "content-type": "text/plain" }); res.write("part");
     setTimeout(() => { try { res.end("rest"); } catch { /* gone */ } }, 300);
   });
   const { server, url } = await listen(app);
-  await hangUp(`${url}/fail`, { abortAfterMs: 60 });
-  await sleep(400);
+  await hangUp(`${url}/fail`, { abortWhen: startedOn("/fail").p.then(() => sleep(60)) });
+  await waitFor(() => seen.filter((s) => s.path === "/fail").length >= 2);
+  await sleep(300);
   const f = seen.filter((s) => s.path === "/fail");
   ok(f.length === 2 && f.some((s) => s.kind === "settle" && s.via === "undelivered" && s.status === 402 && !s.forgiven), `a 402 the gate writes after the buyer left reaches the settle listener once, as undelivered (${JSON.stringify(f)})`);
   await fetch(`${url}/ok`);
+  await waitFor(() => seen.filter((s) => s.path === "/ok").length >= 2);
   await sleep(100);
   const o = seen.filter((s) => s.path === "/ok");
   ok(o.length === 2 && o.every((s) => s.via === "finish" && s.status === 200), `control: a connected response is heard once, on finish (${JSON.stringify(o)})`);
-  await hangUp(`${url}/forgiven`, { abortAfterMs: 60 });
+  await hangUp(`${url}/forgiven`, { abortWhen: startedOn("/forgiven").p.then(() => sleep(60)) });
+  await waitFor(() => seen.some((s) => s.path === "/forgiven"));
   await sleep(400);
   const g = seen.filter((s) => s.path === "/forgiven");
   ok(g.length === 1 && g[0].kind === "always" && g[0].forgiven === true, `a charge cancelled inside the forgiveness budget is NOT a settlement outcome: only the bookkeeping listener hears it (${JSON.stringify(g)})`);
   await new Promise((resolve) => { const r = httpRequest(`${url}/stream`, (res) => { res.once("data", () => { r.destroy(); resolve(); }); }); r.on("error", () => resolve()); r.end(); });
+  await waitFor(() => seen.some((x) => x.path === "/stream"));
   await sleep(450);
   const s = seen.filter((x) => x.path === "/stream");
   ok(s.length === 1 && s[0].via === "close" && s[0].status === 200, `a response cut after its headers went out is heard on close (${JSON.stringify(s)})`);
@@ -333,8 +347,11 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   bal2 = 600_000n;
   const w1 = await admitCoveredRun(reqFor(hdr(S)));
   const tw = Date.now();
-  let wErr = null; try { await admitCoveredRun(reqFor(hdr(S))); } catch (e) { wErr = e; }
-  ok(wErr?.statusCode === 429 && Date.now() - tw < 100, "control: while the first run is still working, a second the balance cannot also cover is refused at once");
+  // "At once" is read against a long wait (5 s): a refusal made without
+  // waiting lands well inside half of it however loaded the host is, and one
+  // that waited could not.
+  let wErr = null; try { await admitCoveredRun(reqFor(hdr(S)), { settleWaitMs: 5_000 }); } catch (e) { wErr = e; }
+  ok(wErr?.statusCode === 429 && Date.now() - tw < 2_500, "control: while the first run is still working, a second the balance cannot also cover is refused at once");
   w1.settling();
   const tl = Date.now();
   let lErr = null; try { await admitCoveredRun(reqFor(hdr(S)), { settleWaitMs: 200 }); } catch (e) { lErr = e; }
@@ -361,8 +378,8 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   bal3r = 1_200_000n; // run 1 paid on chain
   afterSettle(settleCtx(r1req, true)); // its response has not ended
   const t3 = Date.now();
-  let r3 = null; try { r3 = await admitCoveredRun(reqFor(hdr(R)), { settleWaitMs: 200 }); } catch (e) { r3 = e; }
-  ok(typeof r3 === "function" && Date.now() - t3 < 150 && inflightCoverStatus().runsInFlight === 2, `a wallet funded for three: run 1 settled, its response still open, run 3 is admitted at once, not refused 429 (${typeof r3 === "function" ? "admitted" : r3?.statusCode})`);
+  let r3 = null; try { r3 = await admitCoveredRun(reqFor(hdr(R)), { settleWaitMs: 5_000 }); } catch (e) { r3 = e; }
+  ok(typeof r3 === "function" && Date.now() - t3 < 2_500 && inflightCoverStatus().runsInFlight === 2, `a wallet funded for three: run 1 settled, its response still open, run 3 is admitted at once, not refused 429 (${typeof r3 === "function" ? "admitted" : r3?.statusCode})`);
   // No double release: run 1's response now ends; runs 2 and 3 still count.
   r1();
   ok(inflightCoverStatus().runsInFlight === 2, `run 1's response end after its settlement releases nothing more (in flight ${inflightCoverStatus().runsInFlight})`);
