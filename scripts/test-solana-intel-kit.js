@@ -525,7 +525,7 @@ try {
     process.env.SOLANA_RPC_URL = RPC;
     stub((url, opts) => {
       if (url === RPC) { const b = JSON.parse(opts.body); ok(b.method === "getMultipleAccounts" && b.params[0].join(",") === [SOL, JUP].join(",") && b.params[1].encoding === "jsonParsed", "price: one getMultipleAccounts read for the mints, jsonParsed"); return Promise.resolve(jsonRes(RPC_MINTS([9, 6]))); }
-      return url.startsWith("https://api.dexscreener.com/tokens/v1/solana/") ? Promise.resolve(jsonRes(DS_PRICES)) : Promise.reject(new Error("bad url " + url));
+      return urlMatches(url, "api.dexscreener.com", "/tokens/v1/solana/") ? Promise.resolve(jsonRes(DS_PRICES)) : Promise.reject(new Error("bad url " + url));
     });
     r = await h("sol-price")({ mints: `${SOL},${JUP}` });
     ok(r.count === 2 && r.prices[SOL].decimals === 9 && r.prices[JUP].decimals === 6 && r.prices[JUP].blockId === 440919037, "price: comma-string input; decimals and the slot come from the chain");
@@ -538,7 +538,7 @@ try {
     const many = Array.from({ length: 31 }, (_, k) => `${"So1".padEnd(42, "1")}${B58[k]}`);
     stub((url) => (url === RPC ? Promise.resolve(jsonRes(RPC_MINTS([]))) : Promise.resolve(jsonRes([]))));
     r = await h("sol-price")({ mints: many });
-    ok(calls.filter((c) => c.url.startsWith("https://api.dexscreener.com/")).length === 2 && r.missing.length === 31, `price: ${many.length} mints are read in two pair requests`);
+    ok(calls.filter((c) => isHost(c.url, "api.dexscreener.com")).length === 2 && r.missing.length === 31, `price: ${many.length} mints are read in two pair requests`);
     if (prevRpc === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL = prevRpc;
     // The pricing rule, offline.
     ok(priceOfMint(PUMP, DS_PRICES) === null, "priceOfMint: no pair holds the mint, null");

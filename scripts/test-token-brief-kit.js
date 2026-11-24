@@ -20,6 +20,7 @@
 //     move it, a bucket crossing does) and describeTokenChanges() reads it
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { urlMatches } from "./lib/url-host.js";
 process.env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "test-key-not-real";
 
 const { TOKEN_BRIEF_TOOLS, TOKEN_BRIEF_TIERS, probeTokenBrief, describeTokenChanges, normMint, __test } =
@@ -179,7 +180,7 @@ let happy = null;
 
   ok(e.identity.name === "Jupiter" && e.identity.symbol === "JUP", "identity resolved from the fetched facts");
   ok(e.identity.holderCount === 2873512, "holder count from RugCheck");
-  ok(e.price.usd === 0.2034 && e.price.blockId === null && calls.some((u) => u.startsWith(`https://api.dexscreener.com/tokens/v1/solana/${MINT}`)), "price of record from the deepest DEX pair (no Solana RPC here, so no slot)");
+  ok(e.price.usd === 0.2034 && e.price.blockId === null && calls.some((u) => urlMatches(u, "api.dexscreener.com", `/tokens/v1/solana/${MINT}`)), "price of record from the deepest DEX pair (no Solana RPC here, so no slot)");
   ok(e.authorities.mintAuthorityDisabled === true && e.authorities.freezeAuthorityDisabled === true, "authority state read from the audit facts");
   ok(e.authorities.metadataMutable === true && e.authorities.updateAuthority === "UPDATEAUTH61aq", "metadata mutability + update authority carried");
   ok(e.liquidity.totalMarketLiquidityUsd === 3585833.66, "total market liquidity from RugCheck");
