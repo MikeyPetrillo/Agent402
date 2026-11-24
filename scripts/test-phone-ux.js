@@ -60,6 +60,27 @@ try {
     await p.close();
   }
   {
+    // /docs/api at 360 px: no part of any tool row is wider than the viewport,
+    // a probe row with a long unbroken slug and word included (no font metric assumed).
+    const p = await open("/docs/api", 360);
+    const r = await p.evaluate(() => {
+      const first = document.querySelector(".ml-docs-api-row");
+      if (!first) return null;
+      const probe = first.cloneNode(true);
+      probe.dataset.phoneUxProbe = "1";
+      probe.querySelector(".slug").textContent = "x".repeat(120);
+      probe.querySelector(".desc").textContent = `Reads ${"y".repeat(160)} and answers.`;
+      probe.querySelector(".price").textContent = "$0.010";
+      first.after(probe);
+      const cw = document.documentElement.clientWidth;
+      const rows = [...document.querySelectorAll(".ml-docs-api-row")];
+      const wide = rows.flatMap((row) => [row, ...row.querySelectorAll("*")]).filter((e) => { const b = e.getBoundingClientRect(); return b.width > 0 && (b.right > cw + 1 || b.left < -1); }).map((e) => `${e.className}:${(e.textContent || "").trim().slice(0, 30)}`);
+      return { rows: rows.length, wide, sw: document.documentElement.scrollWidth, cw };
+    });
+    ok(r && r.rows > 100 && r.wide.length === 0 && r.sw <= r.cw + 1, `/docs/api at 360 px: no tool row element is wider than the viewport (${r ? `${r.rows} rows${r.wide.length ? `; past it: ${r.wide.slice(0, 3).join(" | ")}` : ""}` : "no rows"})`);
+    await p.close();
+  }
+  {
     const p = await open("/status");
     ok(/hover over or tap a bar/.test(await p.textContent("body")), "/status: the lead names tap beside hover");
     await p.evaluate(() => {

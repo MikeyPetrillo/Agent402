@@ -296,10 +296,13 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-side-a.active { background:var(--card);color:var(--accent);border-left:2px solid var(--accent);padding-left:8px;font-weight:600; }
   .ml-docs-side-hidden { display:none !important; }
   .ml-docs-api-cat { font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--hairline);color:var(--ink); }
-  .ml-docs-api-row { display:grid;grid-template-columns:1.2fr 2fr .5fr;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:var(--fs-md); }
-  .ml-docs-api-row .slug { font-family:var(--font-mono);color:var(--ink); }
-  .ml-docs-api-row .desc { color:var(--muted); }
-  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:var(--fs-md);font-weight:700; }
+  /* Tool rows: slug, description, price. The text columns may shrink below their longest token (minmax(0,..)) and break inside it, so no slug or word widens the page; the price keeps its own width. At phone width the description takes its own line under the slug and price. */
+  .ml-docs-api-row { display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,2fr) max-content;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:var(--fs-md); }
+  .ml-docs-api-row > div { min-width:0; }
+  .ml-docs-api-row .slug { font-family:var(--font-mono);color:var(--ink);overflow-wrap:anywhere; }
+  .ml-docs-api-row .desc { color:var(--muted);overflow-wrap:anywhere; }
+  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:var(--fs-md);font-weight:700;white-space:nowrap; }
+  @media (max-width:700px){ .ml-docs-api-row { grid-template-columns:minmax(0,1fr) max-content;gap:4px 14px; } .ml-docs-api-row .desc { grid-column:1 / -1;grid-row:2; } }
   .ml-docs-pn { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:48px;padding-top:24px;border-top:1px solid var(--hairline); }
   .ml-docs-pn-a { display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);text-decoration:none; }
   .ml-docs-pn-a:hover { border-color:var(--accent);text-decoration:none; }
