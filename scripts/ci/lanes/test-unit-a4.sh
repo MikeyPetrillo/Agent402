@@ -141,6 +141,7 @@ t node scripts/test-late-settlements.js
 t node scripts/test-pending-settle.js
 # Our own Robinhood settler: our sales only, verify refusals, one nonce per relayer across replicas, a never-mined send stops the chain, listed facilitators first, gas check,
 t node scripts/test-own-relayer.js
+t node scripts/test-settle-compliance.js
 # Referral copies of paid routes (/ref/<slug>): the 402 shape, amount parity with the direct route, one run per authorization, handler-first settlement on a signed facilitator request, net booking (local stub facilitator, keys made in the test).
 t node scripts/test-referral-gate.js
 # /ref split legs per proven sale: stored shape, yearly totals per recipient, one row per payment (offline)
