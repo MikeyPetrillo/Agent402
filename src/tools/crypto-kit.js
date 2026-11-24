@@ -23,7 +23,7 @@ const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll, cgNoteUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, addCredit, COINGECKO_CREDIT, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
-import { markResaleBarred, markResaleComputed, markRefAnswer, MARKET_DATA_RESALE_REASON, markResaleCleared } from "../resale-terms.js";
+import { markResaleBarred, markResaleComputed, markRefAnswer, MARKET_DATA_RESALE_REASON, markResaleCleared, MARKET_DATA_CLEARANCE } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.js";
 import { hlSharedInfo } from "./hyperliquid-shared.js";
@@ -796,7 +796,7 @@ markRefAnswer(CRYPTO_TOOLS, ["stablecoin-peg"], (answer) => {
     return kept;
   });
   return { ...answer, coins };
-});
+}, STABLECOIN_PEG_REF_RAW_FIELDS.map((k) => `coins[].${k}`));
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 // A call that ends in an error counts its CoinGecko reads on the unsettled
@@ -804,4 +804,4 @@ markRefAnswer(CRYPTO_TOOLS, ["stablecoin-peg"], (answer) => {
 underBudgetAll(cgScopeAll(CRYPTO_TOOLS), PAYMENT_WINDOW_BUDGET_MS);
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
-markResaleCleared(CRYPTO_TOOLS, ["stablecoin-peg"], "computed over market data whose terms allow products that incorporate it");
+markResaleCleared(CRYPTO_TOOLS, ["stablecoin-peg"], MARKET_DATA_CLEARANCE);

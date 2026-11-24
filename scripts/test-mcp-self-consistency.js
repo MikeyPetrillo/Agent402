@@ -25,6 +25,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CATALOG_FLOOR } from "./sync-count.js";
 
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";
 
@@ -235,10 +236,10 @@ async function routeExists(ref) {
 }
 
 const pricing = await fetchLive("/api/pricing").then((r) => r.json());
-// Catalog floor (the same 400 sync-count enforces): grading against a thin or
+// Catalog floor (the one sync-count enforces): grading against a thin or
 // empty catalog would fail every route the manifest names, so refuse instead.
-if (!Array.isArray(pricing.endpoints) || pricing.endpoints.length < 400) {
-  throw new Error(`/api/pricing carried ${Array.isArray(pricing.endpoints) ? pricing.endpoints.length : "no"} endpoints (floor 400) - the target answered with something other than the catalog; refusing to grade`);
+if (!Array.isArray(pricing.endpoints) || pricing.endpoints.length < CATALOG_FLOOR) {
+  throw new Error(`/api/pricing carried ${Array.isArray(pricing.endpoints) ? pricing.endpoints.length : "no"} endpoints (floor ${CATALOG_FLOOR}) - the target answered with something other than the catalog; refusing to grade`);
 }
 const catalogRoutes = new Set((pricing.endpoints || []).map((e) => String(e.path).replace(/\/$/, "")));
 const catalogSlugs = new Set((pricing.endpoints || []).map((e) => e.slug).filter(Boolean));

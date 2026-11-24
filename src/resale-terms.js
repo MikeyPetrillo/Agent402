@@ -96,14 +96,58 @@ export function resaleBarredReason(def) {
   return why.slice(0, 200);
 }
 
+/** The clearance a tool computed over market data carries (markResaleCleared's
+ *  source): the source's terms allow products that incorporate its data, not
+ *  its own figures resold as they came. A tool cleared this way sells, through
+ *  a third party, no field named in RAW_MARKET_FIELDS at any depth, and a tool
+ *  whose answer carries such figures drops them with markRefAnswer, naming
+ *  each one (scripts/test-resale-clearance.js drives every such tool's
+ *  published example through refAnswerOf). */
+export const MARKET_DATA_CLEARANCE = "computed over market data whose terms allow products that incorporate it";
+
+/** Field names that hold a market-data source's own figures (a coin's price,
+ *  market cap, fully diluted value, volume, all-time high and low, the 24-hour
+ *  range, supply counts): never sold through a third party by a tool cleared
+ *  with MARKET_DATA_CLEARANCE. A sum, share or ratio computed here is named
+ *  otherwise and is not on the list. */
+export const RAW_MARKET_FIELDS = Object.freeze([
+  "price", "currentPrice", "marketCap", "fullyDilutedValuation", "fdv", "volume24h", "totalVolume",
+  "ath", "atl", "high24h", "low24h", "circulatingSupply", "totalSupply", "maxSupply",
+  "medianPriceUsd", "volumeWeightedPriceUsd",
+]);
+
 /** Declare, beside a tool's handler, what its answer becomes on a /ref copy
  *  and on /aws (both resell through a third party):
  *  `transform(answer)` returns the answer the referral gate serves (a new
  *  value; it never changes the one it is given). The public route serves the
- *  handler's own answer, untouched. */
-export function markRefAnswer(tools, slugs, transform) {
+ *  handler's own answer, untouched. `rawFields` names every field the
+ *  transform drops, as a path ("coins[].price", "rows[].supply.total",
+ *  "medianPriceUsd"); the clearance suite reads each one in the published
+ *  example and requires it gone from the resold answer. */
+export function markRefAnswer(tools, slugs, transform, rawFields) {
   if (typeof transform !== "function") throw new Error("resale terms: a /ref answer transform must be a function");
-  return mark(tools, slugs, { refAnswer: transform });
+  if (!Array.isArray(rawFields) || rawFields.length === 0 || !rawFields.every((p) => typeof p === "string" && /^[A-Za-z0-9_]+(\[\])?(\.[A-Za-z0-9_]+(\[\])?)*$/.test(p))) {
+    throw new Error("resale terms: a /ref answer transform names the raw fields it drops (rawFields, paths such as \"coins[].price\")");
+  }
+  return mark(tools, slugs, { refAnswer: transform, refRawFields: Object.freeze([...rawFields]) });
+}
+
+/** The values at `path` ("rows[].supply.total") in `value`: [] when the path
+ *  is absent. Arrays marked "[]" are walked element by element. */
+export function valuesAtPath(value, path) {
+  let cur = [value];
+  for (const part of String(path).split(".")) {
+    const each = part.endsWith("[]");
+    const key = each ? part.slice(0, -2) : part;
+    const next = [];
+    for (const v of cur) {
+      if (!v || typeof v !== "object" || Array.isArray(v) || !Object.hasOwn(v, key)) continue;
+      const got = v[key];
+      if (each) { if (Array.isArray(got)) next.push(...got); } else next.push(got);
+    }
+    cur = next;
+  }
+  return cur;
 }
 
 /** The answer a /ref copy (src/referral-gate.js) and an /aws sale

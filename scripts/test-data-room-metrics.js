@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bootServer } from "./lib/boot-server.js";
 import { readSurfaces, summarize, SURFACES } from "./data-room-metrics.js";
+import { CATALOG_FLOOR } from "./sync-count.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -49,7 +50,7 @@ try {
   let j = null; try { j = JSON.parse(r.stdout); } catch { /* checked below */ }
   ok(r.status === 0 && j, `the CLI reads a local server and exits 0 (${r.status}${r.stderr ? `: ${r.stderr.slice(0, 200)}` : ""})`);
   ok(j && j.source === srv.url && j.unreadable.length === 0, "every surface was readable on the local server");
-  ok(j && j.catalog.toolCount >= 400 && j.catalog.pricedEndpoints >= 400 && j.catalog.proofOfWorkEligible > 0, `the catalog summary reflects the live catalog (${j?.catalog.toolCount} tools, ${j?.catalog.pricedEndpoints} priced)`);
+  ok(j && j.catalog.toolCount >= CATALOG_FLOOR && j.catalog.pricedEndpoints >= CATALOG_FLOOR && j.catalog.proofOfWorkEligible > 0, `the catalog summary reflects the live catalog (${j?.catalog.toolCount} tools, ${j?.catalog.pricedEndpoints} priced)`);
   ok(j && typeof j.build === "string" && j.reliability.components > 0 && j.reliability.guarantees > 0, "build, status components and guarantees are read");
   ok(j && j.catalog.priceUsd && j.catalog.priceUsd.min > 0 && j.catalog.priceUsd.min <= j.catalog.priceUsd.median, "the price band is ordered and positive");
 } finally { await srv.stop(); }

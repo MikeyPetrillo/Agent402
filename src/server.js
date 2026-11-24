@@ -488,6 +488,7 @@ import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, sellablePacks } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
 import { createCreditsAccount, mountCreditsAccount, accountSecretFrom } from "./credits-account.js";
+import { mailboxKey } from "./mailbox-key.js";
 import { refuseCreditsKeyInUrl } from "./credits-key-url.js";
 import { createJsonDocument as createCreditsAccountStore } from "./json-document.js";
 import { creditsAccountPage, creditsVerifyPage, creditsNoticePage, creditsNoticeOffPage } from "./credits-account-page.js";
@@ -3634,8 +3635,10 @@ if (configureWalletSignIn({
   mountWalletSignIn(app, { express, limiter: createRateLimiter("wallet-session", { perMin: 20, perHour: 200 }), clientIp });
 }
 const alertsSignupLimiter = createRateLimiter("alerts-signup", { perMin: 6, perHour: 40 });
-// A second bound keyed on the ADDRESS (hashed), so a distributed source cannot
-// flood one victim's inbox with confirmations by rotating IPs.
+// A second bound keyed on the MAILBOX (hashed; src/mailbox-key.js, so "+tag"
+// and Gmail's dotted spellings of one inbox are one key), so a distributed
+// source cannot flood one victim's inbox with confirmations by rotating IPs
+// or spellings.
 const alertsEmailLimiter = createRateLimiter("alerts-email", { perMin: 2, perHour: 5 });
 const alertPage = (title, body) => ledgerShell({ title: `${title} - Agent402`, description: "Free email alerts from Agent402.", canonical: `${BASE_URL}/reports`, baseUrl: BASE_URL, activePath: "/reports", robots: "noindex, nofollow", body: `<div class="wrap" style="padding:40px 30px;max-width:640px;"><h1 style="font-size:var(--fs-2xl);margin:0 0 12px;">${title}</h1>${body}</div>${ledgerFooterCompact()}` });
 app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
@@ -3643,7 +3646,7 @@ app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
   const b = req.body || {};
   for (const k of ["email", "kind", "target", "source"]) if (b[k] !== null && typeof b[k] === "object") return res.status(400).json({ error: `"${k}" must be a string` });
   if (typeof b.website === "string" && b.website) return res.json({ ok: true, status: "pending" }); // honeypot: bots see success, nothing is stored
-  const emailKey = createHash("sha256").update(String(b.email || "").trim().toLowerCase()).digest("hex").slice(0, 32);
+  const emailKey = createHash("sha256").update(mailboxKey(String(b.email || ""))).digest("hex").slice(0, 32);
   if (alertsEmailLimiter.check(`e:${emailKey}`).limited) return res.json({ ok: true, status: "pending" }); // same shape: never confirms whether an address is known
   try { res.json(await _freeAlerts.signup({ email: b.email, kind: b.kind, target: b.target, source: b.source })); }
   catch (e) {

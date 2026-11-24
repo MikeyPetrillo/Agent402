@@ -1,0 +1,123 @@
+#!/usr/bin/env node
+// CLASS GUARD: a test that misses a mutation. Batch after batch the devil
+// review found a defect put back in a copy and every suite still green: the
+// settle-first clause returning "" (batch 6), the /privacy split-leg line
+// removed, a receipt kept before the response finished (batch 7), the
+// token-diligence trim broken (caught by one suite, missed by the one meant
+// to hold it). This script keeps those mutations, and the ones that were
+// caught, and runs them again: each is applied in an export copy of the
+// tree, its suite is run there, and a suite that still passes is a failure.
+//
+//   node scripts/mutation-smoke.js               run every mutation
+//   node scripts/mutation-smoke.js --only <id>   run one (repeatable)
+//   node scripts/mutation-smoke.js --list        print the list
+//
+// The working tree is never touched: the copy holds the tracked and the
+// untracked, not ignored files as they are in the working tree (a git repository of its own, so a suite that
+// reads `git ls-files` reads the copy), with node_modules linked. A mutation
+// whose `find` text is not in its file exactly once fails as stale, so a
+// refactor re-anchors it instead of letting it pass vacuously. Each suite is
+// first run unmutated in the copy (the control: a mutation's failure must be
+// the mutation's). Add a mutation here when a review finds one a suite
+// missed, together with the test that now catches it.
+//
+// Runs in the test-unit-d lane (about 40 s: each mutation runs its suite
+// once, and each suite runs once unmutated). Keep a mutation's suite an
+// offline one that finishes in seconds; a slower one belongs in the /batch
+// gate's own mutation checks, not here.
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync, realpathSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** id, where it came from, the file and the exact text replaced, and the suite that must fail. */
+export const MUTATIONS = [
+  { id: "settle-first-clause-empty", origin: "batch 6, survived test-settle-first", file: "src/settle-first-copy.js",
+    find: 'return def && def.settlesFirst === true && SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : "";', replace: 'return "";', suite: "test-claim-registry.js" },
+  { id: "privacy-split-leg-line", origin: "batch 7, survived test-referral-gate and test-referral-legs", file: "src/privacy.js",
+    find: "the amount, how the network's contract split it, and the wallet", replace: "the amount, and the wallet", suite: "test-claim-registry.js" },
+  { id: "terms-v1-fallback-for-every-call", origin: "batch 7 (/terms /v1 sentence)", file: "src/terms.js",
+    find: "a call on a chat tier falls back to the next model on that tier when one fails", replace: "a call falls back to the next model when one fails", suite: "test-claim-registry.js" },
+  { id: "terms-caller-url-clause", origin: "batch 7, survived five suites; now caught", file: "src/terms.js",
+    find: "${modelOutputsSection}${callerUrlSection}", replace: "${modelOutputsSection}", suite: "test-robots-gate.js" },
+  { id: "receipt-kept-before-finish", origin: "batch 7 N4, survived test-receipt-streams", file: "src/receipt-store.js",
+    find: 'res.once("finish", () => { try { if (res.statusCode === 200) keep(key, jws, record); } catch { /* bookkeeping only */ } });', replace: "keep(key, jws, record);", suite: "test-receipt-streams.js" },
+  { id: "token-diligence-trim-keeps-market", origin: "batch 7 M5, survived test-resale-clearance", file: "src/tools/bundle-kit.js",
+    find: "const { market: _market, supply, ...kept } = r;", replace: "const { supply, ...kept } = r;", suite: "test-resale-clearance.js" },
+  { id: "stablecoin-peg-sells-market-cap", origin: "batch 7 (/aws skipped the /ref trim)", file: "src/tools/crypto-kit.js",
+    find: 'Object.freeze(["price", "high24h", "low24h", "marketCap"])', replace: 'Object.freeze(["price", "high24h", "low24h"])', suite: "test-resale-clearance.js" },
+  { id: "code-mail-global-read-before-charge", origin: "batch 8 (parallel asks past the service budget)", file: "src/mcp-oauth.js",
+    find: 'if (await charge("send-global", "all", HOUR_MS) > globalMax', replace: 'if (await add("send-global", "all", 0, HOUR_MS) >= globalMax', suite: "test-limiter-identity.js" },
+  { id: "limiter-key-mapped-ipv4", origin: "batch 8 (one host, two keys)", file: "src/rate-limit.js",
+    find: "if (h.slice(0, 5).every((x) => x === 0) && h[5] === 0xffff)", replace: "if (false)", suite: "test-limiter-identity.js" },
+  { id: "alerts-email-spelling", origin: "batch 8 (a mailbox's +tag spellings, as batch 6 G2)", file: "src/server.js",
+    find: 'update(mailboxKey(String(b.email || "")))', replace: 'update(String(b.email || "").trim().toLowerCase())', suite: "test-limiter-identity.js" },
+  { id: "typed-source-floor", origin: "batch 7 (fred >= 8, jupiter >= 5)", file: "scripts/test-bazaar-descriptions.js",
+    find: 'ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0), ', replace: 'ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0) && counts.coingecko >= 24, ', suite: "test-typed-counts.js" },
+  { id: "new-unscoped-absolute", origin: "batch 8 (the class of batches 6 and 7: a claim broader than the code)", file: "wiki/FAQ.md",
+    find: "so they are never charged.", replace: "so they are never charged. A refund always arrives within a day.", suite: "test-claim-registry.js" },
+  { id: "unregistered-limiter", origin: "batch 8 (a new limiter with no identity named)", file: "src/answer-share.js",
+    find: 'createLimiter("answer-share-card"', replace: 'createLimiter("answer-share-thumb"', suite: "test-limiter-identity.js" },
+  { id: "bea-non-endorsement", origin: "batch 7, caught", file: "src/tools/us-macro-series.js",
+    find: " This product uses BEA data but is not endorsed or certified by BEA.", replace: "", suite: "test-fred-series-sources.js" },
+  { id: "fraud-rule-sales-off", origin: "batch 7, caught", file: "src/terms.js",
+    find: "reported by Stripe. ${FRAUD_WARNING_RULE}`} One buyer", replace: "reported by Stripe.`} One buyer", suite: "test-credits-terms.js" },
+];
+
+const args = process.argv.slice(2);
+const only = args.flatMap((a, i) => (a === "--only" ? [args[i + 1]] : []));
+if (args.includes("--list")) { for (const m of MUTATIONS) console.log(`${m.id}\t${m.file}\t${m.suite}\t${m.origin}`); process.exit(0); }
+const picked = only.length ? MUTATIONS.filter((m) => only.includes(m.id)) : MUTATIONS;
+if (only.length && picked.length !== only.length) { console.error(`unknown mutation id: ${only.filter((o) => !MUTATIONS.some((m) => m.id === o)).join(", ")}`); process.exit(2); }
+
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - [test misses a mutation] ${m}`); } };
+
+// The export copy: tracked files as the working tree holds them.
+const COPY = mkdtempSync(join(tmpdir(), "mutation-smoke-"));
+process.on("exit", () => { try { rmSync(COPY, { recursive: true, force: true }); } catch { /* best effort */ } });
+const tracked = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).split("\0").filter(Boolean);
+for (const f of tracked) {
+  const from = join(ROOT, f);
+  if (!existsSync(from)) continue; // deleted in the working tree, not yet staged
+  mkdirSync(dirname(join(COPY, f)), { recursive: true });
+  cpSync(from, join(COPY, f), { verbatimSymlinks: true });
+}
+symlinkSync(realpathSync(join(ROOT, "node_modules")), join(COPY, "node_modules"));
+const git = (...a) => execFileSync("git", a, { cwd: COPY, stdio: "ignore", env: { ...process.env, GIT_AUTHOR_NAME: "m", GIT_AUTHOR_EMAIL: "m@x", GIT_COMMITTER_NAME: "m", GIT_COMMITTER_EMAIL: "m@x" } });
+git("init", "-q"); git("add", "-A"); git("commit", "-q", "--no-verify", "--no-gpg-sign", "-m", "export");
+console.log(`export copy: ${tracked.length} tracked files`);
+
+const runSuite = (suite) => {
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, [join("scripts", suite)], { cwd: COPY, encoding: "utf8", timeout: 300_000, env: { ...process.env, CI: process.env.CI || "" } });
+  const out = `${r.stdout || ""}${r.stderr || ""}`;
+  return { status: r.status, ms: Date.now() - t0, fails: out.split("\n").filter((l) => /^\s*(FAIL|not ok)\b/.test(l)).length };
+};
+
+// Controls: every suite passes in the copy before anything is mutated.
+const controls = new Map();
+for (const suite of [...new Set(picked.map((m) => m.suite))]) {
+  const r = runSuite(suite);
+  controls.set(suite, r.status === 0);
+  ok(r.status === 0, `control: ${suite} passes unmutated in the copy (exit ${r.status}, ${Math.round(r.ms / 1000)} s)`);
+}
+
+for (const m of picked) {
+  const p = join(COPY, m.file);
+  const before = existsSync(p) ? readFileSync(p, "utf8") : "";
+  const count = before.split(m.find).length - 1;
+  ok(count === 1, `${m.id}: the mutation's text is in ${m.file} exactly once (${count}${count === 1 ? "" : "; re-anchor it to the code as it is now"})`);
+  if (count !== 1 || !controls.get(m.suite)) continue;
+  writeFileSync(p, before.replace(m.find, m.replace));
+  try {
+    const r = runSuite(m.suite);
+    ok(r.status !== 0, `${m.id}: ${m.suite} fails under the mutation (exit ${r.status}, ${r.fails} failing checks, ${Math.round(r.ms / 1000)} s; ${m.origin})${r.status === 0 ? `: the suite misses it; add the assert that catches it to ${m.suite}` : ""}`);
+  } finally { writeFileSync(p, before); }
+}
+
+console.log(`\nmutation-smoke: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

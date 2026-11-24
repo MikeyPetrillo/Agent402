@@ -55,6 +55,7 @@ import { namesOwnHost } from "./referral-gate.js";
 import { withoutChargeSentences } from "./not-charged.js";
 import { resaleBarredReason, resaleClearanceRefusal, refAnswerOf } from "./resale-terms.js";
 import { createHash } from "node:crypto";
+import { limiterKey } from "./rate-limit.js";
 import { AWS_LISTING_SLUGS } from "./aws-listing.js";
 import { createAwsUnansweredBook, awsUnansweredWord } from "./aws-unanswered.js";
 
@@ -435,7 +436,7 @@ export async function createAwsMarketplaceGate({
   config, defs, claims,
   recordSale, preValidate = () => null, runAsCaller = (_req, fn) => fn(), handlerInputOf = (req) => (req.method === "GET" ? { ...(req.query || {}) } : (req.body && typeof req.body === "object" ? req.body : {})),
   isSynthetic = () => false, redact = (s) => s, ownHosts = [], ownPaths = [], onServed = null, onToolError = null,
-  clientKey = (req) => String(req.ip || ""), rateLimits = null, describe = (def) => def.description, unanswered = null,
+  clientKey = (req) => limiterKey(String(req.ip || "")), rateLimits = null, describe = (def) => def.description, unanswered = null,
   sdk = null, core = null, express = null, now = Date.now, log = (m) => console.warn(m),
 }) {
   if (!config || !defs || !defs.size || !claims || typeof recordSale !== "function") throw new Error("aws gate: missing a dependency");

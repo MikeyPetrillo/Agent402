@@ -283,7 +283,7 @@ t node scripts/test-tempo-gas-sponsorship.js
 # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call
 t node scripts/test-tempo-credential-check.js
 
-# @step 4: Offline suites (27 scripts, one process each)
+# @step 4: Offline suites (28 scripts, one process each)
 # MPP leaderboard (live-offer recipients via mppx codec, one batched Tempo getLogs per chunk, grouping/ranking/priming, split-on-error + stale-keeps-previous, page badges - offline)
 t node scripts/test-mpp-leaderboard.js
 # Agent-kit tests (token-count, text-chunk, json-validate, jsonl)
@@ -304,6 +304,8 @@ t node scripts/test-cleanroom-openapi-alias.js
 t node scripts/test-reliability-claims.js
 # Four false absolutes (a claim must stay true as the service widens)
 t node scripts/test-copy-absolutes.js
+# Class guard, claims broader than the code: each registered public claim about charging, refunds, caps, receipts and limits checked against the code fact it states, and no new unscoped absolute or free paid route on a public surface (baseline only shrinks; offline)
+t node scripts/test-claim-registry.js
 # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
 t node scripts/test-resale-copy.js
 t node scripts/test-mcp-dockerfiles.js

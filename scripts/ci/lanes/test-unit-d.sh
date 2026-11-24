@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (172 scripts, one process each)
+# @step 1: Offline suites (174 scripts, one process each)
 # Client route discovery and output validation (clean-room behavior test, offline)
 t node scripts/test-cleanroom-client-contract.js
 # Paid scan budget (a public route must not spend without limit)
@@ -230,6 +230,10 @@ t node scripts/test-burner-log-guard.js
 t node scripts/test-algorand-canary-classify.js
 # Catalog floor invariant (floorViolation — null at ≥400, kit-missing message)
 t node scripts/test-sync-count-floor.js
+# Class guard, typed counts: a number compared against a catalog collection in a test, or typed before what the catalog counts in public markdown (README, wiki, docs, package READMEs), is derived or imported from sync-count; the baseline of what is left only shrinks (offline)
+t node scripts/test-typed-counts.js
+# Class guard, tests that miss a mutation: each mutation a review found (survived or caught) is applied in an export copy and its suite must fail there; each suite first passes unmutated (about 40 s, offline)
+t node scripts/mutation-smoke.js
 # Self-check semantic invariants are meaningful (good passes, broken fails)
 t node scripts/test-invariants.js
 # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)

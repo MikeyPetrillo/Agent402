@@ -65,7 +65,7 @@ process.env.LOAD_SHED = "off"; ok(shouldShedFree({ inFlight: 10_000, lagMs: 5000
 process.env.RATE_LIMIT_MAX_KEYS = "3";
 const { createLimiter, limiterKey } = await import("../src/rate-limit.js?cap");
 ok(limiterKey("2001:db8:1:2:aaaa::1") === limiterKey("2001:db8:1:2:ffff::9") && limiterKey("2001:db8:1:3::1") !== limiterKey("2001:db8:1:2::1"), "IPv6 addresses fold to their /64 (and different /64s stay apart)");
-ok(limiterKey("1.2.3.4") === "1.2.3.4" && limiterKey("::ffff:1.2.3.4") === "::ffff:1.2.3.4", "IPv4 and mapped addresses are unchanged");
+ok(limiterKey("1.2.3.4") === "1.2.3.4" && limiterKey("::ffff:1.2.3.4") === "1.2.3.4", "an IPv4 address is unchanged and its mapped spelling is the same key");
 const lim = createLimiter("t", { perMin: 1, perHour: 10 });
 ok(!lim.check("2001:db8:1:2::a").limited && lim.check("2001:db8:1:2::b").limited, "rotating addresses inside one /64 shares one budget");
 for (const k of ["1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4", "5.5.5.5"]) lim.check(k);

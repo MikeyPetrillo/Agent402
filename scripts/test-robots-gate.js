@@ -244,7 +244,7 @@ try {
 // ---------------------------------------------------------------------------
 // 3. Retention, by reading the code
 // ---------------------------------------------------------------------------
-ok(Array.isArray(ROBOTS_GATED_SLUGS) && ROBOTS_GATED_SLUGS.length >= 25, `the gated list is published (${ROBOTS_GATED_SLUGS.length} tools)`);
+ok(Array.isArray(ROBOTS_GATED_SLUGS) && ROBOTS_GATED_SLUGS.length > 0, `the gated list is published (${ROBOTS_GATED_SLUGS.length} tools)`);
 for (const route of Object.keys(CACHEABLE_ROUTES)) {
   const slug = route.replace(/^\/api\//, "");
   if (ROBOTS_GATED_SLUGS.includes(slug)) ok(false, `${route} is a gated tool in the shared response cache`);

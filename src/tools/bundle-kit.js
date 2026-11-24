@@ -31,7 +31,7 @@ import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
 import { markEndsAtCeiling, ceilingLeftMs, CEILING_TIMER_SLACK_MS } from "../run-ceiling.js";
-import { markResaleComputed, markResaleCleared, markRefAnswer } from "../resale-terms.js";
+import { markResaleComputed, markResaleCleared, markRefAnswer, MARKET_DATA_CLEARANCE } from "../resale-terms.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
 import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 import { notChargedHere, runAsStep } from "../not-charged.js";
@@ -684,7 +684,7 @@ markResaleComputed(BUNDLE_TOOLS, ["token-diligence"]);
 markResaleCleared(BUNDLE_TOOLS, ["weather-risk-brief"], "Open-Meteo commercial plan, CC BY 4.0");
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
-markResaleCleared(BUNDLE_TOOLS, ["token-diligence"], "computed over market data whose terms allow products that incorporate it");
+markResaleCleared(BUNDLE_TOOLS, ["token-diligence"], MARKET_DATA_CLEARANCE);
 // On a /ref copy and on /aws (both resold through a third party) token-diligence
 // serves what it computes, the flags, the profile and the credit, without the
 // source's own figures per coin (the market block: price, market cap, fully
@@ -701,7 +701,7 @@ markRefAnswer(BUNDLE_TOOLS, ["token-diligence"], (answer) => {
     ? { ...answer.comparison, byMarketCap: Array.isArray(answer.comparison.byMarketCap) ? answer.comparison.byMarketCap.map((x) => (x && typeof x === "object" ? { rank: x.rank, id: x.id } : x)) : answer.comparison.byMarketCap }
     : answer.comparison;
   return { ...answer, rows, comparison };
-});
+}, ["rows[].market", "rows[].supply.circulating", "rows[].supply.total", "rows[].supply.max", "comparison.byMarketCap[].value"]);
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
 markResaleCleared(BUNDLE_TOOLS, ["filings-brief"], "SEC EDGAR public filings");

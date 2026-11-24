@@ -231,13 +231,6 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     return Number(r.value) || 0;
   }
   const over = async (name, key, limit, windowMs = cfg.windowMs()) => (await add(name, key, 1, windowMs)) > limit;
-  /** A counter's value now, without charging it. */
-  async function read(name, key) {
-    const k = digest(`${name}|${key}`).slice(0, 40);
-    let r = await limits.counterGet(`mcpo-${name}`, k).catch(() => ({ ok: false }));
-    if (!r?.ok) r = await local.counterGet(`mcpo-${name}`, k);
-    return Number(r.value) || 0;
-  }
   // A code attempt is counted BEFORE the code is compared, on two shared
   // counters: the requester's address (every sign-in it holds together) and
   // the emailed code (the pending sign-in it was mailed to). Parallel attempts
@@ -447,9 +440,11 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     // "limited" (refused by a limit; no code made), "gone" (no such sign-in)
     // or whether the mail was sent. The service-wide budget is read last, so
     // a send another limit refused does not spend it.
-    // Each budget meters the requester (its network, an IPv6 /64) and the
-    // shared totals are ceilings read before anything is charged, so a refused
-    // ask raises no counter another requester is judged by:
+    // Each budget meters the requester (its network, an IPv6 /64), and each
+    // is charged before it is compared (count first): asks sent in parallel
+    // cannot all pass a total read before any of them was charged. A refused
+    // ask gives back every count it charged, so it raises no counter another
+    // requester is judged by (scripts/test-limiter-identity.js):
     //   - per (mailbox, network): the requester's own share for an address it
     //     names (the mailbox folds "+tag" and dotted spellings, src/mailbox-key.js);
     //   - the mailbox's day ceiling across requesters, first sends included;
@@ -468,25 +463,21 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     const mine = `${mailbox}|${net}`;
     if (await over("send-email", mine, cfg.sendsPerEmail())) return "limited";
     const perDay = cfg.sendsPerEmailDay();
-    const mineToday = await read("send-email-day", mine);
-    if (mineToday >= perDay) return "limited";
-    let cold = false;
-    if (await read("send-mailbox-day", mailbox) >= perDay) {
-      if (mineToday > 0 || await read("send-mailbox-cold-day", mailbox) >= perDay) return "limited";
-      cold = true;
+    const charged = [];
+    const charge = async (name, key, windowMs) => { const v = await add(name, key, 1, windowMs); charged.push([name, key, windowMs]); return v; };
+    const refuse = async () => { await Promise.all(charged.map(([n, k, w]) => add(n, k, -1, w))).catch(() => {}); return "limited"; };
+    const mineToday = await charge("send-email-day", mine, DAY_MS);
+    if (mineToday > perDay) return refuse();
+    if (await charge("send-mailbox-day", mailbox, DAY_MS) > perDay) {
+      // Past the mailbox's ceiling: a network's first send of the day, from the fixed allowance.
+      if (mineToday > 1 || await charge("send-mailbox-cold-day", mailbox, DAY_MS) > perDay) return refuse();
     }
     const globalMax = cfg.sendsGlobalPerHour();
-    if (await read("send-net-hour", net) >= Math.max(1, Math.ceil(globalMax * GLOBAL_SHARE))) return "limited";
+    if (await charge("send-net-hour", net, HOUR_MS) > Math.max(1, Math.ceil(globalMax * GLOBAL_SHARE))) return refuse();
     const wideNet = wideNetworkKey(String(ip || "?"));
-    if (await read("send-global", "all") >= globalMax && (await read("send-net-day", net) > 0 || await read("send-wide-day", wideNet) > 0)) return "limited";
-    // The send is admitted: charge every budget it draws on.
-    await add("send-email-day", mine, 1, DAY_MS);
-    await add("send-mailbox-day", mailbox, 1, DAY_MS);
-    if (cold) await add("send-mailbox-cold-day", mailbox, 1, DAY_MS);
-    await add("send-net-hour", net, 1, HOUR_MS);
-    await add("send-net-day", net, 1, DAY_MS);
-    await add("send-wide-day", wideNet, 1, DAY_MS);
-    await add("send-global", "all", 1, HOUR_MS);
+    const netToday = await charge("send-net-day", net, DAY_MS);
+    const wideToday = await charge("send-wide-day", wideNet, DAY_MS);
+    if (await charge("send-global", "all", HOUR_MS) > globalMax && (netToday > 1 || wideToday > 1)) return refuse();
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
     const set = await requests.change((b) => {

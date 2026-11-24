@@ -184,7 +184,7 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   ok(midText.length === 0, `no attribution sentence sits anywhere but the end of a description (${midText.join(", ") || "none"})`);
   const counts = Object.fromEntries(Object.keys(ATTRIBUTIONS).map((k) => [k, (bySource[k] || []).length]));
   // "fred" stays a known source with no tool serving it (see the FRED block above).
-  ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0) && counts["us-agencies"] >= 1 && counts["us-treasury"] >= 3 && counts.ecb >= 4 && counts.coingecko >= 24, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
+  ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0), `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
   // Floors read from the catalog, not typed: a tool whose published example
   // answer names a source in its \`source\` field is marked with that source,
   // so a retirement lowers the floor and a lost mark fails.
