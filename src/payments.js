@@ -1484,7 +1484,29 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "asset-transfers": "Token and native transfer history for any EVM address across major chains: direction, counterparty, asset, exact decimal value, block and transaction hash, filterable by category and block range with a cursor for paging. Use it to reconstruct what an address actually did, rather than only what it holds now.",
 });
 
+// Each catalog route's discovery block as its own 402 declares it (route ->
+// the declared extensions.bazaar, before the per-request method is written
+// in), kept by the last buildPaymentMiddleware. The referral copies under
+// /ref read it (publicBazaarOf) so their 402 lists the same input, schema
+// and example the public route lists.
+const LISTED_BAZAAR = new Map();
+/** The extensions.bazaar block the public route `route` ("GET /api/x")
+ *  returns in its 402, with the request method written in as the vendor's
+ *  own extension writes it; null when the route lists none (or the payment
+ *  middleware has not been built). */
+export function publicBazaarOf(route) {
+  const declared = typeof route === "string" ? LISTED_BAZAAR.get(route) : null;
+  if (!declared) return null;
+  const sp = route.indexOf(" ");
+  const method = sp > 0 ? route.slice(0, sp) : "GET";
+  const path = sp > 0 ? route.slice(sp + 1) : route;
+  try {
+    return bazaarResourceServerExtension.enrichDeclaration(structuredClone(declared), { method, adapter: { getPath: () => path } });
+  } catch { return null; }
+}
+
 export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, catalog, extraRoutes = {}, mcpRoutes = [] }) {
+  LISTED_BAZAAR.clear();
   // The origin an unconfirmed settle's refund lookup names (markUnconfirmedStop).
   publicOrigin = typeof baseUrl === "string" && baseUrl ? baseUrl.replace(/\/+$/, "") : null;
   routeSlugOf = (route) => {
@@ -3093,6 +3115,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         if (spent + channelNets * BATCH_ACCEPT_JSON_BYTES > CHALLENGE_VARIABLE_MAX_BYTES) batchWithheld.add(item);
       }
       if (fitted.slim) Object.assign(ext, declareFor(fitted.slim));
+      if (ext.bazaar) LISTED_BAZAAR.set(route, ext.bazaar);
       const listingDescription = fitted.description;
       if (builderCode) Object.assign(ext, { [BUILDER_CODE]: declareBuilderCodeExtension(builderCode) });
       // x402 payment-identifier (optional): a buyer MAY attach a payment id to
