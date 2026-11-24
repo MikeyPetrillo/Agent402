@@ -36,7 +36,7 @@ import { createGzip } from "node:zlib";
 import { setGlobalDispatcher, Agent as UndiciAgent } from "undici";
 import { withDistrust } from "./tls-distrust.js";
 dns.setDefaultResultOrder("ipv4first");
-setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
+setGlobalDispatcher(new UndiciAgent({ allowH2: false, connect: withDistrust({ family: 4 }) }));
 // The event loop is watched for the life of the process (started in
 // boot-profile.js, the first import, because ES imports hoist and a monitor
 // started here cannot see the boot it is meant to measure). A CONNECT timeout
