@@ -51,6 +51,8 @@ let dbCache = { at: 0, unfiled: null, error: null };
 const DB_CACHE_MS = 60_000;
 
 const clip = (v, n) => (v == null ? null : String(v).slice(0, n));
+// A location code is kept only in its code form; anything else is dropped.
+const codeOf = (v, re) => { const s = v == null ? "" : String(v).trim().toUpperCase(); return re.test(s) ? s : null; };
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 
 function newId(now) {
@@ -96,9 +98,10 @@ export function addBusinessDays(ms, days = REPORT_BUSINESS_DAYS) {
  * row, or null when the store did not take it (logged).
  * Fields: kind (required, a SANCTIONS_EVENT_KINDS key), address, rail,
  * network, amount (atomic units or USD as `amountUsd`), asset, route,
- * ip, listPublishDate, via, refundId, detail. Location headers (country,
- * region, city, coordinates) are never stored: a geo-payment event's kind says
- * it came from a sanctioned region, and nothing more of the location is kept.
+ * ip, country, region, listPublishDate, via, refundId, detail. A geo-payment
+ * event keeps the sanctioned country (ISO 3166-1 alpha-2) or region (ISO
+ * 3166-2) code that was the refusal's reason, so a report can state it; no
+ * other location value (city, coordinates, a header's own text) is stored.
  */
 export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
   try {
@@ -117,6 +120,8 @@ export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
       asset: clip(ev.asset, 80),
       route: clip(ev.route, 200),
       ip: clip(ev.ip, 64),
+      country: codeOf(ev.country, /^[A-Z]{2}$/),
+      region: codeOf(ev.region, /^[A-Z]{2}-[A-Z0-9]{1,3}$/),
       listPublishDate: clip(ev.listPublishDate, 40),
       via: clip(ev.via, 80),
       refundId: num(ev.refundId),

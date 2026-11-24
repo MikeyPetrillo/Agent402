@@ -23,10 +23,11 @@
 //
 // RECORDS. Every refusal is counted in memory (operator view, by country). A
 // refused request that carried a payment is recorded in the sanctions events
-// store (src/sanctions-events.js) as a rejected transaction. No location
-// header is ever stored: the country and region are read in memory for the
-// verdict, and Cloudflare's other location headers (city, postal code,
-// coordinates, time zone) are not read at all.
+// store (src/sanctions-events.js) as a rejected transaction, with the
+// sanctioned country or region code that is the refusal's reason (a report
+// must state why), and nothing more of the location: a request that is served
+// keeps no location at all, and Cloudflare's other location headers (city,
+// postal code, coordinates, time zone) are never read.
 import { paymentHeaderOf } from "./payer.js";
 import { NOT_CHARGED } from "./not-charged.js";
 
@@ -36,6 +37,11 @@ export const SANCTIONED_UA_REGION_CODES = Object.freeze(["43", "40", "14", "09"]
 // The same regions by name, for a geolocation source that files them under
 // another country code or spells the code differently.
 const SANCTIONED_REGION_NAME_RE = /\b(crimea|krym|sevastopol|donetsk|luhansk|lugansk)\b/i;
+// The ISO 3166-2 code each region name stands for, so a refusal records a code
+// and never the header's own text.
+const REGION_CODE_BY_NAME = Object.freeze({ crimea: "UA-43", krym: "UA-43", sevastopol: "UA-40", donetsk: "UA-14", luhansk: "UA-09", lugansk: "UA-09" });
+// A first-level subdivision code as Cloudflare sends it ("43", "UA-43", "THR").
+const SUBDIVISION_CODE_RE = /^(?:[A-Z]{2}-)?[A-Z0-9]{1,3}$/;
 
 /** Paths that answer from anywhere: the health probe and the legal pages. */
 export const SANCTIONS_EXEMPT_PATHS = Object.freeze(new Set(["/health", "/terms", "/privacy", "/security", "/company", "/.well-known/security.txt", "/robots.txt"]));
@@ -60,6 +66,8 @@ const header = (req, name) => {
 
 /**
  * The block verdict for a request: null (serve it) or { country, region }.
+ * `country` is an ISO 3166-1 alpha-2 code (or null); `region` an ISO 3166-2
+ * code ("UA-43") or null, never a name, city or coordinate.
  * Reads the Cloudflare headers only when `trusted` is true. Pure.
  */
 export function sanctionedLocationOf(req, { trusted = false, countries = sanctionedCountries() } = {}) {
@@ -67,13 +75,17 @@ export function sanctionedLocationOf(req, { trusted = false, countries = sanctio
   const country = header(req, "cf-ipcountry").toUpperCase();
   const regionCode = header(req, "cf-region-code").toUpperCase();
   const regionName = header(req, "cf-region");
-  if (/^[A-Z]{2}$/.test(country) && countries.has(country)) return { country, region: regionCode || null };
+  if (/^[A-Z]{2}$/.test(country) && countries.has(country)) {
+    const sub = SUBDIVISION_CODE_RE.test(regionCode) ? regionCode.replace(/^[A-Z]{2}-/, "") : "";
+    return { country, region: sub ? `${country}-${sub}` : null };
+  }
   // The region code arrives as the subdivision suffix ("43"); a full code
   // ("UA-43") is read the same way.
   const code = regionCode.replace(/^UA-/, "");
   if (country === "UA" && SANCTIONED_UA_REGION_CODES.includes(code)) return { country, region: `UA-${code}` };
-  if (regionName && SANCTIONED_REGION_NAME_RE.test(regionName) && (country === "UA" || country === "RU" || !country)) {
-    return { country: country || null, region: regionName.slice(0, 40) };
+  const named = regionName ? SANCTIONED_REGION_NAME_RE.exec(regionName) : null;
+  if (named && (country === "UA" || country === "RU" || !country)) {
+    return { country: /^[A-Z]{2}$/.test(country) ? country : null, region: REGION_CODE_BY_NAME[named[1].toLowerCase()] };
   }
   return null;
 }

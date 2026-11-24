@@ -46,6 +46,10 @@ ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "XX" }), { trusted: true }) ==
 for (const code of ["43", "40", "14", "09", "UA-43"]) ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "UA", "cf-region-code": code }), { trusted: true }) !== null, `Ukraine region ${code} is blocked`);
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "UA", "cf-region-code": "30" }), { trusted: true }) === null, "the rest of Ukraine (Kyiv, 30) passes");
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "RU", "cf-region": "Crimea" }), { trusted: true }) !== null, "Crimea filed under another country code is blocked by name");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "RU", "cf-region": "Republic of Crimea" }), { trusted: true })?.region === "UA-43", "a region found by name is recorded as its code, never the header's text");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "UA", "cf-region-code": "14" }), { trusted: true })?.region === "UA-14", "a Ukraine region is its ISO 3166-2 code");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR", "cf-region-code": "<script>" }), { trusted: true })?.region === null, "a region header that is not a code is dropped");
+ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR", "cf-region-code": "23" }), { trusted: true })?.region === "IR-23", "a country refusal keeps its subdivision code");
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "RU", "cf-region": "Moscow" }), { trusted: true }) === null, "the rest of Russia is not blocked here (not a comprehensive program)");
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "CU" }), { trusted: true, countries: geo.sanctionedCountries({ SANCTIONS_GEO_COUNTRIES: "IR" }) }) === null, "SANCTIONS_GEO_COUNTRIES replaces the country set");
 
@@ -81,6 +85,10 @@ const run = (mw, r) => new Promise((resolve) => {
   ok(new Date(ev.addBusinessDays(mon)).toISOString().slice(0, 10) === "2026-12-07", "ten business days from a Monday skip two weekends");
   const a = await ev.recordSanctionsEvent({ kind: "screen-hit", address: "0xAbCdEf0000000000000000000000000000000001", rail: "x402", network: "eip155:8453", amount: "10000", route: "POST /api/x" }, { now: mon });
   ok(a && a.report === "rejected" && a.address === "0xAbCdEf0000000000000000000000000000000001" && a.dueBy.startsWith("2026-12-07"), "a screen hit is kept in full (case preserved) with its report deadline");
+  const g = await ev.recordSanctionsEvent({ kind: "geo-payment", country: "ua", region: "UA-43", route: "POST /api/x" }, { now: mon });
+  const g2 = await ev.recordSanctionsEvent({ kind: "geo-payment", country: "Iran", region: "Simferopol, 44.95,34.10", route: "POST /api/x" }, { now: mon });
+  ok(g.country === "UA" && g.region === "UA-43" && g2.country === null && g2.region === null, "a geo event keeps a country or region only in its code form");
+  await ev.markSanctionsEventsFiled({ ids: [g.id, g2.id], reference: "TEST-GEO" });
   ok(ev.sanctionsReportStatus() === "due", "an unfiled reportable event reads due");
   ev.__resetSanctionsEventsForTests();
   ok(ev.sanctionsReportStatus() === "due", "the event survives a reload from the file");
@@ -164,7 +172,9 @@ try {
   ok(status.sanctionsReport?.status === "due" && Object.keys(status.sanctionsReport).length === 1, "the public status reads one word: due");
   const opView = await (await fetch(`${B}/__operator/sanctions-events.json`, { headers: { "X-Operator-Token": OP } })).json();
   ok(opView.unfiled.length === 2 && opView.unfiled.every((e) => e.kind === "geo-payment" && e.address === "0x1111111111111111111111111111111111111111" && e.network === "eip155:8453"), "the operator view holds both refused payments in full");
-  ok(opView.unfiled.every((e) => !("country" in e) && !("region" in e) && !JSON.stringify(e).includes("Crimea") && !/"(IR|UA)"/.test(JSON.stringify(e))), "no location header is stored with an event");
+  const byCountry = Object.fromEntries(opView.unfiled.map((e) => [e.country, e.region]));
+  ok(byCountry.IR === null && byCountry.UA === "UA-43", `each event keeps the refusal's country or region code (got ${JSON.stringify(byCountry)})`);
+  ok(opView.unfiled.every((e) => !JSON.stringify(e).includes("Crimea") && !("city" in e) && !("latitude" in e)), "no other location value is stored with an event");
   ok(opView.geo.refusedWithPayment === 2, "the operator view counts the refused payments");
   ok((await fetch(`${B}/__operator/sanctions-events.json`)).status === 404, "the events are not readable without the token");
   const filed = await fetch(`${B}/__operator/sanctions-events/filed`, { method: "POST", headers: { "Content-Type": "application/json", "X-Operator-Token": OP }, body: JSON.stringify({ all: true, reference: "RS-TEST-1" }) });
