@@ -2,22 +2,29 @@
 // AGENT402_BASE_URL (defaults to http://localhost:3000). Self-installs
 // agent402-client and llamaindex if they're not in node_modules.
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-if (!existsSync(join(HERE, "node_modules", "agent402-client"))) {
-  execSync("npm install ../../client --no-save --silent --ignore-scripts", { cwd: HERE, stdio: "inherit" });
-}
-if (!existsSync(join(HERE, "node_modules", "llamaindex"))) {
+// ONE install command for both, into an empty node_modules. llamaindex is an
+// optional peer of this package, and npm 11 answers `npm install llamaindex
+// --no-save` here with "up to date" and installs nothing whenever a tree is
+// already there (the client alone, installed first, was enough); into an
+// empty node_modules, the two named together both land (npm 10 and 11 alike).
+// This node_modules holds only these --no-save test installs.
+if (!existsSync(join(HERE, "node_modules", "agent402-client")) || !existsSync(join(HERE, "node_modules", "llamaindex"))) {
+  rmSync(join(HERE, "node_modules"), { recursive: true, force: true });
   // EXACT pin + --ignore-scripts. "^0.12" was described as a pin but is a
   // RANGE: it accepts any 0.12.x, and every transitive dep floats freely. This
   // install pulls a large third-party tree, so its lifecycle scripts are the
   // widest install-time execution surface in this repo - the 2026 worm waves
   // (ChainDrop et al) all delivered through exactly that hook. Nothing here
   // needs a build step, so scripts are simply off.
-  execSync("npm install llamaindex@0.12.0 --no-save --silent --ignore-scripts", { cwd: HERE, stdio: "inherit" });
+  execSync("npm install ../../client llamaindex@0.12.0 --no-save --silent --ignore-scripts", { cwd: HERE, stdio: "inherit" });
+}
+for (const dep of ["agent402-client", "llamaindex"]) {
+  if (!existsSync(join(HERE, "node_modules", dep))) throw new Error(`the install left node_modules/${dep} missing`);
 }
 
 const { agent402Tools, agent402Execute } = await import("./index.js");
