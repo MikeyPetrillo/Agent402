@@ -117,8 +117,8 @@ const { CAP_NAMES, noteCapRefusal, withCapRefusalCount, upstreamCapsWord, upstre
   ws._setSuggestClockForTest(() => t, async (ms) => { t += ms; });
   globalThis.fetch = async () => new Response(JSON.stringify(["a", ["A"]]), { status: 200, headers: { "content-type": "application/json" } });
   try {
-    for (let k = 0; k < ws.SUGGEST_MAX_PER_MINUTE; k++) await ws.wikipediaSuggestions("a", 1);
-    const e3 = await caught(ws.wikipediaSuggestions("a", 1));
+    for (let k = 0; k < ws.SUGGEST_MAX_PER_MINUTE; k++) await ws.wikipediaSuggestions(`a${k}`, 1);
+    const e3 = await caught(ws.wikipediaSuggestions("a-more", 1));
     ok(e3?.statusCode === 503 && e3.capRefusal === CAP_NAMES.suggestRate, "search-suggest's per-minute ceiling marks its busy");
     t += 120_000;
     globalThis.fetch = async () => new Response("slow down", { status: 429 });

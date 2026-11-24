@@ -112,6 +112,11 @@ export const NAGER_ATTRIBUTION = "Holiday data by Nager.Date.";
 // every answer name the source with its link and license.
 export const WIKIPEDIA_ATTRIBUTION = "Suggestions from Wikipedia (CC BY-SA 4.0).";
 export const WIKIPEDIA_CREDIT = "Suggestions from Wikipedia (https://en.wikipedia.org), CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/).";
+// The same answers carry the license link as its own field and say that this
+// service is not affiliated with the Wikimedia Foundation (its API usage
+// guidelines bar a client that obscures the Foundation as the provider).
+export const CC_BY_SA_4_URL = "https://creativecommons.org/licenses/by-sa/4.0/";
+export const WIKIPEDIA_LICENSE_FIELDS = Object.freeze({ licenseUrl: CC_BY_SA_4_URL, sourceUrl: "https://en.wikipedia.org", affiliation: "Not affiliated with or endorsed by the Wikimedia Foundation." });
 export const COPERNICUS_DISCLAIMER = "Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.";
 /** The Copernicus credit an answer carries: its sentence, then the disclaimer. */
 export const CAMS_CREDIT = `${CAMS_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;

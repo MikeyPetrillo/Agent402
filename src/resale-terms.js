@@ -39,6 +39,9 @@ export const RESALE_COMPUTED = "computed";
 /** The market-data source's terms (cited in src/tools/coingecko-rate.js) bar
  *  resale or syndication of its data through a third party. */
 export const MARKET_DATA_RESALE_REASON = "raw pass-through of a data source whose terms bar resale or syndication through a third party";
+/** The Wikimedia Foundation's API usage guidelines bar sublicensing,
+ *  leasing or white-labeling access to its APIs (search-suggest). */
+export const WIKIMEDIA_API_RESALE_REASON = "a relay of a Wikimedia Foundation API, whose usage guidelines bar sublicensing access to it";
 /** The holiday source's terms (cited in src/tools/holiday-source.js) forbid
  *  operating a holiday portal or republishing its dataset. */
 export const HOLIDAY_PORTAL_RESALE_REASON = "a whole-year holiday list from a source whose terms bar a holiday portal";
