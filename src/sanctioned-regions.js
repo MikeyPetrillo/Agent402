@@ -28,6 +28,7 @@
 // verdict, and Cloudflare's other location headers (city, postal code,
 // coordinates, time zone) are not read at all.
 import { paymentHeaderOf } from "./payer.js";
+import { NOT_CHARGED } from "./not-charged.js";
 
 export const DEFAULT_SANCTIONED_COUNTRIES = Object.freeze(["CU", "IR", "KP", "SY"]);
 // Ukraine's ISO 3166-2 subdivisions: 43 Crimea, 40 Sevastopol, 14 Donetsk, 09 Luhansk.
@@ -39,7 +40,7 @@ const SANCTIONED_REGION_NAME_RE = /\b(crimea|krym|sevastopol|donetsk|luhansk|lug
 /** Paths that answer from anywhere: the health probe and the legal pages. */
 export const SANCTIONS_EXEMPT_PATHS = Object.freeze(new Set(["/health", "/terms", "/privacy", "/security", "/company", "/.well-known/security.txt", "/robots.txt"]));
 
-export const SANCTIONED_REGION_TEXT = "This service is not available in your region. Nothing was charged.";
+export const SANCTIONED_REGION_TEXT = `This service is not available in your region. ${NOT_CHARGED}`;
 
 export function sanctionsGeoBlockEnabled(env = process.env) {
   return String(env.SANCTIONS_GEO_BLOCK ?? "").trim().toLowerCase() !== "off";

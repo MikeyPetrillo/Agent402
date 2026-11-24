@@ -128,7 +128,7 @@ export function refundClauses({ gatewayBatched = false } = {}) {
     {
       id: "connection-closed-review",
       section: "Refunds on-chain",
-      text: "An amount owed because a connection closed is reviewed before it is repaid, and is not repaid when the call's effect outlives the response and was delivered (a memory write, or a purchase we made from another seller for you).",
+      text: "An amount owed because a connection closed is reviewed before it is repaid, and is not repaid when the call's effect outlives the response and was delivered (a memory write, or a result we bought from another seller and sold to you).",
       reviewedBeforeRepaid: true,
       notRepaidWhenEffectDelivered: true,
     },

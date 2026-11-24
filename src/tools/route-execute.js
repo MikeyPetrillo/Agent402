@@ -12,8 +12,10 @@
 // is the same shape a later cross-seller executor needs; only the dispatch
 // step changes.
 //
-// Economics: flat $0.01 covers any underlying tool priced <= $0.005 — the
-// spread is the routing fee. Tools above the cap return a self-correcting 409
+// Economics: flat $0.01 covers any underlying tool priced <= $0.005. We buy
+// the result for our own account and resell it; the spread is our margin as
+// the reseller (published as `routingFeeUsd`, a name kept for compatibility:
+// our price less the seller's price, not a fee for moving the buyer's money). Tools above the cap return a self-correcting 409
 // that names the tool and its direct route, so the buyer can call it at list
 // price instead.
 import { isOwnPayoutAddress } from "../own-wallets.js";
@@ -90,7 +92,10 @@ export const EXEC_TIERS = [
 export const EXTERNAL_EXAMPLE_INPUT = Object.freeze({ task: "weather forecast", include: "external", params: Object.freeze({ lat: 40.7128, lon: -74.006 }) });
 const EXEC_SLUGS = new Set(EXEC_TIERS.map((t) => t.slug));
 /** Which execution tier (if any) can run a tool at `underlyingUsd`, and the
- *  price to pay it. Used by /api/route to quote the buyer the exact tier. */
+ *  price to pay it. Used by /api/route to quote the buyer the exact tier.
+ *  `underlyingPriceUsd` is the seller's price for the result we buy;
+ *  `routingFeeUsd` is our resale price less it (our margin; the name is kept
+ *  for compatibility). */
 export function routeExecuteHint(underlyingUsd) {
   const tier = EXEC_TIERS.find((t) => underlyingUsd <= t.underlyingMaxUsd);
   return tier ? { tool: tier.slug, price: `$${tier.execPriceUsd.toFixed(2)}`, underlyingPriceUsd: underlyingUsd, routingFeeUsd: Number((tier.execPriceUsd - underlyingUsd).toFixed(6)) } : null;

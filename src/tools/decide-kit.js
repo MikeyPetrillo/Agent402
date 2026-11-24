@@ -455,6 +455,11 @@ function defaultRunStopSignal() {
   return parts.length ? AbortSignal.any(parts) : null;
 }
 
+/** What the execute answer's charge fields are. Outside results are bought
+ *  by Agent402 for its own account and resold; nothing is paid on the buyer's
+ *  behalf. The field names predate this wording and are kept. */
+export const CHARGES_NOTE = "firstPartyUsd: our own tools at list price. passThroughUsd: what we paid outside sellers for the results we bought for our own account and resold to you. routingFeesUsd: our markup over those sellers' prices (the names are kept for compatibility).";
+
 export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(), isOwnTraffic = () => false, isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus(), ledgerRetryMs = LEDGER_RETRY_MS, runStopSignal = defaultRunStopSignal, replan = (body, opts) => callService("/internal/replan", body, opts), replanGuard = createReplanGuard() }) {
   // A write after money may have moved: awaited once, then retried and
   // journaled (kind, payload) on local disk before the run answers.
@@ -1000,8 +1005,10 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     // A settlement that fails after this run spent money forfeits the credit:
     // restoring it would let the same credit fund run after run.
     if (redeemed && nothingSpent) onSettled(req, (settledOk) => { if (!settledOk) fireRetry(`restore credit ${runId}`, () => ledger.restoreCredit(input.creditToken, runId), ledgerRetryMs, journalOf(ledger, "restoreCredit", { token: input.creditToken, runId })); });
-    // What the spend was, on separate lines: our own tools, what was passed
-    // through to outside sellers, and the routing fee on it.
+    // What the spend was, on separate lines: our own tools, what we paid
+    // outside sellers for the results we bought and resold, and our markup
+    // over their prices. The field names are kept for compatibility;
+    // `chargesNote` states what each one is.
     const okResults = results.filter((r) => r.status === "ok");
     const routingFeesUsd = roundUsd(okResults.reduce((a, r) => a + (r.routingFeeUsd || 0), 0));
     const passThroughUsd = roundUsd(okResults.filter((r) => !r.tool.firstParty).reduce((a, r) => a + (r.costUsd || 0), 0) - routingFeesUsd);
@@ -1011,6 +1018,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       ...(sketchFeedbackToken ? { feedbackToken: sketchFeedbackToken, feedback: "POST /api/decide/feedback { decisionId, feedbackToken, step, outcome: success|failure, quality?: 1-5, latencyMs? } - free, one verdict per step" } : {}),
       steps: results, budgetUsd: spendable, spentUsd: spent, paidUsd: quoted, creditAppliedUsd: redeemed,
       charges: { firstPartyUsd, passThroughUsd, routingFeesUsd, uncertainUsd: roundUsd(Math.max(0, spent - firstPartyUsd - passThroughUsd - routingFeesUsd)) },
+      chargesNote: CHARGES_NOTE,
       routingFeePct: cfg.routingFeePct, leftoverCredit,
       ...(replanned ? { replanned } : {}),
     };
