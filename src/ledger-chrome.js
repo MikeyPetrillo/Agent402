@@ -1094,7 +1094,7 @@ export function ledgerFooterCompact() {
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
       <span class="ml-foot-legal"><span>© 2026 <a href="https://havok.holdings" rel="noopener" style="color:var(--muted);text-decoration:underline;">Havok Holdings LLC</a></span></span>
-      <span class="ml-foot-links"><a href="mailto:help@agent402.tools" style="color:var(--muted);text-decoration:none;">contact</a><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/scorecard" style="color:var(--muted);text-decoration:none;">scorecard</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/trust" style="color:var(--muted);text-decoration:none;">trust</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="/terms#trademarks" style="color:var(--muted);text-decoration:none;">trademarks</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a><button type="button" data-analytics-choices hidden>analytics choices</button></span>
+      <span class="ml-foot-links"><a href="mailto:help@agent402.tools" style="color:var(--muted);text-decoration:none;">contact</a><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/scorecard" style="color:var(--muted);text-decoration:none;">scorecard</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/trust" style="color:var(--muted);text-decoration:none;">trust</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="/dpa" style="color:var(--muted);text-decoration:none;">dpa</a><a href="/terms#trademarks" style="color:var(--muted);text-decoration:none;">trademarks</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a><button type="button" data-analytics-choices hidden>analytics choices</button></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">
       <span style="letter-spacing:.1em;text-transform:uppercase;">for agents</span>
@@ -1178,9 +1178,11 @@ export function setOgImageVersion(v) { ogImageVersion = String(v || ""); }
 // Cookieless client-side analytics: $pageview + $pageleave (bounce/duration) +
 // $web_vitals, loaded and ingested FIRST-PARTY through /e (the reverse proxy in
 // server.js) so the browser never touches a third-party host and CSP stays at
-// 'self'. persistence:'sessionStorage' means NO cookies and no cross-visit
-// tracking, but sessions stay coherent within a single visit so bounce/duration
-// and web-vitals actually compute. autocapture + session recording are OFF.
+// 'self'. persistence:'memory' means nothing is kept in the browser (no
+// cookie, no storage, no per-visit id): each page view stands alone.
+// autocapture + session recording are OFF. It loads only once the consent
+// module grants it (assets/js/analytics-consent.js: asked first in the EU,
+// the EEA, the UK and Switzerland; never with Global Privacy Control).
 // Env-gated on the public project key (POSTHOG_API_KEY); renders nothing without it.
 function posthogSnippet(baseUrl) {
   const key = process.env.POSTHOG_API_KEY || "";
@@ -1188,7 +1190,7 @@ function posthogSnippet(baseUrl) {
   const cfg = {
     api_host: `${baseUrl}/e`,
     ui_host: "https://us.posthog.com",
-    persistence: "sessionStorage",
+    persistence: "memory",
     autocapture: false,
     capture_pageview: true,
     capture_pageleave: true,
@@ -1224,6 +1226,14 @@ export function gaSnippet(canonical) {
   if (GA_BEARER_PATH.test(path) || GA_BEARER_PATH.test(renderPathStore.getStore() || "")) return "";
   return '<link rel="preconnect" href="https://www.googletagmanager.com"><link rel="preconnect" href="https://www.google-analytics.com">'
     + jsonScriptTag("ga-config", { id }) + `<script src="${jsSrc("ga-loader.js")}" defer></script>`;
+}
+
+// Both counters behind one consent decision (assets/js/analytics-consent.js),
+// which runs first: deferred scripts run in document order, so the module is
+// ready when either loader reads it. No counter configured, no module.
+export function analyticsSnippets(baseUrl, canonical) {
+  const counters = posthogSnippet(baseUrl) + gaSnippet(canonical);
+  return counters ? `<script src="${jsSrc("analytics-consent.js")}" defer></script>${counters}` : "";
 }
 
 /** The visible trail from the same [name, path] pairs breadcrumbLd reads, so
@@ -1387,8 +1397,7 @@ ${artPublished ? `<meta property="article:published_time" content="${esc(artPubl
 ${LEDGER_HEAD}
 <style>${LEDGER_CSS}${extraCss}</style>
 ${jsonLdBlock}
-${posthogSnippet(baseUrl)}
-${gaSnippet(canonical)}
+${analyticsSnippets(baseUrl, canonical)}
 </head>
 <body style="overflow-x:clip;"><!--email_off-->
 <a class="ml-skip" href="#main">Skip to content</a>
