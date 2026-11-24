@@ -102,8 +102,8 @@ Packages:
   0.1.14 and agent402-google-adk 0.1.14 refuse a paid call listed above $5 by
   default (`maxPerCallUsd`; `0` or `off` turns it off), take an opt-in
   `dailyLimitUsd`, and refuse a proof-of-work challenge above 28 bits;
-  agent402-langchain for Python 0.1.7 does the same (`max_per_call_usd`,
-  `daily_limit_usd`).
+  agent402-langchain for Python 0.1.7 does the same through
+  `max_per_call_usd` and `daily_limit_usd`, its own option names.
 - agent402-openclaw 0.6.2, agent402-agentkit 0.2.1, agent402-anthropic-tools,
   agent402-openai-tools, agent402-llamaindex and agent402-strands 0.2.2 ship
   TypeScript declarations, as do the four adapters above.
