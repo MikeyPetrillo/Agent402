@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // ONE install command for both, into an empty node_modules. llamaindex is an
-// optional peer of this package, and npm 11 answers `npm install llamaindex
-// --no-save` here with "up to date" and installs nothing whenever a tree is
+// optional peer of this package, and npm 11 answers a separate no-save install
+// of llamaindex here with "up to date" and installs nothing whenever a tree is
 // already there (the client alone, installed first, was enough); into an
 // empty node_modules, the two named together both land (npm 10 and 11 alike).
 // This node_modules holds only these --no-save test installs.

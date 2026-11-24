@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
+import { childJson } from "./lib/child-json.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -69,13 +70,13 @@ process.env.PROGRAMMATIC_THIN_FILE = join(THIN_DIR, "offline-thin.json");
   for (let i = 0; i < 40 && !(existsSync(process.env.PROGRAMMATIC_THIN_FILE) && readFileSync(process.env.PROGRAMMATIC_THIN_FILE, "utf8").includes(SEED_TICKERS[1])); i++) await sleep(25);
   const { execFileSync } = await import("node:child_process");
   const probe = `import "./scripts/lib/offline-stores.js"; const pp = await import("./src/programmatic-pages.js"); const { sitemapXml } = await import("./src/seo.js"); await pp.programmaticThinReady(); const x = sitemapXml(${JSON.stringify(SITE)}, {}); console.log(JSON.stringify({ thin: x.includes(${JSON.stringify(`<loc>${SITE}/reports/insider/${SEED_TICKERS[1]}</loc>`)}), other: x.includes(${JSON.stringify(`<loc>${SITE}/reports/insider/${SEED_TICKERS[2]}</loc>`)}) }));`;
-  const after = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: ROOT, encoding: "utf8", env: { ...process.env } }).trim().split("\n").pop());
+  const after = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: ROOT, encoding: "utf8", env: { ...process.env } }));
   ok(after.thin === false && after.other === true, `after a restart the thin page stays out of the sitemap from the first read, and other pages stay in (${JSON.stringify(after)})`);
   // A later complete build brings it back, in this process and the next.
   pp.__clearTeaserCache();
   await pp.loadTeaser("insider", SEED_TICKERS[1], { seeded: true, builders: { insider: async () => good } });
   for (let i = 0; i < 40 && readFileSync(process.env.PROGRAMMATIC_THIN_FILE, "utf8").includes(SEED_TICKERS[1]); i++) await sleep(25);
-  const back = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: ROOT, encoding: "utf8", env: { ...process.env } }).trim().split("\n").pop());
+  const back = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: ROOT, encoding: "utf8", env: { ...process.env } }));
   ok(!pp.entityDegraded(`/reports/insider/${SEED_TICKERS[1]}`) && back.thin === true, "a complete build clears the kept decision, so the next process lists the page again");
   const okHtml = pp.insiderPage({ ticker: t, data: good, baseUrl: SITE });
   ok(!/noindex/.test(robotsOf(okHtml)), "a complete page is indexable");

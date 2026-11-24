@@ -12,7 +12,7 @@ import { Agent402 } from "agent402-client";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "elizaos-plugin-agent402/0.3.1";
+const USER_AGENT = "elizaos-plugin-agent402/0.3.2";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
