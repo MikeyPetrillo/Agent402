@@ -17,9 +17,12 @@
 import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
 import { settleBeforeUpstream } from "../settle-first.js";
 import { CAP_NAMES } from "../upstream-cap-refusals.js";
+import { SUGGEST_UA } from "../user-agents.js";
+import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
 
 export const WIKIPEDIA_OPENSEARCH_URL = "https://en.wikipedia.org/w/api.php";
-export const SUGGEST_USER_AGENT = "Agent402SuggestBot/1.0 (https://agent402.tools/crawler; help@agent402.tools) search-suggest";
+/** The listed string (src/user-agents.js; /crawler renders it). */
+export const SUGGEST_USER_AGENT = SUGGEST_UA;
 /** Reads per rolling minute this process sends, under the source's 200. */
 export const SUGGEST_MAX_PER_MINUTE = 150;
 /** Callers that may wait for their turn at once; one more is answered busy. */
@@ -111,6 +114,7 @@ export async function wikipediaSuggestions(q, count) {
     const url = new URL(WIKIPEDIA_OPENSEARCH_URL);
     url.search = new URLSearchParams({ action: "opensearch", format: "json", formatversion: "2", namespace: "0", limit: String(count), search: q }).toString();
     const ctx = { label: "Search suggestions", step: "opensearch", timeoutMs: TIMEOUT_MS, tag: "[search-suggest]" };
+    noteHostRequest(url.href, "suggest");
     const res = await upstreamFetch(url, { headers: { "User-Agent": SUGGEST_USER_AGENT, "Api-User-Agent": SUGGEST_USER_AGENT, Accept: "application/json" } }, ctx);
     if (res.status === 429) throw busy(1, { ours: false });
     if (!res.ok) throw bad(`Search suggestions upstream error (HTTP ${res.status})`, 502);
