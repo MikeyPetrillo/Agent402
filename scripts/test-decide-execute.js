@@ -567,6 +567,60 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(booked.length === 1 && booked[0].priceUsd === 0.04, `...and the unspent amount is then booked owed, so the buyer never loses it (${JSON.stringify(booked[0])})`);
 }
 
+// ---- exact vs upto: the fixed price is the plan's listed step prices ----
+{
+  const { buildDecideTools, DECIDE_UNSPENT, decideUnspentNote, isDecideUnspentRefund } = await import("../src/tools/decide-kit.js");
+  const planX = [{ step: 1, purpose: "x", tool: tool("a", { priceUsd: 0.01 }), fallbacks: [tool("b")], dependsOn: [] }];
+  ledger.saveDecision({ decisionId: "dX", depth: "quick", priceUsd: 0.005, plan: planX, costViaUsd: 0.01, now: clock });
+  ledger.markDecisionSettled("dX");
+  // The sample quote, before and after: a plan listed at $0.01 with maxBudgetUsd 0.05.
+  const ceiling = executeQuoteUsd({ decisionId: "dX", maxBudgetUsd: 0.05 }, { ledger, now: clock });
+  const fixedQ = executeQuoteUsd({ decisionId: "dX", maxBudgetUsd: 0.05 }, { ledger, now: clock, fixed: true });
+  ok(ceiling === 0.05 && fixedQ === 0.01, `the upto ceiling keeps the asked budget and the exact price is the plan's listed step prices (${ceiling} / ${fixedQ})`);
+  ok(executeQuoteUsd({ decisionId: "dX" }, { ledger, now: clock, fixed: true }) === executeQuoteUsd({ decisionId: "dX" }, { ledger, now: clock }), "with no maxBudgetUsd both prices are the plan's own figure");
+  ok(executeQuoteUsd({ decisionId: "dX", maxBudgetUsd: 0.004 }, { ledger, now: clock, fixed: true }) === 0.004, "a maxBudgetUsd under the plan caps the exact price too");
+  ok(executeQuoteUsd({ steps: ["s1", "s2"], maxBudgetUsd: 0.5 }, { ledger, now: clock, getCatalog: () => ({ s1: { slug: "s1", price: "$0.004" }, s2: { slug: "s2", price: "$0.006" } }), fixed: true }) === 0.01, "a sketch's exact price is its steps' list prices, never a larger maxBudgetUsd");
+  // The route definition: settles actual spend, two quotes.
+  const def = buildDecideTools({ getCatalog: () => catalog, ledger, now }).find((t) => t.slug === "decide-execute");
+  ok(def.chargesActualSpend === true && typeof def.uptoQuote === "function", "decide-execute settles actual spend and carries its own upto ceiling");
+  ok(def.quote({ decisionId: "dX", maxBudgetUsd: 0.05 }) === 0.01 && def.uptoQuote({ decisionId: "dX", maxBudgetUsd: 0.05 }) === 0.05, "its quote is the exact price and its uptoQuote the ceiling");
+  // An exact payment at the fixed price runs with no refusal and leaves nothing unspent.
+  const exactHeader = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", amount: "10000" }, payload: {} })).toString("base64");
+  const xreq = { headers: { "payment-signature": exactHeader }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? exactHeader : undefined), ip: "0xexactfix", __meteredQuoteUsd: fixedQ };
+  booked.length = 0;
+  const xout = await exec({ decisionId: "dX", maxBudgetUsd: 0.05, runKey: "fixed-1" }, xreq);
+  ok(xout.status === "complete" && xout.chargedUsd === 0.01 && xout.unspent === null, `an exact payment at the plan's price spends it all, nothing owed (${JSON.stringify(xout.unspent)}, charged ${xout.chargedUsd})`);
+  settle(xreq, 200);
+  await new Promise((r) => setImmediate(r));
+  ok(booked.length === 0, "...and books no refund");
+  // A step that falls short on exact: the remainder is owed under the decide-unspent class.
+  failA = true;
+  const planS = [{ step: 1, purpose: "x", tool: tool("a"), fallbacks: [], dependsOn: [] }, { step: 2, purpose: "y", tool: tool("c"), fallbacks: [], dependsOn: [] }];
+  ledger.saveDecision({ decisionId: "dS2", depth: "quick", priceUsd: 0.005, plan: planS, costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("dS2");
+  const sreq = { ...xreq, ip: "0xshort", __meteredQuoteUsd: 0.02 };
+  booked.length = 0;
+  const sout = await exec({ decisionId: "dS2", runKey: "short-1" }, sreq);
+  failA = false;
+  ok(sout.unspent?.handling === "refund-owed" && sout.unspent.amountUsd === 0.01, `a step that fails on exact leaves its price unspent (${JSON.stringify(sout.unspent)})`);
+  settle(sreq, 200);
+  await new Promise((r) => setImmediate(r));
+  ok(booked.length === 1 && booked[0].note === decideUnspentNote(sout.runId) && booked[0].note.startsWith(`${DECIDE_UNSPENT}: `) && isDecideUnspentRefund(booked[0]) && !isDecideUnspentRefund({ note: "held for review" }), `...booked owed under the decide-unspent class (${booked[0]?.note})`);
+  // The settlement floor is the call's price, never unspent budget.
+  const planF = [{ step: 1, purpose: "x", tool: tool("a"), fallbacks: [], dependsOn: [] }];
+  ledger.saveDecision({ decisionId: "dF", depth: "plan", priceUsd: 0.02, plan: planF, costViaUsd: 0.01, now: clock });
+  ledger.markDecisionSettled("dF");
+  const cF = ledger.mintCredit({ decisionId: "dF", amountUsd: 0.01, ttlMs: 24 * 3600_000, payer: "0xfloor", now: clock });
+  ledger.activateCredit(cF.hash);
+  const floorQ = executeQuoteUsd({ decisionId: "dF", creditToken: cF.token }, { ledger, now: clock, fixed: true });
+  const freq = { ...xreq, ip: "0xfloor", __meteredQuoteUsd: floorQ };
+  booked.length = 0;
+  const fout = await exec({ decisionId: "dF", creditToken: cF.token, runKey: "floor-1" }, freq);
+  settle(freq, 200);
+  await new Promise((r) => setImmediate(r));
+  ok(floorQ === 0.001 && fout.status === "complete" && fout.chargedUsd === 0.001 && fout.unspent === null && booked.length === 0, `a run its credit covers is charged the settlement floor and books nothing unspent (quote ${floorQ}, ${JSON.stringify(fout.unspent)}, charged ${fout.chargedUsd})`);
+}
+
 // ---- caps, refused before spending ----
 {
   catalog.big = { slug: "big", route: "POST /api/big", price: "$2", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["big", p]); return { ok: 1 }; } };

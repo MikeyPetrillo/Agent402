@@ -38,7 +38,7 @@ import {
   declareBuilderCodeExtension,
 } from "@x402/extensions/builder-code";
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
-import { normalizePayerAddress } from "./payer.js";
+import { normalizePayerAddress, paymentSchemeOf } from "./payer.js";
 import { x402EvmOnly, RAILS, GATED_RAILS, railKey } from "./rails.js";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, robinhoodRelayerMinPriceUsd, inkRelayerMinPriceUsd, ownRelayerMinPriceUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
@@ -741,7 +741,22 @@ export function acceptsForItem(item, rails) {
   // from that wallet. Decided once per request; every other accept stays a
   // fixed list price, and with the switch off every accept does.
   const loyal = !quoteFn && returningWalletEnabled() && returningWalletRouteRefusal(item) === null;
-  const priceOf = (caip2, { exactEvm = false } = {}) => {
+  // A route that settles what its run spent (`chargesActualSpend`, with its
+  // own `uptoQuote`: decide-execute) quotes two figures. Its upto accepts
+  // carry the ceiling the buyer signs (uptoQuote) and every other accept the
+  // fixed price (quote), so an exact payment is never priced at headroom it
+  // may not spend. A request PAID on upto carries the ceiling as its one
+  // quote, so the handler, the settlement override and the books all read
+  // the amount that buyer signed.
+  const uptoQuoteFn = quoteFn && typeof item.uptoQuote === "function" ? item.uptoQuote : null;
+  const paidUpto = (req) => {
+    if (!uptoQuoteFn || !req || typeof req !== "object") return false;
+    if (typeof req.__paidOnUpto !== "boolean") {
+      try { req.__paidOnUpto = paymentSchemeOf(req) === "upto"; } catch { req.__paidOnUpto = false; }
+    }
+    return req.__paidOnUpto;
+  };
+  const priceOf = (caip2, { exactEvm = false, upto = false } = {}) => {
     if (!quoteFn && !(loyal && exactEvm)) return priceForNetwork(item.price, caip2);
     if (!quoteFn) return async (ctx) => {
       const listQuote = priceForNetwork(item.price, caip2);
@@ -763,20 +778,24 @@ export function acceptsForItem(item, rails) {
       let usd = null;
       try {
         const req = ctx?.adapter?.req;
+        const onUpto = paidUpto(req);
+        const ceiling = !!uptoQuoteFn && (upto || onUpto);
+        const fn = ceiling ? uptoQuoteFn : quoteFn;
+        const key = ceiling && !onUpto ? "__uptoQuoteUsd" : "__meteredQuoteUsd";
         // ONE quote per request: @x402/core resolves every option's price on
         // every request (13 rails on prod) and the Tempo/Stripe appenders ask
         // again on the 402, and each quote is a full tokenization of the body.
         // Every closure shares the request object, so the first one computes
         // and the rest read the stash (audit 2026-08-26: ~15x per POST before).
-        if (req && Number.isFinite(req.__meteredQuoteUsd)) {
-          usd = req.__meteredQuoteUsd;
+        if (req && Number.isFinite(req[key])) {
+          usd = req[key];
         } else {
           // Price the object the handler will be SERVED (query merged, MCP
           // envelopes unwrapped), never the raw body: a body the quoter cannot
           // read must not quote the floor for a call that is then served.
           const body = req ? handlerInputOf(req, item) : (typeof ctx?.adapter?.getBody === "function" ? ctx.adapter.getBody() : null);
-          usd = Number(quoteFn(body && typeof body === "object" ? body : {}));
-          if (req && Number.isFinite(usd)) req.__meteredQuoteUsd = usd;
+          usd = Number(fn(body && typeof body === "object" ? body : {}));
+          if (req && Number.isFinite(usd)) req[key] = usd;
         }
       } catch { usd = null; }
       const price = Number.isFinite(usd) && usd > 0 ? "$" + usd.toFixed(6).replace(/0+$/, "").replace(/\.$/, "") : item.price;
@@ -799,8 +818,14 @@ export function acceptsForItem(item, rails) {
   // top of a scheme that already settles.
   const uptoNets = Array.isArray(rails.uptoCaip2) ? rails.uptoCaip2 : [];
   const upto = uptoNets
-    .filter((caip2) => evmCaip2.includes(caip2))
-    .map((caip2) => ({ scheme: "upto", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 }));
+    .filter((caip2) => evmCaip2.includes(caip2) && (!allowed || allowed.has(caip2)))
+    .map((caip2) => ({ scheme: "upto", payTo: payToFor(caip2), price: priceOf(caip2, { upto: true }), network: caip2 }));
+  // A route that settles only what its run spent (chargesActualSpend:
+  // decide-execute) lists its upto accepts FIRST: a buyer that takes the
+  // first accept it can sign signs the budget as a ceiling and is settled for
+  // the spend, so no unspent remainder is left to repay. Its exact accepts
+  // follow, so a buyer that cannot sign upto keeps the route.
+  const uptoFirst = item.chargesActualSpend === true && !item.identityBound;
   // Identity-bound routes stay EVM-`exact` ONLY (security audit A402-03): the
   // handler derives the caller from the signed EIP-3009 authorization.from, and
   // upto's payload is Permit2-shaped (permit2Authorization.from), which
@@ -838,7 +863,7 @@ export function acceptsForItem(item, rails) {
   // x402EvmOnly (src/rails.js) is this same rule, read by the docs surfaces.
   // The batched accept is an EVM exact authorization with a longer window, so
   // it stays on these routes.
-  if (x402EvmOnly(item)) return [...evm, ...batched];
+  if (x402EvmOnly(item)) return uptoFirst ? [...upto, ...evm, ...batched] : [...evm, ...batched];
   // x402 `batch-settlement` (src/batch-settlement.js, off unless
   // X402_BATCH_SETTLEMENT_NETWORKS lists a network the boot gate kept): a
   // channel accept on each kept network, at the same price, to the treasury
@@ -851,8 +876,7 @@ export function acceptsForItem(item, rails) {
     : [];
   const channel = channelNets.map((caip2) => ({ scheme: "batch-settlement", payTo: rails.walletAddress, price: priceOf(caip2), network: caip2 }));
   return [
-    ...evm,
-    ...upto,
+    ...(uptoFirst ? [...upto, ...evm] : [...evm, ...upto]),
     ...(solanaWallet ? svmCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 })) : []),
     ...(stellarWallet ? stellarCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 })) : []),
     // The Algorand accepts carry the x402 Global Challenge tag (Algorand

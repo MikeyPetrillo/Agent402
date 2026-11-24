@@ -12,7 +12,7 @@
 
 import { runInAbortableScope, drainSignal, clientGoneSignal } from "../drain-abort.js";
 import { setActualCharge, chargesActualSpend } from "../actual-charge.js";
-import { payerFromPaymentResponse } from "../payer.js";
+import { payerFromPaymentResponse, paymentHeaderOf } from "../payer.js";
 import { decideConfig, priceForDepth, DEPTHS } from "../decide/config.js";
 import { recordWish } from "../wish.js";
 import { payerFromRequest } from "../payer.js";
@@ -233,11 +233,28 @@ export function makeDecideHandler({ ledger, now = () => Date.now(), isOwnTraffic
 
 // ---------------------------------------------------------------- execute
 
+/** The least any payment settles: a charge never goes under it. */
+const SETTLE_FLOOR_USD = 0.001;
+/** The refund-ledger class of an exact payment's unspent budget: the row's
+ *  note starts with it. It is owed and repaid like every other owed row, and
+ *  reads on the refundsOwed word past the same notice grace. */
+export const DECIDE_UNSPENT = "decide-unspent";
+/** The note such a row carries: the class, then the run it came from. */
+export function decideUnspentNote(runId) { return `${DECIDE_UNSPENT}: run ${String(runId || "?").slice(0, 64)}`; }
+/** Is this refund row a decide-execute run's unspent budget? */
+export function isDecideUnspentRefund(row) {
+  return typeof row?.note === "string" && row.note.startsWith(DECIDE_UNSPENT);
+}
+
 /** What an execute call is priced at: its budget less a valid credit, never
  *  under the settlement floor. Sync: reads the ledger's synchronous view
  *  (the file, or the mirror on the state database, which the handler then
- *  re-validates against the database before anything is charged). */
-export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = null }) {
+ *  re-validates against the database before anything is charged).
+ *  `fixed: true` is the price of a payment whose amount is fixed at the 402
+ *  (an exact accept, Tempo): the plan's listed step prices, never a
+ *  maxBudgetUsd above them (see executeBudgetUsd). Without it, the ceiling an
+ *  upto buyer signs. */
+export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = null, fixed = false }) {
   const floor = 0.001;
   const d = body?.decisionId ? (ledger.getDecisionSync ? ledger.getDecisionSync(String(body.decisionId)) : ledger.getDecision(String(body.decisionId))) : null;
   if (!d) {
@@ -245,12 +262,12 @@ export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = n
     // the handler refuses a step it cannot run before anything is charged.
     if (!body?.decisionId && Array.isArray(body?.steps) && typeof getCatalog === "function") {
       const sum = sketchListPriceUsd(body.steps, getCatalog());
-      if (sum > 0) return Math.max(floor, executeBudgetUsd(body, { costViaUsd: sum }));
+      if (sum > 0) return Math.max(floor, executeBudgetUsd(body, { costViaUsd: sum }, undefined, 0, { fixed }));
     }
     return floor;
   }
   const credit = ledger.creditAvailableUsdSync ? ledger.creditAvailableUsdSync(body?.creditToken, d.id, now) : ledger.creditAvailableUsd(body?.creditToken, d.id, now);
-  const budget = executeBudgetUsd(body, d, undefined, credit);
+  const budget = executeBudgetUsd(body, d, undefined, credit, { fixed });
   return Math.max(floor, roundUsd(budget - credit + replanPriceUsd(body, d)));
 }
 
@@ -285,12 +302,19 @@ export function planChanges(before = [], after = []) {
 // caller already holds for this decision when that is larger: a backup tool
 // pricier than the planned one can then still run (2026-10-01 prod run: step 1
 // fell through to a dearer seller and the estimate left nothing for step 2
-// while $0.02 of credit sat unused). Unspent budget returns as credit.
-export function executeBudgetUsd(body, d, cfg = decideConfig(), creditUsd = 0) {
+// while $0.02 of credit sat unused).
+// `fixed: true` (a payment whose amount the 402 fixed: exact, Tempo): a
+// maxBudgetUsd above the plan's listed step prices is headroom the run may
+// not spend, and on a fixed payment every unspent cent is a refund owed, so
+// the fixed budget stops at the plan's own figure. The headroom stays on the
+// upto ceiling, where unspent budget is never charged. A lower maxBudgetUsd,
+// and a plan with no priced steps, read the same either way.
+export function executeBudgetUsd(body, d, cfg = decideConfig(), creditUsd = 0, { fixed = false } = {}) {
   const asked = Number(body?.maxBudgetUsd);
   const planned = Number(d?.costViaUsd) || 0;
   const held = Number(creditUsd) > 0 ? Number(creditUsd) : 0;
-  const base = Number.isFinite(asked) && asked > 0 ? asked : Math.max(planned, held);
+  const ownFigure = Math.max(planned, held);
+  const base = Number.isFinite(asked) && asked > 0 ? (fixed && planned > 0 ? Math.min(asked, ownFigure) : asked) : ownFigure;
   // A re-plan's price rides on the same quote, which never passes the
   // published per-call maximum (quoteRange.maxUsd): near it, the steps get
   // the maximum less the plan price.
@@ -544,13 +568,18 @@ export function makeExecuteHandler({ ledger, getCatalog, bookUnspent = async (ro
       throw bad(`"decisionId" (from POST /api/decide) or "steps" (the tool slugs of a free plan sketch from /api/find or /api/route, ${SKETCH_MIN_STEPS} to ${SKETCH_MAX_STEPS}, in order) is required`);
     }
     const startedAt = Date.now();
-    const budget = executeBudgetUsd(input, d, cfg, await ledger.creditAvailableUsd(input.creditToken, d.id, t));
+    // A payment whose amount the 402 fixed (exact, Tempo) was quoted on the
+    // fixed budget (the plan's listed step prices); an upto payment, and a
+    // call with no payment, on the ceiling. The run's budget is read the same
+    // way, so the credit the quote assumed is the credit redeemed below.
+    const fixed = !chargesActualSpend(req) && !!(paymentHeaderOf(req) || req?.mppTempoCredential);
+    const budget = executeBudgetUsd(input, d, cfg, await ledger.creditAvailableUsd(input.creditToken, d.id, t), { fixed });
     if (budget <= 0) throw bad("Nothing to execute: the plan has no priced steps; pass maxBudgetUsd", 400);
 
     // WHAT WAS PAID is the quote the payment gate settled against (stashed on
     // the request by every gate), never a recomputation: a credit raced away
     // since the quote would otherwise make an unpaid budget spendable.
-    const quoted = Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : executeQuoteUsd(input, { ledger, now: t, getCatalog });
+    const quoted = Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : executeQuoteUsd(input, { ledger, now: t, getCatalog, fixed });
     // A re-plan's price rides on the same payment and is never spent on steps.
     const planCharge = replanPriceUsd(input, d, cfg);
     const runPaid = roundUsd(Math.max(0, quoted - planCharge));
@@ -971,7 +1000,9 @@ export function makeExecuteHandler({ ledger, getCatalog, bookUnspent = async (ro
     //  - otherwise (an `exact` payment fixed the amount at the 402) it is
     //    booked as a refund owed to the paying wallet once the payment
     //    settles, and repaid on chain like every other owed refund.
-    const chargedUsd = roundUsd(Math.min(quoted, (replanned?.ran ? planCharge : 0) + Math.max(0, spent - redeemed)));
+    // The settlement floor ($0.001, the least any payment settles) is the
+    // price of the call itself, never unspent budget.
+    const chargedUsd = roundUsd(Math.min(quoted, Math.max(SETTLE_FLOOR_USD, (replanned?.ran ? planCharge : 0) + Math.max(0, spent - redeemed))));
     const unspentUsd = roundUsd(Math.max(0, quoted - chargedUsd));
     let unspent = null;
     if (unspentUsd >= 0.001) {
@@ -984,7 +1015,7 @@ export function makeExecuteHandler({ ledger, getCatalog, bookUnspent = async (ro
         let receipt = null;
         try { receipt = JSON.parse(Buffer.from(String(res?.getHeader?.("payment-response") || ""), "base64").toString("utf-8")); } catch { receipt = null; }
         const owedPayer = payerFromPaymentResponse(String(res?.getHeader?.("payment-response") || "")) || payerFromRequest(req) || req?.mppTempoSender || null;
-        Promise.resolve(bookUnspent({ slug: "decide-execute", network: receipt?.network ?? null, payer: owedPayer, priceUsd: unspentUsd, tx: typeof receipt?.transaction === "string" && receipt.transaction ? receipt.transaction : null, httpStatus: 200, requestId: runId, note: `decide-execute unspent budget (${runId})` }))
+        Promise.resolve(bookUnspent({ slug: "decide-execute", network: receipt?.network ?? null, payer: owedPayer, priceUsd: unspentUsd, tx: typeof receipt?.transaction === "string" && receipt.transaction ? receipt.transaction : null, httpStatus: 200, requestId: runId, note: decideUnspentNote(runId) }))
           .catch((e) => console.error(`[decide] unspent budget of ${runId} ($${unspentUsd}) NOT booked as owed (${String(e?.message || e).slice(0, 120)}); book it by hand`));
       });
     }
@@ -1159,7 +1190,13 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       // Outside steps are bought from the Base spending wallet, which only a
       // Base payment funds: other EVM chains are not offered.
       onlyNetworks: ["eip155:8453"],
-      quote: (body) => executeQuoteUsd(body, { ledger, now: now(), getCatalog }),
+      // Settles what the run spent (src/actual-charge.js): its upto accepts
+      // come first and carry the budget as a ceiling (uptoQuote); its exact
+      // accept, and Tempo, are priced at the plan's listed step prices
+      // (quote), so an exact payment leaves as little unspent as possible.
+      chargesActualSpend: true,
+      quote: (body) => executeQuoteUsd(body, { ledger, now: now(), getCatalog, fixed: true }),
+      uptoQuote: (body) => executeQuoteUsd(body, { ledger, now: now(), getCatalog }),
       // The budget is capped per call (executeBudgetUsd), so that is the ceiling.
       quoteMaxUsd: decideConfig().execute.perCallMaxUsd,
       description:
