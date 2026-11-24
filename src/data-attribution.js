@@ -169,8 +169,13 @@ export const COUNTRIES_ODBL_NOTICE = "Contains information from world-countries,
 export const countriesDatabaseUrl = () => `${String(process.env.BASE_URL || "https://agent402.tools").replace(/\/+$/, "")}${COUNTRIES_DATABASE_PATH}`;
 
 // Chain and crypto data sources, each credited with a link wherever its data
-// is served. GoPlus's API terms ask for attribution "via a backlink or a
-// mention" (src/tools/token-risk-kit.js); the EAS indexer, RugCheck,
+// is served. GoPlus's current API License Agreement (Tops Labs Ltd, "Last
+// Updated August 21, 2023", https://docs.gopluslabs.io/reference/api-license-agreement-new,
+// read 2026-11-24) asks for attribution "via a backlink or a mention" (section
+// 3) and, in section 5, for "the GoPlus logo with 'Powered by GoPlus'
+// expression": its answers carry the logo's URL beside the credit
+// (GOPLUS_LOGO below) and its tool pages show the logo next to the text. The
+// EAS indexer, RugCheck,
 // Hyperliquid's info API and Sourcify (verified source and its signature
 // database) are public services for builders, credited by name and link
 // (src/tools/onchain-identity-kit.js, solana-intel-kit.js, derivatives-kit.js,
@@ -182,6 +187,26 @@ export const countriesDatabaseUrl = () => `${String(process.env.BASE_URL || "htt
 // its listing are unchanged, and the 402 sample is read without the field
 // (withoutAnswerOnlyFields below).
 export const GOPLUS_ATTRIBUTION = "Powered by GoPlus Security (https://gopluslabs.io).";
+/** GoPlus's own "Powered By gopluslabs.io" mark, stored unaltered (same bytes,
+ *  sha256 below) and shown at its own size. Source: the "Other element" on
+ *  GoPlus's brand page, fetched 2026-11-24. */
+export const GOPLUS_LOGO = Object.freeze({
+  file: "goplus-powered-by.png",
+  path: "/partners/goplus-powered-by.png",
+  width: 250,
+  height: 46,
+  alt: "Powered by GoPlus",
+  href: "https://gopluslabs.io",
+  source: "https://gopluslabs.io/en/media-kit (Other element: https://gopluslabs.io/_nuxt/powered-by.zHGBfZ1o.png)",
+  sha256: "bd1af464c35d9ad6bd2530511f79889a87c3ce511a8e29b00dd01256129221f5",
+});
+/** The absolute URL of this deployment's copy of a credit logo. */
+export const creditLogoUrl = (logo) => `${String(process.env.BASE_URL || "https://agent402.tools").replace(/\/+$/, "")}${logo.path}`;
+export const goplusLogoUrl = () => creditLogoUrl(GOPLUS_LOGO);
+/** Credit sentence -> the logo its terms ask to be shown beside it. */
+export const CREDIT_LOGOS = Object.freeze({ [GOPLUS_ATTRIBUTION]: GOPLUS_LOGO });
+/** Static files served under /partners/ (server.js), by name. */
+export const PARTNER_ASSETS = Object.freeze({ [GOPLUS_LOGO.file]: "image/png" });
 export const EAS_ATTRIBUTION = "Indexed by EASSCAN (https://easscan.org).";
 export const RUGCHECK_ATTRIBUTION = "Data from RugCheck (https://rugcheck.xyz).";
 export const HYPERLIQUID_ATTRIBUTION = "Data from Hyperliquid (https://hyperliquid.xyz).";
@@ -297,11 +322,18 @@ export function creditAnswers(tool, credit) {
   if (typeof credit !== "string" || !credit) throw new Error("creditAnswers: credit must be a sentence");
   if (tool.credit === credit) return tool;
   tool.credit = credit;
+  // A source whose terms ask for its logo: the answer names the logo's URL
+  // beside the credit (creditLogo), and the tool page shows it.
+  const logo = CREDIT_LOGOS[credit] ? creditLogoUrl(CREDIT_LOGOS[credit]) : null;
+  const credit2 = (a) => {
+    const out = withCredit(a, credit);
+    return logo && isPlainAnswer(out) && !Object.hasOwn(out, "creditLogo") ? { ...out, creditLogo: logo } : out;
+  };
   const ex = tool.discovery?.output?.example;
-  if (isPlainAnswer(ex)) tool.discovery.output.example = withCredit(ex, credit);
+  if (isPlainAnswer(ex)) tool.discovery.output.example = credit2(ex);
   const inner = tool.handler;
   if (typeof inner === "function") {
-    tool.handler = async function credited(...args) { return withCredit(await inner.apply(this, args), credit); };
+    tool.handler = async function credited(...args) { return credit2(await inner.apply(this, args)); };
   }
   return tool;
 }
@@ -401,6 +433,8 @@ export function withoutAnswerOnlyFields(example) {
     for (const t of ANSWER_ONLY_CREDITS) rest = rest.split(t).join(" ");
     if (!rest.trim()) drop.add("credit");
   }
+  // The logo URL rides with its credit: dropped when the credit is.
+  if (drop.has("credit") && typeof example.creditLogo === "string" && Object.values(CREDIT_LOGOS).some((l) => example.creditLogo.endsWith(l.path))) drop.add("creditLogo");
   if (example.licenseNote === SOURCE_LICENSE_NOTE) { drop.add("licenseNote"); drop.add("licenses"); }
   for (const k of ANSWER_ONLY_FLAGS) if (example[k] === true) drop.add(k);
   return drop.size ? Object.fromEntries(Object.entries(example).filter(([k]) => !drop.has(k))) : example;

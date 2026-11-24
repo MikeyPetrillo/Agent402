@@ -21,6 +21,7 @@ import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
 import { captureNote } from "./tool-output-examples.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
+import { CREDIT_LOGOS } from "./data-attribution.js";
 import { getWalletHtml } from "./get-a-wallet.js";
 import { firstFit } from "./seo-meta.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
@@ -390,6 +391,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const canonical = `${baseUrl}/tools/${tool.slug}`;
   const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
   const catHref = `/tools/category/${tool.category}`;
+  // A source whose terms ask for its logo beside the credit (GoPlus).
+  const creditLogo = typeof tool.credit === "string" ? CREDIT_LOGOS[tool.credit] || null : null;
   const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Tools", "/tools"], [catLabel, catHref], [tool.name, `/tools/${tool.slug}`]]);
   const pw = priceWords(tool);
   const schema = tool.discovery?.inputSchema || {};
@@ -572,6 +575,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-sub code, .tp-lead code, .tp-facts code { background:var(--card); border:1px solid var(--hairline); font-family:var(--font-mono); padding:1px 5px; font-size:var(--fs-code-inline); }
   .tp-h2 { font-weight:700; font-size:var(--fs-xl); margin:40px 0 10px; letter-spacing:-.01em; }
   .tp-table { border-collapse:collapse; width:100%; font-size:var(--fs-md); }
+  .tp-credit { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:14px 0 0; font-size:var(--fs-sm); color:var(--muted); }
+  .tp-credit img { display:block; max-width:100%; height:auto; }
   .tp-table td, .tp-table th { border:1px solid var(--hairline); padding:10px 12px; text-align:left; vertical-align:top; }
   .tp-table th { background:var(--card); font-weight:700; }
   .tp-tw { overflow-x:auto; }
@@ -637,6 +642,7 @@ await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}
     ? `<p class="tp-sub">A 200 carries ${binaryPhrase}: the file itself.</p>`
     : `${codeBlock(JSON.stringify(example ?? {}, null, 2), { name: "the response" })}${captured ? `\n  <p class="tp-sub tp-captured">${e(captureNote(captured))}</p>` : ""}`}
   ${respRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Field</th><th>Type</th><th>Always present</th><th>In the example</th></tr>${respRows}</table></div>` : ""}
+  ${creditLogo ? `<p class="tp-credit"><a href="${e(creditLogo.href)}" rel="noopener"><img src="${e(creditLogo.path)}" width="${creditLogo.width}" height="${creditLogo.height}" alt="${e(creditLogo.alt)}" loading="lazy" decoding="async"></a><span>${e(tool.credit)}</span></p>` : ""}
 
   <h2 class="tp-h2">From an MCP client</h2>
   ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}

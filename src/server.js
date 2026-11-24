@@ -60,7 +60,7 @@ import { manageTokenFrom, MANAGE_RESPONSE_HEADERS } from "./manage-token.js";
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
-import { COUNTRIES_DATABASE_PATH, COUNTRIES_LICENSE_PATH } from "./data-attribution.js";
+import { COUNTRIES_DATABASE_PATH, COUNTRIES_LICENSE_PATH, PARTNER_ASSETS } from "./data-attribution.js";
 import { llmsLinkMiddleware } from "./llms-link.js";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
@@ -10831,6 +10831,19 @@ app.get("/js/:file", (req, res) => {
   // immutable; anything else keeps the short cache.
   res.setHeader("Cache-Control", req.query?.v === ASSET_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=300");
   res.type("application/javascript").send(buf);
+});
+
+// A data source's own mark, shown where its terms ask (src/data-attribution.js
+// PARTNER_ASSETS: the files, by name, and their types). Served unaltered.
+app.get("/partners/:file", (req, res) => {
+  const file = String(req.params.file || "");
+  const type = Object.hasOwn(PARTNER_ASSETS, file) ? PARTNER_ASSETS[file] : null;
+  if (!type) return res.status(404).end();
+  let buf;
+  try { buf = readFileSync(new URL(`../assets/partners/${file}`, import.meta.url)); }
+  catch { return res.status(404).end(); }
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.type(type).send(buf);
 });
 
 // Isolated eval sandbox for the SDK playground's "Run" button (2026-08-16,

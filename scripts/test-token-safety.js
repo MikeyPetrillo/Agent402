@@ -88,5 +88,36 @@ for (const [label, g] of [
   } finally { globalThis.fetch = realFetch; }
 }
 
+// --- GoPlus's logo beside the credit (API License Agreement, section 5) ------
+{
+  const { TOKEN_SAFETY_TOOLS } = await import("../src/tools/token-safety-kit.js");
+  const { TOKEN_RISK_TOOLS } = await import("../src/tools/token-risk-kit.js");
+  const { GOPLUS_ATTRIBUTION, GOPLUS_LOGO, goplusLogoUrl, withoutAnswerOnlyFields } = await import("../src/data-attribution.js");
+  const { toolPage } = await import("../src/pages.js");
+  const { readFileSync } = await import("node:fs");
+  const { createHash } = await import("node:crypto");
+  const png = readFileSync(new URL(`../assets/partners/${GOPLUS_LOGO.file}`, import.meta.url));
+  ok(createHash("sha256").update(png).digest("hex") === GOPLUS_LOGO.sha256, "the stored GoPlus logo is the official file, byte for byte (sha256 recorded with its source)");
+  ok(png.readUInt32BE(16) === GOPLUS_LOGO.width && png.readUInt32BE(20) === GOPLUS_LOGO.height, `the logo's recorded size is its own (${png.readUInt32BE(16)}x${png.readUInt32BE(20)})`);
+  ok(/^https:\/\/gopluslabs\.io\//.test(GOPLUS_LOGO.source) && /media-kit/.test(GOPLUS_LOGO.source), `the logo's source is GoPlus's own brand page (${GOPLUS_LOGO.source})`);
+  const url = goplusLogoUrl();
+  ok(/\/partners\/goplus-powered-by\.png$/.test(url), `the logo URL is this server's copy (${url})`);
+  for (const t of [...TOKEN_SAFETY_TOOLS, ...TOKEN_RISK_TOOLS]) {
+    ok(t.discovery.output.example.creditLogo === url, `${t.slug}: published example carries the logo URL beside the credit`);
+    const sample = withoutAnswerOnlyFields(t.discovery.output.example);
+    ok(!("credit" in sample) && !("creditLogo" in sample), `${t.slug}: the 402 sample is read without the credit and its logo`);
+    const html = toolPage("https://agent402.tools", t, []);
+    const m = html.match(/<p class="tp-credit">([\s\S]*?)<\/p>/);
+    ok(m && m[1].includes(`src="${GOPLUS_LOGO.path}"`) && m[1].includes(`width="${GOPLUS_LOGO.width}"`) && m[1].includes(`height="${GOPLUS_LOGO.height}"`) && m[1].includes(GOPLUS_ATTRIBUTION.replace(/[()]/g, (c) => c)) && /alt="Powered by GoPlus"/.test(m[1]), `${t.slug}: the tool page shows the unaltered logo next to the text credit`);
+  }
+  const realFetch = globalThis.fetch;
+  const addr = "0x940181a94A35A4569E4529A3CDfB74e38FD98631";
+  globalThis.fetch = async () => new Response(JSON.stringify({ code: 1, result: { [addr.toLowerCase()]: { is_honeypot: "0", is_open_source: "1", is_mintable: "0", buy_tax: "0", sell_tax: "0" } } }), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    const r = await TOKEN_SAFETY_TOOLS.find((t) => t.slug === "token-safety").handler({ address: addr, chain: "base" });
+    ok(r.credit === GOPLUS_ATTRIBUTION && r.creditLogo === url, `token-safety: a live answer carries the credit and its logo URL (${r.creditLogo})`);
+  } finally { globalThis.fetch = realFetch; }
+}
+
 console.log(`test-token-safety: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
