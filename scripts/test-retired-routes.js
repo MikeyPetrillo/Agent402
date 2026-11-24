@@ -30,7 +30,7 @@ ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retire
 {
   const { readdirSync, statSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const root = new URL("..", import.meta.url).pathname;
+  const root = (await import("node:url")).fileURLToPath(new URL("..", import.meta.url));
   const OFFER = /\bcode sandbox\b|\bcode[- ]execution sandbox\b|\brun (?:your )?(?:python|javascript|code) (?:in|on) a sandbox\b|\bsandboxed (?:python|code)\b/i;
   const SKIP = new Set(["src/changelog.js", "src/retired-tools.js", "CHANGELOG.md"]);
   const files = [];

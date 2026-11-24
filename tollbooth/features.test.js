@@ -608,7 +608,7 @@ ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes 
 {
   const { spawnSync } = await import("node:child_process");
   const { readFileSync: rf } = await import("node:fs");
-  const here = new URL(".", import.meta.url).pathname;
+  const here = (await import("node:url")).fileURLToPath(new URL(".", import.meta.url));
   const pkg = JSON.parse(rf(new URL("./package.json", import.meta.url), "utf8"));
   const env = { PATH: process.env.PATH, TOLLBOOTH_SECRET: "x".repeat(40) };
   for (const flag of ["--help", "-h"]) {
