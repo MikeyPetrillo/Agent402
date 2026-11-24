@@ -42,7 +42,7 @@ export const RETIRED_TOOLS = Object.freeze({
   // 2026-11-23: routes with no or near-no use whose source reads are not
   // kept. The two day-walk SQL routes ran onchain-sql's own query over more
   // days per call, so onchain-sql is named; fred-release-observations read
-  // every series of one release, and fred-series reads one of them by ID.
+  // every series of one release, and us-macro-series reads one of them by ID.
   // Every other route here answers a question no live tool answers (raw
   // Solana RPC, X post counts and trends, Farcaster,
   // the crypto options book, Solana swap routing and token profiles, image
@@ -68,9 +68,12 @@ export const RETIRED_TOOLS = Object.freeze({
   // pointer to it rides in the note rather than as the replacement.
   "judge-long": { retiredAt: "2026-11-23", replacement: null, route: "/v1/judge/long", note: "POST /v1/judge asks the same typed questions of a shorter document." },
   "fred-release-calendar": { retiredAt: "2026-11-23", replacement: null },
-  "fred-search": { retiredAt: "2026-11-23", replacement: null, note: "fred-series reads a series' observations when you already hold its ID." },
-  "fred-series-info": { retiredAt: "2026-11-23", replacement: null, note: "fred-series reads a series' observations by ID; nothing live returns its metadata." },
-  "fred-release-observations": { retiredAt: "2026-11-23", replacement: "fred-series" },
+  "fred-search": { retiredAt: "2026-11-23", replacement: null, note: "us-macro-series reads a series' observations when you already hold its ID." },
+  "fred-series-info": { retiredAt: "2026-11-23", replacement: null, note: "us-macro-series reads a series' observations by ID; nothing live returns its metadata." },
+  "fred-release-observations": { retiredAt: "2026-11-23", replacement: "us-macro-series" },
+  // 2026-11-24: renamed so the route carries no third party's mark; the same
+  // inputs and answer at the new route.
+  "fred-series": { retiredAt: "2026-11-24", replacement: "us-macro-series" },
   "crypto-news": { retiredAt: "2026-11-23", replacement: null, note: "search-news answers a news search for any query." },
   "gravatar-check": { retiredAt: "2026-11-23", replacement: null },
   // 2026-11-22: the market tick read (GET /api/market/tick, published under the
@@ -188,6 +191,8 @@ export const RETIRED_ROUTE_SLUGS = Object.freeze(Object.fromEntries(
 
 /** Skill packs: /api/skill/<slug>. The catalog slug is `skill-<slug>`. */
 export const RETIRED_PACKS = Object.freeze({
+  // 2026-11-24: renamed with its one tool (fred-series is us-macro-series).
+  "fred-snapshot": { retiredAt: "2026-11-24", replacement: "skill-macro-snapshot" },
   "market-open": { retiredAt: "2026-09-20", replacement: null },
   "agent-outreach": { retiredAt: "2026-09-03", replacement: null },
   ...Object.fromEntries([

@@ -13,7 +13,7 @@
 //
 //   2. The agencies that publish the US labor, price and rate series
 //      (src/tools/us-macro-series.js: the BLS Public Data API, the New York
-//      Fed's Markets Data API, Treasury Fiscal Data) for fred-series and the
+//      Fed's Markets Data API, Treasury Fiscal Data) for us-macro-series and the
 //      computed tools (sahm-rule, cpi-yoy, unemployment-rate, fed-funds).
 //      No FRED data is served.
 //
@@ -206,7 +206,7 @@ export const TREASURY_YIELD_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
 const treasuryYieldYears = new Map(); // year -> { at, rows, failedAt }
 const treasuryYieldReads = new Map(); // year -> in-flight read (single flight)
 const treasuryYieldTimer = { interval: null, boot: null };
-// fred-series' Treasury constant maturities read the years held here.
+// us-macro-series' Treasury constant maturities read the years held here.
 useHeldTreasuryYields((year) => treasuryYieldYears.get(year) || null);
 export function _resetTreasuryYieldCacheForTest() { stopTreasuryYieldRefresh(); treasuryYieldYears.clear(); treasuryYieldReads.clear(); }
 // Moves every held year's read and failure times `ms` into the past.
@@ -815,7 +815,7 @@ const FRED_UNITS = new Set(["lin", "chg", "ch1", "pch", "pc1", "pca", "cca", "lo
 // --- series with a copyright notice ---------------------------------------------
 // FRED's Terms of Use: a series whose notes carry a copyright notice needs
 // the copyright owner's permission for use beyond personal use.
-// No tool here reads FRED: fred-series and the computed tools read the
+// No tool here reads FRED: us-macro-series and the computed tools read the
 // publishing agencies. fredCopyrightOf is the rule a tool that serves a
 // caller-chosen FRED series applies to the series' notes first.
 
@@ -846,18 +846,19 @@ export function fredCopyrightOf(notes) {
 
 MACRO_TOOLS.push(
   {
-    // Served from the agencies that publish each series (src/tools/us-macro-series.js),
-    // never from FRED: the route keeps FRED's series IDs, inputs and answer shape.
-    route: "GET /api/fred-series", name: "US economic time series by FRED series ID", slug: "fred-series", category: "data", attribution: "us-agencies", price: "$0.001",
+    // Served from the agencies that publish each series (src/tools/us-macro-series.js).
+    // The route keeps the common series IDs, inputs and answer shape it served
+    // as fred-series (retired to this route, src/retired-tools.js).
+    route: "GET /api/us-macro-series", name: "US economic time series by series ID", slug: "us-macro-series", category: "data", attribution: "us-agencies", price: "$0.001",
     upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     description:
-      `US economic series by FRED ID, from the agency that publishes each: GDP and PCE (GDPC1, PCEPI), jobs and prices (UNRATE, CPIAUCSL), Treasury yields (DGS10, T10YIE), money (M2SL), FX (DEXUSEU), rates (FEDFUNDS). Units and frequencies; other IDs answer 404 listing those served. ${US_AGENCIES_ATTRIBUTION}`,
-    tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "treasury-yields", "money-supply", "bls", "bea", "macro", "economic-data", "treasury"],
+      `US economic series by series ID, from the agency that publishes each; accepts the common series IDs: GDP and PCE (GDPC1, PCEPI), jobs and prices (UNRATE, CPIAUCSL), Treasury yields (DGS10, T10YIE), money (M2SL), FX (DEXUSEU), rates (FEDFUNDS). Units and frequencies; other IDs answer 404 listing those served. ${US_AGENCIES_ATTRIBUTION}`,
+    tags: ["series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "treasury-yields", "money-supply", "bls", "bea", "macro", "economic-data", "treasury"],
     discovery: {
       input: { seriesId: "GDPC1", startDate: "2024-01-01", endDate: "2024-12-31" },
       inputSchema: {
         properties: {
-          seriesId: { type: "string", maxLength: 40, description: `FRED series ID, one of: ${US_MACRO_SUPPORTED_IDS.join(", ")}` },
+          seriesId: { type: "string", maxLength: 40, description: `series ID, one of: ${US_MACRO_SUPPORTED_IDS.join(", ")}` },
           startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional; without one a Bureau of Labor Statistics series answers its last 10 years, a daily Treasury or exchange-rate series its last 2 calendar years" },
           endDate: { type: "string", description: "ISO end date (YYYY-MM-DD), optional" },
           limit: { type: "number", description: "Max observations, 1-100000 (default 1000)" },
@@ -870,7 +871,7 @@ MACRO_TOOLS.push(
     },
     handler: async (i) => {
       const seriesId = String(i.seriesId ?? "").trim().toUpperCase();
-      if (!/^[A-Z0-9_]{1,40}$/.test(seriesId)) throw bad('"seriesId" must look like a FRED series ID (e.g. UNRATE, CPIAUCSL)');
+      if (!/^[A-Z0-9_]{1,40}$/.test(seriesId)) throw bad('"seriesId" must look like a series ID (e.g. UNRATE, CPIAUCSL)');
       const startDate = i.startDate ? String(i.startDate).trim() : undefined;
       const endDate = i.endDate ? String(i.endDate).trim() : undefined;
       if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw bad('"startDate" must be ISO YYYY-MM-DD');

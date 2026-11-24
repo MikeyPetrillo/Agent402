@@ -8,9 +8,7 @@
 // that require its sentence next to the tools that carry it.
 // Dependency-free: src/payments.js, src/skills.js and the tool kits import it.
 
-// The terms behind each sentence: FRED API Terms of Use
-// (https://fred.stlouisfed.org/docs/api/terms_of_use.html, the notice the
-// macro kit's FRED routes carry); CoinGecko in src/tools/coingecko-rate.js;
+// The terms behind each sentence: CoinGecko in src/tools/coingecko-rate.js;
 // Jupiter in src/tools/solana-intel-kit.js; Open-Meteo and GeoNames in
 // src/tools/weather-kit.js; NVD in
 // src/tools/cve-kit.js; the ECB's reuse terms, which ask that the ECB be
@@ -34,13 +32,6 @@
 // services in one short sentence, the disclaimer once, so that a listing's
 // shortest cut (300 characters, src/payments.js) keeps the run whole; its
 // answers carry each full credit.
-export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
-// The same terms ask an application others use to link the Terms of Use and
-// to tell its users they are bound by them: every answer that carries FRED
-// data says so in its `terms` field (termsAnswers below; the macro kit marks
-// each tool whose attribution is "fred").
-export const FRED_TERMS_URL = "https://fred.stlouisfed.org/docs/api/terms_of_use.html";
-export const FRED_TERMS = `Users of this data are bound by the FRED API Terms of Use: ${FRED_TERMS_URL}`;
 // CoinGecko's API terms ask for the credit with a link to its API page,
 // shown next to the data: the description sentence carries the link, and
 // every CoinGecko-backed answer carries the same sentence as `credit`
@@ -88,7 +79,7 @@ export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
 // Mapping service on every asn-info answer (src/tools/network-kit2.js).
 export const CRTSH_ATTRIBUTION = "Certificate data from crt.sh by Sectigo (https://crt.sh).";
 export const CYMRU_ATTRIBUTION = "IP to ASN data from Team Cymru IP to ASN Mapping (https://team-cymru.com/community-services/ip-asn-mapping/).";
-// fred-series (src/tools/us-macro-series.js, which cites each publisher's
+// us-macro-series (src/tools/us-macro-series.js, which cites each publisher's
 // terms): the publishers named and the New York Fed's disclaimer for a product
 // described with its rates; each answer carries its publisher's full credit
 // (the BLS statement and retrieval date, the New York Fed's notice).
@@ -185,7 +176,6 @@ export const SOURCIFY_SIGDB_ATTRIBUTION = "Signatures from the Sourcify signatur
 
 /** Source key (a tool's `attribution` field) -> the sentence its terms require. */
 export const ATTRIBUTIONS = Object.freeze({
-  fred: FRED_NOTICE,
   coingecko: COINGECKO_ATTRIBUTION,
   jupiter: JUPITER_ATTRIBUTION,
   "open-meteo": OPEN_METEO_ATTRIBUTION,

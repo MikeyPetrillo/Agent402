@@ -44,7 +44,7 @@ delete process.env.BRAVE_SUGGEST_API_KEY;
 // buyer-visible error.
 process.env.COINGECKO_API_KEY = "cg-LEAKCANARY0000";
 delete process.env.WARPCAST_API_KEY;
-// fred-series reads the agencies that publish each series; the BLS key rides
+// us-macro-series reads the agencies that publish each series; the BLS key rides
 // the POST body as registrationkey.
 process.env.BLS_API_KEY = "bls-LEAKCANARY0000";
 process.env.DATABENTO_API_KEY = "db-LEAKCANARY00000000000000000000"; // public-IP literal → no DNS
@@ -293,7 +293,7 @@ for (const { slug, handler, input } of HANDLER_CASES) {
 // "the mock actually received the canary" (test validity).
 const NON_AI_CASES = [
   { slug: "crypto-price", handler: bySlug(CRYPTO_TOOLS, "crypto-price"), input: { coins: "bitcoin" } },
-  { slug: "fred-series", handler: bySlug(MACRO_TOOLS, "fred-series"), input: { seriesId: "UNRATE", startDate: "2024-01-01", endDate: "2024-12-31" } },
+  { slug: "us-macro-series", handler: bySlug(MACRO_TOOLS, "us-macro-series"), input: { seriesId: "UNRATE", startDate: "2024-01-01", endDate: "2024-12-31" } },
   { slug: "stock-quote", handler: bySlug(FINANCE_TOOLS, "stock-quote"), input: { symbol: "AAPL" } },
 ];
 

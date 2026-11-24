@@ -14,7 +14,7 @@
 t node scripts/test-ox-tier.js
 # Macro-kit tests (Treasury yield curve, debt + avg rates, ECB FX series, World Bank - live keyless APIs)
 t node scripts/test-macro-kit.js
-# No macro tool serves FRED data; fred-series and the computed tools read BLS, the New York Fed and Treasury; third-party series screened by their notes (offline)
+# No macro tool serves FRED data; us-macro-series and the computed tools read BLS, the New York Fed and Treasury; third-party series screened by their notes (offline)
 t node scripts/test-fred-terms.js
 t node scripts/test-fred-series-sources.js
 t node scripts/test-macro-computed-sources.js

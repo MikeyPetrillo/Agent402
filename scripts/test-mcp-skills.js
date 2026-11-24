@@ -214,12 +214,12 @@ try {
 
   // ---- a pack whose tools serve a source with an attribution names it in its body
   {
-    const { FRED_NOTICE, COINGECKO_ATTRIBUTION } = await import("../src/data-attribution.js");
+    const { NVD_NOTICE, COINGECKO_ATTRIBUTION } = await import("../src/data-attribution.js");
     const pack = SKILL_PACKS.find((p) => p.toolSlugs.length >= 2);
-    const marks = { [pack.toolSlugs[0]]: { attribution: "fred" }, [pack.toolSlugs[1]]: { attribution: "coingecko" } };
+    const marks = { [pack.toolSlugs[0]]: { attribution: "nvd" }, [pack.toolSlugs[1]]: { attribution: "coingecko" } };
     const withMarks = buildSkillSet({ packs: [pack], toolOf: (s) => marks[s] ?? null }).fileByUri.get(skillUriOf(pack.slug)).text;
     const plain = buildSkillSet({ packs: [pack] }).fileByUri.get(skillUriOf(pack.slug)).text;
-    ok(withMarks.includes(`## Data sources\n\n${FRED_NOTICE} ${COINGECKO_ATTRIBUTION}`) && !plain.includes("## Data sources"), "skill body: the attribution sentences of the sources its tools serve, in step order, and none when no tool needs one");
+    ok(withMarks.includes(`## Data sources\n\n${NVD_NOTICE} ${COINGECKO_ATTRIBUTION}`) && !plain.includes("## Data sources"), "skill body: the attribution sentences of the sources its tools serve, in step order, and none when no tool needs one");
   }
 
   const other = OTHER;

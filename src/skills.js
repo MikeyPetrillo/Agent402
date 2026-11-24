@@ -91,7 +91,7 @@ export const PACK_PRICE_TABLE = {
   "content-grade": 0.004, // 3 tools, parts $0.004
   "api-health": 0.005, // 3 tools, parts $0.005
   "world-data": 0.005, // 1 tools, parts $0.005
-  "fred-snapshot": 0.001, // 1 tools, parts $0.001
+  "macro-snapshot": 0.001, // 1 tools, parts $0.001
   "contact-verify": 0.003, // 3 tools, parts $0.003
   "domain-age": 0.003, // 3 tools, parts $0.003
   "contract-audit": 0.021, // 5 tools, parts $0.023
@@ -346,7 +346,7 @@ const SKILL_PACKS_ALL = [
       "edgar-filings",
       "edgar-company-facts",
       "edgar-insider-trades",
-      "fred-series",
+      "us-macro-series",
     ],
     workflow: [
       "Get the latest close from stock-quote - price, day range, change vs the previous close, and consolidated volume (the answer's coverage field says when a read fell back to three venues).",
@@ -354,7 +354,7 @@ const SKILL_PACKS_ALL = [
       "List recent SEC filings (10-K, 10-Q, 8-K) via edgar-filings - link each one in the report.",
       "Pull the structured XBRL company facts (revenue, net income, total assets, share count) from edgar-company-facts for the canonical numbers.",
       "Check edgar-insider-trades for Form 4 filings in the last 90 days - directional insider activity is a real signal.",
-      "Drop in macro context (CPI, fed funds, unemployment) from fred-series so the brief contextualizes the company-level view.",
+      "Drop in macro context (CPI, fed funds, unemployment) from us-macro-series so the brief contextualizes the company-level view.",
     ],
     claudePrompt:
       "Build a one-page research brief on AAPL. Use Agent402 to pull: (1) current quote, (2) 1-year price history with return/vol/max-drawdown, (3) the last 4 SEC filings, (4) XBRL revenue and net income trend, (5) Form 4 insider trades in the last 90 days, (6) CPI and fed funds rate as macro context. Output a clean markdown brief.",
@@ -636,7 +636,7 @@ const SKILL_PACKS_ALL = [
     promptArgs: [
       {
         name: "series",
-        description: "What to analyze - a ticker (AAPL), a FRED series id fred-series serves (UNRATE), or a Treasury yield id it serves (DGS10)",
+        description: "What to analyze - a ticker (AAPL), a series id us-macro-series serves (UNRATE), or a Treasury yield id it serves (DGS10)",
         required: true,
         substitute: "AAPL",
       },
@@ -648,7 +648,7 @@ const SKILL_PACKS_ALL = [
       },
       {
         name: "benchmark",
-        description: "Optional second series to correlate against - a ticker (SPY) or a FRED series id fred-series serves. Without it the correlation step is skipped.",
+        description: "Optional second series to correlate against - a ticker (SPY) or a series id us-macro-series serves. Without it the correlation step is skipped.",
         required: false,
         substitute: "SPY",
       },
@@ -660,7 +660,7 @@ const SKILL_PACKS_ALL = [
     // finance/macro fetchers that already existed.
     toolSlugs: [
       "stock-history",
-      "fred-series",
+      "us-macro-series",
       "stats-summary",
       "moving-average",
       "linear-regression",
@@ -672,7 +672,7 @@ const SKILL_PACKS_ALL = [
       "forecast-holt",
     ],
     workflow: [
-      "Fetch the series. For an equity ticker, call stock-history with range=horizon (or \"1y\" if unspecified) and pull the array of `close` prices in chronological order. For a macro indicator, call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
+      "Fetch the series. For an equity ticker, call stock-history with range=horizon (or \"1y\" if unspecified) and pull the array of `close` prices in chronological order. For a macro indicator, call us-macro-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
       "Run stats-summary on the values to get the full descriptive panel (mean, median, stddev, min, max, q1/q3, IQR). This is the one-line \"what does this series even look like\" answer - agents that skip this step end up reporting trends without context.",
       "Smooth the noise with moving-average. A 20-day SMA is the textbook short-term trend smoother for daily prices; a 12-month MA suits monthly macro data. Use which=\"both\" so you can compare SMA (lagging but stable) with EMA (responsive but jittery).",
       "Fit linear-regression with x = [0, 1, ..., n-1] (just the index) and y = values. Slope tells you direction + magnitude per unit time; r² tells you how clean the trend is (>0.7 = strong trend, <0.3 = mostly noise). Pass `predict` for next-N-period extrapolation if the user wants a projection.",
@@ -694,7 +694,7 @@ const SKILL_PACKS_ALL = [
     promptArgs: [
       {
         name: "series",
-        description: "What to forecast - a ticker (AAPL) or a FRED series id fred-series serves (UNRATE, CPIAUCSL)",
+        description: "What to forecast - a ticker (AAPL) or a series id us-macro-series serves (UNRATE, CPIAUCSL)",
         required: true,
         substitute: "AAPL",
       },
@@ -713,7 +713,7 @@ const SKILL_PACKS_ALL = [
     // (monthly macro, quarterly earnings) where it usually wins outright.
     toolSlugs: [
       "stock-history",
-      "fred-series",
+      "us-macro-series",
       "forecast-eval",
       "forecast-naive",
       "forecast-ses",
@@ -722,7 +722,7 @@ const SKILL_PACKS_ALL = [
     ],
     workflow: [
       "Fetch the equity series with stock-history (ticker, range=horizon-scaled - e.g. \"2y\" if you want to forecast ~6 months out). Pull `close` in chronological order; you want at least ~50 observations for the backtest to be meaningful, more if you suspect seasonality.",
-      "If the user is asking about a macro indicator instead (unemployment, CPI, fed funds), fetch via fred-series with the series id. Monthly FRED data with 10+ years of history is the sweet spot for Holt-Winters with period=12.",
+      "If the user is asking about a macro indicator instead (unemployment, CPI, fed funds), fetch via us-macro-series with the series id. Monthly data with 10+ years of history is the sweet spot for Holt-Winters with period=12.",
       "Run the bake-off. Call forecast-eval four times on the same values with testSize ≈ 20% of the series (capped at half): method=\"naive\" or \"drift\", \"ses\", \"holt\", \"holt-winters\" (the last only if you have ≥ 2·period observations and suspect seasonality). Compare RMSE; lowest wins. Watch the `warnings` field - \"insufficient data\" or \"could not detect seasonal period\" means treat that method's score as suspect, not as a clean win/loss.",
       "If forecast-naive (or drift, the mean-reversion variant) won, the series is essentially random-walk and there's nothing to extrapolate - call forecast-naive with the full values + horizon. The point forecast is just the last value (or last + average drift); the interval widens with √h. This is the honest answer for noisy series; don't over-engineer.",
       "If forecast-ses won, the series has no trend but local level matters more than the long-run mean. Call forecast-ses with the full values + horizon; the alpha SES picked tells you how much weight goes on recent vs. older observations (high alpha = react fast, low alpha = smooth heavy). Report alpha alongside the forecast - it's diagnostic.",
@@ -1126,7 +1126,7 @@ const SKILL_PACKS_ALL = [
       "Cross-reference named entities with extract-entities on each cleaned article body. Returns people, organizations, places, dates mentioned in the extracted text. The agent now grep-checks: every named entity in the answer (step 1) should appear in at least one extracted article's entity list. If the answer claims 'according to Powell at the FOMC meeting' but neither 'Powell' nor 'FOMC' appears in any cited article's entities, the answer is hallucinating attribution. Final output: a paragraph where every sentence has at least one URL footnote pointing at content that was re-fetched, re-read, and entity-checked against the original claim.",
     ],
     claudePrompt:
-      "Answer this research question with sources, using Agent402.\n\nQuestion: 'What is the Sahm Rule and has it triggered recently?'\nMax answer length: 250 tokens.\nAs-of: 2026-06-22.\n\n(1) answer with q='What is the Sahm Rule and has it triggered recently?', maxTokens=250. Return {answer: '<paragraph>', citations: [{url, title, snippet}, ...]}. Treat this answer as a *hypothesis*. (2) search with q='Sahm Rule recession indicator current', topN=10. Return {results: [{url, title, snippet}, ...]}. Compute overlap with step 1's citation URLs - if overlap < 30%, flag 'answer drew from non-canonical sources'. (3) search-news with q='Sahm Rule triggered', topN=5. Return {results: [{url, title, snippet, age}, ...]}. Critical for the 'triggered recently' half of the question: pick the freshest news result. If the freshest news result is > 30 days old, caveat the answer with 'most recent news coverage is from [date]'. (4) extract on the top 3 citation URLs from step 1. Return {extracted: [{url, ok, markdown|err}, ...]}. Drop any citation where ok=false or markdown is empty. (5) extract-entities on each successfully-extracted markdown body. Return {entities: [{url, people: [], orgs: [], places: [], dates: []}, ...]}. For each named entity in step-1 answer text, verify it appears in at least one citation's entity list. Drop any claim whose key entity isn't supported by any citation. Final return: {question, answer: '<rewritten paragraph where every sentence has a [url] footnote pointing to a citation whose markdown was re-extracted AND whose entities support the claim>', citations: [{url, title, verified: true|false}, ...], droppedClaims: [...], freshness: {newsLatestDate, isStale: true|false}, oneLineSummary: 'Sahm Rule is the 0.5pp 3M-vs-12M-low UE trigger; not currently triggered (0.33 as of May 26); cited 2 verifiable sources (FRED, Bloomberg), dropped 1 unsupported claim.'}. Five tools: answer + search + search-news are egress (web search API); extract is egress (raw web + Readability); extract-entities is pure-CPU. Budget ~$0.08 paid.",
+      "Answer this research question with sources, using Agent402.\n\nQuestion: 'What is the Sahm Rule and has it triggered recently?'\nMax answer length: 250 tokens.\nAs-of: 2026-06-22.\n\n(1) answer with q='What is the Sahm Rule and has it triggered recently?', maxTokens=250. Return {answer: '<paragraph>', citations: [{url, title, snippet}, ...]}. Treat this answer as a *hypothesis*. (2) search with q='Sahm Rule recession indicator current', topN=10. Return {results: [{url, title, snippet}, ...]}. Compute overlap with step 1's citation URLs - if overlap < 30%, flag 'answer drew from non-canonical sources'. (3) search-news with q='Sahm Rule triggered', topN=5. Return {results: [{url, title, snippet, age}, ...]}. Critical for the 'triggered recently' half of the question: pick the freshest news result. If the freshest news result is > 30 days old, caveat the answer with 'most recent news coverage is from [date]'. (4) extract on the top 3 citation URLs from step 1. Return {extracted: [{url, ok, markdown|err}, ...]}. Drop any citation where ok=false or markdown is empty. (5) extract-entities on each successfully-extracted markdown body. Return {entities: [{url, people: [], orgs: [], places: [], dates: []}, ...]}. For each named entity in step-1 answer text, verify it appears in at least one citation's entity list. Drop any claim whose key entity isn't supported by any citation. Final return: {question, answer: '<rewritten paragraph where every sentence has a [url] footnote pointing to a citation whose markdown was re-extracted AND whose entities support the claim>', citations: [{url, title, verified: true|false}, ...], droppedClaims: [...], freshness: {newsLatestDate, isStale: true|false}, oneLineSummary: 'Sahm Rule is the 0.5pp 3M-vs-12M-low UE trigger; not currently triggered (0.33 as of May 26); cited 2 verifiable sources (BLS, a news report), dropped 1 unsupported claim.'}. Five tools: answer + search + search-news are egress (web search API); extract is egress (raw web + Readability); extract-entities is pure-CPU. Budget ~$0.08 paid.",
     promptArgs: [
       {
         name: "question",
@@ -2116,21 +2116,21 @@ const SKILL_PACKS_ALL = [
   },
 
   {
-    slug: "fred-snapshot",
+    slug: "macro-snapshot",
     title: "Fed economic snapshot",
     tagline:
       "Economic snapshot skill: one parallel call returns the fed funds rate, the unemployment rate and the consumer price index series together.",
     useCase:
-      "An agent providing economic context needs the three most-watched Fed indicators: where rates are (FEDFUNDS), how tight the labor market is (UNRATE), and where inflation stands (CPIAUCSL). Three fred-series calls (series read from the New York Fed and the Bureau of Labor Statistics) bundled into one payment.",
+      "An agent providing economic context needs the three most-watched Fed indicators: where rates are (FEDFUNDS), how tight the labor market is (UNRATE), and where inflation stands (CPIAUCSL). Three us-macro-series calls (series read from the New York Fed and the Bureau of Labor Statistics) bundled into one payment.",
     promptArgs: [],
-    toolSlugs: ["fred-series", "fred-series", "fred-series"],
+    toolSlugs: ["us-macro-series", "us-macro-series", "us-macro-series"],
     workflow: [
-      "Call fred-series with seriesId='FEDFUNDS' to get the effective federal funds rate.",
-      "Call fred-series with seriesId='UNRATE' to get the unemployment rate.",
-      "Call fred-series with seriesId='CPIAUCSL' to get the Consumer Price Index for All Urban Consumers.",
+      "Call us-macro-series with seriesId='FEDFUNDS' to get the effective federal funds rate.",
+      "Call us-macro-series with seriesId='UNRATE' to get the unemployment rate.",
+      "Call us-macro-series with seriesId='CPIAUCSL' to get the Consumer Price Index for All Urban Consumers.",
     ],
     claudePrompt:
-      "Get a Fed economic snapshot using Agent402's fred-snapshot skill pack: (1) FEDFUNDS - current rate, (2) UNRATE - unemployment, (3) CPIAUCSL - CPI. Summarize the macro picture: is the Fed tightening or easing, and what does the jobs/inflation combo suggest?",
+      "Get a Fed economic snapshot using Agent402's macro-snapshot skill pack: (1) FEDFUNDS - current rate, (2) UNRATE - unemployment, (3) CPIAUCSL - CPI. Summarize the macro picture: is the Fed tightening or easing, and what does the jobs/inflation combo suggest?",
   },
 
   {
@@ -2654,7 +2654,7 @@ const WITHOUT_STOCK_COPY = {
       "List recent SEC filings (10-K, 10-Q, 8-K) via edgar-filings - link each one in the report.",
       "Pull the structured XBRL company facts (revenue, net income, total assets, share count) from edgar-company-facts for the canonical numbers.",
       "Check edgar-insider-trades for Form 4 filings in the last 90 days - directional insider activity is a real signal.",
-      "Drop in macro context (CPI, fed funds, unemployment) from fred-series so the brief contextualizes the company-level view.",
+      "Drop in macro context (CPI, fed funds, unemployment) from us-macro-series so the brief contextualizes the company-level view.",
     ],
   },
   "company-dossier": {
@@ -2690,7 +2690,7 @@ const WITHOUT_STOCK_COPY = {
     tagline: "Take any numeric time series - a US economic indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase: "You have a question like \"is unemployment trending up - and what does the next year look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data read (macro) is paid.",
     workflow: [
-      "Fetch the series: call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
+      "Fetch the series: call us-macro-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
       "Run stats-summary on the values to get the full descriptive panel (mean, median, stddev, min, max, q1/q3, IQR). This is the one-line \"what does this series even look like\" answer - agents that skip this step end up reporting trends without context.",
       "Smooth the noise with moving-average. A 12-month MA suits monthly macro data. Use which=\"both\" so you can compare SMA (lagging but stable) with EMA (responsive but jittery).",
       "Fit linear-regression with x = [0, 1, ..., n-1] (just the index) and y = values. Slope tells you direction + magnitude per unit time; r² tells you how clean the trend is (>0.7 = strong trend, <0.3 = mostly noise). Pass `predict` for next-N-period extrapolation if the user wants a projection.",
@@ -2699,26 +2699,26 @@ const WITHOUT_STOCK_COPY = {
       "Pick a forecast method honestly by backtesting. Call forecast-eval three times - once each with method=\"drift\", \"ses\", \"holt\" - passing the same values + testSize (≈ 20% of the series, capped at half). Compare RMSE; the lowest wins. Check `warnings` - non-empty means treat the result as indicative not predictive.",
       "Forecast forward with the winning method. Call forecast-naive / forecast-ses / forecast-holt (whichever won) with the full values + the user's horizon. Return the point forecast AND lower95/upper95 - never report a point estimate without its interval. Combine summary + trend + outliers + optional correlation + forecast into a single JSON object.",
     ],
-    claudePrompt: "Run a full trend analysis on UNRATE over the last 5y using Agent402, then project the next year forward. (1) Fetch the series via fred-series (seriesId=UNRATE). (2) Run stats-summary on the values for the descriptive panel. (3) Run moving-average with window=12, which=\"both\" - compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=values; report slope, intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to dates from the fetch, then fetch FEDFUNDS the same way, align both series on their most recent shared length and run correlation on them. (6) Pick a forecast method: call forecast-eval three times with method=\"drift\", \"ses\", \"holt\" and a testSize of about 20% of the series; pick the lowest RMSE. (7) Forecast the next 12 periods using the winning method and report both point and 95% interval. (8) Return a single JSON object: {summary, trend, outlierDates, forecastMethod, forecastWithIntervals, oneLineConclusion}. The stats + forecast steps are free over PoW; only the fred-series fetch is paid.",
+    claudePrompt: "Run a full trend analysis on UNRATE over the last 5y using Agent402, then project the next year forward. (1) Fetch the series via us-macro-series (seriesId=UNRATE). (2) Run stats-summary on the values for the descriptive panel. (3) Run moving-average with window=12, which=\"both\" - compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=values; report slope, intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to dates from the fetch, then fetch FEDFUNDS the same way, align both series on their most recent shared length and run correlation on them. (6) Pick a forecast method: call forecast-eval three times with method=\"drift\", \"ses\", \"holt\" and a testSize of about 20% of the series; pick the lowest RMSE. (7) Forecast the next 12 periods using the winning method and report both point and 95% interval. (8) Return a single JSON object: {summary, trend, outlierDates, forecastMethod, forecastWithIntervals, oneLineConclusion}. The stats + forecast steps are free over PoW; only the us-macro-series fetch is paid.",
     promptArgs: [
-      { name: "series", description: "What to analyze - a FRED series id (UNRATE, CPIAUCSL, FEDFUNDS)", required: true, substitute: "UNRATE" },
+      { name: "series", description: "What to analyze - a series id (UNRATE, CPIAUCSL, FEDFUNDS)", required: true, substitute: "UNRATE" },
       { name: "horizon", description: "Lookback window for the fetch - e.g. \"1y\", \"5y\", \"6mo\".", required: false, substitute: "5y" },
-      { name: "benchmark", description: "Optional second FRED series id to correlate against. Without it the correlation step is skipped.", required: false, substitute: "FEDFUNDS" },
+      { name: "benchmark", description: "Optional second series id to correlate against. Without it the correlation step is skipped.", required: false, substitute: "FEDFUNDS" },
     ],
   },
   "forecasting-bake-off": {
     useCase: "You need a forecast and you're not sure whether the series is stationary, trending, or seasonal. Instead of picking a method by gut, the bake-off lets the data choose: every method runs the same holdout backtest, the lowest RMSE wins, and you forecast forward with that winner only. Pure-CPU and free over PoW - only the upstream data fetch is paid.",
     workflow: [
-      "Fetch the series via fred-series with the series id (unemployment, CPI, fed funds). Monthly FRED data with 10+ years of history is the sweet spot for Holt-Winters with period=12.",
+      "Fetch the series via us-macro-series with the series id (unemployment, CPI, fed funds). Monthly data with 10+ years of history is the sweet spot for Holt-Winters with period=12.",
       "Run the bake-off. Call forecast-eval four times on the same values with testSize ≈ 20% of the series (capped at half): method=\"naive\" or \"drift\", \"ses\", \"holt\", \"holt-winters\" (the last only if you have ≥ 2·period observations and suspect seasonality). Compare RMSE; lowest wins. Watch the `warnings` field.",
       "If forecast-naive (or drift) won, the series is essentially random-walk - call forecast-naive with the full values + horizon. The interval widens with √h.",
       "If forecast-ses won, the series has no trend but local level matters more than the long-run mean. Call forecast-ses with the full values + horizon and report alpha alongside the forecast.",
       "If forecast-holt won, the series has a persistent trend worth extrapolating. Call forecast-holt with full values + horizon; the 95% interval grows faster than SES because trend uncertainty compounds.",
       "If forecast-holt-winters won, the series has seasonality you should respect. Call forecast-holt-winters with the full values + horizon + period (12 for monthly-annual, 4 for quarterly-annual) and report the interval with the point forecast.",
     ],
-    claudePrompt: "Run a forecasting bake-off on UNRATE and project the next 12 months using Agent402. (1) Fetch the series via fred-series (seriesId=UNRATE). (2) Run forecast-eval four times on the values with a testSize of about 20% of the series: method=\"drift\", \"ses\", \"holt\", and \"holt-winters\" with period=12. (3) Rank by RMSE ascending; the lowest is the winner. Note any `warnings` returned. (4) Call the winning forecast tool with the full values + horizon=12 to get the forward forecast and 95% interval. (5) Return a single JSON object: {rankings: [{method, rmse, mape, warnings}, ...], winner, forecast: {point: [...], lower95: [...], upper95: [...]}, oneLineConclusion}. All bake-off + forecast calls are free over PoW; only fred-series is paid.",
+    claudePrompt: "Run a forecasting bake-off on UNRATE and project the next 12 months using Agent402. (1) Fetch the series via us-macro-series (seriesId=UNRATE). (2) Run forecast-eval four times on the values with a testSize of about 20% of the series: method=\"drift\", \"ses\", \"holt\", and \"holt-winters\" with period=12. (3) Rank by RMSE ascending; the lowest is the winner. Note any `warnings` returned. (4) Call the winning forecast tool with the full values + horizon=12 to get the forward forecast and 95% interval. (5) Return a single JSON object: {rankings: [{method, rmse, mape, warnings}, ...], winner, forecast: {point: [...], lower95: [...], upper95: [...]}, oneLineConclusion}. All bake-off + forecast calls are free over PoW; only us-macro-series is paid.",
     promptArgs: [
-      { name: "series", description: "What to forecast - a FRED series id (UNRATE, CPIAUCSL)", required: true, substitute: "UNRATE" },
+      { name: "series", description: "What to forecast - a series id (UNRATE, CPIAUCSL)", required: true, substitute: "UNRATE" },
       { name: "horizon", description: "How many periods to project forward - e.g. 12 (months for monthly data)", required: false, substitute: "12" },
     ],
   },

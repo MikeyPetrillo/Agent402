@@ -86,15 +86,14 @@ ok(bazaarCapDescription("Look up a MIME type by file extension (?ext=png) or ext
 ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1 This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data.", "cap: an abbreviation (St.) does not end a sentence, so no fragment is left behind");
 ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data. This product is not endorsed by the Federal Reserve Bank of St. Louis.", "cap: a hint that ends its own sentence goes alone, and the notice after it stays");
 // The FRED terms require their notice on every surface that serves the data.
-// No tool serves FRED data now (fred-series and the computed macro tools read
+// No tool serves FRED data now (us-macro-series and the computed macro tools read
 // the publishing agencies, src/tools/us-macro-series.js), so the set of FRED
 // routes derived from code must be empty: the macro kit's functions that reach
 // a FRED host, closed over the calls between them, and every tool whose
-// handler calls one. A tool that reaches FRED again must carry attribution
-// "fred", end its catalog text with the notice, and keep it in its listing at
-// the Bazaar cut and at the 402 budget's shorter cut.
+// handler calls one. No FRED attribution key is kept; a tool that reached
+// FRED again would add its notice back with the terms.
 {
-  const { FRED_NOTICE, attributionTailOf } = await import("../src/data-attribution.js");
+  const { NVD_NOTICE, ATTRIBUTIONS } = await import("../src/data-attribution.js");
   const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
   const { readdir } = await import("node:fs/promises");
   const FRED_HOST = /stlouisfed\.org/;
@@ -123,19 +122,12 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
     if (FRED_HOST.test(await readFile(new URL(`../src/tools/${file}`, import.meta.url), "utf8"))) otherKits.push(file);
   }
   ok(otherKits.length === 0, `no other kit calls a FRED host directly (${otherKits.join(", ") || "none"})`);
-  for (const t of MACRO_TOOLS.filter((x) => x.attribution === "fred")) {
-    ok(attributionTailOf(t.description) === FRED_NOTICE, `${t.slug}: the catalog text ends with the FRED notice`);
-    const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS[t.slug] || t.description);
-    const cut = bazaarCapDescription(listed, CHALLENGE_SHORT_DESCRIPTION_MAX);
-    ok(listed.endsWith(FRED_NOTICE) && cut.endsWith(FRED_NOTICE) && cut.length <= CHALLENGE_SHORT_DESCRIPTION_MAX, `${t.slug}: the listing keeps the FRED notice at both cuts (${listed.length} / ${cut.length} chars)`);
-    const live = (res?.endpoints || []).find((e) => e.slug === t.slug);
-    ok(!live || String(live.description || "").endsWith(FRED_NOTICE), `${t.slug}: the live catalog text ends with the notice`);
-  }
+  ok(!("fred" in ATTRIBUTIONS), "no FRED attribution key is kept: a tool that reaches FRED again adds its notice back with its terms");
   // The cut keeps a trailing attribution sentence for any route: the text
   // before it is shortened at a sentence end, and the notice is never cut.
   const lead = "A first sentence about the data that runs on for a while. A second sentence that adds detail and runs on further than the cut allows here.";
-  const kept = bazaarCapDescription(`${lead} ${FRED_NOTICE}`, 200);
-  ok(kept === `A first sentence about the data that runs on for a while. ${FRED_NOTICE}`, `cut: a trailing attribution sentence stays whole and the text before it is cut at a sentence (got ${JSON.stringify(kept)})`);
+  const kept = bazaarCapDescription(`${lead} ${NVD_NOTICE}`, 200);
+  ok(kept === `A first sentence about the data that runs on for a while. ${NVD_NOTICE}`, `cut: a trailing attribution sentence stays whole and the text before it is cut at a sentence (got ${JSON.stringify(kept)})`);
   ok(bazaarCapDescription(`${lead} Not the notice.`, 200).endsWith("allows here.") === false, "cut: text without an attribution tail is cut as before");
 }
 // Every source whose terms require an attribution (src/data-attribution.js):

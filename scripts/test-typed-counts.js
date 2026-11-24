@@ -106,7 +106,7 @@ for (const [t, want] of [
 for (const [t, want] of [
   ["Agent402 serves 500+ tools an agent can pay for.", 0],
   ["The macro tools read 90 series from BLS.", 1],
-  ["| fred-series | 90 supported series |", 1],
+  ["| us-macro-series | 90 supported series |", 1],
   ["All 73 cleared tools are listed.", 1],
   ["Pay with USDC on 7 chains.", 0], // single digit: below the scan's reach on purpose
   ["Pay with USDC on 12 chains.", 0], // held to the rails by test-chain-list-copy

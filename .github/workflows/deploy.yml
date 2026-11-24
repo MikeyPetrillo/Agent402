@@ -2895,7 +2895,7 @@ jobs:
       - name: Start server in free mode (the strict sweep's server; the CI data keys)
         env:
           OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
-          # The BLS-backed macro tools (fred-series, sahm-rule, cpi-yoy,
+          # The BLS-backed macro tools (us-macro-series, sahm-rule, cpi-yoy,
           # unemployment-rate, fed-funds) read BLS v2 with it, keyless v1 without.
           BLS_API_KEY: ${{ secrets.BLS_CI_API_KEY }}
           # The sweep's per-run BLS read cap (BLS_RUN_READ_CAP in

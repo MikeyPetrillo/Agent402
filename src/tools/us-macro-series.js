@@ -1,4 +1,4 @@
-// fred-series' sources: common FRED series IDs, each read from the agency
+// us-macro-series' sources: common series IDs (FRED's codes), each read from the agency
 // that publishes it, so the route serves no FRED data.
 //
 //   - U.S. Bureau of Labor Statistics, Public Data API (api.bls.gov): the
@@ -709,7 +709,7 @@ function periodEnd(start, freq) {
 const yearOf = (iso) => Number(iso.slice(0, 4));
 /**
  * Observations of a supported FRED series ID from its publisher, in
- * fred-series' answer shape. `frequency` and `units` follow FRED's codes
+ * us-macro-series' answer shape. `frequency` and `units` follow FRED's codes
  * (frequency: d, w, m, q, sa, a).
  */
 export async function usMacroSeries({ seriesId, startDate, endDate, limit = 1000, units = "lin", frequency }) {
@@ -828,7 +828,7 @@ export async function usMacroSeries({ seriesId, startDate, endDate, limit = 1000
 /** The 404 for an ID this route does not serve: the supported IDs, named. */
 export function unsupportedSeriesError(seriesId) {
   return Object.assign(
-    bad(`Series ${seriesId} is not served here. fred-series answers these FRED series IDs from the agencies that publish them: ${SUPPORTED_IDS.join(", ")}.`, 404),
+    bad(`Series ${seriesId} is not served here. us-macro-series answers these series IDs from the agencies that publish them: ${SUPPORTED_IDS.join(", ")}.`, 404),
     { supportedSeriesIds: SUPPORTED_IDS },
   );
 }

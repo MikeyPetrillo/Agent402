@@ -57,6 +57,16 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 const ENTRIES = [
   {
     date: "2026-11-24",
+    title: "Source terms: calendars, FX notices, us-macro-series",
+    items: [
+      "Tools: fred-series and fred-release-observations are retired and answer 410 naming us-macro-series and us-macro-series. us-macro-series takes the same inputs and gives the same answer; the macro-snapshot skill pack replaces fred-snapshot, whose route answers 410 naming it.",
+      "Tools: market-calendar compiles its calendars from public sources (NYSE Rules 7.2 and 7.34 as filed with the SEC, GOV.UK bank holidays, the Cabinet Office national holidays, DATA.GOV.HK and the exchange_calendars rules) and every answer names them, carries their credits and says the facts are not exchange data. The HKEX day has its 12:00 to 13:00 break.",
+      "Tools: fx-rate, fx-historical, fx-timeseries and fx-dashboard say before payment and in every answer that the ECB reference rates are available free of charge at ecb.europa.eu, and each answer says whether its rate is the ECB's own or computed from it (`rateBasis`).",
+      "Tools: settlement-calendar cites each rail's rule to public sources and carries their credits; CHAPS answers no longer state operating hours.",
+    ],
+  },
+  {
+    date: "2026-11-24",
     title: "Plain connector names, Algorand catalog, Ink relayer, dependency moves",
     items: [
       "Tools: rwa-markets says why a reference rate is missing (referenceStatus read, rate_table_unreadable or rate_not_listed) and never reports a missing rate as 0.",
@@ -121,7 +131,7 @@ const ENTRIES = [
     date: "2026-11-24",
     title: "Thirty retired tools",
     items: [
-      "Tools: onchain-sql-week, onchain-sql-range and fred-release-observations are retired and answer 410 naming onchain-sql, onchain-sql and fred-series. A partial onchain-sql walk no longer lists longer routes.",
+      "Tools: onchain-sql-week, onchain-sql-range and fred-release-observations are retired and answer 410 naming onchain-sql, onchain-sql and us-macro-series. A partial onchain-sql walk no longer lists longer routes.",
       "Tools: solana-rpc, x-post-counts, x-trends, fc-cast-search, fc-cast-metrics, fc-channel-feed, fc-trending, fc-user-casts, fc-cast, fc-cast-replies, fc-channel, fc-user-search, farcaster-profile, farcaster-by-address, options-summary, crypto-options-chain, options-ticker, sol-swap-quote, sol-token-lookup, judge-vision, judge-locate, judge-long, fred-search, fred-series-info, fred-release-calendar, crypto-news and gravatar-check are retired and answer 410 and name none. The three judge previews answered at POST /v1/judge/vision, /v1/judge/locate and /v1/judge/long, and the 410 for the last points to /v1/judge; options-chain names none now that its pointer is retired.",
       "Tools: sol-price reads each mint's price, 24-hour change and liquidity from the deepest DEX pair that trades it, and its decimals with the slot they were read at from the mint account on chain. Its route and answer fields stay, and a new `priceFrom` field says whether a price came from a pair holding the mint as its base or its quote token.",
       "Skill packs: macro-economics, macro-dashboard and macro-context read the same series without the release calendar step, and their prices follow.",

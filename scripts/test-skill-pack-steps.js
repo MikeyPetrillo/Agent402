@@ -131,7 +131,7 @@ for (const pack of SKILL_PACKS) {
   const rec = (slug, out) => (input) => { calls.push(slug); return out(input); };
   const inline = {
     "stock-history": rec("stock-history", () => ({ bars })),
-    "fred-series": rec("fred-series", () => ({ observations: bars.map((b, i) => ({ date: String(i), value: b.close })) })),
+    "us-macro-series": rec("us-macro-series", () => ({ observations: bars.map((b, i) => ({ date: String(i), value: b.close })) })),
     "stats-summary": rec("stats-summary", (i) => ({ n: i.values.length })),
     "moving-average": rec("moving-average", () => ({})), "linear-regression": rec("linear-regression", () => ({})),
     "outliers": rec("outliers", () => ({})), "correlation": rec("correlation", () => ({})), "forecast-eval": rec("forecast-eval", () => ({})),
@@ -139,15 +139,15 @@ for (const pack of SKILL_PACKS) {
   };
   const ctx = { packIndex, catalog: {}, inlineHandlers: inline };
   const equity = await runPack("trend-analysis", { series: "AAPL" }, ctx);
-  const fred = equity.steps.find((s) => s.slug === "fred-series");
-  ok(fred && fred.skipped === true && fred.ok === true && !calls.includes("fred-series"), "an equity series skips the fred-series leg (reported skipped, handler never called)");
+  const fred = equity.steps.find((s) => s.slug === "us-macro-series");
+  ok(fred && fred.skipped === true && fred.ok === true && !calls.includes("us-macro-series"), "an equity series skips the us-macro-series leg (reported skipped, handler never called)");
   // No benchmark: the two benchmark fetches and correlation are skipped, and
   // only the winning forward forecast runs (drift wins a tie of no RMSE).
   ok(/9\/9 steps succeeded \(6 skipped as not applicable\)/.test(equity.summary), `the summary counts only attempted steps (got "${equity.summary}")`);
   calls.length = 0;
   inline["stock-history"] = rec("stock-history", () => { throw Object.assign(new Error("Yahoo: not found"), { statusCode: 404 }); });
   const macro = await runPack("trend-analysis", { series: "UNRATE" }, ctx);
-  ok(calls.includes("fred-series") && macro.steps.find((s) => s.slug === "fred-series")?.ok === true && !macro.steps.find((s) => s.slug === "fred-series")?.skipped, "a FRED id runs the fred-series leg when stock-history served nothing");
+  ok(calls.includes("us-macro-series") && macro.steps.find((s) => s.slug === "us-macro-series")?.ok === true && !macro.steps.find((s) => s.slug === "us-macro-series")?.skipped, "a FRED id runs the us-macro-series leg when stock-history served nothing");
   ok(macro.steps.find((s) => s.slug === "stats-summary")?.result?.n === 40, "downstream steps read the values from whichever fetcher served");
   const down = () => { throw Object.assign(new Error("down"), { statusCode: 502 }); };
   const dead = Object.fromEntries(Object.keys(inline).map((k) => [k, down]));
@@ -168,7 +168,7 @@ for (const pack of SKILL_PACKS) {
   const RMSE = { drift: 2.5, ses: 1.1, holt: 1.7 };
   const inline = {
     "stock-history": (i) => ({ bars: i.symbol === "SPY" ? mk(400).slice(5) : mk(100) }),
-    "fred-series": () => { throw Object.assign(new Error("unused"), { statusCode: 404 }); },
+    "us-macro-series": () => { throw Object.assign(new Error("unused"), { statusCode: 404 }); },
     "stats-summary": () => ({}), "moving-average": () => ({}), "linear-regression": () => ({}), "outliers": () => ({}),
     "correlation": (i) => { seen.corr = i; return { r: 0.5 }; },
     "forecast-eval": (i) => { seen.evals.push(i); return { method: i.method, rmse: RMSE[i.method] }; },

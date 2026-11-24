@@ -263,7 +263,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "treasury-debt", "treasury-avg-rates",
   "fx-historical", "fx-timeseries", "fx-dashboard",
   "world-bank-indicator", "world-bank-search",
-  "fred-series",
+  "us-macro-series",
   "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",
   "edgar-company-lookup", "edgar-filings", "edgar-company-concept", "edgar-company-facts", "edgar-xbrl-frame",
   "edgar-insider-trades", "edgar-13f-holdings", "edgar-recent-ipos", "edgar-search",
@@ -436,7 +436,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "skill-content-grade",     // calls extract (wallet-only)
   "skill-api-health",        // calls http-check + http-headers + tls-cert (all wallet-only)
   "skill-world-data",        // calls world-bank-indicator (wallet-only)
-  "skill-fred-snapshot",     // calls fred-series (wallet-only)
+  "skill-macro-snapshot",    // calls us-macro-series (wallet-only)
   "skill-contact-verify",    // calls email-validate + dns-lookup (both wallet-only)
   "skill-domain-age",        // calls whois + dns-lookup + tls-cert (all wallet-only)
   // "The 500" phase-2 packs (2026-07) that call wallet-only tools in-process
