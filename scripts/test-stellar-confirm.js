@@ -313,11 +313,11 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
     const inner = new sdk.TransactionBuilder(new sdk.Account(ch.publicKey(), "7"), { fee: "100", networkPassphrase: NET })
       .addOperation(sdk.Operation.invokeHostFunction({ func: op.func, auth: op.auth })).setTimeout(60).build();
     inner.sign(ch);
-    if (!feeBump) return { hash: inner.hash().toString("hex"), envelope_xdr: inner.toXDR() };
+    if (!feeBump) return { hash: Buffer.from(inner.hash()).toString("hex"), envelope_xdr: inner.toXDR() };
     const fb = sdk.Keypair.random();
     const outer = sdk.TransactionBuilder.buildFeeBumpTransaction(fb.publicKey(), "200", inner, NET);
     outer.sign(fb);
-    return { hash: outer.hash().toString("hex"), envelope_xdr: outer.toXDR() };
+    return { hash: Buffer.from(outer.hash()).toString("hex"), envelope_xdr: outer.toXDR() };
   };
   const payloadOf = (x) => ({ x402Version: 2, accepted: { ...REQ }, payload: { transaction: x } });
   const nowIso = () => new Date().toISOString();
@@ -391,7 +391,7 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
     const ch = sdk.Keypair.random();
     const spliced = new sdk.TransactionBuilder(new sdk.Account(ch.publicKey(), "7"), { fee: "100", networkPassphrase: NET })
       .addOperation(sdk.Operation.invokeHostFunction({ func: dustOp.func, auth: ownOp.auth })).setTimeout(60).build();
-    const sp = { hash: spliced.hash().toString("hex"), envelope_xdr: spliced.toXDR() };
+    const sp = { hash: Buffer.from(spliced.hash()).toString("hex"), envelope_xdr: spliced.toXDR() };
     ok((await confirm(own, { txHash: sp.hash, fetchImpl: horizonFor({ txs: [sp] }) })) === null, "a landed call other than the signed one is refused, whatever entry it carries");
   }
 

@@ -57,14 +57,20 @@ async function stellarFrom(payload) {
     const xdr = payload?.payload?.transaction;
     if (typeof xdr !== "string" || !xdr || xdr.length > 32768) return null;
     const sdk = await import("@stellar/stellar-sdk");
-    let tx = sdk.TransactionBuilder.fromXDR(xdr, sdk.Networks.PUBLIC);
+    // Decoded with Node's base64 reader (base64BytesOf), as stellar-sdk 16
+    // decoded it; 17 refuses a string with characters outside the alphabet.
+    const bytes = base64BytesOf(xdr);
+    if (!bytes) return null;
+    let tx = sdk.TransactionBuilder.fromXdr(sdk.xdr.TransactionEnvelope.fromXdr(bytes), sdk.Networks.PUBLIC);
     if (tx?.innerTransaction) tx = tx.innerTransaction;
     if (!tx?.operations || tx.operations.length !== 1) return null;
     const op = tx.operations[0];
-    if (op.type !== "invokeHostFunction" || op.func?.switch?.().name !== "hostFunctionTypeInvokeContract") return null;
-    const call = op.func.invokeContract();
-    if (call.functionName().toString() !== "transfer") return null;
-    const args = call.args();
+    // stellar-sdk 17: the host function is an XDR union read by `.type`, its
+    // arm and fields are properties (no `.switch()` or getter calls).
+    if (op.type !== "invokeHostFunction" || op.func?.type !== "hostFunctionTypeInvokeContract") return null;
+    const call = op.func.invokeContract;
+    if (call.functionName.toString() !== "transfer") return null;
+    const args = call.args;
     if (args.length !== 3) return null;
     const from = sdk.scValToNative(args[0]);
     return typeof from === "string" && /^[GC][A-Z2-7]{55}$/.test(from) ? from : null;
