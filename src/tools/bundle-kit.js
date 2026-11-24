@@ -31,7 +31,7 @@ import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
 import { markEndsAtCeiling, ceilingLeftMs, CEILING_TIMER_SLACK_MS } from "../run-ceiling.js";
-import { markResaleComputed, markResaleCleared, markRefAnswer, MARKET_DATA_CLEARANCE } from "../resale-terms.js";
+import { markResaleComputed, markResaleCleared, MARKET_DATA_CLEARANCE } from "../resale-terms.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
 import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 import { notChargedHere, runAsStep } from "../not-charged.js";
@@ -450,7 +450,13 @@ export function candleStats(bars) {
   return { maxDrawdownPct: closes.length ? round(maxDd * 100, 1) : null, volatilityAnnualizedPct: round(vol, 1), bars: (bars || []).length };
 }
 
-/** One coin's row from its legs' answers (pure; exported for tests). */
+// Each row's market cap, kept beside the row for the ranking and never answered.
+const rowCaps = new WeakMap();
+
+/** One coin's row from its legs' answers (pure; exported for tests). The
+ *  source's own figures (price, market cap, fully diluted value, volume, the
+ *  all-time high, its percent changes, the supply counts, its global rank)
+ *  are read to compute the ratios and flags and are not answered. */
 export function tokenRow(id, { profile, ohlc }) {
   const m = profile?.market || {};
   const stats = candleStats(ohlc?.bars);
@@ -465,11 +471,10 @@ export function tokenRow(id, { profile, ohlc }) {
   if (stats.maxDrawdownPct !== null && stats.maxDrawdownPct > 60) flags.push("deepDrawdown1y");
   if (!Number.isFinite(m.marketCap) || m.marketCap <= 0) flags.push("noMarketCap");
   const contracts = Array.isArray(profile?.platforms) ? profile.platforms.filter((p) => p?.contract) : [];
-  return {
-    id, symbol: profile?.symbol ?? null, name: profile?.name ?? null, rank: profile?.rank ?? null,
+  const row = {
+    id, symbol: profile?.symbol ?? null, name: profile?.name ?? null,
     flags,
-    market: { price: m.price ?? null, marketCap: m.marketCap ?? null, fullyDilutedValuation: m.fullyDilutedValuation ?? null, volume24h: m.volume24h ?? null, change7dPct: m.change7dPct ?? null, change30dPct: m.change30dPct ?? null, change1yPct: m.change1yPct ?? null, ath: m.ath ?? null, athChangePct: m.athChangePct ?? null, currency: profile?.currency ?? "usd" },
-    supply: { circulating: m.circulatingSupply ?? null, total: m.totalSupply ?? null, max: m.maxSupply ?? null, circulatingShare: round(circulatingShare, 4) },
+    supply: { circulatingShare: round(circulatingShare, 4) },
     computed: {
       turnover24h: round(turnover, 4), fdvToMarketCap: round(dilution, 3),
       return1yPct: Number.isFinite(ohlc?.summary?.changePct) ? round(ohlc.summary.changePct, 1) : null,
@@ -478,6 +483,8 @@ export function tokenRow(id, { profile, ohlc }) {
     },
     profile: { genesisDate: profile?.genesisDate ?? null, categories: (profile?.categories || []).slice(0, 5), homepage: profile?.links?.homepage ?? null, chains: contracts.length, contracts: contracts.slice(0, 5).map((p) => ({ platform: p.platform, contract: p.contract })), contractsPartial: partialFields(contracts.length, Math.min(5, contracts.length)) },
   };
+  if (Number.isFinite(m.marketCap)) rowCaps.set(row, m.marketCap);
+  return row;
 }
 
 async function tokenDiligence(input, ctx) {
@@ -491,18 +498,20 @@ async function tokenDiligence(input, ctx) {
     return tokenRow(coin, { profile, ohlc });
   }, (c) => c);
   const rankBy = (pick, asc = false) => rows.map((r) => ({ id: r.id, value: pick(r) })).filter((x) => Number.isFinite(x.value)).sort((a, b) => (asc ? a.value - b.value : b.value - a.value)).map((x, i) => ({ rank: i + 1, ...x }));
+  // The market-cap ranking keeps the order, never the market cap.
+  const byMarketCap = rankBy((r) => rowCaps.get(r)).map(({ rank, id }) => ({ rank, id }));
   return {
     product: "token-diligence",
     generatedAt: new Date().toISOString(),
     coins: rows.length,
     comparison: {
-      byMarketCap: rankBy((r) => r.market.marketCap),
+      byMarketCap,
       byReturn1y: rankBy((r) => r.computed.return1yPct),
       byVolatilityLowFirst: rankBy((r) => r.computed.volatilityAnnualizedPct, true),
       flagged: rows.filter((r) => r.flags.length).map((r) => ({ id: r.id, flags: r.flags })),
     },
     rows,
-    method: "turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap; maxDrawdown1yPct is the largest fall from a running high to a later candle's low over the one-year candles; volatilityAnnualizedPct is the standard deviation of close-to-close log returns scaled to a year. Flags: highDilution (fdvToMarketCap above 2), thinTurnover (below 0.01), farBelowATH (70% or more under the all-time high), highVolatility (above 100%), deepDrawdown1y (above 60%). Market facts only; nothing here is investment advice.",
+    method: "byMarketCap orders the coins by market cap (the order only); supply.circulatingShare is circulating supply over the maximum supply (or the total where no maximum is set); turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap; return1yPct is the change from the first to the last one-year candle close; maxDrawdown1yPct is the largest fall from a running high to a later candle's low over the one-year candles; volatilityAnnualizedPct is the standard deviation of close-to-close log returns scaled to a year. Flags: highDilution (fdvToMarketCap above 2), thinTurnover (below 0.01), farBelowATH (70% or more under the all-time high), highVolatility (above 100%), deepDrawdown1y (above 60%). Market facts only; nothing here is investment advice.",
     pricing: pricingFields(rows.length, TOKEN_DILIGENCE_LEGS),
     source: "computed from CoinGecko coin profiles and OHLC candles",
     credits: [COINGECKO_ATTRIBUTION],
@@ -632,7 +641,7 @@ export const BUNDLE_TOOLS = [
     attribution: "coingecko",
     ...quoted(TOKEN_DILIGENCE_LEGS, coinUnitsCount, TOKEN_DILIGENCE_MAX_COINS, { coins: [COINS_EXAMPLE[0]] }),
     description:
-      `One market diligence read for up to ${TOKEN_DILIGENCE_MAX_COINS} coins in one call: per coin the profile and market snapshot (price, market cap, fully diluted value, volume, supply, all-time high) with turnover, dilution and circulating share computed, one year of candles reduced to return, largest drawdown and annualized volatility, and contract addresses per chain; flags for high dilution, thin turnover, far below the all-time high, high volatility and a deep drawdown, with the list ranked by market cap, one-year return and volatility. Priced per coin: the two tools it runs (${TOKEN_DILIGENCE_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(TOKEN_DILIGENCE_LEGS)} a coin, quoted in the 402 for the coins you send. Coins by coin id (coin-search finds one). Deterministic code, no model; market facts, not investment advice. ${COINGECKO_ATTRIBUTION}`,
+      `One market diligence read for up to ${TOKEN_DILIGENCE_MAX_COINS} coins in one call: per coin the profile with turnover (24h volume over market cap), dilution (fully diluted value over market cap) and circulating share computed from the market snapshot, one year of candles reduced to return, largest drawdown and annualized volatility, and contract addresses per chain; flags for high dilution, thin turnover, far below the all-time high, high volatility and a deep drawdown, with the list ranked by market cap (order only), one-year return and volatility. Answers ratios, ranks and flags, never the source's own price, cap, volume or supply figures. Priced per coin: the two tools it runs (${TOKEN_DILIGENCE_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(TOKEN_DILIGENCE_LEGS)} a coin, quoted in the 402 for the coins you send. Coins by coin id (coin-search finds one). Deterministic code, no model; market facts, not investment advice. ${COINGECKO_ATTRIBUTION}`,
     tags: ["crypto", "token", "diligence", "volatility", "drawdown", "dilution", "portfolio", "bundle"],
     discovery: {
       bodyType: "json",
@@ -645,15 +654,14 @@ export const BUNDLE_TOOLS = [
       output: {
         example: {
           product: "token-diligence", generatedAt: "2026-11-18T23:40:00.000Z", coins: COINS_EXAMPLE.length,
-          comparison: { byMarketCap: [{ rank: 1, id: "bitcoin", value: 1810000000000 }], byReturn1y: [{ rank: 1, id: "bitcoin", value: -1.2 }], byVolatilityLowFirst: [{ rank: 1, id: "bitcoin", value: 41.7 }], flagged: [{ id: "chainlink", flags: ["farBelowATH", "deepDrawdown1y"] }] },
+          comparison: { byMarketCap: [{ rank: 1, id: "bitcoin" }], byReturn1y: [{ rank: 1, id: "bitcoin", value: -1.2 }], byVolatilityLowFirst: [{ rank: 1, id: "bitcoin", value: 41.7 }], flagged: [{ id: "chainlink", flags: ["farBelowATH", "deepDrawdown1y"] }] },
           rows: [{
-            id: "chainlink", symbol: "LINK", name: "Chainlink", rank: 17, flags: ["farBelowATH"],
-            market: { price: 9.05, marketCap: 6942568367, fullyDilutedValuation: 9053359373, volume24h: 183294158, change7dPct: -11.1, change30dPct: -24.87, change1yPct: -34.28, ath: 52.7, athChangePct: -82.82, currency: "usd" },
-            supply: { circulating: 766849970.42, total: 1000000000, max: 1000000000, circulatingShare: 0.7668 },
+            id: "chainlink", symbol: "LINK", name: "Chainlink", flags: ["farBelowATH"],
+            supply: { circulatingShare: 0.7668 },
             computed: { turnover24h: 0.0264, fdvToMarketCap: 1.304, return1yPct: -34.1, maxDrawdown1yPct: 55.5, volatilityAnnualizedPct: 71.3, candles: { days: 365, bars: 92, granularity: "4d" } },
             profile: { genesisDate: "2017-09-16", categories: ["Infrastructure", "Oracle"], homepage: "https://chain.link/", chains: 89, contracts: [{ platform: "ethereum", contract: "0x514910771af9ca656af840dff83e8264ecf986ca" }], contractsPartial: { returned: 5, matched: 89, complete: false, truncated: true } },
           }],
-          method: "turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap.",
+          method: "byMarketCap orders the coins by market cap (the order only); turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap; the full answer states every formula.",
           pricing: pricingFields(COINS_EXAMPLE.length, TOKEN_DILIGENCE_LEGS),
           source: "computed from CoinGecko coin profiles and OHLC candles",
           credits: [COINGECKO_ATTRIBUTION],
@@ -685,23 +693,9 @@ markResaleCleared(BUNDLE_TOOLS, ["weather-risk-brief"], "Open-Meteo commercial p
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
 markResaleCleared(BUNDLE_TOOLS, ["token-diligence"], MARKET_DATA_CLEARANCE);
-// On a /ref copy and on /aws (both resold through a third party) token-diligence
-// serves what it computes, the flags, the profile and the credit, without the
-// source's own figures per coin (the market block: price, market cap, fully
-// diluted value, volume, all-time high and the source's changes; the supply
-// counts) or the market caps in its ranking. The public route's answer is unchanged.
-markRefAnswer(BUNDLE_TOOLS, ["token-diligence"], (answer) => {
-  if (!answer || typeof answer !== "object" || !Array.isArray(answer.rows)) return answer;
-  const rows = answer.rows.map((r) => {
-    if (!r || typeof r !== "object") return r;
-    const { market: _market, supply, ...kept } = r;
-    return { ...kept, supply: { circulatingShare: supply && typeof supply === "object" ? supply.circulatingShare ?? null : null } };
-  });
-  const comparison = answer.comparison && typeof answer.comparison === "object"
-    ? { ...answer.comparison, byMarketCap: Array.isArray(answer.comparison.byMarketCap) ? answer.comparison.byMarketCap.map((x) => (x && typeof x === "object" ? { rank: x.rank, id: x.id } : x)) : answer.comparison.byMarketCap }
-    : answer.comparison;
-  return { ...answer, rows, comparison };
-}, ["rows[].market", "rows[].supply.circulating", "rows[].supply.total", "rows[].supply.max", "comparison.byMarketCap[].value"]);
+// token-diligence answers what it computes, the flags, the profile and the
+// credit, never the source's own figures per coin (tokenRow), on every surface
+// alike, so the /ref and /aws copies serve the public answer as it is.
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
 markResaleCleared(BUNDLE_TOOLS, ["filings-brief"], "SEC EDGAR public filings");

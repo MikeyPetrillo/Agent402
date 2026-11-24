@@ -303,20 +303,21 @@ try {
   const k = await tool("token-diligence").handler({ coins: ["a", "b", "a"] });
   ok(k.coins === 2 && k.comparison.byMarketCap.length === 2 && k.pricing.units === 2, "tokens: a complete answer, duplicates read once and priced once");
   {
-    // Resold through a third party (/ref, /aws): the source's own figures per
-    // coin (price, market cap, FDV, volume, all-time high, changes, supply
-    // counts) are dropped; what is computed here and the credit stay. The
-    // public answer is unchanged.
-    const { refAnswerOf } = await import("../src/resale-terms.js");
+    // The source's own figures per coin (price, market cap, FDV, volume,
+    // all-time high, changes, supply counts, its global rank) are read to
+    // compute and are never answered, on any surface: the public answer is the
+    // one resold through a third party (/ref, /aws), credit included.
+    const { refAnswerOf, RAW_MARKET_FIELDS } = await import("../src/resale-terms.js");
     const pub = tool("token-diligence").discovery.output.example;
-    const ref = refAnswerOf(tool("token-diligence"), pub);
-    const text = JSON.stringify(ref);
-    ok(typeof tool("token-diligence").refAnswer === "function", "token-diligence declares its /ref and /aws answer");
-    ok(ref.rows.every((r) => !("market" in r) && Object.keys(r.supply || {}).join() === "circulatingShare" && r.computed && r.flags), `the resold rows carry no raw market figures or supply counts (${Object.keys(ref.rows[0]).join(",")}; supply ${Object.keys(ref.rows[0].supply || {}).join(",")})`);
-    ok(ref.comparison.byMarketCap.every((x) => !("value" in x) && x.rank && x.id) && ref.comparison.byReturn1y.every((x) => "value" in x), "the market-cap ranking keeps rank and id, never the market cap");
-    ok(!/"(?:price|marketCap|fullyDilutedValuation|volume24h|ath|athChangePct|change7dPct|change30dPct|change1yPct|circulating|total|max)":/.test(text) && Array.isArray(ref.credits) && ref.credits.length > 0, `no raw CoinGecko field is left, and the credit stays`);
-    ok(pub.rows[0].market && pub.rows[0].market.price !== undefined && JSON.stringify(refAnswerOf(tool("token-diligence"), pub)) === text, "the public answer keeps its figures and is not changed by the trim");
-    for (const odd of [null, "x", { error: "e" }]) ok(JSON.stringify(refAnswerOf(tool("token-diligence"), odd)) === JSON.stringify(odd), `an answer of another shape passes as it is (${JSON.stringify(odd)})`);
+    const rawKey = /"(?:price|marketCap|fullyDilutedValuation|volume24h|ath|athChangePct|change7dPct|change30dPct|change1yPct|circulating|total|max)":/;
+    for (const [label, ans] of [["published example", pub], ["handler answer", k]]) {
+      const text = JSON.stringify({ rows: ans.rows, comparison: { byMarketCap: ans.comparison.byMarketCap } });
+      ok(ans.rows.every((r) => !("market" in r) && Object.keys(r.supply || {}).join() === "circulatingShare" && r.computed && r.flags), `${label}: rows carry no market block or supply counts (${Object.keys(ans.rows[0]).join(",")}; supply ${Object.keys(ans.rows[0].supply || {}).join(",")})`);
+      ok(ans.comparison.byMarketCap.every((x) => !("value" in x) && x.rank && x.id) && ans.comparison.byReturn1y.every((x) => "value" in x), `${label}: the market-cap ranking keeps rank and id, never the market cap`);
+      ok(!rawKey.test(text) && !RAW_MARKET_FIELDS.some((f) => text.includes(`"${f}":`)) && Array.isArray(ans.credits) && ans.credits.length > 0, `${label}: no raw CoinGecko field, and the credit stays`);
+    }
+    ok(typeof tool("token-diligence").refAnswer !== "function" && JSON.stringify(refAnswerOf(tool("token-diligence"), pub)) === JSON.stringify(pub), "no resale trim: the resold answer is the public one");
+    ok(/byMarketCap orders the coins by market cap/.test(k.method) && /return1yPct/.test(k.method), "the answer states its formulas");
   }
   // pacing: both legs read one host, so a coin holds one read at a time and
   // the call at most TOKEN_CONCURRENCY; two reads a coin, none repeated.
@@ -405,8 +406,8 @@ try {
         ok(out.coins === N && out.rows.length === N && out.pricing.units === N && out.pricing.priceUsd === tool("token-diligence").quote({ coins: ids }) && out.rows.every((r, n) => r.id === ids[n]),
           `tokens (real legs, ${N} coins): every coin is answered, in order, priced per coin`);
         const r1 = out.rows[1], r2 = out.rows[2];
-        ok(out.rows.every((r, n) => r.market.marketCap === capOf(n) && r.market.price === 10 + n && r.supply.circulatingShare === 0.5 && r.computed.turnover24h === 0.05 && r.symbol === `S${n}` && r.profile.homepage === `https://coin-${n}.example/` && r.profile.chains === 1),
-          `tokens (real legs, ${N} coins): each row carries its own coin's market, supply and profile values`);
+        ok(out.rows.every((r, n) => !("market" in r) && !("rank" in r) && r.supply.circulatingShare === 0.5 && r.computed.turnover24h === 0.05 && r.symbol === `S${n}` && r.profile.homepage === `https://coin-${n}.example/` && r.profile.chains === 1),
+          `tokens (real legs, ${N} coins): each row carries its own coin's computed ratios and profile values, never its market figures`);
         ok(out.rows.every((r) => r.computed.return1yPct === -1 && r.computed.maxDrawdown1yPct === 50 && r.computed.candles.bars === 3 && r.computed.volatilityAnnualizedPct === candleStats(candles.map(([t, o, h, l, c]) => ({ time: new Date(t).toISOString(), open: o, high: h, low: l, close: c }))).volatilityAnnualizedPct && r.computed.volatilityAnnualizedPct > 1000),
           `tokens (real legs, ${N} coins): the candles reduce to return -1%, drawdown 50% and the annualized volatility (${out.rows[0].computed.volatilityAnnualizedPct}%)`);
         ok(r1.computed.fdvToMarketCap === 3 && r1.flags.includes("highDilution") && r2.flags.includes("farBelowATH") && !out.rows[0].flags.includes("highDilution") && out.rows.every((r) => r.flags.includes("highVolatility")),

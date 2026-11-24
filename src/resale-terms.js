@@ -132,23 +132,40 @@ export function resaleBarredReason(def) {
 
 /** The clearance a tool computed over market data carries (markResaleCleared's
  *  source): the source's terms allow products that incorporate its data, not
- *  its own figures resold as they came. A tool cleared this way sells, through
- *  a third party, no field named in RAW_MARKET_FIELDS at any depth, and a tool
- *  whose answer carries such figures drops them with markRefAnswer, naming
- *  each one (scripts/test-resale-clearance.js drives every such tool's
- *  published example through refAnswerOf). */
+ *  its own figures resold as they came. The owner's rule for that source: a
+ *  tool is listed and sold this way only when its answer is computed here
+ *  (ranks, percentiles, shares, deviations, ratios, bands, scores, flags), so
+ *  a tool cleared this way answers no field named in RAW_MARKET_FIELDS at any
+ *  depth, on any surface (its public route as much as /ref and /aws).
+ *  scripts/test-resale-clearance.js reads every such tool's published example,
+ *  and the kits' suites drive the handlers. */
 export const MARKET_DATA_CLEARANCE = "computed over market data whose terms allow products that incorporate it";
 
-/** Field names that hold a market-data source's own figures (a coin's price,
- *  market cap, fully diluted value, volume, all-time high and low, the 24-hour
- *  range, supply counts): never sold through a third party by a tool cleared
- *  with MARKET_DATA_CLEARANCE. A sum, share or ratio computed here is named
+/** Field names that hold a market-data source's own figures, or a USD amount
+ *  read or summed from them (a coin's price, market cap, fully diluted value,
+ *  volume, all-time high and low, the 24-hour range, supply counts, the
+ *  source's own percent changes, a pool's liquidity or reserve, a venue's
+ *  funding rate, basis, quoted bid-ask or open interest, a trade's size):
+ *  never answered by a tool cleared with MARKET_DATA_CLEARANCE. A share,
+ *  ratio, deviation, percentile, rank, band or score computed here is named
  *  otherwise and is not on the list. */
 export const RAW_MARKET_FIELDS = Object.freeze([
-  "price", "currentPrice", "marketCap", "fullyDilutedValuation", "fdv", "volume24h", "totalVolume",
-  "ath", "atl", "high24h", "low24h", "circulatingSupply", "totalSupply", "maxSupply",
+  "price", "currentPrice", "marketCap", "marketCapUsd", "fullyDilutedValuation", "fdv", "volume24h", "totalVolume", "volumeUsd", "volume24hUsd",
+  "ath", "atl", "high24h", "low24h", "circulatingSupply", "totalSupply", "maxSupply", "circulating",
   "medianPriceUsd", "volumeWeightedPriceUsd",
+  "change24hPct", "change7dPct", "change30dPct", "change1yPct", "athChangePct", "athDrawdownPct",
+  "liquidityUsd", "reserveUsd", "lockedLiquidityPct", "medianUsd", "p90Usd", "largestUsd",
+  "fundingPct", "fundingRate", "basisPct", "bidAskPct", "openInterestUsd", "totalUsd", "minPct", "maxPct",
 ]);
+
+/** Top-level answer fields a tool stopped returning because each held a
+ *  market-data source's own figure (RAW_MARKET_FIELDS). The listing parity
+ *  check (scripts/test-bazaar-listing-parity.js) reads it: a field named here
+ *  may leave a route's published sample, and every one must be gone from it. */
+export const WITHDRAWN_SOURCE_FIELDS = Object.freeze({
+  "exchange-spread": Object.freeze(["medianPriceUsd", "volumeWeightedPriceUsd"]),
+  "dex-pool-health": Object.freeze(["liquidityUsd", "volume24hUsd", "lockedLiquidityPct"]),
+});
 
 /** Declare, beside a tool's handler, what its answer becomes on a /ref copy
  *  and on /aws (both resell through a third party):

@@ -128,24 +128,39 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
   ok(["whois", "github-repo", "onchain-sql-schema"].every((s) => !REF_LISTED.includes(s) && !AWS_LISTED.includes(s) && defs.get(s)?.resaleCleared !== true), "whois, github-repo and onchain-sql-schema are on neither list and stay uncleared");
 }
 
-// A cleared tool whose answer carries a source's raw figures sells a trimmed
-// answer through a third party (markRefAnswer): the clearance above holds
-// only with the trim, so the trim is asserted here, not only in its kit's
-// suite. token-diligence: no market block, no supply counts (only
-// circulatingShare), and the market-cap ranking without its values.
+// CLASS GUARD, source figures in a computed answer (owner rule for the market
+// source: a tool built on it is listed and sold only when its answer is our
+// own computation). Every tool that reads the market source (attribution
+// "coingecko") and is marked computed or cleared over market data has its
+// PUBLIC published example read, at any depth, for a field on the shared
+// raw-field denylist (R.RAW_MARKET_FIELDS); none may carry one, and none needs
+// a resale trim (markRefAnswer) to be clean. The kits' suites drive the
+// handlers themselves through the same list.
 {
-  const TRIMMED = ["token-diligence", "exchange-spread", "dex-pool-health", "funding-screener", "stablecoin-peg"];
-  const undeclared = TRIMMED.filter((s) => typeof defs.get(s)?.refAnswer !== "function");
-  ok(undeclared.length === 0, `each cleared tool that trims its resold answer declares the trim (${undeclared.join(",") || TRIMMED.length})`);
-  const td = defs.get("token-diligence");
-  const pub = td?.discovery?.output?.example;
-  const before = JSON.stringify(pub);
-  const ref = R.refAnswerOf(td, pub);
-  ok(pub && Array.isArray(pub.rows) && pub.rows.length > 0 && pub.rows.some((r) => r && r.market) && pub.comparison?.byMarketCap?.some((x) => "value" in x), "CONTROL: token-diligence's published answer carries the market block and the market-cap values");
-  ok(Array.isArray(ref?.rows) && ref.rows.length === pub.rows.length && ref.rows.every((r) => !("market" in r)), "token-diligence resold: no row carries the market block");
-  ok(ref.rows.every((r) => r.supply === undefined || Object.keys(r.supply).join() === "circulatingShare"), `token-diligence resold: supply keeps only circulatingShare (${ref.rows.map((r) => Object.keys(r.supply || {}).join("+")).join(",")})`);
-  ok(Array.isArray(ref.comparison?.byMarketCap) && ref.comparison.byMarketCap.length > 0 && ref.comparison.byMarketCap.every((x) => !("value" in x) && x.id), "token-diligence resold: the market-cap ranking keeps the order, never the market cap");
-  ok(JSON.stringify(pub) === before, "the trim leaves the public answer untouched");
+  const CLASS = "[source figure in a computed answer]";
+  const keysAt = (v, path = "", acc = []) => { if (Array.isArray(v)) v.forEach((x) => keysAt(x, `${path}[]`, acc)); else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { const at = path ? `${path}.${k}` : k; acc.push([k, at]); keysAt(x, at, acc); } return acc; };
+  const deny = new Set(R.RAW_MARKET_FIELDS);
+  const computedCg = [...defs.values()].filter((d) => d.attribution === "coingecko" && (d.resale === R.RESALE_COMPUTED || d.resaleClearedBy === R.MARKET_DATA_CLEARANCE));
+  const NINE = ["funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health", "token-diligence", "stablecoin-peg"];
+  ok(NINE.every((s) => computedCg.some((d) => d.slug === s)), `${CLASS} the guard reads every computed market-source tool (${computedCg.length}: ${NINE.filter((s) => !computedCg.some((d) => d.slug === s)).join(",") || "all nine"})`);
+  for (const d of computedCg) {
+    const pub = d.discovery?.output?.example;
+    ok(pub && typeof pub === "object" && Object.keys(pub).length > 3, `${CLASS} ${d.slug}: has a published example to read`);
+    const hits = keysAt(pub).filter(([k]) => deny.has(k)).map(([, p]) => p);
+    ok(hits.length === 0, `${CLASS} ${d.slug}: the public example carries no source figure (${hits.join(", ") || "none"}${hits.length ? "; answer a share, ratio, deviation, percentile, rank, band or score instead" : ""})`);
+    ok(typeof d.refAnswer !== "function", `${CLASS} ${d.slug}: no resale trim is needed (the public answer is the resold one)`);
+  }
+  // Every withdrawn top-level field is a denylisted one and is gone from the example.
+  for (const [slug, fields] of Object.entries(R.WITHDRAWN_SOURCE_FIELDS)) {
+    ok(fields.every((k) => deny.has(k)) && fields.every((k) => !(k in (defs.get(slug)?.discovery?.output?.example || {}))), `${CLASS} ${slug}: each withdrawn field (${fields.join(", ")}) is on the denylist and out of the example`);
+  }
+  // CONTROLS: the guard reads something. A source figure planted deep in a
+  // copy of one example is found at its path; the barred raw pass-through
+  // carries listed fields and is outside the computed set.
+  const planted = structuredClone(defs.get("exchange-spread").discovery.output.example);
+  planted.venues[0].liquidityUsd = 1;
+  ok(keysAt(planted).some(([k, p]) => deny.has(k) && p === "venues[].liquidityUsd"), "CONTROL: a planted source figure is found at its path");
+  ok(!computedCg.some((d) => d.slug === "crypto-price") && keysAt(defs.get("crypto-price")?.discovery?.output?.example).some(([k]) => deny.has(k)), "CONTROL: the barred raw pass-through carries listed fields and is outside the computed set");
 }
 
 // CLASS GUARD, raw upstream figures sold on a resale surface: every tool

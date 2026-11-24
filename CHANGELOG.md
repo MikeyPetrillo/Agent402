@@ -6,6 +6,40 @@ carries its own version on npm.
 
 ## v2.16.0 - 2026-11-24
 
+### 2026-11-24 (computed market screens)
+Tools:
+- The market screens built on CoinGecko data answer only what they compute
+  (ranks, percentiles, shares, deviations, ratios, bands, scores and flags)
+  and state each formula in a `method` field; the source's own prices,
+  volumes, market caps, liquidity, funding rates, basis, open interest and
+  percent changes are no longer returned, and the /ref and /aws copies serve
+  the same answer as the public route.
+- exchange-spread no longer returns medianPriceUsd, volumeWeightedPriceUsd or
+  each venue's bidAskPct; it returns volumeWeightedVsMedianBps and, per venue,
+  pricePercentile and quoteWidthVsMedian.
+- funding-screener no longer returns each venue's fundingPct and basisPct, the
+  funding and basis minPct and maxPct, or openInterest.totalUsd; it returns
+  each venue's annualizedPct rounded to 0.01, percentile, basisVsMedianPct and
+  flags (extreme-positive-funding, extreme-negative-funding, far-from-median),
+  annualizedMedianPct, basis.rangePct and openInterest.tier.
+- dex-pool-health no longer returns liquidityUsd, volume24hUsd,
+  lockedLiquidityPct, activity24h.trades or the recent trades' medianUsd,
+  p90Usd and largestUsd; it returns a 0-100 healthScore from five stated
+  components, liquidityTier, lockedLiquidity, activity24h.tier and
+  buySellTradeRatio, and p90ToMedianRatio and largestToMedianRatio.
+- defi-screener no longer returns each token's change24hPct, change7dPct and
+  athDrawdownPct or categoryTotals.marketCapUsd; it returns
+  change24hPercentile, change7dVsCategoryPct, change7dPercentile,
+  athDrawdownBand and capWeightedChange7dPct. chain-board no longer returns
+  change24hPct, athDrawdownPct or market.change24hPct; capRank is its own
+  place among the 250 largest coins, and it returns change24hPercentile,
+  athDrawdownBand and market.outpacingMarketSharePct. dex-volume-board no
+  longer returns totals.volume24hUsd or totals.liquidityUsd.
+- stablecoin-peg no longer returns each coin's price, high24h, low24h and
+  marketCap; it returns capRank and marketCapSharePct. token-diligence no
+  longer returns each row's market block, supply counts or rank, or the market
+  caps in its byMarketCap ranking (the order stays).
+
 ### 2026-11-24 (source terms, neutral names, MCP flagships, package names)
 Tools:
 - fred-series and fred-release-observations are retired and answer 410 naming

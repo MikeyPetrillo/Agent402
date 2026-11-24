@@ -21,10 +21,15 @@ import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, SCREEN
 import { clearCryptoMarketsCache, resetCgRateLimit, TTL } from "../src/tools/crypto-markets-kit.js";
 import { COINGECKO_CREDIT, COINGECKO_API_URL, attributionTailOf } from "../src/data-attribution.js";
 import { METERED_SLUGS } from "../src/metered-slugs.js";
+import { RAW_MARKET_FIELDS } from "../src/resale-terms.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
 const near = (a, b, eps = 1e-6) => typeof a === "number" && Math.abs(a - b) <= eps;
+// No answer carries a field on the source-figure denylist, at any depth.
+const RAW = new Set(RAW_MARKET_FIELDS);
+const rawPaths = (v, path = "", acc = []) => { if (Array.isArray(v)) v.forEach((x) => rawPaths(x, `${path}[]`, acc)); else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { const at = path ? `${path}.${k}` : k; if (RAW.has(k)) acc.push(at); rawPaths(x, at, acc); } return acc; };
+const noSourceFigure = (label, out) => { const hits = rawPaths(out); ok(hits.length === 0, `${label}: no source figure in the answer (${hits.join(", ") || "none"})`); };
 const answered = new Set(), uncredited = [];
 const h = (slug) => {
   const fn = CRYPTO_SCREENS_TOOLS.find((t) => t.slug === slug).handler;
@@ -73,7 +78,9 @@ for (const t of CRYPTO_SCREENS_TOOLS) {
   ok(t.attribution === "coingecko" && attributionTailOf(t.description) === COINGECKO_CREDIT && t.description.includes(COINGECKO_API_URL), `${t.slug}: description ends with the linked credit`);
   ok(t.credit === COINGECKO_CREDIT && t.discovery.output.example.credit === COINGECKO_CREDIT, `${t.slug}: published example carries the credit`);
   ok(/Deterministic code over market data/.test(t.description) && t.modelBacked !== true, `${t.slug}: says it is deterministic code, and is not marked model-backed`);
-  ok(!ADVICE.test(t.description) && !ADVICE.test(JSON.stringify(t.discovery.output.example)) && !ADVICE.test(t.name), `${t.slug}: no advice, rating or trade-direction wording`);
+  noSourceFigure(`${t.slug} published example`, t.discovery.output.example);
+  ok(typeof t.discovery.output.example.method === "string" && t.discovery.output.example.method.length > 80, `${t.slug}: the published example states its formulas in \`method\``);
+  ok(!ADVICE.test(t.description) &&!ADVICE.test(JSON.stringify(t.discovery.output.example)) && !ADVICE.test(t.name), `${t.slug}: no advice, rating or trade-direction wording`);
   ok(t.discovery.output.example.source === "coingecko" && typeof t.discovery.output.example.fetchedAt === "string", `${t.slug}: example carries source and fetchedAt`);
   ok(typeof t.handler === "function" && t.handler.__budgetMs > 0, `${t.slug}: handler runs under a budget`);
   ok(t.endsAtCeiling !== true, `${t.slug}: not declared as ending at a run's ceiling (the shared budget read and the retry wait do not)`);
@@ -141,15 +148,18 @@ reset();
   ok(out.mode === "coin" && out.coin === "ETH" && out.venues === 4 && out.minOpenInterestUsd === 1_000_000, "coin mode: the four venues above the default floor, ticker case-folded");
   // weights 6, 2, 2, 1.5 (millions): (0.01*6 - 0.02*2 + 0.05*2 + 0) / 11.5
   ok(near(out.funding.oiWeightedPct, +(0.12 / 11.5).toFixed(6)), `open-interest-weighted funding (${out.funding.oiWeightedPct})`);
-  ok(near(out.funding.medianPct, 0.005) && out.funding.minPct === -0.02 && out.funding.maxPct === 0.05 && near(out.funding.dispersionPct, 0.07), "median, min, max and dispersion");
-  ok(near(out.funding.annualizedOiWeightedPct, +((0.12 / 11.5) * 1095).toFixed(4), 1e-3) && /8-hour/.test(out.funding.annualizationAssumes), "annualized at three intervals a day, with the assumption stated");
+  ok(near(out.funding.medianPct, 0.005) && !("minPct" in out.funding) && !("maxPct" in out.funding) && near(out.funding.dispersionPct, 0.07), "median and dispersion; no single venue's rate as min or max");
+  ok(near(out.funding.annualizedOiWeightedPct, +((0.12 / 11.5) * 1095).toFixed(4), 1e-3) && near(out.funding.annualizedMedianPct, 5.475, 1e-3) && /8-hour/.test(out.funding.annualizationAssumes), "annualized at three intervals a day, with the assumption stated");
   ok(out.funding.positiveVenueSharePct === 50, "half the venues pay positive funding");
-  ok(out.openInterest.totalUsd === 11_500_000 && near(out.openInterest.topVenueSharePct, 52.17) && out.openInterest.hhi === Math.round(__test.hhi([6, 2, 2, 1.5])), "open interest total, top share and concentration index");
-  ok(near(out.basis.oiWeightedPct, +((0.04 * 6 + 0.06 * 2 + 0.1 * 2) / 10).toFixed(4)) && out.basis.minPct === 0.04 && out.basis.maxPct === 0.1, "basis is weighted over the venues that report one");
-  ok(out.highest[0].venue === "Gamma Futures" && out.highest[0].rank === 1 && near(out.highest[0].annualizedPct, 54.75) && near(out.highest[0].vsMedianPct, 0.045), "highest venue ranked first, against the median");
-  ok(out.lowest[0].venue === "Beta Futures" && near(out.lowest[0].openInterestSharePct, 17.39), "lowest venue first on the other side");
+  ok(out.openInterest.tier === "under $100M" && !("totalUsd" in out.openInterest) && near(out.openInterest.topVenueSharePct, 52.17) && out.openInterest.hhi === Math.round(__test.hhi([6, 2, 2, 1.5])), "open interest as a tier, top share and concentration index");
+  ok(near(out.basis.oiWeightedPct, +((0.04 * 6 + 0.06 * 2 + 0.1 * 2) / 10).toFixed(4)) && near(out.basis.medianPct, 0.06) && near(out.basis.rangePct, 0.06) && !("minPct" in out.basis), "basis is weighted over the venues that report one, with its median and range");
+  ok(out.highest[0].venue === "Gamma Futures" && out.highest[0].rank === 1 && out.highest[0].annualizedPct === 54.75 && near(out.highest[0].vsMedianPct, 0.045) && out.highest[0].percentile === 100 && near(out.highest[0].basisVsMedianPct, 0.04), "highest venue ranked first: annualized, against the median, its percentile and basis gap");
+  ok(out.highest[0].flags.join() === "extreme-positive-funding" && out.lowest[0].flags.length === 0, `a venue at 50% a year or more is flagged (${out.highest[0].flags.join()})`);
+  ok(out.lowest[0].venue === "Beta Futures" && near(out.lowest[0].openInterestSharePct, 17.39) && out.lowest[0].percentile === 25 && out.lowest[0].annualizedPct === -21.9, "lowest venue first on the other side");
   ok(out.flags.join() === "wide-dispersion,funding-sign-split,concentrated-open-interest", `flags name the measured conditions (${out.flags.join()})`);
-  ok(!("price" in out.highest[0]) && !JSON.stringify(out).includes("volume_24h"), "no upstream row is passed through");
+  ok(!("price" in out.highest[0]) && !JSON.stringify(out).includes("volume_24h") && ["fundingPct", "basisPct"].every((k) => !(k in out.highest[0])), "no upstream row, venue rate or venue basis is passed through");
+  noSourceFigure("funding-screener (coin)", out);
+  ok(/x 1095/.test(out.method) && /percentile/.test(out.method), "the answer states its formulas");
 
   const low = await h("funding-screener")({ coin: "ETH", minOpenInterestUsd: 100000, limit: 1 });
   ok(low.venues === 5 && low.highest.length === 1 && low.highest[0].venue === "Tiny Futures", "a lower floor admits the smaller venue; limit caps each side");
@@ -285,6 +295,7 @@ reset();
   ok(near(out.onPegMarketCapSharePct, +(((150e9 + 1e9 + 3e8 + 6e8) / capAll) * 100).toFixed(2)) && near(by.USDT.marketCapSharePct, +((150e9 / capAll) * 100).toFixed(2)), "share of watched market cap on peg, and each coin's share");
   ok(out.matched === 7 && out.returned === 7 && out.complete === true && !("coverage" in out), "list fields say the answer is whole");
   ok(!JSON.stringify(out).includes("sparkline") && !("price" in by.USDT) && !("marketCap" in by.USDT), "no upstream row or series is passed through");
+  noSourceFigure("stablecoin-depeg-watch", out);
 
   const wide = await h("stablecoin-depeg-watch")({ minMarketCapUsd: 1000000, thresholdBps: 400, limit: 2 });
   ok(wide.screened === 9 && wide.assessed === 8 && wide.coins.length === 2 && wide.truncated === true && wide.matched === 8, "a lower floor and a cap: the list says it is partial");
@@ -322,16 +333,18 @@ reset();
   const out = await h("exchange-spread")({ coin: "Ethereum" });
   ok(calls.length === 1 && calls[0].url.searchParams.get("order") === "volume_desc", "one read of the coin's tickers, largest first");
   ok(out.coin === "ethereum" && out.name === "Ethereum" && out.venuesCompared === 5 && out.excluded.stale === 1 && out.excluded.anomalous === 1, "five venues compared; stale and anomalous tickers counted and left out");
-  ok(out.medianPriceUsd === 1000.5, `the median is over one market per venue (${out.medianPriceUsd})`);
+  ok(!("medianPriceUsd" in out) && !("volumeWeightedPriceUsd" in out), "no venue or median price is answered");
   const by = Object.fromEntries(out.venues.map((v) => [v.venue, v]));
-  ok(near(by["Venue E"].deviationBps, +(((1020 - 1000.5) / 1000.5) * 1e4).toFixed(2)) && by["Venue E"].flags.includes("outlier") && by["Venue E"].rank === 1, "the widest venue ranks first and is flagged an outlier");
-  ok(near(by["Venue A"].deviationBps, +(((1000 - 1000.5) / 1000.5) * 1e4).toFixed(2)) && by["Venue A"].pair === "ETH/USDT" && near(by["Venue A"].volumeSharePct, 50), "Venue A is read on its largest market, with its share of volume");
-  ok(by["Venue D"].flags.join() === "wide-quote" && by["Venue D"].bidAskPct === 0.9, "a quoted spread above 0.5% is flagged");
-  ok(out.highest.venue === "Venue E" && out.lowest.venue === "Venue C" && near(out.spread.highLowBps, +(((1020 - 999) / 1000.5) * 1e4).toFixed(2)), "highest, lowest and the high-to-low spread");
-  ok(near(out.volumeWeightedPriceUsd, +((1000 * 500 + 1001 * 300 + 999 * 100 + 1000.5 * 60 + 1020 * 40) / 1000).toFixed(4)), "volume-weighted price");
+  ok(near(by["Venue E"].deviationBps, +(((1020 - 1000.5) / 1000.5) * 1e4).toFixed(2)) && by["Venue E"].flags.includes("outlier") && by["Venue E"].rank === 1 && by["Venue E"].pricePercentile === 100, "the widest venue ranks first, is flagged an outlier and prices highest");
+  ok(near(by["Venue A"].deviationBps, +(((1000 - 1000.5) / 1000.5) * 1e4).toFixed(2)) && by["Venue A"].pair === "ETH/USDT" && near(by["Venue A"].volumeSharePct, 50), "Venue A is read on its largest market (the median is over one market per venue), with its share of volume");
+  ok(by["Venue D"].flags.join() === "wide-quote" && by["Venue D"].quoteWidthVsMedian === 45 && by["Venue A"].quoteWidthVsMedian === 1 && !("bidAskPct" in by["Venue D"]) && out.spread.medianBidAskPct === 0.02, "a quoted spread above 0.5% is flagged, and each quote is measured against the median quote");
+  ok(out.highest.venue === "Venue E" && out.lowest.venue === "Venue C" && by["Venue C"].pricePercentile === 20 && near(out.spread.highLowBps, +(((1020 - 999) / 1000.5) * 1e4).toFixed(2)), "highest, lowest and the high-to-low spread");
+  ok(near(out.volumeWeightedVsMedianBps, +((((1000 * 500 + 1001 * 300 + 999 * 100 + 1000.5 * 60 + 1020 * 40) / 1000 - 1000.5) / 1000.5) * 1e4).toFixed(2)), `volume-weighted price against the median (${out.volumeWeightedVsMedianBps} bps)`);
   ok(out.matched === 5 && out.complete === true && !Object.values(by).some((v) => "price" in v || "last" in v), "per-venue rows carry deviations, not prices");
+  noSourceFigure("exchange-spread", out);
+  ok(/deviationBps: \(venue price - median venue price\)/.test(out.method), "the answer states its formulas");
   const usdt = await h("exchange-spread")({ coin: "ethereum", quote: "usdt", limit: 2 });
-  ok(usdt.quote === "USDT" && usdt.venuesCompared === 3 && usdt.venues.length === 2 && usdt.truncated === true && usdt.medianPriceUsd === 1001, "a quote filter compares only that quote; a capped list says so");
+  ok(usdt.quote === "USDT" && usdt.venuesCompared === 3 && usdt.venues.length === 2 && usdt.truncated === true && usdt.venues.some((v) => v.venue === "Venue E" && near(v.deviationBps, +((19 / 1001) * 1e4).toFixed(2))), "a quote filter compares only that quote (median 1001); a capped list says so");
   ok(calls.length === 1, "the filter was answered from the cached document");
   await throws(h("exchange-spread")({ coin: "solo" }), 422, "one live venue is nothing to compare", /Fewer than two/);
   await throws(h("exchange-spread")({}), 400, "coin is required");
@@ -398,13 +411,18 @@ reset();
 {
   const out = await h("defi-screener")({});
   ok(out.screened === 4 && out.matched === 4 && out.sort === "market_cap" && out.tokens[0].id === "big" && out.tokens[0].capRank === 1, "four tokens with a market cap, by cap");
-  ok(out.categoryTotals.marketCapUsd === 1000 && near(out.categoryTotals.turnoverPct, 13.4) && near(out.categoryTotals.top10CapSharePct, 100), "category totals: cap, turnover, top-ten share");
+  ok(!("marketCapUsd" in out.categoryTotals) && near(out.categoryTotals.turnoverPct, 13.4) && near(out.categoryTotals.top10CapSharePct, 100), "category totals: turnover and top-ten share, never the summed cap");
+  ok(near(out.categoryTotals.capWeightedChange7dPct, +(1700 / 950).toFixed(2)), "cap-weighted 7-day move");
+  noSourceFigure("defi-screener", out);
+  ok(/change24hPercentile/.test(out.method), "the answer states its formulas");
   // cap-weighted 24h change over the three that report one: (600*1 + 200*-2 + 150*4) / 950
   ok(near(out.categoryTotals.capWeightedChange24hPct, +(800 / 950).toFixed(2)) && near(out.categoryTotals.tokensUpSharePct, 66.67), "cap-weighted move and the share of tokens up, over tokens that report a move");
   const by = Object.fromEntries(out.tokens.map((t) => [t.id, t]));
   ok(near(by.churn.capSharePct, 20) && near(by.churn.turnoverPct, 50) && near(by.churn.fdvToCapRatio, 2.5) && near(by.churn.change24hVsCategoryPct, +(-2 - 800 / 950).toFixed(2)), "computed columns: cap share, turnover, dilution, move against the category");
   ok(by.churn.flags.join() === "high-turnover,deep-drawdown,dilution-overhang" && by.big.flags.length === 0, "flags at their thresholds");
-  ok(by.tiny.change24hPct === null && by.tiny.change24hVsCategoryPct === null && by.tiny.fdvToCapRatio === null, "a missing input reads null, never zero");
+  ok(by.churn.change24hPercentile === 33.3 && by.mid.change24hPercentile === 100 && near(by.churn.change7dVsCategoryPct, +(-8 - 1700 / 950).toFixed(2)) && by.churn.athDrawdownBand === "more than 80% below" && by.big.athDrawdownBand === "20-50% below", "percentiles, the 7-day move against the category and the drawdown band");
+  ok(["change24hPct", "change7dPct", "athDrawdownPct"].every((k) => !(k in by.big)), "the source's own percent changes are not answered");
+  ok(by.tiny.change24hPercentile === null && by.tiny.change24hVsCategoryPct === null && by.tiny.athDrawdownBand === null && by.tiny.fdvToCapRatio === null, "a missing input reads null, never zero");
   ok(!("marketCap" in by.big) && !("price" in by.big) && !("volume" in by.big), "token rows carry shares and ratios, not the upstream's cap, price or volume");
   const turn = await h("defi-screener")({ sort: "turnover", minMarketCapUsd: 100, limit: 2 });
   ok(turn.tokens.map((t) => t.id).join() === "churn,big" && turn.matched === 3 && turn.truncated === true && turn.tokens[0].rank === 1 && turn.tokens[0].capRank === 2, "sort by turnover over a cap floor: rank in this order, capRank in the category");
@@ -421,8 +439,10 @@ reset();
   ok(board.assets.map((a) => a.nativeCoin).join() === "bitcoin,ethereum,solana" && board.assets[1].symbol === "ETH", "one row per native asset, by market cap");
   const eth = board.assets[1];
   ok(eth.chainCount === 3 && eth.chains[0].id === "ethereum" && eth.chains.map((c) => c.chainId).join() === "1,42161,8453", "the asset's own chain first, then by name");
-  ok(near(eth.capSharePct, 10) && near(eth.change24hVsMarketPct, 1.5) && near(eth.turnoverPct, 5) && eth.capRank === 2 && near(eth.athDrawdownPct, -60), "share of the whole market, move against it, turnover");
-  ok(near(board.market.nativeAssetsCapSharePct, 62) && board.market.change24hPct === 0.5, "the ranked native assets' share of the market");
+  ok(near(eth.capSharePct, 10) && near(eth.change24hVsMarketPct, 1.5) && near(eth.turnoverPct, 5) && eth.capRank === 2 && eth.athDrawdownBand === "50-80% below" && eth.change24hPercentile === 66.7, "share of the whole market, move against it and its percentile, turnover, the drawdown band");
+  ok(!("change24hPct" in eth) && !("athDrawdownPct" in eth), "the source's own percent changes are not answered");
+  ok(near(board.market.nativeAssetsCapSharePct, 62) && !("change24hPct" in board.market) && near(board.market.outpacingMarketSharePct, 66.67), "the ranked native assets' share of the market and the share beating it");
+  noSourceFigure("chain-board", board);
   const byChains = await h("chain-board")({ sort: "chains", limit: 1 });
   ok(byChains.assets[0].nativeCoin === "ethereum" && byChains.truncated === true && byChains.returned === 1, "sort by chain count; a capped list says so");
   ok(calls.length === 4, "the second board came from the cache");
@@ -441,7 +461,8 @@ reset();
   const out = await h("dex-volume-board")({ network: "Base", pools: 40 });
   ok(calls.length === 2 && calls.every((c) => c.url.searchParams.get("sort") === "h24_volume_usd_desc" && c.url.searchParams.get("include") === "dex"), "40 pools is two page reads, by 24h volume, with DEX names");
   ok(out.network === "base" && out.poolsRead === 4 && /4 largest pools/.test(out.scope), "a pool seen on two pages counts once; the scope is stated");
-  ok(out.totals.volume24hUsd === 1000 && out.totals.liquidityUsd === 1000 && out.totals.turnover === 1 && out.totals.dexes === 3, "totals over the pools read");
+  ok(!("volume24hUsd" in out.totals) && !("liquidityUsd" in out.totals) && out.totals.turnover === 1 && out.totals.dexes === 3, "totals over the pools read: turnover and the DEX count, never a summed volume or liquidity");
+  noSourceFigure("dex-volume-board", out);
   ok(near(out.totals.topDexSharePct, 80) && out.totals.hhi === Math.round(80 ** 2 + 15 ** 2 + 5 ** 2) && out.flags.join() === "concentrated", "top share, concentration index and the flag above half");
   const a = out.dexes[0];
   ok(a.dex === "alpha" && a.name === "Alpha DEX" && a.rank === 1 && near(a.volumeSharePct, 80) && near(a.liquiditySharePct, 30) && near(a.turnover, 2.67) && a.pools === 2, "a DEX row: volume share, liquidity share, turnover, pool count");
@@ -506,11 +527,18 @@ reset();
   const out = await h("dex-pool-health")({ network: "eth", pool: PA });
   ok(calls.length === 2, "two reads: the pool and its latest trades (a hex address is lowercased for the path)");
   ok(out.pool === "0xpool00000000000000000000000000000000000001" && out.name === "WETH / USDC 0.05%" && out.dex === "uniswap_v3" && out.ageDays === 400, "identity and age");
-  ok(out.liquidityUsd === 2_000_000 && out.volume24hUsd === 3_000_000 && out.turnover24h === 1.5 && out.lockedLiquidityPct === 12.5, "liquidity, volume, turnover, locked share");
-  ok(out.activity24h.trades === 100 && out.activity24h.buyTradeSharePct === 60 && out.activity24h.buyerSharePct === 60, "24h activity: buy share of trades and of traders");
+  ok(out.liquidityTier === "moderate ($500K-$5M)" && out.turnover24h === 1.5 && out.lockedLiquidity === "under half", "liquidity tier, turnover, locked band");
+  ok(["liquidityUsd", "volume24hUsd", "lockedLiquidityPct"].every((k) => !(k in out)), "the pool's own liquidity, volume and locked share are not answered");
+  ok(out.activity24h.tier === "moderate (100-999 trades)" && !("trades" in out.activity24h) && out.activity24h.buyTradeSharePct === 60 && out.activity24h.buyerSharePct === 60 && out.activity24h.buySellTradeRatio === 1.5, "24h activity: a tier, buy share of trades and of traders, buy/sell ratio");
+  // liquidity (log10(2e6) - 4) / 3 = 0.767; activity log10(101) / 3 = 0.668; flow 1 - 10/50; wallets 1 - 40/50; age 400 days
+  const hs = out.healthScore;
+  ok(JSON.stringify(hs.components) === JSON.stringify({ liquidity: 77, activity: 67, flowBalance: 80, walletSpread: 20, age: 100 }) && hs.componentsUsed === 5, `health score components from the stated formulas (${JSON.stringify(hs.components)})`);
+  ok(hs.score === Math.round((35 * 77 + 20 * 67 + 15 * 80 + 15 * 20 + 15 * 100) / 100) && hs.weights.liquidity === 35, `the score is the weighted mean (${hs.score})`);
   const r = out.recentTrades;
   ok(r.count === 40 && r.uniqueWallets === 22 && near(r.topWalletTradeSharePct, 40) && near(r.repeatWalletTradeSharePct, 50) && r.anomalous === 1, "wallet mix of the latest trades: top wallet, repeat wallets, anomalous count");
-  ok(r.medianUsd === 200 && r.largestUsd === 50000 && near(r.largestShareOfLiquidityPct, 2.5) && r.windowMinutes === 60, "trade sizes and the window they span");
+  ok(r.largestToMedianRatio === 250 && r.p90ToMedianRatio === 5 && near(r.largestShareOfLiquidityPct, 2.5) && r.windowMinutes === 60 && !("medianUsd" in r) && !("largestUsd" in r), "trade sizes against the median, and the window they span");
+  noSourceFigure("dex-pool-health", out);
+  ok(/healthScore\.score is the weighted mean/.test(out.method), "the answer states its formulas");
   // buy volume: 8*100 + 4*1000 + 50000 of 16*100 + 4000 + 19*200 + 50000
   ok(near(r.buyVolumeSharePct, +((54800 / 59400) * 100).toFixed(2)), "buy share of recent volume");
   ok(near(out.priceImpactEstimate.per10kUsdPct, +((10000 / 1010000) * 100).toFixed(4)) && near(out.priceImpactEstimate.per1kUsdPct, +((1000 / 1001000) * 100).toFixed(4)) && /constant-product/.test(out.priceImpactEstimate.method), "price-impact estimate and its method");
@@ -554,7 +582,7 @@ reset();
   routes = [[(u) => u.pathname === poolPath, () => jsonRes(500, {})]];
   await throws(h("dex-pool-health")({ network: "eth", pool: PA }), 502, "an upstream failure on the pool");
   routes = keep;
-  ok((await h("dex-pool-health")({ network: "eth", pool: PA })).liquidityUsd === 2_000_000, "a pool whose read failed upstream is read again");
+  ok((await h("dex-pool-health")({ network: "eth", pool: PA })).liquidityTier === "moderate ($500K-$5M)", "a pool whose read failed upstream is read again");
   // The pool's totals are kept longer than its trades: past the trades' window only the trades are read again.
   reset();
   await h("dex-pool-health")({ network: "eth", pool: PA });
@@ -588,7 +616,7 @@ reset();
   let tradesStatus = 404;
   routes = [[(u) => u.pathname === poolPath, () => jsonRes(200, POOL())], [(u) => u.pathname === `${poolPath}/trades`, () => (tradesStatus === 200 ? jsonRes(200, TRADES) : jsonRes(tradesStatus, {}))]];
   const first = await h("dex-pool-health")({ network: "eth", pool: PA }).catch((e) => e);
-  ok(!(first instanceof Error) && first.name === "WETH / USDC 0.05%" && first.liquidityUsd === 2_000_000 && first.activity24h.trades === 100, `a trades 404 after a good pool read is answered from the pool's data (${first instanceof Error ? `${first.statusCode} ${first.message}` : "200"})`);
+  ok(!(first instanceof Error) && first.name === "WETH / USDC 0.05%" && first.liquidityTier === "moderate ($500K-$5M)" && first.activity24h.tier === "moderate (100-999 trades)", `a trades 404 after a good pool read is answered from the pool's data (${first instanceof Error ? `${first.statusCode} ${first.message}` : "200"})`);
   ok(first.recentTrades === null && first.tradesRead === false && !first.flags.includes("wallet-concentration"), "the trades are absent and a field says they were not read");
   const second = await h("dex-pool-health")({ network: "eth", pool: PA }).catch((e) => e);
   ok(!(second instanceof Error) && calls.length === 3 && calls[2].url.pathname.endsWith("/trades"), `the pool is not remembered as unknown: the next call reads the trades again (${calls.length} reads${second instanceof Error ? `, ${second.statusCode}` : ""})`);
@@ -647,7 +675,7 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
   process.env.COINGECKO_API_KEY = "placeholder-not-a-key"; process.env.COINGECKO_API_TIER = "pro";
   routes = [[(u) => u.pathname === poolPath, () => jsonRes(200, POOL())], [(u) => u.pathname === `${poolPath}/trades`, () => jsonRes(200, TRADES)]];
   const out = await h("dex-pool-health")({ network: "eth", pool: PA });
-  ok(out.liquidityUsd === 2_000_000 && calls.length === 2 && calls.every((c) => c.url.hostname === "pro-api.coingecko.com" && c.headers["x-cg-pro-api-key"] === "placeholder-not-a-key"), "keyed: the pro host with the key in its header");
+  ok(out.liquidityTier === "moderate ($500K-$5M)" && calls.length === 2 && calls.every((c) => c.url.hostname === "pro-api.coingecko.com" && c.headers["x-cg-pro-api-key"] === "placeholder-not-a-key"), "keyed: the pro host with the key in its header");
   ok(!JSON.stringify(out).includes("placeholder-not-a-key") && calls.every((c) => !c.url.href.includes("placeholder-not-a-key")), "the key is in no URL and no answer");
   delete process.env.COINGECKO_API_KEY; delete process.env.COINGECKO_API_TIER;
 }
@@ -737,36 +765,18 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
 ok(answered.size === SLUGS.length, `every tool answered at least once here (${answered.size}/${SLUGS.length})`);
 ok(uncredited.length === 0, `every answer carried the source credit${uncredited.length ? ` (missing on ${[...new Set(uncredited)].join(", ")})` : ""}`);
 
-// The /ref copy (src/referral-gate.js through refAnswerOf only) drops the
-// source's own figures from three screens and keeps every computed field and
-// the credit; the public route's answer is untouched.
+// The /ref and /aws copies (src/referral-gate.js and src/aws-marketplace-gate.js,
+// through refAnswerOf) serve the public answer as it is: no screen carries a
+// source figure, so none declares a trim, and the resold answer equals the
+// public one, credit included.
 {
   const { refAnswerOf } = await import("../src/resale-terms.js");
-  const def = (slug) => CRYPTO_SCREENS_TOOLS.find((t) => t.slug === slug);
-  const ex = (slug) => structuredClone(def(slug).discovery.output.example);
-  const RAW = {
-    "exchange-spread": { top: ["medianPriceUsd", "volumeWeightedPriceUsd"] },
-    "dex-pool-health": { top: ["liquidityUsd", "volume24hUsd", "activity24h"] },
-    "funding-screener": { rows: ["highest", "lowest"], perRow: ["fundingPct", "basisPct"] },
-  };
-  for (const [slug, raw] of Object.entries(RAW)) {
-    const pub = ex(slug);
+  for (const t of CRYPTO_SCREENS_TOOLS) {
+    const pub = structuredClone(t.discovery.output.example);
     const pubText = JSON.stringify(pub);
-    const ref = refAnswerOf(def(slug), pub);
-    const present = (raw.top || []).every((k) => Object.hasOwn(pub, k)) && (raw.rows || []).every((r) => pub[r].every((row) => raw.perRow.every((k) => Object.hasOwn(row, k))));
-    const gone = (raw.top || []).every((k) => !Object.hasOwn(ref, k)) && (raw.rows || []).every((r) => Array.isArray(ref[r]) && ref[r].length === pub[r].length && ref[r].every((row) => raw.perRow.every((k) => !Object.hasOwn(row, k))));
-    ok(typeof def(slug).refAnswer === "function" && present && gone, `${slug}: the /ref answer drops the source's own figures (${[...(raw.top || []), ...(raw.perRow || [])].join(", ")})`);
-    const kept = Object.keys(pub).filter((k) => !(raw.top || []).includes(k)).every((k) => Object.hasOwn(ref, k)) && ref.credit === COINGECKO_CREDIT;
-    ok(kept && JSON.stringify(pub) === pubText, `${slug}: every other field and the credit are kept, and the answer it was given is unchanged`);
+    const ref = refAnswerOf(t, pub);
+    ok(typeof t.refAnswer !== "function" && JSON.stringify(ref) === pubText && ref.credit === COINGECKO_CREDIT, `${t.slug}: the resold answer is the public one, with the credit`);
   }
-  {
-    const pub = ex("funding-screener");
-    const ref = refAnswerOf(def("funding-screener"), pub);
-    ok(ref.highest[0].vsMedianPct === pub.highest[0].vsMedianPct && ref.highest[0].openInterestSharePct === pub.highest[0].openInterestSharePct && ref.funding.medianPct === pub.funding.medianPct && ref.basis.oiWeightedPct === pub.basis.oiWeightedPct, "funding-screener: the computed per-venue and aggregate fields stay");
-    const board = { mode: "board", coins: [{ rank: 1, coin: "BTC", oiWeightedFundingPct: 0.01 }], credit: COINGECKO_CREDIT };
-    ok(JSON.stringify(refAnswerOf(def("funding-screener"), board)) === JSON.stringify(board), "funding-screener: a board answer (aggregates only) passes as it is");
-  }
-  for (const odd of [null, "x", { error: "e" }]) ok(JSON.stringify(refAnswerOf(def("dex-pool-health"), odd)) === JSON.stringify(odd) && JSON.stringify(refAnswerOf(def("funding-screener"), odd)) === JSON.stringify(odd), `an answer of another shape passes as it is (${JSON.stringify(odd)})`);
 }
 
 console.log(`\ntest-crypto-screens-kit: ${pass} passed, ${fail} failed`);

@@ -634,7 +634,15 @@ if (ONLY_PART !== "2") {
 
 // --- the gate, mounted on a small app --------------------------------------------
 const runs = { echo: 0, slow: 0, boom: 0, busy: 0 };
-const PEG_DEF = (await import("../src/tools/crypto-kit.js")).CRYPTO_TOOLS.find((t) => t.slug === "stablecoin-peg");
+// A stub that answers a source's figures beside what it computes, and
+// declares the resale trim that drops them (src/resale-terms.js markRefAnswer):
+// the generic mechanism, held here now that no market-data tool needs it.
+const PEG_RAW = ["price", "high24h", "low24h", "marketCap"];
+const PEG_SAMPLE = { peg: "USD $1.00", count: 2, coins: [
+  { id: "tether", symbol: "USDT", name: "Tether", price: 0.998868, deviationBps: -11.32, high24h: 0.999372, low24h: 0.998674, maxDeviation24hBps: 13.26, marketCap: 184092462233, status: "on-peg" },
+  { id: "usd-coin", symbol: "USDC", name: "USDC", price: 0.999819, deviationBps: -1.81, high24h: 0.999923, low24h: 0.99953, maxDeviation24hBps: 4.7, marketCap: 73033499074, status: "on-peg" },
+], credit: "Data provided by a market source." };
+const PEG_DEF = { refAnswer: (a) => ({ ...a, coins: a.coins.map((c) => Object.fromEntries(Object.entries(c).filter(([k]) => !PEG_RAW.includes(k)))) }), discovery: { output: { example: PEG_SAMPLE } } };
 const seen = { chat: null, budgeted: null, breaker: null, exa: null, chatx: null };
 const TOOLS = {
   echo: { slug: "echo", name: "Echo", category: "test", price: "$0.03", route: "POST /api/echo", handler: async (i) => { runs.echo++; return { echo: i.text ?? null, run: runs.echo }; } },
@@ -644,7 +652,7 @@ const TOOLS = {
   bytes: { slug: "bytes", name: "Bytes", category: "test", price: "$0.03", handler: async () => ({ __binary: Buffer.from("png"), contentType: "image/png" }) },
   list: { slug: "list", name: "List", category: "test", price: "$0.03", handler: async () => [1, 2, 3] },
   owntx: { slug: "owntx", name: "Own", category: "test", price: "$0.03", handler: async () => ({ transaction: "the tool's own field", rows: 1 }) },
-  // stablecoin-peg's published answer and its own /ref transform (src/tools/crypto-kit.js), on a stub handler.
+  // A stub's answer with source figures and its own /ref transform, on a stub handler.
   peg: { slug: "peg", name: "Peg", category: "test", price: "$0.03", refAnswer: PEG_DEF.refAnswer, handler: async () => { runs.peg = (runs.peg || 0) + 1; return structuredClone(PEG_DEF.discovery.output.example); } },
   chat: { slug: "chat", name: "Chat", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), handler: async (i, req) => { seen.chat = { stream: i.stream, hasOptions: "stream_options" in i, stash: req.__meteredQuoteUsd }; return { id: "c1", choices: [] }; } },
   // Refuses its input from inside the handler (a 400 of the caller's own, or a refusal attributed upstream).
@@ -1168,7 +1176,7 @@ try {
     const RAW = ["price", "high24h", "low24h", "marketCap"];
     const pegCoins = pg.json?.coins || [];
     ok(pg.status === 200 && pegCoins.length === 2 && pegCoins.every((c) => RAW.every((k) => !Object.hasOwn(c, k)) && ["id", "symbol", "deviationBps", "maxDeviation24hBps", "status"].every((k) => Object.hasOwn(c, k))) && typeof pg.json?.credit === "string" && pg.json.credit.length > 0 && /^0x/.test(pg.json?.transaction || ""),
-      `stablecoin-peg's /ref answer drops the source's price, 24h high and low and market cap per coin and keeps the computed fields and the credit (${pg.text.slice(0, 200)})`);
+      `a declared /ref answer drops the source's price, 24h high and low and market cap per coin and keeps the computed fields and the credit (${pg.text.slice(0, 200)})`);
     const direct = await TOOLS.peg.handler({});
     ok(direct.coins.every((c) => RAW.every((k) => Object.hasOwn(c, k))), "the same handler's own answer (what the public route serves) keeps every field");
     const o = await send(R("owntx"), { body: {}, headers: { "payment-signature": (await signPayment(accept)).header } });
