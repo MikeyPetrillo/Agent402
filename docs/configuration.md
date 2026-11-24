@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1140 variables in 114 groups.
+1147 variables in 114 groups.
 
 ## Contents
 
@@ -680,6 +680,9 @@ holds it.
 | `LEDGER_JOURNAL_REDIS_OP_MS` | Ledger journal redis op, in milliseconds. |  | `src/ledger-journal-redis.js` |
 | `LEDGER_MIRROR_MARGIN_MS` | Ledger mirror margin, in milliseconds. |  | `src/ledger-mirror.js` |
 | `LEDGER_MIRROR_REFRESH_MS` | Ledger mirror refresh, in milliseconds. |  | `src/ledger-mirror.js` |
+| `LEDGER_RETENTION` | The daily money-record retention pass: apply deletes rows past their period; anything else is a dry run. |  | `src/ledger-retention.js`, `src/server.js` |
+| `LEDGER_RETENTION_REFUND_YEARS` | Years a resolved refund row is kept (never under 7). |  | `src/ledger-retention.js` |
+| `LEDGER_RETENTION_SALES_YEARS` | Years a sales ledger row is kept (never under 7). |  | `src/ledger-retention.js` |
 
 ## LOOP
 
@@ -744,7 +747,7 @@ holds it.
 | `MPP_RECONCILE_FILE` | MPP reconcile file path. | `/data/mpp-reconcile.json` | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_FIRST_DELAY_MS` | MPP reconcile first delay, in milliseconds. |  | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_NON_PAYMENT_USD` | MPP reconcile non payment, in USD. |  | `src/mpp-reconcile.js` |
-| `MPP_SECRET_KEY` | Turns on the MPP wire and signs its challenges (a credential, set on the host). |  | `src/connector-pay.js`, `src/discovery-refusals.js`, `src/hangup-forgiveness.js` and 9 more |
+| `MPP_SECRET_KEY` | Turns on the MPP wire and signs its challenges (a credential, set on the host). |  | `src/connector-pay.js`, `src/discovery-refusals.js`, `src/hangup-forgiveness.js` and 11 more |
 | `MPP_SUBMITTED_SEEDS_FILE` | MPP submitted seeds file path. | `/data/mpp-submitted-seeds.json` | `src/mpp-index.js` |
 | `MPP_SUBSCRIPTIONS` | MPP subscriptions. |  | `src/mpp-subscriptions.js` |
 | `MPP_SUB_CANARY_PERIOD_SECONDS` | MPP sub canary period, in seconds. |  | `src/mpp-subscriptions.js` |
@@ -886,7 +889,7 @@ holds it.
 | `POW_DB_PATH` | Proof-of-work database path. |  | `src/pow.js` |
 | `POW_DIFFICULTY` | Proof-of-work difficulty in leading zero bits (8 to 28). |  | `src/pow.js` |
 | `POW_PG_REFRESH_MS` | Proof-of-work Postgres refresh, in milliseconds. |  | `src/pow.js` |
-| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/changelog.js`, `src/discovery-refusals.js`, `src/first-call-allowance.js` and 11 more |
+| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/changelog.js`, `src/discovery-refusals.js`, `src/first-call-allowance.js` and 12 more |
 | `POW_TTL_SECONDS` | Proof-of-work lifetime, in seconds. |  | `src/pow.js` |
 
 ## PRICE
@@ -1119,6 +1122,10 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `SANCTIONS_EVENTS_FILE` | Sanctions events file path when the server runs without a state database. |  | `src/sanctions-events.js` |
+| `SANCTIONS_EVENTS_RETENTION_YEARS` | Years a sanctions event is kept (never under 10). |  | `src/sanctions-events.js` |
+| `SANCTIONS_GEO_BLOCK` | The 451 answer for requests from sanctioned regions; off turns it off. |  | `src/sanctioned-regions.js` |
+| `SANCTIONS_GEO_COUNTRIES` | Comma list of ISO country codes the geo block refuses, replacing the default set. |  | `src/sanctioned-regions.js` |
 | `SANCTIONS_LIST_REFRESH_MS` | Sanctions list refresh, in milliseconds. | `21600000` | `src/sanctions-screen.js` |
 | `SANCTIONS_LIST_RETRY_MS` | Sanctions list retry, in milliseconds. | `300000` | `src/sanctions-screen.js`, `src/tools/sanctions-kit.js` |
 | `SANCTIONS_LIST_TIMEOUT_MS` | Sanctions list timeout, in milliseconds. | `600000` | `src/ofac-sdn.js` |
@@ -1715,7 +1722,7 @@ holds it.
 | `STATS_DB_DIR` | Stats database directory. |  | `src/router-pool.js`, `src/stats.js` |
 | `STOCK_DATA_PROVIDER` | Stock data provider behind stock-quote and stock-history (off lists none of them). |  | `src/tools/stock-provider.js` |
 | `SUBSCRIPTIONS_REPLAY_MS` | Subscriptions replay, in milliseconds. |  | `src/stripe-subscriptions.js` |
-| `TELEMETRY_ID_SECRET` | Telemetry id secret (a credential, set on the host). |  | `src/payments.js`, `src/tools/llm-gateway-kit.js` |
+| `TELEMETRY_ID_SECRET` | Telemetry id secret (a credential, set on the host). |  | `src/payments.js`, `src/posthog.js`, `src/subject-wallet.js` and 1 more |
 | `TRANSCRIBE_LONG` | Set to on to list and serve the thirty-minute transcription tier (/api/transcribe-long). |  | `src/tools/stt-kit.js` |
 | `TREASURY_YIELD_BUDGET_MS` | Treasury yield budget, in milliseconds. |  | `src/tools/macro-kit.js` |
 | `TREASURY_YIELD_REFRESH` | Treasury yield refresh. |  | `src/tools/macro-kit.js` |
