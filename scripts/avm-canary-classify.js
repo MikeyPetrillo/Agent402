@@ -81,6 +81,18 @@ export const isNoSellerMatched = (status, body) => {
   return NO_SELLER_REASONS.has(refusalReason(text, status));
 };
 
+// A router tier whose outside-seller list for the paying chain is still
+// loading after a restart (src/tools/route-execute.js catalogWarmingMessage):
+// a 503 answered at once, before any seller was tried, so nothing was settled.
+// Not our rail, not the tool's handler and not a third party: the sweep waits
+// its Retry-After once and, if it persists, reports it without failing.
+export const isCatalogWarming = (status, body) => {
+  if (status !== 503) return false;
+  let text = String(body || "");
+  try { const d = JSON.parse(text); if (d && typeof d.error === "string") text = d.error; } catch { /* plain text */ }
+  return /\blist of outside sellers on [a-z0-9-]{1,24} is still loading\b/i.test(text);
+};
+
 // OUR OWN gate refusing the credential before any facilitator is asked: the
 // body names the refusal class in a top-level `reason` (requirements-mismatch,
 // unsupported-network, authorization-expired ...). It is fast BECAUSE nothing

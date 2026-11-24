@@ -146,7 +146,7 @@ async function buy(seller, live) {
   const { readFileSync } = await import("node:fs");
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const branch = srv.slice(srv.indexOf('} else if (chain === "algorand") {'), srv.indexOf('} else if (chain === "solana") {'));
-  ok(/candidates = algo\.candidates;/.test(branch) && /algorandRouterCandidates\(await algorandCatalog\(\), task,/.test(branch), "the resolver's Algorand candidates come from algorandRouterCandidates");
+  ok(/candidates = algo\.candidates;/.test(branch) && /algorandRouterCandidates\(catalog\.resources, task,/.test(branch), "the resolver's Algorand candidates come from algorandRouterCandidates");
   ok(!/chainProvenPayTo:/.test(branch), "and the branch sets no address of its own");
 }
 

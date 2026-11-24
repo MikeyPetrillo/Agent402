@@ -6,7 +6,7 @@
 // upstream vendor 5xx was booked as a broken tool on first sight.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
-import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses, isEdgeTimeout, isNoSellerMatched } from "./avm-canary-classify.js";
+import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses, isEdgeTimeout, isNoSellerMatched, isCatalogWarming } from "./avm-canary-classify.js";
 import { classesText } from "./algorand-canary-classes.js";
 
 let pass = 0, fail = 0;
@@ -413,7 +413,15 @@ ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", 
   ok(isNoSellerMatched(404, JSON.stringify({ error: "3 outside seller(s) matched those words on algorand, and none of them does that task (matched too few of the task's words to buy). Nothing was spent." })), "...and so is the match-floor refusal (judged no match: no seller does the task)");
   ok(!isNoSellerMatched(500, NO_SELLER) && !isNoSellerMatched(200, NO_SELLER) && !isNoSellerMatched(402, NO_SELLER), "only a refusal status (4xx, never a 402) reads as no seller");
   ok(!isNoSellerMatched(404, '{"error":"Not found"}') && !isNoSellerMatched(404, "") && !isNoSellerMatched(404, '{"error":"No seller is eligible"}'), "any other 404 stays a tool failure");
+  const { catalogWarmingMessage } = await import("../src/tools/route-execute.js");
+  const WARMING = JSON.stringify({ error: catalogWarmingMessage({ headers: {} }, "algorand"), tool: "route-execute-mid" });
+  ok(isCatalogWarming(503, WARMING) && isCatalogWarming(503, catalogWarmingMessage(null, "algorand")), "a router tier's 503 'seller list still loading' reads as a loading list (JSON or plain text)");
+  ok(!isCatalogWarming(504, WARMING) && !isCatalogWarming(404, WARMING) && !isCatalogWarming(503, '{"error":"Service Unavailable"}'), "only that 503 does: an edge 503 or another status does not");
+  ok(!isThrottle(503, WARMING) && !isNoSellerMatched(503, WARMING) && outcomeOf(R(503, WARMING)) === "other" && nextStep("other") === "retry", "it is no throttle and no seller verdict, and gets the one retry");
   const canary = readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
+  ok(/\} else if \(isCatalogWarming\(a\.status, a\.body\)\) \{\n\s*report\.catalogWarming\.push/.test(canary) && canary.indexOf("isCatalogWarming(a.status, a.body)) {") < canary.indexOf("} else if (isUpstreamOutage(a.status, a.body)) {"),
+    "the sweep reports a persisting loading list in its own bucket, before the outage split (never a failure)");
+  ok(failedClasses({ catalogWarming: [{ key: "POST /route-execute-mid" }] }).length === 0, "and a loading list never fails the run");
   ok(/isEdgeTimeout\(a\.status\) \? "read-chain" : nextStep\(out\)/.test(canary), "the sweep reads the chain for an edge timeout before it signs again");
   ok(/settleNoAnswer\(a, true, \{ edge: true \}\)/.test(canary), "...and for an edge timeout on the retry, so a charge behind either attempt is reported");
   ok(/isNoSellerMatched\(a\.status, a\.body\)\) \{\s*report\.noSeller\.push/.test(canary) && /noSeller: \[\]/.test(canary), "a router tier with no seller for its task is recorded under its own reason");
