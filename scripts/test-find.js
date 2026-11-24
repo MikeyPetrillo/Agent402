@@ -9,6 +9,16 @@ import { buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
+// An advice disclaimer is a notice, never a match: a report that says it is
+// "not investment advice" is not found by "investment decision" on that word.
+{
+  const cat = [
+    { slug: "report-x", name: "Company report", description: "A cited report for a decision. Information, not investment advice.", category: "llm", tags: [] },
+    { slug: "backdrop", name: "Macro backdrop", description: "The macro backdrop before an investment decision.", category: "finance", tags: [] },
+  ];
+  const r = findTools(cat, "investment decision");
+  ok(r.results?.[0]?.slug === "backdrop" && !(r.results || []).some((x) => x.slug === "report-x" && x.score >= r.results[0].score), "an advice disclaimer does not rank a tool for the word it disclaims");
+}
 
 const CATALOG = {
   "POST /api/extract": { name: "Extract article", slug: "extract", category: "web", price: "$0.005", description: "Extract the main article content from any URL as clean markdown.", tags: ["scraping", "markdown", "content"], discovery: { inputSchema: { properties: { url: { type: "string" } }, required: ["url"] }, input: { url: "https://example.com/article" } } },
