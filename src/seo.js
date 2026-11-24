@@ -680,7 +680,6 @@ ${flatTiersLine()}
 - [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool (\`?category=\` or \`?tag=\` for a part; markdown by category: /tools.md)
 - [/api/wishes](${baseUrl}/api/wishes): the demand board, aggregated; request a tool we do not have yet with \`POST /api/wish\` (clustered by demand; repeated asks get built)
 - [/terms](${baseUrl}/terms): terms of service + acceptable-use policy - using the service (including programmatically) constitutes acceptance
-- [/accessibility](${baseUrl}/accessibility): accessibility statement - the standard the pages aim at (WCAG 2.2 AA), how they are checked, known limits, where to report a barrier
 - [/health](${baseUrl}/health): health check
 
 ## Connect via MCP
