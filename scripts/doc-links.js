@@ -22,6 +22,7 @@
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripTags } from "./lib/html-text.js";
 
 export const ROOT = resolve(fileURLToPath(import.meta.url), "../..");
 export const REPO = "MikeyPetrillo/Agent402";
@@ -48,7 +49,7 @@ export function headingSlugs(text) {
     if (fence) continue;
     const m = /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
     if (!m) continue;
-    const base = m[1].replace(/<[^>]+>/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`/g, "").trim().toLowerCase()
+    const base = stripTags(m[1], "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`/g, "").trim().toLowerCase()
       .replace(/[^\p{L}\p{N} _-]/gu, "").replace(/ /g, "-");
     const n = seen.get(base) || 0;
     seen.set(base, n + 1);

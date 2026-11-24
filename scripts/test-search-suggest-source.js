@@ -48,7 +48,7 @@ const opensearch = (q, titles) => new Response(JSON.stringify([q, titles, titles
 }
 ok(ATTRIBUTIONS.wikipedia === WIKIPEDIA_ATTRIBUTION && tool.attribution === "wikipedia" && tool.description.endsWith(WIKIPEDIA_ATTRIBUTION), "the description ends with the Wikipedia attribution sentence");
 ok(tool.discovery.output.example.credit === WIKIPEDIA_CREDIT && Array.isArray(tool.discovery.output.example.suggestions), "the published example carries the credit beside the suggestions");
-ok(Array.isArray(tool.upstreamHosts) && tool.upstreamHosts.includes("en.wikipedia.org"), "the tool declares its upstream host");
+ok(Array.isArray(tool.upstreamHosts) && tool.upstreamHosts.some((h) => h === "en.wikipedia.org"), "the tool declares its upstream host");
 ok(!/brave/i.test(String(src.wikipediaSuggestions)) && !/BRAVE/.test(String(tool.handler)), "no Brave key or host is read");
 
 // --- missing input is a 400 before any read ---

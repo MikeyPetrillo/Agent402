@@ -200,12 +200,12 @@ if (origKey) process.env.ALCHEMY_API_KEY = origKey;
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [{ blockNumber: "0xff", transactionHash: "0xab", logIndex: "0x0", topics: [], data: "0x" }] }), { status: 200 });
     };
     const ev = await h("event-logs")({ address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" });
-    ok(ev?.network === "base" && ev.count === 1 && hosts.every((x) => x === "mainnet.base.org" || x === "base-rpc.publicnode.com") && hosts.includes("base-rpc.publicnode.com"), `event-logs: Base only, the public node behind mainnet.base.org answers (asked ${hosts.join(", ")})`);
+    ok(ev?.network === "base" && ev.count === 1 && hosts.every((x) => x === "mainnet.base.org" || x === "base-rpc.publicnode.com") && hosts.some((x) => x === "base-rpc.publicnode.com"), `event-logs: Base only, the public node behind mainnet.base.org answers (asked ${hosts.join(", ")})`);
     // eth-call's eth_getLogs reads the same lanes as event-logs (mainnet.base.org
     // refuses the method); its other methods keep the relays' one lane.
     hosts = [];
     const lg = await h("eth-call")({ method: "eth_getLogs", params: [{ fromBlock: "0xff", toBlock: "0x100", address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }] });
-    ok(lg?.network === "base" && Array.isArray(lg.result) && lg.result.length === 1 && hosts.every((x) => x === "mainnet.base.org" || x === "base-rpc.publicnode.com") && hosts.includes("base-rpc.publicnode.com"), `eth-call: eth_getLogs answers from the public node behind mainnet.base.org (asked ${hosts.join(", ")})`);
+    ok(lg?.network === "base" && Array.isArray(lg.result) && lg.result.length === 1 && hosts.every((x) => x === "mainnet.base.org" || x === "base-rpc.publicnode.com") && hosts.some((x) => x === "base-rpc.publicnode.com"), `eth-call: eth_getLogs answers from the public node behind mainnet.base.org (asked ${hosts.join(", ")})`);
     hosts = [];
     await h("eth-call")({ method: "eth_blockNumber", params: [] });
     ok(hosts.length === 1 && hosts[0] === "mainnet.base.org", `eth-call: other methods read mainnet.base.org only (asked ${hosts.join(", ")})`);

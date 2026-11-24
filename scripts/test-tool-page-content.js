@@ -125,7 +125,7 @@ for (const computePayable of [true, false]) {
       try { execFileSync("python3", ["-c", "import ast,sys; ast.parse(sys.stdin.read())"], { input: py, stdio: ["pipe", "ignore", "pipe"] }); parsed = true; }
       catch (e) { parsed = e.code === "ENOENT" ? (process.env.CI ? false : null) : false; }
       if (parsed !== null) ok(parsed, `${def.method} Python sample (pow ${computePayable}) parses`);
-      ok(py.includes(powSnippetRequest("https://example.test", def).url.replace(/"/g, '\\"')) || py.includes(JSON.stringify(powSnippetRequest("https://example.test", def).url)), `${def.method} Python sample (pow ${computePayable}) sends the published request`);
+      ok(py.includes(powSnippetRequest("https://example.test", def).url.replace(/\\/g, "\\\\").replace(/"/g, '\\"')) || py.includes(JSON.stringify(powSnippetRequest("https://example.test", def).url)), `${def.method} Python sample (pow ${computePayable}) sends the published request`);
     }
   }
 }

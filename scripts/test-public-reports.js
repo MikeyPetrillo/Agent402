@@ -10,6 +10,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { existsSync, mkdirSync, unlinkSync, readFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
+import { stripScripts } from "./lib/html-text.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { createHumanCheckout, readPublicReport, listPublicReports } from "../src/human-checkout.js";
 
@@ -78,7 +79,7 @@ try {
   ok(html.includes('data-api="/api/reports/public/"') && html.includes("/js/report-view.js"), "renders through the shared viewer");
   // Served drawn: the report text is in the HTML a crawler or a reader with
   // no script receives, never the loading line alone.
-  const visible = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<style[\s\S]*?<\/style>/g, "");
+  const visible = stripScripts(html, "");
   const firstWords = String(rec.report).replace(/[#*_`>|-]/g, " ").split(/\s+/).filter((w) => /^[A-Za-z]{5,}$/.test(w)).slice(0, 6);
   ok(/data-rendered="1"/.test(html) && !visible.includes("Loading the report.") && firstWords.length >= 3 && firstWords.every((w) => visible.includes(w)), `the page is served with the report drawn on the server (${firstWords.join(" ")})`);
   const j = await (await fetch(`${B}/api/reports/public/${pub.publicId}`)).json();

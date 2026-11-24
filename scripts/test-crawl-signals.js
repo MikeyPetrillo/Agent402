@@ -22,6 +22,7 @@ import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { childJson } from "./lib/child-json.js";
+import { stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -32,7 +33,7 @@ const SITE = "https://agent402.tools";
 const meta = (html, re) => (html.match(re) || [])[1];
 const robotsOf = (html) => meta(html, /<meta name="robots" content="([^"]*)"/) || "";
 const canonOf = (html) => meta(html, /<link rel="canonical" href="([^"]*)"/) || null;
-const h1Of = (html) => [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").trim());
+const h1Of = (html) => [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/g)].map((m) => stripTags(m[1], "").replace(/&amp;/g, "&").trim());
 const ldNodes = (html) => [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)]
   .map((m) => JSON.parse(m[1])).flatMap((j) => (Array.isArray(j["@graph"]) ? j["@graph"] : [j]));
 

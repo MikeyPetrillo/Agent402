@@ -68,7 +68,7 @@ try {
   // failed the exact bound). The assertion's point is "waited ~the hedge
   // delay instead of answering immediately or stalling to crt.sh's 10s".
   ok(elapsed >= 1400 && elapsed < 4000, "crt.sh hangs → returns ~hedge-delay, not the 10s crt.sh timeout (" + elapsed + "ms)");
-  ok(r.subdomains.includes("c.example.com"), "certspotter dns_names → subdomains");
+  ok(r.subdomains.some((d) => d === "c.example.com"), "certspotter dns_names → subdomains");
   ok(!("credit" in r), "a certspotter answer carries no crt.sh credit");
   ok(lastInit?.headers?.Authorization === `Bearer ${KEY}`, "the certspotter leg is read under the deployment's key (Bearer)");
 

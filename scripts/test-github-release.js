@@ -104,7 +104,7 @@ ok(heads.every((v, i) => i === 0 || key(heads[i - 1]) > key(v)), "version headin
 ok(/^## v2\.8\.2 - /m.test(changelog), "v2.8.2 (tagged) has its own heading");
 // Every tag the repo already carries has a heading, when tags are in this clone.
 const tags = spawnSync("git", ["tag", "-l", "v*"], { cwd: ROOT, encoding: "utf8" }).stdout.split("\n").filter((t) => /^v\d+\.\d+\.\d+$/.test(t));
-const missing = tags.filter((t) => !new RegExp(`^## ${t.replace(/\./g, "\\.")}(\\s|$)`, "m").test(changelog));
+const missing = tags.filter((t) => !new RegExp(`^## ${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`, "m").test(changelog));
 ok(missing.length === 0, `every version tag in this clone has a changelog heading (${tags.length} read${missing.length ? `; missing ${missing.join(", ")}` : ""})`);
 
 // --- the job ---

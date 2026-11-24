@@ -25,7 +25,7 @@ const BEFORE = 400, AFTER = 700;
 /** The visible text of a page, with entities that matter here decoded. */
 export function pageText(html) {
   return stripTags(stripScripts(String(html)))
-    .replace(/&nbsp;|&#160;/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"')
+    .replace(/&nbsp;|&#160;/g, " ").replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
     .replace(/⁠/g, "").replace(/\s+/g, " ");
 }
 
