@@ -90,6 +90,12 @@ throws400(() => refundLookup("A".repeat(58)), "an Algorand address is refused (a
 // unknown vs no refund: same shape, same status
 const unknown = refundLookup("0x" + "99".repeat(32));
 ok(unknown.status === "none" && unknown.found === false && unknown.priceUsd === null && unknown.txUrl === null && Object.keys(unknown).join() === Object.keys(paid).join(), "an unknown tx answers status none, found false, in exactly the key set of a known one");
+{
+  // A row held as blocked reads `held` (recorded, under review, not paid), never "none".
+  const held = publicRefundView("0x" + "66".repeat(32), { status: "blocked", priceUsd: 0.01, network: "eip155:8453", evidence: "0x" + "66".repeat(32) });
+  ok(held.status === "held" && held.found === true && /held for review; it has not been paid/.test(held.note) && held.refundTx === null && held.refunds[0]?.status === "held", `a blocked row reads held, found, unpaid (${held.status})`);
+  ok(!/sanction|blocked/i.test(JSON.stringify(held)), "the held answer names no reason");
+}
 const unknownBody = { ...unknown, tx: null }, noneBody = { ...publicRefundView("0x" + "77".repeat(32), null), tx: null };
 ok(JSON.stringify(unknownBody) === JSON.stringify(noneBody), "and the body is identical apart from the echoed tx, so it does not say whether we ever saw the payment");
 
@@ -177,7 +183,7 @@ try {
   const spec = await (await fetch(`${base}/openapi.json`)).json();
   const op = spec?.paths?.["/api/refunds"]?.get;
   ok(/one transaction's payments/.test(op?.summary || "") && /one transaction per ask/.test(op?.responses?.[200]?.description || "") && /One transaction per ask; never a wallet's list/.test(op?.description || "") && !/one payment/i.test(`${op?.summary} ${op?.responses?.[200]?.description} ${op?.description}`), "the published lookup text says one transaction per ask, in its summary, description and 200 answer");
-  ok(op && Array.isArray(op.security) && op.security.length === 0 && op.parameters?.[0]?.name === "tx" && op.responses?.[200]?.content?.["application/json"]?.schema?.properties?.status?.enum?.join() === "owed,sending,paid,void,none" && !("payer" in (op.responses[200].content["application/json"].schema.properties || {})), "openapi documents GET /api/refunds: free, one tx, every status, no payer field");
+  ok(op && Array.isArray(op.security) && op.security.length === 0 && op.parameters?.[0]?.name === "tx" && op.responses?.[200]?.content?.["application/json"]?.schema?.properties?.status?.enum?.join() === "owed,sending,held,paid,void,none" && !("payer" in (op.responses[200].content["application/json"].schema.properties || {})), "openapi documents GET /api/refunds: free, one tx, every status, no payer field");
   // The sweep (scripts/test-all.js buildGetUrl) calls each GET with its
   // published parameter examples: both names must publish a tx that answers 200.
   for (const path of ["/api/refunds", "/api/refunds/lookup"]) {

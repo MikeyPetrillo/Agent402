@@ -900,7 +900,7 @@ const REFUND_LOOKUP_SCHEMA = {
   properties: {
     tx: { type: "string" },
     found: { type: "boolean", description: "True exactly when status is not none." },
-    status: { type: "string", enum: ["owed", "sending", "paid", "void", "none"] },
+    status: { type: "string", enum: ["owed", "sending", "held", "paid", "void", "none"] },
     priceUsd: { type: ["number", "null"], description: "Price of the call this payment bought; the amount a refund repays." },
     amountUsd: { type: ["number", "null"], description: "Same as priceUsd." },
     network: { type: ["string", "null"], description: "CAIP-2 network the payment settled on." },
@@ -916,7 +916,7 @@ const REFUND_LOOKUP_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          status: { type: "string", enum: ["owed", "sending", "paid", "void"] },
+          status: { type: "string", enum: ["owed", "sending", "held", "paid", "void"] },
           priceUsd: { type: "number" },
           amountUsd: { type: "number" },
           refundTx: { type: ["string", "null"] },
@@ -1175,7 +1175,7 @@ export function openapiSpec(baseUrl, catalog) {
     operationId,
     security: [],
     summary: "Refund status of one transaction's payments, by the payment transaction",
-    description: "Free. Answers whether a payment that was charged and not delivered is refunded: found, status (owed, sending, paid, void, or none for a transaction with no refund recorded, which is also the answer for one never seen), priceUsd of the call it paid for, network, chain, the payment's and the refund's explorer links, refundTx once sent, and refunds (every refund recorded for that transaction). One transaction per ask; never a wallet's list, never a wallet address, the payer or the tool bought. Rate limited per client address (429 with Retry-After).",
+    description: "Free. Answers whether a payment that was charged and not delivered is refunded: found, status (owed, sending, held for review, paid, void, or none for a transaction with no refund recorded, which is also the answer for one never seen), priceUsd of the call it paid for, network, chain, the payment's and the refund's explorer links, refundTx once sent, and refunds (every refund recorded for that transaction). One transaction per ask; never a wallet's list, never a wallet address, the payer or the tool bought. Rate limited per client address (429 with Retry-After).",
     tags: ["refunds"],
     parameters: [{ name: "tx", in: "query", required: true, description: "The payment's transaction: 0x plus 64 hex on EVM chains, 64 hex on Stellar, a base58 signature on Solana, a 52-character id on Algorand.", schema: { type: "string", maxLength: 100 }, example: REFUND_LOOKUP_EXAMPLE_TX }],
     responses: {
