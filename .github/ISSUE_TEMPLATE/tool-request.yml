@@ -13,4 +13,4 @@ body:
     id: price
     attributes:
       label: What would it be worth per call?
-      placeholder: e.g. $0.001, keeping in mind tools must be deterministic and honestly serveable
+      placeholder: e.g. $0.001, keeping in mind a tool must be honestly serveable

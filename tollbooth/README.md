@@ -189,7 +189,7 @@ export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)
 > resource) is translated to `PAYMENT-SIGNATURE` and handed to `verifyX402` as
 > if an x402 client had sent it. `mpp:false` turns it off; `mppAssetAddress` +
 > `mppAssetName` name a token outside the built-in USDC table (Base, Celo,
-> Polygon, Arbitrum, Optimism, Avalanche, Sei).
+> Polygon, Arbitrum, OP Mainnet, Avalanche, Sei).
 
 ## Accepting USDC: x402 and MPP on the same 402
 

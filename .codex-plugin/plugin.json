@@ -3,7 +3,7 @@
   "version": "2.16.0",
   "description": "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Open-source MCP server and skill: pay per call in USDC over x402 or MPP, or free via proof-of-work for pure-compute tools.",
   "author": {
-    "name": "Havok Holdings LLC",
+    "name": "Cardhavok LLC (doing business as Havok Holdings LLC)",
     "url": "https://agent402.tools/company"
   },
   "homepage": "https://agent402.tools",
@@ -23,7 +23,7 @@
     "displayName": "Agent402.Tools",
     "shortDescription": "Payment and trust layer for agent calls on x402 and MPP",
     "longDescription": "One MCP server with 500+ tools: PDFs and OCR, SEC filings, US macro series, weather, chain reads and utilities. The agent finds a tool with catalog.find and pays for that one call in USDC over x402 or MPP, by card, or free via proof-of-work for pure-compute tools. A failed x402 call is not charged; a payment that lands late is repaid after on-chain proof. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. Most tools are deterministic code; model-backed tools are marked as such.",
-    "developerName": "Havok Holdings LLC",
+    "developerName": "Cardhavok LLC (doing business as Havok Holdings LLC)",
     "category": "Developer Tools",
     "capabilities": [
       "Read"

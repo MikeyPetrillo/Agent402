@@ -1,9 +1,9 @@
 # Fonts
 
-Five families, all under the SIL Open Font License 1.1. The full licence text for each is in
-`licenses/`, because OFL 1.1 condition 2 requires the copyright notice and licence to be
+Five families, all under the SIL Open Font License 1.1. The full license text for each is in
+`licenses/`, because OFL 1.1 condition 2 requires the copyright notice and license to be
 distributed with the font files. These are subsetted woff2 builds whose internal name tables are
-stripped, so the licence does not travel inside the binaries and has to travel beside them.
+stripped, so the license does not travel inside the binaries and has to travel beside them.
 
 | Family | Files | Copyright | Upstream |
 |---|---|---|---|
@@ -16,5 +16,5 @@ stripped, so the licence does not travel inside the binaries and has to travel b
 Subsetting makes these Modified Versions under the OFL. None is distributed under a Reserved Font
 Name, and none of the upstream projects declares one.
 
-Adding a font means adding its licence here too: `scripts/test-font-licenses.js` fails the build
+Adding a font means adding its license here too: `scripts/test-font-licenses.js` fails the build
 otherwise.
