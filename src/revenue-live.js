@@ -2424,6 +2424,9 @@ export function revenueRangeControl(range) {
 export function revenueChartSection(range = null) {
   const w = range?.window || null;
   const rangeAttrs = w ? ` data-from="${esc(w.from)}" data-to="${esc(w.to)}" data-preset="${esc(w.preset || "")}" data-first="${esc(range.firstDay || "")}" data-today="${esc(range.today || "")}"` : "";
+  // Each chain's official name (src/rails.js), read by the chart's legend and
+  // table; the series stay keyed on the chain key.
+  const chainNames = Object.fromEntries([...RAILS, ...GATED_RAILS].map((r) => [railKey(r), r.name]));
   return `
   <style>
   /* design-tokens: off-start (categorical chart series, a data-viz palette pinned by test-theme.js) */
@@ -2462,7 +2465,7 @@ export function revenueChartSection(range = null) {
   .rvr-note{color:var(--warn)}
   @media (max-width:520px){.rvr-custom label{flex:1 1 130px}.rvr-custom input{flex:1 1 auto;width:100%}}` : ""}
   </style>
-  <div class="rvz" id="rvz"${rangeAttrs}>
+  <div class="rvz" id="rvz"${rangeAttrs} data-chains="${esc(JSON.stringify(chainNames))}">
     <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;">
       <span style="font-weight:800;font-size:var(--fs-lg);">Over time <span class="ml-meta" style="display:inline-flex;margin:0 0 0 8px;font-size:var(--fs-xs);color:var(--muted);font-weight:400;"><span>by chain</span><span>external only unless you widen it</span></span></span>
       <a id="rvzRaw" href="/api/revenue/daily${w ? `?from=${esc(w.from)}&amp;to=${esc(w.to)}` : ""}" style="font-family:var(--font-mono);font-size:var(--fs-xs);">raw data →</a>
