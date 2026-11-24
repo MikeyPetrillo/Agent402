@@ -259,7 +259,7 @@ try {
   ok(r.markets.total === 3 && r.markets.rows.length === 2 && r.markets.rows[0].pool === "M-big" && r.markets.rows[1].pool === "M-mid", "report: markets sorted by liquidity, cut to limit");
   ok(r.markets.rows[0].liquidityUsd === 1260729.14 && r.markets.rows[0].lpLockedPct === 50, "report: market liquidity + LP lock");
   ok(r.lockers.total === 1 && r.lockers.rows[0].type === "raydium_locker" && r.lockers.rows[0].unlockDate === "2027-01-15T08:00:00.000Z", "report: lockers shaped");
-  ok(r.launchpad === "Pump.Fun" && r.totalHolders === 2873512 && r.verification.jupVerified === true && r.transferFee.pct === 0, "report: launchpad/holders/verification/transferFee");
+  ok(r.launchpad === "Pump.Fun" && r.totalHolders === 2873512 && !("verification" in r) && r.transferFee.pct === 0, "report: launchpad/holders/transferFee; the source's own verification is not passed on");
   ok(!("knownAccounts" in r) && JSON.stringify(r).length < 4000, "report: compact (no knownAccounts echo)");
   ok(r.source === "rugcheck" && typeof r.fetchedAt === "string", "report: source + fetchedAt");
   ok(!["score", "scoreNormalised", "risks", "riskCounts", "riskLevel", "rugged", "verdict"].some((k) => k in r) && !/"danger"|"warn"|LP Vault unlocked/.test(JSON.stringify(r)), "report: no score, risk level, risk label, rugged flag or verdict word is passed through");
@@ -422,7 +422,7 @@ try {
     ok(order === "w2,w1,k1,s1,wq", `search fallback: the first mint's pairs by liquidity, then the other mints in rank order, then quote-side pairs (got ${order})`);
     ok(r.totalSolanaPairs === 5 && r.returned === 5 && r.matched === 5 && r.complete === true, "search fallback: w1 from both reads is deduped by pair address");
     ok(r.fallback.ran === true && r.fallback.why === "no-solana-pairs" && r.fallback.status === "found", `search fallback: says why it ran (${JSON.stringify(r.fallback).slice(0, 120)})`);
-    ok(r.fallback.mints.map((m) => m.mint).join(",") === [WIF, KWIF, SWORD].join(",") && r.fallback.mints[0].isVerified === true && r.fallback.mints[0].symbol === "$WIF", "search fallback: verified mints first, invalid ids dropped");
+    ok(r.fallback.mints.map((m) => m.mint).join(",") === [WIF, KWIF, SWORD].join(",") && !("isVerified" in r.fallback.mints[0]) && r.fallback.mints[0].symbol === "$WIF", "search fallback: listed mints first, invalid ids dropped, no outside verified flag");
     ok(calls.some((c) => c.url === `https://api.dexscreener.com/tokens/v1/solana/${WIF},${KWIF},${SWORD}`) && calls.some((c) => c.url === `https://api.dexscreener.com/token-pairs/v1/solana/${WIF}`), "search fallback: pairs read by mint for Solana");
     ok(calls.length === 4 && /token index/.test(r.note), "search fallback: four reads, and the note explains the order");
 
@@ -560,7 +560,7 @@ try {
   r = await tokenIndexLookup(JUP, 5);
   ok(r.count === 2 && r.tokens[0].mint === JUP && r.tokens[1].symbol === "jlUSDC", "lookup: exact mint match sorted first");
   const t0 = r.tokens[0];
-  ok(t0.holderCount === 835540 && t0.marketCapUsd === 675335464.9800633 && t0.organicScore === 99.31 && t0.isVerified === true, "lookup: profile fields");
+  ok(t0.holderCount === 835540 && t0.marketCapUsd === 675335464.9800633 && !("organicScore" in t0) && !("isVerified" in t0) && !("organicScoreLabel" in t0) && !t0.tags.some((x) => /verif|strict/.test(x)), "lookup: profile fields; no outside verified flag, score or rating tag");
   ok(t0.audit.mintAuthorityDisabled === true && t0.audit.topHoldersPct === 15.28 && t0.firstPool.id === "2psp", "lookup: audit + first pool");
   ok(t0.stats24h.numTraders === 1191 && t0.stats24h.priceChangePct === -2.4, "lookup: 24h stats");
 

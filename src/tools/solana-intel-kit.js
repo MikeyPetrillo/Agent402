@@ -602,7 +602,7 @@ async function searchFallback(query, budget) {
     .map((t, rank) => ({ t, rank, verified: t.isVerified === true || (Array.isArray(t.tags) && t.tags.includes("verified")) }))
     .sort((a, b) => (b.verified - a.verified) || (a.rank - b.rank))
     .slice(0, SEARCH_FALLBACK_MINTS)
-    .map(({ t, verified }) => ({ mint: t.id, symbol: t.symbol ?? null, name: t.name ?? null, isVerified: verified }));
+    .map(({ t }) => ({ mint: t.id, symbol: t.symbol ?? null, name: t.name ?? null }));
   if (!mints.length) return { status: "nothing-found", mints, pairs: [], unavailable: null, error: null };
   if (budget && budget.remaining() < OPTIONAL_READ_FLOOR_MS) {
     return { status: "unavailable", mints, pairs: [], unavailable: { upstream: "DexScreener", step: "pairs by mint", reason: "budget" }, error: null };
@@ -728,6 +728,7 @@ function shapeJupStats(x) {
     numBuys: num(x.numBuys), numSells: num(x.numSells), numTraders: num(x.numTraders), numOrganicBuyers: num(x.numOrganicBuyers), numNetBuyers: num(x.numNetBuyers),
   };
 }
+const RATING_TAG_RE = /verif|strict|organic|trust|score/i;
 function shapeJupToken(t) {
   if (!t) return null;
   return {
@@ -742,10 +743,10 @@ function shapeJupToken(t) {
     holderCount: num(t.holderCount),
     circulatingSupply: num(t.circSupply),
     totalSupply: num(t.totalSupply),
-    isVerified: Boolean(t.isVerified),
-    organicScore: round(t.organicScore, 2),
-    organicScoreLabel: t.organicScoreLabel ?? null,
-    tags: Array.isArray(t.tags) ? t.tags.slice(0, 12) : [],
+    // The source's own verification flag and scores are its rating of the
+    // token, not a fact read from the chain: never passed on (nor the tags
+    // that carry the same rating).
+    tags: Array.isArray(t.tags) ? t.tags.filter((x) => typeof x === "string" && !RATING_TAG_RE.test(x)).slice(0, 12) : [],
     audit: {
       mintAuthorityDisabled: authorityDisabled(t.audit?.mintAuthorityDisabled, t, "mintAuthority"),
       freezeAuthorityDisabled: authorityDisabled(t.audit?.freezeAuthorityDisabled, t, "freezeAuthority"),
@@ -977,7 +978,6 @@ export const SOLANA_INTEL_TOOLS = [
         totalHolders: num(r?.totalHolders),
         insiderNetworks: num(r?.graphInsidersDetected),
         transferFee,
-        verification: r?.verification ? { jupVerified: Boolean(r.verification.jup_verified), jupStrict: Boolean(r.verification.jup_strict) } : null,
         // Same RugCheck-empty fallback as /api/sol-token-holders: without it
         // this block's rows and concentration go hollow on every mint.
         holders: {
