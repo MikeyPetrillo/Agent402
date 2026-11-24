@@ -3,7 +3,7 @@
 //   1. A model-backed tool says so in its description (CLAUDE.md "Honest
 //      claims"): the word model, or a term that only a model-backed tool
 //      earns (LLM, chat, embeddings, image or video generation, speech).
-//   2. A data-source credit in a description (World Bank, FRED) survives the
+//   2. A data-source credit in a description (World Bank, or an attribution sentence) survives the
 //      listing cap, which trims from the end, so it is never cut away.
 // Boots a FREE_MODE server on port 0 and reads /api/pricing.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -40,11 +40,14 @@ try {
   const listingSilent = mb.filter((e) => !MODEL_TERM.test(bazaarCapDescription(String(e.description || ""))));
   ok(listingSilent.length === 0, `and still says so after the listing cap${listingSilent.length ? `: ${listingSilent.map((e) => e.slug).join(", ")}` : ""}`);
 
-  const CREDIT = /World Bank|FRED/;
-  const credited = endpoints.filter((e) => CREDIT.test(String(e.description || "")));
-  const cut = credited.filter((e) => { const m = String(e.description).match(CREDIT)[0]; return !bazaarCapDescription(String(e.description)).includes(m); });
+  // A source's credit: a World Bank mention, or any attribution sentence a
+  // source's terms ask for (src/data-attribution.js); FRED is no longer read.
+  const { ATTRIBUTION_TAILS } = await import("../src/data-attribution.js");
+  const creditOf = (d) => (d.match(/World Bank/) || [])[0] || ATTRIBUTION_TAILS.find((t) => d.includes(t)) || null;
+  const credited = endpoints.filter((e) => creditOf(String(e.description || "")));
+  const cut = credited.filter((e) => !bazaarCapDescription(String(e.description)).includes(creditOf(String(e.description))));
   ok(credited.length >= 5, `credited descriptions are found (${credited.length})`);
-  ok(cut.length === 0, `every World Bank or FRED credit survives the listing cap${cut.length ? `: ${cut.map((e) => e.slug).join(", ")}` : ""}`);
+  ok(cut.length === 0, `every source credit survives the listing cap${cut.length ? `: ${cut.map((e) => e.slug).join(", ")}` : ""}`);
 } catch (e) {
   fail++; console.log(`FAIL - ${e?.message || e}`);
 } finally { try { proc.kill("SIGTERM"); } catch { /* gone */ } }
