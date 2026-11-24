@@ -64,7 +64,7 @@ export const WHOLESALE_NOT_CHARGED_RAILS = Object.freeze(["x402", "MPP", "a prep
  *  carries its own), and the slugs (a function of the server's facts). */
 export const WHOLESALE_FAMILIES = Object.freeze([
   {
-    id: "compute", title: "Computation tools", source: "our own code; a tool that compiles facts from outside sources lists each one, with its license, in its row",
+    id: "compute", title: "Computation tools", source: "our own code; some tools compute over public facts from outside sources (public holiday calendars), and each such tool's row lists those sources with their licenses",
     redistribution: "own-computation", credit: null,
     slugs: ({ powSlugs }) => [...powSlugs].filter((s) => !COMMITTED_DATASET_SLUGS.includes(s) && !SELLER_DATA_SLUGS.includes(s)),
   },

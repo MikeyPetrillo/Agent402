@@ -67,7 +67,16 @@ export const OPEN_METEO_PLACE_LICENSE_FIELDS = Object.freeze({ attributionText: 
 // fema-disasters answer carries all three (src/tools/gov-kit.js).
 export const FEMA_NOTICE = "This product uses the Federal Emergency Management Agency's OpenFEMA API, but is not endorsed by FEMA.";
 export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD.";
-export const ECB_ATTRIBUTION = "Source: European Central Bank.";
+// The ECB's reuse terms (the disclaimer page above) ask that the ECB be cited
+// as the source, that a publisher selling documents that include its
+// information tell buyers, before payment and each time they access it, that
+// the information is available free of charge on the ECB's site, and that a
+// change such as a computed rate be stated explicitly. The sentence below is
+// every FX tool's description tail (read before payment: the 402 listing and
+// the catalog) and every FX answer's `credit`; each answer whose rate is not
+// the ECB's own EUR quote says how it was computed (`rateBasis`,
+// src/tools/frankfurter.js).
+export const ECB_ATTRIBUTION = "Source: European Central Bank; the ECB reference rates are available free of charge at ecb.europa.eu.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
 // Network sources, each credited by name and link on the answers it serves
 // (the `credit` field; no key in ATTRIBUTIONS, so a tool's catalog text and

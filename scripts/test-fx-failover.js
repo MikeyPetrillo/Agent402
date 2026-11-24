@@ -88,6 +88,19 @@ try {
   ok(x.r?.source === ECB_FX_SOURCE && x.r?.rate === 1, "fx-rate: the identity answer names its source too");
   x = await run("fx-dashboard", {});
   ok(x.r?.source === ECB_FX_SOURCE && typeof x.r?.rates?.EUR === "number", `fx-dashboard: the answer names its source (${JSON.stringify(x.r || x.e?.message).slice(0, 160)})`);
+  // The ECB's reuse terms: the free-availability notice on every answer and
+  // before payment (the description), and a computed rate stated as such.
+  const { ECB_ATTRIBUTION } = await import("../src/data-attribution.js");
+  const { ecbRateBasis } = await import("../src/tools/frankfurter.js");
+  ok(/available free of charge at ecb\.europa\.eu/.test(ECB_ATTRIBUTION), "the ECB sentence says the rates are free at ecb.europa.eu");
+  x = await run("fx-rate", { from: "USD", to: "JPY", amount: 1 });
+  ok(x.r?.credit === ECB_ATTRIBUTION && x.r?.rateBasis === "cross rate computed from ECB euro reference rates", `fx-rate: a pair without the euro is labeled a computed cross rate, with the ECB notice (${JSON.stringify(x.r || x.e?.message).slice(0, 200)})`);
+  x = await run("fx-rate", { from: "EUR", to: "USD", amount: 1 });
+  ok(x.r?.rateBasis === "ECB euro reference rate as published" && x.r?.credit === ECB_ATTRIBUTION, "fx-rate: a EUR-based pair is the published rate");
+  x = await run("fx-dashboard", {});
+  ok(x.r?.credit === ECB_ATTRIBUTION && /computed/.test(x.r?.rateBasis || ""), "fx-dashboard: computed rates are labeled, with the ECB notice");
+  ok(ecbRateBasis("usd", "eur") === "inverse of the ECB euro reference rate, computed", "an inverted EUR rate is labeled computed");
+  for (const t of [...MACRO_TOOLS, ...DATA_TOOLS].filter((d) => d.attribution === "ecb")) ok(t.description.endsWith(ECB_ATTRIBUTION) && t.discovery.output.example.credit === ECB_ATTRIBUTION, `${t.slug}: the notice ends the description (before payment) and the published example`);
   const host = new URL(FRANKFURTER_V2).host;
   ok(hosts.size === 1 && hosts.has(host), `only the ECB adapter's host was read (${[...hosts].join(", ")})`);
 } finally {

@@ -22,10 +22,10 @@
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingLeftMs } from "../run-ceiling.js";
-import { attribute, US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION, WORLD_BANK_LICENSE, WORLD_BANK_LICENSE_URL, worldBankCredit } from "../data-attribution.js";
+import { attribute, creditAnswers, ECB_ATTRIBUTION, US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION, WORLD_BANK_LICENSE, WORLD_BANK_LICENSE_URL, worldBankCredit } from "../data-attribution.js";
 import { notChargedOn, notChargedHere } from "../not-charged.js";
 import { useHeldTreasuryYields, usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
-import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
+import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable, ecbRateBasis } from "./frankfurter.js";
 import { markResaleCleared } from "../resale-terms.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
@@ -508,7 +508,7 @@ export const MACRO_TOOLS = [
   {
     route: "GET /api/fx-historical", name: "Historical FX rate by date", slug: "fx-historical", category: "data", attribution: "ecb", price: "$0.002",
     description:
-      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date. ?from=USD&to=EUR&date=2024-01-02. Source: European Central Bank.",
+      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date, and how it was derived (a pair without the euro is a computed cross rate). ?from=USD&to=EUR&date=2024-01-02.",
     tags: ["forex", "fx", "currency", "historical", "exchange-rate", "ecb", "macro"],
     discovery: {
       input: { from: "USD", to: "EUR", date: "2024-01-02" },
@@ -520,7 +520,7 @@ export const MACRO_TOOLS = [
         },
         required: ["from", "to", "date"],
       },
-      output: { example: { from: "USD", to: "EUR", date: "2024-01-02", rate: 0.9128, source: "ECB via Frankfurter" } },
+      output: { example: { from: "USD", to: "EUR", date: "2024-01-02", rate: 0.9128, source: "ECB via Frankfurter", rateBasis: "inverse of the ECB euro reference rate, computed" } },
     },
     handler: async (i) => {
       const from = String(i.from ?? "").trim().toUpperCase();
@@ -542,13 +542,13 @@ export const MACRO_TOOLS = [
       if (j == null) throw bad(`No ECB reference rate for ${from}→${to} on or before ${date} (ECB reference currencies only; the series starts 1999-01-04)`, 422);
       const rate = j?.rates?.[to];
       if (typeof rate !== "number") throw bad(`Frankfurter returned no rate for ${from}→${to} on ${date}`, 502);
-      return { from, to, date: j.date ?? date, rate, source: "ECB via Frankfurter (open data)" };
+      return { from, to, date: j.date ?? date, rate, source: "ECB via Frankfurter (open data)", rateBasis: ecbRateBasis(from, to) };
     },
   },
   {
     route: "GET /api/fx-timeseries", name: "FX rate time series", slug: "fx-timeseries", category: "data", attribution: "ecb", price: "$0.005",
     description:
-      "Daily FX rates between two currencies across a date window using European Central Bank reference rates. ?from=USD&to=EUR&startDate=2024-01-02&endDate=2024-01-31. Source: European Central Bank.",
+      "Daily FX rates between two currencies across a date window using European Central Bank reference rates. ?from=USD&to=EUR&startDate=2024-01-02&endDate=2024-01-31.",
     tags: ["forex", "fx", "currency", "time-series", "exchange-rate", "ecb", "macro", "history"],
     discovery: {
       input: { from: "USD", to: "EUR", startDate: "2024-01-02", endDate: "2024-01-31" },
@@ -561,7 +561,7 @@ export const MACRO_TOOLS = [
         },
         required: ["from", "to", "startDate", "endDate"],
       },
-      output: { example: { from: "USD", to: "EUR", startDate: "2024-01-02", endDate: "2024-01-31", count: 22, series: [{ date: "2024-01-02", rate: 0.9128 }] } },
+      output: { example: { from: "USD", to: "EUR", startDate: "2024-01-02", endDate: "2024-01-31", count: 22, series: [{ date: "2024-01-02", rate: 0.9128 }], rateBasis: "inverse of the ECB euro reference rate, computed" } },
     },
     handler: async (i) => {
       const from = String(i.from ?? "").trim().toUpperCase();
@@ -585,18 +585,18 @@ export const MACRO_TOOLS = [
       // input's problem (v1 answered 404 for it), not an outage.
       if (!series.length && endDate < "1999-01-04") throw bad(`No ECB reference rates for ${from}→${to} before 1999-01-04 (the ECB series start)`, 422);
       if (!series.length) throw bad("Frankfurter returned no rates for the requested window", 502);
-      return { from, to, startDate, endDate, count: series.length, series, source: "ECB via Frankfurter (open data)" };
+      return { from, to, startDate, endDate, count: series.length, series, source: "ECB via Frankfurter (open data)", rateBasis: ecbRateBasis(from, to) };
     },
   },
   {
     route: "GET /api/fx-dashboard", name: "G10 FX dashboard vs USD", slug: "fx-dashboard", category: "data", attribution: "ecb", price: "$0.005",
     description:
-      "Snapshot of all G10 spot exchange rates quoted against USD (EUR, GBP, JPY, CHF, CAD, AUD, NZD, SEK, NOK) using European Central Bank reference rates. Includes the USD-strength index (simple geometric mean of inverse rates). No params. Source: European Central Bank.",
+      "Snapshot of all G10 spot exchange rates quoted against USD (EUR, GBP, JPY, CHF, CAD, AUD, NZD, SEK, NOK) using European Central Bank reference rates, computed against USD from the ECB's euro rates. Includes the USD-strength index (simple geometric mean of inverse rates). No params.",
     tags: ["forex", "fx", "dashboard", "g10", "dxy", "usd-strength", "ecb", "macro"],
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { base: "USD", date: "2026-06-12", rates: { EUR: 0.91, GBP: 0.78 }, usdStrengthIndex: 1.04, source: "European Central Bank euro foreign exchange reference rates (via Frankfurter)" } },
+      output: { example: { base: "USD", date: "2026-06-12", rates: { EUR: 0.91, GBP: 0.78 }, usdStrengthIndex: 1.04, source: "European Central Bank euro foreign exchange reference rates (via Frankfurter)", rateBasis: "rates against USD computed from ECB euro reference rates" } },
     },
     handler: async () => {
       // OBSERVED failing from prod (4× 504 on 2026-07-23; sub-second from a
@@ -634,6 +634,7 @@ export const MACRO_TOOLS = [
         rates: Object.fromEntries(have.map((c) => [c, rates[c]])),
         usdStrengthIndex,
         source: ECB_FX_SOURCE,
+        rateBasis: "rates against USD computed from ECB euro reference rates",
       };
       fxDashCache = { at: Date.now(), value };
       return value;
@@ -1030,6 +1031,8 @@ MACRO_TOOLS.push(
 // (src/data-attribution.js): BLS for the labor and price series, the New York
 // Fed for the funds rate.
 for (const t of MACRO_TOOLS) if (t.attribution === "bls" || t.attribution === "nyfed") attribute(t, t.attribution);
+// The ECB sentence ends each FX description (read before payment) and rides every FX answer.
+for (const t of MACRO_TOOLS) if (t.attribution === "ecb") { attribute(t, "ecb"); creditAnswers(t, ECB_ATTRIBUTION); }
 
 // ---- month and day helpers for the computed tools ----------------------------
 const isoMonth = (y, m) => new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
