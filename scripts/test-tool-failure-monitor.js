@@ -388,7 +388,8 @@ await check("upstream words: named hosts only; 5 timeouts degraded, a >25% share
   const full = await m.status({ full: true, fresh: true });
   assert.deepEqual(full.upstreamHealth.upstreams.map((u) => u.upstream), ["exa", "databento"], "a cancel or a 429 is not an outage");
   assert.equal(m.upstreamNameOf("data.sec.gov"), "edgar");
-  assert.equal(m.upstreamNameOf("api.stlouisfed.org"), "fred");
+  assert.equal(m.upstreamNameOf("api.bls.gov"), "bls", "the macro series' source is named");
+  assert.equal(m.upstreamNameOf("api.stlouisfed.org"), null, "FRED, which no tool reads any more, is not");
   assert.ok(m.registerUpstreamHost("https://worker.internal:8080/x", "render-worker"));
   assert.equal(m.upstreamNameOf("worker.internal"), "render-worker");
 });

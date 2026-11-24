@@ -232,6 +232,9 @@ const FIXED_UPSTREAMS = [
   [/(^|\.)hyperliquid\.xyz$/, "hyperliquid"],
   [/(^|\.)rugcheck\.xyz$/, "rugcheck"],
   [/(^|\.)sec\.gov$/, "edgar"],
+  // The US macro series (src/tools/macro-kit.js) read the BLS API, which
+  // replaced FRED; its keyed daily limit makes its failures worth a word.
+  [/(^|\.)bls\.gov$/, "bls"],
   [/(^|\.)exa\.ai$/, "exa"],
   [/(^|\.)openrouter\.ai$/, "openrouter"],
   // The CDP data API (onchain-sql, balances, onramp). Its facilitator shares
