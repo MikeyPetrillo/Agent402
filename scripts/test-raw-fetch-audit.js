@@ -96,7 +96,6 @@ const CALLS = {
   "src/tools/llm-gateway-kit.js": [F("model gateway, fixed URL set"), F("direct upstream, operator-configured URL"), F("gateway credits read"), F("embeddings vendor"), F("rerank endpoint"), F("speech endpoint")],
   "src/tools/llm-images-fast-kit.js": [F("gateway model listing, model id in the path"), F("gateway GET, fixed base")],
   "src/tools/llm-kit.js": [F("chat vendor")],
-  "src/tools/macro-kit.js": [F("FRED API, fixed base, asserted")],
   "src/tools/memory.js": [F("embeddings provider from configuration")],
   "src/tools/moderate-kit.js": [F("moderation vendor")],
   "src/tools/network-kit2.js": [
