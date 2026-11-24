@@ -508,7 +508,7 @@ export const MACRO_TOOLS = [
   {
     route: "GET /api/fx-historical", name: "Historical FX rate by date", slug: "fx-historical", category: "data", attribution: "ecb", price: "$0.002",
     description:
-      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date, and how it was derived (a pair without the euro is a computed cross rate). ?from=USD&to=EUR&date=2024-01-02.",
+      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date. ?from=USD&to=EUR&date=2024-01-02.",
     tags: ["forex", "fx", "currency", "historical", "exchange-rate", "ecb", "macro"],
     discovery: {
       input: { from: "USD", to: "EUR", date: "2024-01-02" },
@@ -591,7 +591,7 @@ export const MACRO_TOOLS = [
   {
     route: "GET /api/fx-dashboard", name: "G10 FX dashboard vs USD", slug: "fx-dashboard", category: "data", attribution: "ecb", price: "$0.005",
     description:
-      "Snapshot of all G10 spot exchange rates quoted against USD (EUR, GBP, JPY, CHF, CAD, AUD, NZD, SEK, NOK) using European Central Bank reference rates, computed against USD from the ECB's euro rates. Includes the USD-strength index (simple geometric mean of inverse rates). No params.",
+      "Snapshot of all G10 spot exchange rates quoted against USD (EUR, GBP, JPY, CHF, CAD, AUD, NZD, SEK, NOK) using European Central Bank reference rates. Includes the USD-strength index (simple geometric mean of inverse rates). No params.",
     tags: ["forex", "fx", "dashboard", "g10", "dxy", "usd-strength", "ecb", "macro"],
     discovery: {
       input: {},

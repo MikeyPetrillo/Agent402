@@ -3,12 +3,11 @@
 // hear is AI-generated, and to pass that duty on to its own users. Every
 // speech tool (tts, tts-lite, tts-hd, v1-audio-speech with each named model
 // it serves, and dub) says so before payment, in its description, and in
-// every answer: a JSON answer carries `aiGeneratedVoice: true`, and a byte
+// every answer: the sentence opens the description, a JSON answer carries `aiGeneratedVoice: true`, and a byte
 // answer (the `{ __binary }` sentinel) the header `X-AI-Generated: true`.
 // scripts/test-ai-voice.js holds every speech tool to it.
-import { attributionTailOf } from "./data-attribution.js";
 
-export const AI_VOICE_SENTENCE = "The voice is AI-generated; disclose that to listeners.";
+export const AI_VOICE_SENTENCE = "AI-generated voice: tell listeners so.";
 export const AI_VOICE_HEADER = "X-AI-Generated";
 
 const isPlain = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -22,7 +21,7 @@ export function withAiVoice(answer) {
 }
 
 /** Mark each tool in `tools` whose slug is in `slugs`: the sentence in its
- *  description (before any attribution tail), the field on its published
+ *  description (first, so a listing's cut keeps it), the field on its published
  *  example when that is JSON, and every answer through withAiVoice.
  *  Idempotent per tool. */
 export function markAiVoice(tools, slugs) {
@@ -30,10 +29,8 @@ export function markAiVoice(tools, slugs) {
     if (!slugs.includes(tool?.slug) || tool.aiGeneratedVoice === true) continue;
     tool.aiGeneratedVoice = true;
     const d = String(tool.description || "");
-    if (!d.includes(AI_VOICE_SENTENCE)) {
-      const tail = attributionTailOf(d);
-      tool.description = tail ? `${d.slice(0, d.length - tail.length).trimEnd()} ${AI_VOICE_SENTENCE} ${tail}` : `${d.trimEnd()} ${AI_VOICE_SENTENCE}`;
-    }
+    // First, so every cut of the description (a listing's length cap) keeps it.
+    if (!d.includes(AI_VOICE_SENTENCE)) tool.description = `${AI_VOICE_SENTENCE} ${d.trimStart()}`;
     const ex = tool.discovery?.output?.example;
     if (isPlain(ex) && !ex.__binary && (!tool.mimeType || /json/i.test(tool.mimeType))) tool.discovery.output.example = withAiVoice(ex);
     const inner = tool.handler;

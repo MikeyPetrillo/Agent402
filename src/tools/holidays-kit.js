@@ -118,12 +118,12 @@ const RAILS = {
   ach: {
     name: "ACH (FedACH)", region: ["US", null], basis: "bank",
     method: "Settlement days are Federal Reserve business days: Monday to Friday except the U.S. federal holidays (5 U.S.C. 6103), observed as the Federal Reserve observes them: a Saturday holiday leaves the preceding Friday open, a Sunday holiday closes the following Monday. Same-day ACH settles on the first such day on or after the send date; next-day ACH on the business day after it.",
-    sources: [OPM, FED_BOARD], credit: US_RAIL_CREDIT,
+    sources: [FED_BOARD], credit: US_RAIL_CREDIT,
   },
   fedwire: {
     name: "Fedwire Funds", region: ["US", null], basis: "bank",
     method: "Real-time gross settlement on Federal Reserve business days: Monday to Friday except the U.S. federal holidays (5 U.S.C. 6103), Saturday holidays not moved, Sunday holidays closing the following Monday. A payment sent on a closed day settles on the next business day.",
-    sources: [OPM, FED_BOARD], credit: US_RAIL_CREDIT,
+    sources: [FED_BOARD], credit: US_RAIL_CREDIT,
   },
   "sepa-sct": {
     name: "SEPA Credit Transfer", t2: true,
@@ -380,7 +380,7 @@ export const HOLIDAY_TOOLS = [
   },
   {
     route: "GET /api/settlement-calendar", name: "Payment settlement calendar", slug: "settlement-calendar", upstreamHosts: HOLIDAY_HOSTS, category: "time", price: "$0.002",
-    description: "Expected settlement date for a payment sent on a given date over ACH, Fedwire, SEPA Credit Transfer, SEPA Instant or CHAPS, from each rail's operating-day rule as public law and official sources state it and the holidays that close it, with the rule, its sources and their credits in the answer (the T2 calendar is the European Central Bank's, available free of charge at ecb.europa.eu). ?rail=ach&date=2026-12-24.",
+    description: "Expected settlement date for a payment sent on a given date over ACH, Fedwire, SEPA Credit Transfer, SEPA Instant or CHAPS, from each rail's operating-day rule in public sources and the holidays that close it, with the rule and its official sources in the answer. ?rail=ach&date=2026-12-24.",
     tags: ["settlement", "payments", "ach", "fedwire", "sepa", "chaps", "business-days", "finance"],
     discovery: {
       input: { rail: "ach", date: "2026-12-24" },
@@ -391,7 +391,7 @@ export const HOLIDAY_TOOLS = [
         },
         required: ["rail", "date"],
       },
-      output: { example: { rail: "ach", name: "ACH (FedACH)", sendDate: "2026-12-24", operatingDay: true, settlementDate: "2026-12-24", nextDaySettlementDate: "2026-12-28", closedDays: [{ date: "2026-12-25", reason: "holiday", name: "Christmas Day" }, { date: "2026-12-26", reason: "weekend" }, { date: "2026-12-27", reason: "weekend" }], sources: [OPM, FED_BOARD], credit: US_RAIL_CREDIT } },
+      output: { example: { rail: "ach", name: "ACH (FedACH)", sendDate: "2026-12-24", operatingDay: true, settlementDate: "2026-12-24", nextDaySettlementDate: "2026-12-28", closedDays: [{ date: "2026-12-25", reason: "holiday", name: "Christmas Day" }, { date: "2026-12-26", reason: "weekend" }, { date: "2026-12-27", reason: "weekend" }], sources: [FED_BOARD] } },
     },
     handler: async (i) => {
       const key = RAIL_ALIASES[String(i.rail ?? "").trim().toLowerCase()];
@@ -425,7 +425,7 @@ export const HOLIDAY_TOOLS = [
   },
   {
     route: "GET /api/market-calendar", name: "Exchange trading calendar", slug: "market-calendar", category: "time", price: "$0.001",
-    description: "Is an exchange open at a given moment, and when does it next open and close: NYSE, London Stock Exchange, Xetra, JPX (Tokyo) or HKEX, from each market's public holiday calendar and published session rules, with the day's sessions in local time and UTC and the closures in the next month. Every answer names its sources and their credits. Calendar facts only: not exchange data, and not affiliated with any exchange. ?exchange=NYSE&at=2026-11-27T17:30:00Z.",
+    description: "Is an exchange open at a given moment, and when does it next open and close: NYSE, London Stock Exchange, Xetra, JPX (Tokyo) or HKEX, from official public holiday calendars and published session rules, with the day's sessions in local time and UTC and the closures in the next month. Not exchange data; not affiliated with any exchange. ?exchange=NYSE&at=2026-11-27T17:30:00Z.",
     tags: ["market-hours", "trading-calendar", "exchange", "stock-market", "holidays", "finance"],
     discovery: {
       input: { exchange: "NYSE", at: "2026-11-27T17:30:00Z" },
@@ -471,8 +471,6 @@ markEndsAtCeiling(HOLIDAY_TOOLS, ["bank-holidays", "school-holidays", "next-holi
 // sources (src/tools/exchange-calendars.js): each is declared with its license,
 // so reaching no upstream alone never clears it for resale.
 {
-  const mc = HOLIDAY_TOOLS.find((t) => t.slug === "market-calendar");
-  Object.assign(mc.discovery.output.example, { earlyCloseBasis: "rule", ...marketCalendarSourceFields(parseExchange("NYSE")) });
   markContentSources(HOLIDAY_TOOLS, ["market-calendar"], Object.values(MARKET_CALENDAR_SOURCES).map(({ name, url, license, redistribution, credit }) => ({ name, url, license, redistribution, credit })));
   markContentSources(HOLIDAY_TOOLS, ["settlement-calendar"], SETTLEMENT_RULE_SOURCES);
 }

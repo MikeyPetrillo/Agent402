@@ -382,7 +382,13 @@ export function withoutLicenseFields(example) {
 // without them (withoutAnswerOnlyFields), so they never take room from the
 // listing's description or the answer's own fields.
 export const SOURCE_LICENSE_NOTE = "Each file is its authors' work, under the license its SPDX-License-Identifier states (licenses, by file; null where a file states none). Reuse of a file follows its license.";
-const ANSWER_ONLY_CREDITS = Object.freeze([GOPLUS_ATTRIBUTION, EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION]);
+// The ECB sentence ends each FX description (read before payment) and rides
+// every answer, and the government credit lines ride every answer: none of
+// them takes the 402 sample's room either.
+const ANSWER_ONLY_CREDITS = Object.freeze([GOPLUS_ATTRIBUTION, EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION, ECB_ATTRIBUTION, USGS_CREDIT, CENSUS_CREDIT, OPENFDA_CREDIT]);
+// A disclosure flag every answer of its tools carries, stated in the tool's
+// description before payment (the AI-generated voice, src/ai-voice.js).
+const ANSWER_ONLY_FLAGS = Object.freeze(["aiGeneratedVoice"]);
 
 /** `example` without a `credit` made only of the credits above, and without
  *  the source license fields (the note and the per-file map beside it).
@@ -396,5 +402,6 @@ export function withoutAnswerOnlyFields(example) {
     if (!rest.trim()) drop.add("credit");
   }
   if (example.licenseNote === SOURCE_LICENSE_NOTE) { drop.add("licenseNote"); drop.add("licenses"); }
+  for (const k of ANSWER_ONLY_FLAGS) if (example[k] === true) drop.add(k);
   return drop.size ? Object.fromEntries(Object.entries(example).filter(([k]) => !drop.has(k))) : example;
 }
