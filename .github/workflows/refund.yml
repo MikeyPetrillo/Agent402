@@ -107,7 +107,7 @@ jobs:
         with:
           node-version: 24
       - name: Install deps (senders only load for chains that have rows)
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @stellar/stellar-sdk@16.0.1 viem@2.52.2 algosdk@3.5.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @stellar/stellar-sdk@17.4.0 viem@2.52.2 algosdk@3.5.0
       - name: Run refunds
         env:
           AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
