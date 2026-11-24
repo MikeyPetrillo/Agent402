@@ -12,11 +12,17 @@
 //     completions, Messages, embeddings and the like) and carries the header
 //     only;
 //   - a byte answer (an image, audio, video) also gets the header in its own
-//     headers, and its bytes are passed through as the model returned them:
-//     nothing here re-encodes, so content credentials an upstream embeds
-//     (C2PA manifests, watermarks) arrive untouched.
+//     headers;
+//   - the generated file itself carries the mark where its format has a
+//     place for it (src/ai-media-mark.js: XMP in PNG, JPEG and WebP, an ID3
+//     tag on MP3), on a byte answer and on an image inside a JSON answer
+//     (`data[].b64_json`, `image`): metadata is added, the image or audio
+//     data is never re-encoded, and a file that already carries content
+//     credentials (C2PA) an upstream embedded, or XMP of its own, is passed
+//     through untouched.
 // scripts/test-ai-generated.js holds every model-backed tool to it.
 import { AI_VOICE_HEADER } from "./ai-voice.js";
+import { markMediaBytes, markMediaBase64 } from "./ai-media-mark.js";
 
 export const AI_GENERATED_HEADER = AI_VOICE_HEADER; // "X-AI-Generated"
 export const AI_GENERATED_FIELD = "aiGenerated";
@@ -30,9 +36,33 @@ export function isWireRoute(route) { return /^(GET|POST|PUT|DELETE|PATCH)?\s*\/v
  *  non-object) unchanged. Never touches the bytes. */
 export function withAiGenerated(answer, { wire = false } = {}) {
   if (!isPlain(answer) || typeof answer.__sse === "function") return answer;
-  if (answer.__binary) return { ...answer, headers: { ...(isPlain(answer.headers) ? answer.headers : {}), [AI_GENERATED_HEADER]: "true" } };
-  if (wire || Object.hasOwn(answer, AI_GENERATED_FIELD)) return answer;
-  return { ...answer, [AI_GENERATED_FIELD]: true };
+  if (answer.__binary) return { ...answer, __binary: markMediaBytes(answer.__binary), headers: { ...(isPlain(answer.headers) ? answer.headers : {}), [AI_GENERATED_HEADER]: "true" } };
+  const marked = withMarkedMedia(answer);
+  if (wire || Object.hasOwn(marked, AI_GENERATED_FIELD)) return marked;
+  return { ...marked, [AI_GENERATED_FIELD]: true };
+}
+
+/** A JSON answer whose generated images ride as base64 (the images wire's
+ *  `data[].b64_json`, an image tool's `image`), each with the mark written
+ *  into the file. Anything else is returned as it is. */
+export function withMarkedMedia(answer) {
+  let out = answer;
+  if (typeof answer.image === "string") {
+    const m = markMediaBase64(answer.image);
+    if (m !== answer.image) out = { ...out, image: m };
+  }
+  if (Array.isArray(answer.data) && answer.data.some((d) => isPlain(d) && typeof d.b64_json === "string")) {
+    let changed = false;
+    const data = answer.data.map((d) => {
+      if (!isPlain(d) || typeof d.b64_json !== "string") return d;
+      const m = markMediaBase64(d.b64_json);
+      if (m === d.b64_json) return d;
+      changed = true;
+      return { ...d, b64_json: m };
+    });
+    if (changed) out = { ...out, data };
+  }
+  return out;
 }
 
 /** Mark every tool in `defs` that is model-backed: its handler's answers and

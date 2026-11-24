@@ -1,7 +1,8 @@
 // The machine-readable AI-generated mark (src/ai-generated.js; EU AI Act
 // Art. 50(2)): every model-backed tool's answer carries it.
 //   - unit: a JSON answer gets `aiGenerated: true`, a byte answer the
-//     `X-AI-Generated: true` header beside its own (bytes untouched), a /v1
+//     `X-AI-Generated: true` header beside its own, a generated PNG, JPEG,
+//     WebP or MP3 the IPTC source type inside the file (src/ai-media-mark.js), a /v1
 //     wire answer and a stream writer keep their body; marking twice adds once;
 //   - the class, on a booted server: every catalog row marked modelBacked is
 //     marked aiGenerated (its handler wrapped, its JSON example carrying the
@@ -25,6 +26,37 @@ ok(G.AI_GENERATED_HEADER === AI_VOICE_HEADER && G.AI_GENERATED_HEADER === "X-AI-
   const bytes = Buffer.from([1, 2, 3, 4]);
   const b = G.withAiGenerated({ __binary: bytes, contentType: "image/png", headers: { "X-Other": "1" } });
   ok(b.headers["X-AI-Generated"] === "true" && b.headers["X-Other"] === "1" && b.__binary === bytes && !("aiGenerated" in b), "a byte answer gets the header beside its own, the same bytes untouched");
+  // The mark inside the file (src/ai-media-mark.js): a real PNG, JPEG, WebP
+  // and MP3 come back with the IPTC source type written in and still decode;
+  // a file with content credentials or XMP of its own is passed through.
+  {
+    const M = await import("../src/ai-media-mark.js");
+    const { Jimp } = await import("jimp");
+    const img = new Jimp({ width: 4, height: 3, color: 0x3366ccff });
+    const png = await img.getBuffer("image/png");
+    const jpg = await img.getBuffer("image/jpeg");
+    const has = (buf) => buf.includes(Buffer.from(M.DIGITAL_SOURCE_TYPE, "latin1"));
+    const pb = G.withAiGenerated({ __binary: png, contentType: "image/png" }).__binary;
+    ok(has(pb) && pb.length > png.length && (await Jimp.read(pb)).bitmap.width === 4, "a generated PNG carries the IPTC source type in an XMP chunk and still decodes");
+    ok(M.markMediaBytes(pb) === pb, "a PNG already marked (its own XMP) is not marked twice");
+    const jb = G.withAiGenerated({ __binary: jpg, contentType: "image/jpeg" }).__binary;
+    ok(has(jb) && (await Jimp.read(jb)).bitmap.height === 3 && M.markMediaBytes(jb) === jb, "a generated JPEG carries it in an APP1 XMP segment, still decodes, and is marked once");
+    const webp = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
+    const wb = M.markMediaBytes(webp);
+    ok(has(wb) && wb.toString("latin1", 12, 16) === "VP8X" && (wb[20] & 0x04) && wb.readUInt32LE(4) === wb.length - 8 && wb.includes(Buffer.from("VP8L")), "a simple WebP gets a VP8X header with the XMP flag, its frame kept, and a consistent RIFF size");
+    const mp3 = Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x64]), Buffer.alloc(413)]);
+    const mb = M.markMediaBytes(mp3);
+    ok(mb.toString("latin1", 0, 3) === "ID3" && mb.includes(Buffer.from("TXXX")) && has(mb) && mb.subarray(mb.length - mp3.length).equals(mp3), "an MP3 with no tag gets an ID3 tag naming the source type, the audio untouched");
+    ok(M.markMediaBytes(mb) === mb, "an MP3 with a tag of its own is left as it is");
+    const c2pa = Buffer.concat([jpg.subarray(0, 2), Buffer.from([0xff, 0xeb, 0x00, 0x06, 0x4a, 0x50, 0x00, 0x00]), jpg.subarray(2)]);
+    ok(M.markMediaBytes(c2pa) === c2pa, "a JPEG with content credentials (APP11 JUMBF) is passed through untouched");
+    const b64 = png.toString("base64");
+    const wire = G.withAiGenerated({ created: 1, data: [{ b64_json: b64 }] }, { wire: true });
+    ok(has(Buffer.from(wire.data[0].b64_json, "base64")) && !("aiGenerated" in wire), "an image on the images wire (data[].b64_json) carries the mark in the file; the wire body keeps its shape");
+    const tool = G.withAiGenerated({ image: b64, model: "m" });
+    ok(has(Buffer.from(tool.image, "base64")) && tool.aiGenerated === true, "an image tool's base64 image carries the mark in the file");
+    ok(M.markMediaBytes(Buffer.from("not media at all")).toString() === "not media at all" && M.markMediaBase64("short") === "short", "anything else is returned as it is");
+  }
   const chat = { id: "c", object: "chat.completion", choices: [] };
   ok(G.withAiGenerated(chat, { wire: true }) === chat, "a /v1 wire answer keeps the provider's body as it is (header only)");
   const sse = { __sse: () => {} };
