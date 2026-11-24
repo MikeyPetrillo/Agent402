@@ -9,7 +9,7 @@ package manifest). Copyright and licensing of Agent402 itself: see NOTICE.
 Server image (Dockerfile, Dockerfile.worker)
 ============================================
 Installed by npm ci --omit=dev from package-lock.json.
-Packages: 518. Licenses: MIT 403, Apache-2.0 61, ISC 25, BSD-2-Clause 7, BSD-3-Clause 7, 0BSD 2, BlueOak-1.0.0 2, MIT-0 2, (BSD-2-Clause OR MIT OR Apache-2.0) 1, (MIT AND Zlib) 1, (MIT OR GPL-3.0-or-later) 1, (MIT OR WTFPL) 1, (Unlicense OR Apache-2.0) 1, CC0-1.0 1, MIT (from its license file; the manifest names none) 1, PSF-2.0 1, Unlicense 1.
+Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-Clause 7, 0BSD 2, BlueOak-1.0.0 2, MIT-0 2, (BSD-2-Clause OR MIT OR Apache-2.0) 1, (MIT AND Zlib) 1, (MIT OR GPL-3.0-or-later) 1, (MIT OR WTFPL) 1, (Unlicense OR Apache-2.0) 1, CC0-1.0 1, MIT (from its license file; the manifest names none) 1, PSF-2.0 1, Unlicense 1.
 
   @adraffy/ens-normalize@1.11.1  MIT
   @algorandfoundation/algokit-utils@10.0.0-alpha.46  MIT
@@ -178,14 +178,15 @@ Packages: 518. Licenses: MIT 403, Apache-2.0 61, ISC 25, BSD-2-Clause 7, BSD-3-C
   @types/node@16.9.1  MIT
   @types/node@22.20.5  MIT
   @types/node@26.6.6  MIT
-  @x402/avm@2.30.0  Apache-2.0
+  @x402/avm@2.32.0  Apache-2.0
   @x402/core@2.30.0  Apache-2.0
-  @x402/evm@2.30.0  Apache-2.0
-  @x402/express@2.30.0  Apache-2.0
-  @x402/extensions@2.30.0  Apache-2.0
-  @x402/fetch@2.30.0  Apache-2.0
+  @x402/core@2.32.0  Apache-2.0
+  @x402/evm@2.32.0  Apache-2.0
+  @x402/express@2.32.0  Apache-2.0
+  @x402/extensions@2.32.0  Apache-2.0
+  @x402/fetch@2.32.0  Apache-2.0
   @x402/stellar@2.30.0  Apache-2.0
-  @x402/svm@2.30.0  Apache-2.0
+  @x402/svm@2.32.0  Apache-2.0
   @zxing/library@0.21.3  MIT
   @zxing/text-encoding@0.9.0  (Unlicense OR Apache-2.0)  (optional, platform-specific)
   abitype@1.2.3  MIT
@@ -701,10 +702,10 @@ Packages: 75. Licenses: MIT 62, Apache-2.0 13.
   @solana/transaction-introspection@8.4.0  MIT
   @solana/transaction-messages@8.4.0  MIT
   @solana/transactions@8.4.0  MIT
-  @x402/core@2.30.0  Apache-2.0
-  @x402/evm@2.30.0  Apache-2.0
-  @x402/fetch@2.30.0  Apache-2.0
-  @x402/svm@2.30.0  Apache-2.0
+  @x402/core@2.32.0  Apache-2.0
+  @x402/evm@2.32.0  Apache-2.0
+  @x402/fetch@2.32.0  Apache-2.0
+  @x402/svm@2.32.0  Apache-2.0
   abitype@1.2.3  MIT
   chalk@5.6.2  MIT
   commander@15.0.0  MIT
