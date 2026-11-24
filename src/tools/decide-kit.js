@@ -627,9 +627,7 @@ export function makeExecuteHandler({ ledger, getCatalog, bookUnspent = async (ro
     // on the saved decision (its run key, credit and budget are the ones the
     // quote priced); the new plan is recorded as a decision of its own, with
     // its own feedback token. A re-plan that does not happen runs the saved
-    // plan and returns its price as credit, which the saved decision's credit
-    // window must still be open to hold; when it is not, the call is refused
-    // before anything is spent (not charged).
+    // plan, and its price is part of the run's unspent amount (below).
     let replanned = null;
     if (wantsReplan) {
       const saved = d;
@@ -1200,7 +1198,7 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       // The budget is capped per call (executeBudgetUsd), so that is the ceiling.
       quoteMaxUsd: decideConfig().execute.perCallMaxUsd,
       description:
-        "Run a decision's plan (decisionId from POST /api/decide), or a free plan sketch (steps), through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you at Agent402's price (paid with a wallet on Base; prepaid credits and cards do not pay this route). Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and you pay only for what the run spent: on an upto payment the unspent amount is never charged, and on an exact payment it is repaid on chain to the paying wallet (the answer's unspent field says which). A run where no step succeeds is not charged on x402. Reusing a saved plan: send its decisionId with replan: true and the saved task is planned again on current prices and reliability before the run, for the POST /api/decide price at that decision's depth added to the quote; the answer's replanned field gives the new decisionId and each step whose tool, seller or price changed (or unchanged: true), and a re-plan that cannot run falls back to the saved plan with its price returned as credit. Also runs a free plan sketch: pass the sketch's tool slugs as steps (no decisionId) with params for step 1, and each later step takes its one required input from the step before, at list price.",
+        "Run a decision's plan (decisionId from POST /api/decide), or a free plan sketch (steps), through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you at Agent402's price (paid with a wallet on Base; prepaid credits and cards do not pay this route). Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and you pay only for what the run spent. The 402 lists upto first: you sign the budget as a ceiling and are charged what the run spent. Exact follows, priced at the plan's listed step prices (never a larger maxBudgetUsd), and any part a run does not spend is repaid on chain to the paying wallet (the answer's unspent field says which). A run where no step succeeds is not charged on x402. Reusing a saved plan: send its decisionId with replan: true and the saved task is planned again on current prices and reliability before the run, for the POST /api/decide price at that decision's depth added to the quote; the answer's replanned field gives the new decisionId and each step whose tool, seller or price changed (or unchanged: true), and a re-plan that cannot run falls back to the saved plan, its price unspent (never charged on upto, repaid on exact). Also runs a free plan sketch: pass the sketch's tool slugs as steps (no decisionId) with params for step 1, and each later step takes its one required input from the step before, at list price.",
       tags: ["agents", "execute", "planning", "router", "x402"],
       discovery: {
         bodyType: "json",
