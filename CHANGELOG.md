@@ -6,23 +6,24 @@ carries its own version on npm.
 
 ## v2.16.0 - 2026-11-24
 
-### 2026-11-24 (source terms: calendars, FX notices, us-macro-series)
+### 2026-11-24 (source terms, neutral names, MCP flagships, package names)
 Tools:
 - fred-series and fred-release-observations are retired and answer 410 naming
-  us-macro-series and us-macro-series. us-macro-series takes the same inputs
-  and gives the same answer; the macro-snapshot skill pack replaces
-  fred-snapshot, whose route answers 410 naming it.
+  us-macro-series, which takes the same inputs and gives the same answer; the
+  macro-snapshot skill pack replaces fred-snapshot, whose route answers 410
+  naming it. The tools serving New York Fed rates are not offered for resale
+  through a third party, and say why.
 - market-calendar compiles its calendars from public sources (NYSE Rules 7.2
   and 7.34 as filed with the SEC, GOV.UK bank holidays, the Cabinet Office
   national holidays, DATA.GOV.HK and the exchange_calendars rules) and every
   answer names them, carries their credits and says the facts are not exchange
   data. The HKEX day has its 12:00 to 13:00 break.
+- settlement-calendar cites each rail's rule to public sources and carries
+  their credits; CHAPS answers no longer state operating hours.
 - fx-rate, fx-historical, fx-timeseries and fx-dashboard say before payment
   and in every answer that the ECB reference rates are available free of
   charge at ecb.europa.eu, and each answer says whether its rate is the ECB's
   own or computed from it (`rateBasis`).
-- settlement-calendar cites each rail's rule to public sources and carries
-  their credits; CHAPS answers no longer state operating hours.
 - search-suggest keeps each prefix's suggestions for a day, so a repeated
   prefix is answered without a new read, and every answer carries the license
   link and says it is not affiliated with the Wikimedia Foundation.
@@ -31,22 +32,20 @@ Tools:
   X-AI-Generated header on audio bytes).
 - earthquakes, the openFDA tools and geo-lookup answers carry the credit line
   their sources ask for.
-
-### 2026-11-24 (neutral provider and server tool names)
-Gateway:
-- Speech and transcription answers name agent402 in their provider field;
-  the model field still names the model that ran.
-- The pro and premium chat tiers list their server tools as agent402:web_search,
-  agent402:web_fetch and agent402:datetime on /v1/models; the earlier type
-  names are still accepted on input.
-
-### 2026-11-24 (plain connector names, Algorand catalog, Ink relayer, dependency moves)
-Tools:
 - rwa-markets says why a reference rate is missing (referenceStatus read,
   rate_table_unreadable or rate_not_listed) and never reports a missing rate
   as 0.
 - image-ocr runs on tesseract.js 7 and reads its lines from the recognized
   page tree.
+- The professional article report takes a neutral name, and the reports on an
+  issuer carry a line that they are not investment advice.
+Gateway:
+- Speech and transcription answers name agent402 in their provider field;
+  the model field still names the model that ran.
+- The pro and premium chat tiers list their server tools as agent402:web_search,
+  agent402:web_fetch and agent402:datetime on /v1/models; the earlier type
+  names are still accepted on input. The /v1 tiers are described by their wire
+  formats.
 Payments:
 - A refusal says nothing was charged only on a call answered to its own
   caller; a step inside a charged answer (a skill pack, decide, route-execute
@@ -65,19 +64,39 @@ Payments:
 - Rate limits read every spelling of one address (IPv6 case, leading zeros, an
   IPv4-mapped form) as one key, and the connector sign-in counts a code mail
   before it compares the count.
+- Chain reads default only to endpoints whose terms permit commercial use; a
+  chain with no such public endpoint reads the keyed lane when one is set.
 MCP:
+- The hosted connector and agent402-mcp list pdf.markdown, macro.series and
+  weather.current as flagship tools in place of web.search, web.news and
+  web.answer, each payable in the call over x402. The earlier names still run
+  their catalog tools, paid on their HTTP routes, and are not listed.
 - The hosted connector lists every tool under a plain name (catalog_search for
   catalog.search) at /mcp?tool_names=underscore, for hosts that accept only
   letters, digits, underscores and dashes in a tool name; either spelling
   runs.
 Site:
+- /llms.txt, /agents.md and server.describe open with SEC filings as the first
+  call (edgar-filings, then edgar-company-facts), and the integration pages
+  lead with Agent402 and use the SEC tools in their examples.
+- /terms adds a section on third-party names and marks, linked from every
+  page's footer, and pages that name another owner's mark print that owner's
+  notice. /terms also asks a buyer who offers synthetic speech to its own
+  users to pass the AI-generated disclosure on.
+- Chains are named in plain text, and published prose names no settlement
+  counterparty.
 - A /docs slug typed in another case 301s to its canonical path. A retired
   route's 410 suggests its declared replacement first, then tools in its
-  category. /aws/start states the sanctions eligibility /terms sets, and
-  /crawler lists the search-suggest User-Agent.
+  category. /aws/start states the sanctions eligibility /terms sets, lists
+  settlement-calendar with the calendars, and /crawler lists the
+  search-suggest User-Agent.
 - The server images install dependencies in a builder stage and ship no
   compiler; the server moves to undici 8, better-sqlite3 13, jsdom 31,
   TypeScript 7 and mppx 0.21.
+Operations:
+- The scheduled checks page when the holiday source's commercial terms lapse,
+  and the paid canary reads its Monad funding on the keyed lane without
+  printing the key.
 Packages:
 - The framework packages take neutral names, same API: agent402-function-calling
   0.3.0 (was agent402-openai-tools), agent402-tool-use 0.3.0
@@ -90,10 +109,11 @@ Packages:
   0.4.0 (elizaos-plugin-agent402) and agent402-model-provider 0.7.0
   (agent402-openclaw, CLI `agent402-model-provider`). Each earlier name's last
   release depends on its new name, re-exports it and prints a one-time notice.
-- Package license files and author fields name Cardhavok LLC (doing business as
-  Havok Holdings LLC); agent402-mcp 0.17.1, agent402-client 0.12.2 and
-  agent402-tollbooth 0.13.1 carry them. The tollbooth README cites Coinbase's
-  own documentation for its Coinbase Business section.
+- agent402-mcp 0.17.1 lists the new flagship tools. Package license files and
+  author fields name Cardhavok LLC (doing business as Havok Holdings LLC);
+  agent402-mcp 0.17.1, agent402-client 0.12.2 and agent402-tollbooth 0.13.1
+  carry them. The tollbooth README cites Coinbase's own documentation for its
+  Coinbase Business section.
 
 ## v2.15.0 - 2026-11-24
 
