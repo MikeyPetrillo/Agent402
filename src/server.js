@@ -14902,14 +14902,14 @@ for (const tool of ALL_KIT) {
         enabled: GATEWAY_METER_ON,
         setOverrides: setSettlementOverrides,
       });
-      // A model-backed answer, whatever its form, carries the machine-readable
-      // AI-generated mark (src/ai-generated.js); recorded as an answer header,
-      // so a refused payment sends none of it.
-      markAiAnswer(req, res, tool);
       // ACTUAL SPEND (upto only): a handler that knows its cost only after it
       // ran (decide-execute) names what it spent, and an upto payment settles
       // that, never the rest of the ceiling (src/actual-charge.js).
       applyActualCharge({ result, req, res, setOverrides: setSettlementOverrides });
+      // A model-backed answer, whatever its form, carries the machine-readable
+      // AI-generated mark (src/ai-generated.js); recorded as an answer header,
+      // so a refused payment sends none of it.
+      markAiAnswer(req, res, tool);
       if (result && result.__binary) {
         // A binary answer may carry headers of its own (the dub tool's
         // translation rides beside the audio); the content type is set last.
