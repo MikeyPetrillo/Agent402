@@ -150,6 +150,8 @@ t node scripts/test-ink-relayer.js
 t node scripts/test-settle-compliance.js
 # Referral copies of paid routes (/ref/<slug>): the 402 shape, amount parity with the direct route, one run per authorization, handler-first settlement on a signed facilitator request, net booking (local stub facilitator, keys made in the test).
 t node scripts/test-referral-gate.js
+# Every eligible published slug's /ref 402 carries the catalog description and the public route's extensions.bazaar block, no pointer home, inside the challenge budget (paid boot, offline).
+t node scripts/test-referral-listing-parity.js
 # /ref split legs per proven sale: stored shape, yearly totals per recipient, one row per payment (offline)
 t node scripts/test-referral-legs.js
 # The AWS Marketplace front door (/aws/<slug>): one aws:base offer, a signed quote that an altered price breaks, one sale per payment id, replayed or expired tokens refused unbooked, off answers as an unknown path, direct 402s byte-identical (stub payment-service keys, keys made in the test).

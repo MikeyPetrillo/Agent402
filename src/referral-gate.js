@@ -994,12 +994,14 @@ export function createLineSampler({ perMinute = 20, now = Date.now, print = () =
  *                                             the gateway's own margin bound, src/tools/llm-gateway-kit.js MARGIN)
  * @param {({tx, netUsd, payer, slug, grossUsd}) => boolean|Promise<boolean>} o.amendSaleNet  correct THIS payment's booked net in place: the row of that payer, slug and gross under the transaction (true when a row changed)
  * @param {number} [o.sweepChainBudgetMs]      the wall time one sweep pass gives all its chain reads (SWEEP_CHAIN_BUDGET_MS)
+ * @param {(def) => object|null} [o.bazaarOf]  the extensions.bazaar block the tool's public route lists in its 402
+ *                                             (src/payments.js publicBazaarOf): the /ref 402 lists the same, with no pointer home
  */
 export function createReferralGate({
   config, defs, settler, chain, book, replayGuard, baseUrl, priceUsdOf, priceForNetwork,
   preValidate, prePaymentRefusal, warmQuote, runAsCaller, sendToolError, recordSale, saleBooked, isSynthetic, salePathOf, requireShared, onRun = null,
   payerScreen, isolate, presentWindow, withCeiling, credentialLimiter, clientKey, draining, onSettledSale, payerHasPaid, oweRefund, amendSaleNet, answers, modelNetFloorBps = null,
-  notServed = [], sweepChainBudgetMs = SWEEP_CHAIN_BUDGET_MS, recordSplitLegs = null,
+  notServed = [], sweepChainBudgetMs = SWEEP_CHAIN_BUDGET_MS, recordSplitLegs = null, bazaarOf = null,
   log = console, now = Date.now,
 } = {}) {
   if (!config || !(defs instanceof Map) || !settler || !chain || !book || !replayGuard) throw new Error("referral gate: config, defs, settler, chain, book and replayGuard are required");
@@ -1982,12 +1984,17 @@ export function createReferralGate({
     const agentId = headerText(req.headers["x-referrer-buyer-agent-id"]);
     return {
       x402Version: 2,
-      resource: { url: `${origin}/ref/${def.slug}`, description: String(def.name || def.slug).slice(0, 200), mimeType: "application/json" },
+      // What the call returns, before paying: the description the catalog
+      // publishes for the tool, less any sentence that points home.
+      resource: { url: `${origin}/ref/${def.slug}`, description: refDescriptionOf(def), mimeType: "application/json" },
       accepts: [requirement],
       extensions: {
         attributionToken: typeof token === "string" && token.length <= REFERRAL_TOKEN_MAX_CHARS && PRINTABLE_ASCII.test(token) ? token : "",
         ...(typeof agentId === "string" && agentId && agentId.length <= REFERRAL_AGENT_ID_MAX_CHARS ? { buyerAgentId: agentId } : {}),
         setup_url: config.setupUrl,
+        // The input, its schema and the example answer the public route's 402
+        // lists (info.input and schema), with no pointer home.
+        ...refBazaarOf(def),
       },
       // A request with no input runs the tool's published example (below):
       // the 402 for it says so and shows that input, in a field of this
@@ -2013,6 +2020,46 @@ export function createReferralGate({
     if (Array.isArray(value)) return value.map((v) => withoutPointers(v, depth + 1)).filter((v) => v !== undefined);
     const out = {};
     for (const [k, v] of Object.entries(value)) { const w = withoutPointers(v, depth + 1); if (w !== undefined) out[k] = w; }
+    return out;
+  }
+  // The public listing's own words for a shortened example name the spec
+  // (src/payments.js examplePointer and its shortened strings): reworded
+  // here, in the /ref copy only, before any other text that points home is
+  // dropped.
+  const refListingText = (v) => {
+    if (typeof v !== "string") return v;
+    if (/^full example in \/openapi\.json$/.test(v)) return "example shortened to fit the listing";
+    const short = /^<(\d+) characters; the full example is in \/openapi\.json>$/.exec(v);
+    return short ? `<${short[1]} characters>` : v;
+  };
+  function refListingCopy(value, depth = 0) {
+    if (typeof value === "string") return withoutPointers(refListingText(value));
+    if (!value || typeof value !== "object" || depth > 16) return value;
+    if (Array.isArray(value)) return value.map((v) => refListingCopy(v, depth + 1)).filter((v) => v !== undefined);
+    const out = {};
+    for (const [k, v] of Object.entries(value)) { const w = refListingCopy(v, depth + 1); if (w !== undefined) out[k] = w; }
+    return out;
+  }
+  /** `{ bazaar }` as the tool's public route lists it, or {} when it lists none. */
+  function refBazaarOf(def) {
+    if (typeof bazaarOf !== "function") return {};
+    let block = null;
+    try { block = bazaarOf(def); } catch { block = null; }
+    if (!block || typeof block !== "object") return {};
+    const copy = refListingCopy(block);
+    return copy && typeof copy === "object" && Object.keys(copy).length ? { bazaar: copy } : {};
+  }
+  /** The catalog description (what /api/pricing publishes) with a direct
+   *  route named by its tool ("/api/contract-abi" reads "contract-abi"), then
+   *  sentence by sentence, less any sentence that still names this host or
+   *  one of its paths; the tool's name when nothing is left. */
+  const refDescriptions = new Map();
+  function refDescriptionOf(def) {
+    if (refDescriptions.has(def.slug)) return refDescriptions.get(def.slug);
+    const text = typeof def.description === "string" ? def.description.trim().replace(/(^|[\s("'])\/api\/([a-z0-9][a-z0-9-]*)\b/g, "$1$2") : "";
+    const kept = text ? text.split(/(?<=[.!?])\s+(?=[A-Z0-9("'])/).filter((sentence) => sentence && !pointsHome(sentence)).join(" ").trim() : "";
+    const out = kept || String(def.name || def.slug);
+    refDescriptions.set(def.slug, out);
     return out;
   }
   function scrub(body) {
