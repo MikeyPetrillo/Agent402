@@ -2,7 +2,9 @@
 //   - names the controller entity /company names, both roles, the SCC modules
 //     (Two and Three) and the UK Addendum by reference, Switzerland;
 //   - its sub-processor table is the /trust table plus the mailbox, row for row;
-//   - the breach window and the change notice are the constants;
+//   - offered on request (binds once confirmed by email), breach notice to the
+//     customers we can reach, outside sellers and data sources named as
+//     recipients; the change notice is the constant;
 //   - every figure it prints is read from the module that runs it;
 //   - linked from /privacy and the footer, in the sitemap and llms.txt, dated
 //     like the legal pages; no em dashes, no raw hex.
@@ -28,7 +30,12 @@ ok(legalName && text.includes(`${legalName}, doing business as Havok Holdings LL
 ok(/you are the controller/.test(text) && /we are your processor/.test(text) && /independent controller/.test(text), "both roles are stated");
 ok(/Implementing Decision \(EU\) 2021\/914/.test(text) && /Module Two/.test(text) && /Module Three/.test(text), "the EU Standard Contractual Clauses, Modules Two and Three, by reference");
 ok(/International Data Transfer Addendum/.test(text) && /Switzerland/.test(text) && /Federal Act on Data Protection/.test(text), "the UK Addendum and the Swiss adaptation");
-ok(text.includes(`within ${D.DPA_BREACH_NOTICE_HOURS} hours`) && D.DPA_BREACH_NOTICE_HOURS <= 72, `breach notice within ${D.DPA_BREACH_NOTICE_HOURS} hours, inside the 72 a controller has`);
+ok(/available on request/.test(text) && /from the day we confirm it by email/.test(text) && !/needs no signature/.test(text) && !/for every business customer that uses/.test(text), "the addendum is offered on request, not incorporated for every caller");
+ok(/without undue delay/.test(text) && /customers we can identify and reach/.test(text) && !/within \d+ hours/.test(text), "breach notice: without undue delay to customers we can identify and reach, no hour figure a wallet-only caller could not receive");
+ok(!/no less protective than these/.test(text) && /Article 28\(3\)/.test(text), "the sub-processor flow-down says what is true: each provider's own terms, chosen to meet Article 28(3)");
+ok(/Recipients that are not our sub-processors/.test(text) && /Outside sellers/.test(text) && /decide\/execute/.test(text) && /Data sources/.test(text) && /blockchain node provider/.test(text), "outside sellers and data sources are named as recipients");
+ok(/clause 13/.test(text), "an SCC clause 13 supervisory authority is chosen");
+ok(!/Cardhavok LLC/.test(readFileSync(new URL("../src/dpa.js", import.meta.url), "utf8")), "the entity name is read from src/legal-entity.js, never typed");
 ok(text.includes(`at least ${D.DPA_SUBPROCESSOR_NOTICE_DAYS} days`) && /changelog/.test(text), "sub-processor changes are announced ahead on the changelog");
 ok(text.includes(`after ${backupKeepDays()} days`), "the backup period is read from src/backup.js");
 {

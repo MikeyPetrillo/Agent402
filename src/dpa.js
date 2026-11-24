@@ -1,27 +1,34 @@
-// /dpa - the Data Processing Addendum for business customers: where a
-// customer sends personal data in tool inputs, prompts, uploaded audio,
-// memory documents or job results, we process it on the customer's behalf.
+// /dpa - the Data Processing Addendum, offered to business customers on
+// request: where a customer sends personal data in tool inputs, prompts,
+// uploaded audio, memory documents or job results, we process it on the
+// customer's behalf. It binds once a customer asks for it and we confirm it by
+// email; it is not incorporated into the terms for every caller, since a
+// wallet-only caller gives us no contact to keep its promises to.
 // The sub-processor table is the /trust table (src/trust-page.js
 // trustSubprocessors), so the two pages cannot list different processors;
-// the mailbox that receives requests is added here. The breach window, the
-// change notice and the retention figures are constants below, read by the
-// page and pinned by scripts/test-dpa-page.js.
+// the mailbox that receives requests is added here. Outside sellers the
+// router buys from and the data sources a lookup reads are recipients the
+// caller's own call names, listed apart from the sub-processors. The change
+// notice and the retention figures are constants below, read by the page and
+// pinned by scripts/test-dpa-page.js.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { trustSubprocessors } from "./trust-page.js";
 import { backupKeepDays } from "./backup.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { COMPANY_MAILBOXES } from "./company.js";
+import { LEGAL_ENTITY_NAME, TRADE_NAME } from "./legal-entity.js";
+import { companyPostalLine } from "./email.js";
 
 export const DPA_DATE = "2026-11-25";
-export const DPA_BREACH_NOTICE_HOURS = 48;
 export const DPA_SUBPROCESSOR_NOTICE_DAYS = 30;
 export const DPA_MAILBOX_ROW = Object.freeze({ category: "Mailbox", name: "Zoho Mail", gets: "Messages you send us, including data and rights requests" });
 
 export function dpaPage(baseUrl) {
   const canonical = `${baseUrl}/dpa`;
   const title = "Data Processing Addendum - Agent402";
-  const description = "Agent402's Data Processing Addendum for business customers: our role, the processing, the EU Standard Contractual Clauses and UK Addendum, sub-processors, security measures and breach notice.";
+  const description = "Agent402's Data Processing Addendum, available to business customers on request: our role, the processing, the EU Standard Contractual Clauses and UK Addendum, sub-processors, other recipients, security measures and breach notice.";
   const mail = COMPANY_MAILBOXES.operator;
+  const postal = companyPostalLine();
   const subs = [...trustSubprocessors(), DPA_MAILBOX_ROW];
   const cacheMin = Math.round(IDEM_TTL_MS / 60000);
   const extraCss = `
@@ -52,14 +59,15 @@ export function dpaPage(baseUrl) {
 </section>
 <section>
 <div class="dp-body">
-<p>This addendum is part of the <a href="/terms">terms</a> for every business customer that uses Agent402
-to process personal data, from the later of the date above and the customer's first call. It needs no
-signature; write to <a href="mailto:${esc(mail)}">${esc(mail)}</a> for a countersigned copy. Where it and the
-terms differ on personal data, this addendum governs; where it and the Standard Contractual Clauses differ,
-the Clauses govern.</p>
+<p>This addendum is <b>available on request</b> to business customers that use Agent402 to process personal
+data. Ask for it at <a href="mailto:${esc(mail)}">${esc(mail)}</a>${postal ? ` or by mail to ${esc(postal)}` : ""},
+naming the business and the contact we should write to. It applies to that customer from the day we confirm it
+by email, and from then on it is part of the <a href="/terms">terms</a> between us; until then it is not. Where it
+and the terms differ on personal data, this addendum governs; where it and the Standard Contractual Clauses
+differ, the Clauses govern.</p>
 
 <h2>1. Parties and roles</h2>
-<p>"We" are <strong>Cardhavok LLC</strong>, doing business as <strong>Havok Holdings LLC</strong>, the operator of
+<p>"We" are <strong>${esc(LEGAL_ENTITY_NAME)}</strong>, doing business as <strong>${esc(TRADE_NAME)}</strong>, the operator of
 Agent402 (see <a href="/company">/company</a>). "You" are the business customer. For personal data in what you
 send to a tool or model through the service (tool inputs, prompts, uploaded audio and files, memory
 documents, job and task results), you are the controller (or a processor for your own customer) and we are
@@ -86,8 +94,10 @@ records, logs, rate limits, analytics), we are an independent controller, as the
   <li>We apply the security measures in section 6.</li>
   <li>We help you answer requests from data subjects (access, erasure, portability) for data we hold for you,
   and with impact assessments and consultations, as far as the service's records allow.</li>
-  <li>We notify you of a personal data breach affecting your data without undue delay, and in any case within
-  ${DPA_BREACH_NOTICE_HOURS} hours of becoming aware of it, with what we know then and updates as we learn more.</li>
+  <li>We notify a personal data breach affecting your data without undue delay after becoming aware of it, to
+  the customers we can identify and reach: by email to the contact you gave when you asked for this addendum,
+  with what we know then and updates as we learn more. Where we cannot identify who was affected, we post the
+  notice on <a href="/status">/status</a>.</li>
   <li>When you stop using the service, the data we hold for you is deleted on the schedules above; ask and we
   delete what remains sooner, except what the law requires us to keep.</li>
   <li>We make available what you need to verify these commitments: the server is open source, and we answer
@@ -95,8 +105,10 @@ records, logs, rate limits, analytics), we are an independent controller, as the
 </ol>
 
 <h2>4. Sub-processors</h2>
-<p>You authorize the sub-processors below. We bind each to data protection terms no less protective than these,
-and remain responsible for them. We announce a new or replaced sub-processor on the
+<p>You authorize the sub-processors below. Each processes your data under the data processing terms it offers
+its customers, which we accept as written; we choose providers whose terms commit them to confidentiality,
+security and processing only on our instructions, as Article 28(3) of the GDPR requires, and we remain
+responsible to you for them. We announce a new or replaced sub-processor on the
 <a href="/changelog">changelog</a> at least ${DPA_SUBPROCESSOR_NOTICE_DAYS} days before it receives your data; you may
 object in that time, and if we cannot meet the objection you may stop using the service for the affected
 processing.</p>
@@ -105,21 +117,37 @@ processing.</p>
 <tbody>${subs.map((s) => `<tr><td>${esc(s.category)}</td><td>${esc(s.name)}</td><td>${esc(s.gets)}</td></tr>`).join("")}</tbody>
 </table></div>
 
-<h2>5. International transfers</h2>
+<h2>5. Recipients that are not our sub-processors</h2>
+<p>Some calls exist to send a value you give to a third party that the call itself names. Those parties act on
+their own terms, not as our sub-processors, and this addendum does not cover what they do with it; do not send
+personal data to them under this addendum.</p>
+<ul>
+  <li><b>Outside sellers.</b> A route-and-execute or <code>/api/decide/execute</code> run buys the answer from an
+  outside seller and sends that seller your inputs, sometimes to more than one seller and sometimes more than
+  once (a retry or a fallback), as the <a href="/privacy">privacy policy</a> describes.</li>
+  <li><b>Data sources.</b> A lookup sends the value it looks up to the source that answers it: a wallet address
+  or transaction to a blockchain node provider, an IP address to an IP-to-network or reputation service, a
+  domain or name to DNS resolvers, registration (RDAP) and naming services and certificate logs, and a query to
+  the public data service the tool's page names.</li>
+</ul>
+
+<h2>6. International transfers</h2>
 <p>The service runs in the United States. For personal data you transfer to us from the European Economic Area,
 the <b>Standard Contractual Clauses</b> adopted by the European Commission in Implementing Decision (EU)
 2021/914 are incorporated by reference: <b>Module Two</b> (controller to processor) where you are a controller,
 and <b>Module Three</b> (processor to processor) where you are a processor. In them: clause 7 (docking) applies;
 clause 9 option 2 (general authorization, with the notice in section 4); the optional wording in clause 11 does
-not apply; clause 17 option 1, the law of Ireland; clause 18, the courts of Ireland. Annex I is sections 1 and 2
-of this addendum, Annex II is section 6, and Annex III is the table in section 4. For transfers from the United
+not apply; clause 13, the competent supervisory authority is the one clause 13(a) names where you are
+established in the European Union, and otherwise the one clause 13 names for your case; clause 17 option 1, the
+law of Ireland; clause 18, the courts of Ireland. Annex I is sections 1 and 2 of this addendum, Annex II is
+section 7, and Annex III is the table in section 4. For transfers from the United
 Kingdom, the <b>International Data Transfer Addendum</b> to those Clauses issued by the UK Information
 Commissioner (version B1.0) is incorporated, with its tables completed from this addendum, and either party
 may end it as its section 19 allows. For transfers from Switzerland, the same Clauses apply with the Federal Act
 on Data Protection in place of the GDPR and the Swiss Federal Data Protection and Information Commissioner as
 the competent authority.</p>
 
-<h2>6. Security measures</h2>
+<h2>7. Security measures</h2>
 <ul>
   <li>Every connection is encrypted in transit (TLS, HSTS on every answer).</li>
   <li>The stores require credentials held only by the service; nightly backups are encrypted before upload and
@@ -133,7 +161,7 @@ the competent authority.</p>
   reports are handled under the <a href="/security">security policy</a>.</li>
 </ul>
 
-<h2>7. Contact</h2>
+<h2>8. Contact</h2>
 <p>Data protection questions, objections and breach contacts: <a href="mailto:${esc(mail)}">${esc(mail)}</a>.</p>
 </div>
 </section>

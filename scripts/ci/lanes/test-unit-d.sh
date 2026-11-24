@@ -180,7 +180,7 @@ t node scripts/test-tts-elevenlabs.js
 t node scripts/test-ai-voice.js
 # AI-generated mark: every model-backed answer carries X-AI-Generated (and aiGenerated on JSON), bytes untouched; the whole catalog on a booted server
 t node scripts/test-ai-generated.js
-# The Data Processing Addendum: entity, roles, SCC modules and UK Addendum by reference, the /trust sub-processors, breach window, links, sitemap and date
+# The Data Processing Addendum: offered on request, entity, roles, SCC modules and UK Addendum by reference, the /trust sub-processors, other recipients, breach notice, links, sitemap and date
 t node scripts/test-dpa-page.js
 # TTS per-request quote: anchors, round-up, floor, the served body, refusals before any spend (offline); the margin at every length against the private rows
 t node scripts/test-tts-quote.js
