@@ -160,7 +160,7 @@ alerts are the form that takes an address, and it
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
 keep, and for how long, is listed below, including the backups of it. The providers that receive it and how
 the stores are protected are summarized at <a href="/trust">/trust</a>. A business that sends personal data
-through the service can ask for our <a href="/dpa">Data Processing Addendum</a>. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
+through the service can ask for our Data Processing Addendum at <a href="mailto:help@agent402.tools">help@agent402.tools</a>. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
 so every claim below is verifiable in code.</p>
 
 <h2>What we process, and why</h2>
@@ -267,9 +267,10 @@ so every claim below is verifiable in code.</p>
   raises its limit on unpaid price quotes (one hour at most), and on the demand board (combined with the day).
   Requests reach our server through Cloudflare, which adds headers locating the visitor from the IP address
   (country, region, city and approximate coordinates); we read only the country and the region, in memory, to
-  refuse requests from sanctioned regions and, for the analytics choice above, the country, and we do not store
-  or log any of them, with one exception: a request refused from a sanctioned region that carried a payment keeps
-  the sanctioned country or region code as the reason it was refused (see Retention).
+  refuse requests from the countries and regions we do not serve (see the terms) and, for the analytics choice
+  above, the country, and we do not store or log any of them, with one exception: a request refused from a region
+  under U.S. sanctions that carried a payment whose signature proves the paying wallet keeps the country or region
+  code as the reason it was refused (see Retention).
   The tollbooth waitlist form is closed, and every record it collected has been deleted from our
   database; those records were never part of our offsite backups.</li>
   <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat in the
@@ -340,7 +341,7 @@ so every claim below is verifiable in code.</p>
   served back to you; the finished report is served at an unguessable link and is not published.</li>
   <li><b>Operational telemetry.</b> The server records service events (tool called, payment settled,
   errors) with metadata - tool name, HTTP status, price, settlement chain, a keyed hash of the paying wallet
-  (never the address; events sent before 2026-11-25 named the address, and on request we delete those too) and, on a settled payment, the first word of the caller's
+  (never the address; events sent before this change named the address, and we delete those on request) and, on a settled payment, the first word of the caller's
   User-Agent; a call to a retired route carries the first word of the User-Agent, the host name of the
   Referer (no path or query) and which kind of payment header was present (never its value) - in a
   server-side analytics tool (PostHog). This is used to run
@@ -529,7 +530,7 @@ records; the card processor's copy is deleted through Stripe. The sales ledger k
 on-chain${gatewayBatched ? " (for a Circle Gateway batched payment, it keeps Gateway's transfer id instead)" : ""}. The sales and refund
 ledgers (wallet address, amount, chain, transaction id, tool, response digest${referralOn ? ", and for a referral payment the split its transaction shows" : ""}) are kept for seven years after
 the sale, the period our accounting and tax records must cover. A record of a payment refused or held under sanctions
-screening, or refused because it came from a sanctioned region (the address, rail, network, amount, route, time, the IP
+screening, or refused because it came from a region under U.S. sanctions (the address, rail, network, amount, route, time, the IP
 address the request came from, the list entry, and for a refusal by location the sanctioned country or region code), is
 kept privately for ten years, as US sanctions rules require. The consent a card checkout records (that you accepted
 the terms, asked us to start at once and, for a monitor, agreed to the automatic renewal at the price shown, with the

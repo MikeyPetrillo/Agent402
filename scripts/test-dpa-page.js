@@ -6,8 +6,10 @@
 //     customers we can reach, outside sellers and data sources named as
 //     recipients; the change notice is the constant;
 //   - every figure it prints is read from the module that runs it;
-//   - linked from /privacy and the footer, in the sitemap and llms.txt, dated
-//     like the legal pages; no em dashes, no raw hex.
+//   - unlisted: served at /dpa, but not linked from /privacy or the footer and
+//     not in the sitemap or llms.txt; /privacy says it is available on request
+//     at the contact address, with no link; dated like the legal pages; no em
+//     dashes, no raw hex.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
@@ -49,15 +51,26 @@ ok(!/#[0-9a-fA-F]{3,6}\b/.test(readFileSync(new URL("../src/dpa.js", import.meta
 {
   const { privacyPage } = await import("../src/privacy.js");
   const { ledgerFooterCompact } = await import("../src/ledger-chrome.js");
-  ok(/href="\/dpa"/.test(privacyPage(B).split("<footer")[0]) || /href="\/dpa">Data Processing Addendum/.test(privacyPage(B)), "/privacy links the addendum");
-  ok(/<a href="\/dpa"[^>]*>dpa<\/a>/.test(ledgerFooterCompact()), "the footer links it");
+  const pp = privacyPage(B);
+  ok(!/href="\/dpa"/.test(pp) && /ask for our Data Processing Addendum at <a href="mailto:help@agent402\.tools">/.test(pp), "/privacy offers the addendum on request at the contact address, with no link to the page");
+  ok(!/href="\/dpa"/.test(ledgerFooterCompact()), "the footer does not link it");
   const seo = await import("../src/seo.js");
   const sm = seo.sitemapPages(B, {});
-  ok(/\/dpa/.test(String(await sm)), "the sitemap lists it");
-  ok(/\[Data processing addendum\]\(\$\{baseUrl\}\/dpa\)/.test(readFileSync(new URL("../src/seo.js", import.meta.url), "utf8")), "llms.txt lists it");
+  ok(!/\/dpa\b/.test(String(await sm)), "the sitemap does not list it");
+  ok(!/\$\{baseUrl\}\/dpa/.test(readFileSync(new URL("../src/seo.js", import.meta.url), "utf8")), "llms.txt does not list it");
   const { pageLastmod } = await import("../src/page-dates.js");
   ok(pageLastmod("/dpa") === D.DPA_DATE, `the sitemap's lastmod is the printed date (${pageLastmod("/dpa")})`);
+  {
+    const { dpaPage } = await import("../src/dpa.js");
+    const prev = process.env.OPERATOR_SESSION_IDLE_SECONDS;
+    process.env.OPERATOR_SESSION_IDLE_SECONDS = "600";
+    const h = dpaPage(B);
+    if (prev === undefined) delete process.env.OPERATOR_SESSION_IDLE_SECONDS; else process.env.OPERATOR_SESSION_IDLE_SECONDS = prev;
+    ok(/ends after 10 minutes without use and 8 hours at most/.test(h), "the operator session figures are read from the limits the server enforces");
+    ok(/identical calls \(up to\s+one day\)/.test(h), "the cache bound matches /privacy (up to one day)");
+  }
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/const OP_SESSION_IDLE_MS = opSessionIdleMs\(\);/.test(server) && /import \{ OP_SESSION_TTL_MS, opSessionIdleMs \} from "\.\/operator-session-limits\.js";/.test(server), "the server enforces the same session limits the page states");
   ok(/app\.get\("\/dpa", \(_req, res\) => htmlCache\(res, 300, 900\)\.send\(dpaPage\(BASE_URL\)\)\);/.test(server), "served at /dpa, cached like the legal pages");
 }
 

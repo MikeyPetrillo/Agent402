@@ -21,7 +21,7 @@ import { COMPANY_PHONE } from "./company.js";
 import { LEGAL_ENTITY_NAME, LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 import { companyPostalLine } from "./email.js";
 import { lowBalanceWords, signInLifeWords } from "./credits-figures.js";
-import { sanctionedCountries, SANCTIONED_UA_REGION_CODES } from "./sanctioned-regions.js";
+import { sanctionedCountries, SANCTIONED_UA_REGION_CODES, NON_PROGRAM_COUNTRIES, sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 // Where a fraud-warning refund goes (src/credits.js fraudWarning and
 // approveFraudRefund): to the warned payment's own card when it can take the
 // whole balance back, automatically only while CREDITS_EFW_AUTO_REFUND is on
@@ -32,13 +32,20 @@ const FRAUD_WARNING_REFUND = "to that payment's card when that payment can take 
 // name: the country set the server runs with, and the occupied regions of
 // Ukraine by their ISO 3166-2 codes.
 const UA_REGION_NAMES = Object.freeze({ "43": "Crimea", "40": "Sevastopol", "14": "Donetsk", "09": "Luhansk" });
+/** The sentence naming where the service is not offered: the countries under
+ *  comprehensive US sanctions programs, then any country blocked by our own
+ *  choice, named separately (NON_PROGRAM_COUNTRIES), and the occupied regions
+ *  of Ukraine where the request carries region data. */
 export function refusedRegionsText(env = process.env) {
-  let names;
-  try { const dn = new Intl.DisplayNames(["en"], { type: "region" }); names = [...sanctionedCountries(env)].map((c) => dn.of(c) || c); } catch { names = [...sanctionedCountries(env)]; }
-  names.sort();
-  const ua = SANCTIONED_UA_REGION_CODES.map((c) => UA_REGION_NAMES[c] || `UA-${c}`);
+  const codes = [...sanctionedCountries(env)];
+  const name = (c) => { try { return new Intl.DisplayNames(["en"], { type: "region" }).of(c) || c; } catch { return c; } };
   const list = (a) => (a.length <= 1 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
-  return `${list(names)}, and the ${list(ua)} regions of Ukraine`;
+  const program = codes.filter((c) => !NON_PROGRAM_COUNTRIES.has(c)).map(name).sort();
+  const own = codes.filter((c) => NON_PROGRAM_COUNTRIES.has(c)).map(name).sort();
+  const ua = SANCTIONED_UA_REGION_CODES.map((c) => UA_REGION_NAMES[c] || `UA-${c}`);
+  const sanctioned = `${program.length ? `${list(program)} or from ` : ""}the ${list(ua)} regions of Ukraine (where the request carries region data)`;
+  const ownText = own.length ? ` As a business choice we also do not serve requests from ${list(own)}.` : "";
+  return `We do not serve requests from ${sanctioned}, which are under comprehensive U.S. sanctions.${ownText} Such a request is refused before its payment is verified or settled.`;
 }
 const FRAUD_WARNING_RULE = `A key whose payment the card network reports as possibly fraudulent is frozen, and its unspent balance is refunded ${FRAUD_WARNING_REFUND}.`;
 export function termsPage(baseUrl) {
@@ -181,7 +188,7 @@ If you do not agree to these terms, do not use the service.</p>
   <li>Traffic through the AI gateway is also subject to the <b>usage policies of the upstream model providers</b> (including OpenAI's usage policies and the terms of OpenRouter and the model operators it serves). Those providers apply their own safety filtering and may refuse requests; their policies apply to your use through us. The GPT Image tools (image-gen, image-gen-hd and image-gen-premium) ask the provider for its less restrictive filtering level by default, and a caller may choose its stricter level; the provider's usage policies apply at either level. Don't attempt to circumvent, probe, or disable that safety filtering.</li>
   <li>Don't use the service to create malware or exploits for unauthorized use, to defraud, phish, spam, or deceive, or to process other people's personal data unlawfully.</li>
   <li><b>High-risk use is prohibited:</b> the service is not designed for, and must not be relied on in, any context where failure or inaccuracy could lead to death, personal injury, or severe damage - including medical treatment, life-safety systems, and operation of critical infrastructure.</li>
-  <li><b>Sanctions and export controls:</b> don't use or export the service or its outputs in violation of U.S. sanctions or U.S. export control laws (the Export Administration Regulations), including for a prohibited end use or by a prohibited end user. We screen the paying wallets on our crypto rails against U.S. sanctions lists, and we refuse requests, before any payment is read, from countries and regions under comprehensive U.S. sanctions: today ${esc(refusedRegionsText())}.</li>
+  <li><b>Sanctions and export controls:</b> don't use or export the service or its outputs in violation of U.S. sanctions or U.S. export control laws (the Export Administration Regulations), including for a prohibited end use or by a prohibited end user. We screen the paying wallets on our crypto rails against U.S. sanctions lists.${sanctionsGeoBlockEnabled() ? ` ${esc(refusedRegionsText())}` : ""}</li>
   <li>You are responsible for the inputs you send and how you use the outputs.</li>
 </ul>
 
@@ -290,7 +297,7 @@ not investment, trading, legal or tax advice.</p>
 Agent402 buys that result from the seller for its own account, with its own funds, and sells it to you;
 your payment is a payment to Agent402 for the result, at the price shown before you pay. Agent402 does not
 send, hold or exchange funds for you on these routes, and you have no account with the seller through us.
-On <code>/api/decide/execute</code> you pay only for what a run spent: on an x402 <code>upto</code> payment the budget you sign is a ceiling and only the amount spent is settled; on an <code>exact</code> payment any part of the price the run does not spend is owed back to the paying wallet and repaid on chain under these refund terms. No part of a payment is kept as a credit.</p>
+On <code>/api/decide/execute</code> you pay only for what a run spent: on an x402 <code>upto</code> payment the budget you sign is a ceiling and only the amount spent is settled; on an <code>exact</code> payment any part of the price the run does not spend is owed back to the paying wallet and repaid on chain under these refund terms. No part of a run's budget is kept as a credit. A decision paid with a wallet comes with an execution credit, part of its fee, usable only toward running that decision's plan on <code>/api/decide/execute</code> until the expiry its answer states; it has no cash value, is not transferable and is not paid out if unused.</p>
 <h2 id="refunds">Refunds</h2>
 <p><b>Refunds on-chain.</b> ${clause("ordinary-failure")} ${clause("charged-but-failed")}
 ${clause("repayment-process")} ${clause("repayment-proof")}
@@ -378,11 +385,9 @@ right to use them.</p>
 
 <h2>Availability & changes</h2>
 <p>The service may change, be rate-limited, or be discontinued at any time, subject to what these terms say under
-"If the service stops". We may update these terms. We post the new version here with a new "last updated" date. For a
-material change we also email the address on any active subscription or prepaid balance at least 30 days before it
-takes effect. A change applies only to use after it takes effect. A change to the
-<a href="#disputes">Governing law and disputes</a> section never applies to a dispute that arose before the change;
-that dispute is governed by the version in effect when it arose.</p>
+"If the service stops". We may update these terms. We post the new version on this page with a new "last updated" date. A change applies to
+calls and purchases made on or after that date, and never to a dispute that arose before it; that dispute is
+governed by the version in effect when it arose. An active subscription keeps the price it was bought at.</p>
 
 <h2>Indemnification</h2>
 <p>You agree to indemnify and hold harmless ${LEGAL_ENTITY_SENTENCE} and the service's maintainers and

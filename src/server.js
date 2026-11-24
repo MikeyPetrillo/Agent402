@@ -543,6 +543,7 @@ import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
 import { consentRegionRoute } from "./consent-region.js";
+import { OP_SESSION_TTL_MS, opSessionIdleMs } from "./operator-session-limits.js";
 import { dpaPage } from "./dpa.js";
 import { termsPage } from "./terms.js";
 import { transparencyPage, repoTraffic } from "./transparency.js";
@@ -6951,14 +6952,13 @@ const getOperatorToken = (req, { headerOnly = false } = {}) => {
 // carries only a random session id; the token stays server-side, sessions
 // expire after OP_SESSION_TTL_MS, and logout (or a token rotation) revokes them
 // without touching the root token.
-const OP_SESSION_TTL_MS = 8 * 3600 * 1000;
 // Inside that absolute lifetime, a session also ends after
 // OPERATOR_SESSION_IDLE_SECONDS (default 1800) with no authenticated request:
 // each one moves the idle deadline forward, never past the absolute expiry.
 // The shared copy of the idle deadline is written at most once per
 // OP_SESSION_TOUCH_MS per session, so another container may end an idle
 // session up to that much early, never late.
-const OP_SESSION_IDLE_MS = Math.min(OP_SESSION_TTL_MS, Math.max(1, Number(process.env.OPERATOR_SESSION_IDLE_SECONDS) || 1800) * 1000);
+const OP_SESSION_IDLE_MS = opSessionIdleMs();
 const OP_SESSION_TOUCH_MS = Math.min(60_000, Math.floor(OP_SESSION_IDLE_MS / 4));
 // Shared across replicas (src/shared-limits.js): a session is a flag in the
 // shared store, keyed by a digest of the operator token and its id (never the

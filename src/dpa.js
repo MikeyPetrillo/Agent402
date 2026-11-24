@@ -14,10 +14,10 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { trustSubprocessors } from "./trust-page.js";
 import { backupKeepDays } from "./backup.js";
-import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { COMPANY_MAILBOXES } from "./company.js";
 import { LEGAL_ENTITY_NAME, TRADE_NAME } from "./legal-entity.js";
 import { companyPostalLine } from "./email.js";
+import { OP_SESSION_TTL_MS, opSessionIdleMs, durationWords } from "./operator-session-limits.js";
 
 export const DPA_DATE = "2026-11-25";
 export const DPA_SUBPROCESSOR_NOTICE_DAYS = 30;
@@ -30,7 +30,6 @@ export function dpaPage(baseUrl) {
   const mail = COMPANY_MAILBOXES.operator;
   const postal = companyPostalLine();
   const subs = [...trustSubprocessors(), DPA_MAILBOX_ROW];
-  const cacheMin = Math.round(IDEM_TTL_MS / 60000);
   const extraCss = `
 .dp-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
 .dp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
@@ -82,7 +81,7 @@ records, logs, rate limits, analytics), we are an independent controller, as the
   <li><b>Data subjects and categories:</b> whatever people and data you choose to send; the service asks for
   none. Do not send special category data unless the tool needs it and you have a lawful basis.</li>
   <li><b>Duration:</b> in memory for the call, then deleted, except: short caches of identical calls (up to
-  ${cacheMin} minutes), memory data until you delete it or its time to live ends, and job and task results
+  one day), memory data until you delete it or its time to live ends, and job and task results
   for the periods the privacy policy states. Nightly backups are deleted after ${backupKeepDays()} days.</li>
   <li><b>Instructions:</b> your calls and this addendum are your complete instructions. We process your data
   for no other purpose, never sell it, and never use it to train a model.</li>
@@ -152,7 +151,7 @@ the competent authority.</p>
   <li>Every connection is encrypted in transit (TLS, HSTS on every answer).</li>
   <li>The stores require credentials held only by the service; nightly backups are encrypted before upload and
   deleted after ${backupKeepDays()} days.</li>
-  <li>Operator access needs a token; a browser session ends after 30 minutes without use and 8 hours at most.</li>
+  <li>Operator access needs a token; a browser session ends after ${durationWords(opSessionIdleMs())} without use and ${durationWords(OP_SESSION_TTL_MS)} at most.</li>
   <li>Payments carry no card data to us; card details stay on the card processor's hosted page.</li>
   <li>Tool inputs are not written to logs (the one exception, the text of an <code>onchain-sql</code> query the
   data service could not answer, is named in the privacy policy); prompts are sent to model providers configured not to keep or train on them
