@@ -790,6 +790,10 @@ try {
   ok(r.status === 400 && !r.headers.get("location"), "an unknown client is never redirected to");
   r = await get(authUrl({ code_challenge: p1.c, resource: "https://other.example/mcp" }));
   ok(refusedHere(r) && /invalid_target/.test(await r.text()), "a resource that is not this connector is refused on an error page");
+  r = await get(authUrl({ code_challenge: p1.c, resource: `${SITE}/mcp?tool_names=underscore` }));
+  ok(r.status === 303 && /\/oauth\/consent\?rid=/.test(r.headers.get("location") || ""), `the plain-names connector URL (/mcp?tool_names=underscore) is this connector's resource (${r.status})`);
+  r = await get(authUrl({ code_challenge: p1.c, resource: `${SITE}/mcp?tool_names=other` }));
+  ok(refusedHere(r) && /invalid_target/.test(await r.text()), "any other query on the connector URL is refused");
 
   // A started sign-in: cookie, consent page, CSRF token.
   async function start(p, extra = {}) {

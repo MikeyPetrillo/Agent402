@@ -48,6 +48,7 @@
 // one else's guesses refuse an email's owner. Thresholds come from the private table;
 // a refusal never says which check refused.
 import { mailboxKey } from "./mailbox-key.js";
+import { PLAIN_TOOL_NAMES_VALUE } from "./mcp-flagship.js";
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { SKIP_UPDATE } from "./json-document.js";
 import { shared, createMemoryLimits } from "./shared-limits.js";
@@ -216,6 +217,11 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
   const own = secret ? createHmac("sha256", secret).update("mcp-oauth").digest() : null;
   const mac = (purpose, body) => createHmac("sha256", own).update(`${purpose}|${body}`).digest("base64url");
   const resources = new Set([`${baseUrl}/mcp`, `${baseUrl}${AUTH_MCP_PATH}`]);
+  // The plain-names listing (/mcp?tool_names=underscore, src/mcp-flagship.js)
+  // is the same connector: a host that registered that URL names it as the
+  // resource, read as the URL without the query.
+  const PLAIN_QUERY = `?tool_names=${PLAIN_TOOL_NAMES_VALUE}`;
+  const canonicalResource = (r) => (typeof r === "string" && r.endsWith(PLAIN_QUERY) ? r.slice(0, -PLAIN_QUERY.length) : r);
   const enabled = () => mcpOAuthSwitch() && creditsSalesEnabled() && Boolean(secret);
   // Both switches set but the private table missing or incomplete: the
   // sign-in does not start, and its routes answer a generic 503.
@@ -620,7 +626,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       if (q.code_challenge_method !== "S256") return bad("invalid_request", "PKCE with code_challenge_method S256 is required.");
       if (!CHALLENGE_RE.test(String(q.code_challenge || ""))) return bad("invalid_request", "code_challenge must be a base64url SHA-256 digest.");
       if (q.scope != null && String(q.scope).split(/\s+/).filter(Boolean).some((x) => x !== SCOPE)) return bad("invalid_scope", `The only scope is ${SCOPE}.`);
-      const resource = q.resource == null ? null : str(q.resource, 500);
+      const resource = q.resource == null ? null : canonicalResource(str(q.resource, 500));
       if (q.resource != null && (!resource || !resources.has(resource))) return bad("invalid_target", "resource must name this server's MCP connector.");
       const rid = hex(16);
       const cookie = b64url(randomBytes(32));
@@ -897,7 +903,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
         if (gt === "authorization_code") {
           const code = str(b.code, 200), verifier = str(b.code_verifier, 200), redirectUri = str(b.redirect_uri, 500);
           if (!code || !verifier || !VERIFIER_RE.test(verifier)) return oauthErr(res, 400, "invalid_request", "code and a PKCE code_verifier are required.");
-          const resource = b.resource == null ? null : str(b.resource, 500);
+          const resource = b.resource == null ? null : canonicalResource(str(b.resource, 500));
           let known = false;
           try { known = Object.hasOwn((await clients.view()).clients, clientId); } catch { return oauthErr(res, 503, "temporarily_unavailable"); }
           if (!known) return oauthErr(res, 401, "invalid_client");
