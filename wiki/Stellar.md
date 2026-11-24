@@ -1,5 +1,7 @@
 # Stellar (USDC)
 
+"Stellar" is a trademark of the Stellar Development Foundation. All rights reserved. This is independent software, not affiliated with, sponsored or endorsed by the Stellar Development Foundation.
+
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
 Agent402 accepts x402 payments in USDC on Stellar mainnet (pubnet), settled through an x402 facilitator for Stellar. See [[Paying with x402]] for the buyer side.

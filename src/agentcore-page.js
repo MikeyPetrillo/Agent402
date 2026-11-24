@@ -28,6 +28,7 @@ import { articleDates } from "./page-dates.js";
 
 const PLATFORM = PLATFORM_INTEGRATIONS.find((p) => p.slug === "agentcore");
 export const AGENTCORE_SLUG = PLATFORM.slug;
+import { AWS_MARK_NOTICE } from "./mark-notices.js";
 export const AGENTCORE_NAME = PLATFORM.name;
 // The User-Agent the Payments plugin's HTTP client sends (a version follows the slash).
 export const AGENTCORE_PLUGIN_USER_AGENT = "python-httpx/";
@@ -35,7 +36,7 @@ const SAMPLE_DIR = "examples/agentcore-x402-buyer";
 const GATEWAY_DIR = "examples/agentcore-gateway";
 // The AgentCore CLI package version the Gateway example's MCP target ran with (its README).
 const GATEWAY_CLI_VERSION = "@aws/agentcore 0.27.1";
-const TOOL_SLUGS = ["search", "answer", "hash"];
+const TOOL_SLUGS = ["edgar-filings", "edgar-company-facts", "hash"];
 const AWS_PAYMENTS_DOC = "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html";
 
 /** Does the gate answer the Payments plugin's client with the x402 offer alone? */
@@ -65,7 +66,6 @@ export function agentcorePage(baseUrl, catalog = {}, { tempo = tempoEnabled(), e
   const x402Alone = pluginGetsX402Alone(env);
   const bySlug = new Map(Object.values(catalog || {}).filter((d) => d && d.slug).map((d) => [d.slug, d]));
   const tools = TOOL_SLUGS.map((s) => bySlug.get(s)).filter(Boolean);
-  const answerTool = bySlug.get("answer");
 
   const x402Para = x402Alone
     ? `x402 is this server's default for the Payments plugin's HTTP client. A request whose User-Agent starts with ${code(AGENTCORE_PLUGIN_USER_AGENT)} (what the plugin sent when the sample ran) is answered with the x402 offer alone: the ${code("PAYMENT-REQUIRED")} header and the full offer in the body, with no ${code("WWW-Authenticate: Payment")} challenge. The offer is payable in USDC with no extra configuration on this server's side.`
@@ -103,7 +103,8 @@ export function agentcorePage(baseUrl, catalog = {}, { tempo = tempoEnabled(), e
   const body = `
   <div style="max-width:980px;margin:0 auto;padding:50px 30px 64px;">
     <nav class="ml-crumb" aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><span class="ml-crumb-cur">&#160;/ <span style="color:var(--ink);">${esc(AGENTCORE_NAME)}</span></span></nav>
-    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 18px;">Agent402 with ${esc(AGENTCORE_NAME)}</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 10px;">Agent402 with ${esc(AGENTCORE_NAME)}</h1>
+    <p class="ml-mark-notice" style="color:var(--faint);font-size:var(--fs-xs);margin:0 0 18px;max-width:760px;">${esc(AWS_MARK_NOTICE)}</p>
     <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 34px;max-width:760px;">Agent402 serves an AgentCore agent two things: a tool catalog to add as an AgentCore Gateway target, and an x402 offer on every paid call. The sample on this page pays that offer through AgentCore Payments.</p>
 
     <section id="setup" style="margin-bottom:34px;">
@@ -131,7 +132,7 @@ export function agentcorePage(baseUrl, catalog = {}, { tempo = tempoEnabled(), e
       <p ${P}><a href="${esc(sample)}" rel="noopener" ${A}>${esc(SAMPLE_DIR)}</a> is a runnable buyer with two entry points.</p>
       <ul style="padding-left:20px;margin:0;">
         <li ${LI}>${code("direct_buy.py")}: fetch, 402, sign, retry, then check the paid sha256 answer against its own hash.</li>
-        <li ${LI}>${code("agent_buy.py")}: a Strands agent with the Payments plugin runs a web search, then a cited answer${answerTool?.modelBacked ? " from a model-backed tool" : ""}, each paid through the plugin.</li>
+        <li ${LI}>${code("agent_buy.py")}: a Strands agent with the Payments plugin lists a company's SEC filings, then its filed financials, each paid through the plugin.</li>
       </ul>
     </section>
 

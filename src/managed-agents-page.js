@@ -17,6 +17,7 @@
 // and test (isComputePayable over the live catalog), the connector's per-client
 // limits (src/rate-limit.js), the wires the connector takes in the call
 // (connectorWires, src/connector-pay.js) and the tool card prices (the catalog).
+import { CLAUDE_MARK_NOTICE } from "./mark-notices.js";
 import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
@@ -192,7 +193,8 @@ export function managedAgentsPage(baseUrl, catalog = {}, { env = process.env } =
   const body = `
   <div style="max-width:980px;margin:0 auto;padding:50px 30px 64px;">
     <nav class="ml-crumb" aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><span class="ml-crumb-cur">&#160;/ <span style="color:var(--ink);">${esc(MANAGED_AGENTS_NAME)}</span></span></nav>
-    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 18px;">Agent402 with ${esc(MANAGED_AGENTS_NAME)}</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 10px;">Agent402 with ${esc(MANAGED_AGENTS_NAME)}</h1>
+    <p class="ml-mark-notice" style="color:var(--faint);font-size:var(--fs-xs);margin:0 0 18px;max-width:760px;">${esc(CLAUDE_MARK_NOTICE)}</p>
     <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 34px;max-width:760px;">Agent402's hosted MCP connector at ${code(connectorUrl(baseUrl))} attaches to a Claude Managed Agents agent as a remote MCP server. The agent finds tools and runs the free ones through it; a custom tool on your host pays for the rest.</p>
 
     <section id="setup" style="margin-bottom:34px;">

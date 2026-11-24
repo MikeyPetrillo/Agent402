@@ -131,7 +131,7 @@ skill packs built on them. When you use them:</p>
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-24.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-25.</p>
 </section>
 
 <section>
@@ -324,6 +324,15 @@ contract for AWS Marketplace governs those purchases together with our refund ru
 before running the tool does not use the payment, and a call that does not complete can be sent again with the same
 payment while it is valid. ${AWS_UNANSWERED_SENTENCE}</p>
 ` : ""}
+<h2 id="trademarks">Third-party names and marks</h2>
+<p>Product, company, network and data-source names on this site and in tool answers belong to their owners. They are
+used only to identify those products, networks and sources, and to say what works with what. Their use does not mean
+that any of them sponsors, endorses or is affiliated with Agent402 or Havok Holdings LLC. Amazon Web Services, AWS and
+Amazon Bedrock AgentCore are trademarks of Amazon.com, Inc. or its affiliates. Stellar is a trademark of the Stellar
+Development Foundation. Arc is a trademark of Circle Internet Group, Inc. and/or its affiliates. EDGAR is a registered
+trademark of the U.S. Securities and Exchange Commission. FRED is a registered trademark of the Federal Reserve Bank of
+St. Louis. All other product and company names are trademarks of their respective owners.</p>
+
 <h2>Availability & changes</h2>
 <p>The service may change, be rate-limited, or be discontinued at any time. We may update these terms;
 the "last updated" date reflects the current version. Continued use after a change means you accept it.</p>

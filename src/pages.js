@@ -1,5 +1,6 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
+import { EDGAR_MARK_NOTICE, namesEdgar } from "./mark-notices.js";
 import { SERVER_VERSION } from "./server-version.js";
 import { siteOrgRef } from "./site-org.js";
 import { usdToBaseUnits } from "./base-units.js";
@@ -589,6 +590,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const body = `<div class="tp-wrap">
   ${crumbs.nav}
   <h1 class="tp-h1" title="${e(tool.name)}">${e(tool.name)}</h1>
+  ${namesEdgar(tool) ? `<p class="tp-mark-notice" style="font-size:var(--fs-xs);color:var(--faint);margin:-4px 0 12px;max-width:76ch;">${e(EDGAR_MARK_NOTICE)}</p>` : ""}
   <div class="tp-badge">${
     computePayable
       ? `<span><span class="tp-free">FREE</span> <span style="color:var(--on-panel-dim);">with proof-of-work</span></span><span style="color:var(--on-panel-muted);">or ${e(pw.short)} in USDC</span>`

@@ -23,8 +23,8 @@ const ok = (cond, msg) => { assert.ok(cond, msg); pass++; };
 const eq = (a, b, msg) => { assert.equal(a, b, msg); pass++; };
 const BASE = "https://example.test";
 const CATALOG = {
-  "GET /api/search": { slug: "search", name: "Web search", price: "$0.010" },
-  "GET /api/answer": { slug: "answer", name: "Cited answer", price: "$0.02", modelBacked: true },
+  "GET /api/edgar-filings": { slug: "edgar-filings", name: "SEC recent filings", price: "$0.010" },
+  "GET /api/edgar-company-facts": { slug: "edgar-company-facts", name: "SEC company facts", price: "$0.02" },
   "POST /api/hash": { slug: "hash", name: "Hash", price: "$0.001" },
 };
 // Visible text: scripts, styles, head and tags removed, entities decoded.
@@ -101,8 +101,8 @@ for (const [label, env] of [["gate off", { MPP_OFFER_WITHHOLD_USER_AGENTS: "off"
   }
   ok(t.includes("with no extra configuration on this server's side"), "configuration is said of this server's side");
   ok(t.includes("direct_buy.py") && t.includes("agent_buy.py") && html.includes("examples/agentcore-x402-buyer"), "the sample and its two entry points");
-  ok(t.includes("a cited answer from a model-backed tool"), "the answer step is labeled model-backed when the catalog says so");
-  ok(!main(agentcorePage(BASE, { ...CATALOG, "GET /api/answer": { slug: "answer", name: "Cited answer", price: "$0.02" } }, { tempo: true, env: {} })).includes("model-backed tool"), "and not labeled when it does not");
+  ok(t.includes("lists a company's SEC filings, then its filed financials"), "the agent sample's two paid steps are the SEC tools it calls");
+  ok(t.includes("Amazon Web Services, AWS and Amazon Bedrock AgentCore are trademarks of Amazon.com, Inc. or its affiliates."), "the AWS notice sits under the title");
   // Prices come from the catalog handed in, nothing typed.
   ok(t.includes("$0.01") && t.includes("$0.02") && t.includes("$0.001"), "tool card prices are the catalog's");
   const other = main(agentcorePage(BASE, { "POST /api/hash": { slug: "hash", name: "Hash", price: "$0.777" } }, { tempo: true, env: {} }));
