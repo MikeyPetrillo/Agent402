@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import * as gen from "../src/tools/convert-gen.js";
 import { KIT2 } from "../src/tools/kit2.js";
+import { CATALOG_FLOOR } from "./sync-count.js";
 
 const { UNIT_CATEGORIES, convertAnyUnit } = gen;
 
@@ -301,7 +302,7 @@ try {
   // /marketplace renders.
   {
     const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
-    ok(Array.isArray(pricing.endpoints) && pricing.endpoints.length >= 400, `catalog holds the 400-entry floor (got ${pricing.endpoints?.length})`);
+    ok(Array.isArray(pricing.endpoints) && pricing.endpoints.length >= CATALOG_FLOOR, `catalog holds the ${CATALOG_FLOOR}-entry floor (got ${pricing.endpoints?.length})`);
     const mkt = await fetch(`${BASE}/marketplace`);
     ok(mkt.status === 200, `/marketplace → 200 (got ${mkt.status})`);
   }

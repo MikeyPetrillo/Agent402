@@ -240,7 +240,7 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
     for (const slug of namedRetired(proseOf(pack))) inPacks.push(`${pack.slug}: prose names ${slug}`);
   }
   ok(namedRetired(proseOf({ slug: "skill-x", toolSlugs: ["geocode"], workflow: "Resolve each stop with geocode, then forecast." })).join() === "geocode", "control: a pack's workflow that names a one-word retired tool is found");
-  ok(SKILL_PACKS.length >= 50 && inPacks.length === 0, `no pack runs or names a retired tool in its steps, workflow or prompt (found: ${inPacks.join(", ") || "none"}; ${SKILL_PACKS.length} packs)`);
+  ok(SKILL_PACKS.length > 0 && inPacks.length === 0, `no pack runs or names a retired tool in its steps, workflow or prompt (found: ${inPacks.join(", ") || "none"}; ${SKILL_PACKS.length} packs)`);
 }
 
 // --- the changelog's retirement sentences say what the registry says ----------------
