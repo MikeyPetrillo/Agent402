@@ -96,7 +96,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   if (format === "mp3") ok(sent.provider?.data_collection === "deny" && sent.provider?.zdr === true && !("instructions" in sent), "the ElevenLabs request carries our data policy (data_collection deny, zdr)");
   const head = out.subarray(0, 4).toString("latin1");
   const shaped = format === "mp3" ? head === "ID3f" : format === "pcm" ? out.equals(pcm) : format === "aac" ? out[0] === 0xff && (out[1] & 0xf0) === 0xf0 : head === magic[format];
-  ok(r.format === format && shaped && r.provider === "openrouter" && r.voice === "sarah" && r.chars === 20, `${format}: answered as ${format} (${out.length} bytes), naming the voice that spoke`);
+  ok(r.format === format && shaped && r.provider === "agent402" && r.voice === "sarah" && r.chars === 20, `${format}: answered as ${format} (${out.length} bytes), naming the voice that spoke`);
 }
 {
   const outKeys = (o) => Object.keys(o).sort().join(",");
@@ -153,7 +153,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   const r = await run("tts-hd", { text: "hi", voice: "george", format: "flac" });
   const bk = calls.find((c) => !isEleven(c.init));
   const sent = JSON.parse(bk.init.body);
-  ok(r.provider === "openrouter" && r.model === FIRST_BACKUP && sent.model === FIRST_BACKUP, `an ElevenLabs 503 is served by the first backup (${r.model}), named in the answer`);
+  ok(r.provider === "agent402" && r.model === FIRST_BACKUP && sent.model === FIRST_BACKUP, `an ElevenLabs 503 is served by the first backup (${r.model}), named in the answer`);
   ok(sent.voice === firstBackup.map.fable && r.voice === sent.voice, `the backup gets the nearest voice for the one asked for (george -> fable -> ${sent.voice})`);
   const flac = Buffer.from(r.audio, "base64");
   ok(sent.response_format === "pcm" && r.format === "flac" && flac.subarray(0, 4).toString("latin1") === "fLaC", "and the format asked for is still served, encoded from the backup's PCM");
@@ -164,7 +164,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   let n = 0;
   stub([["openrouter.ai", withBackups(() => (n++ === 0 ? err(503) : audio(Buffer.from("ID3second"))))]]);
   const second = await run("tts-hd", { text: "hi" });
-  ok(second.model === TTS_TIERS["tts-hd"].chain[1] && second.provider === "openrouter" && backupCalls().length === 0, `a server error on the first link (unbilled) is served by the second (${second.model}), named in the answer, before any backup`);
+  ok(second.model === TTS_TIERS["tts-hd"].chain[1] && second.provider === "agent402" && backupCalls().length === 0, `a server error on the first link (unbilled) is served by the second (${second.model}), named in the answer, before any backup`);
   stub([["openrouter.ai", withBackups(err(401))]]);
   ok((await run("tts", { text: "hi" })).model === FIRST_BACKUP, "our key refused (401) is an outage, not the buyer's 400: a backup serves");
   stub([["openrouter.ai", withBackups(() => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } }); })]]);

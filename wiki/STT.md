@@ -33,7 +33,7 @@ mp3, m4a, wav, ogg, flac, webm (max 25 MB). mp4, mpeg and mpga files are accepte
 { "url": "https://agent402.tools/fixtures/sample-audio.wav", "language": "en" }
 
 // Response
-{ "model": "gpt-transcribe", "provider": "openai",
+{ "model": "gpt-transcribe", "provider": "agent402",
   "text": "Hello, this is a sample transcription.",
   "language": "en", "duration": 3.5 }
 ```

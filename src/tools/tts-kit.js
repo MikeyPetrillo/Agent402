@@ -228,7 +228,7 @@ async function callKokoro(text, voice, format, tierSlug) {
   }
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length === 0) throw bad("Upstream returned no audio - retry, or rephrase the input", 502);
-  return { model: tier.model, provider: "openrouter", voice: nativeVoice, format, audio: buf.toString("base64"), chars: text.length };
+  return { model: tier.model, provider: "agent402", voice: nativeVoice, format, audio: buf.toString("base64"), chars: text.length };
 }
 
 /** ElevenLabs over OpenRouter's speech wire. mp3 and pcm come back as is;
@@ -430,7 +430,7 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
   // Encode at the rate the wire reports (every speech model checked answers 24 kHz).
   const rate = Number(/rate=(\d+)/.exec(res.headers?.get?.("content-type") || "")?.[1]) || 24000;
   if (wireFormat !== format) buf = await transcodePcm(buf, format, { sampleRate: rate });
-  return { model, provider: "openrouter", voice: nativeVoice, format, audio: buf.toString("base64"), chars: text.length };
+  return { model, provider: "agent402", voice: nativeVoice, format, audio: buf.toString("base64"), chars: text.length };
 }
 
 /** The standard voice name for a backup call: the name the buyer gave, or
@@ -593,7 +593,7 @@ export const TTS_TOOLS = [
       output: {
         example: {
           model: "hexgrad/kokoro-82m",
-          provider: "openrouter",
+          provider: "agent402",
           voice: "af_alloy",
           format: "mp3",
           audio: "<base64-encoded audio>",
@@ -626,7 +626,7 @@ export const TTS_TOOLS = [
       output: {
         example: {
           model: "elevenlabs/eleven-v4-turbo",
-          provider: "openrouter",
+          provider: "agent402",
           voice: "river",
           format: "mp3",
           audio: "<base64-encoded audio>",
@@ -659,7 +659,7 @@ export const TTS_TOOLS = [
       output: {
         example: {
           model: "elevenlabs/eleven-v4",
-          provider: "openrouter",
+          provider: "agent402",
           voice: "river",
           format: "mp3",
           audio: "<base64-encoded audio>",

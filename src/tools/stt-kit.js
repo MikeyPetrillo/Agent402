@@ -651,7 +651,7 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
 
   return {
     model,
-    provider: "openai",
+    provider: "agent402",
     text: data.text ?? "",
     // The json response format carries no language: the caller's hint, else a
     // guess from the transcript's words (null when no language clearly leads).
@@ -707,7 +707,7 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
   if (!diarize) {
     return {
       model,
-      provider: "openrouter",
+      provider: "agent402",
       text: data.text,
       language: answerLanguage(data.language, language, data.text),
       duration: Number.isFinite(data.duration) ? data.duration : (Number.isFinite(probedDuration) ? Math.round(probedDuration * 100) / 100 : null),
@@ -722,7 +722,7 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
   const speakers = new Set(words.map((w) => w.speaker).filter((n) => n !== null)).size;
   return {
     model,
-    provider: "openrouter",
+    provider: "agent402",
     text: data.text ?? "",
     language: answerLanguage(data.language, language, data.text),
     // Scribe's 0-1 confidence in the detected language; null when not scored.
@@ -927,7 +927,7 @@ export const STT_TOOLS_BASE = [
       output: {
         example: {
           model: "gpt-transcribe",
-          provider: "openai",
+          provider: "agent402",
           text: "Hi, this is the Agent402 sample recording. Can you hear me clearly? Yes, loud and clear. There are two of us on this clip, so the transcript can tell us apart.",
           language: "en",
           duration: 12.6,
@@ -961,7 +961,7 @@ export const STT_TOOLS_BASE = [
       output: {
         example: {
           model: "gpt-transcribe",
-          provider: "openai",
+          provider: "agent402",
           text: "Hi, this is the Agent402 sample recording. Can you hear me clearly? Yes, loud and clear. There are two of us on this clip, so the transcript can tell us apart.",
           language: "en",
           duration: 12.6,
@@ -1033,7 +1033,7 @@ export const STT_LONG_TOOL = {
     output: {
       example: {
         model: "gpt-transcribe",
-        provider: "openai",
+        provider: "agent402",
         text: "Hi, this is the Agent402 sample recording. Can you hear me clearly? Yes, loud and clear. There are two of us on this clip, so the transcript can tell us apart.",
         language: "en",
         duration: 12.6,
