@@ -26,7 +26,7 @@ export const DPA_MAILBOX_ROW = Object.freeze({ category: "Mailbox", name: "Zoho 
 export function dpaPage(baseUrl) {
   const canonical = `${baseUrl}/dpa`;
   const title = "Data Processing Addendum - Agent402";
-  const description = "Agent402's Data Processing Addendum, available to business customers on request: our role, the processing, the EU Standard Contractual Clauses and UK Addendum, sub-processors, other recipients, security measures and breach notice.";
+  const description = "Agent402's Data Processing Addendum for business customers, on request: roles, processing, transfer clauses, sub-processors and breach notice.";
   const mail = COMPANY_MAILBOXES.operator;
   const postal = companyPostalLine();
   const subs = [...trustSubprocessors(), DPA_MAILBOX_ROW];
