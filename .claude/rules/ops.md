@@ -189,7 +189,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   alone (no refusal). `SOLANA_DEVNET_RPC_URL`: wallet-balances on solana-devnet (unset, the devnet
   host of the provider behind `SOLANA_RPC_URL`). search-suggest's per-minute ceiling and queue-wait
   bound count as a cap too.
-- **CI's data keys:** `OPEN_METEO_API_KEY`, `BLS_API_KEY` (the BLS-backed macro tools; the step
+- **CI's data keys:** `OPEN_METEO_API_KEY`, `BLS_CI_API_KEY` (handed to the server as `BLS_API_KEY`, never the production BLS key; the BLS-backed macro tools; the step
   logs keyed or keyless and caps the run's BLS reads with `BLS_DAILY_MAX` = `BLS_RUN_READ_CAP`, 12) and `COINGECKO_CI_API_KEY` (never the production
   CoinGecko key) reach only test-sweeps' strict-sweep server step and the nightly corpus step; the
   server gets `COINGECKO_API_TIER=pro` and `COINGECKO_DAILY_MAX` = `CG_RUN_READ_CAP`

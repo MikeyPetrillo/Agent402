@@ -254,11 +254,12 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
 // refused 429 (scripts/test-non-metered-examples.js --coingecko-run-check).
 {
   const { CG_RUN_READ_CAP, CG_RUN_MAX_PER_MIN, CG_NIGHTLY_READ_CAP, BLS_RUN_READ_CAP } = await import("./test-non-metered-examples.js");
-  const DATA_KEYS = ["OPEN_METEO_API_KEY", "COINGECKO_CI_API_KEY", "BLS_API_KEY"];
+  const DATA_KEYS = ["OPEN_METEO_API_KEY", "COINGECKO_CI_API_KEY", "BLS_CI_API_KEY"];
   const KEY_VARS = ["OPEN_METEO_API_KEY", "COINGECKO_API_KEY", "BLS_API_KEY"];
   const wfText = (f) => readFileSync(new URL(`../.github/workflows/${f}`, import.meta.url), "utf8");
   for (const f of ["deploy.yml", "corpus-nightly.yml"]) {
     ok(!/secrets\.COINGECKO_API_KEY\b/.test(wfText(f)), `${f}: no step reads secrets.COINGECKO_API_KEY (the production key is not an Actions secret; CI uses COINGECKO_CI_API_KEY)`);
+    ok(!/secrets\.BLS_API_KEY\b/.test(wfText(f)), `${f}: no step reads secrets.BLS_API_KEY (CI uses BLS_CI_API_KEY, so a run never spends the production key's daily queries)`);
   }
   // Every place a data key is read, by workflow: [job, step name].
   const readsOf = (wf) => {
@@ -284,7 +285,7 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
     const run = String(keyed.run || "");
     ok(/^\$\{\{ secrets\.OPEN_METEO_API_KEY \}\}$/.test(String(env.OPEN_METEO_API_KEY)) && /^\$\{\{ secrets\.COINGECKO_CI_API_KEY \}\}$/.test(String(env.COINGECKO_API_KEY)),
       "the keyed step hands the server OPEN_METEO_API_KEY and the CI CoinGecko key as COINGECKO_API_KEY");
-    ok(/^\$\{\{ secrets\.BLS_API_KEY \}\}$/.test(String(env.BLS_API_KEY)), "the keyed step hands the server BLS_API_KEY (the BLS-backed macro tools)");
+    ok(/^\$\{\{ secrets\.BLS_CI_API_KEY \}\}$/.test(String(env.BLS_API_KEY)), "the keyed step hands the server the CI BLS key as BLS_API_KEY (the BLS-backed macro tools; the production key is never an Actions input)");
     ok(String(env.BLS_DAILY_MAX) === String(BLS_RUN_READ_CAP), `the server's BLS read ceiling is the sweep's per-run cap (${env.BLS_DAILY_MAX} vs BLS_RUN_READ_CAP ${BLS_RUN_READ_CAP})`);
     ok(env.COINGECKO_API_TIER === "pro", `the keyed step sets COINGECKO_API_TIER=pro (got ${env.COINGECKO_API_TIER})`);
     ok(String(env.COINGECKO_DAILY_MAX) === String(CG_RUN_READ_CAP), `the server's CoinGecko read ceiling is the sweep's per-run cap (${env.COINGECKO_DAILY_MAX} vs CG_RUN_READ_CAP ${CG_RUN_READ_CAP})`);
