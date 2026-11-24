@@ -45,9 +45,16 @@ ok(G.AI_GENERATED_HEADER === AI_VOICE_HEADER && G.AI_GENERATED_HEADER === "X-AI-
     const wb = M.markMediaBytes(webp);
     ok(has(wb) && wb.toString("latin1", 12, 16) === "VP8X" && (wb[20] & 0x04) && wb.readUInt32LE(4) === wb.length - 8 && wb.includes(Buffer.from("VP8L")), "a simple WebP gets a VP8X header with the XMP flag, its frame kept, and a consistent RIFF size");
     const mp3 = Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x64]), Buffer.alloc(413)]);
-    const mb = M.markMediaBytes(mp3);
+    const mb = M.markMediaBytes(mp3, { contentType: "audio/mpeg" });
     ok(mb.toString("latin1", 0, 3) === "ID3" && mb.includes(Buffer.from("TXXX")) && has(mb) && mb.subarray(mb.length - mp3.length).equals(mp3), "an MP3 with no tag gets an ID3 tag naming the source type, the audio untouched");
-    ok(M.markMediaBytes(mb) === mb, "an MP3 with a tag of its own is left as it is");
+    ok(M.markMediaBytes(mb, { contentType: "audio/mpeg" }) === mb, "an MP3 with a tag of its own is left as it is");
+    // Raw PCM (the speech wire's response_format pcm) can start 0xFF 0xFx: never tagged.
+    const pcm = Buffer.concat([Buffer.from([0xff, 0xff, 0xff, 0xfb]), Buffer.alloc(400, 7)]);
+    for (const ct of ["audio/pcm", "audio/L16", "application/octet-stream", "", "audio/wav"]) ok(M.markMediaBytes(pcm, { contentType: ct }) === pcm, `PCM starting FF FF under ${ct || "no type"} is returned byte-identical`);
+    ok(M.markMediaBytes(mp3, { contentType: "audio/pcm" }) === mp3 && M.markMediaBytes(mp3) === mp3, "MPEG-looking bytes declared audio/pcm, or with no declared type, are never tagged");
+    ok(M.markMediaBytes(pcm, { contentType: "audio/mpeg" }) === pcm, "bytes declared audio/mpeg that are no valid MPEG frame are left as they are");
+    const pcmAnswer = G.withAiGenerated({ __binary: pcm, contentType: "audio/pcm" });
+    ok(pcmAnswer.__binary === pcm && pcmAnswer.headers["X-AI-Generated"] === "true", "a PCM byte answer keeps its bytes and still gets the header");
     const c2pa = Buffer.concat([jpg.subarray(0, 2), Buffer.from([0xff, 0xeb, 0x00, 0x06, 0x4a, 0x50, 0x00, 0x00]), jpg.subarray(2)]);
     ok(M.markMediaBytes(c2pa) === c2pa, "a JPEG with content credentials (APP11 JUMBF) is passed through untouched");
     const b64 = png.toString("base64");

@@ -32,9 +32,27 @@ export function sniffMedia(buf) {
   if (b.subarray(0, 8).equals(PNG_SIG)) return "png";
   if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg";
   if (b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP") return "webp";
-  if (b.toString("latin1", 0, 3) === "ID3" || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return "mp3";
+  if (b.toString("latin1", 0, 3) === "ID3" || isMpegFrameHeader(b)) return "mp3";
   return null;
 }
+
+/** True when the first four bytes are a valid MPEG audio frame header: the
+ *  11-bit sync, a version and layer that are not reserved, a bitrate index
+ *  that is neither free nor bad, and a sample rate that is not reserved. Raw
+ *  PCM that happens to start with 0xFF 0xE0+ fails one of these. */
+export function isMpegFrameHeader(b) {
+  if (!isBuf(b) || b.length < 4) return false;
+  if (b[0] !== 0xff || (b[1] & 0xe0) !== 0xe0) return false;
+  const version = (b[1] >> 3) & 0x03, layer = (b[1] >> 1) & 0x03;
+  const bitrate = (b[2] >> 4) & 0x0f, rate = (b[2] >> 2) & 0x03;
+  return version !== 0x01 && layer !== 0x00 && bitrate !== 0x00 && bitrate !== 0x0f && rate !== 0x03;
+}
+
+// The content types each kind is marked under. A byte answer is marked only
+// when its declared type is one of these and its bytes parse as that kind;
+// audio/pcm, audio/wav and anything unknown is never touched.
+const KIND_TYPES = Object.freeze({ png: ["image/png"], jpeg: ["image/jpeg", "image/jpg"], webp: ["image/webp"], mp3: ["audio/mpeg", "audio/mp3"] });
+const baseType = (ct) => String(ct || "").split(";")[0].trim().toLowerCase();
 
 function markPng(b) {
   // Walk the chunks: refuse on a malformed file, a C2PA chunk or an XMP of its own.
@@ -153,11 +171,15 @@ function markMp3(b) {
 
 /** The bytes with the AI-generated mark written in, or the same bytes when
  *  the format is not one we mark, already carries credentials or XMP, or does
- *  not parse. Never throws. */
-export function markMediaBytes(buf) {
+ *  not parse. `contentType` is the answer's declared type: when given, the
+ *  bytes are marked only when it names the kind they parse as; when absent
+ *  (an image inside a JSON answer), only an image is marked, never audio.
+ *  Never throws. */
+export function markMediaBytes(buf, { contentType = null } = {}) {
   try {
     const kind = sniffMedia(buf);
     if (!kind) return buf;
+    if (contentType == null ? kind === "mp3" : !KIND_TYPES[kind].includes(baseType(contentType))) return buf;
     const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
     const out = kind === "png" ? markPng(b) : kind === "jpeg" ? markJpeg(b) : kind === "webp" ? markWebp(b) : markMp3(b);
     return out || buf;

@@ -37,7 +37,7 @@ export function isWireRoute(route) { return /^(GET|POST|PUT|DELETE|PATCH)?\s*\/v
  *  non-object) unchanged. Never touches the bytes. */
 export function withAiGenerated(answer, { wire = false } = {}) {
   if (!isPlain(answer) || typeof answer.__sse === "function") return answer;
-  if (answer.__binary) return keepAnswerCharges(answer, { ...answer, __binary: markMediaBytes(answer.__binary), headers: { ...(isPlain(answer.headers) ? answer.headers : {}), [AI_GENERATED_HEADER]: "true" } });
+  if (answer.__binary) return keepAnswerCharges(answer, { ...answer, __binary: markMediaBytes(answer.__binary, { contentType: answer.contentType ?? "" }), headers: { ...(isPlain(answer.headers) ? answer.headers : {}), [AI_GENERATED_HEADER]: "true" } });
   const marked = withMarkedMedia(answer);
   if (wire || Object.hasOwn(marked, AI_GENERATED_FIELD)) return marked;
   return keepAnswerCharges(answer, { ...marked, [AI_GENERATED_FIELD]: true });
