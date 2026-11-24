@@ -143,6 +143,8 @@ t node scripts/test-late-settlements.js
 t node scripts/test-pending-settle.js
 # Our own Robinhood settler: our sales only, verify refusals, one nonce per relayer across replicas, a never-mined send stops the chain, listed facilitators first, gas check,
 t node scripts/test-own-relayer.js
+# Our own Ink settler (INK_RELAYER_KEY): listed facilitators first, ours last and only after a refusal that moved nothing; minimum, payer screen, compliance finality, gas row, own key
+t node scripts/test-ink-relayer.js
 t node scripts/test-settle-compliance.js
 # Referral copies of paid routes (/ref/<slug>): the 402 shape, amount parity with the direct route, one run per authorization, handler-first settlement on a signed facilitator request, net booking (local stub facilitator, keys made in the test).
 t node scripts/test-referral-gate.js

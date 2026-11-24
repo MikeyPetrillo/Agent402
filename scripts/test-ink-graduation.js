@@ -32,7 +32,7 @@ let failed = 0;
 const check = (cond, msg) => { if (cond) console.log(`ok - ${msg}`); else { failed++; console.log(`FAIL - ${msg}`); } };
 const GRAD = { NODE_ENV: "test", RAILS_TEST_GRADUATE: "ink" };
 const GATED = { NODE_ENV: "test", RAILS_TEST_GRADUATE: "" };
-const CLEAN_KEYS = ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "INK_FACILITATOR_URL", "NETWORK_PRICE_FLOORS", "FACILITATOR_PUBLIC_INDEX_CHAINS", "ALCHEMY_API_KEY", "RAILS_TEST_GRADUATE"];
+const CLEAN_KEYS = ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "INK_RELAYER_KEY", "INK_FACILITATOR_URL", "NETWORK_PRICE_FLOORS", "FACILITATOR_PUBLIC_INDEX_CHAINS", "ALCHEMY_API_KEY", "RAILS_TEST_GRADUATE"];
 const cleanEnv = () => { const e = { ...process.env }; for (const k of CLEAN_KEYS) delete e[k]; return e; };
 
 // --- offline: the module tables in each mode (a child per mode: the seam is read at import) ---

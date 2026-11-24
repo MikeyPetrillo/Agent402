@@ -52,13 +52,14 @@ ok(dollars.length === 0, `no purpose line carries a dollar figure or an em dash$
   ok(unknownWithheld.length === 0, `every withheldDefaults entry names a documented variable${list(unknownWithheld)}`);
   const leaked = withheld.filter((n) => printed(n) || (config.defaults && n in config.defaults) || rowCells(n)[2]?.trim() !== WITHHELD_DEFAULT_TEXT);
   ok(leaked.length === 0, `every withheld default reads "${WITHHELD_DEFAULT_TEXT}" and has no defaults entry${list(leaked)}`);
-  for (const n of ["ATTEST_MAX_GAS_USD", "ATTEST_SCHEMA_MAX_GAS_USD", "ATTEST_ETH_USD", "DATABENTO_MAX_QUERY_USD", "ROBINHOOD_RELAYER_MIN_PRICE_USD", "PLANTED_MARKUP_BPS", "PLANTED_VENDOR_COST_USD"]) ok(isCostShapedName(n), `control: ${n} reads as a cost-shaped name`);
+  for (const n of ["ATTEST_MAX_GAS_USD", "ATTEST_SCHEMA_MAX_GAS_USD", "ATTEST_ETH_USD", "DATABENTO_MAX_QUERY_USD", "ROBINHOOD_RELAYER_MIN_PRICE_USD", "INK_RELAYER_MIN_PRICE_USD", "PLANTED_MARKUP_BPS", "PLANTED_VENDOR_COST_USD"]) ok(isCostShapedName(n), `control: ${n} reads as a cost-shaped name`);
   for (const n of ["MAX_CALL_USD", "EXTERNAL_MAX_UNSETTLED_USD", "TEMPO_UPSTREAM_BUYER_LOW_USD", "PRICE_WEBHOOK_MAX", "DATABENTO_COST_TIMEOUT_MS", "FACILITATOR_GAS_CHECK_MS"]) ok(!isCostShapedName(n), `control: ${n} does not read as a cost-shaped name`);
   // Nor does a withheld figure appear beside its variable's name in the wiki,
   // docs/ or the changelogs (CHANGELOG.md, src/changelog.js). Each figure is
   // read from the code; only names are printed here.
   const figureOf = async (n) => {
     if (n === "ROBINHOOD_RELAYER_MIN_PRICE_USD") return String((await import("../src/network-floors.js")).robinhoodRelayerMinPriceUsd({}));
+    if (n === "INK_RELAYER_MIN_PRICE_USD") return String((await import("../src/network-floors.js")).inkRelayerMinPriceUsd({}));
     const files = [...(scan.vars.get(n)?.files || [])];
     return defaultOf(n, files.map((f) => stripComments(readFileSync(new URL(`../${f}`, import.meta.url), "utf8"))));
   };

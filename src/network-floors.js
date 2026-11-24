@@ -47,6 +47,39 @@ export function robinhoodRelayerMinUnits(env = process.env) {
   return usdToBaseUnits(robinhoodRelayerMinPriceUsd(env), 6);
 }
 
+// Our own Ink relayer (the same client, src/robinhood-relayer.js, with its own
+// key INK_RELAYER_KEY) pays the gas of the Ink sales it settles, so it takes a
+// sale only when its price is at least INK_RELAYER_MIN_PRICE_USD (default
+// INK_RELAYER_MIN_PRICE_DEFAULT_USD; "0": any price).
+export const INK_CAIP2 = "eip155:57073";
+export const INK_RELAYER_MIN_PRICE_DEFAULT_USD = 0.001;
+
+/** The least price, in USD, a sale must carry for our own Ink relayer to
+ *  settle it. Same reading rules as the Robinhood minimum. */
+export function inkRelayerMinPriceUsd(env = process.env) {
+  const raw = env.INK_RELAYER_MIN_PRICE_USD;
+  if (raw === undefined || String(raw).trim() === "") return INK_RELAYER_MIN_PRICE_DEFAULT_USD;
+  const usd = Number(raw);
+  if (!Number.isFinite(usd) || usd < 0) {
+    console.warn(`[payments] INK_RELAYER_MIN_PRICE_USD ignored (malformed or negative): "${raw}"; using ${INK_RELAYER_MIN_PRICE_DEFAULT_USD}`);
+    return INK_RELAYER_MIN_PRICE_DEFAULT_USD;
+  }
+  return usd;
+}
+
+/** The Ink minimum in USDC base units (6 decimals). */
+export function inkRelayerMinUnits(env = process.env) {
+  return usdToBaseUnits(inkRelayerMinPriceUsd(env), 6);
+}
+
+/** Our own relayer's minimum sale price on `network` (USD), or null for a
+ *  network no relayer of ours settles. */
+export function ownRelayerMinPriceUsd(network, env = process.env) {
+  if (network === ROBINHOOD_CAIP2) return robinhoodRelayerMinPriceUsd(env);
+  if (network === INK_CAIP2) return inkRelayerMinPriceUsd(env);
+  return null;
+}
+
 /** caip2 -> floor in integer micro-dollars. A malformed or negative entry is
  *  refused loudly (never a floor below what was asked for silently). */
 export function networkPriceFloors(env = process.env) {

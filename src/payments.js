@@ -39,7 +39,7 @@ import {
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
 import { normalizePayerAddress } from "./payer.js";
 import { x402EvmOnly, RAILS, GATED_RAILS } from "./rails.js";
-import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, robinhoodRelayerMinPriceUsd } from "./network-floors.js";
+import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, robinhoodRelayerMinPriceUsd, inkRelayerMinPriceUsd, ownRelayerMinPriceUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers, pendingSettleTxOf, pendingTxsOf } from "./pending-settle.js";
@@ -189,7 +189,8 @@ const ROBINHOOD_FACILITATOR_URL = ROBINHOOD_FACILITATOR_URLS[0] || "";
 // Ink (eip155:57073): INK_FACILITATOR_URL is an ordered list with the same
 // meaning as ROBINHOOD_FACILITATOR_URL (the first confirming /supported exact
 // on eip155:57073 at boot settles, the rest are its settle fallback). No
-// default and no own relayer: unset, Ink is not configured.
+// default: unset, Ink is not configured. INK_RELAYER_KEY adds our own relayer
+// after the listed ones (the last settle fallback).
 const INK_CAIP2 = "eip155:57073";
 const INK_FACILITATOR_URLS = facilitatorUrlList(process.env.INK_FACILITATOR_URL);
 // ROBINHOOD_RELAYER_KEY (our own relayer, src/robinhood-relayer.js): read at
@@ -198,6 +199,22 @@ function robinhoodRelayerKeySafe() {
   const k = String(process.env.ROBINHOOD_RELAYER_KEY || "").trim();
   if (!k) return "";
   if (!/^(0x)?[0-9a-fA-F]{64}$/.test(k)) { console.warn("WARNING: ROBINHOOD_RELAYER_KEY is not a 32-byte hex key - own Robinhood relayer off"); return ""; }
+  return k.startsWith("0x") ? k : `0x${k}`;
+}
+/**
+ * INK_RELAYER_KEY (our own Ink relayer, src/robinhood-relayer.js): its own
+ * key, never the Robinhood one. One key per chain keeps each wallet to the
+ * gas of one chain: a leaked key drains one chain's gas, each wallet's
+ * low-water row reads one chain, and turning one chain off is removing one
+ * variable. A key equal to ROBINHOOD_RELAYER_KEY is refused (Ink relayer off,
+ * with a warning); a malformed one too. Never a crash.
+ */
+export function inkRelayerKeySafe(env = process.env) {
+  const k = String(env.INK_RELAYER_KEY || "").trim();
+  if (!k) return "";
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(k)) { console.warn("WARNING: INK_RELAYER_KEY is not a 32-byte hex key - own Ink relayer off"); return ""; }
+  const norm = (x) => String(x || "").trim().toLowerCase().replace(/^0x/, "");
+  if (norm(k) === norm(env.ROBINHOOD_RELAYER_KEY)) { console.warn("WARNING: INK_RELAYER_KEY is the same key as ROBINHOOD_RELAYER_KEY - own Ink relayer off (give Ink a wallet of its own)"); return ""; }
   return k.startsWith("0x") ? k : `0x${k}`;
 }
 // Monad (chain 143) settles native Circle USDC (in @x402/evm's registry, so the
@@ -1801,19 +1818,24 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       startFacilitatorGasCheck({
         network: ROBINHOOD_CAIP2,
         urls: () => gasCheckUrls(robinhoodPrimaryUrl, robinhoodFallbacks),
-        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, ROBINHOOD_CAIP2) }] : [],
+        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, ROBINHOOD_CAIP2, { relayerMinUsd: robinhoodRelayerMinPriceUsd() }) }] : [],
         onReadings: robinhoodOrder ? (readings) => robinhoodOrder.update(readings) : null,
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
   }
   // Ink (chain 57073 / USDC) settles through the operator's ordered
   // INK_FACILITATOR_URL list, wired exactly like Robinhood's (boot choice,
-  // listed settle fallbacks, graceful refusals passed on, gas runway) with no
-  // relayer of ours. The chosen client routes Ink only, and no other routing
-  // client may list Ink, so the operator's order is the only one. Same
-  // drop-don't-break safety: no URL, no Ink (enabledNetworks already leaves
-  // it unconfigured; this guard covers an `ink` primary).
+  // listed settle fallbacks, graceful refusals passed on, gas runway). The
+  // chosen client routes Ink only, and no other routing client may list Ink,
+  // so the operator's order is the only one. Same drop-don't-break safety: no
+  // URL, no Ink (enabledNetworks already leaves it unconfigured; this guard
+  // covers an `ink` primary). INK_RELAYER_KEY adds our own relayer as the LAST
+  // fallback, after every listed one: reached only by a refusal that moved
+  // nothing (pre-broadcast, a reverted transfer, a known nothing-sent node
+  // refusal). No gas order and no outage read on Ink: an ambiguous listed
+  // failure still stops as a 402, so the listed facilitator stays primary.
   const inkFallbacks = [];
+  let inkOwnRelayer = null;
   const inkEnabled = evmCaip2.includes(INK_CAIP2) && INK_FACILITATOR_URLS.length > 0;
   if (evmCaip2.includes(INK_CAIP2) && !inkEnabled) {
     console.warn("WARNING: PAYMENT_NETWORKS enables `ink` but INK_FACILITATOR_URL is unset - dropping Ink from the offered networks (other chains unaffected). Set INK_FACILITATOR_URL to enable it.");
@@ -1824,10 +1846,22 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     addFacilitator(`Ink (${listed.primaryUrl})`, listed.primary);
     console.log(`Ink: settling USDC (${TIER1_USDC[INK_CAIP2].asset}) via facilitator ${listed.primaryUrl}`);
     wireListedFallbacks({ caip2: INK_CAIP2, chain: "Ink", label: "Ink", listName: "Ink's", recheckMs: ROBINHOOD_FALLBACK_RECHECK_MS, fallbacks: inkFallbacks }, listed);
+    if (inkRelayerKeySafe()) {
+      try {
+        const { createOwnRelayerClient } = await import("./robinhood-relayer.js");
+        const { evmRpcFor } = await import("./evm-rpcs.js");
+        const client = withOwnRefusalMemo(createOwnRelayerClient({ key: inkRelayerKeySafe(), network: INK_CAIP2, asset: TIER1_USDC[INK_CAIP2].asset, payTo: walletAddress, rpcUrl: evmRpcFor(INK_CAIP2) }));
+        inkOwnRelayer = { name: client.name, client, url: null, revertRetry: true, confirmed: true, own: true };
+        console.log(`Ink: own relayer ${client.address} enabled as the last settle fallback (our sales only, priced at least $${inkRelayerMinPriceUsd()}; pays gas only when the listed facilitators refuse with nothing sent)`);
+      } catch (e) {
+        console.warn(`WARNING: own Ink relayer not enabled (${String(e?.message || e).slice(0, 120)})`);
+      }
+    }
     if (process.env.X402_SYNC_ON_START !== "false" && !/^off$/i.test(String(process.env.FACILITATOR_GAS_CHECK || "").trim())) {
       startFacilitatorGasCheck({
         network: INK_CAIP2,
         urls: () => gasCheckUrls(listed.primaryUrl, inkFallbacks),
+        ownSigners: inkOwnRelayer ? [{ label: inkOwnRelayer.name, signer: inkOwnRelayer.client.address, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, INK_CAIP2, { relayerMinUsd: inkRelayerMinPriceUsd() }) }] : [],
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
   }
@@ -2733,9 +2767,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // exact on 4663), then the chain it had before. Read at settle time: the
     // boot check may still confirm or drop one.
     // Our own relayer, when configured, comes after them.
-    // Ink: its listed fallbacks only (confirmed ones, read at settle time);
-    // no default-chain facilitator settles Ink.
-    ...(inkEnabled ? { [INK_CAIP2]: () => inkFallbacks.filter((f) => f.confirmed) } : {}),
+    // Ink: its listed fallbacks (confirmed ones, read at settle time), then
+    // our own relayer when INK_RELAYER_KEY is set; no default-chain
+    // facilitator settles Ink.
+    ...(inkEnabled ? { [INK_CAIP2]: () => [...inkFallbacks.filter((f) => f.confirmed), ...(inkOwnRelayer ? [inkOwnRelayer] : [])] } : {}),
     ...(robinhoodFallbacks.length || ownRelayer ? { [ROBINHOOD_CAIP2]: () => [...robinhoodFallbacks.filter((f) => f.confirmed), ...(ownRelayer ? [ownRelayer] : []), ...fallbackCandidatesFor(ROBINHOOD_CAIP2, payAiClient, solvadorClient)] } : {}),
     // Base and Polygon: the chain they always had, then the issuer's
     // facilitator last, once its /supported listed the network.
@@ -4318,14 +4353,15 @@ function startRobinhoodOrderRefresh(order, { intervalMs = Number(process.env.ROB
 }
 
 /**
- * Whether our own relayer's minimum sale price (ROBINHOOD_RELAYER_MIN_PRICE_USD)
+ * Whether our own relayer's minimum sale price on `network`
+ * (ROBINHOOD_RELAYER_MIN_PRICE_USD, INK_RELAYER_MIN_PRICE_USD)
  * is at or under the lowest price sold on `network`: the catalog's least fixed
  * list price, raised to that chain's price floor. Only then can the relayer
  * stand in for a listed facilitator on every sale, so only then is a dry
  * facilitator row covered (src/tool-failure-monitor.js). A catalog with no
  * fixed price reads covered.
  */
-export function ownRelayerCoversLowestPrice(catalog, network, { relayerMinUsd = robinhoodRelayerMinPriceUsd(), env = process.env } = {}) {
+export function ownRelayerCoversLowestPrice(catalog, network, { relayerMinUsd = ownRelayerMinPriceUsd(network) ?? robinhoodRelayerMinPriceUsd(), env = process.env } = {}) {
   let lowest = Infinity;
   for (const def of Object.values(catalog || {})) {
     if (!def || typeof def !== "object" || typeof def.quote === "function") continue;
@@ -4346,9 +4382,9 @@ export async function startFacilitatorGasCheck({ network, urls, ownSigners = [],
   const { evmRpcFor } = await import("./evm-rpcs.js");
   const settings = gasCheckSettings();
   // Settlement gas against the least price a settler of ours is paid for:
-  // the chain's price floor, else (our relayer on, Robinhood) the relayer's
-  // minimum sale price. Neither: no row.
-  const gasRefUsd = () => networkFloorUsd(network) || (network === ROBINHOOD_CAIP2 && ownSigners.length ? robinhoodRelayerMinPriceUsd() : 0);
+  // the chain's price floor, else (our relayer on, Robinhood or Ink) the
+  // relayer's minimum sale price. Neither: no row.
+  const gasRefUsd = () => networkFloorUsd(network) || (ownSigners.length ? ownRelayerMinPriceUsd(network) || 0 : 0);
   const floorCheck = gasRefUsd() > 0 ? createFloorGasCheck({ network, floorUsd: gasRefUsd, readEthUsd }) : null;
   const checkers = new Map(); // url-list key -> checker (keeps each signer's failure count)
   const logSeen = new Map(); // a fallback signer's last logged state (evmGasLogLines)
