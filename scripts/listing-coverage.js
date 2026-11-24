@@ -29,7 +29,7 @@
 import { pathToFileURL } from "node:url";
 import { requestExampleOf, isMultipartOperation } from "../src/openapi-request.js";
 import { ALGORAND_MAINNET_CAIP2, canonicalAvmNetwork } from "../src/avm-network.js";
-import { walkRegistry, routeKey, originKey, DEFAULT_REGISTRY_URL as PAYAI_REGISTRY_URL } from "./payai-solana-sweep.js";
+import { walkRegistry, routeKey, originKey, DEFAULT_REGISTRY_URL as PAYAI_REGISTRY_URL } from "./registry-solana-sweep.js";
 
 export const BAZAAR_REGISTRY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 
@@ -120,7 +120,7 @@ export function coverageFor({ pricing, bazaarItems = [], payaiItems = [], origin
       method: e.method || "POST", path: e.path, slug: e.slug || null, price: e.price || null,
       priceUsd: priceToUsd(e.price), quoted: e.quoted === true, identityBound: e.identityBound === true, computePayable: e.computePayable === true, modelBacked: e.modelBacked === true,
       // The row's async block (src/slow-routes.js asyncAdvice): a slow route's
-      // paid call is sent with Prefer: respond-async (scripts/payai-listing-pass.js).
+      // paid call is sent with Prefer: respond-async (scripts/registry-listing-pass.js).
       async: e.async && typeof e.async === "object" ? e.async : null,
       sells: {}, bazaar: {}, payai: {},
       bazaarRow: registries.bazaar.has(key), payaiRow: registries.payai.has(key),

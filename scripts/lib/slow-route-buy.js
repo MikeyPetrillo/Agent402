@@ -18,7 +18,7 @@
 // refusal body names; no other answer earns that retry, and a call that
 // already sent the header never gets it.
 //
-// The same rules scripts/payai-listing-pass.js applies to its own records.
+// The same rules scripts/registry-listing-pass.js applies to its own records.
 //
 // A job id is a bearer link to the paid answer until the job expires
 // (src/async-jobs.js), and these scripts' logs and records are public run

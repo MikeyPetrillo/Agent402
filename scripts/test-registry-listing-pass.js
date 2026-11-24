@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The listing pass (scripts/payai-listing-pass.js), offline: route selection
+// The listing pass (scripts/registry-listing-pass.js), offline: route selection
 // with no per-route cap by default (and the optional one), the run ceiling,
 // --only and --limit, quoted routes priced by their own 402 (stubbed fetch),
 // the chain premium, the signing ceiling policy, the preflight that refuses to
@@ -9,10 +9,10 @@
 // /supported check on Base, the Bazaar Solana check, the spend ceiling, and
 // nothing bought when coverage says listed. Nothing here pays.
 //
-//   node scripts/test-payai-listing-pass.js
+//   node scripts/test-registry-listing-pass.js
 import assert from "node:assert/strict";
 import { CHAINS, coverageFor } from "./listing-coverage.js";
-import { selectPass, candidatesOf, quoteOf, quoteRoutes, ceilingPolicy, routeKeyOf, preferenceHonored, receiptOf, parseArgs, main, DEFAULT_MAX_PRICE_USD, DEFAULT_MAX_SPEND_USD, SETTLE_VIA, isMultipartExample, premiumOf, supportsExact, legHeaders, keyEnvFor, boughtKeyOf, purchasesOf, loadPurchaseMemory, oneAttemptOnly, mayRetry, DEFAULT_REBUY_AFTER_DAYS, parseInputs, purposefulInputFor, identifyingHeaders, keptBody, BODY_KEEP_BYTES } from "./payai-listing-pass.js";
+import { selectPass, candidatesOf, quoteOf, quoteRoutes, ceilingPolicy, routeKeyOf, preferenceHonored, receiptOf, parseArgs, main, DEFAULT_MAX_PRICE_USD, DEFAULT_MAX_SPEND_USD, SETTLE_VIA, isMultipartExample, premiumOf, supportsExact, legHeaders, keyEnvFor, boughtKeyOf, purchasesOf, loadPurchaseMemory, oneAttemptOnly, mayRetry, DEFAULT_REBUY_AFTER_DAYS, parseInputs, purposefulInputFor, identifyingHeaders, keptBody, BODY_KEEP_BYTES } from "./registry-listing-pass.js";
 import { pickArtifacts, fetchMemory, MEMORY_ARTIFACTS } from "./listing-pass-memory.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -677,4 +677,4 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
   }
 }
 
-console.log(`test-payai-listing-pass: ${n} passed`);
+console.log(`test-registry-listing-pass: ${n} passed`);

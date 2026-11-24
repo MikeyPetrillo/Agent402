@@ -1,13 +1,13 @@
 // The PayAI Solana listing sweep's diff logic, against fixtures. Offline:
-// the ops script (scripts/payai-solana-sweep.js) reads /api/pricing and the
+// the ops script (scripts/registry-solana-sweep.js) reads /api/pricing and the
 // facilitator registry; this drives its pure functions and the registry
 // walker with a stub fetch, so nothing leaves the machine.
 //
-//   node scripts/test-payai-solana-sweep.js
+//   node scripts/test-registry-solana-sweep.js
 import assert from "node:assert/strict";
 import {
   solanaRoutesFromPricing, solanaRowsFromRegistry, diffListing, walkRegistry, routeKey, originKey, SOLANA_MAINNET_CAIP2,
-} from "./payai-solana-sweep.js";
+} from "./registry-solana-sweep.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -96,4 +96,4 @@ const ORIGIN = "https://agent402.tools";
   ok(noTotal.items.length === 1 && noTotal.total === 1, "without a stated total the walk ends on the first empty page and keeps the query string");
 }
 
-console.log(`test-payai-solana-sweep: ${n} passed`);
+console.log(`test-registry-solana-sweep: ${n} passed`);

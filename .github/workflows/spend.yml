@@ -428,7 +428,7 @@ jobs:
   # registry. Each lists a route from a settlement its own facilitator carried,
   # so a route neither has seen settle stays unlisted until someone pays it.
   #
-  # scripts/payai-listing-pass.js runs four legs, one after another, each a
+  # scripts/registry-listing-pass.js runs four legs, one after another, each a
   # coverage read followed by one buy per route that registry lacks on that
   # chain (the same measurement as scripts/listing-coverage.js --missing):
   #
@@ -545,7 +545,7 @@ jobs:
             REGISTRY="${LEG%%-*}"
             CHAIN="${LEG#*-}"
             echo "::group::$REGISTRY / $CHAIN"
-            node scripts/payai-listing-pass.js --registry "$REGISTRY" --chain "$CHAIN" --live --include-upstream --max-spend "$MAX_SPEND_USD" ${MAX_PRICE_USD:+--max-price "$MAX_PRICE_USD"} ${ONLY:+--only "$ONLY"} --bought bought --rebuy-after-days 14 --inputs scripts/listing-inputs.json --out "pass-$LEG.json" || FAILED="$FAILED $LEG($?)"
+            node scripts/registry-listing-pass.js --registry "$REGISTRY" --chain "$CHAIN" --live --include-upstream --max-spend "$MAX_SPEND_USD" ${MAX_PRICE_USD:+--max-price "$MAX_PRICE_USD"} ${ONLY:+--only "$ONLY"} --bought bought --rebuy-after-days 14 --inputs scripts/listing-inputs.json --out "pass-$LEG.json" || FAILED="$FAILED $LEG($?)"
             echo "::endgroup::"
           done
           if [ -n "$FAILED" ]; then echo "::error::legs that did not complete (exit code):$FAILED"; exit 1; fi

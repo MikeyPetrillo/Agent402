@@ -60,10 +60,10 @@ t node scripts/test-algorand-catalog-warm.js
 # Solana external routing: accept pinning (devnet never matches), env gate, pay-time proven-seller gate fails closed, offline e2e signed buy vs stub seller + stub RPC
 t node scripts/test-solana-router.js
 # PayAI Solana listing sweep: the diff between the routes sold on Solana and the registry's rows, from fixtures (offline)
-t node scripts/test-payai-solana-sweep.js
+t node scripts/test-registry-solana-sweep.js
 # Listing coverage per registry and chain from fixtures; the PayAI pass's selection, cap and preflight (offline)
 t node scripts/test-listing-coverage.js
-t node scripts/test-payai-listing-pass.js
+t node scripts/test-registry-listing-pass.js
 # The listing pass's purposeful inputs validate against each route's published input schema (booted FREE_MODE, offline)
 t node scripts/test-listing-inputs.js
 # Multipart routes publish multipart/form-data on /openapi.json
@@ -103,7 +103,7 @@ t node scripts/test-logs-cap-wording.js
 t node scripts/test-block-clock.js
 # Base block time across Denim (2 s to 200 ms): windows stay the same wall-clock length (offline)
 t node scripts/test-chain-block-time.js
-t node scripts/test-payai-credit-watch.js
+t node scripts/test-facilitator-credit-watch.js
 # Heartbeat security advisory triage check: script vs a stub GitHub API, and the step's shell with gh stubbed (offline)
 t node scripts/test-advisory-triage.js
 # Heartbeat 7-day MPP reconciliation window step, run with curl/gh stubbed (offline)
