@@ -33,8 +33,8 @@ const rail = { balance: 0.042, recent: [
   { tx: "https://stellar.expert/explorer/public/tx/abc123", when: "2026-07-10T04:15:00Z", usd: 0.001, from: "GBA2DDJ4X", external: false, internal: true },
 ] };
 let html = stellarPage("https://agent402.tools", { snapshot: snapOnlyUs, rail });
-ok(html.includes("Stellar x402 marketplace"), "title phrase present");
-ok((html.match(/Stellar x402 marketplace/g) || []).length >= 3, "phrase appears in title, h1 and description");
+ok(html.includes("Agent402 on Stellar") && !html.includes("Stellar x402 marketplace"), "title phrase present (the chain page is named Agent402 on Stellar)");
+ok((html.match(/Agent402 on Stellar/g) || []).length >= 3, "phrase appears in title, h1 and description");
 ok(html.includes("stellar.expert/explorer/public/tx/abc123"), "real receipt tx link rendered");
 ok(html.includes("1 seller live"), "honesty line rendered when only local seller");
 ok(html.includes("network=stellar"), "machine route-filter snippet present");
