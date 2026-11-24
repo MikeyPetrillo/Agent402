@@ -101,7 +101,7 @@ handlerStatus = 200;
 broadcastOk = false;
 const bfail = await fetch(`${url}/paid`, { headers: { Authorization: credFor(await fresh()) } });
 const bfailBody = await bfail.json();
-ok(bfail.status === 402 && bfailBody.problem?.type === "https://paymentauth.org/problems/verification-failed" && bfailBody.result === undefined && /temporarily_unavailable/.test(bfailBody.problem.detail), "gate: broadcast failure after a successful handler -> 402 verification-failed, handler body discarded, relay reason surfaced");
+ok(bfail.status === 402 && bfailBody.problem?.type === "https://paymentauth.org/problems/verification-failed" && bfailBody.result === undefined && /temporarily_unavailable/.test(bfailBody.problem.detail), `gate: broadcast failure after a successful handler -> 402 verification-failed, handler body discarded, relay reason surfaced (${bfail.status} ${JSON.stringify(bfailBody).slice(0, 300)})`);
 broadcastOk = true;
 // validate failure -> 402, handler never runs
 validateOk = false;
