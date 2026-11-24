@@ -38,7 +38,7 @@ const init = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { na
 {
   const l = await rpc("/mcp", "tools/list");
   const names = (l.body.result?.tools || []).map((t) => t.name);
-  ok(names.includes("catalog.search") && names.includes("web.search") && !names.includes("sec.filing_report"), "/mcp is unchanged: catalog meta tools and the flagships, no sec.* names");
+  ok(names.includes("catalog.search") && names.includes("pdf.markdown") && !names.includes("sec.filing_report"), "/mcp is unchanged: catalog meta tools and the flagships, no sec.* names");
   const r = await rpc("/mcp", "initialize", init);
   ok(r.body.result?.serverInfo?.name === "agent402", "/mcp still initializes as agent402");
 }

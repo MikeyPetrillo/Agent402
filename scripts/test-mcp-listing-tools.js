@@ -39,7 +39,7 @@ import { generatePrivateKey } from "viem/accounts";
 import { load } from "js-yaml";
 import { bootServer } from "./lib/boot-server.js";
 import {
-  MCP_LISTING_TOOLS, mcpListingRoutes, selectMcpListings, mcpOfferProblems, mcpToolOfResource, isMcpFeedRow, mcpListingKey, usdText,
+  MCP_LISTING_TOOLS, RETIRED_MCP_LISTING_TOOLS, mcpListingRoutes, selectMcpListings, mcpOfferProblems, mcpToolOfResource, isMcpFeedRow, mcpListingKey, usdText,
   mcpListingSlugsOf, mcpSignableOffer, publishedPayTo, MCP_OFFER_MAX_VALIDITY_SECONDS,
 } from "./lib/mcp-listings.js";
 import { buyMcpListing, askMcpOffer, signedPaymentProblems, X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META } from "./lib/mcp-x402-client.js";
@@ -59,7 +59,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { faile
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const read = (p) => readFileSync(join(ROOT, p), "utf8");
 const ORIGIN = "https://agent402.tools";
-const SIX = "search,search-news,answer,stock-quote,render,memory-read";
+const SIX = "pdf-to-markdown,us-macro-series,weather-current,stock-quote,render,memory-read";
 
 // ---- the list is the server's ------------------------------------------------------
 {
@@ -69,8 +69,8 @@ const SIX = "search,search-news,answer,stock-quote,render,memory-read";
 }
 
 // ---- fixtures ----------------------------------------------------------------------
-const PRICES = { search: "$0.010", "search-news": "$0.010", answer: "$0.080", "stock-quote": "$0.001", render: "$0.010", "memory-read": "$0.001" };
-const PATHS = { search: ["GET", "/api/search"], "search-news": ["GET", "/api/search-news"], answer: ["POST", "/api/answer"], "stock-quote": ["GET", "/api/stock-quote"], render: ["POST", "/api/render"], "memory-read": ["GET", "/api/memory"] };
+const PRICES = { "pdf-to-markdown": "$0.010", "us-macro-series": "$0.010", "weather-current": "$0.080", "stock-quote": "$0.001", render: "$0.010", "memory-read": "$0.001" };
+const PATHS = { "pdf-to-markdown": ["POST", "/api/pdf-to-markdown"], "us-macro-series": ["GET", "/api/us-macro-series"], "weather-current": ["GET", "/api/weather-current"], "stock-quote": ["GET", "/api/stock-quote"], render: ["POST", "/api/render"], "memory-read": ["GET", "/api/memory"] };
 const PRICING = {
   endpoints: [
     ...Object.keys(PRICES).map((slug) => ({ slug, method: PATHS[slug][0], path: PATHS[slug][1], price: PRICES[slug] })),
@@ -93,13 +93,13 @@ const offerFor = (toolName, micros, over = {}) => ({
 
 // ---- feed rows ---------------------------------------------------------------------
 {
-  ok(mcpToolOfResource(`${ORIGIN}/mcp#web.search`, "agent402.tools") === "web.search" && mcpListingKey("web.search") === "/mcp#web.search", "a feed resource /mcp#web.search on our host is the web.search listing");
-  ok(mcpToolOfResource(`${ORIGIN}/mcp`, "agent402.tools") === null && mcpToolOfResource("https://other.example/mcp#web.search", "agent402.tools") === null
-    && mcpToolOfResource(`${ORIGIN}/api/search#web.search`, "agent402.tools") === null && mcpToolOfResource(`${ORIGIN}/mcp#a b\n`, "agent402.tools") === null && mcpToolOfResource("not a url", "agent402.tools") === null,
+  ok(mcpToolOfResource(`${ORIGIN}/mcp#pdf.markdown`, "agent402.tools") === "pdf.markdown" && mcpListingKey("pdf.markdown") === "/mcp#pdf.markdown", "a feed resource /mcp#pdf.markdown on our host is the pdf.markdown listing");
+  ok(mcpToolOfResource(`${ORIGIN}/mcp`, "agent402.tools") === null && mcpToolOfResource("https://other.example/mcp#pdf.markdown", "agent402.tools") === null
+    && mcpToolOfResource(`${ORIGIN}/api/search#pdf.markdown`, "agent402.tools") === null && mcpToolOfResource(`${ORIGIN}/mcp#a b\n`, "agent402.tools") === null && mcpToolOfResource("not a url", "agent402.tools") === null,
     "no fragment, another host, another path, or a fragment that is no tool name is not a listing of ours");
-  ok(listingKeyOnHost(`${ORIGIN}/mcp#web.news`, "agent402.tools") === "/mcp#web.news" && listingKeyOnHost(`${ORIGIN}/api/hash`, "agent402.tools") === "/api/hash" && listingKeyOnHost("https://x.example/api/hash", "agent402.tools") === null,
+  ok(listingKeyOnHost(`${ORIGIN}/mcp#macro.series`, "agent402.tools") === "/mcp#macro.series" && listingKeyOnHost(`${ORIGIN}/api/hash`, "agent402.tools") === "/api/hash" && listingKeyOnHost("https://x.example/api/hash", "agent402.tools") === null,
     "the presence check keys an MCP listing by /mcp#<tool> and a route by its path");
-  const rows = [{ resource: `${ORIGIN}/mcp#web.search`, type: "mcp", serviceName: "Web search" }, { resource: `${ORIGIN}/mcp`, serviceName: "x" }, { resource: `${ORIGIN}/api/hash`, type: "http", serviceName: "Hash" }];
+  const rows = [{ resource: `${ORIGIN}/mcp#pdf.markdown`, type: "mcp", serviceName: "Web search" }, { resource: `${ORIGIN}/mcp`, serviceName: "x" }, { resource: `${ORIGIN}/api/hash`, type: "http", serviceName: "Hash" }];
   ok(isMcpFeedRow(rows[0]) && isMcpFeedRow(rows[1]) && !isMcpFeedRow(rows[2]) && !isMcpFeedRow(null), "a row of type mcp, or on the connector's path, is an MCP row");
   ok(staleCandidates(rows).length === 1 && staleCandidates(rows)[0].resource.endsWith("/api/hash"), "stale mode reads no MCP row as a route whose name drifted");
 }
@@ -107,32 +107,32 @@ const offerFor = (toolName, micros, over = {}) => ({
 // ---- selection: the listed slugs and nothing else ------------------------------------
 {
   const all = selectMcpListings(PRICING, SIX.split(","));
-  ok(all.refused.length === 0 && all.routes.map((r) => r.toolName).join(",") === "web.search,web.news,web.answer,market.quote,browser.render,memory.read", "the six slugs select the six listings");
+  ok(all.refused.length === 0 && all.routes.map((r) => r.toolName).join(",") === "pdf.markdown,macro.series,weather.current,market.quote,browser.render,memory.read", "the six slugs select the six listings");
   ok(passMicros(all.routes) === 112000 && usdText(112000) === "$0.112" && usdText(1000) === "$0.001" && usdText(80000) === "$0.080" && usdText(2500000) === "$2.500" && usdText(1234) === "$0.001234",
     `their list prices sum in micro-USD and print as the catalog prints them (${usdText(passMicros(all.routes))})`);
-  const extra = selectMcpListings(PRICING, ["search", "hash", "memory-write", "nope", "report"]);
+  const extra = selectMcpListings(PRICING, ["pdf-to-markdown", "hash", "memory-write", "nope", "report"]);
   ok(extra.routes.length === 1 && extra.refused.map((r) => r.slug).join(",") === "hash,memory-write,nope,report" && extra.refused.every((r) => r.why === "not an MCP tool listing"),
     "a slug that is not an MCP tool listing (a free tool, a writer, an unknown, a report) is refused by name");
-  ok(selectMcpListings(PRICING, ["search", "search", " search "]).routes.length === 1, "a slug named twice is bought once");
+  ok(selectMcpListings(PRICING, ["pdf-to-markdown", "pdf-to-markdown", " pdf-to-markdown "]).routes.length === 1, "a slug named twice is bought once");
   ok(selectMcpListings({ endpoints: PRICING.endpoints.filter((e) => e.slug !== "render") }, ["render"]).refused[0]?.why === "not in the live catalog", "a listing the catalog does not carry is refused");
-  const quoted = { endpoints: PRICING.endpoints.map((e) => (e.slug === "answer" ? { ...e, quoted: true } : e.slug === "render" ? { ...e, price: "free" } : e)) };
-  const q = selectMcpListings(quoted, ["answer", "render"]);
+  const quoted = { endpoints: PRICING.endpoints.map((e) => (e.slug === "weather-current" ? { ...e, quoted: true } : e.slug === "render" ? { ...e, price: "free" } : e)) };
+  const q = selectMcpListings(quoted, ["weather-current", "render"]);
   ok(q.routes.length === 0 && /exempt kind \(quoted\)/.test(q.refused[0].why) && q.refused[1].why === "unpriced", "the exempt kinds stand for an MCP listing too, and an unpriced one is refused");
   ok(mcpListingRoutes(PRICING).length === 6 && mcpListingRoutes({}).length === 0 && selectMcpListings(PRICING, []).routes.length === 0, "no slugs, no listings");
 }
 
 // ---- the offer check ---------------------------------------------------------------
 {
-  const good = offerFor("web.search", 10000);
-  const args = { toolName: "web.search", origin: ORIGIN, micros: 10000, payTo: PAY_TO };
+  const good = offerFor("pdf.markdown", 10000);
+  const args = { toolName: "pdf.markdown", origin: ORIGIN, micros: 10000, payTo: PAY_TO };
   ok(mcpOfferProblems(good, args).length === 0, "the tool's MCP listing offer at the list price has no problem");
   const bad = (over, re, label) => { const p = mcpOfferProblems({ ...good, ...over }, args); ok(p.some((x) => re.test(x)), `${label} (${p.join("; ").slice(0, 110)})`); };
   bad({ resource: { url: `${ORIGIN}/api/search` } }, /resource is/, "an offer naming the HTTP route is refused");
-  bad({ extensions: offerFor("web.news", 10000).extensions }, /toolName is "web\.news"/, "another tool's extension is refused");
+  bad({ extensions: offerFor("macro.series", 10000).extensions }, /toolName is "macro\.series"/, "another tool's extension is refused");
   bad({ extensions: bazaar.declareDiscoveryExtension({ method: "GET", input: { q: "x" } }) }, /type is/, "an HTTP discovery extension is refused");
   bad({ extensions: {} }, /no bazaar discovery extension/, "an offer with no discovery extension is refused");
   // The Bazaar indexes an MCP tool by calling it with the example as its arguments: none, or an empty one, is not indexed.
-  const exampleOf = (example) => bazaar.declareDiscoveryExtension({ toolName: "web.search", transport: "streamable-http", inputSchema: { type: "object", properties: { q: { type: "string" } } }, ...(example !== undefined ? { example } : {}) });
+  const exampleOf = (example) => bazaar.declareDiscoveryExtension({ toolName: "pdf.markdown", transport: "streamable-http", inputSchema: { type: "object", properties: { q: { type: "string" } } }, ...(example !== undefined ? { example } : {}) });
   bad({ extensions: exampleOf({}) }, /example holds no argument/, "an offer whose example holds no argument is refused (a buy would not list it)");
   bad({ extensions: exampleOf(undefined) }, /example is not an object/, "an offer with no example is refused");
   bad({ accepts: [{ ...good.accepts[0], amount: "10001" }] }, /list price/, "a Base accept asking another amount is refused");
@@ -173,11 +173,11 @@ const offerFor = (toolName, micros, over = {}) => ({
 
 // ---- one buy, in memory: never sign a wrong offer, never send twice --------------------
 {
-  const route = { slug: "search", toolName: "web.search", micros: 10000 };
+  const route = { slug: "pdf-to-markdown", toolName: "pdf.markdown", micros: 10000 };
   const mk = (answers) => { const calls = []; return { calls, callTool: async (name, args, meta) => { calls.push({ name, meta }); const a = answers[calls.length - 1]; if (a instanceof Error) throw a; return a; } }; };
   // The connector's ask: the offer as JSON in the first text block, no structuredContent.
   const ask = (offer) => ({ isError: true, content: [{ type: "text", text: JSON.stringify(offer) }, { type: "text", text: "This tool requires payment." }] });
-  ok((await askMcpOffer(async () => ask(offerFor("web.search", 10000)), "web.search", {})).offer?.accepts?.length === 1 && (await askMcpOffer(async () => ({ isError: true, structuredContent: offerFor("web.search", 10000), content: [] }), "web.search", {})).offer?.x402Version === 2,
+  ok((await askMcpOffer(async () => ask(offerFor("pdf.markdown", 10000)), "pdf.markdown", {})).offer?.accepts?.length === 1 && (await askMcpOffer(async () => ({ isError: true, structuredContent: offerFor("pdf.markdown", 10000), content: [] }), "pdf.markdown", {})).offer?.x402Version === 2,
     "the offer is read from the first text block, and from structuredContent where a server sends it");
   let signed = 0, lastSigned = null;
   const authFor = (over = {}) => ({ x402Version: 2, payload: { signature: "0x00", authorization: { to: PAY_TO, value: "10000", validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 60), ...over } } });
@@ -186,15 +186,15 @@ const offerFor = (toolName, micros, over = {}) => ({
   const buy1 = (o) => buyMcpListing({ payTo: PAY_TO, ...o });
   const paidOk = { content: [{ type: "text", text: "{}" }], _meta: { [X402_PAYMENT_RESPONSE_META]: { success: true, transaction: "0x1" } } };
 
-  let c = mk([ask(offerFor("web.search", 10000)), paidOk]);
+  let c = mk([ask(offerFor("pdf.markdown", 10000)), paidOk]);
   let r = await buy1({ ...c, signPayment, route, args: { q: "x" }, origin: ORIGIN });
   ok(r.ok && signed === 1 && c.calls.length === 2 && !c.calls[0].meta && c.calls[1].meta?.[X402_PAYMENT_META]?.payload?.signature === "0x00", "a buy is one unpaid ask, one signature, one paid call carrying the payment in _meta");
 
-  signed = 0; c = mk([ask(offerFor("web.search", 10000, { resource: { url: `${ORIGIN}/api/search` } })), paidOk]);
+  signed = 0; c = mk([ask(offerFor("pdf.markdown", 10000, { resource: { url: `${ORIGIN}/api/search` } })), paidOk]);
   r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && !r.signed && signed === 0 && c.calls.length === 1 && /not this tool's MCP listing offer/.test(r.why), `the HTTP route's offer (a build without the twins) is never signed (${String(r.why).slice(0, 90)})`);
 
-  signed = 0; c = mk([ask(offerFor("web.search", 20000)), paidOk]);
+  signed = 0; c = mk([ask(offerFor("pdf.markdown", 20000)), paidOk]);
   r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && signed === 0 && c.calls.length === 1, "an offer above the list price is never signed");
 
@@ -206,15 +206,15 @@ const offerFor = (toolName, micros, over = {}) => ({
   r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && signed === 0 && /no x402 offer/.test(r.why), "a refusal with no x402 offer (no paywall on the connector) is not a buy");
 
-  signed = 0; c = mk([ask(offerFor("web.search", 10000)), new Error("timeout")]);
+  signed = 0; c = mk([ask(offerFor("pdf.markdown", 10000)), new Error("timeout")]);
   r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && r.sent && signed === 1 && c.calls.length === 2 && /not sent again/.test(r.why), "a paid call that does not answer is reported and never sent again");
 
-  signed = 0; c = mk([ask(offerFor("web.search", 10000)), { isError: true, content: [{ type: "text", text: "settlement failed" }], _meta: { [X402_PAYMENT_RESPONSE_META]: { success: false } } }]);
+  signed = 0; c = mk([ask(offerFor("pdf.markdown", 10000)), { isError: true, content: [{ type: "text", text: "settlement failed" }], _meta: { [X402_PAYMENT_RESPONSE_META]: { success: false } } }]);
   r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && r.sent && signed === 1 && c.calls.length === 2 && /did not settle/.test(r.why), "a settle that fails is reported and never sent again");
 
-  signed = 0; c = mk([ask(offerFor("web.search", 10000)), paidOk]);
+  signed = 0; c = mk([ask(offerFor("pdf.markdown", 10000)), paidOk]);
   r = await buy1({ ...c, signPayment: async () => { throw new Error("selected accept refused: over the cap"); }, route, origin: ORIGIN });
   ok(!r.ok && !r.sent && c.calls.length === 1 && /no payment was signed/.test(r.why), "a signature the cap refuses sends nothing");
 
@@ -223,20 +223,20 @@ const offerFor = (toolName, micros, over = {}) => ({
     [{ payTo: OTHER }, "an offer at the list price to another address"],
     [{ maxTimeoutSeconds: 10 * 365 * 86400 }, "an offer with a ten-year validity window"],
   ]) {
-    const o = offerFor("web.search", 10000); o.accepts = [{ ...o.accepts[0], ...over }];
+    const o = offerFor("pdf.markdown", 10000); o.accepts = [{ ...o.accepts[0], ...over }];
     signed = 0; c = mk([ask(o), paidOk]);
     r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
     ok(!r.ok && !r.signed && signed === 0 && c.calls.length === 1, `${label} is never signed (${String(r.why).slice(-70)})`);
   }
-  { const o = offerFor("web.search", 10000); o.accepts = [o.accepts[0], { ...o.accepts[0], payTo: OTHER }];
+  { const o = offerFor("pdf.markdown", 10000); o.accepts = [o.accepts[0], { ...o.accepts[0], payTo: OTHER }];
     signed = 0; c = mk([ask(o), paidOk]);
     r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
     ok(!r.ok && signed === 0 && c.calls.length === 1, "an offer with two exact USDC accepts on Base is never signed"); }
-  { const o = offerFor("web.search", 10000); o.accepts = [{ ...o.accepts[0], maxTimeoutSeconds: 604900, extra: { name: "GatewayWalletBatched", verifyingContract: OTHER } }, o.accepts[0]];
+  { const o = offerFor("pdf.markdown", 10000); o.accepts = [{ ...o.accepts[0], maxTimeoutSeconds: 604900, extra: { name: "GatewayWalletBatched", verifyingContract: OTHER } }, o.accepts[0]];
     signed = 0; lastSigned = null; c = mk([ask(o), paidOk]);
     r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
     ok(r.ok && signed === 1 && lastSigned.accepts.length === 1 && lastSigned.accepts[0].maxTimeoutSeconds === 60 && lastSigned.accepts[0].extra?.verifyingContract === undefined, "the signer is handed the one checked accept, never the batched one listed before it"); }
-  signed = 0; c = mk([ask(offerFor("web.search", 10000)), paidOk]);
+  signed = 0; c = mk([ask(offerFor("pdf.markdown", 10000)), paidOk]);
   r = await buyMcpListing({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && signed === 0 && c.calls.length === 0 && /no published receiving address/.test(r.why), "with no published receiving address to hold the offer to, nothing is asked or signed");
   // The signed authorization is read back before it is sent.
@@ -245,7 +245,7 @@ const offerFor = (toolName, micros, over = {}) => ({
     [{ value: "10001" }, /list price/, "an authorization for another amount"],
     [{ validBefore: String(Math.floor(Date.now() / 1000) + 10 * 365 * 86400) }, /longer than the bounded window/, "an authorization valid for ten years"],
   ]) {
-    c = mk([ask(offerFor("web.search", 10000)), paidOk]);
+    c = mk([ask(offerFor("pdf.markdown", 10000)), paidOk]);
     r = await buy1({ ...c, signPayment: async () => authFor(over), route, origin: ORIGIN });
     ok(!r.ok && r.signed && !r.sent && c.calls.length === 1 && re.test(r.why), `${label} is not sent`);
   }
@@ -255,7 +255,7 @@ const offerFor = (toolName, micros, over = {}) => ({
 // ---- the two holds on what a run may sign, with the real capped client --------------------
 {
   const key = generatePrivateKey();
-  const mkRoutes = () => [{ slug: "search", toolName: "web.search", micros: 10000 }, { slug: "search-news", toolName: "web.news", micros: 10000 }, { slug: "memory-read", toolName: "memory.read", micros: 1000 }];
+  const mkRoutes = () => [{ slug: "pdf-to-markdown", toolName: "pdf.markdown", micros: 10000 }, { slug: "us-macro-series", toolName: "macro.series", micros: 10000 }, { slug: "memory-read", toolName: "memory.read", micros: 1000 }];
   const quiet = { log: () => {}, err: () => {} };
   const valueOf = (payment) => String(payment?.payload?.authorization?.value);
   // A buy that signs whatever offer it is given: what a missed offer check would do.
@@ -292,7 +292,7 @@ const offerFor = (toolName, micros, over = {}) => ({
       const asked = [];
       const out = await buyMcpListings({ routes, budget, callTool: null, signPayment: (offer) => client.createPaymentPayload(offer), origin: ORIGIN, payTo: PAY_TO, ...quiet,
         buy: async (o) => { asked.push(o.route.toolName); return blindBuy((r) => offerFor(r.toolName, r.micros))(o); } });
-      say(out.okCount === 1 && out.failed.join() === "web.news" && asked.join() === "web.search" && budget.signatures === 1 && budget.signedMicros === 10000, `a listing that does not fit under what the run may still sign is not asked for (asked ${asked.join()})`);
+      say(out.okCount === 1 && out.failed.join() === "macro.series" && asked.join() === "pdf.markdown" && budget.signatures === 1 && budget.signedMicros === 10000, `a listing that does not fit under what the run may still sign is not asked for (asked ${asked.join()})`);
     }
     {
       // The same total held at the signature itself: a second signature of a listing already bought.
@@ -313,7 +313,7 @@ const offerFor = (toolName, micros, over = {}) => ({
   const httpKeys = pricing.endpoints.map((e) => e.path);
   const mcpKeys = Object.values(MCP_LISTING_TOOLS).map(mcpListingKey);
   const reading = (keys) => ({ pricing, passes: [{ keys: new Set(keys) }, { keys: new Set(keys) }] });
-  ok(mcpCatalogRows(pricing).length === 6 && mcpCatalogRows(pricing)[0].key === "MCP /mcp#web.search" && mcpCatalogRows(pricing)[0].slug === "search", "the catalog's MCP listings are read as MCP /mcp#<tool>");
+  ok(mcpCatalogRows(pricing).length === 6 && mcpCatalogRows(pricing)[0].key === "MCP /mcp#pdf.markdown" && mcpCatalogRows(pricing)[0].slug === "pdf-to-markdown", "the catalog's MCP listings are read as MCP /mcp#<tool>");
 
   // The listings are decided apart from the routes, whatever the switch says.
   for (const sw of [true, false]) {
@@ -331,33 +331,33 @@ const offerFor = (toolName, micros, over = {}) => ({
     ok(d.notYetListed.length === 0 && d.mcpMissing.length === 0 && d.state.mcpSeen.join(",") === [...Object.values(MCP_LISTING_TOOLS)].sort().join(","), `${tag}: a reading that holds the six listings finds them`);
     const seenState = d.state;
     // One leaves: named in the log, never bought, no page on the first check.
-    const without = [...httpKeys, ...mcpKeys.filter((k) => k !== "/mcp#web.answer")];
+    const without = [...httpKeys, ...mcpKeys.filter((k) => k !== "/mcp#weather.current")];
     d = dec({ reading: reading(without), prev: seenState });
-    ok(d.mcpMissing.map((m) => m.key).join() === "MCP /mcp#web.answer" && d.newlyMissing.length === 0 && d.buy.length === 0 && d.mcpAction === "none" && d.action === "none" && d.state.mcpMissing.join() === "MCP /mcp#web.answer" && !Object.hasOwn(d.state.missing, "MCP /mcp#web.answer"),
+    ok(d.mcpMissing.map((m) => m.key).join() === "MCP /mcp#weather.current" && d.newlyMissing.length === 0 && d.buy.length === 0 && d.mcpAction === "none" && d.action === "none" && d.state.mcpMissing.join() === "MCP /mcp#weather.current" && !Object.hasOwn(d.state.missing, "MCP /mcp#weather.current"),
       `${tag}: a listing that was seen and leaves is missing apart from the routes, never bought, no page on the first check`);
     const lines1 = logLines(d);
-    ok(lines1.some((l) => /^  missing MCP \/mcp#web\.answer \(catalog slug answer\)$/.test(l)) && lines1.some((l) => /^::warning::[^\n]*\/mcp#web\.answer/.test(l)) && lines1.some((l) => (sw ? /pass is on/ : /pass is off \(BAZAAR_MCP_KEEPALIVE\), so nothing re-buys/).test(l)),
+    ok(lines1.some((l) => /^  missing MCP \/mcp#weather\.current \(catalog slug weather-current\)$/.test(l)) && lines1.some((l) => /^::warning::[^\n]*\/mcp#weather\.current/.test(l)) && lines1.some((l) => (sw ? /pass is on/ : /pass is off \(BAZAAR_MCP_KEEPALIVE\), so nothing re-buys/).test(l)),
       `${tag}: the log names the missing listing and its slug, warns, and says whether the scheduled pass runs (${lines1.filter((l) => /MCP/.test(l)).join(" | ")})`);
-    ok(d.state.mcpSeen.includes("web.answer"), `${tag}: it stays remembered as seen`);
+    ok(d.state.mcpSeen.includes("weather.current"), `${tag}: it stays remembered as seen`);
     // Still missing: its own issue opens; the route issue does not.
     const d2 = dec({ reading: reading(without), prev: d.state });
     ok(d2.mcpRepeat.length === 1 && d2.mcpAction === "open" && d2.action === "none" && d2.repeat.length === 0 && d2.buy.length === 0, `${tag}: still missing on the next check: the MCP listing issue opens, the route issue does not, nothing bought`);
-    ok(logLines(d2).some((l) => /^  still missing MCP \/mcp#web\.answer \(catalog slug answer\)$/.test(l)), `${tag}: the log names it as still missing`);
+    ok(logLines(d2).some((l) => /^  still missing MCP \/mcp#weather\.current \(catalog slug weather-current\)$/.test(l)), `${tag}: the log names it as still missing`);
     // Open and still missing: never edited.
     const d3 = dec({ reading: reading(without), prev: d2.state, mcpOpenIssue: true });
     ok(d3.mcpAction === "none" && d3.mcpRepeat.length === 1, `${tag}: with its issue open and the listing still missing, the issue is kept and not edited`);
     // State lost with that issue open: held as is for that check, the absent listing not recorded.
     const lost = dec({ reading: reading(without), prev: null, mcpOpenIssue: true });
-    ok(lost.mcpRepeat.length === 0 && lost.mcpMissing.length === 0 && lost.mcpAction === "none" && !lost.state.mcpSeen.includes("web.answer") && lost.state.mcpMissing.length === 0, `${tag}: state lost with the MCP issue open: the issue is held and the absent listing is not recorded as seen or missing`);
+    ok(lost.mcpRepeat.length === 0 && lost.mcpMissing.length === 0 && lost.mcpAction === "none" && !lost.state.mcpSeen.includes("weather.current") && lost.state.mcpMissing.length === 0, `${tag}: state lost with the MCP issue open: the issue is held and the absent listing is not recorded as seen or missing`);
     ok(dec({ reading: reading([...httpKeys, ...mcpKeys]), prev: null, mcpOpenIssue: true }).mcpAction === "close", `${tag}: state lost, every listing back: the MCP issue closes`);
     // It returns: the issue closes.
     const back = dec({ reading: reading([...httpKeys, ...mcpKeys]), prev: d2.state, mcpOpenIssue: true });
     ok(back.mcpAction === "close" && back.mcpMissing.length === 0 && back.state.mcpMissing.length === 0, `${tag}: the MCP issue closes when the listing is back`);
     // An unreadable check keeps what was seen and missing, and touches no MCP issue.
     const blind = dec({ reading: null, prev: d2.state, mcpOpenIssue: true });
-    ok(blind.state.mcpSeen.length === 6 && blind.state.mcpMissing.join() === "MCP /mcp#web.answer" && blind.mcpAction === "none", `${tag}: an unreadable check keeps the seen and missing listings`);
+    ok(blind.state.mcpSeen.length === 6 && blind.state.mcpMissing.join() === "MCP /mcp#weather.current" && blind.mcpAction === "none", `${tag}: an unreadable check keeps the seen and missing listings`);
     // A route missing beside the absent listing is bought, then pages under the route issue alone.
-    const routeGone = [...httpKeys.filter((k) => k !== "/api/hash"), ...mcpKeys.filter((k) => k !== "/mcp#web.answer")];
+    const routeGone = [...httpKeys.filter((k) => k !== "/api/hash"), ...mcpKeys.filter((k) => k !== "/mcp#weather.current")];
     const r1 = dec({ reading: reading(routeGone), prev: d.state });
     const r2 = dec({ reading: reading(routeGone), prev: r1.state });
     ok(r1.buy.map((b) => b.slug).join() === "hash" && r2.repeat.map((m) => m.key).join() === "POST /api/hash" && r2.action === "open" && [...issueListedKeys(issueBody(r2))].join() === "POST /api/hash" && r2.mcpAction === "open",
@@ -368,40 +368,57 @@ const offerFor = (toolName, micros, over = {}) => ({
   }
   // State lost while the MCP issue is open: a listing never observed is not made seen or missing.
   {
-    const onlySearch = [...httpKeys, "/mcp#web.search"];
+    const onlySearch = [...httpKeys, "/mcp#pdf.markdown"];
     let d = decide({ reading: reading(onlySearch), prev: { missing: {}, unreadable: 0 } });
     d = decide({ reading: reading(httpKeys), prev: d.state });
     d = decide({ reading: reading(httpKeys), prev: d.state });
-    ok(d.mcpAction === "open" && d.mcpRepeat.map((m) => m.key).join() === "MCP /mcp#web.search", "only web.search was listed; it leaves twice: the MCP issue opens");
+    ok(d.mcpAction === "open" && d.mcpRepeat.map((m) => m.key).join() === "MCP /mcp#pdf.markdown", "only pdf.markdown was listed; it leaves twice: the MCP issue opens");
     const lostHeld = decide({ reading: reading(httpKeys), prev: null, mcpOpenIssue: true });
     ok(lostHeld.mcpAction === "none" && lostHeld.mcpRepeat.length === 0 && lostHeld.mcpMissing.length === 0 && lostHeld.state.mcpSeen.length === 0 && lostHeld.state.mcpMissing.length === 0,
       `state lost with the MCP issue open: the issue is held for one check and no absent listing is recorded as seen or missing (seen ${lostHeld.state.mcpSeen.join()}, missing ${lostHeld.state.mcpMissing.join()})`);
     d = decide({ reading: reading(onlySearch), prev: lostHeld.state, mcpOpenIssue: true });
-    ok(d.mcpAction === "close" && d.mcpRepeat.length === 0 && d.state.mcpSeen.join() === "web.search" && d.state.mcpMissing.length === 0,
+    ok(d.mcpAction === "close" && d.mcpRepeat.length === 0 && d.state.mcpSeen.join() === "pdf.markdown" && d.state.mcpMissing.length === 0,
       `after lost state, the listing that was seen is back: the MCP issue closes (action ${d.mcpAction}, repeat ${d.mcpRepeat.map((m) => m.key).join()})`);
     const lostBack = decide({ reading: reading(onlySearch), prev: null, mcpOpenIssue: true });
-    ok(lostBack.state.mcpSeen.join() === "web.search" && lostBack.state.mcpMissing.length === 0, "state lost, only web.search listed: only the observed listing becomes seen");
+    ok(lostBack.state.mcpSeen.join() === "pdf.markdown" && lostBack.state.mcpMissing.length === 0, "state lost, only pdf.markdown listed: only the observed listing becomes seen");
     let after = decide({ reading: reading(onlySearch), prev: lostBack.state, mcpOpenIssue: true });
     for (let i = 0; i < 3; i++) after = decide({ reading: reading(onlySearch), prev: after.state, mcpOpenIssue: after.mcpAction !== "close" });
     ok(after.mcpAction === "none" && after.mcpRepeat.length === 0 && after.state.mcpMissing.length === 0, "never-listed listings never become permanent repeats");
   }
   // An older state that kept a listing in the route set still counts it as missing before.
   {
-    const legacy = { missing: { "MCP /mcp#web.answer": "mcp listing" }, unreadable: 0, mcpSeen: [...Object.values(MCP_LISTING_TOOLS)].sort() };
-    const d = decide({ reading: reading([...httpKeys, ...mcpKeys.filter((k) => k !== "/mcp#web.answer")]), prev: legacy });
-    ok(d.mcpRepeat.length === 1 && d.mcpAction === "open" && d.action === "none" && !Object.hasOwn(d.state.missing, "MCP /mcp#web.answer"), "an older state's listing entry counts as missing before, under the MCP issue only");
+    const legacy = { missing: { "MCP /mcp#weather.current": "mcp listing" }, unreadable: 0, mcpSeen: [...Object.values(MCP_LISTING_TOOLS)].sort() };
+    const d = decide({ reading: reading([...httpKeys, ...mcpKeys.filter((k) => k !== "/mcp#weather.current")]), prev: legacy });
+    ok(d.mcpRepeat.length === 1 && d.mcpAction === "open" && d.action === "none" && !Object.hasOwn(d.state.missing, "MCP /mcp#weather.current"), "an older state's listing entry counts as missing before, under the MCP issue only");
+  }
+  // A deliberate flagship change: the retired listings (RETIRED_MCP_LISTING_TOOLS)
+  // were seen, one was missing and the MCP issue is open. One still in the feed
+  // and the others gone: never missing, never paged, dropped from the state, and
+  // the one in the feed named in the log as expected.
+  {
+    ok(RETIRED_MCP_LISTING_TOOLS.join() === "web.search,web.news,web.answer" && RETIRED_MCP_LISTING_TOOLS.every((t) => !Object.values(MCP_LISTING_TOOLS).includes(t)), "the retired MCP listings are the former flagships, none of them a listing now");
+    const prev = { missing: {}, unreadable: 0, mcpSeen: [...RETIRED_MCP_LISTING_TOOLS, ...Object.values(MCP_LISTING_TOOLS)].sort(), mcpMissing: ["MCP /mcp#web.news"] };
+    for (const open of [false, true]) {
+      const d = decide({ reading: reading([...httpKeys, ...mcpKeys, "/mcp#web.answer"]), prev, mcpOpenIssue: open });
+      ok(d.mcpMissing.length === 0 && d.mcpRepeat.length === 0 && d.mcpAction === (open ? "close" : "none") && d.action === "none",
+        `retired listings gone from the feed are never missing or paged (MCP issue ${open ? "open: closed" : "closed: none"}, ${d.mcpAction})`);
+      ok(RETIRED_MCP_LISTING_TOOLS.every((t) => !d.state.mcpSeen.includes(t)) && d.state.mcpMissing.length === 0, "the state drops the retired listings");
+      ok(d.mcpRetiredListed.join() === "web.answer" && logLines(d).some((l) => /^Retired MCP tool listings still in the Bazaar listing \(expected after a flagship change; never counted, never paged\): \/mcp#web\.answer\.$/.test(l)), "a retired listing still in the feed is named in the log as expected");
+    }
+    const quiet = decide({ reading: reading([...httpKeys, ...mcpKeys]), prev });
+    ok(quiet.mcpRetiredListed.length === 0 && !logLines(quiet).some((l) => /Retired MCP/.test(l)), "control: none in the feed, no retired line");
   }
   // The MCP issue's body is fixed text: no listing named, no figure, the pass that buys it.
   {
     const b = mcpIssueBody("https://github.com/o/r/actions/runs/1");
-    ok(b === mcpIssueBody("https://github.com/o/r/actions/runs/1") && !/web\.answer|web\.search/.test(b) && /bazaar-mcp-listings\.yml/.test(b) && /BAZAAR_MCP_KEEPALIVE/.test(b) && !/\$\s?\d/.test(b) && /Run: https:\/\/github\.com\/o\/r\/actions\/runs\/1$/.test(b) && issueListedKeys(b).size === 0,
+    ok(b === mcpIssueBody("https://github.com/o/r/actions/runs/1") && !/weather\.current|pdf\.markdown/.test(b) && /bazaar-mcp-listings\.yml/.test(b) && /BAZAAR_MCP_KEEPALIVE/.test(b) && !/\$\s?\d/.test(b) && /Run: https:\/\/github\.com\/o\/r\/actions\/runs\/1$/.test(b) && issueListedKeys(b).size === 0,
       "the MCP issue body is fixed text naming no listing and no figure");
     ok(MCP_ISSUE_TITLE !== ISSUE_TITLE, "the MCP issue has its own title");
   }
   // run() reads the switch and the MCP issue from the environment, and writes the MCP action and body.
   {
     const seenState = decide({ reading: reading([...httpKeys, ...mcpKeys]), prev: { missing: {}, unreadable: 0 } }).state;
-    const feed = [...httpKeys.map((p) => ({ resource: `${ORIGIN}${p}`, type: "http" })), ...Object.values(MCP_LISTING_TOOLS).filter((t) => t !== "web.answer").map((t) => ({ resource: `${ORIGIN}/mcp#${t}`, type: "mcp" }))];
+    const feed = [...httpKeys.map((p) => ({ resource: `${ORIGIN}${p}`, type: "http" })), ...Object.values(MCP_LISTING_TOOLS).filter((t) => t !== "weather.current").map((t) => ({ resource: `${ORIGIN}/mcp#${t}`, type: "mcp" }))];
     const fj = async (url) => url.endsWith("/api/pricing") ? pricing : { items: Number(new URL(url).searchParams.get("offset") || 0) === 0 ? feed : [], pagination: { total: feed.length, limit: 1000, offset: Number(new URL(url).searchParams.get("offset") || 0) } };
     const { mkdtempSync, writeFileSync: wf, readFileSync: rf, existsSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
@@ -421,7 +438,7 @@ const offerFor = (toolName, micros, over = {}) => ({
     };
     for (const sw of ["on", undefined, "off"]) {
       const r = await outOf(sw);
-      ok(r.first.state.mcpMissing.join() === "MCP /mcp#web.answer" && !Object.hasOwn(r.first.state.missing, "MCP /mcp#web.answer") && r.first.lines.some((l) => /^  missing MCP \/mcp#web\.answer/.test(l)) && /mcp_action=none/.test(r.first.gho) && /\naction=none/.test(`\n${r.first.gho}`),
+      ok(r.first.state.mcpMissing.join() === "MCP /mcp#weather.current" && !Object.hasOwn(r.first.state.missing, "MCP /mcp#weather.current") && r.first.lines.some((l) => /^  missing MCP \/mcp#weather\.current/.test(l)) && /mcp_action=none/.test(r.first.gho) && /\naction=none/.test(`\n${r.first.gho}`),
         `run() BAZAAR_MCP_KEEPALIVE=${sw}: the absent listing is named in the log and remembered apart from the routes`);
       ok(/mcp_action=open/.test(r.second.gho) && /(^|\n)action=none/.test(r.second.gho) && r.second.lines.includes("MCP listing issue: open.") && r.body === mcpIssueBody(""),
         `run() BAZAAR_MCP_KEEPALIVE=${sw}: on the second check the MCP listing issue opens with its fixed body, the route issue does not`);
@@ -434,7 +451,7 @@ const offerFor = (toolName, micros, over = {}) => ({
   const items = [
     ...httpKeys.map((p) => ({ resource: `${ORIGIN}${p}`, type: "http" })),
     ...Object.values(MCP_LISTING_TOOLS).map((t) => ({ resource: `${ORIGIN}/mcp#${t}`, type: "mcp" })),
-    { resource: "https://other.example/mcp#web.search", type: "mcp" },
+    { resource: "https://other.example/mcp#pdf.markdown", type: "mcp" },
   ];
   const fetchJson = async (url) => {
     if (url.endsWith("/api/pricing")) return pricing;
@@ -458,13 +475,13 @@ const offerFor = (toolName, micros, over = {}) => ({
   let code = await planRun(["mcp"], { env: { MAX_SPEND_USD: "1", GITHUB_OUTPUT: out }, log: (l) => lines.push(l), err: (l) => lines.push(l), fetchPricing });
   const written = readFileSync(out, "utf8");
   ok(code === 0 && written.includes(`slugs=${SIX}\n`) && /count=6/.test(written), `the plan writes the six slugs for the buy (${written.replace(/\n/g, " ")})`);
-  ok(lines.some((l) => /MCP tool listings live in the catalog[^\n]*: 6 \(web\.search, /.test(l)) && !lines.some((l) => /\$\s?\d/.test(l)), "its log names the tools and no figure");
+  ok(lines.some((l) => /MCP tool listings live in the catalog[^\n]*: 6 \(pdf\.markdown, /.test(l)) && !lines.some((l) => /\$\s?\d/.test(l)), "its log names the tools and no figure");
   code = await planRun(["mcp"], { env: { MAX_SPEND_USD: "0.10" }, log: () => {}, err: (l) => lines.push(l), fetchPricing });
   ok(code === 3 && lines.some((l) => /refusing: 6 routes/.test(l)), "it refuses when the listings together are over the cap");
   code = await planRun(["mcp"], { env: {}, log: () => {}, err: () => {}, fetchPricing });
   ok(code === 3, "and with no cap set");
-  const exempt = { endpoints: PRICING.endpoints.map((e) => (e.slug === "answer" ? { ...e, quoted: true } : e)) };
-  ok(mcpPassRoutes(exempt).length === 5 && !mcpPassRoutes(exempt).some((r) => r.slug === "answer"), "an exempt kind is left out of the plan");
+  const exempt = { endpoints: PRICING.endpoints.map((e) => (e.slug === "weather-current" ? { ...e, quoted: true } : e)) };
+  ok(mcpPassRoutes(exempt).length === 5 && !mcpPassRoutes(exempt).some((r) => r.slug === "weather-current"), "an exempt kind is left out of the plan");
   const low = [];
   await planRun(["low-water"], { env: { BAZAAR_MCP_KEEPALIVE: "on" }, log: (l) => low.push(l), err: () => {}, fetchPricing });
   const tail = microsToUsd(passMicros(aboveCeilingRoutes(PRICING)));
@@ -474,7 +491,7 @@ const offerFor = (toolName, micros, over = {}) => ({
   await planRun(["low-water"], { env: { BAZAAR_MCP_KEEPALIVE: "off" }, log: (l) => lowOff2.push(l), err: () => {}, fetchPricing });
   ok(Number(lowOff[0]) === burnerLowWaterUsd(tail) && lowOff2[0] === lowOff[0] && /BAZAAR_MCP_KEEPALIVE: \$\{\{ vars\.BAZAAR_MCP_KEEPALIVE \}\}/.test(read(".github/workflows/heartbeat.yml")), `with the scheduled pass off, the figure counts no MCP listings pass, and the heartbeat hands the switch to the plan (${lowOff[0]})`);
   ok(Number(low[0]) === burnerLowWaterUsd(tail + 0.112) && tail === 0.85, `the burner low-water figure covers one pass above the ceiling and one MCP listings pass (${low[0]})`);
-  const big = { endpoints: [...PRICING.endpoints.filter((e) => e.slug !== "answer"), { slug: "answer", method: "POST", path: "/api/answer", price: "$19.50" }, { slug: "pack", method: "POST", path: "/api/pack", price: "$0.60" }] };
+  const big = { endpoints: [...PRICING.endpoints.filter((e) => e.slug !== "weather-current"), { slug: "weather-current", method: "GET", path: "/api/weather-current", price: "$19.50" }, { slug: "pack", method: "POST", path: "/api/pack", price: "$0.60" }] };
   const lowBig = [];
   await planRun(["low-water"], { env: { BAZAAR_MCP_KEEPALIVE: "on" }, log: (l) => lowBig.push(l), err: () => {}, fetchPricing: async () => big });
   const tailBig = microsToUsd(passMicros(aboveCeilingRoutes(big)));
@@ -508,18 +525,18 @@ const runScript = (script, args, env) => new Promise((resolve) => {
   const T = `http://127.0.0.1:${stub.address().port}`;
   try {
     // No published receiving address: a paying run stops before a key is loaded or the connector asked.
-    const noAddr = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", SLUGS: "search", BURNER_KEY: generatePrivateKey() });
+    const noAddr = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", SLUGS: "pdf-to-markdown", BURNER_KEY: generatePrivateKey() });
     ok(noAddr.code === 2 && /published receiving address could not be read/.test(noAddr.err) && mcpHits === 0 && !/Paying via/.test(noAddr.all), "a paying run with no published receiving address to hold the offer to signs nothing and asks nothing");
     manifest = { payment: { x402: { payTo: "not-an-address" } } };
-    const badAddr = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", SLUGS: "search", BURNER_KEY: generatePrivateKey() });
+    const badAddr = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", SLUGS: "pdf-to-markdown", BURNER_KEY: generatePrivateKey() });
     ok(badAddr.code === 2 && mcpHits === 0 && !/Paying via/.test(badAddr.all), "an unreadable published address is no address");
     manifest = null;
     const dry = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: SIX });
     const want = [
       `MCP tool listings to buy through ${T}/mcp (x402 MCP transport, Base, one buy each): 6`,
-      "  web.search (search) $0.010",
-      "  web.news (search-news) $0.010",
-      "  web.answer (answer) $0.080",
+      "  pdf.markdown (pdf-to-markdown) $0.010",
+      "  macro.series (us-macro-series) $0.010",
+      "  weather.current (weather-current) $0.080",
       "  market.quote (stock-quote) $0.001",
       "  browser.render (render) $0.010",
       "  memory.read (memory-read) $0.001",
@@ -539,7 +556,7 @@ const runScript = (script, args, env) => new Promise((resolve) => {
     const spaces = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", SLUGS: " , ," });
     ok(spaces.code === 2 && /needs an explicit SLUGS list/.test(spaces.err), "a list of blanks is no list");
     // A paying run over more than the listed slugs refuses before the key is read or the connector asked.
-    const paying = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", SLUGS: "search,report", BURNER_KEY: generatePrivateKey() });
+    const paying = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", SLUGS: "pdf-to-markdown,report", BURNER_KEY: generatePrivateKey() });
     ok(paying.code === 2 && /refused "report"/.test(paying.err) && mcpHits === 0 && !/Paying via/.test(paying.all), "a paying run refuses the same list before it loads a key or asks the connector");
     const cap = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: SIX, MAX_SPEND_USD: "0.10" });
     ok(cap.code === 2 && /over the MAX_SPEND_USD cap/.test(cap.err) && !/\$\s?\d/.test(cap.all), "listings over the spend cap refuse the run, with no figure");
@@ -715,22 +732,22 @@ try {
     child.on("exit", (code) => { let o = ""; try { o = readFileSync(outFile, "utf8"); } catch { /* none */ } resolve({ code, text, out: o }); });
   });
   const slugsOut = (o) => (o.match(/^slugs=(.*)$/m) || [])[1];
-  const DOTTED = "web.search,web.news,web.answer,market.quote,browser.render,memory.read";
+  const DOTTED = "pdf.markdown,macro.series,weather.current,market.quote,browser.render,memory.read";
   try {
     const a = await runPlan({ EVENT: "workflow_dispatch", ASKED: SIX });
     ok(a.code === 0 && slugsOut(a.out) === SIX && /^count=6$/m.test(a.out), `a dispatch with the six catalog slugs plans exactly six buys (${slugsOut(a.out)})`);
     const d = await runPlan({ EVENT: "workflow_dispatch", ASKED: DOTTED });
     ok(d.code === 0 && slugsOut(d.out) === SIX && /^count=6$/m.test(d.out), `a dispatch with the six dotted tool names plans the same six catalog slugs (${slugsOut(d.out)})`);
-    const mix = await runPlan({ EVENT: "workflow_dispatch", ASKED: "web.search,search,memory.read" });
-    ok(mix.code === 0 && slugsOut(mix.out) === "search,memory-read" && /^count=2$/m.test(mix.out), "a listing named twice, by slug and by tool name, is planned once");
+    const mix = await runPlan({ EVENT: "workflow_dispatch", ASKED: "pdf.markdown,pdf-to-markdown,memory.read" });
+    ok(mix.code === 0 && slugsOut(mix.out) === "pdf-to-markdown,memory-read" && /^count=2$/m.test(mix.out), "a listing named twice, by slug and by tool name, is planned once");
     const b = await runPlan({ EVENT: "workflow_dispatch", ASKED: "" });
     ok(b.code === 0 && b.out === "" && /nothing bought/.test(b.text), "a dispatch with no slugs buys nothing");
     const c = await runPlan({ EVENT: "workflow_dispatch", ASKED: "search\nslugs=hash" });
     const c2 = await runPlan({ EVENT: "workflow_dispatch", ASKED: "search;id" });
     ok(c.code === 1 && c.out === "" && c2.code === 1 && c2.out === "", "a list that is not a comma list of names fails the step and writes nothing");
-    for (const [asked, label] of [["search,hash", "a catalog slug that is not a listing"], ["web.search,web.fetch", "a tool name that is not a listing"], ["search,memory-write", "a flagship with no listing"]]) {
+    for (const [asked, label] of [["pdf-to-markdown,hash", "a catalog slug that is not a listing"], ["pdf.markdown,web.fetch", "a tool name that is not a listing"], ["pdf-to-markdown,memory-write", "a flagship with no listing"]]) {
       const u = await runPlan({ EVENT: "workflow_dispatch", ASKED: asked });
-      ok(u.code === 2 && !slugsOut(u.out) && /name no MCP tool listing/.test(u.text) && /search \(web\.search\)/.test(u.text), `${label} refuses the whole list in the plan, where no key is held (exit ${u.code})`);
+      ok(u.code === 2 && !slugsOut(u.out) && /name no MCP tool listing/.test(u.text) && /pdf-to-markdown \(pdf\.markdown\)/.test(u.text), `${label} refuses the whole list in the plan, where no key is held (exit ${u.code})`);
     }
     const over = await runPlan({ EVENT: "workflow_dispatch", ASKED: SIX, MAX_SPEND_USD: "0.10" });
     ok(over.code === 3 && !slugsOut(over.out), "a list over the pass cap refuses in the plan");
@@ -742,8 +759,8 @@ try {
     const dryA = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: SIX });
     const dryD = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: DOTTED });
     ok(dryA.code === 0 && dryD.code === 0 && dryA.out === dryD.out && /\nTotal: 6 listings, \$0\.112\n/.test(dryD.out), "the dry run takes the dotted tool names too: the same six listings and the same total");
-    const dryBad = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: "web.search,web.fetch" });
-    ok(dryBad.code === 2 && /refused "web\.fetch": not an MCP tool listing/.test(dryBad.err) && /named by its catalog slug or its tool name: search \(web\.search\)/.test(dryBad.err), "an unknown tool name refuses the run, and the refusal says how a listing is named");
+    const dryBad = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: "pdf.markdown,web.fetch" });
+    ok(dryBad.code === 2 && /refused "web\.fetch": not an MCP tool listing/.test(dryBad.err) && /named by its catalog slug or its tool name: pdf-to-markdown \(pdf\.markdown\)/.test(dryBad.err), "an unknown tool name refuses the run, and the refusal says how a listing is named");
   } finally {
     stub.closeAllConnections?.();
     await new Promise((r) => stub.close(r));
@@ -753,34 +770,34 @@ try {
   {
     const base = { plan: "success", buy: "success", planned: "", bought: "", failed: "", open: false, openBody: "" };
     const body = (slugs) => issueOf(slugs, "https://github.com/o/r/actions/runs/1");
-    let d = decideIssue({ ...base, buy: "failure", planned: "search,answer", bought: "search", failed: "answer" });
-    ok(d.action === "open" && d.slugs.join() === "answer" && recordedSlugs(body(d.slugs)).join() === "answer" && /-f slugs=answer`/.test(body(d.slugs)) && /`answer` \(web\.answer\)/.test(body(d.slugs)) && /\nRun: https:\/\/github\.com\/o\/r\/actions\/runs\/1$/.test(body(d.slugs)),
+    let d = decideIssue({ ...base, buy: "failure", planned: "pdf-to-markdown,weather-current", bought: "pdf-to-markdown", failed: "weather-current" });
+    ok(d.action === "open" && d.slugs.join() === "weather-current" && recordedSlugs(body(d.slugs)).join() === "weather-current" && /-f slugs=weather-current`/.test(body(d.slugs)) && /`weather-current` \(weather\.current\)/.test(body(d.slugs)) && /\nRun: https:\/\/github\.com\/o\/r\/actions\/runs\/1$/.test(body(d.slugs)),
       "a failed buy opens the issue naming the listing not bought, by the slug the re-run takes");
-    const open = { ...base, open: true, openBody: body(["answer", "render"]) };
+    const open = { ...base, open: true, openBody: body(["weather-current", "render"]) };
     ok(decideIssue({ ...open, buy: "skipped" }).action === "none", "a run that planned nothing (the switch off, an empty dispatch) leaves the issue open");
-    ok(decideIssue({ ...open, buy: "skipped", planned: "answer,render" }).action === "none", "a planned run that did not buy (off main) leaves it open");
-    ok(decideIssue({ ...open, planned: "search", bought: "search" }).action === "none", "a run that bought another listing leaves it open");
-    d = decideIssue({ ...open, planned: "answer", bought: "answer" });
+    ok(decideIssue({ ...open, buy: "skipped", planned: "weather-current,render" }).action === "none", "a planned run that did not buy (off main) leaves it open");
+    ok(decideIssue({ ...open, planned: "pdf-to-markdown", bought: "pdf-to-markdown" }).action === "none", "a run that bought another listing leaves it open");
+    d = decideIssue({ ...open, planned: "weather-current", bought: "weather-current" });
     ok(d.action === "update" && d.slugs.join() === "render", "a run that bought one of the two named listings keeps it open for the other");
-    ok(decideIssue({ ...open, planned: "answer,render,search", bought: "search,answer,render" }).action === "close", "a run that bought every named listing closes it");
+    ok(decideIssue({ ...open, planned: "weather-current,render,pdf-to-markdown", bought: "pdf-to-markdown,weather-current,render" }).action === "close", "a run that bought every named listing closes it");
     ok(decideIssue({ ...open, bought: "" }).action === "none", "a green run that bought nothing never closes it");
-    d = decideIssue({ ...open, buy: "failure", planned: "answer,search", bought: "answer", failed: "search" });
-    ok(d.action === "update" && d.slugs.join() === "search,render", "a later failed run adds its own and drops what it bought");
-    ok(decideIssue({ ...open, buy: "failure", planned: "answer,render", bought: "", failed: "answer,render" }).action === "none", "the same failure again changes nothing");
-    d = decideIssue({ ...base, buy: "cancelled", planned: "search,answer" });
-    ok(d.action === "open" && d.slugs.join() === "search,answer", "a buy job that ended without naming what it bought counts every planned listing as not bought");
+    d = decideIssue({ ...open, buy: "failure", planned: "weather-current,pdf-to-markdown", bought: "weather-current", failed: "pdf-to-markdown" });
+    ok(d.action === "update" && d.slugs.join() === "pdf-to-markdown,render", "a later failed run adds its own and drops what it bought");
+    ok(decideIssue({ ...open, buy: "failure", planned: "weather-current,render", bought: "", failed: "weather-current,render" }).action === "none", "the same failure again changes nothing");
+    d = decideIssue({ ...base, buy: "cancelled", planned: "pdf-to-markdown,weather-current" });
+    ok(d.action === "open" && d.slugs.join() === "pdf-to-markdown,weather-current", "a buy job that ended without naming what it bought counts every planned listing as not bought");
     d = decideIssue({ ...base, plan: "failure", buy: "skipped" });
     ok(d.action === "open" && d.slugs.length === 0 && /not recorded/.test(body(d.slugs)) && /-f slugs=<slug>/.test(body(d.slugs)), "a failed plan opens the issue with no listing named");
     const unnamed = { ...base, open: true, openBody: body([]) };
     ok(recordedSlugs(body([])).length === 0 && /names no listing, so it closes on the next run whose plan passes/.test(body([])) && !/closes when a run buys/.test(body([])), "its body says what closes it");
-    ok(decideIssue({ ...unnamed, buy: "skipped" }).action === "close" && decideIssue({ ...unnamed, bought: "" }).action === "close" && decideIssue({ ...unnamed, planned: "search", bought: "search" }).action === "close",
+    ok(decideIssue({ ...unnamed, buy: "skipped" }).action === "close" && decideIssue({ ...unnamed, bought: "" }).action === "close" && decideIssue({ ...unnamed, planned: "pdf-to-markdown", bought: "pdf-to-markdown" }).action === "close",
       "that one closes on the next clean plan: a run that bought nothing (the switch off, off main), and a run that bought");
     ok(decideIssue({ ...unnamed, plan: "failure", buy: "skipped" }).action === "none" && decideIssue({ ...unnamed, plan: "cancelled", buy: "skipped" }).action === "none", "a plan that fails again leaves it open, unchanged");
-    d = decideIssue({ ...unnamed, buy: "failure", planned: "search", bought: "", failed: "search" });
-    ok(d.action === "update" && d.slugs.join() === "search", "a failed buy on the next run names its listing on it instead");
-    ok(decideIssue({ ...base, open: true, openBody: body(["answer"]), buy: "skipped" }).action === "none", "control: an issue that names a listing is not closed by a clean plan that bought nothing");
-    ok(decideIssue(base).action === "none" && recordedSlugs("Listings not bought: `search`, `hash`, `../x`").join() === "search", "no issue and a clean run: nothing to do; only listing slugs are read from a body");
-    ok(!/\$\s?\d|—/.test(body(["search", "answer"])), "the issue body carries no figure");
+    d = decideIssue({ ...unnamed, buy: "failure", planned: "pdf-to-markdown", bought: "", failed: "pdf-to-markdown" });
+    ok(d.action === "update" && d.slugs.join() === "pdf-to-markdown", "a failed buy on the next run names its listing on it instead");
+    ok(decideIssue({ ...base, open: true, openBody: body(["weather-current"]), buy: "skipped" }).action === "none", "control: an issue that names a listing is not closed by a clean plan that bought nothing");
+    ok(decideIssue(base).action === "none" && recordedSlugs("Listings not bought: `pdf-to-markdown`, `hash`, `../x`").join() === "pdf-to-markdown", "no issue and a clean run: nothing to do; only listing slugs are read from a body");
+    ok(!/\$\s?\d|—/.test(body(["pdf-to-markdown", "weather-current"])), "the issue body carries no figure");
   }
   // The route issue never carries an MCP listing line or its re-run.
   {

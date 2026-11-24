@@ -63,8 +63,8 @@
 // with an extension of type "mcp"), so this mode pays there, on Base, from the
 // burner. It takes an explicit slug list and nothing else:
 //   SLUGS             required; each entry names one of the MCP tool listings,
-//                     by its catalog slug (search) or its dotted tool name
-//                     (web.search), live in the catalog and not an exempt
+//                     by its catalog slug (pdf-to-markdown) or its dotted tool name
+//                     (pdf.markdown), live in the catalog and not an exempt
 //                     kind. Any other entry refuses the whole run; a listing
 //                     named twice is bought once. No price, prefix, staleness
 //                     or batch filter applies.

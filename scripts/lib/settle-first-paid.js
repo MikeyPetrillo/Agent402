@@ -115,7 +115,8 @@ export async function run({ ok, parts, setRig }) {
   if (parts.includes("2")) {
     await boot("settle-first-a", {
       GATEWAY_SETTLE_FIRST: "always",
-      // The connector's x402 twins (web.search, web.news, web.answer) on a stub search upstream.
+      // The former flagships (web.search, web.news, web.answer), called by name
+      // through the connector and paid on their HTTP routes, on a stub search upstream.
       BRAVE_API_KEY: "stub-brave-key", BRAVE_ANSWERS_API_KEY: "stub-brave-key", UPSTREAM_STUB_HOSTS: "api.search.brave.com",
       AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
     });
@@ -520,11 +521,11 @@ export async function run({ ok, parts, setRig }) {
         } finally { await mcp.close(); }
       }
 
-      // ---- the connector's x402 twins: one settle per payment -------------------
-      // web.search, web.news and web.answer are served by the twins' own HTTP
-      // resource server over the same core server: a new wallet's payment
-      // settles before the search upstream, and the twin's after-handler
-      // settlement answers that settle. A facilitator that refuses a second
+      // ---- the connector, by a tool's MCP name: one settle per payment ---------
+      // web.search, web.news and web.answer (former flagships, still callable
+      // by name) are paid on their HTTP routes through the connector's
+      // loopback: a new wallet's payment settles before the search upstream,
+      // and the route's after-handler settlement answers that settle. A facilitator that refuses a second
       // settle of the same payment (as a used EVM nonce or a processed Solana
       // transaction is) is never asked one.
       {

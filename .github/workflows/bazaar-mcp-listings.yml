@@ -12,8 +12,10 @@
 # tool listing, and buys each listing exactly once (one signature held to its
 # list price and to the server's published receiving address, one paid call,
 # no retry):
-#   dispatch   `slugs` is the explicit list, by catalog slug (search) or by
-#              tool name (web.search); an empty one buys nothing.
+#   dispatch   `slugs` is the explicit list, by catalog slug (pdf-to-markdown)
+#              or by tool name (pdf.markdown); an empty one buys nothing.
+#              The retired listings (web.search, web.news, web.answer; a
+#              flagship change) name no listing and refuse the list.
 #   schedule   the 1st and 15th, only while the repo variable
 #              BAZAAR_MCP_KEEPALIVE is "on"; the list is the plan's
 #              (scripts/keepalive-plan.js mcp: every MCP tool listing live in
@@ -32,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       slugs:
-        description: "Explicit comma list of MCP listings to buy once each, by catalog slug (search, search-news, answer, render, memory-read) or tool name (web.search, web.news, web.answer, browser.render, memory.read); a listing the live catalog does not serve refuses the list. Empty buys nothing."
+        description: "Explicit comma list of MCP listings to buy once each, by catalog slug (pdf-to-markdown, us-macro-series, weather-current, render, memory-read) or tool name (pdf.markdown, macro.series, weather.current, browser.render, memory.read); a listing the live catalog does not serve refuses the list. Empty buys nothing."
         default: ""
       max_spend_usd:
         description: "Hard cap for the whole pass (USD). The pass refuses to start above it."
@@ -67,7 +69,7 @@ jobs:
             # Matched as one string (a newline never passes). The plan maps each
             # entry (a catalog slug or a dotted tool name) to its catalog slug
             # and refuses the whole list on an entry that names no listing.
-            [[ "$ASKED" =~ ^[a-z0-9.-]+(,[a-z0-9.-]+)*$ ]] || { echo "::error::slugs must be a comma list of MCP listings, by catalog slug (search) or tool name (web.search)"; exit 1; }
+            [[ "$ASKED" =~ ^[a-z0-9.-]+(,[a-z0-9.-]+)*$ ]] || { echo "::error::slugs must be a comma list of MCP listings, by catalog slug (pdf-to-markdown) or tool name (pdf.markdown)"; exit 1; }
             node scripts/keepalive-plan.js mcp
           elif [ "$ENABLED" = "on" ]; then
             ASKED="" node scripts/keepalive-plan.js mcp

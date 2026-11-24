@@ -97,8 +97,8 @@ A small set of dotted MCP tools that cover all 500+ underlying Agent402
 tools (the older snake_case names such as `search_tools` / `call_tool` still
 work as call aliases):
 
-- Flagships, callable directly: `web.search`, `web.answer`, `web.news`,
-  `browser.render`, `audio.transcribe`, `memory.read`,
+- Flagships, callable directly: `pdf.markdown`, `macro.series`,
+  `weather.current`, `browser.render`, `audio.transcribe`, `memory.read`,
   `memory.write`.
 - `catalog.search(query)` - lexical search across the catalog. Task-shaped
   queries also return matching multi-tool skill packs, which the server

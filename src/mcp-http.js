@@ -25,7 +25,7 @@ class McpError extends ProtocolError {
 // Connectors), ChatGPT, or any MCP client that speaks streamable HTTP.
 //
 // This is the authless free tier. It runs in the same process as the tools and
-// lists a FLAGSHIP set (search/answer front door + render/data/STT/memory) plus
+// lists a FLAGSHIP set (PDF, macro series, weather, render, data, STT, memory) plus
 // meta discovery tools. Pure-CPU tools still execute free via call_tool /
 // find_tool; wallet-only flagships return paid-access setup pointing at the
 // npm `agent402-mcp` server with a funded AGENT_KEY. Payment identity can't
@@ -130,6 +130,7 @@ import { KALSHI_SLUGS, kalshiNotOffered } from "./kalshi-switch.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
+  FORMER_FLAGSHIP_MCP_NAMES,
   META_MCP_NAMES,
   MCP_CALL_ALIASES,
   resolveListedName,
@@ -550,7 +551,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     : null;
 
   // Flagship first-class tools: demand SKUs agents should see without a
-  // find_tool round-trip (search/answer front door + render/data/STT/memory).
+  // find_tool round-trip (PDF, macro series, weather, render, data, STT, memory).
   // Most are wallet-only on this authless connector — calling one returns
   // paid-access setup (same as call_tool on a wallet slug). The long catalog
   // stays behind search_tools / find_tool / call_tool. Total tools/list size
@@ -626,6 +627,23 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   for (const [alias, canonical] of Object.entries(MCP_CALL_ALIASES)) {
     const slug = dottedToSlug[canonical];
     if (slug && flagshipSet.has(slug)) namedToolSlugs.set(alias, slug);
+  }
+  // Former flagships (the main connector only): never listed, still callable
+  // by every name they were listed under. Not a flagship here, so a call is
+  // priced and paid on the tool's own HTTP route, as catalog.call is.
+  if (!profile?.flagshipSlugs) {
+    const formerBySlug = Object.fromEntries(Object.entries(FORMER_FLAGSHIP_MCP_NAMES).map(([slug, dotted]) => [dotted, slug]));
+    for (const [slug, dotted] of Object.entries(FORMER_FLAGSHIP_MCP_NAMES)) {
+      if (!tools.has(slug) || namedToolSlugs.has(dotted)) continue;
+      namedToolSlugs.set(dotted, slug);
+      namedToolSlugs.set(dotted.replace(/\./g, "_"), slug);
+      if (!namedToolSlugs.has(slug)) namedToolSlugs.set(slug, slug);
+      if (!namedToolSlugs.has(toSnake(slug))) namedToolSlugs.set(toSnake(slug), slug);
+    }
+    for (const [alias, canonical] of Object.entries(MCP_CALL_ALIASES)) {
+      const slug = formerBySlug[canonical];
+      if (slug && tools.has(slug) && !namedToolSlugs.has(alias)) namedToolSlugs.set(alias, slug);
+    }
   }
   for (const [alias, slug] of Object.entries(LEGACY_MCP_ALIASES)) {
     if (tools.has(slug)) {
@@ -910,9 +928,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           inputSchema: { type: "object", properties: {} },
           outputSchema: META_OUTPUT_SCHEMAS["payment.info"],
         },
-        // Flagship demand tools — listed first-class so agents see search/answer
-        // as the front door without a discovery round-trip. Wallet-only on this
-        // authless connector: calling returns paid-access setup.
+        // Flagship demand tools — listed first-class so agents see them
+        // without a discovery round-trip. Wallet-only on this authless
+        // connector: calling returns the payment offer or paid-access setup.
         ...[...flagshipSet].map((slug) => {
           const { def, free } = tools.get(slug);
           const ann = flagshipHints(slug);
@@ -1751,7 +1769,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             connector: "hosted free tier (authless)",
             maintainer: "Havok Holdings LLC",
             positioning: `${leadSentence({ mpp: mppMethodsSummary().enabled, receipts: receiptsServed() })} ${SUPPORT_LINE} It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, ${mppMethodsSummary().enabled ? "over the two open wires - x402 and MPP (Machine Payments Protocol) - both answered on the same 402" : "over x402"}. Definition + glossary: ${baseUrl}/agentic-finance, ${baseUrl}/glossary.`,
-            // Flagship-first positioning: search/answer as the default job,
+            // Flagship-first positioning: the front door's first call,
             // evergreen 500+ catalog, models and reports named beside the tools.
             startHere: {
               firstJob: `${frontDoor.firstCall}${catalog["POST /api/decide"] ? " A job with more than one step: call decide.plan, then decide.execute (the plan fee is credited toward the run)." : ""} Otherwise catalog.find with your task. Agent402 sells three things on one key: deterministic utilities (no model in that serving path), a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini; /v1/metered), and finished report products. Flagship tools first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call.`,

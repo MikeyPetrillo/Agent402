@@ -79,7 +79,7 @@ Loaded when a connector or front-door file is read.
   ledger) claims neither and books nothing. The ledger is read only once loaded (bounded wait and
   pull); the database sweep leaves an orphan working while it has not loaded, for up to
   `limits.ledgerWaitMs` (5 minutes) (`scripts/test-mcp-task-orphan-charge.js`, `test-mcp-tasks-pg.js`).
-- **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then web.answer takes
+- **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then the answer tool (slug `answer`, also callable as web.answer) takes
   `share=true` and writes a public page after a settled 200 (`/answers/:id`, record at `/answers/:id.json`);
   off, no surface offers it and existing pages serve until expiry. `ANSWER_SHARE_TTL_DAYS` (default 30)
   keeps it (then 410 expired for 90 days), `ANSWER_SHARE_PER_HOUR` (default 60) caps each payer's shares,

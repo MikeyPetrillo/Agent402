@@ -134,10 +134,13 @@ export function frontDoor(catalog, baseUrl, { code = (s) => s, link = (text) => 
   const answer = routeOf(catalog, ANSWER_SLUG);
   const extract = routeOf(catalog, EXTRACT_SLUG);
   const render = routeOf(catalog, RENDER_SLUG);
-  const mcpName = FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG];
+  // A listed flagship is named by its MCP name; any other tool by its catalog
+  // slug (on the MCP connector, catalog.call runs it by that slug).
+  const mcpName = FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG] ?? null;
+  const nameOf = (slug) => FLAGSHIP_MCP_NAMES[slug] ?? `slug ${code(slug)}`;
   const firstUrl = `${baseUrl}${first.path}?q=your+query`;
   const answerClause = answer
-    ? ` For a cited answer, ${FLAGSHIP_MCP_NAMES[ANSWER_SLUG]} (${code(`${answer.method} ${answer.path}`)}, ${priceText(answer)}${answer.modelBacked ? ", model-backed" : ""}).`
+    ? ` For a cited answer, ${nameOf(ANSWER_SLUG)} (${code(`${answer.method} ${answer.path}`)}, ${priceText(answer)}${answer.modelBacked ? ", model-backed" : ""}).`
     : "";
   const readClause = extract
     ? `read it with ${code(`${extract.method} ${extract.path}`)}${render ? `, or ${FLAGSHIP_MCP_NAMES[RENDER_SLUG]} for JavaScript pages` : ""}`
@@ -148,7 +151,7 @@ export function frontDoor(catalog, baseUrl, { code = (s) => s, link = (text) => 
     : "";
   return {
     firstCall: {
-      text: `${mcpName}: ${code(`${first.method} ${firstUrl}`)}, ${priceText(first)} per call: ranked live web results as JSON (title, URL, snippet, age).${answerClause}`,
+      text: `${mcpName ?? `Web search (${nameOf(FRONT_DOOR_SLUG)})`}: ${code(`${first.method} ${firstUrl}`)}, ${priceText(first)} per call: ranked live web results as JSON (title, URL, snippet, age).${answerClause}`,
       mcpName,
       slug: FRONT_DOOR_SLUG,
       method: first.method,

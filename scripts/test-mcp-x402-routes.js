@@ -58,12 +58,13 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // ---- module half ------------------------------------------------------------------
 {
-  ok(same([...twins.MCP_X402_SLUGS].sort(), ["answer", "memory-read", "render", "search", "search-news", "stock-quote"]), "six flagships have a twin");
+  ok(same([...twins.MCP_X402_SLUGS].sort(), ["memory-read", "pdf-to-markdown", "render", "stock-quote", "us-macro-series", "weather-current"]), "six flagships have a twin");
+  ok(!twins.MCP_X402_SLUGS.some((s) => ["search", "search-news", "answer"].includes(s)) && twins.mcpX402SlugOfToolName("web.search") === null, "the former flagships have no twin, by slug or by their old names");
   ok(FLAGSHIP_MCP_NAMES.render === "browser.render" && FLAGSHIP_MCP_NAMES["memory-read"] === "memory.read", "render is browser.render and memory-read is memory.read");
   const fakeCatalog = {
     "GET /api/memory": { slug: "memory-read", price: "$0.001", discovery: { input: {}, inputSchema: { properties: { key: { type: "string" } } } } },
     "POST /api/render": { slug: "render", price: "$0.01", discovery: { input: { url: "https://example.com" }, inputSchema: { properties: { url: { type: "string" } }, required: ["url"] } } },
-    "GET /api/answer": { slug: "answer", price: "$0.01", quote: () => 0.01 },
+    "GET /api/weather-current": { slug: "weather-current", price: "$0.01", quote: () => 0.01 },
     "GET /api/uuid": { slug: "uuid", price: "$0.001" },
   };
   const entries = twins.mcpX402Entries(fakeCatalog);
@@ -177,7 +178,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
       ...(req ? { transportContext: { request: { adapter: { req } } } } : {}),
     });
     ok(lateSettleCandidate(ctxOf(twinReq))?.slug === "memory-read", `a twin's candidate carries its slug (${lateSettleCandidate(ctxOf(twinReq))?.slug})`);
-    ok(lateSettleCandidate(ctxOf(null, { bazaar: { info: { input: { type: "mcp", toolName: "web.search" } } } }))?.slug === "search", "with no request, the /mcp resource's tool name maps to its slug");
+    ok(lateSettleCandidate(ctxOf(null, { bazaar: { info: { input: { type: "mcp", toolName: "pdf.markdown" } } } }))?.slug === "pdf-to-markdown", "with no request, the /mcp resource's tool name maps to its slug");
     ok(lateSettleCandidate(ctxOf(null))?.slug === undefined, "with neither, no slug is claimed (the book reads the URL)");
     const dir = mkdtempSync(join(tmpdir(), "mcp-x402-late-"));
     try {
@@ -273,7 +274,7 @@ try {
   for (const [label, url, init] of [
     ["no marker", "/__mcp-x402/memory-read", {}],
     ["a wrong secret", "/__mcp-x402/memory-read", { headers: { "x-agent402-via": `mcp;k=${"00".repeat(24)}` } }],
-    ["a marker without the secret", "/__mcp-x402/search?q=x", { headers: { "x-agent402-via": "mcp" } }],
+    ["a marker without the secret", "/__mcp-x402/weather-current?lat=1&lon=2", { headers: { "x-agent402-via": "mcp" } }],
     ["another method", "/__mcp-x402/memory-read", { method: "POST", headers: { ...MARKER, "content-type": "application/json" }, body: "{}" }],
     ["a slug with no twin", "/__mcp-x402/uuid", { headers: MARKER }],
   ]) {

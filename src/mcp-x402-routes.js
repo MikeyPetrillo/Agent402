@@ -25,11 +25,11 @@
 // the HTTP route's paywall (mcpX402Dispatch), never on unpaid.
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { isMcpLoopback } from "./mcp-loopback.js";
-import { FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
+import { FLAGSHIP_MCP_NAMES, MACRO_SERIES_SLUG } from "./mcp-flagship.js";
 import { boundedSchema } from "./openapi-schema.js";
 
 /** The flagship slugs that have an internal x402 twin (fixed-price tools). */
-export const MCP_X402_SLUGS = Object.freeze(["search", "search-news", "answer", "stock-quote", "render", "memory-read"]);
+export const MCP_X402_SLUGS = Object.freeze(["pdf-to-markdown", MACRO_SERIES_SLUG, "weather-current", "stock-quote", "render", "memory-read"]);
 export const MCP_X402_PREFIX = "/__mcp-x402/";
 /** The arrival path a twin's sale books (sales ledger `via`). */
 export const MCP_X402_SALE_PATH = "x402-mcp";

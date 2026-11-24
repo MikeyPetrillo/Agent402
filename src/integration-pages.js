@@ -505,7 +505,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.0
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [
-      "Flagship tools under dotted names: `web.search`, `web.answer`, `web.news`, `browser.render`, " + (stockDataEnabled() ? "`market.quote`, " : "") + "`audio.transcribe`, `memory.read`, `memory.write`.",
+      "Flagship tools under dotted names: `pdf.markdown`, `macro.series`, `weather.current`, `browser.render`, " + (stockDataEnabled() ? "`market.quote`, " : "") + "`audio.transcribe`, `memory.read`, `memory.write`.",
       "`catalog.search` / `catalog.find` + `catalog.call` for the rest of the catalog, keeping the context window small.",
       "`payment.info` and `server.describe` for orientation and spend caps; `sellers.list` for the live seller leaderboards, listed when a wallet or credits key is set.",
       "Skill packs as MCP prompts (`prompts/list`, `prompts/get`).",

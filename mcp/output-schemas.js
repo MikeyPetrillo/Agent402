@@ -10,15 +10,18 @@
 // search_tools / call_tool. Keep this list aligned with mcp/index.js
 // DEFAULT_CURATED (stdio package cannot import this file when published).
 //
-// Chosen from live topPaidTools + front-door choice (search/answer first):
-// search, answer, search-news, render, stock-quote, transcribe, memory-*.
+// Every flagship reads a source whose terms are cleared for resale, or none:
+// PDF to markdown, the US macro series, current weather, render, stock-quote,
+// transcribe, memory-*. The web search, news and cited-answer tools stay
+// catalog tools (catalog.call), their prior MCP names callable as aliases
+// (FORMER_FLAGSHIP_MCP_NAMES), never listed.
 // Exactly 8 catalog flagships so hosted tools/list stays ~15 with meta tools
 // (Glama's well-scoped band is 3–15).
 
 export const FLAGSHIP_SLUGS = [
-  "search",
-  "answer",
-  "search-news",
+  "pdf-to-markdown",
+  "us-macro-series",
+  "weather-current",
   "render",
   "stock-quote",
   "transcribe",
@@ -31,9 +34,9 @@ export const FLAGSHIP_SLUGS = [
 // dot-notation (e.g. admin.tools.list)". CallTool still accepts prior snake /
 // digit names via MCP_CALL_ALIASES.
 export const FLAGSHIP_MCP_NAMES = {
-  search: "web.search",
-  answer: "web.answer",
-  "search-news": "web.news",
+  "pdf-to-markdown": "pdf.markdown",
+  "us-macro-series": "macro.series",
+  "weather-current": "weather.current",
   render: "browser.render",
   "stock-quote": "market.quote",
   transcribe: "audio.transcribe",
@@ -41,6 +44,16 @@ export const FLAGSHIP_MCP_NAMES = {
   "memory-write": "memory.write",
   decide: "decide.plan",
   "decide-execute": "decide.execute",
+};
+
+/**
+ * Former flagships: catalog tools once listed under these names. Never
+ * listed now; a call by the name (or its snake alias) still runs the tool.
+ */
+export const FORMER_FLAGSHIP_MCP_NAMES = {
+  search: "web.search",
+  answer: "web.answer",
+  "search-news": "web.news",
 };
 
 /** Meta tools listed alongside flagships, dotted canonical names. */
@@ -60,10 +73,11 @@ export const META_MCP_NAMES = {
  * working after the Smithery dot rename.
  */
 export const MCP_CALL_ALIASES = {
-  // flagships (snake → dotted)
+  // former flagships (snake → dotted), callable, not listed
   search_web: "web.search",
   answer_question: "web.answer",
   search_news: "web.news",
+  // flagships (snake → dotted)
   render_page: "browser.render",
   get_stock_quote: "market.quote",
   transcribe_audio: "audio.transcribe",
@@ -85,9 +99,10 @@ export const MCP_CALL_ALIASES = {
   route_and_execute: "router.execute",
 };
 
-/** Every listed dotted name (flagships, meta tools, the router). */
+/** Every dotted name a call may use (flagships, former flagships, meta tools, the router). */
 const LISTED_DOTTED = new Set([
   ...Object.values(FLAGSHIP_MCP_NAMES),
+  ...Object.values(FORMER_FLAGSHIP_MCP_NAMES),
   ...Object.values(META_MCP_NAMES),
   ...Object.values(MCP_CALL_ALIASES),
 ]);
@@ -111,7 +126,7 @@ export function resolveListedName(name) {
 
 /** Open-world / egress tools, honest annotations for directory clients. */
 export const FLAGSHIP_OPEN_WORLD = new Set([
-  "search", "answer", "search-news", "render", "stock-quote", "transcribe", "decide",
+  "pdf-to-markdown", "us-macro-series", "weather-current", "render", "stock-quote", "transcribe", "decide",
 ]);
 
 /** Tools that mutate durable state (not read-only). */
@@ -119,7 +134,7 @@ export const FLAGSHIP_WRITERS = new Set(["memory-write", "decide-execute"]);
 
 /** initialize.serverInfo description (MCP Implementation.description). */
 export const MCP_SERVER_DESCRIPTION =
-  "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Flagships: live web search and cited answers, news, browser render, speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
+  "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Flagships: PDF to markdown, US economic series, current weather, browser render, speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
 
 /** initialize.serverInfo.websiteUrl */
 export const MCP_SERVER_WEBSITE = "https://agent402.tools";
@@ -315,71 +330,67 @@ export const META_OUTPUT_SCHEMAS = {
 
 /** Flagship catalog-tool output schemas keyed by catalog slug. */
 export const FLAGSHIP_OUTPUT_SCHEMAS = {
-  search: {
+  "pdf-to-markdown": {
     type: "object",
     properties: {
-      query: { type: "string" },
-      count: { type: "integer" },
-      results: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: ["string", "null"] },
-            url: { type: ["string", "null"] },
-            description: { type: ["string", "null"] },
-            age: { type: ["string", "null"] },
-          },
-        },
-      },
-      untrustedContent: { type: "boolean" },
+      url: { type: "string" },
+      pages: { type: "integer" },
+      title: { type: ["string", "null"] },
+      wordCount: { type: "integer" },
+      markdown: { type: "string" },
     },
-    required: ["query", "results"],
+    required: ["markdown"],
+    additionalProperties: true,
   },
-  answer: {
+  "us-macro-series": {
     type: "object",
     properties: {
-      query: { type: "string" },
-      answer: { type: "string" },
-      citations: {
+      seriesId: { type: "string" },
+      units: { type: "string" },
+      count: { type: "integer" },
+      observations: {
         type: "array",
         items: {
           type: "object",
-          properties: {
-            url: { type: "string" },
-            snippet: { type: "string" },
-            favicon: { type: "string" },
-            number: { type: "integer" },
-          },
+          properties: { date: { type: "string" }, value: { type: ["number", "null"] } },
           additionalProperties: true,
         },
       },
-      citationCount: { type: "integer" },
+      source: { type: "string" },
+      sourceSeries: { type: ["string", "null"] },
+      title: { type: ["string", "null"] },
+      retrievedAt: { type: ["string", "null"] },
+      credit: { description: "The publisher's credit line" },
+      terms: { description: "The publisher's terms for the data" },
     },
-    required: ["query", "answer"],
+    required: ["seriesId", "observations"],
+    additionalProperties: true,
   },
-  "search-news": {
+  "weather-current": {
     type: "object",
     properties: {
-      query: { type: "string" },
-      count: { type: "integer" },
-      results: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: ["string", "null"] },
-            url: { type: ["string", "null"] },
-            description: { type: ["string", "null"] },
-            age: { type: ["string", "null"] },
-            source: { type: ["string", "null"] },
-            breaking: { type: "boolean" },
-          },
-          additionalProperties: true,
+      lat: { type: "number" },
+      lon: { type: "number" },
+      place: { type: "object", additionalProperties: true, description: "Present when the location was given by name" },
+      current: {
+        type: "object",
+        properties: {
+          time: { type: ["string", "null"] },
+          temperature: { type: ["number", "null"] },
+          feelsLike: { type: ["number", "null"] },
+          unit: { type: "string" },
+          humidity: { type: ["number", "null"] },
+          precipitation: { type: ["number", "null"] },
+          condition: { type: ["string", "null"] },
+          windSpeed: { type: ["number", "null"] },
+          windUnit: { type: "string" },
         },
+        additionalProperties: true,
       },
+      source: { type: "string" },
     },
-    required: ["query", "results"],
+    required: ["current"],
+    additionalProperties: true,
   },
   render: {
     type: "object",
@@ -561,7 +572,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
   return [
     "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Per-call tools and metered models, paid in USDC, or free through proof-of-work for the pure-CPU tools; the applied layer of Agentic Finance.",
     // market.quote only where the server lists a stock quote (it is listed then).
-    `Flagship tools: web.search (live web search), web.answer (answers with citations), web.news, browser.render, ${stock ? "market.quote, " : ""}audio.transcribe, memory.read, memory.write.`,
+    `Flagship tools: pdf.markdown (PDF to markdown), macro.series (US economic series), weather.current (current weather anywhere), browser.render, ${stock ? "market.quote, " : ""}audio.transcribe, memory.read, memory.write.`,
     "Long tail: catalog.search lists tools by keyword, catalog.find returns the best match with its input schema and price, catalog.call runs a tool by slug.",
     // Only where the decide tools are listed: an instruction must never name a
     // tool the connector does not advertise.

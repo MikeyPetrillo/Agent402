@@ -50,7 +50,7 @@ export interface Agent402McpEnv {
 export type Agent402McpToolName =
   | "catalog.search" | "catalog.find" | "catalog.call"
   | "payment.info" | "server.describe" | "sellers.list" | "router.execute"
-  | "web.search" | "web.answer" | "web.news" | "browser.render"
+  | "pdf.markdown" | "macro.series" | "weather.current" | "browser.render"
   | "audio.transcribe" | "memory.read" | "memory.write" | "decide.plan" | "decide.execute"
   | "market.quote";
 

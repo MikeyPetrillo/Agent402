@@ -50,7 +50,7 @@ export const API_VERSION = "2026-10-21";
 export const DISCOVERY_TOOLS = Object.freeze(["catalog.search", "catalog.find", "payment.info", "server.describe"]);
 export const SERVER_NAME = "agent402";
 export const PAID_TOOL_NAME = "agent402_paid_call";
-const TOOL_SLUGS = ["hash", "search", "answer"];
+const TOOL_SLUGS = ["hash", "pdf-to-markdown", "weather-current"];
 /** The connector URL the agent names: every tool listed under a plain name. */
 export const connectorUrl = (baseUrl) => `${baseUrl}/mcp?tool_names=${PLAIN_TOOL_NAMES_VALUE}`;
 

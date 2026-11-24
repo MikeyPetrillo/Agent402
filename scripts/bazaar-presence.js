@@ -59,6 +59,12 @@
 //                         not restore it; scripts/refresh-bazaar.js MODE=mcp
 //                         does, through the connector, on its schedule only
 //                         while that switch is on).
+//   retired listings      An MCP tool listing the server no longer offers
+//                         (RETIRED_MCP_LISTING_TOOLS: a deliberate flagship
+//                         change) is expected to leave: it is never a catalog
+//                         row, so never missing and never paged; the state
+//                         drops it from the seen set, and the log names one
+//                         still in the feed as retired, expected to age out.
 //   lost state            With no saved state and an issue open, a route the
 //                         issue already lists counts as a repeat miss (never
 //                         bought again, the issue updated), and the issue is
@@ -90,7 +96,7 @@ import { walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 import {
   exemptKind, aboveCeilingRoutes, usdMicros, microsToUsd, spendCapVerdict, routeCountVerdict,
 } from "./lib/keepalive-plan.js";
-import { mcpListingRoutes, mcpToolOfResource, mcpListingKey, mcpListingSlugOf } from "./lib/mcp-listings.js";
+import { mcpListingRoutes, mcpToolOfResource, mcpListingKey, mcpListingSlugOf, RETIRED_MCP_LISTING_TOOLS } from "./lib/mcp-listings.js";
 
 export const DEFAULT_MAX_ROUTES = 10;
 export const DEFAULT_MAX_SPEND_USD = 2;
@@ -98,6 +104,8 @@ export const UNREADABLE_PAGE_AFTER = 3;
 export const ISSUE_TITLE = "Scheduled check needs review: listing-presence";
 // The MCP tool listings page under their own issue, never the route issue.
 export const MCP_ISSUE_TITLE = "Scheduled check needs review: mcp-listing-presence";
+/** The keys a retired MCP tool listing was read by, in any state an older check saved. */
+const RETIRED_MCP_KEYS = new Set(RETIRED_MCP_LISTING_TOOLS.map((t) => `MCP ${mcpListingKey(t)}`));
 // One page of the listing or the catalog waits this long; the whole reading
 // (two or three passes) this long. The workflow's step and job timeouts are
 // set above both (scripts/test-bazaar-presence.js reads them).
@@ -186,13 +194,13 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   const lost = !prev || typeof prev !== "object";
   const prevMissing = prev && prev.missing && typeof prev.missing === "object" ? prev.missing : {};
   const prevStreak = Number.isInteger(prev?.unreadable) && prev.unreadable > 0 ? prev.unreadable : 0;
-  const prevSeen = Array.isArray(prev?.mcpSeen) ? prev.mcpSeen.filter((t) => typeof t === "string") : [];
-  const prevMcpMissing = Array.isArray(prev?.mcpMissing) ? prev.mcpMissing.filter((k) => typeof k === "string") : [];
+  const prevSeen = Array.isArray(prev?.mcpSeen) ? prev.mcpSeen.filter((t) => typeof t === "string" && !RETIRED_MCP_LISTING_TOOLS.includes(t)) : [];
+  const prevMcpMissing = Array.isArray(prev?.mcpMissing) ? prev.mcpMissing.filter((k) => typeof k === "string" && !RETIRED_MCP_KEYS.has(k)) : [];
   if (!reading) {
     const streak = prevStreak + 1;
     const page = streak >= unreadablePageAfter;
     return {
-      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [], notYetListed: [], mcpMissing: [], mcpRepeat: [], mcpAction: "none", mcpKeepalive,
+      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [], notYetListed: [], mcpMissing: [], mcpRepeat: [], mcpRetiredListed: [], mcpAction: "none", mcpKeepalive,
       state: { missing: prevMissing, unreadable: streak, mcpSeen: prevSeen, mcpMissing: prevMcpMissing },
       action: page && !openIssue ? "open" : "none", cause: page ? "unreadable" : null,
     };
@@ -218,6 +226,9 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   const mcpMissing = mcpAbsent.filter((m) => !notYetListed.includes(m));
   for (const m of mcpMissing) seen.add(m.mcp);
   const mcpRepeat = mcpMissing.filter(mcpWasMissing);
+  // Retired listings still in the feed: named in the log, never counted.
+  const feedKeys = new Set((reading.passes || []).flatMap((p) => [...(p.keys || [])]));
+  const mcpRetiredListed = RETIRED_MCP_LISTING_TOOLS.filter((t) => feedKeys.has(mcpListingKey(t)));
   // Opened once, never edited while open (its text is fixed; the log names
   // the listings); closed on a readable check with no repeat miss, never on
   // lost state while a listing is absent: that check holds the issue as is
@@ -251,7 +262,7 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   if (refused) for (const m of newlyMissing) if (!Object.hasOwn(state.missing, m.key) && !heldBuy.includes(m)) state.missing[m.key] = "refused";
   // Never close on lost state while a route is missing: the issue may be about it.
   const action = repeat.length ? (openIssue ? "update" : "open") : !openIssue ? "none" : lost && missing.length ? "none" : "close";
-  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, notYetListed, mcpMissing, mcpRepeat, mcpAction, mcpKeepalive, state, action, cause: repeat.length ? "missing" : null };
+  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, notYetListed, mcpMissing, mcpRepeat, mcpRetiredListed, mcpAction, mcpKeepalive, state, action, cause: repeat.length ? "missing" : null };
 }
 
 const NOTE = {
@@ -324,6 +335,7 @@ export function logLines(d) {
     }
     out.push(`::warning::MCP tool listings missing from the Bazaar listing: ${mcpMissing.filter((m) => PATH_RE.test(m.path)).map((m) => m.path).join(", ")}`);
   }
+  if ((d.mcpRetiredListed || []).length) out.push(`Retired MCP tool listings still in the Bazaar listing (expected after a flagship change; never counted, never paged): ${d.mcpRetiredListed.map((t) => mcpListingKey(t)).join(", ")}.`);
   if ((d.notYetListed || []).length) out.push(`MCP tool listings not yet listed (never seen in the listing, so not counted as missing): ${d.notYetListed.length}.`);
   if (d.refused) out.push(`Refusing the buy: ${d.refused}. Nothing bought.`);
   else out.push(`Routes to buy: ${d.buy.length}.`);
