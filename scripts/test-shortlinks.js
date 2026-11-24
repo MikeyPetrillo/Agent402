@@ -170,6 +170,14 @@ try {
     const head = await fetch(`${base}/docs/solana`, { method: "HEAD", redirect: "manual" });
     ok(head.status === 301 && head.headers.get("location") === "/docs/Solana", `HEAD /docs/solana -> /docs/Solana (got ${head.status})`);
     ok((await loc("/docs/Solana")) === "200", "the canonical path itself answers 200");
+    // With a trailing slash, one hop straight to the canonical path (never slashless first, then canonical).
+    const path1 = (l) => { try { return new URL(l.replace(/^301 /, "")).pathname + new URL(l.replace(/^301 /, "")).search; } catch { return l; } };
+    for (const [from, to] of [["/docs/solana/", "/docs/Solana"], ["/docs/ARC/?x=1", "/docs/Arc?x=1"], ["/docs/home/", "/docs"]]) {
+      const got = await loc(from);
+      ok(got.startsWith("301 ") && path1(got) === to, `${from} -> ${to} in one hop (got ${got})`);
+    }
+    const unknownSlash = await loc("/docs/no-such-doc/");
+    ok(unknownSlash.startsWith("301 ") && path1(unknownSlash) === "/docs/no-such-doc", `an unknown docs slug with a slash only loses the slash (got ${unknownSlash})`);
     for (const p of ["/docs/no-such-doc", "/docs//evil.com", "/docs/%2F%2Fevil.com", "/docs/sol%61na", "/docs/solana%2F..%2Fevil", "/docs/solana/extra"]) {
       const got = await loc(p);
       ok(got === "404", `${p} answers 404, never a redirect (got ${got})`);

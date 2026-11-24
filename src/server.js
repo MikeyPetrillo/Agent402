@@ -3346,7 +3346,9 @@ app.use((req, res, next) => {
   const clean = path.replace(/\/+$/, "");
   if (!clean || !/^\/[A-Za-z0-9._~%!$&'()*+,;=:@/-]*$/.test(clean) || clean.startsWith("//")) return next();
   const q = req.originalUrl.indexOf("?");
-  return res.redirect(301, new URL(clean + (q >= 0 ? req.originalUrl.slice(q) : ""), BASE_URL).href);
+  // A docs slug in another case goes to its canonical path in one hop.
+  const docs = clean.startsWith("/docs/") ? docsCanonicalTarget(clean) : undefined;
+  return res.redirect(301, new URL((docs || clean) + (q >= 0 ? req.originalUrl.slice(q) : ""), BASE_URL).href);
 });
 
 // PostHog reverse proxy: serve posthog-js AND ingest its events first-party
@@ -6634,8 +6636,12 @@ const DOCS_CANONICAL_BY_LOWER = (() => {
   for (const k of dup) m.delete(k);
   return m;
 })();
+// The canonical docs path a /docs/<slug> spelling names, or undefined.
+function docsCanonicalTarget(path) {
+  return Object.hasOwn(DOCS_REDIRECTS, path) ? DOCS_REDIRECTS[path] : (/^\/docs\/[A-Za-z0-9-]+$/.test(path) ? DOCS_CANONICAL_BY_LOWER.get(path.slice(6).toLowerCase()) : undefined);
+}
 app.get(/^\/docs\/[^/]+$/i, (req, res, next) => {
-  const target = Object.hasOwn(DOCS_REDIRECTS, req.path) ? DOCS_REDIRECTS[req.path] : (/^\/docs\/[A-Za-z0-9-]+$/.test(req.path) ? DOCS_CANONICAL_BY_LOWER.get(req.path.slice(6).toLowerCase()) : undefined);
+  const target = docsCanonicalTarget(req.path);
   if (!target || target === req.path) return next();
   const q = req.originalUrl.indexOf("?");
   res.redirect(301, target + (q >= 0 ? req.originalUrl.slice(q) : ""));
