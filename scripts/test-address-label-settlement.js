@@ -36,7 +36,9 @@ for (const t of [
   for (const l of r.labels || []) if (/^USD[CG]$/.test(l.label)) stableNetworks.add(l.network);
 }
 for (const rail of RAILS.filter((r) => r.chainId)) {
-  const net = rail.name.toLowerCase().replace(/ chain$/, "");
+  // The label's network is the rail's key (rails.js), which differs from its
+  // official display name for Arbitrum One, Avalanche C-Chain and OP Mainnet.
+  const net = rail.key || rail.name.toLowerCase().replace(/ chain$/, "");
   ok(stableNetworks.has(net), `EVM rail ${rail.name}: its ${rail.asset} contract is labelled (network "${net}")`);
 }
 const sample = await tool.handler({ address: assets[0] });

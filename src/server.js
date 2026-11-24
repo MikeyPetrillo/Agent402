@@ -8175,7 +8175,7 @@ app.get("/__operator/sanctions-events.json", async (req, res) => {
   if (operatorLedgerLimited(req, res)) return;
   res.set("Cache-Control", "private, no-store");
   try { res.json({ ...(await sanctionsEventsOperatorView()), geo: sanctionedRegionsView() }); }
-  catch (e) { res.status(503).json({ error: `the sanctions events store could not be read (${String(e?.message || e).slice(0, 120)})` }); }
+  catch (e) { res.status(503).json({ error: `the sanctions events store could not be read (${redactSecrets(String(e?.message || e)).slice(0, 120)})` }); }
 });
 // The money records' retention pass (src/ledger-retention.js): its last run.
 app.get("/__operator/ledger-retention.json", (req, res) => {
@@ -8190,7 +8190,7 @@ app.post("/__operator/sanctions-events/filed", express.json({ limit: "16kb" }), 
   res.set("Cache-Control", "private, no-store");
   const { ids, all, reference } = req.body || {};
   try { res.json({ ok: true, ...(await markSanctionsEventsFiled({ ids, all: all === true, reference })), status: sanctionsReportStatus() }); }
-  catch (e) { res.status(e?.statusCode === 400 ? 400 : 503).json({ error: String(e?.message || e).slice(0, 200) }); }
+  catch (e) { res.status(e?.statusCode === 400 ? 400 : 503).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
 });
 // Record an event the refund runner found (a refund owed to a listed wallet,
 // held as blocked property). The runner holds no database credential.
