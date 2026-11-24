@@ -1,53 +1,42 @@
-// Chain logo marks — offline unit tests. No network. Verifies each of the
-// twelve rails has a mark, the marks are single-tone (currentColor, no baked
-// brand colors), and the trust strip links every chain to its marketplace page.
+// Chain chips: offline unit tests. No network. Every rail is named in plain
+// text, each chip links to that chain's page, and no network's logo (an <svg>
+// or an <img>) is drawn on the home page, /marketplace or a chain page.
 //
 //   node scripts/test-chain-logos.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { CHAIN_MARKS, CHAIN_ORDER, chainMark, chainLogoStrip, RAIL_COUNT_WORD } from "../src/chain-logos.js";
-import { RAILS, GATED_RAILS, railKey, countWord } from "../src/rails.js";
+import { readFileSync } from "node:fs";
+import * as chips from "../src/chain-logos.js";
+import { RAILS, railKey, countWord } from "../src/rails.js";
 
+const { CHAIN_ORDER, chainLogoStrip, chainChipTitle, RAIL_COUNT_WORD } = chips;
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
   if (cond) { passed++; console.log(`ok - ${msg}`); }
   else { failed++; console.error(`FAIL - ${msg}`); }
 };
 
-// Every rail, and every gated rail too, so a gated rail's mark is ready the
-// day it moves into RAILS.
-const CHAINS = RAILS.map(railKey);
-for (const c of GATED_RAILS.map(railKey)) ok(!!CHAIN_MARKS[c] && chainMark(c).includes('fill="currentColor"'), `gated rail ${c}: its mark is ready (single-tone)`);
+ok(CHAIN_ORDER.length === RAILS.length, `every rail in CHAIN_ORDER (got ${CHAIN_ORDER.length} of ${RAILS.length})`);
+ok(!("CHAIN_MARKS" in chips) && !("chainMark" in chips), "no logo artwork is exported");
+ok(CHAIN_ORDER.every(([k], i) => k === railKey(RAILS[i])), "chip keys are the rails' fixed keys");
 
-// --- every rail has a mark, and it renders to an <svg> ---------------------------
-ok(CHAIN_ORDER.length === RAILS.length && CHAINS.length === RAILS.length, `every rail in CHAIN_ORDER (got ${CHAIN_ORDER.length} of ${RAILS.length})`);
-for (const c of CHAINS) {
-  const svg = chainMark(c);
-  ok(svg.startsWith("<svg") && svg.includes("viewBox=") && svg.endsWith("</svg>"), `${c}: renders a complete <svg>`);
-  ok(svg.includes('fill="currentColor"'), `${c}: single-tone (currentColor)`);
-  // no baked hex/rgb brand color leaks into the mark (would break monochrome)
-  ok(!/fill="#|fill:#|rgb\(/.test(svg), `${c}: no hard-coded brand color`);
-}
-
-// base is its circle; the rest carry a path
-ok(chainMark("base").includes("<circle"), "base mark is a circle");
-ok(chainMark("solana").includes("<path"), "solana mark is a path");
-
-// --- unknown slug is a safe empty string (never throws / never a broken tag) -----
-ok(chainMark("dogecoin") === "", "unknown slug → empty string");
-ok(chainMark(undefined) === "", "undefined slug → empty string");
-
-// --- size override flows through -------------------------------------------------
-ok(chainMark("base", 40).includes('width="40"'), "size override applied");
-
-// --- the trust strip links every chain to its /<chain> marketplace page ----------
 const strip = chainLogoStrip({});
 for (const [slug, name] of CHAIN_ORDER) {
   ok(strip.includes(`href="/${slug}"`), `strip links /${slug}`);
-  ok(strip.includes(`>${name}</span>`), `strip labels ${name}`);
+  ok(strip.includes(`>${name}</span>`), `strip names ${name} in text`);
+  ok(strip.includes(`title="${chainChipTitle(name)}"`), `${name}: the chip's title names our page, not the network's marketplace`);
 }
-ok((strip.match(/<svg/g) || []).length === RAILS.length, "strip renders one mark per rail");
+ok(!/<svg|<img/i.test(strip), "strip draws no logo");
+ok(!/x402 marketplace/.test(strip), "no chip calls a network's page its marketplace");
 ok(strip.includes(`Settles natively on ${RAIL_COUNT_WORD} networks`) && RAIL_COUNT_WORD === countWord(RAILS.length), `strip label counts the rails (${RAIL_COUNT_WORD})`);
 ok(chainLogoStrip({ label: "Custom label here" }).includes("Custom label here"), "custom label flows through");
+
+// The pages that once drew the marks import no artwork and name no chain page
+// "<Chain> x402 marketplace".
+for (const f of ["src/ledger-home.js", "src/market-page.js"]) {
+  const src = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  ok(!/chainMark\(|CHAIN_MARKS/.test(src), `${f}: draws no chain logo`);
+  ok(!/\$\{(?:esc\()?(?:C\.chainName|name|r\.name)\)?\} x402 marketplace/.test(src), `${f}: no "<Chain> x402 marketplace" name`);
+}
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

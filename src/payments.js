@@ -38,7 +38,7 @@ import {
 } from "@x402/extensions/builder-code";
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
 import { normalizePayerAddress } from "./payer.js";
-import { x402EvmOnly, RAILS, GATED_RAILS } from "./rails.js";
+import { x402EvmOnly, RAILS, GATED_RAILS, railKey } from "./rails.js";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, robinhoodRelayerMinPriceUsd, inkRelayerMinPriceUsd, ownRelayerMinPriceUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
@@ -4224,7 +4224,7 @@ async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
 export function cdpLabelOf(network) {
   const net = typeof network === "string" ? network : "";
   const lower = net.toLowerCase();
-  const rail = net ? [...RAILS, ...GATED_RAILS].find((r) => r.caip2 === net || r.name.toLowerCase() === lower) : null;
+  const rail = net ? [...RAILS, ...GATED_RAILS].find((r) => r.caip2 === net || r.name.toLowerCase() === lower || railKey(r) === lower) : null;
   return `CDP (${rail ? rail.name : net ? net.slice(0, 80) : "Base"})`;
 }
 

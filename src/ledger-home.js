@@ -14,7 +14,7 @@ import { toolList, priceWords } from "./pages.js";
 import { paidCallFigure, paidCallScript, PAID_CALL_CSS } from "./paid-call-figure.js";
 import { RAILS, RAILS_SHORT } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
-import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
+import { CHAIN_ORDER, chainChipTitle } from "./chain-logos.js";
 import { routerPayChains } from "./tools/route-execute.js";
 import { railKey, chainDisplayName, countWord } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
@@ -77,7 +77,7 @@ export function railsByVolume(stats, { tempo = tempoEnabled() } = {}) {
   const rows = RAILS.map((r) => {
     const key = CAIP2_NAMES[r.caip2] || r.name.toLowerCase();
     const n = Number(byNet[key]) || 0;
-    return { name: r.name, asset: r.asset, slug: railKey(r), href: `/${railKey(r)}`, title: `${r.name} x402 marketplace`, n, calls: n ? fmtNum(n) : "·" };
+    return { name: r.name, asset: r.asset, slug: railKey(r), href: `/${railKey(r)}`, title: chainChipTitle(r.name), n, calls: n ? fmtNum(n) : "·" };
   });
   // Tempo settles over its own MPP relay, not an x402 facilitator, so it is
   // not in RAILS (which drives accepts and the on-chain scan). Its per-call
@@ -246,22 +246,22 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 .hm-door-people strong { color: var(--ink); font-weight: 600; }
 .hm-door .ml-ticks { margin: 0; }
 .hm-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 18px; color: var(--muted); }
-.hm-marks a { color: var(--muted); display: inline-flex; padding: 4px; }
+.hm-marks a { color: var(--muted); display: inline-flex; padding: 2px 8px; border: 1px solid var(--hairline); font-family: var(--font-mono); font-size: var(--fs-xs); text-decoration: none; white-space: nowrap; }
 .hm-marks a:hover { color: var(--ink); }
 .hm-marks .hm-marks-k { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--faint); letter-spacing: .14em; text-transform: uppercase; }
 @media (max-width: 900px) { .hm-hero, .hm-doors, .hm-claims { grid-template-columns: minmax(0,1fr) !important; } .hm-h2 { font-size: var(--fs-2xl); } }
 @media (max-width: 600px) { .hm-live-stats, .hm-own { grid-template-columns: 1fr 1fr !important; } .hm-own { column-gap: 10px; } .hm-own-l { letter-spacing: .08em; } .hm-live-tail { display: none; } .hm-ptable a { flex-wrap: wrap; } .hm-ptable a > span { white-space: nowrap; } }
 `;
 
-  // The chain marks as one compact row of icon links, each to that chain's
-  // marketplace page; Tempo has no traced mark, so it is named in text.
+  // The networks as one compact row of plain-text chips, each to that chain's
+  // page; a network is named, never drawn with its owner's logo.
   const railMarksHtml = CHAIN_ORDER.map(([slug, name]) =>
-    `<a href="/${slug}" title="${esc(name)} x402 marketplace" aria-label="${esc(name)}">${chainMark(slug, 18)}</a>`
+    `<a href="/${slug}" title="${esc(chainChipTitle(name))}">${esc(name)}</a>`
   ).join("");
   // Tempo is NOT an x402 rail (no facilitator settles it - it rides its own
   // MPP relay, see src/mpp-tempo.js), so it never joins the marks above.
   const tempoMarkHtml = tempoEnabled()
-    ? `<a href="/what-is-mpp" title="Tempo native MPP settlement" style="font-family:var(--font-mono);font-size:var(--fs-xs);">+ Tempo</a>`
+    ? `<a href="/what-is-mpp" title="Tempo native MPP settlement">Tempo</a>`
     : "";
 
   const claimsHtml = whyHomeClaims().map((c) =>

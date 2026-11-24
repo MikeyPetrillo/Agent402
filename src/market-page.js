@@ -15,7 +15,7 @@ import { ledgerShell, ledgerFooterCompact, decideLive, esc, safeHref, breadcrumb
 import { x402RailsFor, RAILS } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { CATEGORIES } from "./pages.js";
-import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
+import { CHAIN_ORDER, chainChipTitle } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
 import { sellerReputation, METRIC_LABELS, WINDOW_DAYS as REPUTATION_WINDOW_DAYS } from "./seller-reputation.js";
 import { hostCardHtml, hostCardNotes } from "./host-entry.js";
@@ -79,6 +79,13 @@ import { crawlIntervalLabel, discoveryIntervalLabel } from "./crawl-cadence.js";
 import { repoUrl } from "./repo-link.js";
 import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 import { BASE_NO_GAS_SENTENCE } from "./base-no-gas.js";
+/** The line under a chain page's H1: the network's name belongs to its owner,
+ *  and Agent402 is independent of it. Stellar and Arc carry the sentences
+ *  their owners publish for this purpose. */
+export function chainMarkNotice(C) {
+  if (C.markNotice) return C.markNotice;
+  return `${C.chainName} is a trademark of its owner. Agent402 is independent and is not affiliated with or endorsed by it.`;
+}
 export const CHAIN_PAGES = {
   base: {
     chainName: "Base",
@@ -139,7 +146,7 @@ export const CHAIN_PAGES = {
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
   arbitrum: {
-    chainName: "Arbitrum",
+    chainName: "Arbitrum One",
     ticker: "ETH",
     tickerLabel: "ARBITRUM · MAINNET",
     caip2: "eip155:42161",
@@ -153,7 +160,7 @@ export const CHAIN_PAGES = {
     // different chain id ("eip155:421614"), so an exact match can't be
     // fooled by a testnet accept.
     isNetwork: (n) => n === "eip155:42161",
-    honestyNetworkPhrase: "the Arbitrum network",
+    honestyNetworkPhrase: "the Arbitrum One network",
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
   monad: {
@@ -193,7 +200,7 @@ export const CHAIN_PAGES = {
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
   avalanche: {
-    chainName: "Avalanche",
+    chainName: "Avalanche C-Chain",
     ticker: "AVAX",
     tickerLabel: "AVALANCHE · C-CHAIN",
     caip2: "eip155:43114",
@@ -206,7 +213,7 @@ export const CHAIN_PAGES = {
     // Avalanche C-Chain CAIP-2 is "eip155:43114"; Fuji testnet is a different
     // chain id ("eip155:43113"), so an exact match can't be fooled.
     isNetwork: (n) => n === "eip155:43114",
-    honestyNetworkPhrase: "the Avalanche network",
+    honestyNetworkPhrase: "the Avalanche C-Chain network",
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
   sei: {
@@ -227,9 +234,9 @@ export const CHAIN_PAGES = {
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
   optimism: {
-    chainName: "Optimism",
+    chainName: "OP Mainnet",
     ticker: "OP",
-    tickerLabel: "OPTIMISM \u00b7 MAINNET",
+    tickerLabel: "OP MAINNET",
     caip2: "eip155:10",
     asset: "USDC",
     settledBy: "an x402 facilitator",
@@ -241,11 +248,12 @@ export const CHAIN_PAGES = {
     // ("eip155:11155420"), so an exact match can't be fooled. Settles native
     // Circle USDC (standard "USD Coin" v2 domain, EIP-3009 verified on-chain).
     isNetwork: (n) => n === "eip155:10",
-    honestyNetworkPhrase: "the Optimism network",
+    honestyNetworkPhrase: "the OP Mainnet network",
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
   arc: {
-    chainName: "Arc",
+    chainName: "Arc Network",
+    markNotice: "Arc is a trademark of Circle Internet Group, Inc. and/or its affiliates. Agent402 is independent and is not affiliated with or endorsed by Circle.",
     // Arc's gas is paid in USDC; there is no separate native token.
     ticker: "USDC",
     tickerLabel: "ARC · MAINNET",
@@ -259,7 +267,7 @@ export const CHAIN_PAGES = {
     // Arc mainnet CAIP-2 is "eip155:5042"; Arc testnet is a different chain id
     // ("eip155:5042002"), so an exact match can't be fooled.
     isNetwork: (n) => n === "eip155:5042",
-    honestyNetworkPhrase: "the Arc network",
+    honestyNetworkPhrase: "the Arc Network",
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
   ink: {
@@ -282,6 +290,7 @@ export const CHAIN_PAGES = {
   },
   stellar: {
     chainName: "Stellar",
+    markNotice: "\u2018Stellar\u2019 is a trademark of the Stellar Development Foundation. All rights reserved. This is independent software, not affiliated with, sponsored or endorsed by the Stellar Development Foundation.",
     ticker: "XLM",
     tickerLabel: "STELLAR · PUBNET",
     caip2: "stellar:pubnet",
@@ -929,7 +938,7 @@ function* marketPageChainSteps(chainKey, baseUrl, opts = {}) {
     {
       "@context": "https://schema.org",
       "@type": "CollectionPage",
-      name: `The ${C.chainName} x402 marketplace`,
+      name: `Agent402 on ${C.chainName}`,
       url: `${baseUrl}/${chainKey}`,
       description: `Pay-per-call tools for AI agents, settled in ${C.asset} on ${C.chainName} via the x402 protocol. ${tools.length} tools live.`,
       mainEntity: {
@@ -998,9 +1007,9 @@ function* marketPageChainSteps(chainKey, baseUrl, opts = {}) {
   const headerHtml = `
   <div class="ml-2col" style="display:grid;grid-template-columns:1.15fr .85fr;gap:34px;align-items:start;">
     <div>
-      <div class="ml-chain-h1-wrap" style="display:flex;align-items:flex-start;gap:14px;margin-bottom:12px;">
-        <span style="width:44px;height:44px;flex:none;border:1px solid var(--hairline);color:var(--ink);display:flex;align-items:center;justify-content:center;" title="${esc(C.chainName)}">${chainMark(chainKey, 26) || `<span style="font-family:var(--font-mono);font-weight:700;font-size:var(--fs-xs);">${esc(C.ticker)}</span>`}</span>
-        <h1 style="font-size:var(--fs-3xl);font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:0;">The ${esc(C.chainName)} x402 marketplace</h1>
+      <div class="ml-chain-h1-wrap" style="margin-bottom:12px;">
+        <h1 style="font-size:var(--fs-3xl);font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:0;">Agent402 on ${esc(C.chainName)}</h1>
+        <p class="ml-chain-mark-notice" style="font-size:var(--fs-xs);color:var(--faint);margin:6px 0 0;max-width:76ch;">${esc(chainMarkNotice(C))}</p>
       </div>
       <p style="font-size:var(--fs-lg);color:var(--muted);margin:0;max-width:76ch;">${subheadHtml}</p>
       <div style="margin:16px 0 0;padding:16px 18px;border:1px solid var(--hairline);background:var(--card);">
@@ -1149,8 +1158,8 @@ ${ledgerFooterCompact()}`;
 
   return ledgerShell({
     // A long chain name takes the shorter form rather than a clamp mid-phrase.
-    title: fitTitle([`The ${C.chainName} x402 marketplace - pay-per-call tools for AI agents`, `${C.chainName} x402 marketplace - tools for AI agents`], META_TITLE_MAX),
-    description: `The ${C.chainName} x402 marketplace: ${tools.length} pay-per-call tools for AI agents, settled in ${C.asset} on ${C.chainName}.${C.mpp ? " x402 and MPP (Machine Payments Protocol) both accepted." : ""} No signup, no API keys - the wallet is the account.`,
+    title: fitTitle([`Agent402 on ${C.chainName}: pay-per-call tools for AI agents`, `Agent402 on ${C.chainName}: tools for AI agents`], META_TITLE_MAX),
+    description: `Agent402 on ${C.chainName}: ${tools.length} pay-per-call tools for AI agents, settled in ${C.asset} on ${C.chainName}.${C.mpp ? " x402 and MPP (Machine Payments Protocol) both accepted." : ""} No signup, no API keys - the wallet is the account.`,
     canonical: `${baseUrl}/${chainKey}`,
     baseUrl,
     activePath: `/${chainKey}`,
@@ -1479,8 +1488,8 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
     const sellerCount = yield* marketOperatorCountSteps(slug, { sellers }, leaderboardSnap);
     const toolCount = chainSellers.reduce((sum, s) => sum + (Number(s.toolCount) || 0), 0);
     const asset = CHAIN_PAGES[slug]?.asset || "USDC";
-    chainCards.push(`<a href="/${slug}" title="${esc(name)} x402 marketplace" style="display:block;padding:17px 19px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);text-decoration:none;color:var(--muted);">
-      <span style="display:flex;align-items:center;gap:9px;margin-bottom:12px;">${chainMark(slug, 19)}<span style="font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--ink);white-space:nowrap;">${esc(name)}</span><span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);white-space:nowrap;margin-left:auto;">${asset}</span></span>
+    chainCards.push(`<a href="/${slug}" title="${esc(chainChipTitle(name))}" style="display:block;padding:17px 19px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);text-decoration:none;color:var(--muted);">
+      <span style="display:flex;align-items:center;gap:9px;margin-bottom:12px;"><span style="font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--ink);white-space:nowrap;">${esc(name)}</span><span style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--faint);white-space:nowrap;margin-left:auto;">${asset}</span></span>
       <span style="display:flex;align-items:baseline;gap:6px;font-family:var(--font-mono);font-size:var(--fs-sm);flex-wrap:wrap;"><span style="color:var(--ok);font-variant-numeric:tabular-nums;">${sellerCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">seller${sellerCount === 1 ? "" : "s"}</span><span style="color:var(--muted);font-variant-numeric:tabular-nums;margin-left:6px;">${toolCount.toLocaleString("en-US")}</span><span style="color:var(--faint);font-size:var(--fs-2xs);">tool${toolCount === 1 ? "" : "s"}</span></span>
     </a>`);
   }

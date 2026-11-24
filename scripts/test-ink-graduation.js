@@ -38,7 +38,7 @@ const cleanEnv = () => { const e = { ...process.env }; for (const k of CLEAN_KEY
 // --- offline: the module tables in each mode (a child per mode: the seam is read at import) ---
 const PROBE = `
 const rails = await import("./src/rails.js");
-const { CHAIN_ORDER, chainLogoStrip, chainMark } = await import("./src/chain-logos.js");
+const { CHAIN_ORDER, chainLogoStrip } = await import("./src/chain-logos.js");
 const { CHAIN_PAGES } = await import("./src/market-page.js");
 const live = await import("./src/revenue-live.js");
 const { rankableChains } = await import("./src/leaderboard.js");
@@ -48,7 +48,7 @@ console.log(JSON.stringify({
   inRails: !!ink, at: rails.RAILS.findIndex((r) => r.caip2 === "${INK}"), arcAt: rails.RAILS.findIndex((r) => r.name === "Arc"),
   gated: rails.GATED_RAILS.map((r) => r.caip2), count: rails.RAILS.length, countText: rails.RAILS_COUNT, countWord: rails.countWord(rails.RAILS.length),
   copy: [rails.RAILS_AMP, rails.RAILS_OR, rails.RAILS_PAREN, rails.RAILS_SHORT, rails.RAILS_OS, rails.RAILS_TICKER, rails.RAILS_NOTE, rails.RAIL_CHAIN_NAMES.join(",")],
-  order: CHAIN_ORDER.map(([k]) => k), strip: chainLogoStrip({}), mark: chainMark("ink"),
+  order: CHAIN_ORDER.map(([k]) => k), strip: chainLogoStrip({}),
   pages: Object.keys(CHAIN_PAGES), page: CHAIN_PAGES.ink ? { caip2: CHAIN_PAGES.ink.caip2, asset: CHAIN_PAGES.ink.asset, explorer: CHAIN_PAGES.ink.explorerWalletUrl("0xabc") } : null,
   evm: Object.keys(live.EVM), evmInk: live.EVM.ink ? { token: live.EVM.ink.token, label: live.EVM.ink.label, tx: live.EVM.ink.tx("0x1") } : null,
   covered: live.railsCoveredByLiveView(), rankable: rankableChains().map((c) => c.key),
@@ -72,7 +72,7 @@ gcheck(!g.evm.includes("ink") && !g.rankable.includes("ink") && g.covered, "gate
 check(d.inRails && (REAL || d.at === d.arcAt + 1) && !d.gated.includes(INK), `graduated: Ink is in RAILS right after Arc (at ${d.at})`);
 check(d.countText === `USDC or USDG on ${d.countWord} chains` && (REAL || d.count === g.count + 1) && d.copy.slice(0, 3).every((t) => t.includes("Ink")) && d.copy[3].includes(`+ ${d.copy[1].split(" - ")[0].split(", ").length - 1} more chains`) && d.copy[4].includes("Ink (EVM, chain ID 57073)") && d.copy[5].includes("INK") && d.copy[7].includes("Ink"), `graduated: counts and every rail string include Ink (${d.countText})`);
 check(d.tokens.startsWith(`${d.countWord}|`) && d.tokens.includes("Arc, Ink"), `graduated: served rail tokens count and list Ink (${d.tokens.slice(0, 40)})`);
-check(d.order.includes("ink") && d.strip.includes('href="/ink"') && d.strip.includes(">Ink</span>") && d.mark.startsWith("<svg"), "graduated: the trust strip links /ink with its mark");
+check(d.order.includes("ink") && d.strip.includes('href="/ink"') && d.strip.includes(">Ink</span>") && !d.strip.includes("<svg"), "graduated: the trust strip links /ink, named in text");
 check(d.pages.indexOf("ink") === d.pages.indexOf("arc") + 1 && d.page?.caip2 === INK && d.page.asset === "USDC" && d.page.explorer === "https://explorer.inkonchain.com/address/0xabc?tab=token_transfers", `graduated: the Ink chain page joins in RAILS order (${d.pages.join(",")})`);
 check(d.evm.includes("ink") && d.evmInk?.token === "0x2D270e6886d130D724215A266106e6832161EAEd" && d.evmInk.tx === "https://explorer.inkonchain.com/tx/0x1", "graduated: the revenue entry is in the scan set with Ink's USDC and explorer");
 check(d.rankable.includes("ink") && d.covered, "graduated: the leaderboard ranks Ink and every rail has a live-view read-config");

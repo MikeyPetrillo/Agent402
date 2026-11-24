@@ -19,7 +19,7 @@ import { rpcHeaderReader } from "./block-clock.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact, codeBlock } from "./ledger-chrome.js";
-import { RAILS, RAILS_AMP, GATED_RAILS } from "./rails.js";
+import { RAILS, RAILS_AMP, GATED_RAILS, railKey } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { REVENUE_RANGE_PRESETS, REVENUE_RANGE_PRESET_LABELS, windowLabel } from "./revenue-range.js";
 // Pure, main-guarded helpers shared with the daily scanners — one
@@ -2663,8 +2663,9 @@ export function revenuePage(baseUrl, snap) {
 // A gated rail's config waits in GATED_EVM (inert until it graduates or is
 // offered), so it counts as covered from there.
 export function railsCoveredByLiveView() {
-  const covered = new Set([...Object.values(EVM).map((c) => c.label), ...Object.values(GATED_EVM).map((c) => c.label), "Solana", "Stellar", "Algorand"]);
-  return [...RAILS, ...GATED_RAILS].every((r) => covered.has(r.name));
+  // Matched by the rail's fixed key: a display name ("OP Mainnet") is not the read-config's key.
+  const covered = new Set([...Object.keys(EVM), ...Object.keys(GATED_EVM), "solana", "stellar", "algorand"]);
+  return [...RAILS, ...GATED_RAILS].every((r) => covered.has(railKey(r)));
 }
 
 // Operator heap read (/__operator/heap.json `stores`).
