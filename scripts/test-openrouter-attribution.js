@@ -52,7 +52,13 @@ const gatewayHardcodes = (gateway.match(/"X-Title"\s*:/g) || []).length;
 ok(gatewayHardcodes === 0, `llm-gateway-kit states no X-Title of its own (found ${gatewayHardcodes})`);
 // A file outside src/tools that talks to openrouter.ai directly (the decide
 // service) must spread the constant into its request headers.
-const directCallers = files.filter((f) => !f.includes(`${join("src", "tools")}`) && /["'`]https:\/\/openrouter\.ai/.test(readFileSync(f, "utf8")) && !/OPENROUTER_ATTRIBUTION = Object\.freeze/.test(readFileSync(f, "utf8")));
+// A page's link a reader follows (an HTML href attribute) is not a request,
+// so it is set aside first; a URL in any other form is still read.
+const withoutLinks = (src) => src.replace(/\bhref="https?:\/\/[^"\s]*"/g, 'href=""');
+ok(!/["'`]https:\/\/openrouter\.ai/.test(withoutLinks('<a href="https://openrouter.ai/docs">terms</a>'))
+  && /["'`]https:\/\/openrouter\.ai/.test(withoutLinks('await fetch("https://openrouter.ai/api/v1/models");')),
+  "a page link to openrouter.ai is not a caller; a fetch of it still is");
+const directCallers = files.filter((f) => !f.includes(`${join("src", "tools")}`) && /["'`]https:\/\/openrouter\.ai/.test(withoutLinks(readFileSync(f, "utf8"))) && !/OPENROUTER_ATTRIBUTION = Object\.freeze/.test(readFileSync(f, "utf8")));
 const unlabelled = directCallers.filter((f) => !/headers:\s*\{\s*\.\.\.OPENROUTER_ATTRIBUTION/.test(readFileSync(f, "utf8")));
 ok(unlabelled.length === 0, `every direct OpenRouter caller outside the kits sends the attribution headers${unlabelled.length ? ` - ${unlabelled.map(rel).join(", ")}` : ` (${directCallers.map(rel).join(", ") || "none"})`}`);
 
