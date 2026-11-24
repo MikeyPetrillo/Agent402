@@ -208,12 +208,13 @@ export const ATTRIBUTIONS = Object.freeze({
 
 /** Every sentence the listing cut keeps when a description ends with it. */
 export const ATTRIBUTION_TAILS = Object.freeze(Object.values(ATTRIBUTIONS));
-// Credit sentences a source's terms had us print before their current wording
-// (CoinGecko's "Data provided by", replaced by its section 4.3 "Powered by"):
-// the listing parity check (scripts/test-bazaar-listing-parity.js) sets them
-// aside with the current ones, so a credit reworded is not read as a listing
-// that lost its description. Never printed.
-export const PREVIOUS_ATTRIBUTION_TAILS = Object.freeze([`Data provided by CoinGecko (${COINGECKO_API_URL}).`]);
+// Credit sentences a source's terms had us print before their current wording,
+// each with the sentence that replaced it (CoinGecko's "Data provided by",
+// replaced by its section 4.3 "Powered by"): the listing parity check
+// (scripts/test-bazaar-listing-parity.js) reads a base listing with the
+// current wording, so a credit reworded is not read as a listing that lost
+// its description. Never printed.
+export const REWORDED_ATTRIBUTIONS = Object.freeze([[`Data provided by CoinGecko (${COINGECKO_API_URL}).`, COINGECKO_ATTRIBUTION]]);
 
 const endsWithSentence = (s, t) => s.endsWith(t) && (s.length === t.length || /\s/.test(s[s.length - t.length - 1]));
 
