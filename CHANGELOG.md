@@ -3189,7 +3189,7 @@ Packages:
   against their caps until its authorization can no longer settle, and an
   error after sending reports the payment as unknown rather than unpaid.
 
-### 2026-11-05 (Robinhood facilitator order, public-index disclosure, job buys)
+### 2026-11-05 (Robinhood Chain facilitator order, public-index disclosure, job buys)
 Payments:
 - On Robinhood Chain the server settles through the first listed facilitator
   whose `/supported` confirms exact at boot, so a primary that does not answer
@@ -3200,7 +3200,7 @@ Privacy:
 - When the facilitator that settles Robinhood Chain publishes settlements on a
   public index (`FACILITATOR_PUBLIC_INDEX_CHAINS`), the privacy page names it
   and what it publishes, the terms, `/.well-known/x402`, llms.txt and the
-  Robinhood page point there, and the pages print the date it began.
+  Robinhood Chain page point there, and the pages print the date it began.
 Operations:
 - The operator view of first-call grants counts refusals of wallets that
   never paid by reason and route, apart from returning buyers, so a route a

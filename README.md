@@ -21,7 +21,6 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
 [![MCP Registry](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0%2Fservers%2Fio.github.MikeyPetrillo%252Fagent402%2Fversions%2Flatest&query=%24.server.version&label=MCP%20Registry)](https://registry.modelcontextprotocol.io/v0/servers/io.github.MikeyPetrillo%2Fagent402/versions/latest)
-[![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dhavok-holdings-llc%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/havok-holdings-llc%2Fagent402)
 [![CodeQL](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml)
 [![Secret scan](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml)
 [![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
@@ -62,7 +61,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > ecosystem**:
 >
 > - **Find** - [`/api/find?q={task}`](https://agent402.tools/api/find) resolves a task description to the best-matching tools (route, price, schema, ready example).
-> - **Route** - [`POST /api/route`](https://agent402.tools/api/route) is the **neutral Smart Order Router**: rank tools across every x402 seller crawled (auto-discovered from the Coinbase CDP Bazaar), health-aware, with `include=external` to exclude us. The response returns the top N and carries `matched` for how many scored.
+> - **Route** - [`POST /api/route`](https://agent402.tools/api/route) is the **neutral Smart Order Router**: rank tools across every x402 seller crawled (auto-discovered from the x402 Bazaar on the Coinbase Developer Platform), health-aware, with `include=external` to exclude us. The response returns the top N and carries `matched` for how many scored.
 > - **Leaderboard** - [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) is the **public on-chain ranking** of x402 sellers by **Base USDC settled volume** - calls served, totalUsd, unique buyers per seller. It returns the **top N, never the whole board** (25 by default, 50 the ceiling; `totalSellers` carries the full count). Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate by `payTo`. The snapshot refreshes every 12 hours.
 >
 > Plus the catalog - **500+ strong: search/answer as the MCP front door, then
@@ -119,8 +118,8 @@ surfaces are explicit and priced as such: the `/v1` gateway (metered under a
 quoted ceiling, or flat tiers) and the finished report products (`/v1/research`, `/v1/dossier`, ... below).
 
 > Optionally, the same server can charge per call over the [x402
-> protocol](https://x402.org) (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche,
-> Sei, Optimism, Arc, Ink, Stellar & Algorand, plus USDG on Robinhood Chain - 14 chains) - so the instance you
+> protocol](https://x402.org) (USDC on Base, Solana, Polygon, Arbitrum One, Monad, Celo, Avalanche C-Chain,
+> Sei, OP Mainnet, Arc, Ink, Stellar & Algorand, plus USDG on Robinhood Chain - 14 chains) - so the instance you
 > self-host for free can also be a hosted, monetized one. Free mode is one
 > setting (`FREE_MODE=true`); a paid instance needs a payout wallet.
 
@@ -212,7 +211,7 @@ More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-wi
 | **Geo** | `geo-distance` (haversine, pure-CPU), `place-lookup` (place names worldwide), `geo-lookup` (US county and state), `sun-times` |
 | **Weather** | `weather-current`, `weather-daily`, `weather-hourly`, `weather-history`, `weather-air-quality` by coordinates or place name; `weather-probability`, `weather-market-brackets`, `weather-market-board` (ensemble probabilities); `weather-window`, `weather-thresholds`; free calculators `heat-index-calc`, `aqi-calc`, `degree-days-calc`, `wmo-weather-code` |
 | **Live data** | `fx-rate` (ECB), `barcode-lookup` (Open Food Facts), `gov-data` (data.gov), `weather-forecast`/`weather-alerts`, `earthquakes` (USGS) |
-| **Calendars & business days** | `public-holidays`, `bank-holidays`, `school-holidays`, `next-holidays`, `long-weekends` (with bridge days), `country-business-days` (check, add, count, region-aware), `business-day-planner` (first common business day across countries); `settlement-calendar` (ACH, Fedwire, SEPA, SEPA Instant, CHAPS settlement dates from each rail's published operating days); `market-calendar` (NYSE, LSE, Xetra, JPX, HKEX open, close and holidays from each exchange's own calendar). Holiday data by [Nager.Date](https://nagerholidays.com), used under a sponsorship held for this service |
+| **Calendars & business days** | `public-holidays`, `bank-holidays`, `school-holidays`, `next-holidays`, `long-weekends` (with bridge days), `country-business-days` (check, add, count, region-aware), `business-day-planner` (first common business day across countries); `settlement-calendar` (ACH, Fedwire, SEPA, SEPA Instant, CHAPS settlement dates from each rail's published operating days); `market-calendar` (open, close and holidays for NYSE, the London Stock Exchange, Xetra, JPX and HKEX; calendar facts only, no market data, not affiliated with the exchanges). Holiday data by [Nager.Date](https://nagerholidays.com), used under a sponsorship held for this service; a commercial self-host needs its own sponsorship |
 | **Finance & crypto** | `crypto-price`/`crypto-market`/`crypto-history`/`crypto-trending`/`crypto-global` (CoinGecko) |
 | **Crypto derivatives** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth) - $0.001 to $0.003 a call, no exchange account |
 | **DeFi, venues & stablecoins (computed answers)** | `lending-rates` (Aave v3 and Compound v3 supply and borrow rates read from the contracts), `funding-screener` (one coin's funding across every listed venue), `stablecoin-depeg-watch` (USD stablecoins off peg now, over 24 hours and 7 days), `exchange-spread` (a coin's price per venue against the median), `dex-pool-health`, `dex-volume-board`, `defi-screener`, `chain-board` - $0.005 a call |
@@ -326,7 +325,7 @@ synthesis; `ipo-report` is fully deterministic (no model at all):
 | `POST /v1/filing-report` | $0.85 | latest SEC filing read and summarized with the facts that moved (`{ticker}`) |
 | `POST /v1/token-brief` | $0.60 | Solana token risk evidence from on-chain and market data (`{mint}`), available while its data source answers |
 | `POST /v1/ticker-pack` | $2.00 | one ticker in one report: dossier, insider flow and holders |
-| `POST /v1/linkedin-article` | $1.10 | a publish-ready LinkedIn article package from a topic (`{topic}`): cited research, headline options, the body, a companion post and images at the platform's sizes |
+| `POST /v1/linkedin-article` | $1.10 | a publish-ready professional article package from a topic, formatted for posting on LinkedIn (not affiliated with LinkedIn), (`{topic}`): cited research, headline options, the body, a companion post and images at the platform's sizes |
 | `POST /v1/token-risk` · `/v1/token-risk/pro` | $0.60 · $0.85 | token and contract risk report from on-chain evidence (`{address, chain}`) |
 | `POST /v1/ipo-report` | $0.05 | IPO pipeline digest, S-1 + 424B4 from EDGAR full-text search (`{days, keyword}`), deterministic |
 
@@ -420,7 +419,7 @@ on MCP the packs appear under `prompts/list` so any MCP-aware client picks them 
 
 Agent402 is also **the open routing + ranking layer for the whole x402
 ecosystem**: it crawls public x402 sellers (the local catalog + an
-auto-discovered set from the [Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/bazaar),
+auto-discovered set from the [x402 Bazaar](https://docs.cdp.coinbase.com/x402/bazaar) (Coinbase Developer Platform),
 refreshed hourly) and exposes them through three free surfaces - same logic as
 `/api/find`: discovery primitives shouldn't cost money.
 
@@ -587,7 +586,7 @@ instance. Payments are the default posture: a bare `npm start` **fails closed**,
 exiting unless `WALLET_ADDRESS` is set - running without payments is the
 explicit opt-in (`FREE_MODE=true npm start`). To charge, set `WALLET_ADDRESS`
 + CDP facilitator keys (free at [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com))
-and agents pay in USDC on Base (or Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar,
+and agents pay in USDC on Base (or Solana, Polygon, Arbitrum One, Monad, Celo, Avalanche C-Chain, Sei, OP Mainnet, Arc, Ink, Stellar,
 Algorand - or USDG on Robinhood Chain via `PAYMENT_NETWORKS=…,robinhood` +
 `ROBINHOOD_FACILITATOR_URL`) via standard x402 clients:
 
@@ -644,7 +643,7 @@ Every claim links to the surface that proves it (the live version, a section of 
 2. **A failed x402 call is not charged, and the response proves it.** Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. Settlement runs after the handler and an error status cancels it, so a failed call is answered with no payment receipt, or with a receipt marked `success:false`, and is not charged. A call paid before it ran answers `charged: true`. One exception, on the EVM chains: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof. Not so for a receipt whose errorReason is settlement_unconfirmed (a settle that ended without showing whether the transfer was sent): the transfer may still land, so do not sign a new authorization for that call before the expiry the answer names (authorizationValidBefore, lastValidRound or expirationLedger), or, when it names none, before the paying wallet shows whether the transfer landed, and follow the answer's retry (watch-transaction: watch the named transaction; check-wallet: check the paying wallet). A receipt whose errorReason is settled_refund_owed was charged: its transfer landed after an earlier attempt with the same payment and is booked as owed to the paying wallet, repaid after on-chain proof (refundStatusUrl shows where it stands), and a new authorization makes the call. A retry carrying the same `Idempotency-Key` and the same payment credential replays the paid answer instead of paying again, and a request re-sent with the same signed EVM payment is answered from its first answer even without a key (`X-Replayed-Answer: 1`); a settled receipt on an error response is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
 3. **One key buys everything.** The same wallet pays for five LLM tiers on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory.
 4. **No wallet required.** Proof-of-work pays for the pure-CPU tools, cards over MPP pay routes priced at $0.50 or more, and [card checkout](https://agent402.tools/reports) sells the finished reports, beside USDC or USDG on fourteen chains and native MPP on Tempo.
-5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix; [monitors](https://agent402.tools/monitors) check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days.
+5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a professional article package, grounded in live sources, most with a downloadable data appendix; [monitors](https://agent402.tools/monitors) check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days.
 6. **We source from other sellers.** `POST /api/route/execute` resolves a task to the best seller across the ecosystem, buys the result from that seller with our wallet and sells it to you under one receipt. Sellers are routable on proven on-chain settlement, with one bounded exception for a zero-history Base or Solana seller under a small per-call ceiling.
 7. **Everything is checkable.** Uptime observed by two probes outside production ([`/status`](https://agent402.tools/status)), a real-money canary through every on-chain rail daily, transactions published by rail and wire ([`/revenue`](https://agent402.tools/revenue)), open source and self-hostable. The deterministic tools run no model; the ones that do are named (the /v1 tiers, the report products, the image, speech, transcription, embedding and AI-answer tools, the Decide planner, and the judgment model that can pick among the router's shortlisted candidates). The operator is identified on-chain: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, resolving to [`/.well-known/agent-registration.json`](https://agent402.tools/.well-known/agent-registration.json), with an A2A agent card at [`/.well-known/agent-card.json`](https://agent402.tools/.well-known/agent-card.json). Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
@@ -673,12 +672,13 @@ Every claim links to the surface that proves it (the live version, a section of 
 
 ## Independent records
 
-Grades and purchase records kept by other services. Each runs its own checks, and we do not control what they show.
+Grades, listings and purchase records kept by other services. Each runs its own checks, and we do not control what they show. A listing or grade is not an endorsement by that service.
 
 [![vet402 record for agent402.tools](https://vet402.com/api/badge/host/agent402.tools.svg)](https://vet402.com/sellers/agent402.tools)
 [![mcp.market](https://mcp.market/badge/mikeypetrillo-agent402.svg)](https://mcp.market/server/mikeypetrillo-agent402)
 [![Wellknown](https://wellknown.network/agents/agent402-mcp/badge.svg)](https://wellknown.network/agents/agent402-mcp)
 [![MCP Queen operational grade](https://mcpqueen.com/badge/io.github.MikeyPetrillo/agent402.svg)](https://mcpqueen.com/s/io.github.MikeyPetrillo/agent402)
+[![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dhavok-holdings-llc%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/havok-holdings-llc%2Fagent402)
 [![agent402-mcp on Glama](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402/badges/score.svg)](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402)
 
 ## Agent402 in the x402 ecosystem
@@ -734,7 +734,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 | `src/tools/` | The tool kits (web, PDF, media, images, live data, crypto/x402, 150+ pure-CPU utilities) - **add tools here** |
 | `src/mcp-http.js` | Hosted MCP connector (streamable HTTP, authless free tier) |
 | `src/pow.js` | Proof-of-work tier (signed, single-use, slug-scoped challenges) |
-| `src/payments.js` | Optional x402 v2 wiring: USDC on Base/Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Arc/Ink/Stellar/Algorand + USDG on Robinhood Chain (14 chains), CDP facilitator, Bazaar discovery |
+| `src/payments.js` | Optional x402 v2 wiring: USDC on Base/Solana/Polygon/Arbitrum One/Monad/Celo/Avalanche C-Chain/Sei/OP Mainnet/Arc/Ink/Stellar/Algorand + USDG on Robinhood Chain (14 chains), CDP facilitator, Bazaar discovery |
 | `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js` | MPP on the same routes: `Payment` challenges/credentials translated to x402 (evm), native Tempo settlement via Tempo's relay, and Stripe cards over MPP |
 | `src/x402-index.js` | x402 Index + Smart Order Router: cross-seller crawl, auto-discovery, health-aware routing, per-chain marketplace pages (`/stellar`, `/algorand`) |
 | `src/sell.js` | `/sell` - the seller front door: free self-serve listing (`POST /api/index/register`) or `agent402-tollbooth` for pay-per-crawl |
@@ -778,6 +778,9 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
   If you self-host, you are the operator: your deployment, your terms, your compliance -
   Havok Holdings LLC operates only the hosted instance and is not responsible for third-party
   deployments.
+- All other product and company names are trademarks of their respective owners. Naming them
+  describes compatibility or a data source and does not imply affiliation with, or endorsement
+  by, them ([agent402.tools/terms#trademarks](https://agent402.tools/terms#trademarks)).
 
 ## Contact
 

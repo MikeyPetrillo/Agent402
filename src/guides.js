@@ -277,7 +277,9 @@ agent402-client has no dependencies: install viem for \`privateKeyToAccount\`, o
 
 Off by default; a 402 with no batched accept falls back to the plain payment
 fetch. The mechanism, the pending-settlement resend and the signing helpers:
-[wiki: Circle Gateway](${REPO_URL}/wiki/Circle-Gateway).
+[wiki: Circle Gateway](${REPO_URL}/wiki/Circle-Gateway). Circle Gateway, Arc and USDC are trademarks of
+Circle Internet Group, Inc. and/or its affiliates; Agent402 is not affiliated
+with or endorsed by Circle.
 
 ## Or from the command line
 
@@ -1683,9 +1685,9 @@ exists:
 
 - **Base** - the primary rail, and where the x402 Bazaar discovery listing
   lives.
-- **Solana, Polygon, Arbitrum, Avalanche, Sei, Monad, Celo** - USDC, each
-  through a facilitator that settles that network.
-- **Optimism** - USDC; its settlement carries a fee, so its quote carries a
+- **Solana, Polygon, Arbitrum One, Avalanche C-Chain, Sei, Monad, Celo** -
+  USDC, each through a facilitator that settles that network.
+- **OP Mainnet** - USDC; its settlement carries a fee, so its quote carries a
   small network premium, shown in the \`402\`. What you're quoted is what
   actually clears.
 - **Arc** - USDC, through the facilitator that settles that network; Arc pays
@@ -1723,8 +1725,8 @@ routing everything through one chain regardless of what you sent.
   },
   {
     slug: "pay-with-coinbase-agentic-wallet",
-    title: "Pay Agent402 from Coinbase's own agent tooling: Agentic Wallet CLI, Agentic Wallet MCP, purl, and the CDP SDK",
-    seoTitle: "Pay Agent402 from Coinbase's agent tooling",
+    title: "Pay Agent402 with an Agentic Wallet, purl or the CDP SDK",
+    seoTitle: "Pay Agent402 with an Agentic Wallet, purl or the CDP SDK",
     description:
       "Already holding a Coinbase Agentic Wallet, the Agentic Wallet MCP tools, Stripe's purl, or a CDP-managed wallet in code? Every Agent402 endpoint is a plain x402 resource on Base, so those pay it unchanged - here are the exact commands, the spend caps to set, and the two extensions we honor (payment-identifier, bazaar).",
     md: `
@@ -1733,6 +1735,9 @@ plain x402 v2 resource settling USDC on Base (plus {{railsMore}} more rails). So
 buyer tooling Coinbase and Stripe ship for x402 pays it with no Agent402-specific
 setup. This guide is the command sheet. Nothing here needs an API key from us:
 the payment is the identity.
+
+Coinbase, Coinbase Business, Agentic Wallet and CDP are trademarks of Coinbase,
+Inc.; Agent402 is not affiliated with or endorsed by Coinbase.
 
 ## Agentic Wallet CLI (\`awal\`)
 
@@ -1841,10 +1846,10 @@ carries a \`WWW-Authenticate: Payment\` challenge - see
   },
   {
     slug: "coinbase-business-get-paid-by-agents",
-    title: "Get paid by AI agents into your Coinbase Business account with agent402-tollbooth",
-    seoTitle: "Get paid by AI agents into Coinbase Business",
+    title: "agent402-tollbooth: get paid by AI agents into a Coinbase Business account",
+    seoTitle: "agent402-tollbooth: get paid into a Coinbase Business account",
     description:
-      "Coinbase Business accounts receive x402 payments from AI agents. agent402-tollbooth is the one-middleware way to put a USDC price on your API or site, settle through Coinbase's facilitator, and land every payment in that account. Three env vars, one command, one example server.",
+      "Coinbase Business accounts receive x402 payments from AI agents. agent402-tollbooth is the one-middleware way to put a USDC price on your API or site, settle through the facilitator your CDP keys authorize, and land every payment in that account. Three env vars, one command, one example server.",
     md: `
 Coinbase Business now takes payments from AI agents over x402: an agent pays
 your x402 URL in USDC and the funds settle into your Coinbase Business account,
@@ -1852,6 +1857,9 @@ where you reconcile, withdraw, or hold them. Coinbase's own path is a hosted
 checkout that returns an x402 URL. If you sell an API and want a price on every
 request, this guide puts x402 in front of the API itself and settles into the
 same account.
+
+Coinbase, Coinbase Business and CDP are trademarks of Coinbase, Inc.; Agent402
+is not affiliated with or endorsed by Coinbase.
 
 [agent402-tollbooth](https://www.npmjs.com/package/agent402-tollbooth) is an
 open-source (MIT) gate for Express, Next.js, Cloudflare or a plain reverse
@@ -1866,10 +1874,9 @@ it at your Coinbase Business address and every settled call lands there.
    the programmatic route to a receive address). This is the \`payTo\` on
    every 402 you serve, so funds settle straight into the account.
 2. A **CDP API key** (id + secret) from the Coinbase Developer Platform. The
-   tollbooth uses it to sign requests to Coinbase's x402 facilitator, which
-   verifies and settles each payment. On Base no fee is taken from the payment
-   itself; the facilitator's own usage pricing is on Coinbase's developer
-   platform pages.
+   tollbooth uses it to sign requests to the x402 facilitator that verifies
+   and settles each payment; that facilitator's own usage pricing is on the
+   Coinbase Developer Platform's pages.
 
 ## 2. One command in front of anything
 
@@ -1930,9 +1937,9 @@ runnable example is in the repo:
 
 We ran exactly this path with real money before publishing: the CLI's own
 middleware built from CDP keys, paid $0.001 by a stock x402 client, settled
-through Coinbase's facilitator on Base
+through the facilitator those keys authorize, on Base
 ([transaction](https://basescan.org/tx/0x8175178ac4e2229dfd9385a3c78c491ffe554b08fdf52cf92f99425c983ec5d1)).
-One rule to know: Coinbase's facilitator refuses a payment whose payer is the
+One rule to know: that facilitator refuses a payment whose payer is the
 payTo (\`self_send_not_allowed\`), so test from a second wallet, never from the
 receiving address.
 
@@ -2649,7 +2656,7 @@ receipt shape:
   answers, browser render, market quotes, SEC filings, crypto and DeFi data,
   PDFs, OCR, DNS and TLS checks, wallet-keyed memory.
 - **Finished reports and monitors**: dossiers, insider flow, 13F holdings,
-  domain audits, token risk, deep research, market briefs, a LinkedIn article
+  domain audits, token risk, deep research, market briefs, a professional article
   package; monitors that re-run a report only when the facts change.
 - **Routing that sources from other sellers**: \`POST /api/route/execute\` buys
   the result from the best-matching external seller for a task, proven sellers
