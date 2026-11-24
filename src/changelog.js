@@ -81,7 +81,7 @@ const ENTRIES = [
       "Site: /status reads a rail left out of the latest canary as unknown, with its age. The settlement gas word clears only past the floor plus a margin.",
       "Site: While the server sheds load, the x402 manifest, /openapi.json, /llms.txt, /llms-full.txt and /api/pricing answer their last good copy.",
       "Site: robots.txt lets the named AI agents fetch the proof-of-work challenge. Public report pages are served with the report drawn, the home page heading names x402 and MPP, the playground loads a picked tool's form on demand, and insider pages show per-insider totals; a page with too little to show is not indexed. The credits and sign-in pages share the site shell.",
-      "Packages: agent402-tollbooth 0.13.0 answers `--help` and `--version`, ships its `deploy/` files, and charges a request with an empty User-Agent, except an empty-User-Agent GET or HEAD of a health path (`healthPaths`, default `/healthz` and `/health`; `TOLLBOOTH_HEALTH_PATHS` for the CLI), so a load balancer's health check keeps passing. A minor release: an empty User-Agent elsewhere now pays.",
+      "Packages: agent402-tollbooth 0.13.0 answers `--help` and `--version`, ships its `deploy/` files, and charges a request with an empty User-Agent, except an empty-User-Agent GET or HEAD of a health path (`healthPaths`, default `/healthz` and `/health`; `TOLLBOOTH_HEALTH_PATHS` for the CLI, matched exactly on the raw request path), so a load balancer's health check keeps passing. A minor release: an empty User-Agent elsewhere now pays.",
       "Packages: agent402-mcp 0.17.0: `wallet new --help` prints the usage and makes no key.",
       "Packages: The meta-tool adapters pass the server's error body through to the caller.",
     ],
