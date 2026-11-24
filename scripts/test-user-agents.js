@@ -174,7 +174,7 @@ ok(legacy.length > 0 && legacy.every((f) => VENDOR_ONLY.has(f)), `the Agent402/1
 {
   const nk2 = src("tools/network-kit2.js");
   const uses = [...nk2.matchAll(/"User-Agent": (\w+)/g)].map((m) => m[1]);
-  ok(uses.includes("CALLER_FETCH_UA") && uses.filter((u) => u === "USER_AGENT").length === 1 && /fetchJson\(url, label\)/.test(nk2), "network-kit2 sends its vendor string only from fetchJson (fixed data APIs); caller-named fetches send the fetch string or the deployment's own");
+  ok(uses.includes("CALLER_FETCH_UA") && uses.filter((u) => u === "USER_AGENT").length === 1 && /async function fetchJson\(url, label(?:, extraHeaders = \{\})?\)/.test(nk2) && ![...nk2.matchAll(/fetchJson\([^;]*?\)/g)].some((m) => /User-Agent/i.test(m[0])), "network-kit2 sends its vendor string only from fetchJson (fixed data APIs; a caller of it adds no User-Agent); caller-named fetches send the fetch string or the deployment's own");
 }
 
 console.log(`\n${fail ? "FAILED" : "PASSED"}: ${pass} passed, ${fail} failed`);
