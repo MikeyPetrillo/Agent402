@@ -66,6 +66,13 @@ ok(/SLUGS:\s*\$\{\{\s*inputs\.slugs\s*\}\}/.test(wf), "a dispatch can name exact
   ok(fl.init.body === '{"sites":[1]}' && fl.init.headers["Content-Type"] === "application/json" && fl.init.headers["X-H"] === "1", "a quoted route with a fromInput is paid with that body, not its example");
   const nf = await sweepRequest({ method: "POST", path: "/api/brief", fromInput: null }, ex, { target: "http://t", clip });
   ok(nf.init.body === '{"sites":[1,2,3,4,5,6]}', "a route with no fromInput is paid with its example (and the list-price hold refuses an over-list quote)");
+  // A slow route (the catalog row's async block) is paid with Prefer:
+  // respond-async up front, so its one buy is one signature.
+  ex.set("POST /api/transcribe-long", { url: "https://e/a.mp3" });
+  const slow = await sweepRequest({ method: "POST", path: "/api/transcribe-long", prefer: "respond-async" }, ex, { target: "http://t", headers: { "X-H": "1" }, clip });
+  ok(slow.init.headers.Prefer === "respond-async" && slow.init.headers["X-H"] === "1" && slow.init.body === '{"url":"https://e/a.mp3"}', "a slow route is paid with Prefer: respond-async up front");
+  ok(!("Prefer" in js.init.headers), "a route the catalog does not mark slow carries no Prefer header");
+  ok(/prefer: slowPreferOf\(t\.async, \{ method: t\.method \}\)/.test(src) && /maxSeconds: t\.asyncMaxSeconds/.test(src), "the catalog row's async advice is carried to the request and to the job's wait");
   ok(/budget\.forRoute\(t\.priceUsd\)/.test(src) && /fromInput: fromInputOf\(t\)/.test(src), "each buy is still held to the route's list price, and the catalog row's fromInput is carried to the request");
   const day = 86400000;
   const fresh = new Map([["/a", 5 * day], ["/b", 20 * day], ["/c", 29 * day], ["/d", 19.9 * day]]);

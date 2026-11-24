@@ -114,6 +114,18 @@ const check = (name, cond) => {
   let t = 0; const stuckFetch = async () => R(200, { state: "running", pollIntervalSeconds: 1 });
   const stuck = await buyOnce(payFetch, "https://t.example/api/decide/execute", { method: "POST", headers: {}, body: "{}" }, { plainFetch: stuckFetch, target: "https://t.example", sleep: async (ms) => { t += ms; }, now: () => t });
   check("a job past its budget is given up as a 504 with the budget named, after the budget plus a minute", stuck.status === 504 && /240 s/.test(stuck.note) && t >= 240_000 && t < 250_000);
+  // A route the catalog marks slow is sent with Prefer: respond-async up front:
+  // one paid call, one signature, its job followed. Sending it bare first
+  // signs a payment the 400 throws away, and the pass's signed-spend budget
+  // (which counts every signature) then refuses the retry as over the cap.
+  const upFront = []; const asyncFetch = async (url, init) => { upFront.push(init.headers?.Prefer || null); return R(202, { statusUrl: "/api/jobs/j2", pollIntervalSeconds: 1 }, { location: "/api/jobs/j2" }); };
+  const okJob = async () => R(200, { state: "succeeded", result: { httpStatus: 200 } });
+  const direct = await buyOnce(asyncFetch, "https://t.example/api/transcribe-long", { method: "POST", headers: { Prefer: "respond-async" }, body: "{}" }, { plainFetch: okJob, target: "https://t.example", sleep: async () => {} });
+  check("a call sent with Prefer: respond-async up front is one paid call whose 202 job is followed to its 200", upFront.length === 1 && upFront[0] === "respond-async" && direct.status === 200 && direct.job?.state === "succeeded");
+  let t2 = 0; const stuck2 = await buyOnce(asyncFetch, "https://t.example/api/transcribe-long", { method: "POST", headers: { Prefer: "respond-async" }, body: "{}" }, { plainFetch: stuckFetch, target: "https://t.example", sleep: async (ms) => { t2 += ms; }, now: () => t2, maxSeconds: 230 });
+  check("an up-front job waits the route's own maxSeconds plus a minute", stuck2.status === 504 && /290 s/.test(stuck2.note));
+  const no202 = await buyOnce(async () => R(402, "{}"), "https://t.example/api/transcribe-long", { method: "POST", headers: { Prefer: "respond-async" }, body: "{}" });
+  check("an up-front async call that is not answered 202 is returned as is, never sent again bare", no202.status === 402 && no202.res);
   // The buy loops' retry decision: a plain 402 or 5xx is sent again inside
   // the three attempts, and a failure that came through a job (the job
   // already paid for the route) or that buyOnce explained in a note is not,
