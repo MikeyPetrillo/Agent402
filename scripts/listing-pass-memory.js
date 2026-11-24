@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The listing pass's purchase memory: download the pass records of this
 // repository's recent listing runs into one directory, for
-// scripts/payai-listing-pass.js --bought DIR. Nothing here pays; it reads the
+// scripts/registry-listing-pass.js --bought DIR. Nothing here pays; it reads the
 // Actions API with the workflow's own token (permissions: actions: read).
 //
 // A record file is kept as a workflow artifact by each run that buys:

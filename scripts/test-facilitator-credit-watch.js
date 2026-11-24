@@ -93,4 +93,4 @@ const creditsAre = (args, want) => {
   const r = runStep({ pricing: "<html>down</html>", daily: DAYS, fb: "{\"sei\":1}" });
   ok(/credit watch skipped/.test(r.stdout), "a repo variable missing a rail is not half-used: skipped");
 }
-console.log(`test-payai-credit-watch: ${passed} passed`);
+console.log(`test-facilitator-credit-watch: ${passed} passed`);

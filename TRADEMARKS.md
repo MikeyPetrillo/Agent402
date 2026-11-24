@@ -32,3 +32,16 @@ are independent: forking the code is welcome, adopting the identity is not.
 AGPL-3.0 gives you every code right you need.
 
 Questions or permission requests: **help@agent402.tools**.
+
+## Other marks
+
+All other product and company names are trademarks of their respective
+owners. Naming them describes compatibility or a data source and does not
+imply affiliation with, or endorsement by, them. Amazon Web Services, AWS and
+Amazon Bedrock AgentCore are trademarks of Amazon.com, Inc. or its
+affiliates. Stellar is a trademark of the Stellar Development Foundation. Arc
+is a trademark of Circle Internet Group, Inc. and/or its affiliates. EDGAR is
+a registered trademark of the U.S. Securities and Exchange Commission. FRED
+is a registered trademark of the Federal Reserve Bank of St. Louis. The
+hosted service states the same in its terms:
+[agent402.tools/terms#trademarks](https://agent402.tools/terms#trademarks).

@@ -23,6 +23,12 @@ import { shownGroundingNote } from "./report-grounding.js";
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "assets", "samples");
 
+// A sample that names a real company, fund or market says, in its own words
+// on the page, that it is information and not investment advice, whether or
+// not its kit returned a disclaimer of its own.
+export const ISSUER_SAMPLE_NOTE = "Information, not investment advice. Written by a language model from public filings and sources; check them before relying on it.";
+export const ISSUER_SAMPLE_PRODUCTS = Object.freeze(["dossier", "fund-report", "market-brief", "research", "ticker-pack"]);
+
 // The citation check of the fixtures (assets/samples/_citations.json): the
 // date each fixture's cited URLs were last fetched, and each source that no
 // longer answers at its address. The fixture stays as it was run; the page
@@ -94,7 +100,7 @@ export const SAMPLES = (() => {
         priceUsd: p.price / 100,
         // The kit's own disclaimer as the run returned it, and the model-written
         // note the page shows under the title (the JSON reader gets both too).
-        ...(kitDisclaimer(j) ? { disclaimer: kitDisclaimer(j) } : {}),
+        ...(kitDisclaimer(j) ? { disclaimer: kitDisclaimer(j) } : ISSUER_SAMPLE_PRODUCTS.includes(product) ? { disclaimer: ISSUER_SAMPLE_NOTE } : {}),
         ...(reportIsModelWritten(p.kind) ? { notice: REPORT_MODEL_NOTE } : {}),
         // A fixture generated after the grounding check shipped carries its
         // result; the sample shows the same field and note a buyer gets.

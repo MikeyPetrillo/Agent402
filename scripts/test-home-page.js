@@ -285,7 +285,7 @@ const catalog = {
   ok(!/our own \d[\d,]* tools|all \d[\d,]* tools/.test(text), "marketing blocks say 500+, not the exact live count");
   ok(CHAIN_ORDER.length === RAILS.length && CHAIN_ORDER.every(([k, n], i) => n === RAILS[i].name), "the chip row is RAILS, names and order");
   const marks = (html.match(/<div class="hm-marks">[\s\S]*?<\/div>/) || [""])[0];
-  ok(CHAIN_ORDER.every(([k, n]) => marks.includes(`href="/${k}"`) && marks.includes(`aria-label="${n}"`)), "the compact mark row links every chain's page, each named for screen readers");
+  ok(CHAIN_ORDER.every(([k, n]) => marks.includes(`href="/${k}"`) && marks.includes(`>${n}</a>`)) && !/<svg|<img/.test(marks), "the chain row links every chain's page, each named in plain text, no logo");
   ok(!/fifteen lines|~15 lines/.test(html), "no unverifiable size claim for contributing a tool");
   ok(/href="\/tools\/v1-chat-metered"[^>]*><span>POST \/v1\/metered\/chat\/completions/.test(html), "the metered row links to the metered tier's page");
   const rows = [...html.matchAll(/<span>((?:GET|POST) \/[^<]*)<\/span>/g)].map((m) => m[1]);

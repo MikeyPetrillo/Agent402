@@ -1,8 +1,10 @@
-# Amazon Bedrock AgentCore
+# Agent402 with Amazon Bedrock AgentCore
+
+Amazon Web Services, AWS and Amazon Bedrock AgentCore are trademarks of Amazon.com, Inc. or its affiliates. Agent402 is not affiliated with or endorsed by AWS.
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-[Amazon Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) is a fully-managed orchestrator for **x402** - the same protocol [Agent402](https://agent402.tools) speaks natively. That means Agent402 snaps into AgentCore as a first-class tool source with **no protocol bridging code**: AgentCore handles the wallet and the signing, Agent402 supplies the catalog and serves the 402 challenges.
+[Amazon Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) is a fully-managed orchestrator for **x402** - the same protocol [Agent402](https://agent402.tools) speaks natively. Because both speak x402, an AgentCore agent can call Agent402 tools with **no protocol bridging code**: AgentCore handles the wallet and the signing, Agent402 supplies the catalog and serves the 402 challenges.
 
 This page is a 5-minute recipe to wire the two together - buy side (let an AgentCore agent call Agent402 tools) and sell side (charge AgentCore agents that crawl *your* site, using `agent402-tollbooth`).
 
@@ -133,7 +135,7 @@ No bridging code, no protocol translation - x402 on both ends.
 ## Why this works without glue
 
 - **AgentCore Payments speaks x402.** Per the AWS docs, AgentCore orchestrates payments using `HTTP 402 Payment Required` (x402) with the `exact` scheme. That's exactly what Agent402 emits.
-- **Agent402 is x402 v2 native.** The same paywall middleware that powers `agent402.tools` is what AgentCore expects to negotiate against.
+- **Agent402 is x402 v2 native.** Agent402 serves x402 v2, the protocol AgentCore Payments pays.
 - **The `agent402-strands` adapter returns native Strands `tool({...})` instances**, so a Strands Agent built with it needs no shape changes.
 
 ## See also

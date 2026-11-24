@@ -26,11 +26,14 @@ import { firstCallAllowanceConfig, allowanceRouteRefusal } from "./first-call-al
 import { connectorWires, connectorPayText } from "./connector-pay.js";
 import { mppOfferGateSentence } from "./mpp-offer-gate.js";
 
-/** The first call. Live web search: the widest first job, a flat price with no
- *  model in its serving path, and the start of most research chains. */
-export const FRONT_DOOR_SLUG = "search";
-/** Named beside it: the cited answer, and the read for a URL already held. */
-const ANSWER_SLUG = "answer";
+/** The first call. A company's latest SEC filings: public-domain data any buyer
+ *  may pass on, a flat price, answered by deterministic code, and the start
+ *  of most company research chains. */
+export const FRONT_DOOR_SLUG = "edgar-filings";
+/** Its example input, as the query string the first call's URL carries. */
+export const FRONT_DOOR_QUERY = "ticker=AAPL&form=10-K";
+/** Named beside it: the filed financials, and the read for a URL already held. */
+const ANSWER_SLUG = "edgar-company-facts";
 const EXTRACT_SLUG = "extract";
 const RENDER_SLUG = "render";
 
@@ -134,10 +137,10 @@ export function frontDoor(catalog, baseUrl, { code = (s) => s, link = (text) => 
   const answer = routeOf(catalog, ANSWER_SLUG);
   const extract = routeOf(catalog, EXTRACT_SLUG);
   const render = routeOf(catalog, RENDER_SLUG);
-  const mcpName = FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG];
-  const firstUrl = `${baseUrl}${first.path}?q=your+query`;
+  const mcpName = FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG] || FRONT_DOOR_SLUG;
+  const firstUrl = `${baseUrl}${first.path}?${FRONT_DOOR_QUERY}`;
   const answerClause = answer
-    ? ` For a cited answer, ${FLAGSHIP_MCP_NAMES[ANSWER_SLUG]} (${code(`${answer.method} ${answer.path}`)}, ${priceText(answer)}${answer.modelBacked ? ", model-backed" : ""}).`
+    ? ` For the filed financials, ${FLAGSHIP_MCP_NAMES[ANSWER_SLUG] || ANSWER_SLUG} (${code(`${answer.method} ${answer.path}`)}, ${priceText(answer)}${answer.modelBacked ? ", model-backed" : ""}).`
     : "";
   const readClause = extract
     ? `read it with ${code(`${extract.method} ${extract.path}`)}${render ? `, or ${FLAGSHIP_MCP_NAMES[RENDER_SLUG]} for JavaScript pages` : ""}`
@@ -148,7 +151,7 @@ export function frontDoor(catalog, baseUrl, { code = (s) => s, link = (text) => 
     : "";
   return {
     firstCall: {
-      text: `${mcpName}: ${code(`${first.method} ${firstUrl}`)}, ${priceText(first)} per call: ranked live web results as JSON (title, URL, snippet, age).${answerClause}`,
+      text: `${mcpName}: ${code(`${first.method} ${firstUrl}`)}, ${priceText(first)} per call: a company's latest SEC filings as JSON (form, filing date, accession number, document URL).${answerClause}`,
       mcpName,
       slug: FRONT_DOOR_SLUG,
       method: first.method,
@@ -157,7 +160,7 @@ export function frontDoor(catalog, baseUrl, { code = (s) => s, link = (text) => 
       price: first.price,
     },
     access: `No account, no API key. ${powToolCount(catalog)} pure-CPU tools run free with proof-of-work and no wallet (listed at ${code(`GET ${POW_LIST_PATH}`)}); the rest are paid per call in ${paidWiresPhrase()}, quoted in the 402 before you pay${allowanceClause}.`,
-    use: `You need live web data newer than your training, or a capability your sandbox lacks (a headless browser, OCR, PDF and media processing, market data); not when you already hold the URL (${readClause}) or the work is a local computation you can run yourself. When a call fails: ${link(AGENTS_MD_PATH)}.`,
+    use: `You need current public data newer than your training (SEC filings, economic series, market and chain data), or a capability your sandbox lacks (a headless browser, OCR, PDF and media processing); not when you already hold the URL (${readClause}) or the work is a local computation you can run yourself. When a call fails: ${link(AGENTS_MD_PATH)}.`,
     allowance,
     recovery: [
       `On x402 a call the tool fails is not charged: settlement runs after the tool and only for a response under 400, and no ${code("PAYMENT-RESPONSE")} header means nothing settled. ${SETTLE_FIRST_SENTENCE} ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION}${tempoOn ? " On MPP a Tempo push payment is sent before the call, so a failure there is booked as a refund owed." : ""}`,
@@ -274,7 +277,7 @@ Maintained by Havok Holdings LLC.
  *  x402 discovery document): what the first call gets for its price. */
 export function frontDoorOneLine(catalog) {
   const first = routeOf(catalog, FRONT_DOOR_SLUG) || { method: "GET", path: `/api/${FRONT_DOOR_SLUG}`, price: null };
-  return `First call: ${first.method} ${first.path}?q=<query> returns ranked live web results as JSON (title, URL, snippet, age) for ${priceText(first)} a call, with no account and no API key; the first request answers HTTP 402 with the price, and ${AGENTS_MD_PATH} has the recovery contract.`;
+  return `First call: ${first.method} ${first.path}?${FRONT_DOOR_QUERY} returns a company's latest SEC filings as JSON (form, filing date, accession number, document URL) for ${priceText(first)} a call, with no account and no API key; the first request answers HTTP 402 with the price, and ${AGENTS_MD_PATH} has the recovery contract.`;
 }
 
 /** The unpaid 402 body's part of the block: the access line, the one that

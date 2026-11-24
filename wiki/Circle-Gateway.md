@@ -1,5 +1,7 @@
 # Circle Gateway (batched USDC payments)
 
+Arc, Circle Gateway and USDC are trademarks of Circle Internet Group, Inc. and/or its affiliates. Agent402 is independent and is not affiliated with or endorsed by Circle.
+
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
 The Circle Gateway batched option is a second way to pay an x402 `exact` accept

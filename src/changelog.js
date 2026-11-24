@@ -70,6 +70,14 @@ const ENTRIES = [
   },
   {
     date: "2026-11-24",
+    title: "Neutral provider and server tool names",
+    items: [
+      "Gateway: Speech and transcription answers name agent402 in their provider field; the model field still names the model that ran.",
+      "Gateway: The pro and premium chat tiers list their server tools as agent402:web_search, agent402:web_fetch and agent402:datetime on /v1/models; the earlier type names are still accepted on input.",
+    ],
+  },
+  {
+    date: "2026-11-24",
     title: "Plain connector names, Algorand catalog, Ink relayer, dependency moves",
     items: [
       "Tools: rwa-markets says why a reference rate is missing (referenceStatus read, rate_table_unreadable or rate_not_listed) and never reports a missing rate as 0.",
@@ -1355,7 +1363,7 @@ const ENTRIES = [
       "Server: outbound tools resolve hostnames without the shared thread pool, so a name that never answers no longer delays other lookups; a name server that refuses a query falls back to the system resolver once; every resolved address is checked before a fetch, rendered pages included.",
       "Server: the LLM tiers advertise the successors of the OpenAI models retiring 2026-12-11; the retiring ids are still accepted.",
       "Server: /api/llm-premium's refusal lists every model family it accepts.",
-      "Server: the insider, LinkedIn article and IPO reports fence the filer- and publisher-written text they read.",
+      "Server: the insider, professional article and IPO reports fence the filer- and publisher-written text they read.",
       "Server: daily upstream ceilings no longer count a call the upstream refused.",
       "Server: /mcp and the revenue view redact secrets from error text, including keys split across lines, cut short, or written as bare hex; transaction hashes stay readable.",
       "Server: six more status words page on their alarm values.",
@@ -1889,7 +1897,7 @@ const ENTRIES = [
       "Each slow route (reports, video, the premium image) states its typical and maximum run time on its /api/pricing row and /openapi.json operation, marks its /llms.txt line, and its 402 carries X-Async-Recommended with the same advice in the JSON body. The route-execute tiers, seller-payability and the fast and pro image tiers accept Prefer: respond-async too.",
       "GET /api/jobs/{id} keeps its status (working, completed, failed) and adds state (queued, running, succeeded, failed), with a stage (video: submitted, generating, downloading; reports: their named steps), progress from 0 to 1, an ETA and Retry-After on every state that is not final. A route that does not report its own steps shows elapsed time against its typical run, marked as an estimate. Payment still settles only on the delivered answer.",
       "On the MCP connector, every slow paid route runs as an MCP task for a client that declares the tasks extension, and tasks/get carries the same progress.",
-      "Faster runs: a domain audit probes in one round instead of three, research reads its source pages at once, the LinkedIn article generates its images together, and video checks for its finished clip every 2 seconds once it is due.",
+      "Faster runs: a domain audit probes in one round instead of three, research reads its source pages at once, the professional article generates its images together, and video checks for its finished clip every 2 seconds once it is due.",
       "agent402-client 0.8.16 and agent402-mcp 0.13.17 send slow calls as jobs and collect them on their own, honoring Retry-After, with progress callbacks and MCP progress notifications.",
     ],
   },
@@ -2199,7 +2207,7 @@ const ENTRIES = [
       "Why pay here: first-party differences, each linked to the surface that proves it (first at /why, now the #why section of the home page); the same points in /llms.txt, the MCP instructions, the README and the OpenClaw guide",
       "Metered gateway: credits and card buyers settle actual usage like upto buyers; agent402-openclaw 0.3.x pays upto when the wallet holds a Permit2 allowance (permit2-approve), proven daily by the canary's metered-upto leg; the quote is priced from the same object the handler serves",
       "Stellar facilitator: second and third Soroban RPC on transport failures, and a settle fallback",
-      "Report inputs: XBRL operating-to-net bridge and verbatim filing excerpts in the dossier, 13F amendments folded, Schedule 13G holders, derivative Form 4s, token-security and DEX market probes in token risk, DNS posture and recursive SPF in domain audits, page bodies and a citation audit in research; LinkedIn article package with LinkedIn-sized images",
+      "Report inputs: XBRL operating-to-net bridge and verbatim filing excerpts in the dossier, 13F amendments folded, Schedule 13G holders, derivative Form 4s, token-security and DEX market probes in token risk, DNS posture and recursive SPF in domain audits, page bodies and a citation audit in research; professional article package with images sized for LinkedIn",
       "Wiki accuracy pass across 19 pages, generated from the live catalog and product tables",
     ],
   },

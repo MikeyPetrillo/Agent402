@@ -105,7 +105,7 @@ try {
     stub((_u, init) => (String(JSON.parse(init.body).model).startsWith("elevenlabs/") ? json({ error: { message: "down" } }, 500) : audio()));
     const out = await bySlug(TTS_TOOLS, "tts").handler({ text, format: "mp3" });
     restore();
-    ok(out.model === backup && out.provider === "openrouter", `the backup spoke (${out.model})`);
+    ok(out.model === backup && out.provider === "agent402", `the backup spoke (${out.model})`);
     recorded(await take(), { source: "speech", usd: text.length * T.speech[backup], tier: "tts", model: backup, priceUsd: ttsQuoteUsd("tts", text.length) }, "tts backup");
   }
   // ---- no rate row for the model that spoke: served, nothing metered, the event says unreported ----

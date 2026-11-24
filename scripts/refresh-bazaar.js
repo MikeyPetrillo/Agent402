@@ -39,7 +39,7 @@
 //   PAY_NETWORK       "base" (default, BURNER_KEY) or "solana"
 //                     (SOLANA_BURNER_KEY); both settle at the boot order's
 //                     first facilitator, CDP on both chains (an untagged buy
-//                     never reaches PayAI: scripts/payai-listing-pass.js
+//                     never reaches PayAI: scripts/registry-listing-pass.js
 //                     settles there on purpose)
 //   MAX_PRICE_USD     sweep-mode per-tool ceiling (default 0.05; the scheduled
 //                     keep-alive passes its own, which admits priced routes
@@ -124,7 +124,7 @@ const MAX_SPEND_USD = Number(process.env.MAX_SPEND_USD || "5");
 // every chain its /supported lists (src/payments.js), which is what the Bazaar
 // harvester observes; every payment also makes harvesters re-observe the live
 // 402 with the full multi-chain accepts. PayAI's registry sees only what PayAI
-// settles, which scripts/payai-listing-pass.js asks for per request.
+// settles, which scripts/registry-listing-pass.js asks for per request.
 const PAY_NETWORK = (process.env.PAY_NETWORK || "base").toLowerCase();
 // Sweep-mode price ceiling per tool: skip anything above it. Routes that bill
 // real upstream credit per call sit on both sides of any ceiling, so the

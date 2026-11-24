@@ -27,7 +27,7 @@ import {
   probeRows, probeCounts, latestByComponent, latestBySource, earliestObservation, totalObservations, statusPersistent,
   uptimeFrom, dailyFrom, incidentsFrom, stateFrom, stateFromSources,
 } from "./status-store.js";
-import { RAILS } from "./rails.js";
+import { RAILS, railKey } from "./rails.js";
 
 import { REPO_URL } from "./repo-link.js";
 const REPO = REPO_URL;
@@ -80,7 +80,7 @@ const DAILY = 26 * 3600_000; // a day plus slack for a late scheduled run
 // existing "settlement" component below.
 export const RAIL_COMPONENTS = [
   ...RAILS.map((r) => ({
-    key: `rail_${r.name.toLowerCase().replace(/\s+chain$/, "")}`,
+    key: `rail_${railKey(r)}`,
     label: r.name,
     blurb: `Real ${r.asset} settlement on ${r.name}, proven daily by the paid canary.`,
     staleAfterMs: DAILY,

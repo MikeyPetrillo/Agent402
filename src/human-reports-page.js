@@ -251,11 +251,11 @@ ${R["token-brief"] ? `
         <div class="note" style="margin-top:10px;">${sampleLink("market-brief")}<a href="/tools/market-brief" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="linkedin">
-        <div class="k">LinkedIn article</div>
-        <h3>A publish-ready LinkedIn article, with the images</h3>
-        <p>Grounded research with cited sources, three headline options, a hook-first body with facts linked to their sources, key takeaways, a companion post with hashtags, and generated images at LinkedIn's own sizes: cover 1920x1080, link-share 1200x627, feed square and portrait. Paste and publish.</p>
+        <div class="k">Professional article</div>
+        <h3>A publish-ready professional article, with the images</h3>
+        <p>Grounded research with cited sources, three headline options, a hook-first body with facts linked to their sources, key takeaways, a companion post with hashtags, and generated images in the sizes LinkedIn uses: cover 1920x1080, link-share 1200x627, feed square and portrait. Formatted for posting on LinkedIn; not affiliated with LinkedIn.</p>
         <form class="pcard-form" data-kind="linkedin" novalidate>${cardField("linkedin", "Topic", "e.g. why AI agents will pay for APIs with stablecoins")}
-        <div class="gets"><b>What you get:</b> the article, three headline options, key takeaways, a companion post and cover plus inline images cut to LinkedIn's sizes.</div>
+        <div class="gets"><b>What you get:</b> the article, three headline options, key takeaways, a companion post and cover plus inline images cut to the sizes LinkedIn uses.</div>
         ${cardError("linkedin")}
         ${buyBtn("linkedin", "linkedin-article", "Get the article")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("linkedin-article")}<a href="/tools/linkedin-article" style="color:var(--muted);">Sample output + API docs →</a></div>

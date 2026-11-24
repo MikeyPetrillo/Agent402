@@ -32,6 +32,14 @@ Tools:
 - earthquakes, the openFDA tools and geo-lookup answers carry the credit line
   their sources ask for.
 
+### 2026-11-24 (neutral provider and server tool names)
+Gateway:
+- Speech and transcription answers name agent402 in their provider field;
+  the model field still names the model that ran.
+- The pro and premium chat tiers list their server tools as agent402:web_search,
+  agent402:web_fetch and agent402:datetime on /v1/models; the earlier type
+  names are still accepted on input.
+
 ### 2026-11-24 (plain connector names, Algorand catalog, Ink relayer, dependency moves)
 Tools:
 - rwa-markets says why a reference rate is missing (referenceStatus read,
@@ -2499,7 +2507,7 @@ Server:
 - The LLM tiers advertise the successors of the OpenAI models retiring
   2026-12-11; the retiring ids are still accepted.
 - /api/llm-premium's refusal lists every model family it accepts.
-- The insider, LinkedIn article and IPO reports fence the filer- and
+- The insider, professional article and IPO reports fence the filer- and
   publisher-written text they read.
 - Daily upstream ceilings no longer count a call the upstream refused.
 - /mcp and the revenue view redact secrets from error text, including keys
@@ -3215,7 +3223,7 @@ Packages:
   against their caps until its authorization can no longer settle, and an
   error after sending reports the payment as unknown rather than unpaid.
 
-### 2026-11-05 (Robinhood facilitator order, public-index disclosure, job buys)
+### 2026-11-05 (Robinhood Chain facilitator order, public-index disclosure, job buys)
 Payments:
 - On Robinhood Chain the server settles through the first listed facilitator
   whose `/supported` confirms exact at boot, so a primary that does not answer
@@ -3226,7 +3234,7 @@ Privacy:
 - When the facilitator that settles Robinhood Chain publishes settlements on a
   public index (`FACILITATOR_PUBLIC_INDEX_CHAINS`), the privacy page names it
   and what it publishes, the terms, `/.well-known/x402`, llms.txt and the
-  Robinhood page point there, and the pages print the date it began.
+  Robinhood Chain page point there, and the pages print the date it began.
 Operations:
 - The operator view of first-call grants counts refusals of wallets that
   never paid by reason and route, apart from returning buyers, so a route a

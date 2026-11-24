@@ -774,9 +774,9 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const fnTool = { type: "function", function: { name: "get_weather", parameters: { type: "object", properties: {} } } };
   const v = validateRequest({ model: "gpt-4o-mini", messages: msg1(), tools: [fnTool] }, "v1-chat");
   ok(Array.isArray(v.tools) && v.tools[0].function.name === "get_weather", "function tools still pass through verbatim");
-  throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg1(), tools: [{ type: "openrouter:subagent" }] }, "v1-chat"), "openrouter:*", "openrouter:subagent rejected with the reason");
+  throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg1(), tools: [{ type: "openrouter:subagent" }] }, "v1-chat"), "agent402:*", "openrouter:subagent rejected with the reason");
   throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg1(), tools: [{ type: "openrouter:advisor" }] }, "v1-chat"), "function", "openrouter:advisor rejected, error names the accepted shape");
-  throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg1(), tools: [fnTool, { type: "openrouter:subagent" }] }, "v1-chat"), "openrouter:*", "one bad entry poisons the whole array - no partial acceptance");
+  throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg1(), tools: [fnTool, { type: "openrouter:subagent" }] }, "v1-chat"), "agent402:*", "one bad entry poisons the whole array - no partial acceptance");
   throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg1(), tools: [{ type: "function" }] }, "v1-chat"), "function", "type:function without a function object rejected");
   // Tool NAMESPACES (2026-09-10): one buyer sent ~130 of these to /v1/metered
   // on 09-09 and was refused every time. A namespace flattens into its function
@@ -853,7 +853,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     await base.handler({ model: "gpt-4o-mini", messages: msg1(), tools: [{ type: "openrouter:subagent" }] });
     ok(false, "handler accepted a server-side tool type");
   } catch (e) {
-    ok(e.statusCode === 400 && String(e.message).includes("openrouter:*"), `handler 400s on server-side tools (got ${e.statusCode}: ${String(e.message).slice(0, 60)})`);
+    ok(e.statusCode === 400 && String(e.message).includes("agent402:*"), `handler 400s on server-side tools (got ${e.statusCode}: ${String(e.message).slice(0, 60)})`);
   }
   ok(fetches === 0, "...and made zero upstream fetches doing it");
   globalThis.fetch = realFetch;

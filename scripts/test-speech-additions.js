@@ -198,7 +198,7 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
     ok(calls.length === 1 && new URL(calls[0].url).host === "openrouter.ai" && new URL(calls[0].url).pathname === "/api/v1/audio/transcriptions", "a named model goes to the transcription wire, once");
     ok(calls[0].fields.model === MINI && calls[0].fields.response_format === "json" && !("diarize" in calls[0].fields) && !("timestamp_granularities[]" in calls[0].fields), "with its model id and no speaker-label fields");
     ok(JSON.parse(calls[0].fields.provider).zdr === true && JSON.parse(calls[0].fields.provider).data_collection === "deny", "under the zdr data policy");
-    ok(out.model === MINI && out.provider === "openrouter" && out.text === "hello there" && out.language === "en" && out.duration === 3 && !("words" in out) && !("speakers" in out), "the answer names the model that served it and has the transcript fields");
+    ok(out.model === MINI && out.provider === "agent402" && out.text === "hello there" && out.language === "en" && out.duration === 3 && !("words" in out) && !("speakers" in out), "the answer names the model that served it and has the transcript fields");
     // The default call still goes to the tier's own model on its own wire.
     calls.length = 0;
     const own = await tool.handler({ url: AUDIO_URL });

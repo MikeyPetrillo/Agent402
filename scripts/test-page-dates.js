@@ -130,7 +130,13 @@ if (!isShallow() && stored) {
 ok(ISO.test(pageLastmod("/") || ""),`/ is dated from ${PAGE_SOURCES["/"].join(",")} (${pageLastmod("/")})`);
 ok(pageLastmod("/") === filesLastmod(PAGE_SOURCES["/"]), "a static page's lastmod is its module's date");
 ok(pageLastmod("/base") === filesLastmod(["src/market-page.js"]), "a chain page is dated by the market page module");
-ok(pageLastmod("/guides/agent-hosts") === filesLastmod(["src/guides.js"]), "a guide is dated by the guides module");
+// A guide is dated one by one (the table's entries): its own last change, never
+// later than the guides module, so an edit to another guide does not move it.
+{
+  const own = JSON.parse(readFileSync(new URL("../src/generated/page-dates.json", import.meta.url), "utf8")).entries?.["/guides/agent-hosts"]?.modified;
+  const mod = filesLastmod(["src/guides.js"]);
+  ok(ISO.test(own || "") && pageLastmod("/guides/agent-hosts") === own && own <= mod, `a guide is dated by its own entry, no later than the guides module (${own}, module ${mod})`);
+}
 ok(ISO.test(toolLastmod("hash") || "") && pageLastmod("/tools/hash") === toolLastmod("hash"), `/tools/hash is dated by its kit (${toolLastmod("hash")})`);
 ok(pageLastmod("/tools/no-such-tool-xyz") === null, "an unknown tool slug has no lastmod");
 ok(pageLastmod("/tools/category/crypto") === null, "a category page has no lastmod");

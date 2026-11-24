@@ -147,7 +147,7 @@ await (async () => {
     assert.deepEqual(premiumUsdByNetworkName(p, ["base"]), {});
     assert.deepEqual(premiumUsdByNetworkName(p, ["base", "optimism"]), { optimism: 0.001 });
     assert.equal(premiumClause(p, ["base"]), "");
-    assert.match(premiumClause(p, ["optimism"]), /Optimism/);
+    assert.match(premiumClause(p, ["optimism"]), /OP Mainnet/);
   });
   process.env.PAYMENT_NETWORKS = "base";
   check("a boot offering Base alone quotes no premium on any surface", () => {
@@ -160,9 +160,9 @@ await (async () => {
   process.env.PAYMENT_NETWORKS = "base,optimism";
   check("a boot offering Optimism quotes its premium on every surface, from the one helper", () => {
     assert.deepEqual(publicPremiumUsdByNetwork(), { optimism: 0.001 });
-    assert.match(publicPremiumClause(), /on Optimism every call quotes \$0\.001 above its list price/);
+    assert.match(publicPremiumClause(), /on OP Mainnet every call quotes \$0\.001 above its list price/);
     assert.deepEqual(premium(), { optimism: 0.001 }, "openapi x-payment-info");
-    assert.match(llmsFullTxt("http://x", catalog), /payment\.premiumUsdByNetwork[^\n]*on Optimism every call quotes \$0\.001/, "llms-full.txt");
+    assert.match(llmsFullTxt("http://x", catalog), /payment\.premiumUsdByNetwork[^\n]*on OP Mainnet every call quotes \$0\.001/, "llms-full.txt");
   });
   check("/api/pricing and the connector's payment.info read the same helper", () => {
     const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");

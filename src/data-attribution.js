@@ -92,7 +92,7 @@ export const CYMRU_ATTRIBUTION = "IP to ASN data from Team Cymru IP to ASN Mappi
 // terms): the publishers named and the New York Fed's disclaimer for a product
 // described with its rates; each answer carries its publisher's full credit
 // (the BLS statement and retrieval date, the New York Fed's notice).
-export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, BEA, the U.S. Treasury, the Fed Board and the New York Fed. Agent402 is not affiliated with them.";
+export const US_AGENCIES_ATTRIBUTION = "Sources: U.S. BLS, BEA, the U.S. Treasury, the Federal Reserve Board and the Federal Reserve Bank of New York. Agent402 is not affiliated with them.";
 // The computed macro tools (sahm-rule, cpi-yoy, unemployment-rate, fed-funds
 // in src/tools/macro-kit.js) read the same publishers through
 // src/tools/us-macro-series.js: each answer's `credit` opens with its

@@ -76,7 +76,7 @@ export function reportsParagraph(baseUrl, tools) {
     ["Market / competitor brief", ["market-brief"]],
     ["Solana token brief", ["token-brief"]],
     ["Token risk", ["token-risk", "token-risk-pro"]],
-    ["LinkedIn article, ready to publish", ["linkedin-article"]],
+    ["Professional article, ready to publish", ["linkedin-article"]],
     ["IPO pipeline digest, deterministic", ["ipo-report"]],
   ];
   const groups = groupSlugs.map(([k, slugs]) => [k, list(...slugs)]).filter(([, v]) => v);
@@ -599,7 +599,7 @@ function llmsFullBody(baseUrl, catalog) {
 
   return `# Agent402.Tools
 
-> ${leadSentence({ mpp: mppMethodsSummary().enabled, receipts: receiptsServed() })} ${SUPPORT_LINE} The applied layer of Agentic Finance (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the catalog via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
+> ${leadSentence({ mpp: mppMethodsSummary().enabled, receipts: receiptsServed() })} ${SUPPORT_LINE} The applied layer of Agentic Finance (explainer: /agentic-finance). **First job: company filings and public data** (\`/api/edgar-filings\`, \`/api/edgar-company-facts\`) - then the catalog via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
 
 Base URL: ${baseUrl}
 
@@ -656,8 +656,8 @@ ${flatTiersLine()}
 - [/SKILL.md](${baseUrl}/SKILL.md): agent-onboarding skill sheet - setup (MCP server / SDK / plain HTTP), discover, pay (x402, MPP or proof-of-work), read the 402, common issues. Start here if you are setting Agent402 up for the first time
 - [/guides/buying-at-volume](${baseUrl}/guides/buying-at-volume): buying in bursts - the per-address limits and their \`Retry-After\`, retries that never pay twice, async jobs, spend caps and the errors to handle
 - [/guides/content-pipeline](${baseUrl}/guides/content-pipeline): a content pipeline from paid calls - research, script, voiceover, images, transcription, subtitles, dubbing and media checks from one wallet, with the stages that run as jobs and the rail to pay on
-- [/api/search](${baseUrl}/api/search): **front door** - live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
-- [/api/answer](${baseUrl}/api/answer): **front door** - cited answer grounded in live web search results
+- [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
+- [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results
 - [/api/search-news](${baseUrl}/api/search-news): live news search for current events / headlines
 - [/api/find](${baseUrl}/api/find): resolve a plain-language task to the best-matching tools with route, price, input schema, and a ready example (GET \`?q={task}\` or POST \`{"task":"..."}\`) - long-tail discovery behind the flagships. A task that names several steps ("get the price, then compute RSI") also returns a free \`plan\`: each step ranked the same way, with an estimated total
 - [/api/route](${baseUrl}/api/route): Smart Order Router - rank tools across every x402 seller crawled from public registries; \`include:"external"\` excludes Agent402 for neutral cross-seller discovery
@@ -803,14 +803,15 @@ export function llmsTxt(baseUrl, catalog) {
   const platformLinks = new Set(listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug})`));
   const shortPlatforms = (text) => text.split("\n").map((l) => { const head = l.slice(0, l.indexOf("): ") + 1); return platformLinks.has(head) ? head : l; }).join("\n");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
-  const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
+  // The model gateway follows the tools: the short index leads with the catalog.
+  const keep = ["Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains", "Call a model (metered, the default)"];
   // Key machine surfaces: the short index names each surface in one clause
   // and /llms-full.txt keeps every line whole. An entry below is that
   // surface's own brief; any other line keeps its first clause
   // (surfaceClause), so a surface added later stays short here too.
   const brief = [
-    [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): **front door**: live web search (title, URL, snippet)`],
-    [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): **front door**: cited answer grounded in live web search results`],
+    [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet)`],
+    [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results`],
     [`- [/api/route](`, `- [/api/route](${baseUrl}/api/route): Smart Order Router: rank tools across every crawled x402 seller`],
     [`- [/api/index](`, `- [/api/index](${baseUrl}/api/index): the crawled x402 seller index, one page per call; one origin with \`?seller=<host>\``],
     // Each depth's price stays here (from the decide configuration), and so

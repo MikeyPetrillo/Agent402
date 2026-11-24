@@ -31,8 +31,8 @@
 // facilitator's settlement credentials on Railway) are not needed to read it
 // and are never sent by this script.
 //
-//   node scripts/payai-solana-sweep.js            # against production
-//   TARGET_URL=http://127.0.0.1:3000 node scripts/payai-solana-sweep.js
+//   node scripts/registry-solana-sweep.js            # against production
+//   TARGET_URL=http://127.0.0.1:3000 node scripts/registry-solana-sweep.js
 //   --json   machine-readable output
 //
 // Env: TARGET_URL (default https://agent402.tools), PAYAI_REGISTRY_URL,
@@ -179,5 +179,5 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().then((code) => process.exit(code), (e) => { console.error(`payai-solana-sweep: ${e?.message || e}`); process.exit(2); });
+  main().then((code) => process.exit(code), (e) => { console.error(`registry-solana-sweep: ${e?.message || e}`); process.exit(2); });
 }

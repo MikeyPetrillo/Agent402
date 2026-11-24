@@ -388,10 +388,13 @@ export function docDescription(md, title, slug = "") {
 // A page that shows an AGENT_KEY placeholder ends with the shared get-a-wallet
 // step (src/get-a-wallet.js): the wiki text stays as GitHub shows it.
 const KEY_PLACEHOLDER = /AGENT_KEY(?:=|"?\s*:\s*")0x(?:[A-Z_]{3,}|\.\.\.|<[^>]*>)/;
+// A page whose file name is not its title: the API reference, and the AgentCore
+// page, whose title names the product by its own name with ours first.
+const DOC_TITLES = { "API-Reference": "API Reference Guide", "AWS-Bedrock-AgentCore": "Agent402 with Amazon Bedrock AgentCore" };
 export function docsPage(baseUrl, slug) {
   const md = Object.hasOwn(WIKI, slug) ? WIKI[slug] : null;
   if (!md) return null;
-  const title = slug === "API-Reference" ? "API Reference Guide" : slug.replace(/-/g, " ");
+  const title = DOC_TITLES[slug] || slug.replace(/-/g, " ");
   const description = docDescription(md, title, slug);
   return shell(
     baseUrl,

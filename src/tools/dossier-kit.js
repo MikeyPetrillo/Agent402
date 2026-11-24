@@ -485,14 +485,14 @@ const OUT_EXAMPLE = {
 export const DOSSIER_TOOLS = [
   {
     route: "POST /v1/dossier", name: "Company due-diligence dossier (grounded, cited)", slug: "dossier", category: "llm", price: DOSSIER_TIERS["dossier"].price,
-    description: `Hand over a ticker and get one due-diligence dossier back. Pulls the company's SEC EDGAR filings (10-K / 10-Q / 8-K) and Form 4 insider trades${QUOTE_ON ? ", a live quote," : ""} and grounded web research on recent developments and risks, then synthesizes a ~2,400-word cited dossier - business, financial posture, insider activity, red flags, and a balanced diligence read. Grounded in real SEC data, not a generic web guess. One payment, one report. USDC (x402/MPP) or card (Stripe). Not cached.`,
+    description: `Hand over a ticker and get one due-diligence dossier back. Pulls the company's SEC EDGAR filings (10-K / 10-Q / 8-K) and Form 4 insider trades${QUOTE_ON ? ", a live quote," : ""} and grounded web research on recent developments and risks, then synthesizes a ~2,400-word cited dossier - business, financial posture, insider activity, red flags, and a balanced diligence read. Grounded in real SEC data, not a generic web guess. One payment, one report. USDC (x402/MPP) or card (Stripe). Not cached. Information, not investment advice.`,
     tags: ["research", "due-diligence", "company", "sec", "edgar", "filings", "insider", "stocks", "dossier", "premium", "agent"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", focus: ["risks"] }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeDossierHandler("dossier"),
   },
   {
     route: "POST /v1/dossier/max", name: "Company due-diligence dossier - MAX (exhaustive)", slug: "dossier-max", category: "llm", price: DOSSIER_TIERS["dossier-max"].price,
-    description: "The exhaustive due-diligence tier (model-backed): more filings, a full year of Form 4 insider activity, wider web research (up to 8 angles), the widest source set, and a ~2,800-word cited dossier with a full source table. For a decision that warrants real diligence. USDC or card (Stripe). Not cached.",
+    description: "The exhaustive due-diligence tier (model-backed): more filings, a full year of Form 4 insider activity, wider web research (up to 8 angles), the widest source set, and a ~2,800-word cited dossier with a full source table. For a decision that warrants real diligence. USDC or card (Stripe). Not cached. Information, not investment advice.",
     tags: ["research", "due-diligence", "company", "sec", "edgar", "filings", "insider", "stocks", "dossier", "premium", "agent"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", focus: ["debt", "litigation"] }, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "dossier-max" } } } },
     handler: makeDossierHandler("dossier-max"),

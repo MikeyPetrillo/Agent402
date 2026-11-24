@@ -79,6 +79,37 @@ for (const f of files) {
   hits.push(...findHits(f, text));
 }
 ok(hits.length === 0, `no tracked file names a third-party seller or counterparty (${files.length} files scanned)${hits.length ? ":\n    " + hits.join("\n    ") : ""}`);
+// --- counterparties named in settlement code, never in published prose -----
+// A facilitator behind a configuration variable is named in code (its
+// variable, its client), but the published prose (the README, the wiki, docs/,
+// the security policy, the changelog, the blog and guide pages) names none:
+// it says "a facilitator". Variable names (ALL_CAPS identifiers) and the
+// anchors built from them are code contracts and are set aside before the read.
+const PUBLIC_NAMES = new Set(data.publicNames || []);
+const PUBLIC_PROSE = (f) => /^(wiki|docs)\/.+\.md$/.test(f) || /^(README|SECURITY|CONTRIBUTING|AGENTS|CHANGELOG|llms-install)\.md$/.test(f) || f === "src/blog.js" || f === "src/guides.js";
+export function publicProseHits(file, text, names = PUBLIC_NAMES) {
+  const out = [];
+  text.split("\n").forEach((line, i) => {
+    const prose = line.replace(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*\b/g, " ").replace(/\(#[a-z0-9-]+\)/g, " ").toLowerCase();
+    if ((prose.match(WORD_RE) || []).some((t) => names.has(h(t)) || t.split(/[-.]/).some((p) => p.length >= 4 && names.has(h(p))))) out.push(`${file}:${i + 1}`);
+  });
+  return out;
+}
+{
+  const N = new Set([h("zzfacilitator")]);
+  ok(publicProseHits("wiki/x.md", "settles through Zzfacilitator's registry", N).length === 1, "control: a counterparty named in prose is caught");
+  ok(publicProseHits("docs/x.md", "| `ZZFACILITATOR_API_KEY_ID` | Key id for a fallback facilitator. |", N).length === 0, "control: its configuration variable alone passes");
+  ok(publicProseHits("docs/x.md", "[ZZFACILITATOR](#zzfacilitator) · ## ZZFACILITATOR", N).length === 0, "control: a variable group's heading and anchor pass");
+  ok(publicProseHits("wiki/x.md", "default https://api.zzfacilitator.example/x402", N).length === 1, "control: a counterparty's host in prose is caught");
+  ok(PUBLIC_NAMES.size >= 5, `the public-prose list is populated (${PUBLIC_NAMES.size} names)`);
+  const proseHits = [];
+  for (const f of files.filter(PUBLIC_PROSE)) {
+    let text;
+    try { text = readFileSync(new URL(f, ROOT), "utf8"); } catch { continue; }
+    proseHits.push(...publicProseHits(f, text));
+  }
+  ok(proseHits.length === 0, `no published prose names a settlement counterparty${proseHits.length ? ":\n    " + proseHits.join("\n    ") : ""}`);
+}
 // --- upstream vendor names in public tool text ------------------------------
 // Tool names, descriptions, tags and input descriptions, and every skill-pack
 // string, describe the data, not the vendor it is read from. The vendor list is

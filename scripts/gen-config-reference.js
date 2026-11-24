@@ -84,6 +84,10 @@ export function defaultOf(name, texts) {
 // `withheldDefaults` and its row reads WITHHELD_DEFAULT_TEXT
 // (scripts/test-config-reference.js fails a printed one).
 export const WITHHELD_DEFAULT_TEXT = "not listed";
+// A default that is an outside party's endpoint (a facilitator's URL) prints
+// as this text: the variable and its purpose are documented, the party is not
+// named (docs/configuration.json `builtInDefaults`, read by the same test).
+export const BUILT_IN_DEFAULT_TEXT = "built in";
 const COST_WORDS = new Set(["GAS", "COST", "COSTS", "FEE", "FEES", "QUERY", "RELAYER", "ETH", "RATE", "RATES", "VENDOR"]);
 export function isCostShapedName(name) {
   const t = String(name).split("_");
@@ -132,9 +136,10 @@ export function buildReference({ root = ROOT, config = JSON.parse(readFileSync(C
     for (const n of groups.get(g)) {
       const files = [...scan.vars.get(n).files].sort();
       const withheld = Object.hasOwn(config.withheldDefaults || {}, n);
-      const d = withheld ? null : defaultOf(n, files.map((f) => texts.get(f)).filter(Boolean)) ?? config.defaults?.[n] ?? null;
+      const builtIn = Object.hasOwn(config.builtInDefaults || {}, n);
+      const d = withheld || builtIn ? null : defaultOf(n, files.map((f) => texts.get(f)).filter(Boolean)) ?? config.defaults?.[n] ?? null;
       const where = files.length > 3 ? `${files.slice(0, 3).map((f) => `\`${f}\``).join(", ")} and ${files.length - 3} more` : files.map((f) => `\`${f}\``).join(", ");
-      out.push(`| \`${n}\` | ${esc(config.vars[n] || "(no purpose line)")} | ${withheld ? WITHHELD_DEFAULT_TEXT : d === null ? "" : `\`${esc(d)}\``} | ${where} |`);
+      out.push(`| \`${n}\` | ${esc(config.vars[n] || "(no purpose line)")} | ${withheld ? WITHHELD_DEFAULT_TEXT : builtIn ? BUILT_IN_DEFAULT_TEXT : d === null ? "" : `\`${esc(d)}\``} | ${where} |`);
     }
     out.push("");
   }

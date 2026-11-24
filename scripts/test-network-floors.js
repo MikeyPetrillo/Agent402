@@ -136,7 +136,7 @@ await check("every surface that states a floor reads the same map, and states no
   // pins that shape).
   const { floorClause, llmsTxt, llmsFullTxt } = await import("../src/seo.js");
   assert.equal(floorClause(new Map()), "", "no floor, no clause");
-  assert.match(floorClause(new Map([[RH, 2000], [OP, 1500]])), /^on Robinhood Chain every call costs at least \$0\.002, the floor its 402 quotes; on Optimism every call costs at least \$0\.0015, the floor its 402 quotes$/, "each floored chain is named from the rails list");
+  assert.match(floorClause(new Map([[RH, 2000], [OP, 1500]])), /^on Robinhood Chain every call costs at least \$0\.002, the floor its 402 quotes; on OP Mainnet every call costs at least \$0\.0015, the floor its 402 quotes$/, "each floored chain is named from the rails list");
   const llms = llmsFullTxt("https://agent402.tools", {});
   assert.ok(!/every call costs at least/.test(llms), "llms-full.txt states no floor by default");
   for (const t of [llms, llmsTxt("https://agent402.tools", {})]) assert.ok(!/^- \[[^\]]+\]\([^)]+\): [A-Z.]+ \(`[^`]+`\).+$/m.test(t), "no llms.txt chain line carries a floor or premium clause");
@@ -158,7 +158,7 @@ await check("the premium map and clause derive from NETWORK_PRICE_PREMIUMS, by p
   const p = parseNetworkPremiums("eip155:10=0.001,eip155:4663=0.002,eip155:999999=0.5");
   assert.deepEqual(premiumUsdByNetworkName(p), { optimism: 0.001, robinhood: 0.002 }, "a chain no network is named for is left out");
   const clause = premiumClause(p);
-  assert.match(clause, /on Optimism every call quotes \$0\.001 above its list price/);
+  assert.match(clause, /on OP Mainnet every call quotes \$0\.001 above its list price/);
   assert.match(clause, /on Robinhood Chain every call quotes \$0\.002 above its list price/);
   const { readFileSync } = await import("node:fs");
   const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");

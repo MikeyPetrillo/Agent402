@@ -18,12 +18,12 @@ export const RAILS = [
   { name: "Base", asset: "USDC", caip2: "eip155:8453", chainId: 8453, primary: true },
   { name: "Solana", asset: "USDC", caip2: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" },
   { name: "Polygon", asset: "USDC", caip2: "eip155:137", chainId: 137 },
-  { name: "Arbitrum", asset: "USDC", caip2: "eip155:42161", chainId: 42161 },
+  { name: "Arbitrum One", key: "arbitrum", asset: "USDC", caip2: "eip155:42161", chainId: 42161 },
   { name: "Monad", asset: "USDC", caip2: "eip155:143", chainId: 143 },
   { name: "Celo", asset: "USDC", caip2: "eip155:42220", chainId: 42220 },
-  { name: "Avalanche", asset: "USDC", caip2: "eip155:43114", chainId: 43114 },
+  { name: "Avalanche C-Chain", key: "avalanche", asset: "USDC", caip2: "eip155:43114", chainId: 43114 },
   { name: "Sei", asset: "USDC", caip2: "eip155:1329", chainId: 1329 },
-  { name: "Optimism", asset: "USDC", caip2: "eip155:10", chainId: 10 },
+  { name: "OP Mainnet", key: "optimism", asset: "USDC", caip2: "eip155:10", chainId: 10 },
   { name: "Arc", asset: "USDC", caip2: "eip155:5042", chainId: 5042 },
   { name: "Ink", asset: "USDC", caip2: "eip155:57073", chainId: 57073 },
   { name: "Stellar", asset: "USDC", caip2: "stellar:pubnet" },
@@ -138,7 +138,10 @@ export const RAILS_NOTE =
 
 /** Short display key for a rail: "Robinhood Chain" -> "robinhood". Used for
  *  ?network= query params and CSS-class-safe identifiers. */
-export const railKey = (r) => r.name.replace(/ Chain$/, "").toLowerCase().replace(/\s+/g, "");
+// A rail's key (its page slug, network parameter and counter key) is fixed; a
+// rail whose display name is the network's full mark ("OP Mainnet") names
+// its key explicitly, so a display name never moves a route or a counter.
+export const railKey = (r) => r.key || r.name.replace(/ Chain$/, "").toLowerCase().replace(/\s+/g, "");
 
 /** Display name for a chain slug ("robinhood" -> "Robinhood Chain"): the
  *  rail's own name (listed or gated), Tempo (MPP, not an x402 rail), else the

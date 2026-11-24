@@ -53,12 +53,12 @@
 //
 // DEFAULT IS A DRY RUN. `--live` sends real money.
 //
-//   node scripts/payai-listing-pass.js                                  # payai / solana: measure, select, price
-//   node scripts/payai-listing-pass.js --registry payai --chain base    # payai / base
-//   node scripts/payai-listing-pass.js --registry bazaar --chain solana
-//   node scripts/payai-listing-pass.js --live --only hash,page-speed
-//   node scripts/payai-listing-pass.js --include-upstream --only dub    # quote one route
-//   node scripts/payai-listing-pass.js --live --include-upstream --max-spend 2 --out /tmp/pass.json
+//   node scripts/registry-listing-pass.js                                  # payai / solana: measure, select, price
+//   node scripts/registry-listing-pass.js --registry payai --chain base    # payai / base
+//   node scripts/registry-listing-pass.js --registry bazaar --chain solana
+//   node scripts/registry-listing-pass.js --live --only hash,page-speed
+//   node scripts/registry-listing-pass.js --include-upstream --only dub    # quote one route
+//   node scripts/registry-listing-pass.js --live --include-upstream --max-spend 2 --out /tmp/pass.json
 //
 // Flags: --registry payai|bazaar (default payai), --chain base|solana (default
 // solana), --max-spend USD (the ceiling on one run: the selection is cheapest
@@ -565,32 +565,32 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   const err = deps.error || ((m) => console.error(m));
   const opts = parseArgs(argv);
   const target = String(env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
-  try { assertOwnPaidTarget(target, "payai-listing-pass", { env, throwOnRefuse: true }); } catch (e) { err(e.message); return 2; }
+  try { assertOwnPaidTarget(target, "registry-listing-pass", { env, throwOnRefuse: true }); } catch (e) { err(e.message); return 2; }
   const chain = chainOf(opts.chain);
   const registry = opts.registry;
   const leg = `${registry} / ${chain?.name || opts.chain}`;
-  if (!REGISTRIES.includes(registry)) { err(`payai-listing-pass: unknown registry ${opts.registry} (bazaar or payai)`); return 2; }
-  if (!chain) { err(`payai-listing-pass: unknown chain ${opts.chain}`); return 2; }
-  if (!PAY_CHAINS.includes(chain.name)) { err(`payai-listing-pass: the pass pays on ${PAY_CHAINS.join(" or ")}, not ${chain.name}`); return 2; }
-  if (Number.isNaN(opts.maxSpendUsd)) { err("payai-listing-pass: --max-spend needs a non-negative USD amount"); return 2; }
-  if (Number.isNaN(opts.maxPriceUsd)) { err("payai-listing-pass: --max-price needs a positive USD amount"); return 2; }
-  if (Number.isNaN(opts.limit)) { err("payai-listing-pass: --limit needs a whole number of routes"); return 2; }
-  if (Number.isNaN(opts.rebuyAfterDays)) { err(`payai-listing-pass: --rebuy-after-days needs a number of days, at least ${DEFAULT_REBUY_AFTER_DAYS}`); return 2; }
-  if (opts.bought === true) { err("payai-listing-pass: --bought needs a directory"); return 2; }
-  if (opts.inputs === true) { err("payai-listing-pass: --inputs needs a file"); return 2; }
+  if (!REGISTRIES.includes(registry)) { err(`registry-listing-pass: unknown registry ${opts.registry} (bazaar or payai)`); return 2; }
+  if (!chain) { err(`registry-listing-pass: unknown chain ${opts.chain}`); return 2; }
+  if (!PAY_CHAINS.includes(chain.name)) { err(`registry-listing-pass: the pass pays on ${PAY_CHAINS.join(" or ")}, not ${chain.name}`); return 2; }
+  if (Number.isNaN(opts.maxSpendUsd)) { err("registry-listing-pass: --max-spend needs a non-negative USD amount"); return 2; }
+  if (Number.isNaN(opts.maxPriceUsd)) { err("registry-listing-pass: --max-price needs a positive USD amount"); return 2; }
+  if (Number.isNaN(opts.limit)) { err("registry-listing-pass: --limit needs a whole number of routes"); return 2; }
+  if (Number.isNaN(opts.rebuyAfterDays)) { err(`registry-listing-pass: --rebuy-after-days needs a number of days, at least ${DEFAULT_REBUY_AFTER_DAYS}`); return 2; }
+  if (opts.bought === true) { err("registry-listing-pass: --bought needs a directory"); return 2; }
+  if (opts.inputs === true) { err("registry-listing-pass: --inputs needs a file"); return 2; }
   let inputs = null;
   if (opts.inputs) {
     try { inputs = parseInputs(JSON.parse(readFileSync(opts.inputs, "utf8")), opts.inputs); }
-    catch (e) { err(`payai-listing-pass: unreadable --inputs: ${String(e?.message || e).slice(0, 200)}. Nothing spent.`); return 2; }
+    catch (e) { err(`registry-listing-pass: unreadable --inputs: ${String(e?.message || e).slice(0, 200)}. Nothing spent.`); return 2; }
   }
-  if (opts.live && !opts.bought) { err("payai-listing-pass: --live needs --bought DIR, the records of earlier runs (scripts/listing-pass-memory.js fetches them; an empty directory means none). Nothing spent."); return 2; }
+  if (opts.live && !opts.bought) { err("registry-listing-pass: --live needs --bought DIR, the records of earlier runs (scripts/listing-pass-memory.js fetches them; an empty directory means none). Nothing spent."); return 2; }
   // The purchase memory is read before anything else: a run that cannot read
   // it spends nothing.
   let memory = { bought: new Map(), files: 0, records: 0 };
   if (opts.bought) {
-    if (!existsSync(opts.bought) || !statSync(opts.bought).isDirectory()) { err(`payai-listing-pass: --bought ${opts.bought} is not a directory. Nothing spent.`); return 2; }
+    if (!existsSync(opts.bought) || !statSync(opts.bought).isDirectory()) { err(`registry-listing-pass: --bought ${opts.bought} is not a directory. Nothing spent.`); return 2; }
     try { memory = loadPurchaseMemory(opts.bought, { now: deps.now ? deps.now() : Date.now(), days: opts.rebuyAfterDays }); }
-    catch (e) { err(`payai-listing-pass: unreadable purchase record: ${String(e?.message || e).slice(0, 200)}. Nothing spent.`); return 2; }
+    catch (e) { err(`registry-listing-pass: unreadable purchase record: ${String(e?.message || e).slice(0, 200)}. Nothing spent.`); return 2; }
   }
   const token = String(env.AGENT402_OPERATOR_TOKEN || "").trim();
   const rawKey = String(env[keyEnvFor(chain.name)] || "").trim();
@@ -657,8 +657,8 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
 
   // The untagged Solana check (Bazaar) and every PayAI buy need the gate.
   const needsGate = registry === "payai" || chain.name === "solana";
-  if (needsGate && !token) { err(`payai-listing-pass: AGENT402_OPERATOR_TOKEN is required for ${leg} (the settle-via gate)`); return 2; }
-  if (!rawKey) { err(`payai-listing-pass: ${keyEnvFor(chain.name)} is required to pay on ${chain.name}`); return 2; }
+  if (needsGate && !token) { err(`registry-listing-pass: AGENT402_OPERATOR_TOKEN is required for ${leg} (the settle-via gate)`); return 2; }
+  if (!rawKey) { err(`registry-listing-pass: ${keyEnvFor(chain.name)} is required to pay on ${chain.name}`); return 2; }
   const tagHeaders = legHeaders(registry, token);
   const decode = (h) => { try { return JSON.parse(Buffer.from(h, "base64").toString("utf8")); } catch { return null; } };
 
@@ -669,18 +669,18 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     // route, else the cheapest list-priced route sold on Solana.
     const solRoutes = (rs) => rs.filter((r) => r.sells?.solana && !r.quoted && r.priceUsd > 0);
     const probe = solRoutes(plan.selected)[0] || solRoutes(before.routes).sort((a, b) => a.priceUsd - b.priceUsd)[0];
-    if (!probe) { err(`payai-listing-pass: no route sold on Solana to read the gate on; nothing spent`); return 2; }
+    if (!probe) { err(`registry-listing-pass: no route sold on Solana to read the gate on; nothing spent`); return 2; }
     // The example body goes along: a route prices its 402 from it.
     const { url, body } = await urlFor(probe);
     const read = async (headers) => { const r = await fetchImpl(url, { method: probe.method, headers: { Accept: "application/json", ...headers, ...jsonHeader(body) }, body, signal: AbortSignal.timeout(30_000) }); await r.text().catch(() => ""); return { status: r.status, pr: decode(r.headers.get("payment-required") || "") }; };
     const control = await read({});
     const tagged = await read(legHeaders("payai", token));
-    if (control.status !== 402 || tagged.status !== 402) { err(`payai-listing-pass: preflight expected two 402s on ${probe.path}, got ${control.status} and ${tagged.status}`); return 2; }
+    if (control.status !== 402 || tagged.status !== 402) { err(`registry-listing-pass: preflight expected two 402s on ${probe.path}, got ${control.status} and ${tagged.status}`); return 2; }
     const v = preferenceHonored(control.pr, tagged.pr, sol.caip2);
     if (!v.honored) {
       err(registry === "payai"
-        ? `payai-listing-pass: the settle-via preference is NOT honored on ${probe.path} (control feePayer ${v.controlFeePayer}, tagged ${v.taggedFeePayer}). Check AGENT402_OPERATOR_TOKEN and that the build carries the gate. Nothing spent.`
-        : `payai-listing-pass: cannot prove the untagged Solana signer is not PayAI's on ${probe.path} (control feePayer ${v.controlFeePayer}, tagged ${v.taggedFeePayer}); a Bazaar buy must settle at the first facilitator. Nothing spent.`);
+        ? `registry-listing-pass: the settle-via preference is NOT honored on ${probe.path} (control feePayer ${v.controlFeePayer}, tagged ${v.taggedFeePayer}). Check AGENT402_OPERATOR_TOKEN and that the build carries the gate. Nothing spent.`
+        : `registry-listing-pass: cannot prove the untagged Solana signer is not PayAI's on ${probe.path} (control feePayer ${v.controlFeePayer}, tagged ${v.taggedFeePayer}); a Bazaar buy must settle at the first facilitator. Nothing spent.`);
       return 2;
     }
     log(registry === "payai"
@@ -693,7 +693,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       const supUrl = `${String(env.PAYAI_FACILITATOR_URL || PAYAI_FACILITATOR_URL).replace(/\/+$/, "")}/supported`;
       let supported = null;
       try { const r = await fetchImpl(supUrl, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) }); supported = r.ok ? await r.json() : null; } catch { supported = null; }
-      if (!supportsExact(supported, chain.caip2)) { err(`payai-listing-pass: PayAI's /supported does not list exact v2 on ${chain.caip2}; a tagged buy would settle at the boot order. Nothing spent.`); return 2; }
+      if (!supportsExact(supported, chain.caip2)) { err(`registry-listing-pass: PayAI's /supported does not list exact v2 on ${chain.caip2}; a tagged buy would settle at the boot order. Nothing spent.`); return 2; }
       log(`preflight: PayAI lists exact v2 on ${chain.caip2}; tagged buys there settle at PayAI`);
     }
   } else {
@@ -820,5 +820,5 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().then((code) => process.exit(code), (e) => { console.error(`payai-listing-pass: ${e?.message || e}`); process.exit(2); });
+  main().then((code) => process.exit(code), (e) => { console.error(`registry-listing-pass: ${e?.message || e}`); process.exit(2); });
 }

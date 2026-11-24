@@ -488,13 +488,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // (mcp/networks.js, every rail since 0.13.25, pinned by test-legal-claims.js);
   // a CAIP-2 id works on every published version. Arc is shown by its CAIP-2
   // id so the setup line works on versions before 0.13.25 too.
-  const NPM_EVM_PRESETS = { base: "Base", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", robinhood: "Robinhood Chain", arc: "Arc", ink: "Ink" };
-  const SETUP_NAMED = ["Base", "Polygon", "Arbitrum", "Robinhood Chain", "Arc"];
+  const NPM_EVM_PRESETS = { base: "Base", polygon: "Polygon", arbitrum: "Arbitrum One", monad: "Monad", celo: "Celo", avalanche: "Avalanche C-Chain", sei: "Sei", optimism: "OP Mainnet", robinhood: "Robinhood Chain", arc: "Arc", ink: "Ink" };
+  const SETUP_NAMED = ["Base", "Polygon", "Arbitrum One", "Robinhood Chain", "Arc"];
   const presetOf = (name) => Object.keys(NPM_EVM_PRESETS).find((k) => NPM_EVM_PRESETS[k] === name);
   const otherEvm = RAILS.filter((r) => r.chainId && !SETUP_NAMED.includes(r.name)).map((r) => (presetOf(r.name) ? `${presetOf(r.name)} (${r.caip2})` : `${r.name} ${r.caip2}`));
   // The variables a reader sets on the npm server; the wallet warning is its
   // own sentence after the command (NPM_WALLET_WARNING).
-  const npmEvmSetup = `AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by name or CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
+  const npmEvmSetup = `AGENT_KEY=0x<private key> for EVM (USDC on Base, Polygon or Arbitrum One; USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood; USDC on Arc via AGENT402_NETWORKS=eip155:5042${otherEvm.length ? `; any other EVM rail by name or CAIP-2 id in AGENT402_NETWORKS: ${otherEvm.join(", ")}` : ""})`;
   const NPM_WALLET_WARNING = "Use a new wallet holding only a few dollars of USDC, never your main wallet.";
   // MPP start-here set (src/mpp-flagship.js) as served by this connector's
   // catalog, prices read from it. Surfaced in payment.info.

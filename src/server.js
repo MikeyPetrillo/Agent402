@@ -5102,7 +5102,7 @@ app.get(`${RECEIPT_FETCH_PATH}/:key`, async (req, res) => {
   return res.json({ receipt: jws, header: RECEIPT_HEADER, keys: `${BASE_URL}${RECEIPT_KEYS_PATH}`, verify: `${BASE_URL}${RECEIPT_VERIFY_PATH}` });
 });
 app.get("/.well-known/glama.json", (_req, res) => {
-  const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
+  const email = process.env.GLAMA_MAINTAINER_EMAIL || "help@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
     $schema: "https://glama.ai/mcp/schemas/connector.json",
     maintainers: [{ email }],

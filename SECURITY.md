@@ -26,7 +26,7 @@ with legal action. You can expect an acknowledgement within two business days; f
 - The `agent402-mcp` npm package (especially the spend-control enforcement)
 - The `agent402-client` buyer SDK and the `agent402-tollbooth` pay-per-crawl gate
 
-Out of scope: the x402 protocol itself, the Coinbase facilitator, Base/USDC
+Out of scope: the x402 protocol itself, the x402 facilitators we settle through, Base/USDC
 contracts, and volumetric denial-of-service.
 
 ## Controls on the code
