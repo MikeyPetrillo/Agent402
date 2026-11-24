@@ -214,12 +214,13 @@ for (const e of TTS_BACKUP_ENTRIES) {
 //      live, and a speech one still serves every voice its map and its list
 //      name. A speech addition's private row covers its dearest live endpoint
 //      per character, as every other speech row does. A transcription
-//      addition's row is NOT compared with the listing here: the listed unit
-//      differs by provider and is not established for these models, so a
-//      model is switched on (NAMED_AUDIO_MODELS) only after a supervised paid
-//      call measures what one audio minute bills.
+//      addition's listed unit differs by provider: where a supervised paid
+//      call has measured it (`listedPer`), its per-minute row covers the
+//      dearest live endpoint in that unit; a model with no measured unit is
+//      not compared, and is switched on (NAMED_AUDIO_MODELS) only after such a
+//      call.
 {
-  const { SPEECH_ADDITIONS, STT_ADDITIONS } = await import("../src/speech-additions.js");
+  const { SPEECH_ADDITIONS, STT_ADDITIONS, LISTED_UNIT_MINUTES } = await import("../src/speech-additions.js");
   const sttLive = (await (await fetch("https://openrouter.ai/api/v1/models?output_modalities=transcription", { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null))?.data || [];
   for (const a of SPEECH_ADDITIONS) {
     const m = speech.find((x) => x.id === a.id);
@@ -232,7 +233,15 @@ for (const e of TTS_BACKUP_ENTRIES) {
     const live = prices.length ? Math.max(...prices) : null;
     ok(live !== null && Number.isFinite(row) && row >= live - 1e-12, brief(a.id, `${a.id}: private row ${row} covers the dearest endpoint ${live}/char`));
   }
-  for (const a of STT_ADDITIONS) ok(sttLive.some((x) => x.id === a.id), `named transcription model ${a.id} is live`);
+  for (const a of STT_ADDITIONS) {
+    ok(sttLive.some((x) => x.id === a.id), `named transcription model ${a.id} is live`);
+    if (!a.listedPer) continue;
+    const perUnit = LISTED_UNIT_MINUTES[a.listedPer];
+    const j = await (await fetch(`https://openrouter.ai/api/v1/models/${a.id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null);
+    const prices = (j?.data?.endpoints || []).map((e) => { const r = Number(e?.pricing?.prompt); const d = Number(e?.pricing?.discount) || 0; return d > 0 && d < 1 ? r / (1 - d) : r; }).filter(Number.isFinite);
+    const live = prices.length ? Math.max(...prices) : null, row = upstreamCosts().sttPerMinute[a.id];
+    ok(Number.isFinite(perUnit) && live !== null && Number.isFinite(row) && row * perUnit >= live - 1e-12, brief(a.id, `${a.id}: private per-minute row ${row} covers the dearest endpoint ${live}/${a.listedPer}`));
+  }
 }
 // 1e. Our audio data policy (src/openrouter-audio-policy.js) sends zdr:true to
 //     the models in AUDIO_ZDR_MODELS. That is only safe while EVERY endpoint
