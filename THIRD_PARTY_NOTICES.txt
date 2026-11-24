@@ -747,6 +747,39 @@ These bundle no third-party code. Their dependencies are installed by the user's
   agent402-model-provider (MIT)
     dependencies: none
     peer dependencies: @x402/evm >=2.20.0 <3, @x402/fetch >=2.20.0 <3, viem >=2.48.11 <3
+  agent402-agentkit (MIT)
+    dependencies: agent402-action-provider ^0.3.0
+    peer dependencies: none
+  agent402-ai-sdk (MIT)
+    dependencies: agent402-stream-tools ^0.3.0
+    peer dependencies: none
+  agent402-anthropic-tools (MIT)
+    dependencies: agent402-tool-use ^0.3.0
+    peer dependencies: none
+  agent402-google-adk (MIT)
+    dependencies: agent402-dev-kit-tools ^0.2.0
+    peer dependencies: none
+  agent402-langchain (MIT)
+    dependencies: agent402-structured-tools ^0.3.0
+    peer dependencies: none
+  agent402-llamaindex (MIT)
+    dependencies: agent402-function-tools ^0.3.0
+    peer dependencies: none
+  agent402-openai-agents (MIT)
+    dependencies: agent402-runner-tools ^0.2.0
+    peer dependencies: none
+  agent402-openai-tools (MIT)
+    dependencies: agent402-function-calling ^0.3.0
+    peer dependencies: none
+  agent402-openclaw (MIT)
+    dependencies: agent402-model-provider ^0.7.0
+    peer dependencies: none
+  agent402-strands (MIT)
+    dependencies: agent402-agent-loop-tools ^0.3.0
+    peer dependencies: none
+  elizaos-plugin-agent402 (MIT)
+    dependencies: agent402-actions-plugin ^0.4.0
+    peer dependencies: none
   agent402-tollbooth (MIT)
     dependencies: express ^5.0.0
     peer dependencies: @coinbase/x402 >=2.0.0 <3, @x402/core >=2.0.0 <3, @x402/evm >=2.0.0 <3, @x402/express >=2.0.0 <3
@@ -758,6 +791,9 @@ These bundle no third-party code. Their dependencies are installed by the user's
   agent402-structured-tools (adapters/langchain-py/)
     dependencies: requests>=2.25
     optional dependencies: langchain: langchain-core>=0.2, pydantic>=2
+  agent402-langchain (renamed/agent402-langchain-py/)
+    dependencies: agent402-structured-tools>=0.2.0,<0.3
+    optional dependencies: langchain: 
 
 Outside npm
 ===========
