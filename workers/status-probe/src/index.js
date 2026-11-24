@@ -631,6 +631,23 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // noticing (2026-10-06: 44 debts to one buyer, found by reading the
     // ledger). owed (any buyer's debt past a short grace), aging and stuck
     // page; ok clears; unknown or absent does neither.
+    title: "Scheduled check needs review: sanctions-report",
+    // A sanctions event that needs a report (sanctionsReport on
+    // /api/gateway-status, src/sanctions-events.js): due pages until an
+    // operator marks it filed; clear closes; unknown or absent does neither.
+    verdict: ({ gateway: b }) => {
+      const w = b.sanctionsReport?.status;
+      if (w === "due") return "bad";
+      return w === "clear" ? "good" : "quiet";
+    },
+    body: () => "/api/gateway-status reports sanctionsReport.status=due: an event in the private sanctions store needs a report within ten business days. Read /__operator/sanctions-events.json, file it as the private procedure says, then mark it filed (POST /__operator/sanctions-events/filed). Auto-closes when the word reads clear.",
+  },
+  {
+    // Money we owe a buyer (refundsOwed on /api/gateway-status). The refund
+    // job is dispatched by hand, so a debt can sit unpaid with nothing else
+    // noticing (2026-10-06: 44 debts to one buyer, found by reading the
+    // ledger). owed (any buyer's debt past a short grace), aging and stuck
+    // page; ok clears; unknown or absent does neither.
     title: "Scheduled check needs review: refunds",
     verdict: ({ gateway: b }) => {
       const w = b.refundsOwed?.status;

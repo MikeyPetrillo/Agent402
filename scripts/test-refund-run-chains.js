@@ -136,6 +136,22 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
   ok(out.ok === 2 && calls.send.join(",") === "1,3", "and the other refunds in the run are paid");
   const src = readFileSync(fileURLToPath(new URL("./refund-run.js", import.meta.url)), "utf8");
   ok(/screen: async \(row\) => \{\s*const \{ loadSanctions, assertPayoutScreened \} = await import\("\.\.\/src\/tools\/sanctions-kit\.js"\);\s*await loadSanctions\(\);\s*await assertPayoutScreened\(row\.payer/.test(src), "the live run screens every recipient against a freshly loaded list");
+  ok(/assertPayoutScreened\(row\.payer, \{ label: tag\(row\.payer\), record: false \}\)/.test(src) && /block: \(row\) => blockListedRefund\(row\)/.test(src), "the live run reports a listed payee through blockListedRefund, not a store of its own");
+  // A listed payee with a block step: the row is held as blocked property
+  // (never claimed or sent), counted, and the run goes on.
+  {
+    const l2 = fakeLedger(ROWS());
+    const s2 = stubDeps(l2);
+    const blockedIds = [];
+    const lines2 = [];
+    const out2 = await executeRefunds(planRefunds(ROWS(), planOptions).send, { ...s2.deps, screen, block: async (row) => { blockedIds.push(row.id); return true; }, log: { log: () => {}, warn: (m) => lines2.push(String(m)), error: () => {} } });
+    ok(blockedIds.join(",") === "2" && out2.blocked === 1 && !s2.calls.send.includes(2) && !s2.calls.order.includes("claim:2") && lines2.some((l) => /BLOCK #2 .*held as blocked property/.test(l)), "a listed payee is held as blocked: refused with the reason, never claimed or sent");
+    const l3 = fakeLedger(ROWS());
+    const s3 = stubDeps(l3);
+    const lines3 = [];
+    const out3 = await executeRefunds(planRefunds(ROWS(), planOptions).send, { ...s3.deps, screen, block: async () => false, log: { log: () => {}, warn: (m) => lines3.push(String(m)), error: () => {} } });
+    ok(out3.blocked === 0 && l3.status.get(2) === "owed" && lines3.some((l) => /HOLD\s+#2/.test(l)), "a block that did not land leaves the row owed and held");
+  }
   const sol = readFileSync(fileURLToPath(new URL("./solana-refund-send.js", import.meta.url)), "utf8");
   ok(sol.indexOf("assertPayoutScreened(TO)") > 0 && sol.indexOf("assertPayoutScreened(TO)") < sol.indexOf("SOLANA_BURNER_KEY ||"), "the Solana refund sender screens its recipient before it reads a key");
 }

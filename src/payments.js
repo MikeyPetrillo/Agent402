@@ -61,6 +61,7 @@ import { hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf, noteSettleAsked } from "./settle-demotion.js";
 import { screenStellarBeforeSettle } from "./own-settler-screen.js";
 import { isComplianceSettleRefusal, isOwnScreenRefusal, noteComplianceRefusal, complianceRefusedResult } from "./settle-compliance.js";
+import { recordSanctionsEvent } from "./sanctions-events.js";
 import { withSettleDeadline, noteSettleContext, settleDeadlineStopOf, noteCappedRequest } from "./settle-deadlines.js";
 import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
@@ -4829,6 +4830,11 @@ function complianceStop(ctx, refusal, via) {
   const network = ctx?.requirements?.network;
   if (!own) noteComplianceRefusal({ network, via });
   const payer = typeof refusal?.payer === "string" ? refusal.payer : ctx?.paymentPayload?.payload?.authorization?.from;
+  // Kept in full for the records rule and the rejected-transaction report
+  // (src/sanctions-events.js); never awaited.
+  try {
+    recordSanctionsEvent({ kind: own ? "own-screen-refusal" : "provider-refusal", address: typeof payer === "string" ? payer : null, rail: "x402", network: network ?? null, amount: ctx?.requirements?.amount ?? null, asset: ctx?.requirements?.asset ?? null, route: typeof ctx?.requirements?.resource === "string" ? ctx.requirements.resource : null, via: typeof via === "string" ? via : null }).catch(() => {});
+  } catch { /* recording never changes the settle's end */ }
   return { recovered: true, result: complianceRefusedResult({ network, payer, own }) };
 }
 

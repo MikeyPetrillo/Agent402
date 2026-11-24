@@ -622,6 +622,8 @@ import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMo
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
 import { settleComplianceView } from "./settle-compliance.js";
+import { sanctionedRegionsMiddleware, sanctionedRegionsView } from "./sanctioned-regions.js";
+import { recordSanctionsEvent, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
 import { relayPayerScreenView } from "./payer-screen-rails.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
@@ -3090,6 +3092,25 @@ app.use(paidNoStoreMiddleware());
 // email-link routes under /followups and /alerts are registered early; the
 // PostHog proxy sets its own nosniff as well).
 app.use(securityHeaders());
+// Comprehensively sanctioned regions (src/sanctioned-regions.js): answered 451
+// here, before every payment gate, the idempotency cache and the async-job
+// replay, so a payment from one is never verified or settled. The location is
+// read only from Cloudflare's headers on a request the CDN resolver above
+// proved came through Cloudflare (req.viaCdn). A refused request that carried
+// a payment is kept in the sanctions events store as a rejected transaction.
+app.use(sanctionedRegionsMiddleware({
+  record: ({ req, country, region }) => {
+    let network = null, amount = null, asset = null;
+    try {
+      const p = decodePaymentHeader(paymentHeaderOf(req));
+      const acc = p?.accepted || p;
+      network = acc?.network ?? null; amount = acc?.amount ?? acc?.maxAmountRequired ?? null; asset = acc?.asset ?? null;
+    } catch { /* an unreadable payment is still recorded */ }
+    return recordSanctionsEvent({ kind: "geo-payment", address: payerFromRequest(req), rail: req.headers?.authorization ? "mpp" : "x402", network, amount, asset, route: `${req.method} ${req.path}`, country, region, ip: req.ip });
+  },
+}));
+// The report word's first read of the database (file mode reads at first use).
+{ const t = setTimeout(() => { refreshSanctionsEvents().catch(() => {}); }, 2_000); t.unref?.(); }
 // A credits key in a URL is refused before anything reads or records the URL
 // (src/credits-key-url.js).
 app.use(refuseCreditsKeyInUrl());
@@ -4721,6 +4742,10 @@ app.get("/api/gateway-status", async (req, res) => {
     ...(sanctionsScreenStarted()
       ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView(), tempoRelay: relayPayerScreenView(), settleCompliance: settleComplianceView(), ...(_mppSubs ? { mppSubscriptions: _mppSubs.payerScreenView() } : {}) } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
       : {}),
+    // Sanctions reports (src/sanctions-events.js): `due` while a rejected or
+    // blocked-property report is unfiled; the operator view adds the regional
+    // block's counts. The events themselves are /__operator/sanctions-events.json.
+    sanctionsReport: (() => { try { const status = sanctionsReportStatus(); return full ? { status, geo: sanctionedRegionsView() } : { status }; } catch { return { status: "unknown" }; } })(),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
     // Daily MPP reconciliation (src/mpp-reconcile.js): status words + counts,
@@ -8100,6 +8125,38 @@ app.get("/__operator/seller-registrations.json", (req, res) => {
     registrations: rows,
   });
 });
+// The sanctions events store (src/sanctions-events.js): every screen hit,
+// compliance refusal, blocked refund and geo-refused payment in full, for the
+// records rule and the ten-business-day reports. Private: operator token only.
+app.get("/__operator/sanctions-events.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorLedgerLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  try { res.json({ ...(await sanctionsEventsOperatorView()), geo: sanctionedRegionsView() }); }
+  catch (e) { res.status(503).json({ error: `the sanctions events store could not be read (${String(e?.message || e).slice(0, 120)})` }); }
+});
+// Mark reportable events filed: { ids: [...] } or { all: true }, with the
+// filing's confirmation as `reference`. The status word clears when none is left.
+app.post("/__operator/sanctions-events/filed", express.json({ limit: "16kb" }), async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorLedgerLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  const { ids, all, reference } = req.body || {};
+  try { res.json({ ok: true, ...(await markSanctionsEventsFiled({ ids, all: all === true, reference })), status: sanctionsReportStatus() }); }
+  catch (e) { res.status(e?.statusCode === 400 ? 400 : 503).json({ error: String(e?.message || e).slice(0, 200) }); }
+});
+// Record an event the refund runner found (a refund owed to a listed wallet,
+// held as blocked property). The runner holds no database credential.
+app.post("/__operator/sanctions-events", express.json({ limit: "16kb" }), async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorLedgerLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  const b = req.body || {};
+  if (!["blocked-refund", "payout-refused"].includes(b.kind)) return res.status(400).json({ error: 'kind must be "blocked-refund" or "payout-refused"' });
+  const row = await recordSanctionsEvent({ kind: b.kind, address: b.address, network: b.network, amountUsd: b.amountUsd, refundId: b.refundId, route: b.route, rail: b.rail, detail: b.detail, via: "refund-run" });
+  if (!row) return res.status(503).json({ error: "the sanctions events store did not take the event" });
+  res.json({ ok: true, id: row.id, dueBy: row.dueBy });
+});
 app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorLedgerLimited(req, res)) return;   // see refunds.json above
@@ -8111,13 +8168,15 @@ app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), async (r
   // caller can win a given row. `release` puts a row stuck in `sending` back
   // to owed, after a human has checked the chain and found nothing was sent.
   // `paid` needs the outbound tx; `void` and `release` need a note.
-  if (!["paid", "void", "claim", "release"].includes(action)) return res.status(400).json({ error: 'action must be "claim", "release" (requires note), "paid" (requires tx) or "void" (requires note)' });
+  // `block` holds a row whose payee is on a sanctions list as blocked
+  // property (never sent, never written off; requires a note).
+  if (!["paid", "void", "claim", "release", "block"].includes(action)) return res.status(400).json({ error: 'action must be "claim", "release" (requires note), "paid" (requires tx), "void" (requires note) or "block" (requires note)' });
   // 409 is a state conflict and nothing else (the runner reads it as "another
   // run has this row"); a store that did not confirm the write is a 503.
   const { refundRowUpdate } = await import("./refund-ledger.js");
   const verdict = await refundRowUpdate({ id: rowId, action, tx, note });
   res.set("Cache-Control", "private, no-store");
-  if (verdict === "invalid") return res.status(400).json({ error: "evidence missing: paid needs the outbound tx, void and release need a note" });
+  if (verdict === "invalid") return res.status(400).json({ error: "evidence missing: paid needs the outbound tx, void, release and block need a note" });
   if (verdict === "store_failed") return res.status(503).json({ error: "the refund ledger did not confirm this write; read the row (refunds.json) before retrying, a write that timed out may have landed" });
   if (verdict !== "updated") return res.status(409).json({ error: "not updated - row missing, already resolved, claimed by another run, or not sending (release)" });
   res.json({ ok: true, id: rowId, action, totals: refundTotals() });

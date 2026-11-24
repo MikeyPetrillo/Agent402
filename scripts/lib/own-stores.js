@@ -40,6 +40,7 @@ export function ownStoreEnv(label = "server") {
     DISCOVERY_REFUSALS_FILE: join(dir, "discovery-refusals.json"),
     // Price webhook registrations, kept prices and queued deliveries (src/price-webhooks.js).
     PRICE_WEBHOOKS_FILE: join(dir, "price-webhooks.json"),
+    SANCTIONS_EVENTS_FILE: join(dir, "sanctions-events.jsonl"),
     // The entity pages kept as thin (src/programmatic-pages.js).
     PROGRAMMATIC_THIN_FILE: join(dir, "programmatic-thin.json"),
     // The Solana activity scans' state and the per-caller call days

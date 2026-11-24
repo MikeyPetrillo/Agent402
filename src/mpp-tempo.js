@@ -52,6 +52,7 @@ import { sharedClaimRequired } from "./replay-topology.js";
 import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
 import { drainSignal } from "./drain-abort.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne, TEMPO_SCREEN_REFUSED_DETAIL, TEMPO_SCREEN_REFUSED_HINT } from "./sanctions-screen.js";
+import { recordSanctionsEvent } from "./sanctions-events.js";
 import { relayPayerScreen } from "./payer-screen-rails.js";
 import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
@@ -1478,6 +1479,7 @@ function screenTempoParties(authorizationHeader, phase, extra = []) {
   const v = screenAddresses(parties);
   if (v.ok) return null;
   if (v.reason === "listed") {
+    try { recordSanctionsEvent({ kind: "screen-hit", address: v.address, rail: "tempo", detail: `Tempo payment party, ${phase}` }).catch(() => {}); } catch { /* never changes the refusal */ }
     return { ok: false, cls: "screen-rejected", error: `screen ${phase}: party ${maskOne(v.address)} is on the OFAC SDN list (${parties.length} parties screened)`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };
   }
   return { ok: false, cls: "screen-unavailable", error: `screen ${phase}: no list loaded (status ${sanctionsScreenStatus()})`, reason: "payment-party screening unavailable", requestId: null, relayMessage: null };
@@ -1492,6 +1494,7 @@ async function screenTempoFunding(authorizationHeader, phase, extra = []) {
   let v;
   try { v = await screenFunding(payers); } catch { v = { ok: true }; }
   if (v.ok) return null;
+  try { recordSanctionsEvent({ kind: "screen-hit", address: v.payer || null, rail: "tempo", detail: `Tempo payer funded by a listed address${v.funder ? ` ${v.funder}` : ""}, ${phase}` }).catch(() => {}); } catch { /* never changes the refusal */ }
   const amount = Number.isFinite(v.listedUsd) ? ` $${v.listedUsd.toFixed(6)} in ${v.count} transfer(s), ${(v.share * 100).toFixed(2)}% of inflows read` : "";
   return { ok: false, cls: "screen-rejected", error: `screen ${phase}: funded by a listed address (payer ${maskOne(v.payer)}, funder ${v.funder ? maskOne(v.funder) : "cached verdict"}${amount})`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };
 }
