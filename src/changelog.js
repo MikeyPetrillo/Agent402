@@ -59,7 +59,7 @@ const ENTRIES = [
     date: "2026-11-24",
     title: "Source terms, neutral names, MCP flagships, package names",
     items: [
-      "Tools: fred-series and fred-release-observations are retired and answer 410 naming us-macro-series, which takes the same inputs and gives the same answer; the macro-snapshot skill pack replaces fred-snapshot, whose route answers 410 naming it. The tools serving New York Fed rates are not offered for resale through a third party, and say why.",
+      "Tools: fred-series and fred-release-observations are retired and answer 410 naming us-macro-series and us-macro-series. us-macro-series takes the same inputs and gives the same answer; the macro-snapshot skill pack replaces fred-snapshot, whose route answers 410 naming it. The tools serving New York Fed rates are not offered for resale through a third party, and say why.",
       "Tools: market-calendar compiles its calendars from public sources (NYSE Rules 7.2 and 7.34 as filed with the SEC, GOV.UK bank holidays, the Cabinet Office national holidays, DATA.GOV.HK and the exchange_calendars rules) and every answer names them, carries their credits and says the facts are not exchange data. The HKEX day has its 12:00 to 13:00 break.",
       "Tools: settlement-calendar cites each rail's rule to public sources and carries their credits; CHAPS answers no longer state operating hours.",
       "Tools: fx-rate, fx-historical, fx-timeseries and fx-dashboard say before payment and in every answer that the ECB reference rates are available free of charge at ecb.europa.eu, and each answer says whether its rate is the ECB's own or computed from it (`rateBasis`).",
