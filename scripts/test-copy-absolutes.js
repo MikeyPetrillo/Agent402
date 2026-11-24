@@ -1079,7 +1079,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "src/plan-sketch.js": "4cadea04b304",
     "src/prepayment-refusal.js": "160294f17ecd",
     "src/push-refusal-body.js": "8063db9fb6ca",
-    "src/referral-gate.js": "aa2c21786af1",
+    "src/referral-gate.js": "0ece5181eede",
     "src/refund-lookup.js": "af094b08a40a",
     "src/returning-wallet.js": "608dd5b31b28",
     "src/sanctions-screen.js": "b85694d37ee4",
