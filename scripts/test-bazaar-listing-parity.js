@@ -20,7 +20,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -150,7 +150,16 @@ if (!ref) {
   const baseDir = mkdtempSync(join(tmpdir(), "a402-listing-parity-"));
   try {
     execFileSync("sh", ["-c", `git archive ${ref} | tar -x -C "${baseDir}"`], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
-    if (existsSync(join(ROOT, "node_modules"))) symlinkSync(join(ROOT, "node_modules"), join(baseDir, "node_modules"), "dir");
+    // The base boots on its own dependencies: the head's node_modules only when
+    // both lockfiles are the same, else a clean install of the base lockfile
+    // (a dependency move can drop an export the base imports, so the head's
+    // packages would not boot the base at all).
+    const sameLock = existsSync(join(baseDir, "package-lock.json")) && readFileSync(join(baseDir, "package-lock.json"), "utf8") === readFileSync(join(ROOT, "package-lock.json"), "utf8");
+    if (sameLock && existsSync(join(ROOT, "node_modules"))) symlinkSync(join(ROOT, "node_modules"), join(baseDir, "node_modules"), "dir");
+    else {
+      console.log("base lockfile differs from the head's: installing the base's dependencies");
+      execFileSync("npm", ["ci", "--no-audit", "--no-fund"], { cwd: baseDir, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" } });
+    }
     console.log(`base ${ref.slice(0, 9)}; head ${git("rev-parse", "--short", "HEAD")} (working tree)`);
     const then = await dump(baseDir, "base");
     const now = await dump(ROOT, "head");
