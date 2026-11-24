@@ -2550,11 +2550,14 @@ jobs:
           # source: a bytecode edit that leaves the .sol alone would pass the
           # source-hash pin, so recompile with the pinned solc and diff the blob.
           # The install prints its own output and is retried once, so a registry
-          # hiccup names itself in the log instead of a silent exit 1.
+          # hiccup names itself in the log instead of a silent exit 1. The
+          # compiler goes in a directory of its own (SOLC_DIR), so the install
+          # never resolves the example's own dependencies from the registry.
           ( cd examples/agentkit-data-to-deploy
-            install_solc() { npm i --no-save --ignore-scripts --no-audit --no-fund solc@0.8.28; }
+            export SOLC_DIR="$RUNNER_TEMP/solc-0.8.28"; mkdir -p "$SOLC_DIR"
+            install_solc() { npm i --prefix "$SOLC_DIR" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund solc@0.8.28; }
             install_solc || { rc=$?; echo "::warning::solc@0.8.28 install failed (exit $rc); retrying once"; sleep 5; install_solc; }
-            node contracts/compile.js && rm -rf node_modules )
+            node contracts/compile.js )
           git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/eliza/test.js
           # Paid calls in the zero-dependency adapters and the OpenClaw proxy refuse redirects (offline, loopback)
