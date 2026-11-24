@@ -106,6 +106,8 @@ t node scripts/test-chain-block-time.js
 t node scripts/test-payai-credit-watch.js
 # Heartbeat security advisory triage check: script vs a stub GitHub API, and the step's shell with gh stubbed (offline)
 t node scripts/test-advisory-triage.js
+# The heartbeat's holiday source sponsorship read: active, not active and unreadable, the token never echoed, the workflow step wired (offline)
+t node scripts/test-holiday-sponsorship-check.js
 # Heartbeat 7-day MPP reconciliation window step, run with curl/gh stubbed (offline)
 t node scripts/test-heartbeat-mpp-window.js
 t node scripts/test-revenue-fresh-recent.js

@@ -58,6 +58,8 @@ export const PREVIOUS_TITLES = Object.freeze({
   "gateway-credits-read": ["Gateway balance UNREADABLE (OpenRouter)"],
   "gateway-settlements": ["Gateway pending settlements need attention"],
   "history-reads": ["Solana history reads FAILING on every lane"],
+  "holiday-source-sponsorship": [],
+  "holiday-source-sponsorship-read": [],
   "index-price-sync": ["402 Index price sync FAILING"],
   "index-price-writeback": ["402 Index listing written back at an old price"],
   "index-availability": [],
