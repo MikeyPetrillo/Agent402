@@ -185,7 +185,7 @@ export const HUMAN_PRODUCTS = {
   "insider-report": { label: "Insider flow report (Form 4)", price: 200, kind: "insider", slug: "insider-report", inputField: "ticker", inputLabel: "a US stock ticker" },
   "market-brief": { label: "Market / competitor brief", price: 200, kind: "research", slug: "market-brief", inputField: "query", inputLabel: "a market, category or company" },
   "ticker-pack": { label: "Ticker pack: dossier, insider flow and holders", price: 400, kind: "ticker", slug: "ticker-pack", inputField: "ticker", inputLabel: "a US stock ticker" },
-  "linkedin-article": { label: "LinkedIn article, ready to publish", price: 400, kind: "linkedin", slug: "linkedin-article", inputField: "topic", inputLabel: "the topic of your article" },
+  "linkedin-article": { label: "Professional article, ready to publish", price: 400, kind: "linkedin", slug: "linkedin-article", inputField: "topic", inputLabel: "the topic of your article" },
 };
 
 // Applied at module load: each product's card price comes from its agent tier,

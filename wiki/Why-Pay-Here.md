@@ -35,7 +35,7 @@ Proof-of-work pays for the pure-CPU tools, cards over MPP pay any route priced a
 
 ## 05 / Deliverables - Finished work, ready to use.
 
-Company dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix. Monitors check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days; past that a change arrives as an alert.
+Company dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a professional article package, grounded in live sources, most with a downloadable data appendix. Monitors check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days; past that a change arrives as an alert.
 
 - Report products: https://agent402.tools/reports
 - Monitors: https://agent402.tools/monitors

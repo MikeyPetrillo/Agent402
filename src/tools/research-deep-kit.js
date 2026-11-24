@@ -314,28 +314,28 @@ const OUT_EXAMPLE = {
 export const RESEARCH_DEEP_TOOLS = [
   {
     route: "POST /v1/research", name: "Deep research report (grounded, cited)", slug: "research", category: "llm", price: RESEARCH_TIERS["research"].price,
-    description: "Hand over a whole research question and get one cited report back. The gateway plans sub-questions, runs multiple live web searches, reranks the sources by relevance, and synthesizes a ~1,500-word report with inline [n] citations and a source list - one payment, one outcome: one call returns one finished report. Payable in USDC (x402/MPP) or by card over MPP (card charges start at $0.50; this clears it). Not cached (the web moves).",
+    description: "Hand over a whole research question and get one cited report back. The gateway plans sub-questions, runs multiple live web searches, reranks the sources by relevance, and synthesizes a ~1,500-word report with inline [n] citations and a source list - one payment, one outcome: one call returns one finished report. Payable in USDC (x402/MPP) or by card over MPP (card charges start at $0.50; this clears it). Not cached (the web moves). Information, not investment advice.",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeResearchHandler("research"),
   },
   {
     route: "POST /v1/research/pro", name: "Deep research report - PRO (premium synthesis)", slug: "research-pro", category: "llm", price: RESEARCH_TIERS["research-pro"].price,
-    description: "The deeper research tier: more sub-questions, more grounded searches, wider reranked source set, and a premium (Claude Opus class) synthesis into a ~2,200-word cited report with structured findings. For questions worth a real dossier. USDC or card (Stripe). Not cached.",
+    description: "The deeper research tier: more sub-questions, more grounded searches, wider reranked source set, and a premium (Claude Opus class) synthesis into a ~2,200-word cited report with structured findings. For questions worth a real dossier. USDC or card (Stripe). Not cached. Information, not investment advice.",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "research-pro", synthesis_model: "anthropic/claude-opus-5" } } } },
     handler: makeResearchHandler("research-pro"),
   },
   {
     route: "POST /v1/research/max", name: "Deep research report - MAX (exhaustive)", slug: "research-max", category: "llm", price: RESEARCH_TIERS["research-max"].price,
-    description: "The exhaustive tier: up to a dozen sub-questions and grounded searches, the widest reranked source set, premium synthesis into a ~2,800-word cited report with a full source table. Our most thorough single-call research report. USDC or card (Stripe). Not cached.",
+    description: "The exhaustive tier: up to a dozen sub-questions and grounded searches, the widest reranked source set, premium synthesis into a ~2,800-word cited report with a full source table. Our most thorough single-call research report. USDC or card (Stripe). Not cached. Information, not investment advice.",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "research-max", synthesis_model: "anthropic/claude-opus-5" } } } },
     handler: makeResearchHandler("research-max"),
   },
   {
     route: "POST /v1/research/market-brief", name: "Market / competitor brief (grounded)", slug: "market-brief", category: "llm", price: RESEARCH_TIERS["market-brief"].price,
-    description: "Name a market, category or company and get one cited, model-backed MARKET / COMPETITOR BRIEF: how the market is defined and sized, the key players and what each offers, pricing, recent moves, how they differ, risks and a bottom line - every claim from live web research with citations, nothing from memory. The research pipeline with a competitive-intelligence plan. USDC (x402/MPP) or card (Stripe). Not cached.",
+    description: "Name a market, category or company and get one cited, model-backed MARKET / COMPETITOR BRIEF: how the market is defined and sized, the key players and what each offers, pricing, recent moves, how they differ, risks and a bottom line - every claim from live web research with citations, nothing from memory. The research pipeline with a competitive-intelligence plan. USDC (x402/MPP) or card (Stripe). Not cached. Information, not investment advice.",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "market-brief", synthesis_model: "anthropic/claude-opus-5" } } } },
     handler: makeResearchHandler("market-brief"),
