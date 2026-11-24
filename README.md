@@ -15,7 +15,7 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/docs#why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
-**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.17.0`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
+**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.17.1`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
 
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
@@ -98,15 +98,15 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 
 
 **Framework adapters** (drop-in tools for the major agent stacks - auto-payment underneath):
-[![npm](https://img.shields.io/npm/v/agent402-openai-tools?label=openai-tools)](https://www.npmjs.com/package/agent402-openai-tools)
-[![npm](https://img.shields.io/npm/v/agent402-anthropic-tools?label=anthropic-tools)](https://www.npmjs.com/package/agent402-anthropic-tools)
-[![npm](https://img.shields.io/npm/v/agent402-ai-sdk?label=ai-sdk)](https://www.npmjs.com/package/agent402-ai-sdk)
-[![npm](https://img.shields.io/npm/v/agent402-langchain?label=langchain)](https://www.npmjs.com/package/agent402-langchain)
-[![npm](https://img.shields.io/npm/v/agent402-llamaindex?label=llamaindex)](https://www.npmjs.com/package/agent402-llamaindex)
-[![npm](https://img.shields.io/npm/v/agent402-strands?label=strands)](https://www.npmjs.com/package/agent402-strands)
-[![npm](https://img.shields.io/npm/v/agent402-google-adk?label=google-adk)](https://www.npmjs.com/package/agent402-google-adk)
-[![npm](https://img.shields.io/npm/v/agent402-openai-agents?label=openai-agents)](https://www.npmjs.com/package/agent402-openai-agents)
-[![npm](https://img.shields.io/npm/v/agent402-agentkit?label=agentkit)](https://www.npmjs.com/package/agent402-agentkit)
+[![npm](https://img.shields.io/npm/v/agent402-function-calling?label=openai-tools)](https://www.npmjs.com/package/agent402-function-calling)
+[![npm](https://img.shields.io/npm/v/agent402-tool-use?label=anthropic-tools)](https://www.npmjs.com/package/agent402-tool-use)
+[![npm](https://img.shields.io/npm/v/agent402-stream-tools?label=ai-sdk)](https://www.npmjs.com/package/agent402-stream-tools)
+[![npm](https://img.shields.io/npm/v/agent402-structured-tools?label=langchain)](https://www.npmjs.com/package/agent402-structured-tools)
+[![npm](https://img.shields.io/npm/v/agent402-function-tools?label=llamaindex)](https://www.npmjs.com/package/agent402-function-tools)
+[![npm](https://img.shields.io/npm/v/agent402-agent-loop-tools?label=strands)](https://www.npmjs.com/package/agent402-agent-loop-tools)
+[![npm](https://img.shields.io/npm/v/agent402-dev-kit-tools?label=google-adk)](https://www.npmjs.com/package/agent402-dev-kit-tools)
+[![npm](https://img.shields.io/npm/v/agent402-runner-tools?label=openai-agents)](https://www.npmjs.com/package/agent402-runner-tools)
+[![npm](https://img.shields.io/npm/v/agent402-action-provider?label=agentkit)](https://www.npmjs.com/package/agent402-action-provider)
 
 **500+ strong - live web search and cited answers as the MCP front door, then ready-to-use web tools and multi-tool skill packs for your AI agent, from one server. Every one priced per call and settled on-chain. Browser
 rendering, web search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, deterministic stats, forecasting, and options/bond pricing (Black-Scholes, YTM), compression, and 150+ pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
@@ -141,8 +141,8 @@ The pure-CPU tools run free there. A wallet-only tool is payable in the same cal
 **2. One command - run the MCP server locally** (the pure-CPU tools work with no key; it pays the tiny proof-of-work for you):
 
 ```bash
-npx -y agent402-mcp@0.17.0
-# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.17.0
+npx -y agent402-mcp@0.17.1
+# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.17.1
 ```
 
 **3. Clone and host the whole thing** (all 500+ tools as an HTTP API + MCP, free mode, no payments):
@@ -523,21 +523,23 @@ If you're already on one of the stacks below - OpenAI, Anthropic, the Vercel AI 
 
 | Stack | npm | Returns |
 |---|---|---|
-| OpenAI function-calling (chat.completions / Assistants v2 / Responses) | [`agent402-openai-tools`](https://www.npmjs.com/package/agent402-openai-tools) | `tools[]` for `tools:` param |
-| Anthropic Messages API (`tool_use`) | [`agent402-anthropic-tools`](https://www.npmjs.com/package/agent402-anthropic-tools) | `tools[]` for `tools:` param |
-| Vercel AI SDK (`streamText` / `generateText`) | [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) | `Record<name, tool()>` |
-| LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` |
-| LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
-| Strands Agents (Amazon Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
-| Google ADK (Agent Development Kit) | [`agent402-google-adk`](https://www.npmjs.com/package/agent402-google-adk) | `FunctionTool[]` for ADK agents |
-| OpenAI Agents SDK | [`agent402-openai-agents`](https://www.npmjs.com/package/agent402-openai-agents) | `Agent tools` for `@openai/agents` |
-| Coinbase AgentKit (CDP, Privy, ZeroDev, viem wallets) | [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit) | an `ActionProvider` for `AgentKit.from({ actionProviders })` |
-| LangChain **Python** / CrewAI | [`agent402-langchain`](https://pypi.org/project/agent402-langchain/) (PyPI) | `StructuredTool[]` from `Agent402Toolkit.get_tools()` - four meta-tools (find / route / call / about), not one per slug |
+| OpenAI function-calling (chat.completions / Assistants v2 / Responses) | [`agent402-function-calling`](https://www.npmjs.com/package/agent402-function-calling) | `tools[]` for `tools:` param |
+| Anthropic Messages API (`tool_use`) | [`agent402-tool-use`](https://www.npmjs.com/package/agent402-tool-use) | `tools[]` for `tools:` param |
+| Vercel AI SDK (`streamText` / `generateText`) | [`agent402-stream-tools`](https://www.npmjs.com/package/agent402-stream-tools) | `Record<name, tool()>` |
+| LangChain JS / LangGraph | [`agent402-structured-tools`](https://www.npmjs.com/package/agent402-structured-tools) | `DynamicStructuredTool[]` |
+| LlamaIndex TS | [`agent402-function-tools`](https://www.npmjs.com/package/agent402-function-tools) | `FunctionTool[]` |
+| Strands Agents | [`agent402-agent-loop-tools`](https://www.npmjs.com/package/agent402-agent-loop-tools) | `StrandsTool[]` for `new Agent({ tools })` |
+| Google ADK (Agent Development Kit) | [`agent402-dev-kit-tools`](https://www.npmjs.com/package/agent402-dev-kit-tools) | `FunctionTool[]` for ADK agents |
+| OpenAI Agents SDK | [`agent402-runner-tools`](https://www.npmjs.com/package/agent402-runner-tools) | `Agent tools` for `@openai/agents` |
+| Coinbase AgentKit (CDP, Privy, ZeroDev, viem wallets) | [`agent402-action-provider`](https://www.npmjs.com/package/agent402-action-provider) | an `ActionProvider` for `AgentKit.from({ actionProviders })` |
+| LangChain **Python** / CrewAI | [`agent402-structured-tools`](https://pypi.org/project/agent402-structured-tools/) (PyPI) | `StructuredTool[]` from `Agent402Toolkit.get_tools()` - four meta-tools (find / route / call / about), not one per slug |
+
+Renamed packages (same API; each earlier name's last release forwards to its new name): `agent402-openai-tools` is now `agent402-function-calling`, `agent402-anthropic-tools` is now `agent402-tool-use`, `agent402-ai-sdk` is now `agent402-stream-tools`, `agent402-langchain` is now `agent402-structured-tools` (npm and PyPI), `agent402-llamaindex` is now `agent402-function-tools`, `agent402-google-adk` is now `agent402-dev-kit-tools`, `agent402-strands` is now `agent402-agent-loop-tools`, `agent402-agentkit` is now `agent402-action-provider`, `agent402-openai-agents` is now `agent402-runner-tools`, `elizaos-plugin-agent402` is now `agent402-actions-plugin`, `agent402-openclaw` is now `agent402-model-provider`.
 
 ```js
 // e.g. OpenAI - every adapter has the same surface.
 import OpenAI from "openai";
-import { agent402Tools } from "agent402-openai-tools";
+import { agent402Tools } from "agent402-function-calling";
 
 const openai = new OpenAI();
 const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render"] });
@@ -699,7 +701,7 @@ working tools, so you don't have to build the catalog yourself.
 Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)
 and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/bazaar).
 
-**Works with [Amazon Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** - AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 500+ tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: Amazon Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
+**Works with [Amazon Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** - AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 500+ tools, or use [`agent402-agent-loop-tools`](https://www.npmjs.com/package/agent402-agent-loop-tools) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: Amazon Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
 
 ### Tollbooth - pay-per-crawl for **your** site (the other side of x402)
 
@@ -774,7 +776,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 - AI-gateway traffic (`/v1` chat, embeddings, images, speech) is additionally subject to the
   upstream model providers' usage policies. Wallets used for prohibited content are blocked
   before settlement (`WALLET_BLOCKLIST`).
-- The **server code** is AGPL-3.0-licensed and provided as-is; every **published npm package** is MIT with its own LICENSE file in its directory: `agent402-mcp` (`mcp/`), `agent402-client` (`client/`), `agent402-tollbooth` (`tollbooth/`), `agent402-openclaw` (`openclaw/`), `agent402-agentkit` (`adapters/agentkit/`), `elizaos-plugin-agent402` (`adapters/eliza/`) and the facilitator (`facilitator/`). GitHub's repository-level license badge reports the server's AGPL; a package's `license` field and its directory's LICENSE are what apply to that package. Provided as-is, without warranty (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). "Agent402" and the logo are trademarks of Havok Holdings LLC - the license covers the code, not the name; forks must rename (see [TRADEMARKS.md](TRADEMARKS.md)).
+- The **server code** is AGPL-3.0-licensed and provided as-is; every **published npm package** is MIT with its own LICENSE file in its directory: `agent402-mcp` (`mcp/`), `agent402-client` (`client/`), `agent402-tollbooth` (`tollbooth/`), `agent402-model-provider` (`openclaw/`), `agent402-action-provider` (`adapters/agentkit/`), `agent402-actions-plugin` (`adapters/eliza/`) and the facilitator (`facilitator/`). GitHub's repository-level license badge reports the server's AGPL; a package's `license` field and its directory's LICENSE are what apply to that package. Provided as-is, without warranty (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). "Agent402" and the logo are trademarks of Havok Holdings LLC - the license covers the code, not the name; forks must rename (see [TRADEMARKS.md](TRADEMARKS.md)).
   If you self-host, you are the operator: your deployment, your terms, your compliance -
   Havok Holdings LLC operates only the hosted instance and is not responsible for third-party
   deployments.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// agent402-openclaw <command>
+// agent402-model-provider <command>
 //   setup [--credits-key a402_...] [--write]   store the key, print (or merge) the openclaw.json block
 //   proxy [--port N] [--upstream URL]          run the local proxy on its own (no OpenClaw needed;
 //                                              serves the OpenAI wire and Anthropic POST /v1/messages)
@@ -64,7 +64,7 @@ async function generateWallet() {
 
 async function main() {
   if (cmd === "help" || has("--help")) {
-    out("agent402-openclaw setup [--credits-key a402_...|-] [--no-wallet] [--write] [--flat] | proxy [--port N] [--upstream URL] [--flat] | wallet [--rpc URL] | doctor | permit2-approve [--rpc URL]");
+    out("agent402-model-provider setup [--credits-key a402_...|-] [--no-wallet] [--write] [--flat] | proxy [--port N] [--upstream URL] [--flat] | wallet [--rpc URL] | doctor | permit2-approve [--rpc URL]");
     return 0;
   }
   const upstream = stripTrailingSlashes(opt("--upstream") || process.env.AGENT402_UPSTREAM || DEFAULT_UPSTREAM);
@@ -99,7 +99,7 @@ async function main() {
           out(`  address: ${w.address}`);
           out(`  key:     ${WALLET_KEY_FILE()} (0600; back it up, it is the only copy)`);
           out(`fund it with USDC on Base (any amount; a call costs from $0.001), then every call is paid from it over x402.`);
-          out(`optional: \`agent402-openclaw permit2-approve\` once (needs a little ETH on Base for gas) to pay actual usage instead of the per-request quote.`);
+          out(`optional: \`agent402-model-provider permit2-approve\` once (needs a little ETH on Base for gas) to pay actual usage instead of the per-request quote.`);
           out(`holding a credits key? rerun with --credits-key a402_... instead`);
         } else {
           out(`no payment method yet: install viem + @x402/fetch + @x402/evm and rerun to generate a wallet, set AGENT402_WALLET_KEY, or rerun with --credits-key a402_... if you hold a credits key`);
@@ -149,7 +149,7 @@ async function main() {
   // usage over `upto` instead of the per-request quote over `exact`.
   if (cmd === "permit2-approve") {
     const pk = resolveWalletKey();
-    if (!pk) { console.error("no wallet: set AGENT402_WALLET_KEY (0x + 64 hex) or run `agent402-openclaw setup` to generate one"); return 2; }
+    if (!pk) { console.error("no wallet: set AGENT402_WALLET_KEY (0x + 64 hex) or run `agent402-model-provider setup` to generate one"); return 2; }
     try {
       const [{ createPermit2ApprovalTx, getPermit2AllowanceReadParams }, { createWalletClient, createPublicClient, http }, { privateKeyToAccount }, { base }] = await Promise.all([import("@x402/evm/upto/client"), import("viem"), import("viem/accounts"), import("viem/chains")]);
       const account = privateKeyToAccount(pk);
@@ -170,7 +170,7 @@ async function main() {
   // Address + USDC balance of the wallet the proxy pays from. Read-only.
   if (cmd === "wallet") {
     const pk = resolveWalletKey();
-    if (!pk) { console.error("no wallet: run `agent402-openclaw setup` to generate one, or set AGENT402_WALLET_KEY"); return 2; }
+    if (!pk) { console.error("no wallet: run `agent402-model-provider setup` to generate one, or set AGENT402_WALLET_KEY"); return 2; }
     try {
       const [{ createPublicClient, http, erc20Abi, formatUnits }, { privateKeyToAccount }, { base }] = await Promise.all([import("viem"), import("viem/accounts"), import("viem/chains")]);
       const account = privateKeyToAccount(pk);

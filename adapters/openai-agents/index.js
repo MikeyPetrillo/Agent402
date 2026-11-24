@@ -1,5 +1,5 @@
-// agent402-openai-agents: turn Agent402 into OpenAI Agents SDK tools the
-// agent can pick up directly. Four meta tools, all free to discover:
+// agent402-runner-tools (formerly agent402-openai-agents): Agent402 tools for
+// use with the OpenAI Agents SDK, which the agent can pick up directly. Four meta tools, all free to discover:
 //
 //   agent402_find:    local catalog resolver  (GET /api/find)
 //   agent402_route:   cross-seller x402 router  (POST /api/route)
@@ -11,7 +11,7 @@
 // discovery means the LLM picks a task, the router picks the seller, and the
 // caller handles payment.
 //
-//   import { agent402Tools } from "agent402-openai-agents";
+//   import { agent402Tools } from "agent402-runner-tools";
 //   import { Agent, run } from "@openai/agents";
 //   const tools = await agent402Tools();              // free tier (PoW)
 //   const agent = new Agent({ name: "x402-agent", tools });
@@ -29,7 +29,7 @@ import { createHash } from "node:crypto";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-openai-agents/0.1.14";
+const USER_AGENT = "agent402-runner-tools/0.2.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -151,7 +151,7 @@ function perCallCeilingOf(value, warn = (m) => console.warn(m)) {
   const n = typeof raw === "number" ? raw : (typeof raw === "string" && raw !== "" ? Number(raw) : NaN);
   if (Number.isFinite(n) && n >= 0) return n;
   const shown = typeof value === "string" && value.length <= 16 ? JSON.stringify(value) : typeof value;
-  warn(`[agent402-openai-agents] maxPerCallUsd ${shown} is not a USD amount, 0 or "off"; keeping the default ($${DEFAULT_MAX_PER_CALL_USD} per call)`);
+  warn(`[agent402-runner-tools] maxPerCallUsd ${shown} is not a USD amount, 0 or "off"; keeping the default ($${DEFAULT_MAX_PER_CALL_USD} per call)`);
   return DEFAULT_MAX_PER_CALL_USD;
 }
 

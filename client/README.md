@@ -523,8 +523,8 @@ books the amount actually signed.
 `x402Client` is the only mode where the caps are advisory: they are checked on
 an unpaid preflight of the `402`, before your wallet fetch runs, but not on the
 `402` that fetch then signs. The client logs a one-time warning when caps are
-set in this mode. The adapters built on this client (agent402-agentkit,
-elizaos-plugin-agent402) construct their own x402 client and pass it, so their
+set in this mode. The adapters built on this client (agent402-action-provider,
+agent402-actions-plugin) construct their own x402 client and pass it, so their
 caps hold at signing by default.
 
 **How a quote is priced.** An x402 signer signs the option's raw base-unit

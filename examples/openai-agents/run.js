@@ -10,7 +10,7 @@
 // install `@openai/agents` and `zod` as peer dependencies. See "Using with the
 // real Agents SDK" in README.md.
 
-import { agent402ToolSpecs } from "agent402-openai-agents";
+import { agent402ToolSpecs } from "agent402-runner-tools";
 
 const BASE = process.env.AGENT402_BASE_URL || "https://agent402.tools";
 console.log(`[demo] Agent402 base: ${BASE}`);

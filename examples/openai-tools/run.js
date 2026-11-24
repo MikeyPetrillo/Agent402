@@ -2,7 +2,7 @@
 //
 // What this proves:
 //   1. agent402-client resolves a slug and calls the tool with PoW payment.
-//   2. The adapter (agent402-openai-tools) wraps the same client to produce
+//   2. The adapter (agent402-function-calling) wraps the same client to produce
 //      OpenAI function-calling tool definitions + an execute() dispatcher.
 //   3. Payment is handled underneath — sub-second proof-of-work for free tools,
 //      no wallet, no API key required to run this file.

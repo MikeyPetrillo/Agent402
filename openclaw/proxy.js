@@ -46,7 +46,7 @@ import { AUTO_ID, routesFromCatalog, stripTrailingSlashes } from "./models.js";
 export const DEFAULT_UPSTREAM = "https://agent402.tools";
 export const PKG_VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 // The User-Agent product token that names this package on every request.
-const USER_AGENT = `agent402-openclaw/${PKG_VERSION}`;
+const USER_AGENT = `agent402-model-provider/${PKG_VERSION}`;
 const MAX_BODY = 2 * 1024 * 1024;
 
 // The model catalog read (GET /v1/models) settles nothing, so a 503 the
@@ -264,7 +264,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
           return json(res, 400, { error: { message: `Unknown model "${requested}". Use "auto" or an id from GET /v1/models (${table.size} available).`, type: "invalid_request_error", code: "model_not_found" } });
         }
         if (!paid) {
-          return json(res, 402, { error: { message: "No payment method configured. Run `agent402-openclaw setup` to generate an x402 wallet, set AGENT402_WALLET_KEY, or set AGENT402_CREDITS_KEY to a prepaid credits key.", type: "payment_required", code: "agent402_unconfigured" }, topup: `${upstream}/credits`, priceUsd: route.priceUsd });
+          return json(res, 402, { error: { message: "No payment method configured. Run `agent402-model-provider setup` to generate an x402 wallet, set AGENT402_WALLET_KEY, or set AGENT402_CREDITS_KEY to a prepaid credits key.", type: "payment_required", code: "agent402_unconfigured" }, topup: `${upstream}/credits`, priceUsd: route.priceUsd });
         }
         const outbound = { ...body };
         if (requested === AUTO_ID) delete outbound.model; else outbound.model = route.id;
@@ -278,7 +278,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
           return json(res, 400, { type: "error", error: { type: "invalid_request_error", message: "\"model\" is required (any id from GET /v1/models, or a Claude id such as claude-sonnet-5)" } });
         }
         if (!paid) {
-          return json(res, 402, { type: "error", error: { type: "payment_required", message: "No payment method configured. Set AGENT402_WALLET_KEY to an EVM key holding USDC on Base (or run `agent402-openclaw setup`), or set AGENT402_CREDITS_KEY to a prepaid credits key." } });
+          return json(res, 402, { type: "error", error: { type: "payment_required", message: "No payment method configured. Set AGENT402_WALLET_KEY to an EVM key holding USDC on Base (or run `agent402-model-provider setup`), or set AGENT402_CREDITS_KEY to a prepaid credits key." } });
         }
         const outbound = { ...body, model: body.model.trim().replace(/^agent402\//, "") };
         const extra = {};
@@ -291,7 +291,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
       // A thrown message is the payment fetch's or the network's own text,
       // so the credits key is cut out of it before it is logged or answered.
       const msg = key ? String(e?.message || e).split(key).join("[redacted]") : String(e?.message || e);
-      log(`[agent402-openclaw] ${req.method} ${url.pathname}: ${msg}`);
+      log(`[agent402-model-provider] ${req.method} ${url.pathname}: ${msg}`);
       const wire = url.pathname === "/v1/messages" ? ANTHROPIC_WIRE : OPENAI_WIRE;
       if (!res.headersSent) return json(res, 502, wire.error("upstream_error", `Upstream error: ${msg.slice(0, 200)}`));
       try { res.end(); } catch { /* ignore */ }
@@ -301,7 +301,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, host, resolve); });
   const actualPort = server.address().port;
   const baseUrl = `http://${host}:${actualPort}`;
-  log(`[agent402-openclaw] proxy on ${baseUrl}/v1 -> ${upstream} (${mode}, ${pricing} pricing, ${table.size} models)`);
+  log(`[agent402-model-provider] proxy on ${baseUrl}/v1 -> ${upstream} (${mode}, ${pricing} pricing, ${table.size} models)`);
   return {
     baseUrl, port: actualPort, mode, upstream, pricing,
     stats: () => ({ ...stats }),

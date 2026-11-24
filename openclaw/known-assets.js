@@ -18,7 +18,7 @@
 // an accept whose `extra.name` or `extra.version` is not exactly the token's
 // cannot be priced either, and a buyer with a cap does not sign it.
 //
-// The same file ships in agent402-client, agent402-mcp and agent402-openclaw;
+// The same file ships in agent402-client, agent402-mcp and agent402-model-provider;
 // the parent repo's scripts/test-known-assets.js keeps the copies identical and
 // checks the table against the assets the server offers.
 

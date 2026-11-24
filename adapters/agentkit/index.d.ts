@@ -1,4 +1,4 @@
-// Type declarations for agent402-agentkit. The runtime is index.js (plain ES
+// Type declarations for agent402-action-provider. The runtime is index.js (plain ES
 // modules on agent402-client); these declarations describe its public API.
 // AgentKit, zod and the wallet provider are typed loosely, so the
 // declarations import nothing from those peers.

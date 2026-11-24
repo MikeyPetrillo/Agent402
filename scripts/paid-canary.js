@@ -1351,7 +1351,7 @@ async function main() {
   // llm-metered TOOL leg pays the per-request EXACT quote; this leg buys the
   // same body through the upto scheme (Permit2 allowance on the burner, granted
   // once), so the quote becomes a ceiling and the gateway settles actual usage
-  // plus the markup. It is the only live proof of what agent402-openclaw's upto path
+  // plus the markup. It is the only live proof of what agent402-model-provider's upto path
   // does for a real buyer: the OUTGOING credential must be scheme "upto" (a
   // client that quietly fell back to exact would still get a 200), the
   // response must carry X-Metered-Usd strictly UNDER the quote, and the
@@ -1369,7 +1369,7 @@ async function main() {
       const pub = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC_URL || "https://mainnet.base.org") });
       const allowance = await pub.readContract(getPermit2AllowanceReadParams({ tokenAddress: USDC_BASE, ownerAddress: account.address }));
       if (BigInt(allowance) < 10n ** 12n) {
-        railFail("metered-upto", `burner ${account.address} has no Permit2 allowance on Base USDC (${allowance}) — run \`agent402-openclaw permit2-approve\` with the burner key once`);
+        railFail("metered-upto", `burner ${account.address} has no Permit2 allowance on Base USDC (${allowance}) — run \`agent402-model-provider permit2-approve\` with the burner key once`);
         return;
       }
       const bare = await fetch(`${TARGET}${path}`, init());

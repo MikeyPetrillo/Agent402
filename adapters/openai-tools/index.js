@@ -1,4 +1,5 @@
-// agent402-openai-tools: drop-in OpenAI function-calling tools for Agent402.
+// agent402-function-calling (formerly agent402-openai-tools): Agent402 tools as
+// function-calling definitions for use with the OpenAI API.
 //
 // Turn the Agent402 catalog (500+ pay-per-call web tools) into OpenAI tool
 // definitions the model can invoke, with payment handled for you under the
@@ -6,7 +7,7 @@
 // wallet-only tools when you pass a payFetch).
 //
 //   import OpenAI from "openai";
-//   import { agent402Tools, agent402Execute } from "agent402-openai-tools";
+//   import { agent402Tools, agent402Execute } from "agent402-function-calling";
 //
 //   const openai = new OpenAI();
 //   const { tools, execute } = await agent402Tools({ slugs: ["extract","hash","render"] });
@@ -27,7 +28,7 @@ import { Agent402 } from "agent402-client";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-openai-tools/0.2.2";
+const USER_AGENT = "agent402-function-calling/0.3.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It

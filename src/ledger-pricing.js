@@ -179,7 +179,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
       <div>
           <div style="font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:700;margin-bottom:6px;">Keep the wallet &middot; approve once</div>
           <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 10px;">A one-time Permit2 approval for USDC on Base (one on-chain transaction, which needs a little ETH on Base for gas) lets the gateway settle the actual usage under each quote, with no fixed tier to overpay into. Non-custodial on this rail, and the approval is yours to revoke.</p>
-          <div style="overflow-x:auto;"><code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);white-space:nowrap;background:transparent;">npx agent402-openclaw permit2-approve</code></div>
+          <div style="overflow-x:auto;"><code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);white-space:nowrap;background:transparent;">npx agent402-model-provider permit2-approve</code></div>
           <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:8px 0 0;">The approval belongs to the wallet, so it applies to any client that pays from it, not only OpenClaw.</p>
         </div>
     </div>

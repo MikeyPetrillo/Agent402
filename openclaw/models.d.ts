@@ -1,4 +1,4 @@
-// Type declarations for agent402-openclaw/models: the route table read from
+// Type declarations for agent402-model-provider/models: the route table read from
 // the gateway's /v1/models and the OpenClaw provider config built from it.
 
 /** One model the local proxy can serve, and the gateway route it pays. */

@@ -1,16 +1,16 @@
 # OpenAI function-calling + Agent402 -- runnable demo
 
-Proves that the [`agent402-openai-tools`](https://www.npmjs.com/package/agent402-openai-tools) adapter works: `agent402-client` calls an Agent402 tool with built-in proof-of-work payment. The adapter wraps the same client to produce OpenAI function-calling definitions. The first snippet below runs a web search and then a cited answer, each paid per call from a wallet.
+Proves that the [`agent402-function-calling`](https://www.npmjs.com/package/agent402-function-calling) adapter works: `agent402-client` calls an Agent402 tool with built-in proof-of-work payment. The adapter wraps the same client to produce OpenAI function-calling definitions. The first snippet below runs a web search and then a cited answer, each paid per call from a wallet.
 
 ## Search the web, then answer (paid from a wallet)
 
 ```bash
-npm install openai agent402-openai-tools @x402/fetch @x402/core @x402/evm viem
+npm install openai agent402-function-calling @x402/fetch @x402/core @x402/evm viem
 ```
 
 ```js
 import OpenAI from "openai";
-import { agent402Tools } from "agent402-openai-tools";
+import { agent402Tools } from "agent402-function-calling";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";

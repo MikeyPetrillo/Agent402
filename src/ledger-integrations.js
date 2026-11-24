@@ -69,9 +69,9 @@ export function ledgerIntegrationsPage(baseUrl) {
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">// same shape everywhere</div>
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 22px;">Install, get tools, pass them in.</h2>
     ${codeBlock(`<span style="color:var(--on-panel-faint);"># pick your stack
-</span>npm install agent402-openai-tools @x402/fetch @x402/core @x402/evm viem
+</span>npm install agent402-function-calling @x402/fetch @x402/core @x402/evm viem
 
-import { agent402Tools } from "agent402-openai-tools";
+import { agent402Tools } from "agent402-function-calling";
 <span style="color:var(--on-panel-faint);">// web search, then a cited answer, paid per call from a wallet (payFetch: an @x402/fetch fetch)
 </span>const { tools, execute } = await agent402Tools({ slugs: ["search","answer"], freeOnly: false, fetch: payFetch });
 <span style="color:var(--on-panel-faint);">// pass tools to openai.chat.completions.create({ tools })

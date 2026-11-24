@@ -1,4 +1,4 @@
-// Type declarations for agent402-google-adk. The runtime is index.js (plain ES modules,
+// Type declarations for agent402-dev-kit-tools. The runtime is index.js (plain ES modules,
 // no dependencies); these declarations describe its public API. The
 // framework objects it returns are typed loosely, so the declarations import
 // nothing from the framework (an optional peer).

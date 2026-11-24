@@ -312,7 +312,7 @@ facilitator.close();
 // two directly, so `npx agent402-tollbooth` - the command five docs pages tell
 // you to run - started nothing at all and exited 0. Every test here invoked
 // index.js BY PATH, which is the one way to call it that cannot see the bug.
-// Same defect as agent402-openclaw 0.1.0/0.1.1, and the same reason it hid.
+// Same defect as agent402-model-provider 0.1.0/0.1.1, and the same reason it hid.
 {
   const { mkdtempSync, symlinkSync, rmSync, mkdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");

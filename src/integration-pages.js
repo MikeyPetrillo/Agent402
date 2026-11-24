@@ -91,15 +91,16 @@ export const INTEGRATIONS = [
     meta: "Agent402 tools as OpenAI function-calling definitions for chat.completions and the Responses API. Free tier by proof-of-work; paid tools over x402 or MPP.",
     name: "OpenAI function calling",
     short: "OpenAI",
-    pkg: "agent402-openai-tools",
+    pkg: "agent402-function-calling",
+    formerly: "agent402-openai-tools",
     dir: "adapters/openai-tools",
     docsSlug: "openai",
     shape: "per-slug",
     worksWith: ["OpenAI chat.completions", "OpenAI Responses API"],
     what: "Turns Agent402 tools into OpenAI function-calling definitions. The returned `tools` array is the same JSON used by chat.completions and the Responses API, and `execute` runs whatever tool call the model returns.",
-    install: "npm install openai agent402-openai-tools @x402/fetch @x402/core @x402/evm viem",
+    install: "npm install openai agent402-function-calling @x402/fetch @x402/core @x402/evm viem",
     example: `import OpenAI from "openai";
-import { agent402Tools } from "agent402-openai-tools";
+import { agent402Tools } from "agent402-function-calling";
 ${X402_FETCH}
 
 const openai = new OpenAI();
@@ -128,15 +129,16 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
     meta: "Agent402 tools as Anthropic Messages API tool definitions with an execute helper. Free tier by proof-of-work; paid tools over x402 or MPP.",
     name: "Anthropic tool use",
     short: "Anthropic",
-    pkg: "agent402-anthropic-tools",
+    pkg: "agent402-tool-use",
+    formerly: "agent402-anthropic-tools",
     dir: "adapters/anthropic-tools",
     docsSlug: "anthropic",
     shape: "per-slug",
     worksWith: ["Anthropic Messages API", "Any Claude model with tool use"],
     what: "Turns Agent402 tools into Anthropic Messages API tool definitions (`input_schema` format) for server-side agents and custom tool loops. For Claude clients that speak MCP, the hosted connector at /mcp is the shorter path; this package is for direct Messages API integrations.",
-    install: "npm install @anthropic-ai/sdk agent402-anthropic-tools @x402/fetch @x402/core @x402/evm viem",
+    install: "npm install @anthropic-ai/sdk agent402-tool-use @x402/fetch @x402/core @x402/evm viem",
     example: `import Anthropic from "@anthropic-ai/sdk";
-import { agent402Tools } from "agent402-anthropic-tools";
+import { agent402Tools } from "agent402-tool-use";
 ${X402_FETCH}
 
 const client = new Anthropic();
@@ -164,14 +166,15 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
     meta: "Four meta tools that give a Vercel AI SDK agent the whole Agent402 catalog: find, route, call, about. Proof-of-work free tier; paid tools over x402 or MPP.",
     name: "Vercel AI SDK",
     short: "Vercel AI SDK",
-    pkg: "agent402-ai-sdk",
+    pkg: "agent402-stream-tools",
+    formerly: "agent402-ai-sdk",
     dir: "adapters/ai-sdk",
     docsSlug: "ai-sdk",
     shape: "meta",
     worksWith: ["generateText", "streamText", "Any AI SDK provider"],
     what: "Gives a Vercel AI SDK agent four meta tools that reach the whole catalog: the model describes a task, `agent402_find` or `agent402_route` picks the tool, and `agent402_call` runs and pays for it. Works with `generateText` and `streamText` on any provider the SDK supports.",
-    install: "npm install agent402-ai-sdk ai @ai-sdk/openai zod @x402/fetch @x402/core @x402/evm viem",
-    example: `import { agent402Tools } from "agent402-ai-sdk";
+    install: "npm install agent402-stream-tools ai @ai-sdk/openai zod @x402/fetch @x402/core @x402/evm viem",
+    example: `import { agent402Tools } from "agent402-stream-tools";
 import { generateText, stepCountIs } from "ai";
 import { openai } from "@ai-sdk/openai";
 ${X402_FETCH}
@@ -197,14 +200,15 @@ const { text } = await generateText({
     meta: "LangChain.js and LangGraph tools for Agent402: four meta tools that reach the whole catalog, with proof-of-work for free tools and x402 or MPP for paid ones.",
     name: "LangChain.js and LangGraph",
     short: "LangChain.js",
-    pkg: "agent402-langchain",
+    pkg: "agent402-structured-tools",
+    formerly: "agent402-langchain",
     dir: "adapters/langchain",
     docsSlug: "langchain",
     shape: "meta",
     worksWith: ["LangChain JS", "LangGraph", "createAgent", "Any tool-calling LangChain model"],
     what: "LangChain.js tool objects for Agent402, ready for any LangChain or LangGraph agent. Four meta tools cover the whole catalog, so the agent's tool budget stays small however many endpoints the catalog holds.",
-    install: "npm install agent402-langchain langchain @langchain/core @langchain/openai zod @x402/fetch @x402/core @x402/evm viem",
-    example: `import { agent402Tools } from "agent402-langchain";
+    install: "npm install agent402-structured-tools langchain @langchain/core @langchain/openai zod @x402/fetch @x402/core @x402/evm viem",
+    example: `import { agent402Tools } from "agent402-structured-tools";
 import { ChatOpenAI } from "@langchain/openai";
 import { createAgent } from "langchain";
 
@@ -228,13 +232,14 @@ const result = await agent.invoke({
     meta: "Agent402 for Python LangChain and CrewAI agents: a toolkit with four meta tools, free pure-CPU tools by proof-of-work, paid tools through a signed fetch.",
     name: "LangChain and CrewAI (Python)",
     short: "LangChain (Python)",
-    pkg: "agent402-langchain",
+    pkg: "agent402-structured-tools",
+    formerly: "agent402-langchain",
     registry: "pypi",
     dir: "adapters/langchain-py",
     what: "The Python adapter: an `Agent402Toolkit` that hands LangChain and CrewAI agents the same four meta tools the JavaScript adapters expose. Pure-CPU tools are free through the built-in proof-of-work; live-data tools settle in USDC through a signing callable you pass in.",
-    install: `pip install "agent402-langchain[langchain]"`,
+    install: `pip install "agent402-structured-tools[langchain]"`,
     lang: "python",
-    example: `from agent402_langchain import Agent402Toolkit
+    example: `from agent402_structured_tools import Agent402Toolkit
 
 toolkit = Agent402Toolkit(base_url="https://agent402.tools")
 tools = toolkit.get_tools()   # four meta-tools your agent can call`,
@@ -260,16 +265,17 @@ toolkit = Agent402Toolkit(base_url="https://agent402.tools", x402_fetch=my_signe
     meta: "Agent402 tools as LlamaIndex TS FunctionTools built from the catalog's JSON Schema. Free tier by proof-of-work; paid tools over x402 or MPP.",
     name: "LlamaIndex TS",
     short: "LlamaIndex",
-    pkg: "agent402-llamaindex",
+    pkg: "agent402-function-tools",
+    formerly: "agent402-llamaindex",
     dir: "adapters/llamaindex",
     docsSlug: "llamaindex",
     shape: "per-slug",
     worksWith: ["LlamaIndex TS", "@llamaindex/workflow agent()", "FunctionTool"],
     what: "Returns a `FunctionTool[]` array for any LlamaIndex TS agent or workflow, built from the catalog's raw JSON Schema, so there is no Zod or hand-written schema to maintain.",
-    install: "npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex @x402/fetch @x402/core @x402/evm viem",
+    install: "npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-function-tools @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent } from "@llamaindex/workflow";
 import { openai } from "@llamaindex/openai";
-import { agent402Tools } from "agent402-llamaindex";
+import { agent402Tools } from "agent402-function-tools";
 ${X402_FETCH}
 
 // web search, then a cited answer: both paid per call from the wallet
@@ -290,14 +296,15 @@ const { tools } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "tex
     meta: "Agent402 tools for Gemini agents on Google's Agent Development Kit: find, route, call and about, with proof-of-work or x402 and MPP payment underneath.",
     name: "Google Agent Development Kit",
     short: "Google ADK",
-    pkg: "agent402-google-adk",
+    pkg: "agent402-dev-kit-tools",
+    formerly: "agent402-google-adk",
     dir: "adapters/google-adk",
     docsSlug: "google-adk",
     shape: "meta",
     worksWith: ["Google Agent Development Kit", "LlmAgent", "Gemini models"],
     what: "ADK `FunctionTool` instances for Gemini agents built on the Agent Development Kit. Both peers are optional: without `@google/adk` and `zod`, `agent402ToolSpecs()` gives the same four tools with no dependencies.",
-    install: "npm install agent402-google-adk @google/adk zod @x402/fetch @x402/core @x402/evm viem",
-    example: `import { agent402Tools } from "agent402-google-adk";
+    install: "npm install agent402-dev-kit-tools @google/adk zod @x402/fetch @x402/core @x402/evm viem",
+    example: `import { agent402Tools } from "agent402-dev-kit-tools";
 import { LlmAgent } from "@google/adk";
 
 const tools = await agent402Tools();   // free tier: proof-of-work, no wallet
@@ -322,14 +329,15 @@ const tools = await agent402Tools({ fetch: payFetch });`,
     meta: "Agent402 tools for the OpenAI Agents SDK: four meta tools that reach the whole catalog, paid by proof-of-work or over x402 or MPP.",
     name: "OpenAI Agents SDK",
     short: "OpenAI Agents SDK",
-    pkg: "agent402-openai-agents",
+    pkg: "agent402-runner-tools",
+    formerly: "agent402-openai-agents",
     dir: "adapters/openai-agents",
     docsSlug: "openai-agents",
     shape: "meta",
     worksWith: ["@openai/agents", "Agent", "run()"],
     what: "Tools for agents built with the OpenAI Agents SDK (`@openai/agents`). Pass them to `new Agent({ tools })` and the agent can find, route to and call any tool in the catalog.",
-    install: "npm install agent402-openai-agents @openai/agents @x402/fetch @x402/core @x402/evm viem",
-    example: `import { agent402Tools } from "agent402-openai-agents";
+    install: "npm install agent402-runner-tools @openai/agents @x402/fetch @x402/core @x402/evm viem",
+    example: `import { agent402Tools } from "agent402-runner-tools";
 import { Agent, run } from "@openai/agents";
 ${X402_FETCH}
 
@@ -353,16 +361,17 @@ const result = await run(agent, "${SEARCH_THEN_ANSWER}");`,
     meta: "Agent402 tools as Strands Agents tool instances, including on Amazon Bedrock AgentCore. Free tier by proof-of-work; paid tools over x402.",
     name: "Strands Agents",
     short: "Strands",
-    pkg: "agent402-strands",
+    pkg: "agent402-agent-loop-tools",
+    formerly: "agent402-strands",
     dir: "adapters/strands",
     docsSlug: "strands",
     shape: "per-slug",
     worksWith: ["@strands-agents/sdk", "Amazon Bedrock AgentCore", "Any Strands-compatible model"],
     what: "Strands `tool({...})` instances for TypeScript agents, including Strands agents running on Amazon Bedrock AgentCore. Pull a curated subset of the catalog into the agent; when it calls a tool, the adapter solves a proof-of-work or signs an x402 payment and returns the structured result.",
-    install: "npm install agent402-strands @strands-agents/sdk zod @x402/fetch @x402/core @x402/evm viem",
+    install: "npm install agent402-agent-loop-tools @strands-agents/sdk zod @x402/fetch @x402/core @x402/evm viem",
     lang: "ts",
     example: `import { Agent } from "@strands-agents/sdk";
-import { agent402Tools } from "agent402-strands";
+import { agent402Tools } from "agent402-agent-loop-tools";
 ${X402_FETCH}
 
 // web search, then a cited answer: both paid per call from the wallet
@@ -391,13 +400,14 @@ const { tools } = await agent402Tools({
     meta: "An AgentKit action provider: agents with CDP, Privy, ZeroDev or viem wallets find and call Agent402 tools, paying over x402 in USDC on Base.",
     name: "Coinbase AgentKit",
     short: "AgentKit",
-    pkg: "agent402-agentkit",
+    pkg: "agent402-action-provider",
+    formerly: "agent402-agentkit",
     dir: "adapters/agentkit",
     what: "An AgentKit action provider. An agent with a CDP, Privy, ZeroDev or viem-backed wallet gets three actions and pays for wallet-only tools over x402 in USDC on Base, signed by its own wallet provider. The signer is derived the same way AgentKit's own x402 provider derives it (`toSigner()` plus `readContract`).",
-    install: "npm install agent402-agentkit @coinbase/agentkit @x402/fetch @x402/evm zod",
+    install: "npm install agent402-action-provider @coinbase/agentkit @x402/fetch @x402/evm zod",
     lang: "ts",
     example: `import { AgentKit, CdpEvmWalletProvider } from "@coinbase/agentkit";
-import { agent402ActionProvider } from "agent402-agentkit";
+import { agent402ActionProvider } from "agent402-action-provider";
 
 const walletProvider = await CdpEvmWalletProvider.configureWithWallet({
   apiKeyId: process.env.CDP_API_KEY_ID,
@@ -436,19 +446,20 @@ await agent402ActionProvider({
     meta: `An elizaOS plugin to find and call Agent402 tools, paid in USDC over x402${CREDITS_ON ? " or by prepaid credits" : ""}, inside a per-call spend ceiling and an optional daily one.`,
     name: "elizaOS plugin",
     short: "elizaOS",
-    pkg: "elizaos-plugin-agent402",
+    pkg: "agent402-actions-plugin",
+    formerly: "elizaos-plugin-agent402",
     dir: "adapters/eliza",
     what: `An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a plain-language task and call it, paying in USDC over x402 or with ${CREDITS_HELD}, inside a per-call ceiling ($5 unless you set another) and any daily ceiling you set in the character config.`,
-    install: "npm install elizaos-plugin-agent402",
+    install: "npm install agent402-actions-plugin",
     lang: "json",
     example: CREDITS_ON ? `{
-  "plugins": ["elizaos-plugin-agent402"],
+  "plugins": ["agent402-actions-plugin"],
   "settings": {
     "AGENT402_CREDITS_KEY": "a402_...",
     "AGENT402_MAX_PER_CALL_USD": "1"
   }
 }` : `{
-  "plugins": ["elizaos-plugin-agent402"],
+  "plugins": ["agent402-actions-plugin"],
   "settings": {
     "AGENT402_WALLET_KEY": "0x...",
     "AGENT402_MAX_PER_CALL_USD": "1"
@@ -482,13 +493,13 @@ bun add @x402/fetch @x402/evm viem
     pkg: "agent402-mcp",
     dir: "mcp",
     what: "An MCP server for any MCP client (Claude Desktop, Claude Code, Cursor and others). Flagship tools are listed as first-class MCP tools and the rest of the catalog is reachable through `catalog.search`, `catalog.find` and `catalog.call`, with skill packs surfaced as MCP prompts. The hosted connector at /mcp needs no install at all.",
-    install: "npx -y agent402-mcp@0.17.0",
+    install: "npx -y agent402-mcp@0.17.1",
     lang: "json",
     example: `{
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0xYOUR_EVM_PRIVATE_KEY" }
     }
   }
@@ -501,7 +512,7 @@ claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.0
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.1
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [
@@ -629,22 +640,23 @@ npx agent402-tollbooth   # testnet dry run; for mainnet, drop TOLLBOOTH_NETWORK 
     meta: `Agent402 as an OpenClaw model provider: routed and explicit models priced per call, paid in USDC over x402${CREDITS_ON ? " or by credits key" : ""} through a local proxy.`,
     name: "OpenClaw model provider",
     short: "OpenClaw",
-    pkg: "agent402-openclaw",
+    pkg: "agent402-model-provider",
+    formerly: "agent402-openclaw",
     dir: "openclaw",
     what: "An OpenClaw plugin that adds Agent402 as a model provider: the routed `auto` model and every model the gateway lists, priced per call. A loopback proxy pays Agent402 and forwards, so OpenClaw only ever sees a local OpenAI-compatible URL. The same key or wallet reaches the tool catalog.",
-    install: "openclaw plugins install agent402-openclaw",
+    install: "openclaw plugins install agent402-model-provider",
     lang: "bash",
-    example: `openclaw plugins install agent402-openclaw
-npx agent402-openclaw setup --write   # no key? it creates a wallet and prints the address to fund
+    example: `openclaw plugins install agent402-model-provider
+npx agent402-model-provider setup --write   # no key? it creates a wallet and prints the address to fund
 openclaw gateway restart`,
     walletExample: `# ${CREDITS_ON ? "pay by card instead: buy a credits pack, then" : "already hold a credits key? use it instead of a wallet"}
-AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write
+AGENT402_CREDITS_KEY=a402_... npx agent402-model-provider setup --write
 
 # no OpenClaw? run the proxy alone and point any OpenAI client at it;
 # install it with its wallet peers in one folder and run it from there
-npm i agent402-openclaw @x402/fetch @x402/evm viem
+npm i agent402-model-provider @x402/fetch @x402/evm viem
 export AGENT402_WALLET_KEY=0x...   # an EVM key holding USDC on Base
-npx agent402-openclaw proxy   # http://127.0.0.1:8412/v1, model "auto"`,
+npx agent402-model-provider proxy   # http://127.0.0.1:8412/v1, model "auto"`,
     exposes: [
       "`auto` (routed per prompt) plus every model id from GET /v1/models.",
       "Explicit models go to the metered route by default, where each request is quoted from its body; `--flat` keeps them on flat per-call tiers.",
@@ -755,7 +767,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
   <div style="max-width:980px;margin:0 auto;padding:50px 30px 64px;">
     <nav class="ml-crumb" aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><span class="ml-crumb-cur">&#160;/ <span style="color:var(--ink);">${esc(i.name)}</span></span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 10px;">${esc(i.name)}</h1>
-    <div style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--accent);margin-bottom:18px;">${esc(i.pkg)} &middot; ${esc(registryLabel(i))} &middot; MIT</div>
+    <div style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--accent);margin-bottom:18px;">${esc(i.pkg)} &middot; ${esc(registryLabel(i))} &middot; MIT${i.formerly ? ` &middot; formerly ${esc(i.formerly)}` : ""}</div>
     <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 34px;max-width:760px;">${inline(i.what)}</p>
 
     <section style="margin-bottom:34px;">

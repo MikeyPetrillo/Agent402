@@ -1,7 +1,7 @@
 {
-  "name": "agent402-openai-tools",
-  "version": "0.2.2",
-  "description": "Drop-in OpenAI function-calling tools for Agent402.Tools (the applied layer of Agentic Finance): turn tools from its catalog of 500+ pay-per-call tools and skill packs (x402 or MPP) into OpenAI tool definitions, one per catalog tool, with payment handled by agent402-client. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 13 chains or USDG on Robinhood Chain.",
+  "name": "agent402-function-calling",
+  "version": "0.3.0",
+  "description": "Agent402 tools as function-calling tool definitions, for use with the OpenAI API (chat.completions, Responses) and other function-calling APIs (Agentic Finance over x402 or MPP): turn tools from Agent402's catalog of 500+ pay-per-call tools and skill packs into tool definitions, one per catalog tool, with payment handled by agent402-client. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 13 chains or USDG on Robinhood Chain. Formerly agent402-openai-tools.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -26,7 +26,6 @@
     "openai",
     "function-calling",
     "tools",
-    "assistants",
     "x402",
     "ai-agents",
     "agent-tools",
@@ -47,7 +46,7 @@
     "machine-payments-protocol",
     "agentic-payments"
   ],
-  "author": "Havok Holdings LLC <mike@agent402.tools> (https://github.com/MikeyPetrillo/Agent402)",
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC) <mike@agent402.tools> (https://github.com/MikeyPetrillo/Agent402)",
   "license": "MIT",
   "repository": {
     "type": "git",

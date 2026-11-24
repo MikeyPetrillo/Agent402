@@ -1,4 +1,4 @@
-// elizaos-plugin-agent402 - offline against a paid-mode Agent402 server (free
+// agent402-actions-plugin - offline against a paid-mode Agent402 server (free
 // tier via proof-of-work), plus a stub gateway that records the Authorization
 // header for the credits-key path. No @elizaos/core needed: the plugin never
 // imports it at runtime; a stub runtime supplies getSetting().

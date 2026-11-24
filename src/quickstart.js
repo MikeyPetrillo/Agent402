@@ -180,10 +180,10 @@ console.log(result);</code></pre></div>
 <p class="qs-oneliner">Chat, the Anthropic Messages wire and embeddings, paid per request. The metered tier quotes each call from its own body.</p>
 
 <span class="qs-label">Run the local wallet proxy (pays each call from your wallet over x402)</span>
-<div class="ml-code" style="margin:0 0 20px"><pre><code>npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
+<div class="ml-code" style="margin:0 0 20px"><pre><code>npm i agent402-model-provider @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
 export AGENT402_MAX_PER_CALL_USD=5    # per-call ceiling checked before signing (the default; 0 or off turns it off)
-npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1</code></pre></div>
+npx agent402-model-provider proxy           # run from that folder; serves http://127.0.0.1:8412/v1</code></pre></div>
 
 <span class="qs-label">Point any OpenAI SDK at it</span>
 <div class="ml-code" style="margin:0 0 20px"><pre><code>from openai import OpenAI
@@ -197,12 +197,12 @@ r = client.chat.completions.create(model="auto", messages=[{"role": "user", "con
 <p class="qs-oneliner">Drop-in tool definitions for OpenAI, Anthropic, and Vercel AI SDK.</p>
 
 <span class="qs-label">Install</span>
-<div class="ml-code" style="margin:0 0 20px"><pre><code>npm install agent402-openai-tools
-# also: agent402-anthropic-tools, agent402-ai-sdk</code></pre></div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>npm install agent402-function-calling
+# also: agent402-tool-use, agent402-stream-tools</code></pre></div>
 
 <span class="qs-label">Wire into your LLM call</span>
-<div class="ml-code" style="margin:0 0 20px"><pre><code>import { agent402Tools } from "agent402-openai-tools";
-// same shape: agent402-anthropic-tools
+<div class="ml-code" style="margin:0 0 20px"><pre><code>import { agent402Tools } from "agent402-function-calling";
+// same shape: agent402-tool-use
 // payFetch: the wallet-paying fetch from the Pay with USDC tab
 
 // web search, then a cited answer: both paid per call from the wallet
@@ -212,7 +212,7 @@ const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], fr
 // for each tool_call it returns, run:
 const result = await execute(call.function.name, JSON.parse(call.function.arguments));
 
-// agent402-ai-sdk returns four meta tools instead, keyed by name:
+// agent402-stream-tools returns four meta tools instead, keyed by name:
 // const tools = await agent402Tools({ fetch: payFetch }); await generateText({ model, tools, prompt });</code></pre></div>
 
 <p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown-to-html, json-to-csv and more) run free with proof-of-work and no wallet:</p>

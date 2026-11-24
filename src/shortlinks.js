@@ -60,7 +60,7 @@ if have claude; then
   fi
 fi
 if have openclaw; then
-  say "-> OpenClaw found: run  npx agent402-openclaw setup   (mints a wallet to fund with USDC on Base, writes the provider)"
+  say "-> OpenClaw found: run  npx agent402-model-provider setup   (mints a wallet to fund with USDC on Base, writes the provider)"
 fi
 if have cursor || [ -d "$HOME/.cursor" ]; then
   say "-> Cursor: add to ~/.cursor/mcp.json ->  {\\"mcpServers\\":{\\"agent402\\":{\\"url\\":\\"$MCP_URL\\"}}}"

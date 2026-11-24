@@ -9,7 +9,7 @@
 // Same specs wire into the real AI SDK via agent402Tools() — just install `ai`
 // and `zod` as peer dependencies. See "Using with the real AI SDK" in README.md.
 
-import { agent402ToolSpecs } from "agent402-ai-sdk";
+import { agent402ToolSpecs } from "agent402-stream-tools";
 
 const BASE = process.env.AGENT402_BASE_URL || "https://agent402.tools";
 console.log(`[demo] Agent402 base: ${BASE}`);

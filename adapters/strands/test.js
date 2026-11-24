@@ -1,4 +1,4 @@
-// Smoke test for agent402-strands. Spawns its own paywalled server
+// Smoke test for agent402-agent-loop-tools. Spawns its own paywalled server
 // (X402_SYNC_ON_START=false so the facilitator is never contacted; PoW
 // bypasses settlement) and exercises the auto-payment path through a stub
 // Strands `tool({...})` shape.
@@ -96,7 +96,7 @@ async function main() {
   const out3 = await exec("hash", { text: "hello world", algo: "sha256" });
   if (JSON.stringify(out) !== JSON.stringify(out3)) throw new Error("standalone executor disagreed");
 
-  console.log(`PASS — agent402-strands: ${tools.length} tool(s) generated, callback() and execute() returned the real result.`);
+  console.log(`PASS — agent402-agent-loop-tools: ${tools.length} tool(s) generated, callback() and execute() returned the real result.`);
 }
 
 // Spending caps pass through to agent402-client: with none set the client's

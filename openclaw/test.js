@@ -1,4 +1,4 @@
-// Offline test for agent402-openclaw: a stub gateway on loopback stands in for
+// Offline test for agent402-model-provider: a stub gateway on loopback stands in for
 // agent402.tools (GET /v1/models + two tier endpoints that require a Bearer),
 // the real proxy is started against it, and the plugin's register() is driven
 // with a fake OpenClaw api. No network, no keys, no money.
@@ -521,7 +521,7 @@ await p.close();
 {
   const home = mkdtempSync(join(tmpdir(), "a402-oc-bin-"));
   const bin = join(home, "node_modules", ".bin"); mkdirSync(bin, { recursive: true });
-  const link = join(bin, "agent402-openclaw");
+  const link = join(bin, "agent402-model-provider");
   symlinkSync(fileURLToPath(new URL("./cli.js", import.meta.url)), link);
   const viaLink = await run([link, "help"], { ...process.env, AGENT402_OPENCLAW_HOME: home });
   ok(viaLink.status === 0 && /setup/.test(viaLink.stdout), `the CLI runs when invoked through a bin symlink (got status ${viaLink.status}, stdout ${JSON.stringify(viaLink.stdout.slice(0, 40))})`);

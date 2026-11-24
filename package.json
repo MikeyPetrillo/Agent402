@@ -27,8 +27,6 @@
     "llm-tools",
     "ai-tools",
     "self-hosted",
-    "claude",
-    "openai",
     "agents",
     "ai",
     "payments",
@@ -56,7 +54,7 @@
     "algorand",
     "agentic-commerce"
   ],
-  "author": "Havok Holdings LLC <mike@agent402.tools> (https://agent402.tools)",
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC) <mike@agent402.tools> (https://agent402.tools)",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "dependencies": {

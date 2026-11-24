@@ -65,7 +65,7 @@ const { OUR_EVM_WALLETS } = await import("../src/revenue-live.js");
   ok(sp.salePathOf(req({ "x-agent402-via": MCP_MARKER, "user-agent": "agent402-client/0.8.21" }, "::ffff:127.0.0.1")) === "mcp", "the loopback marker wins over a User-Agent");
   ok(sp.salePathOf(req({ "x-agent402-via": MCP_MARKER })) === "http", "the marker from a remote socket is plain http");
   ok(sp.salePathOf(req({ "user-agent": "agent402-client/0.8.21" })) === "agent402-client/0.8.21", "an agent402-client User-Agent books its product token");
-  ok(sp.salePathOf(req({ "user-agent": "agent402-strands/0.1.13 agent402-client/0.8.21" })) === "agent402-strands/0.1.13", "an adapter built on the client books the adapter's own token");
+  ok(sp.salePathOf(req({ "user-agent": "agent402-agent-loop-tools/0.1.13 agent402-client/0.8.21" })) === "agent402-agent-loop-tools/0.1.13", "an adapter built on the client books the adapter's own token");
   ok(sp.salePathOf(req({ "user-agent": "agent402-mcp/0.13.23" })) === "agent402-mcp/0.13.23", "the stdio MCP package books its token");
   ok(sp.salePathOf(req({ "user-agent": "curl/8.7.1" })) === "http" && sp.salePathOf(req({})) === "http", "any other User-Agent, or none, is http");
   ok(sp.salePathOf(req({ "user-agent": "agent402-unknown/1.0" })) === "http", "an unlisted package-looking token is http");
@@ -95,8 +95,8 @@ const { OUR_EVM_WALLETS } = await import("../src/revenue-live.js");
     const used = /"User-Agent": USER_AGENT/.test(src) || /new Agent402\(\{ userAgent: USER_AGENT/.test(src);
     ok(ua === `${pkg.name}/${pkg.version}` && used, `${a}: sends ${pkg.name}/${pkg.version} (${ua})`);
   }
-  const py = readFileSync(new URL("../adapters/langchain-py/agent402_langchain/__init__.py", import.meta.url), "utf8");
-  ok(/_USER_AGENT = f"agent402-langchain-py\/\{__version__\}"/.test(py) && (py.match(/"User-Agent": _USER_AGENT/g) || []).length === 3, "langchain-py sends agent402-langchain-py/<version> on every request");
+  const py = readFileSync(new URL("../adapters/langchain-py/agent402_structured_tools/__init__.py", import.meta.url), "utf8");
+  ok(/_USER_AGENT = f"agent402-structured-tools-py\/\{__version__\}"/.test(py) && (py.match(/"User-Agent": _USER_AGENT/g) || []).length === 3, "langchain-py sends agent402-structured-tools-py/<version> on every request");
   const mcpSrc = readFileSync(new URL("../mcp/index.js", import.meta.url), "utf8");
   ok(/h\.set\("user-agent", `agent402-mcp\/\$\{VERSION\}`\)/.test(mcpSrc), "the stdio MCP package sends agent402-mcp/<version>");
 }

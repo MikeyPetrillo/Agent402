@@ -1,6 +1,6 @@
 # Vercel AI SDK + Agent402 -- runnable demo
 
-Proves that the [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) adapter works: `agent402ToolSpecs()` returns four meta-tools (find/route/call/about) with built-in proof-of-work payment. No wallet, no API key, no framework install required.
+Proves that the [`agent402-stream-tools`](https://www.npmjs.com/package/agent402-stream-tools) adapter works: `agent402ToolSpecs()` returns four meta-tools (find/route/call/about) with built-in proof-of-work payment. No wallet, no API key, no framework install required.
 
 ## Run it
 
@@ -28,7 +28,7 @@ Install the peer dependencies (`npm install ai zod`) and use `agent402Tools()` i
 ```js
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
-import { agent402Tools } from "agent402-ai-sdk";
+import { agent402Tools } from "agent402-stream-tools";
 
 const tools = await agent402Tools();
 const { text } = await generateText({
@@ -41,7 +41,7 @@ const { text } = await generateText({
 ## Troubleshooting
 
 - **`ECONNREFUSED agent402.tools`** -- point at a local instance: `AGENT402_BASE_URL=http://localhost:3000 node run.js` after `FREE_MODE=true npm start` in the repo root.
-- **`agent402-ai-sdk` not found** -- run `npm install` in this folder first.
+- **`agent402-stream-tools` not found** -- run `npm install` in this folder first.
 
 ## See also
 

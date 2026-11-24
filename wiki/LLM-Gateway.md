@@ -28,9 +28,9 @@ simplest is the local wallet proxy, which signs an x402 payment per call from a
 wallet you hold and forwards to the gateway:
 
 ```bash
-npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
+npm i agent402-model-provider @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...   # an EVM key holding USDC on Base
-npx agent402-openclaw proxy        # run from that folder; serves http://127.0.0.1:8412/v1
+npx agent402-model-provider proxy        # run from that folder; serves http://127.0.0.1:8412/v1
 ```
 
 Install the four packages together and start the proxy from that folder: the
@@ -133,9 +133,9 @@ Set a client timeout of at least 120 s: the answer is generated and the payment 
 
 The field is absent when metered would not be materially cheaper, on the metered tier itself, and on streamed responses (a stream has no envelope to carry it). It is not part of the documented response shape, so nothing should depend on its presence.
 
-## OpenClaw provider plugin (`agent402-openclaw`)
+## OpenClaw provider plugin (`agent402-model-provider`)
 
-[OpenClaw](https://openclaw.ai) talks to any OpenAI-compatible provider through one block in `openclaw.json`, and the [`agent402-openclaw`](https://www.npmjs.com/package/agent402-openclaw) npm plugin writes that block for this gateway: `AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write` stores a prepaid credits key ([`/credits`](https://agent402.tools/credits) says whether packs are on sale) and starts a loopback proxy that carries it, so OpenClaw itself never holds a payment credential. `auto` (routed per prompt, flat $0.01 per call) is offered beside every id on `GET /v1/models`; explicit models ride the metered route by default (`--flat` keeps them on their flat tiers), and `setup` picks the cheapest preferred metered model whose input cap holds OpenClaw's own system prompt as the primary. A wallet can pay instead of a credits key (`AGENT402_WALLET_KEY`, an EVM key holding USDC on Base): exact by default, or `upto` after a one-time `agent402-openclaw permit2-approve`, so the wallet settles actual usage; `agent402-openclaw doctor` reports which mode it is in. Full guide: [agent402.tools/guides/openclaw-model-provider](https://agent402.tools/guides/openclaw-model-provider).
+[OpenClaw](https://openclaw.ai) talks to any OpenAI-compatible provider through one block in `openclaw.json`, and the [`agent402-model-provider`](https://www.npmjs.com/package/agent402-model-provider) npm plugin writes that block for this gateway: `AGENT402_CREDITS_KEY=a402_... npx agent402-model-provider setup --write` stores a prepaid credits key ([`/credits`](https://agent402.tools/credits) says whether packs are on sale) and starts a loopback proxy that carries it, so OpenClaw itself never holds a payment credential. `auto` (routed per prompt, flat $0.01 per call) is offered beside every id on `GET /v1/models`; explicit models ride the metered route by default (`--flat` keeps them on their flat tiers), and `setup` picks the cheapest preferred metered model whose input cap holds OpenClaw's own system prompt as the primary. A wallet can pay instead of a credits key (`AGENT402_WALLET_KEY`, an EVM key holding USDC on Base): exact by default, or `upto` after a one-time `agent402-model-provider permit2-approve`, so the wallet settles actual usage; `agent402-model-provider doctor` reports which mode it is in. Full guide: [agent402.tools/guides/openclaw-model-provider](https://agent402.tools/guides/openclaw-model-provider).
 
 ## Image generation
 

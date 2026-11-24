@@ -1,8 +1,8 @@
-# agent402-openclaw
+# agent402-model-provider
 
 Part of [Agent402](https://agent402.tools), open source and self-hostable. Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails.
 
-Agent402 as an [OpenClaw](https://openclaw.ai) model provider: explicit models
+Agent402 as a model provider for use with [OpenClaw](https://openclaw.ai): explicit models
 **priced per request** from the body by default (metered), and the auto-routed
 tier at a **flat per-call price**, paid in **USDC over x402** from a wallet or with a
 prepaid credits key (agent402.tools/credits says whether packs are on sale). The
@@ -10,22 +10,26 @@ same key and gateway reach Agent402's 500+ pay-per-call tools; credits pay
 Agent402's own services, so the routes that buy from an outside seller
 (the route-execute tiers, `seller-payability`, `decide-execute` and the flight routes) need a wallet.
 
+Works with OpenClaw. Agent402 is not affiliated with or endorsed by the OpenClaw project.
+
+Formerly `agent402-openclaw`: the same plugin, provider id and CLI commands under a new name. Install `agent402-model-provider` and run `npx agent402-model-provider` where you ran `npx agent402-openclaw`.
+
 Guide: https://agent402.tools/guides/openclaw-model-provider
 
 ## Install
 
 ```bash
-openclaw plugins install agent402-openclaw
-npx agent402-openclaw setup --write        # no key? it mints a wallet and prints the address to fund
+openclaw plugins install agent402-model-provider
+npx agent402-model-provider setup --write        # no key? it mints a wallet and prints the address to fund
 openclaw gateway restart
 ```
 
 With no credits key and no `AGENT402_WALLET_KEY`, `setup` generates an EVM
 wallet into `~/.openclaw/agent402/wallet.key` (0600, the only copy, never
 printed) and prints its address: send it USDC on Base and every call is paid
-from it over x402. `agent402-openclaw wallet` shows the address and balance;
+from it over x402. `agent402-model-provider wallet` shows the address and balance;
 `--no-wallet` skips the generation. Holding a credits key? Run
-`AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write` (key by env,
+`AGENT402_CREDITS_KEY=a402_... npx agent402-model-provider setup --write` (key by env,
 or `--credits-key -` on stdin).
 
 (`openclaw plugins install` copies the plugin into `~/.openclaw/extensions` and
@@ -41,9 +45,9 @@ pays Agent402 and forwards; OpenClaw only ever sees a local OpenAI-compatible UR
 
 Each release is published to npm and ClawHub. OpenClaw 2026.11.5 and later
 install a bare name from ClawHub, so the command above takes the ClawHub
-listing there; `openclaw plugins install npm:agent402-openclaw` takes the npm
+listing there; `openclaw plugins install npm:agent402-model-provider` takes the npm
 package. Earlier hosts install the bare name from npm, and
-`openclaw plugins install clawhub:agent402-openclaw` takes the ClawHub listing
+`openclaw plugins install clawhub:agent402-model-provider` takes the ClawHub listing
 and shows its security audit first.
 
 OpenClaw 2026.10.1 and later reserve the verified-source badge for plugins in
@@ -60,7 +64,7 @@ one before it, plus a daily run against the newest published one): plugin
 install from a packed archive, the npm registry and ClawHub, doctor, setup, model
 listing, gateway boot and one agent turn (`test-real-install.js`).
 
-No OpenClaw? `agent402-openclaw proxy` runs the proxy alone; point any OpenAI
+No OpenClaw? `agent402-model-provider proxy` runs the proxy alone; point any OpenAI
 client at `http://127.0.0.1:8412/v1`. An explicit model rides the metered route
 by default (each request quoted from its body, and settlement never exceeds the
 quote); model `auto` takes the flat routed tier.
@@ -111,11 +115,11 @@ Two ways the wallet can pay a metered call:
 
 - **exact** (default): the 402 quotes the call from its body (input + your
   `max_tokens`) and the wallet pays that quote.
-- **upto, actual usage**: run `agent402-openclaw permit2-approve` once (one USDC
+- **upto, actual usage**: run `agent402-model-provider permit2-approve` once (one USDC
   approval transaction on Base; the wallet needs a little ETH for gas). From
   then on the proxy authorizes the quote as a CEILING and the gateway settles
   what the call actually used, so a short answer costs a fraction of the
-  quote. `agent402-openclaw doctor` says which mode the wallet is in.
+  quote. `agent402-model-provider doctor` says which mode the wallet is in.
 
 Credits-key buyers already pay actual usage on metered calls.
 
@@ -142,16 +146,16 @@ the key.
 
 The credits key stays out of what the proxy prints: an upstream or network
 error is logged and answered (the 502 body) with the key cut out as
-`[redacted]`, and `agent402-openclaw doctor` reports the key as `present` or
+`[redacted]`, and `agent402-model-provider doctor` reports the key as `present` or
 `none`, never any part of it.
 
 ## Commands
 
-- `agent402-openclaw setup [--credits-key K | --credits-key - (stdin) | AGENT402_CREDITS_KEY env] [--no-wallet] [--write] [--port N] [--flat]`
-- `agent402-openclaw proxy [--port N] [--upstream URL]`
-- `agent402-openclaw doctor`
-- `agent402-openclaw wallet [--rpc URL]` (address + USDC balance of the wallet the proxy pays from)
-- `agent402-openclaw permit2-approve [--rpc URL]` (one-time USDC approval so the wallet pays actual usage over upto)
+- `agent402-model-provider setup [--credits-key K | --credits-key - (stdin) | AGENT402_CREDITS_KEY env] [--no-wallet] [--write] [--port N] [--flat]`
+- `agent402-model-provider proxy [--port N] [--upstream URL]`
+- `agent402-model-provider doctor`
+- `agent402-model-provider wallet [--rpc URL]` (address + USDC balance of the wallet the proxy pays from)
+- `agent402-model-provider permit2-approve [--rpc URL]` (one-time USDC approval so the wallet pays actual usage over upto)
 
 ## What else the same key buys
 

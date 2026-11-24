@@ -65,7 +65,7 @@ if (!existsSync(stubFile) || !readFileSync(stubFile, "utf8").includes("agent402-
 }
 
 const { Agent } = await import("@strands-agents/sdk");
-const { agent402Tools } = await import("agent402-strands");
+const { agent402Tools } = await import("agent402-agent-loop-tools");
 
 const BASE = process.env.AGENT402_BASE_URL || "https://agent402.tools";
 console.log(`[demo] Agent402 catalog: ${BASE}`);

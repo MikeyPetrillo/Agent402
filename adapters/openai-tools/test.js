@@ -1,4 +1,4 @@
-// Smoke test for agent402-openai-tools. Spawns its own paywalled server
+// Smoke test for agent402-function-calling. Spawns its own paywalled server
 // (X402_SYNC_ON_START=false so the facilitator is never contacted; PoW bypasses
 // settlement) and exercises the auto-payment path through the OpenAI tool shape.
 import { spawn, execSync } from "node:child_process";
@@ -57,7 +57,7 @@ async function main() {
   const out2 = await exec("hash", { text: "hello world", algo: "sha256" });
   if (JSON.stringify(out) !== JSON.stringify(out2)) throw new Error("standalone executor disagreed with bundled one");
 
-  console.log(`PASS — agent402-openai-tools: ${tools.length} tool(s) generated, execute() returned a real result.`);
+  console.log(`PASS — agent402-function-calling: ${tools.length} tool(s) generated, execute() returned a real result.`);
 }
 
 // Spending caps pass through to agent402-client: with none set the client's
