@@ -7,6 +7,9 @@ name: Sync 402 Index listing prices
 permissions:
   contents: read
   issues: write
+  # The outage streak reads earlier runs and their annotations.
+  actions: read
+  checks: read
 
 on:
   workflow_dispatch:
@@ -80,16 +83,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CODE: ${{ steps.sync.outputs.code }}
+          INDEX402_UNAVAILABLE_PAGE_RUNS: ${{ vars.INDEX402_UNAVAILABLE_PAGE_RUNS }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           # No code means the step never finished (a job limit, a setup failure).
           CODE="${CODE:-1}"
-          # 4: the index did not answer. Its outage pages nothing and closes
-          # nothing (the sync was not proven); the step above left a warning.
-          if [ "$CODE" = "4" ]; then echo "The index was unavailable on this run: nothing opened or closed."; exit 0; fi
           FAIL_TITLE="Scheduled check needs review: index-price-sync"
           BACK_TITLE="Scheduled check needs review: index-price-writeback"
+          AVAIL_TITLE="Scheduled check needs review: index-availability"
           # Only this workflow's own issues and comments count: an issue or a
           # marker comment written by anyone else is not read.
           open_issue() {
@@ -98,6 +100,30 @@ jobs:
           }
           FAIL_OPEN="$(open_issue "$FAIL_TITLE" || true)"
           BACK_OPEN="$(open_issue "$BACK_TITLE" || true)"
+          AVAIL_OPEN="$(open_issue "$AVAIL_TITLE" || true)"
+
+          # 4: the index did not answer (the step above left a warning). One
+          # run is its outage and pages nothing; INDEX402_UNAVAILABLE_PAGE_RUNS
+          # scheduled runs in a row (default 3, counted from the earlier runs'
+          # warnings, scripts/index402-outage-streak.js) open one issue, which
+          # a run that reaches the index closes. Unreadable earlier runs open
+          # and close nothing.
+          if [ "$CODE" = "4" ]; then
+            NEED="${INDEX402_UNAVAILABLE_PAGE_RUNS:-3}"
+            case "$NEED" in ''|*[!0-9]*) NEED=3 ;; esac
+            PRIOR="$(node scripts/index402-outage-streak.js 2>/dev/null || echo unknown)"
+            case "$PRIOR" in ''|*[!0-9]*) echo "The index was unavailable on this run; earlier runs could not be read: nothing opened or closed."; exit 0 ;; esac
+            STREAK=$((PRIOR + 1))
+            echo "The index was unavailable on this run ($STREAK scheduled runs in a row; pages at $NEED)."
+            if [ "$STREAK" -ge "$NEED" ] && [ -z "$AVAIL_OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$AVAIL_TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
+            fi
+            exit 0
+          fi
+          # 0 and 3: the index answered every read and write; its outage is over.
+          if { [ "$CODE" = "0" ] || [ "$CODE" = "3" ]; } && [ -n "$AVAIL_OPEN" ]; then
+            gh issue close "$AVAIL_OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
 
           # The sync itself: with 0 and 3 every read and write worked.
           if [ "$CODE" = "0" ] || [ "$CODE" = "3" ]; then

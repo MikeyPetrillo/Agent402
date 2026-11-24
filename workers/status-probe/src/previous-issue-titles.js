@@ -60,6 +60,7 @@ export const PREVIOUS_TITLES = Object.freeze({
   "history-reads": ["Solana history reads FAILING on every lane"],
   "index-price-sync": ["402 Index price sync FAILING"],
   "index-price-writeback": ["402 Index listing written back at an old price"],
+  "index-availability": [],
   "late-settlements": ["Late settlements need attention"],
   "ledger-rows": ["Ledger rows waiting on local disk (dead-letter stuck)"],
   "listing-keep-alive": ["Bazaar keep-alive FAILED - listings will age out"],
