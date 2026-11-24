@@ -21,7 +21,7 @@ Tools:
   funding and basis minPct and maxPct, or openInterest.totalUsd; it returns
   each venue's annualizedPct rounded to 0.01, percentile, basisVsMedianPct and
   flags (extreme-positive-funding, extreme-negative-funding, far-from-median),
-  annualizedMedianPct, basis.rangePct and openInterest.tier.
+  annualizedMedianPct, basis.rangePct and openInterest.tier in each answer.
 - dex-pool-health no longer returns liquidityUsd, volume24hUsd,
   lockedLiquidityPct, activity24h.trades or the recent trades' medianUsd,
   p90Usd and largestUsd; it returns a 0-100 healthScore from five stated
@@ -34,7 +34,7 @@ Tools:
   change24hPct, athDrawdownPct or market.change24hPct; capRank is its own
   place among the 250 largest coins, and it returns change24hPercentile,
   athDrawdownBand and market.outpacingMarketSharePct. dex-volume-board no
-  longer returns totals.volume24hUsd or totals.liquidityUsd.
+  longer returns totals.volume24hUsd or totals.liquidityUsd in its answer.
 - stablecoin-peg no longer returns each coin's price, high24h, low24h and
   marketCap; it returns capRank and marketCapSharePct. token-diligence no
   longer returns each row's market block, supply counts or rank, or the market
