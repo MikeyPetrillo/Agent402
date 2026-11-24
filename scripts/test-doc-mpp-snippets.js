@@ -1,9 +1,9 @@
 // The MPP snippets the docs publish are run as written: each JavaScript
 // block that pays with mppx is taken from its file, pointed at a local paid
 // server (the MPP shim over a stub facilitator) and must come back paid. A
-// reader copies these blocks; a block that cannot sign (an evm method given
-// no currencies has no token name and version to sign with) fails here, where
-// a suite that builds its own client would pass.
+// reader copies these blocks; a block that cannot pay (an evm method whose
+// currencies leave out the token the 402 asks for) fails here, where a suite
+// that builds its own client would pass.
 //
 // Nothing leaves this process: every fetch to a host other than the local
 // server or its stub facilitator fails the run.
@@ -102,7 +102,7 @@ const KNOWN = { "mppx/client": mppxClient, "viem/accounts": viemAccounts, "agent
 /** Run one published block: its imports bound to the installed modules, the
  *  site's URL to the local server, its key to a throwaway one. Returns the
  *  values of the names it declares that a reader would look at. */
-async function runBlock(code, { strip = false } = {}) {
+async function runBlock(code, { foreignCurrency = false } = {}) {
   const bound = {};
   let body = code.replace(/^import\s*\{([^}]*)\}\s*from\s*"([^"]+)";?[ \t]*$/gm, (line, names, mod) => {
     if (!KNOWN[mod]) throw new Error(`the block imports ${mod}, which this suite does not bind`);
@@ -111,8 +111,11 @@ async function runBlock(code, { strip = false } = {}) {
   });
   if (/^\s*import\s/m.test(body)) throw new Error("the block has an import this suite does not read");
   body = body.replaceAll("https://agent402.tools", B);
-  // The fault the docs had: the same block with the currencies taken out.
-  if (strip) body = body.replace(/,\s*currencies\s*:\s*\[[^\]]*\]/g, "");
+  // A block that cannot pay: the same block listing only a token this server
+  // does not ask for (USDC on Base Sepolia), which the evm method refuses to
+  // sign for. (Without a currencies list mppx 0.21 signs for any token it
+  // knows, so taking the list out is no longer a fault.)
+  if (foreignCurrency) body = body.replace(/currencies\s*:\s*\[[^\]]*\]/g, "currencies: [evm.assets.baseSepolia.USDC]");
   if (!("Agent402" in bound) && /\bAgent402\b/.test(body)) bound.Agent402 = LocalAgent402;
   const KEY = viemAccounts.generatePrivateKey();
   process.env.AGENT_KEY = KEY;
@@ -133,13 +136,13 @@ try {
     const paidOk = res ? res.status === 200 && !!res.headers?.get?.("payment-receipt") : got && (got.verdict || got.out) && typeof (got.verdict || got.out) === "object";
     ok(!err && paidOk && fac.settle === before.settle + 1 && fac.verify === before.verify + 1, `${file}: the published mppx block pays the local server as written (${err ? `threw: ${String(err.message).slice(0, 160)}` : res ? `HTTP ${res.status}` : "SDK call answered"}; +${fac.verify - before.verify} verify, +${fac.settle - before.settle} settle)`);
   }
-  // Control: with the currencies taken out the same block cannot pay, so the runs above are what catch it.
+  // Control: listing only a token the server does not ask for, the same block cannot pay, so the runs above are what catch it.
   {
     const first = blocks.find((b) => b.file === "README.md");
     const before = { ...fac };
     let got = null, err = null;
-    try { got = await runBlock(first.code, { strip: true }); } catch (e) { err = e; }
-    ok((err !== null || got?.res?.status !== 200) && fac.settle === before.settle, `control: the README block with no currencies does not pay (${err ? String(err.message).slice(0, 90) : `HTTP ${got?.res?.status}`})`);
+    try { got = await runBlock(first.code, { foreignCurrency: true }); } catch (e) { err = e; }
+    ok((err !== null || got?.res?.status !== 200) && fac.settle === before.settle, `control: the README block listing only a token the server does not ask for does not pay (${err ? String(err.message).slice(0, 90) : `HTTP ${got?.res?.status}`})`);
   }
   ok(left.length === 0, `no snippet reached a host other than the local server (${left.slice(0, 3).join(", ") || "none"})`);
 } finally {
