@@ -39,9 +39,65 @@ const MAX_FETCH = 8 * 1024 * 1024; // 8 MB cap when fetching from a URL
 // working directory.
 export const TESSDATA_DIR = resolve(process.env.OCR_TESSDATA_DIR || fileURLToPath(new URL("../../tessdata", import.meta.url)));
 const TESS_CACHE_DIR = join(tmpdir(), "agent402-tessdata-cache");
+const TESSERACT_WORKER = fileURLToPath(new URL("./tesseract-worker.cjs", import.meta.url));
 
 export function tessdataInstalled(lang) {
   return existsSync(join(TESSDATA_DIR, `${lang}.traineddata.gz`));
+}
+
+// What recognize() is asked for. tesseract.js returns only the text unless an
+// output is named: `blocks` is the page tree (blocks, paragraphs, lines, words)
+// the per-line text and boxes come from, and `tsv` carries each word's
+// confidence to six places, which the tree rounds down to a whole number.
+export const OCR_OUTPUT = Object.freeze({ text: true, blocks: true, tsv: true });
+
+/** Each word's confidence per line, from the TSV, keyed by the line's box
+ *  (null for a box two lines share, so neither borrows the other's words). */
+function tsvLineWords(tsv) {
+  const out = new Map();
+  if (typeof tsv !== "string") return out;
+  let words = null;
+  for (const row of tsv.split("\n")) {
+    const c = row.split("\t");
+    if (c[0] === "4") {
+      const [x0, y0, w, h] = [c[6], c[7], c[8], c[9]].map(Number);
+      const box = `${x0},${y0},${x0 + w},${y0 + h}`;
+      words = out.has(box) ? null : [];
+      out.set(box, words);
+    } else if (c[0] === "5" && words) {
+      const conf = Number(c[10]);
+      if (Number.isFinite(conf)) words.push(conf);
+    }
+  }
+  return out;
+}
+
+/**
+ * The answer's per-line rows from a recognize() result: the text, the line's
+ * confidence (0-100, two places) and its box, in reading order. Tesseract's
+ * line confidence is 100 + 5 x its words' mean certainty, which is the mean of
+ * the words' confidences while no word is clipped at 0; the tree carries it
+ * rounded down to a whole number. So a line whose words the TSV lists (same
+ * box) with none at 0 gets that mean, and any other line the whole number.
+ */
+export function ocrLines(data) {
+  const words = tsvLineWords(data?.tsv);
+  const lines = [];
+  for (const b of data?.blocks ?? []) for (const p of b?.paragraphs ?? []) for (const l of p?.lines ?? []) lines.push(l);
+  return lines.map((l) => {
+    const bbox = l.bbox ? { x0: l.bbox.x0, y0: l.bbox.y0, x1: l.bbox.x1, y1: l.bbox.y1 } : null;
+    let confidence = typeof l.confidence === "number" ? l.confidence : null;
+    const ws = bbox ? words.get(`${bbox.x0},${bbox.y0},${bbox.x1},${bbox.y1}`) : null;
+    if (confidence !== null && ws?.length && ws.every((x) => x > 0)) {
+      const mean = ws.reduce((a, x) => a + x, 0) / ws.length;
+      if (Math.floor(mean) === Math.floor(confidence)) confidence = mean;
+    }
+    return {
+      text: (l.text ?? "").replace(/\s+$/g, ""),
+      confidence: confidence === null ? null : +confidence.toFixed(2),
+      bbox,
+    };
+  });
 }
 
 // One tesseract.js worker per language, in a small map with least-recently-used
@@ -94,6 +150,8 @@ function startEntry(lang) {
   const started = loadTesseract().then(({ createWorker }) => createWorker(lang, undefined, {
     langPath: TESSDATA_DIR,
     cachePath: TESS_CACHE_DIR,
+    // The package's worker script, answering each job once (see the file).
+    workerPath: TESSERACT_WORKER,
     cacheMethod: "none",
     gzip: true,
     // CRITICAL: on a worker 'reject' (e.g. a malformed image tesseract can't
@@ -689,7 +747,7 @@ async function doRecognize(buf, lang, fmt, pixels = 0, who = null, req = null, h
       entry = large ? startOwnEngine(lang) : getWorkerEntry(lang);
       entry.active++;
       // A run that is cut short is not waited for: its engine is terminated below.
-      const work = entry.promise.then((worker) => worker.recognize(buf)).then((r) => ({ data: r.data }), (error) => ({ error }));
+      const work = entry.promise.then((worker) => worker.recognize(buf, {}, OCR_OUTPUT)).then((r) => ({ data: r.data }), (error) => ({ error }));
       out = await Promise.race([work, stop]);
     }
     if (out.cut) {
@@ -803,11 +861,7 @@ async function readImageText(i, req) {
   // What this call holds while it waits: the image, and its base64 text when sent that way.
   const heldBytes = buf.length + (typeof i.image === "string" ? i.image.length : 0);
   const data = await doRecognize(buf, lang, fmt, width * height, ocrCallerOf(req), req, heldBytes);
-  const lines = (data.lines ?? []).map((l) => ({
-    text: (l.text ?? "").replace(/\s+$/g, ""),
-    confidence: typeof l.confidence === "number" ? +l.confidence.toFixed(2) : null,
-    bbox: l.bbox ? { x0: l.bbox.x0, y0: l.bbox.y0, x1: l.bbox.x1, y1: l.bbox.y1 } : null,
-  }));
+  const lines = ocrLines(data);
   return {
     text: (data.text ?? "").replace(/\s+$/g, ""),
     confidence: typeof data.confidence === "number" ? +data.confidence.toFixed(2) : null,
