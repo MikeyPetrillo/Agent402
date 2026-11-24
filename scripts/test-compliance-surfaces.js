@@ -81,7 +81,7 @@ const ph = island ? JSON.parse(island[1].replace(/\\u003c/g, "<")) : { cfg: {} }
 ok(ph.cfg.autocapture === false, "PostHog: autocapture off (no clicks or inputs captured)");
 ok(ph.cfg.disable_session_recording === true, "PostHog: session recording off");
 ok(!ph.cfg.enable_heatmaps && !ph.cfg.capture_dead_clicks, "PostHog: heatmaps and dead-click capture not turned on");
-ok(ph.cfg.persistence === "sessionStorage", "PostHog: no cookie (session storage only)");
+ok(ph.cfg.persistence === "memory", "PostHog: no cookie and no browser storage (memory only)");
 ok(/no session replay/i.test(privacyText) && /Google Analytics/.test(privacyText), "privacy names the page counter, its lack of replay, and Google Analytics");
 
 // 4. Recurring email carries its stop path

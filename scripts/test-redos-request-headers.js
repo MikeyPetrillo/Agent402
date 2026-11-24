@@ -103,7 +103,7 @@ function shaped(n) {
 const HEADERS = ["user-agent", "accept", "accept-language", "referer", "origin", "x-forwarded-for", "authorization", "x-payment", "payment-signature", "x-operator-token", "cookie", "if-none-match", "range", "idempotency-key"];
 // Further headers a gate, the connector or the edge code reads; each gets the
 // general shapes.
-const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call", "x-agent402-via-run", "x-agent402-via-grant", "x-agent402-async-run", "signature", "signature-input", "signature-agent", "content-digest", "x-wallet-session"];
+const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call", "x-agent402-via-run", "x-agent402-via-grant", "x-agent402-async-run", "signature", "signature-input", "signature-agent", "content-digest", "x-wallet-session", "cf-ipcountry"];
 
 // --- the readers the surfaces do not reach, timed directly --------------------
 // Synchronous functions, so a reading is the time this thread had a core.
@@ -119,6 +119,7 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const tapMw = webBotAuth.createWebBotAuth({ fetchDirectory: async () => null, fetchRegistryKey: async () => { throw new Error("not read here"); }, note: () => {}, origin: () => ({ authority: "redos.example.test", scheme: "https" }) }).middleware();
   const TAP_INPUT = `sig2=("@method" "@authority" "@path" "content-digest");created=${Math.floor(Date.now() / 1000)};expires=${Math.floor(Date.now() / 1000) + 60};keyid="${"A".repeat(43)}";alg="ed25519";tag="agent-payer-auth"`;
   const walletSignIn = await import("../src/wallet-sign-in.js");
+  const consentRegion = await import("../src/consent-region.js");
   const walletSvc = walletSignIn.createWalletSignIn({ env: { SIWE_SESSION_SECRET: "r".repeat(40) }, baseUrl: "https://redos.example.test" });
   const sources = await import("../src/funnel-sources.js");
   // Read only for a gated User-Agent (python-httpx/ by default), which the boots below never send.
@@ -166,6 +167,7 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
     "returning-wallet walletHintOf (x-agent402-wallet)": (v) => returningWallet.walletHintOf({ headers: { "x-agent402-wallet": v } }),
     "returning-wallet walletProofShape (x-agent402-wallet-proof)": (v) => returningWallet.walletProofShape(v),
     "mcp-http lenientMcpAccept (accept)": (v) => mcpHttp.lenientMcpAccept(v),
+    "consent-region consentRegionRoute (cf-ipcountry)": (v) => consentRegion.consentRegionRoute({ get: () => v }, { set() { return this; }, json() { return this; } }),
   };
   for (const [name, fn] of Object.entries(traffic)) {
     // Every exported reader of the traffic classifier that takes one string.

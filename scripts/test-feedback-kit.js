@@ -128,7 +128,7 @@ const err = (p) => p.then((v) => v, (e) => e);
   await handler({ tx: "0xtx3", verdict: "bad", reason: "the report cited one source and called it research" }, as(MINE));
   eq(logged.length, 1, "a bad verdict is logged for a human - collecting complaints nobody reads is how the last one sat unread for eleven days");
   ok(/research/.test(logged[0]) && /0xtx3/.test(logged[0]), "the log names the tool and the settlement transaction");
-  ok(/cited one source/.test(logged[0]), "and the buyer's own words");
+  ok(!/cited one source/.test(logged[0]) && /reason kept with the verdict/.test(logged[0]), "but never the buyer's own words: they stay in the feedback record, not the operational log");
   logged.length = 0;
   await handler({ tx: "0xtx1", verdict: "good", reason: "fine" }, as(MINE));
   eq(logged.length, 0, "a good verdict pages nobody");

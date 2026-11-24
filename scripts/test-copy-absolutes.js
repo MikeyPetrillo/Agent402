@@ -1091,7 +1091,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "src/svm-facilitator-split.js": "3afac15f3c3a",
     "src/svm-funding-refusal.js": "c00679c3beff",
     "src/tempo-buyer.js": "1407c610e202",
-    "src/tools/attest-kit.js": "7f4fe318f486",
+    "src/tools/attest-kit.js": "0a7ec988cee1",
     "src/tools/cdp-kit.js": "a081d5aac2f7",
     "src/tools/decide-kit.js": "70d63ba14e6a",
     "src/tools/dub-kit.js": "1dd69d7461ab",

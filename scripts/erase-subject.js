@@ -2,6 +2,7 @@
 // Erase a person's data by email address across every store that can hold one.
 //
 //   node scripts/erase-subject.js <email> [--dry] [--data-root DIR]
+//   node scripts/erase-subject.js --wallet <address> [--export] ... (see below)
 //
 // The privacy policy promises deletion on request. This walks every store that
 // keeps an address, prints per store what it removed (or, with --dry, what it
@@ -51,6 +52,46 @@ import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from
 import { join } from "node:path";
 
 const args = process.argv.slice(2);
+
+// ---- By wallet: erase or export, on a message signed by that wallet ---------
+//   node scripts/erase-subject.js --wallet <address> --message-file <file> --signature <sig> [--dry]
+//   node scripts/erase-subject.js --wallet <address> --export --message-file <file> --signature <sig> [--out <file>]
+// The message is the exact text src/subject-wallet.js subjectRequestMessage
+// prints (Action: erase or export, the wallet, a date within 14 days), signed
+// by the wallet: EIP-191 on EVM, Ed25519 on Solana, SEP-53 on Stellar. The
+// request is refused unless the signature verifies. State database only (the
+// production store); the telemetry id secret must match the server's
+// (TELEMETRY_ID_SECRET, else POW_SECRET, else MPP_SECRET_KEY) so an erased
+// first-call grant is still recognized. `--print-message` prints the text to
+// sign and exits.
+if (args.includes("--wallet")) {
+  const val = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
+  const { verifySubjectRequest, walletSubjectRun, subjectRequestMessage, walletKind } = await import("../src/subject-wallet.js");
+  const wallet = String(val("--wallet") || "").trim();
+  const action = args.includes("--export") ? "export" : "erase";
+  if (!walletKind(wallet)) { console.error("usage: --wallet <EVM 0x address | Solana address | Stellar G... account>"); process.exit(2); }
+  if (args.includes("--print-message")) { console.log(subjectRequestMessage({ action, wallet, date: new Date().toISOString().slice(0, 10) })); process.exit(0); }
+  const file = val("--message-file");
+  const message = file ? readFileSync(file, "utf8") : val("--message");
+  const v = await verifySubjectRequest({ action, wallet, message, signature: val("--signature") });
+  if (!v.ok) { console.error(`refused: ${v.reason}`); process.exit(3); }
+  const sdb = await import("../src/state-db.js");
+  if (!sdb.stateDbEnabled()) { console.error("a wallet request runs against the state database: set STATE_DATABASE_URL"); process.exit(2); }
+  const dryW = args.includes("--dry");
+  const out = await walletSubjectRun({ query: (t, p) => sdb.stateQuery(t, p), schema: sdb.stateDbSchema(), wallet, action, dry: dryW });
+  console.log(`${dryW ? "[dry run] " : ""}${action} ${wallet} (${v.kind}, signed ${v.date}) in the state database (schema ${sdb.stateDbSchema()})`);
+  for (const r of out.report) console.log(` - ${r.store}: ${r.count ?? "-"} ${r.note}`);
+  if (action === "export") {
+    const body = JSON.stringify({ wallet, exportedAt: new Date().toISOString(), stores: out.data }, null, 2);
+    const dest = val("--out");
+    if (dest) { writeFileSync(dest, body, { mode: 0o600 }); console.log(`export written to ${dest}`); } else console.log(body);
+  } else if (!dryW) {
+    console.log("Backups hold the erased rows until they age out (see /privacy, Backups).");
+  }
+  await sdb.closeStateDb().catch(() => {});
+  process.exit(out.failed ? 1 : 0);
+}
+
 const rootIdx = args.indexOf("--data-root");
 const rootGiven = rootIdx >= 0 && Boolean(args[rootIdx + 1]);
 const email = String(args.find((a, i) => !a.startsWith("--") && !(rootGiven && i === rootIdx + 1)) || "").trim().toLowerCase();

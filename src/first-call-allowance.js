@@ -72,6 +72,7 @@ import { getSharedRedisClient } from "./shared-limit.js";
 import { withLoopTimeout } from "./loop-deadline.js";
 import { keyOf, OP_MS } from "./shared-limits.js";
 import { stateDbEnabled, records } from "./state-db.js";
+import { allowanceRecordKey } from "./subject-wallet.js";
 import { handlerInputOf } from "./handler-input.js";
 import { wantsShare, answerShareEnabled } from "./answer-share.js";
 import { decodePaymentHeader } from "./payment-header.js";
@@ -399,7 +400,13 @@ export async function claimFirstCallAllowance(req, res, def, { ip = null, synthe
   if (paid) return deny("paid before", "returning");
   if (stateDbEnabled()) {
     let seen = true;
-    try { seen = (await records.get(RECORD_COLLECTION, payer)) != null; } catch { seen = true; }
+    // A wallet that asked to be erased keeps its grant under a keyed hash
+    // (src/subject-wallet.js allowanceRecordKey), still never granted twice.
+    try {
+      seen = (await records.get(RECORD_COLLECTION, payer)) != null;
+      const erasedKey = seen ? null : allowanceRecordKey(payer);
+      if (erasedKey) seen = (await records.get(RECORD_COLLECTION, erasedKey)) != null;
+    } catch { seen = true; }
     if (seen) return deny("wallet already granted", "returning");
   }
   // From here the payer is known new: no paid sale and no grant record.
@@ -554,6 +561,8 @@ export async function listServedGrants({ max = RETURNED_MAX_GRANTS } = {}) {
     const page = await records.list(RECORD_COLLECTION, { limit: RETURNED_PAGE, after });
     for (const r of page) {
       if (grants.length >= max) return { grants, complete: false };
+      // An erased wallet's record names no address to read sales by.
+      if (String(r.id).startsWith("erased:")) continue;
       grants.push({ payer: r.id, grantedAtMs: Date.parse(r.body?.grantedAt) });
     }
     if (page.length < RETURNED_PAGE) return { grants, complete: true };

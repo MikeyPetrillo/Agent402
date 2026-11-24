@@ -71,7 +71,7 @@ t node scripts/test-ga-key-events.js
 t node scripts/test-reports-prefill.js
 # The guide site: named in the menu, /learn, /how-to-pay and llms.txt as plain links; this site's explainer pages link its explainers, keep their own canonical and stay indexable
 t node scripts/test-guide-site-links.js
-# Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
+# Page analytics in a DOM: one consent decision, nothing loads in Europe before Allow (time zone or the CDN country), PostHog in memory, equal buttons, GPC loads nothing, the footer reopens the choice
 t node scripts/test-analytics-privacy.js
 # Age, self-hosted fonts, analytics off-switches, recurring-mail stop links, renewal terms after purchase, the copyright agent
 t node scripts/test-compliance-surfaces.js
@@ -178,6 +178,10 @@ t node scripts/test-tts-lite.js
 t node scripts/test-tts-elevenlabs.js
 # AI-generated voice disclosure: every speech tool says so before payment and in every answer (field or header) (offline)
 t node scripts/test-ai-voice.js
+# AI-generated mark: every model-backed answer carries X-AI-Generated (and aiGenerated on JSON), bytes untouched; the whole catalog on a booted server
+t node scripts/test-ai-generated.js
+# The Data Processing Addendum: entity, roles, SCC modules and UK Addendum by reference, the /trust sub-processors, breach window, links, sitemap and date
+t node scripts/test-dpa-page.js
 # TTS per-request quote: anchors, round-up, floor, the served body, refusals before any spend (offline); the margin at every length against the private rows
 t node scripts/test-tts-quote.js
 t node scripts/test-tts-margins.js

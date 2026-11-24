@@ -23,6 +23,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { telemetryPayerKey } from "../src/posthog.js";
+const pk = (w) => telemetryPayerKey(w, { idSecret: "settlement-event-telemetry-secret" });
 requireUpstreamCosts("test-settlement-event");
 
 let pass = 0, fail = 0, srv = null, facilitator = null, upstream = null;
@@ -93,7 +95,7 @@ const bootOpts = {
   env: { TRUST_PROXY_HOPS: "1", SLOW_SYNC_WINDOW_SECONDS: "off", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "",
-    POSTHOG_API_KEY: "", POSTHOG_TEST_CAPTURE: "1",
+    POSTHOG_API_KEY: "", POSTHOG_TEST_CAPTURE: "1", TELEMETRY_ID_SECRET: "settlement-event-telemetry-secret",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
@@ -136,13 +138,21 @@ try {
 
   // 1. Direct paid call: one settlement, one event.
   const r1 = await post({ "x-forwarded-for": "10.9.1.2", "payment-signature": credential(wallet(1)) });
-  await r1.arrayBuffer();
+  const r1Body = Buffer.from(await r1.arrayBuffer());
+  // The AI-generated mark (src/ai-generated.js) on a real paid model-backed answer.
+  {
+    const ct = r1.headers.get("content-type") || "";
+    let json = null; try { json = /json/.test(ct) ? JSON.parse(r1Body.toString("utf8")) : null; } catch { /* bytes */ }
+    ok(r1.status === 200 && r1.headers.get("x-ai-generated") === "true", `a paid model-backed answer carries X-AI-Generated: true (got ${r1.headers.get("x-ai-generated")})`);
+    ok(json === null || json.aiGenerated === true, "and a JSON answer the field aiGenerated: true");
+    if (json === null) ok(r1Body.subarray(0, 8).equals(Buffer.from(PNG_B64, "base64").subarray(0, 8)), "the image bytes are the upstream's, passed through untouched");
+  }
   await agree();
   const e1 = settledEvents();
   ok(r1.status === 200 && fac.settle === 1, `a direct paid call answers 200 and settles once (got ${r1.status}, settles ${fac.settle})`);
   ok(e1.length === 1 && e1[0].properties.slug === SLUG && e1[0].properties.rail === "usdc" && e1[0].properties.paid === true && e1[0].properties.network === "base",
     `exactly one payment_settled for it, slug=${SLUG} rail=usdc on Base (got ${e1.length}: ${JSON.stringify(e1.map((e) => e.properties))})`);
-  ok(e1[0]?.properties.payer === wallet(1), "the event names the signed payer");
+  ok(e1[0]?.properties.payerKey === pk(wallet(1)) && !("payer" in e1[0].properties), "the event names the signed payer by its keyed hash, never the address");
 
   // 2. Prefer: respond-async: the 202 emits nothing; the replay emits one.
   const r2 = await post({ prefer: "respond-async", "x-forwarded-for": "10.9.1.3", "payment-signature": credential(wallet(2)) });
@@ -154,7 +164,7 @@ try {
   await agree();
   ok(done2 && g2.status === "completed" && fac.settle === 2, `the job completes and settles once (status ${g2.status}, settles ${fac.settle})`);
   const e2 = settledEvents();
-  ok(e2.length === 2 && e2[1].properties.slug === SLUG && e2[1].properties.payer === wallet(2), `the replayed call emits exactly one payment_settled, for its payer (got ${e2.length})`);
+  ok(e2.length === 2 && e2[1].properties.slug === SLUG && e2[1].properties.payerKey === pk(wallet(2)) && !("payer" in e1[0].properties), `the replayed call emits exactly one payment_settled, for its payer (got ${e2.length})`);
 
   // 3. A handler 4xx with a valid payment: nothing settles, nothing is emitted.
   const r3 = await post({ "x-forwarded-for": "10.9.1.4", "payment-signature": credential(wallet(3)) }, PATH, JSON.stringify({}));
@@ -184,7 +194,7 @@ try {
   ok(await waitFor(() => fac.settle === 3, 10_000), `the abandoned run is settled anyway (no ticket) (settles ${fac.settle})`);
   await agree();
   const e5 = settledEvents();
-  ok(e5.length === 3 && e5[2].properties.slug === SLUG && e5[2].properties.payer === wallet(5) && e5[2].properties.paid === true,
+  ok(e5.length === 3 && e5[2].properties.slug === SLUG && e5[2].properties.payerKey === pk(wallet(5)) && !("payer" in e1[0].properties) && e5[2].properties.paid === true,
     `the settlement the buyer never received still emits exactly one payment_settled (got ${e5.length})`);
   ok(serverLog().some((l) => /\[hangup\] CHARGED-BUT-NOT-SERVED/.test(l)), "and the charge is booked as owed in the refund ledger");
   // The sales ledger and the served-call tally ride the same hook.

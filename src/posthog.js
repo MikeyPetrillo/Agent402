@@ -6,7 +6,10 @@
 // streaming error events to PostHog.
 //
 // Privacy posture matches the rest of the project:
-//   - No caller IP, wallet, payment, body, headers, or query values are sent.
+//   - No caller IP, wallet address, payment, body, headers, or query values
+//     are sent. A paying wallet rides only as `payerKey`, a keyed hash
+//     (telemetryPayerKey below), which groups a payer's events and cannot be
+//     reversed without our secret.
 //   - distinctId is a fixed server-side identifier (we have no end-user — the
 //     "user" of a tool error is the catalog operator, not the calling agent).
 //   - shape tag is keys-only ("b:url", "q:format").
@@ -209,6 +212,27 @@ export function telemetryKeyOf(tool, input) {
   } catch { return null; }
 }
 
+// The paying wallet as analytics sees it: a KEYED hash, never the address
+// (privacy, 2026-11-25). Same construction as verify_failed's payerKey
+// (src/payments.js verifyFailurePayerKey: `a402:` + HMAC-SHA256 under the
+// telemetry id secret, 32 hex; an EVM address folded to lower case, base58
+// and other spellings kept exactly), so the two group together and an erasure
+// request never has to reach the analytics store. No secret configured: no
+// property at all, never a reversible one.
+export function telemetryPayerKey(payer, { idSecret } = {}) {
+  try {
+    if (typeof payer !== "string" || !payer) return null;
+    const secret = typeof idSecret === "string" ? idSecret : process.env.TELEMETRY_ID_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "";
+    if (!secret) return null;
+    const basis = /^0x[0-9a-fA-F]{40}$/.test(payer) ? `payer:${payer.toLowerCase()}` : `payer:${payer}`;
+    return `a402:${createHmac("sha256", secret).update(basis).digest("hex").slice(0, 32)}`;
+  } catch { return null; }
+}
+function payerKeyProp(payer) {
+  const k = telemetryPayerKey(payer);
+  return k ? { payerKey: k } : {};
+}
+
 export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason, rail, inputKey, prePayment = false }) {
   if (!active()) return;
   if (ROLLED_UP_SLUG_RE.test(String(slug || ""))) {
@@ -236,7 +260,7 @@ export function capturePostHogToolCall({ slug, latencyMs, cached, errored, statu
     // read as the metered tier refusing 89% of its buyers. A closed vocabulary
     // is groupable; the caller's message and values never leave the process.
     ...(refusalReason ? { refusalReason } : {}),
-    ...(payer ? { payer } : {}),
+    ...payerKeyProp(payer),
     // A keyed hash of the ONE input field a tool declares as its repeat key
     // (telemetryKey on the tool def, e.g. the equity symbol), so repeat share
     // is measurable without the value itself ever leaving the process.
@@ -518,7 +542,7 @@ export function capturePostHogSettlement({ slug, rail, network, priceUsd, synthe
     priceUsd: Number(priceUsd) || 0,
     paid: isCountedRail(rail),
     synthetic: !!synthetic,
-    ...(payer ? { payer } : {}),
+    ...payerKeyProp(payer),
     ...(clientUa ? { clientUa: String(clientUa).slice(0, 40) } : {}),
     ...(wire ? { wire: String(wire) } : {}),
   });
@@ -538,7 +562,7 @@ export function capturePostHogChargedFailure({ slug, status, network, priceUsd, 
     network: network ? String(network) : null,
     priceUsd: Number(priceUsd) || 0,
     synthetic: !!synthetic,
-    ...(payer ? { payer } : {}),
+    ...payerKeyProp(payer),
   });
 }
 
@@ -615,7 +639,7 @@ export function settleFailedProps({ slug, status, network, priceUsd, synthetic, 
     network: network ? String(network) : null,
     priceUsd: Number(priceUsd) || 0,
     synthetic: !!synthetic,
-    ...(payer ? { payer } : {}),
+    ...payerKeyProp(payer),
     ...(errorReason ? { errorReason: String(errorReason).slice(0, 200) } : {}),
     ...(facilitator ? { facilitator: String(facilitator).slice(0, 120) } : {}),
   };

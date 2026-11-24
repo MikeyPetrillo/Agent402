@@ -37,10 +37,11 @@ delete process.env.GA_MEASUREMENT_ID;
 const loader = readFileSync(new URL("../assets/js/ga-loader.js", import.meta.url), "utf8");
 ok(/ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied"/.test(loader), "loader: every ads consent signal is denied by default");
 ok(/allow_google_signals: false/.test(loader) && /allow_ad_personalization_signals: false/.test(loader), "loader: Google signals and ad personalization off");
-ok(/analytics_storage: granted \? "granted" : "denied"/.test(loader) && /\^Europe\\\//.test(loader), "loader: analytics storage starts denied for a European time zone");
+const consentJs = readFileSync(new URL("../assets/js/analytics-consent.js", import.meta.url), "utf8");
+ok(/consent\.whenGranted\(load\)/.test(loader) && /if \(!consent \|\| consent\.gpc\) return;/.test(loader) && /\^Europe\\\//.test(consentJs), "loader: Google's tag is requested only once the consent module grants it (Europe asked first)");
 ok(/traffic_type = "internal"/.test(loader), "loader: ?internal=1 browsers are tagged for the Internal Traffic filter");
-ok(!/innerHTML/.test(loader), "loader: the consent strip is built without innerHTML");
-ok(/"Asia\/Nicosia"/.test(loader) && /"Indian\/Reunion"/.test(loader), "loader: EU states outside the Europe/ zone prefix (Cyprus, the outermost regions) start denied too");
+ok(!/innerHTML/.test(loader) && !/innerHTML/.test(consentJs), "loader and consent module: the strip is built without innerHTML");
+ok(/"Asia\/Nicosia"/.test(consentJs) && /"Indian\/Reunion"/.test(consentJs), "consent module: EU states outside the Europe/ zone prefix (Cyprus, the outermost regions) are asked first too");
 {
   // Session replay skips exactly the paths GA skips.
   const ph = readFileSync(new URL("../assets/js/posthog-loader.js", import.meta.url), "utf8");

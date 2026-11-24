@@ -542,6 +542,8 @@ import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, captur
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
+import { consentRegionRoute } from "./consent-region.js";
+import { dpaPage } from "./dpa.js";
 import { termsPage } from "./terms.js";
 import { transparencyPage, repoTraffic } from "./transparency.js";
 import { quickstartPage } from "./quickstart.js";
@@ -890,7 +892,9 @@ import { paysThirdParty } from "./third-party-routes.js";
 import { ncTaxReport, NC_TAXABLE_SLUGS, monthBounds } from "./nc-sales-tax.js";
 import { evidenceWatchList, LOW_VOLUME_USD } from "./evidence-watch.js";
 import { outboundDestinationStore } from "./outbound-destinations.js";
-import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores, stateQueryStats } from "./state-db.js";
+import { stateStoresReady, stateStoresLoaded, stateDbStatus, stateDbEnabled, stopLeases, releaseHeldLeases, closeStateDb, setUnloadedStoresProbe, unloadedStateStores, stateQueryStats, stateQuery, stateDbSchema } from "./state-db.js";
+import { verifySubjectRequest, walletSubjectRun } from "./subject-wallet.js";
+import { markAiGenerated, AI_GENERATED_HEADER } from "./ai-generated.js";
 import { ledgerDeadLetterStatus, flushJournals } from "./ledger-mirror.js";
 import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-persistence.js";
 import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sharedLimitsEnabled, sharedWrite as sharedLimitsWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
@@ -1560,6 +1564,13 @@ for (const slug of modelBackedPackSlugs(SKILL_PACKS, isModelBacked)) {
   MODEL_BACKED_SLUGS.add(slug);
   const def = SKILL_TOOLS.find((t) => t.slug === slug);
   if (def) def.modelBacked = true;
+}
+// Every model-backed answer is marked AI-generated, machine-readably
+// (src/ai-generated.js): the field on JSON answers here, the header at send
+// (markAiAnswer). After the packs, so a model-backed pack is marked too.
+markAiGenerated(ALL_KIT);
+function markAiAnswer(req, res, tool) {
+  if (tool?.modelBacked === true) setAnswerHeader(req, res, AI_GENERATED_HEADER, "true");
 }
 
 // Route-and-execute: the SOR's executing surface. Internal dispatch always;
@@ -3705,6 +3716,22 @@ app.post("/__operator/alerts/run", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(await _freeAlerts.tick({ force: req.query.force === "1" }));
 });
+// A data request by wallet (/privacy "Your rights"): erase or export, run only
+// on a message the wallet signed (src/subject-wallet.js). Body { action,
+// wallet, message, signature, dry }. The same run as scripts/erase-subject.js
+// --wallet; the state database only.
+app.post("/__operator/subject-request", express.json({ limit: "16kb" }), async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store");
+  const { action, wallet, message, signature } = req.body || {};
+  const v = await verifySubjectRequest({ action, wallet, message, signature });
+  if (!v.ok) return res.status(400).json({ error: v.reason });
+  if (!stateDbEnabled()) return res.status(503).json({ error: "a wallet request runs against the state database, which this server does not have" });
+  try {
+    const out = await walletSubjectRun({ query: (t, p) => stateQuery(t, p), schema: stateDbSchema(), wallet: String(wallet).trim(), action, dry: req.body?.dry === true });
+    res.status(out.failed ? 500 : 200).json({ action, kind: v.kind, signedOn: v.date, dry: req.body?.dry === true, report: out.report, ...(action === "export" ? { data: out.data } : {}) });
+  } catch (e) { res.status(503).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
+});
 const ALERT_KIND_LABEL = (kind, t) => ({ insider: `Form 4 insider filings for ${t}`, filing: `SEC filings from ${t}`, fund: `13F filings from ${t}`, domain: `security changes on ${t}`, recall: `FDA recalls naming ${t}` }[kind] || `changes for ${t}`);
 
 let _subs = null;
@@ -5124,6 +5151,10 @@ app.get("/.well-known/*doc", async (req, res, next) => {
   res.set("Cache-Control", "no-store").set("X-Content-Type-Options", "nosniff").type(hit.contentType).send(hit.body);
 });
 app.get("/privacy", (_req, res) => htmlCache(res, 300, 900).send(privacyPage(BASE_URL)));
+app.get("/dpa", (_req, res) => htmlCache(res, 300, 900).send(dpaPage(BASE_URL)));
+// The consent module asks this when the browser's time zone is not European
+// (src/consent-region.js): one bit from the CDN's country header, never cached.
+app.get("/api/consent-region", consentRegionRoute);
 app.get("/terms", (_req, res) => htmlCache(res, 300, 900).send(termsPage(BASE_URL)));
 app.get("/accessibility", (_req, res) => htmlCache(res, 300, 900).send(accessibilityPage(BASE_URL)));
 app.get("/transparency", async (_req, res) => htmlCache(res, 300, 900).send(transparencyPage(BASE_URL, await repoTraffic().catch(() => null))));
@@ -11808,6 +11839,8 @@ app.get("/api/pricing", (_req, res) => {
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.
         modelBacked: MODEL_BACKED_SLUGS.has(slug),
+        // Its answers carry the machine-readable AI-generated mark (src/ai-generated.js).
+        ...(def.aiGenerated === true ? { aiGenerated: true } : {}),
         // The chains a restricted route's 402 offers, so an agent on another
         // rail learns it before paying (x402EvmOnly in rails.js decides; the
         // 402 itself is unchanged). Absent on routes every rail can pay.
@@ -14660,6 +14693,7 @@ for (const tool of ALL_KIT) {
           cached = true;
           noteCacheOutcome("hit");
           res.setHeader("X-Cache", "hit");
+          markAiAnswer(req, res, tool);
           return res.json(withIgnoredParams(hit, req));
         }
       }
@@ -14793,6 +14827,10 @@ for (const tool of ALL_KIT) {
         enabled: GATEWAY_METER_ON,
         setOverrides: setSettlementOverrides,
       });
+      // A model-backed answer, whatever its form, carries the machine-readable
+      // AI-generated mark (src/ai-generated.js); recorded as an answer header,
+      // so a refused payment sends none of it.
+      markAiAnswer(req, res, tool);
       if (result && result.__binary) {
         // A binary answer may carry headers of its own (the dub tool's
         // translation rides beside the audio); the content type is set last.

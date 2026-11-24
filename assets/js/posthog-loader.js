@@ -10,8 +10,23 @@
   var data;
   try { data = JSON.parse(cfgEl.textContent); } catch (e) { return; }
   if (!data || !data.key) return;
-  // Global Privacy Control: a browser that sends it gets no page counter.
-  try { if (navigator.globalPrivacyControl === true) return; } catch (e) { /* no navigator */ }
+  // Consent: assets/js/analytics-consent.js decides (window.a402Consent).
+  // Nothing below runs (no stub, no library request, nothing kept) until
+  // consent is granted: a visitor in the EU, the EEA, the UK or Switzerland is
+  // asked first, and a browser that sends Global Privacy Control gets no page
+  // counter at all. No consent module on the page: nothing loads. Persistence
+  // is memory only: the counter keeps nothing in the browser, not even a
+  // per-visit id, so each page view stands alone.
+  var consent = window.a402Consent;
+  if (!consent || consent.gpc) return;
+  var loaded = false, withdrawn = false;
+  // Withdrawing drops every later event before it is sent; nothing is stored
+  // to remember it beyond the choice the consent module keeps.
+  consent.onWithdrawn(function () { withdrawn = true; });
+  consent.whenGranted(function () {
+  withdrawn = false;
+  if (loaded) return;
+  loaded = true;
 
   !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
 
@@ -46,6 +61,7 @@
     });
   }
   data.cfg.before_send = function (event) {
+    if (withdrawn) return null;
     if (event) { scrub(event.properties, 0); scrub(event.$set, 0); scrub(event.$set_once, 0); }
     return event;
   };
@@ -54,5 +70,7 @@
   // identical by scripts/test-ga-snippet.js). The project's URL blocklist is a
   // second layer; this one ships with the code and cannot drift from it.
   if (/^\/(r|m|reports\/public|answers|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest|__operator)(\/|$)/.test(location.pathname)) data.cfg.disable_session_recording = true;
+  data.cfg.persistence = "memory";
   posthog.init(data.key, data.cfg);
+  });
 })();

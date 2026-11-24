@@ -388,7 +388,7 @@ export const SOURCE_LICENSE_NOTE = "Each file is its authors' work, under the li
 const ANSWER_ONLY_CREDITS = Object.freeze([GOPLUS_ATTRIBUTION, EAS_ATTRIBUTION, RUGCHECK_ATTRIBUTION, HYPERLIQUID_ATTRIBUTION, SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, CRTSH_ATTRIBUTION, CYMRU_ATTRIBUTION, ECB_ATTRIBUTION, USGS_CREDIT, CENSUS_CREDIT, OPENFDA_CREDIT]);
 // A disclosure flag every answer of its tools carries, stated in the tool's
 // description before payment (the AI-generated voice, src/ai-voice.js).
-const ANSWER_ONLY_FLAGS = Object.freeze(["aiGeneratedVoice"]);
+const ANSWER_ONLY_FLAGS = Object.freeze(["aiGeneratedVoice", "aiGenerated"]);
 
 /** `example` without a `credit` made only of the credits above, and without
  *  the source license fields (the note and the per-file map beside it).
