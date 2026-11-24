@@ -21,6 +21,9 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
 const throwsWith = async (fn, status, frag, m) => { let e = null; try { await fn(); } catch (x) { e = x; } ok(e && e.statusCode === status && (!frag || String(e.message).includes(frag)), `${m} (${e ? `${e.statusCode} ${String(e.message).slice(0, 90)}` : "no throw"})`); return e; };
 
 const dir = mkdtempSync(join(tmpdir(), "decide-exec-"));
+// A handler built without a booking stub books unspent budget in the refund
+// ledger: this suite's own file.
+process.env.REFUND_DB_DIR = dir;
 let clock = 1_800_000_000_000;
 const now = () => clock;
 const ledger = openDecideLedger(join(dir, "ledger.db"));
@@ -76,8 +79,16 @@ const catalog = {
     return { result: { ext: true }, receipt: { underlyingPriceUsd: 0.018, seller: "seller.example", paidUsd: 3.3, routingFeeUsd: 3.282 } };
   } },
 };
-const exec = makeExecuteHandler({ ledger, getCatalog: () => catalog, now });
-function settle(req, status = 200) { for (const fn of req.__onSettled || []) fn(status === 200); }
+const booked = [];
+const exec = makeExecuteHandler({ ledger, getCatalog: () => catalog, now, bookUnspent: async (row) => { booked.push(row); } });
+// A settled response as the route binder hands it to the hooks: the
+// PAYMENT-RESPONSE receipt names the transaction, network and payer.
+const SETTLE_TX = "0x" + "5e".repeat(32);
+const settledRes = (extra = {}) => {
+  const h = { "payment-response": Buffer.from(JSON.stringify({ success: true, transaction: SETTLE_TX, network: "eip155:8453", payer: "0x00000000000000000000000000000000000000ab" })).toString("base64"), ...extra };
+  return { getHeader: (k) => h[String(k).toLowerCase()] };
+};
+function settle(req, status = 200, res = settledRes()) { for (const fn of req.__onSettled || []) fn(status === 200, res); }
 function mkReq(payer = "0xabc") { return { headers: {}, ip: payer }; }
 
 ledger.saveDecision({ decisionId: "d1", depth: "plan", priceUsd: 0.02, payer: "0xabc", plan, costViaUsd: 0.031, now: clock });
@@ -111,10 +122,14 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(out.steps[1].costUsd === 0.0189 && out.steps[1].routingFeeUsd === 0.0009 && out.steps[0].costUsd === 0.01, "cost = seller's actual price + disclosed fee on third-party steps; list price, no fee, on first-party");
   ok(out.creditAppliedUsd === 0.02 && out.paidUsd === 0.011 && out.budgetUsd === 0.031, "the credit is redeemed against the run");
   ok(out.charges.firstPartyUsd === 0.01 && out.charges.passThroughUsd === 0.018 && out.charges.routingFeesUsd === 0.0009 && out.charges.uncertainUsd === 0, `charges on separate lines: our tool, pass-through to the seller, routing fee (${JSON.stringify(out.charges)})`);
-  ok(out.leftoverCredit && out.leftoverCredit.amountUsd === 0.0021 && ledger.creditState(out.leftoverCredit.token).state === "pending", "unspent budget comes back as a credit, pending until settlement");
+  ok(out.leftoverCredit === null && out.unspent?.amountUsd === 0.0021 && out.unspent.handling === "refund-owed" && out.chargedUsd === 0.0089, `no part of the payment is held as a credit: spend draws on the execution credit first, and the unspent rest is owed back (${JSON.stringify(out.unspent)}, charged ${out.chargedUsd})`);
+  ok(!JSON.stringify(out).includes("dc_") && Object.keys(out).every((k) => k !== "__actualChargeUsd"), "the answer carries no credit token and no internal charge figure");
+  ok(booked.length === 0, "nothing is booked before the payment settles");
+  settle(req, 402);
+  ok(booked.length === 0, "a payment that did not settle books nothing (the buyer paid nothing)");
   settle(req, 200);
-  ok(ledger.creditState(out.leftoverCredit.token).state === "active", "the leftover credit activates on a settled 200");
-  ok(ledger.creditState(out.leftoverCredit.token).expiresAt === ledger.getDecision("d1").createdAt + 24 * 3600_000, "the leftover keeps the decision's expiry: no fresh window");
+  await new Promise((r) => setImmediate(r));
+  ok(booked.length === 1 && booked[0].slug === "decide-execute" && booked[0].priceUsd === 0.0021 && booked[0].tx === SETTLE_TX && booked[0].network === "eip155:8453" && booked[0].payer === "0x00000000000000000000000000000000000000ab" && booked[0].httpStatus === 200, `on an exact payment the unspent amount is booked as a refund owed to the paying wallet once it settles (${JSON.stringify(booked[0])})`);
   ok(out.steps[1].untrustedContent === true, "third-party output is marked untrusted");
   ok(out.steps[1].receipt.paidUsd === out.steps[1].costUsd && out.steps[1].receipt.routingFeeUsd === out.steps[1].routingFeeUsd && out.steps[1].receipt.underlyingPriceUsd === 0.018, `the step receipt carries this run's charge, not the router's own price (${JSON.stringify(out.steps[1].receipt)})`);
 }
@@ -509,13 +524,116 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(reopened.getRun("old").status === "abandoned", "a restart marks cut-off runs abandoned");
 }
 
-// ---- no roll-forward: a decision past its window returns no leftover credit ----
+// ---- no window on money owed back: a decision about to expire still returns its unspent amount ----
 {
   const planL = [{ step: 1, purpose: "x", tool: tool("a", { priceUsd: 0.001 }), fallbacks: [], dependsOn: [] }];
   ledger.saveDecision({ decisionId: "dL", depth: "quick", priceUsd: 0.005, plan: planL, costViaUsd: 0.001, now: clock - 24 * 3600_000 + 30_000 });
   ledger.markDecisionSettled("dL");
-  const out = await exec({ decisionId: "dL", maxBudgetUsd: 0.01 }, mkReq("0xroll"));
-  ok(out.leftoverCredit === null, "a decision about to expire mints no leftover credit, so none outlives it");
+  const out = await exec({ decisionId: "dL", maxBudgetUsd: 0.03 }, mkReq("0xroll"));
+  ok(out.leftoverCredit === null && out.unspent?.amountUsd === 0.02 && out.chargedUsd === 0.01, `a decision about to expire still returns the unspent budget: nothing is forfeited to a window (${JSON.stringify(out.unspent)})`);
+}
+
+// ---- upto: the settlement names only what was spent ----
+{
+  const { applyActualCharge } = await import("../src/actual-charge.js");
+  const planU = [{ step: 1, purpose: "x", tool: tool("a", { priceUsd: 0.002 }), fallbacks: [], dependsOn: [] }];
+  ledger.saveDecision({ decisionId: "dU", depth: "quick", priceUsd: 0.005, plan: planU, costViaUsd: 0.002, now: clock });
+  ledger.markDecisionSettled("dU");
+  const uptoHeader = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "upto", network: "eip155:8453", amount: "50000" }, payload: {} })).toString("base64");
+  const ureq = { headers: { "payment-signature": uptoHeader }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? uptoHeader : undefined), ip: "0xupto", __meteredQuoteUsd: 0.05 };
+  booked.length = 0;
+  const out = await exec({ decisionId: "dU", maxBudgetUsd: 0.05 }, ureq);
+  ok(out.unspent?.handling === "not-charged" && out.chargedUsd === 0.01 && out.unspent.amountUsd === 0.04, `an upto payment is told the unspent amount is not charged (${JSON.stringify(out.unspent)}, charged ${out.chargedUsd})`);
+  const set = [];
+  const hdrs = {};
+  const res = { headersSent: false, setHeader: (k, v) => { hdrs[k.toLowerCase()] = v; }, getHeader: (k) => hdrs[String(k).toLowerCase()] };
+  const amount = applyActualCharge({ result: out, req: ureq, res, setOverrides: (_r, o) => set.push(o) });
+  ok(amount === 0.01 && set.length === 1 && set[0].amount === "$0.010000" && hdrs["x-charged-usd"] === "0.010000", `the route binder settles the spent amount, not the ceiling (${JSON.stringify(set)})`);
+  settle(ureq, 200, res);
+  await new Promise((r) => setImmediate(r));
+  ok(booked.length === 0, "with the upto override applied nothing is owed back");
+  // An exact payment is never overridden: the scheme fixed the amount at the 402.
+  const exactRes = { headersSent: false, setHeader: () => {}, getHeader: () => undefined };
+  const exactOut = await exec({ decisionId: "dU", maxBudgetUsd: 0.05, runKey: "exact-1" }, mkReq("0xexact"));
+  const none = [];
+  ok(applyActualCharge({ result: exactOut, req: mkReq("0xexact"), res: exactRes, setOverrides: (_r, o) => none.push(o) }) === null && none.length === 0, "an exact payment's amount is never overridden");
+  // An upto payment whose override could not be applied (headers already sent) is owed the rest.
+  const lateOut = await exec({ decisionId: "dU", maxBudgetUsd: 0.05, runKey: "upto-late" }, ureq);
+  const lateRes = { headersSent: true, setHeader: () => {}, getHeader: (k) => (String(k).toLowerCase() === "payment-response" ? settledRes().getHeader("payment-response") : undefined) };
+  ok(applyActualCharge({ result: lateOut, req: ureq, res: lateRes, setOverrides: () => { throw new Error("must not be called"); } }) === null, "an override that cannot be applied is not attempted");
+  booked.length = 0;
+  for (const fn of ureq.__onSettled.slice(-1)) fn(true, lateRes);
+  await new Promise((r) => setImmediate(r));
+  ok(booked.length === 1 && booked[0].priceUsd === 0.04, `...and the unspent amount is then booked owed, so the buyer never loses it (${JSON.stringify(booked[0])})`);
+}
+
+// ---- exact vs upto: the fixed price is the plan's listed step prices ----
+{
+  const { buildDecideTools, DECIDE_UNSPENT, decideUnspentNote, isDecideUnspentRefund } = await import("../src/tools/decide-kit.js");
+  const planX = [{ step: 1, purpose: "x", tool: tool("a", { priceUsd: 0.01 }), fallbacks: [tool("b")], dependsOn: [] }];
+  ledger.saveDecision({ decisionId: "dX", depth: "quick", priceUsd: 0.005, plan: planX, costViaUsd: 0.01, now: clock });
+  ledger.markDecisionSettled("dX");
+  // The sample quote, before and after: a plan listed at $0.01 with maxBudgetUsd 0.05.
+  const ceiling = executeQuoteUsd({ decisionId: "dX", maxBudgetUsd: 0.05 }, { ledger, now: clock });
+  const fixedQ = executeQuoteUsd({ decisionId: "dX", maxBudgetUsd: 0.05 }, { ledger, now: clock, fixed: true });
+  ok(ceiling === 0.05 && fixedQ === 0.01, `the upto ceiling keeps the asked budget and the exact price is the plan's listed step prices (${ceiling} / ${fixedQ})`);
+  ok(executeQuoteUsd({ decisionId: "dX" }, { ledger, now: clock, fixed: true }) === executeQuoteUsd({ decisionId: "dX" }, { ledger, now: clock }), "with no maxBudgetUsd both prices are the plan's own figure");
+  ok(executeQuoteUsd({ decisionId: "dX", maxBudgetUsd: 0.004 }, { ledger, now: clock, fixed: true }) === 0.004, "a maxBudgetUsd under the plan caps the exact price too");
+  ok(executeQuoteUsd({ steps: ["s1", "s2"], maxBudgetUsd: 0.5 }, { ledger, now: clock, getCatalog: () => ({ s1: { slug: "s1", price: "$0.004" }, s2: { slug: "s2", price: "$0.006" } }), fixed: true }) === 0.01, "a sketch's exact price is its steps' list prices, never a larger maxBudgetUsd");
+  // The route definition: settles actual spend, two quotes.
+  const def = buildDecideTools({ getCatalog: () => catalog, ledger, now }).find((t) => t.slug === "decide-execute");
+  ok(def.chargesActualSpend === true && typeof def.uptoQuote === "function", "decide-execute settles actual spend and carries its own upto ceiling");
+  ok(def.quote({ decisionId: "dX", maxBudgetUsd: 0.05 }) === 0.01 && def.uptoQuote({ decisionId: "dX", maxBudgetUsd: 0.05 }) === 0.05, "its quote is the exact price and its uptoQuote the ceiling");
+  // The 402's accepts: upto first on Base at the ceiling, exact after at the
+  // fixed price; a request PAID on upto carries the ceiling as its one quote.
+  const { acceptsForItem } = await import("../src/payments.js");
+  const rails = { evmCaip2: ["eip155:8453", "eip155:137"], svmCaip2: [], stellarCaip2: [], avmCaip2: [], walletAddress: "0x000000000000000000000000000000000000dEaD", uptoCaip2: ["eip155:137", "eip155:8453"] };
+  const acc = acceptsForItem(def, rails);
+  ok(acc.map((a) => `${a.scheme}@${a.network}`).join(",") === "upto@eip155:8453,exact@eip155:8453", `upto is listed first, on the route's own network only (${acc.map((a) => `${a.scheme}@${a.network}`).join(",")})`);
+  const body = { decisionId: "dX", maxBudgetUsd: 0.05 };
+  const unpaid = { body, headers: {}, header: () => undefined, method: "POST", query: {} };
+  const ctxOf = (req) => ({ adapter: { req, getBody: () => body } });
+  const unpaidPrices = await Promise.all(acc.map((a) => a.price(ctxOf(unpaid))));
+  ok(unpaidPrices[0] === "$0.05" && unpaidPrices[1] === "$0.01" && unpaid.__meteredQuoteUsd === 0.01 && unpaid.__uptoQuoteUsd === 0.05, `the unpaid 402 quotes the ceiling on upto and the plan on exact (${unpaidPrices.join(" / ")})`);
+  const uptoSig = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "upto", network: "eip155:8453" }, payload: {} })).toString("base64");
+  const paidU = { body, headers: { "payment-signature": uptoSig }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? uptoSig : undefined), method: "POST", query: {} };
+  await Promise.all([...acc].reverse().map((a) => a.price(ctxOf(paidU))));
+  ok(paidU.__meteredQuoteUsd === 0.05, `a request paid on upto carries the ceiling it signed as its quote (${paidU.__meteredQuoteUsd})`);
+  // An exact payment at the fixed price runs with no refusal and leaves nothing unspent.
+  const exactHeader = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", amount: "10000" }, payload: {} })).toString("base64");
+  const xreq = { headers: { "payment-signature": exactHeader }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? exactHeader : undefined), ip: "0xexactfix", __meteredQuoteUsd: fixedQ };
+  booked.length = 0;
+  const xout = await exec({ decisionId: "dX", maxBudgetUsd: 0.05, runKey: "fixed-1" }, xreq);
+  ok(xout.status === "complete" && xout.chargedUsd === 0.01 && xout.unspent === null, `an exact payment at the plan's price spends it all, nothing owed (${JSON.stringify(xout.unspent)}, charged ${xout.chargedUsd})`);
+  settle(xreq, 200);
+  await new Promise((r) => setImmediate(r));
+  ok(booked.length === 0, "...and books no refund");
+  // A step that falls short on exact: the remainder is owed under the decide-unspent class.
+  failA = true;
+  const planS = [{ step: 1, purpose: "x", tool: tool("a"), fallbacks: [], dependsOn: [] }, { step: 2, purpose: "y", tool: tool("c"), fallbacks: [], dependsOn: [] }];
+  ledger.saveDecision({ decisionId: "dS2", depth: "quick", priceUsd: 0.005, plan: planS, costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("dS2");
+  const sreq = { ...xreq, ip: "0xshort", __meteredQuoteUsd: 0.02 };
+  booked.length = 0;
+  const sout = await exec({ decisionId: "dS2", runKey: "short-1" }, sreq);
+  failA = false;
+  ok(sout.unspent?.handling === "refund-owed" && sout.unspent.amountUsd === 0.01, `a step that fails on exact leaves its price unspent (${JSON.stringify(sout.unspent)})`);
+  settle(sreq, 200);
+  await new Promise((r) => setImmediate(r));
+  ok(booked.length === 1 && booked[0].note === decideUnspentNote(sout.runId) && booked[0].note.startsWith(`${DECIDE_UNSPENT}: `) && isDecideUnspentRefund(booked[0]) && !isDecideUnspentRefund({ note: "held for review" }), `...booked owed under the decide-unspent class (${booked[0]?.note})`);
+  // The settlement floor is the call's price, never unspent budget.
+  const planF = [{ step: 1, purpose: "x", tool: tool("a"), fallbacks: [], dependsOn: [] }];
+  ledger.saveDecision({ decisionId: "dF", depth: "plan", priceUsd: 0.02, plan: planF, costViaUsd: 0.01, now: clock });
+  ledger.markDecisionSettled("dF");
+  const cF = ledger.mintCredit({ decisionId: "dF", amountUsd: 0.01, ttlMs: 24 * 3600_000, payer: "0xfloor", now: clock });
+  ledger.activateCredit(cF.hash);
+  const floorQ = executeQuoteUsd({ decisionId: "dF", creditToken: cF.token }, { ledger, now: clock, fixed: true });
+  const freq = { ...xreq, ip: "0xfloor", __meteredQuoteUsd: floorQ };
+  booked.length = 0;
+  const fout = await exec({ decisionId: "dF", creditToken: cF.token, runKey: "floor-1" }, freq);
+  settle(freq, 200);
+  await new Promise((r) => setImmediate(r));
+  ok(floorQ === 0.001 && fout.status === "complete" && fout.chargedUsd === 0.001 && fout.unspent === null && booked.length === 0, `a run its credit covers is charged the settlement floor and books nothing unspent (quote ${floorQ}, ${JSON.stringify(fout.unspent)}, charged ${fout.chargedUsd})`);
 }
 
 // ---- caps, refused before spending ----
@@ -801,31 +919,24 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   let out = null, err = null;
   try { out = await exh({ decisionId: "dh5", params: { 2: { q: "z" } }, maxBudgetUsd: 0.05 }, req); } catch (e) { err = e; }
   ok(!err && out?.status === "complete" && calls.some((c) => c[0] === "router"), `H5: the outside seller was paid and the run still answers its result (${err ? `${err.statusCode} ${err.message}` : out?.status})`);
-  ok(out && out.leftoverCredit?.token && out.leftoverCredit.recordPending === true && out.leftoverCredit.amountUsd > 0, "H5: a leftover credit whose mint failed is answered with its token and queued for retry, not thrown");
-  ok(out?.leftoverCredit?.token && lf.creditState(out.leftoverCredit.token) === null, "H5: ...it is not recorded while the ledger is down");
-  settle(req, 200); // the payment settles before the mint has landed
+  ok(out && out.leftoverCredit === null && out.unspent?.handling === "refund-owed" && out.unspent.amountUsd > 0, "H5: the unspent amount is answered as owed back, not as a credit");
+  settle(req, 200); // the payment settles before the finish has landed
   const run = lf.getRun(out?.runId);
   ok(run && run.status === "running", "H5: while the ledger is down the run row is not finished yet");
   broken = false;
   await new Promise((r) => setTimeout(r, 200));
   const run2 = lf.getRun(out?.runId);
   ok(run2 && run2.status === "complete" && run2.spentUsd === out.spentUsd, `H5: the queued finish lands once the ledger answers again (${run2?.status}, ${run2?.spentUsd})`);
-  const late = out?.leftoverCredit?.token ? lf.creditState(out.leftoverCredit.token) : null;
-  ok(late?.state === "active" && Math.abs(late.amountUsd - out.leftoverCredit.amountUsd) < 1e-9, `H5: the queued mint lands with the same token and, the payment having settled, is active (${JSON.stringify(late)})`);
   const held = lf.db.prepare("SELECT micro FROM seller_spend WHERE run_id = ?").all(out.runId).map((r) => Number(r.micro));
   ok(held.length === 1 && held[0] === 18000, `H5: the seller hold is settled to what was paid (${held.join()})`);
-  // The leftover credit minted, but its activation after settlement fails: it is retried.
-  failing.delete("mintCredit");
-  broken = true;
+  // A booking of the unspent amount that fails never throws into the settlement hook.
+  const exFail = makeExecuteHandler({ ledger: lf, getCatalog: () => catalog, now, runBudgetMs: () => null, spendingWalletStatus: async () => ({ status: "ok" }), ledgerRetryMs: [20, 20, 20, 20], bookUnspent: async () => { throw new Error("refund ledger down"); } });
   const r2 = mkReq("0xh5b");
-  const out2 = await exh({ decisionId: "dh5", params: { 2: { q: "y" } }, maxBudgetUsd: 0.05 }, r2);
-  ok(out2?.leftoverCredit?.token && lf.creditState(out2.leftoverCredit.token).state === "pending", "H5: a leftover credit is minted, pending");
+  const out2 = await exFail({ decisionId: "dh5", params: { 2: { q: "y" } }, maxBudgetUsd: 0.05 }, r2);
   let hookThrew = false;
   try { settle(r2, 200); } catch { hookThrew = true; }
-  ok(!hookThrew, "H5: a failing activation never throws into the settlement hook");
-  broken = false;
-  await new Promise((r) => setTimeout(r, 200));
-  ok(lf.creditState(out2.leftoverCredit.token).state === "active", "H5: the activation lands on retry");
+  await new Promise((r) => setTimeout(r, 20));
+  ok(out2?.unspent?.amountUsd > 0 && !hookThrew, "H5: a failed booking never throws into the settlement hook (it is logged for a human)");
 }
 
 // ---- replan: a saved decision planned again before its run ----
@@ -864,7 +975,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const ch = out.replanned.changes;
   ok(ch.length === 1 && ch[0].step === 1 && ch[0].before.id === "a" && ch[0].after.id === "c" && ch[0].before.priceUsd === 0.01 && ch[0].after.priceUsd === 0.008, "each changed step says which tool and price it moved from and to");
   ok(out.decisionId === "rp1" && Math.abs(out.paidUsd - (0.02 + planFee)) < 1e-9 && out.budgetUsd === 0.02, `the run stays on the saved decision; paid covers budget plus plan price, the plan price is not spendable (${out.paidUsd}, budget ${out.budgetUsd})`);
-  ok(out.leftoverCredit && Math.abs(out.leftoverCredit.amountUsd - (0.02 - out.spentUsd)) < 1e-9, `a re-plan that ran keeps its price: only unspent budget comes back (${out.leftoverCredit?.amountUsd})`);
+  ok(out.unspent && Math.abs(out.unspent.amountUsd - (0.02 - out.spentUsd)) < 1e-9 && Math.abs(out.chargedUsd - (planFee + out.spentUsd)) < 1e-9, `a re-plan that ran keeps its price: only unspent budget comes back (${out.unspent?.amountUsd})`);
   const rec = ledger.getDecision("dec_re1");
   ok(rec && rec.plan?.[0]?.tool?.id === "c" && !rec.settled && typeof out.replanned.feedbackToken === "string", "the new plan is recorded as its own decision with a feedback token, unsettled until payment");
   settle(req, 200);
@@ -878,17 +989,19 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   // The planner is down: the saved plan runs and the plan price comes back.
   calls.length = 0; replanMode = "down";
   const fb = await exr({ decisionId: "rp1", replan: true }, mkReq("0xr3"));
-  ok(fb.replanned?.ran === false && fb.replanned.returnedAsCredit === true && /did not answer/.test(fb.replanned.reason) && calls.some((c) => c[0] === "a"), `a re-plan that cannot run falls back to the saved plan and says so (${JSON.stringify(fb.replanned)})`);
-  ok(fb.leftoverCredit && Math.abs(fb.leftoverCredit.amountUsd - (0.02 + planFee - fb.spentUsd)) < 1e-9 && fb.spentUsd <= 0.02, `...and the plan price is returned as credit with the unspent budget (${fb.leftoverCredit?.amountUsd})`);
+  ok(fb.replanned?.ran === false && fb.replanned.returnedWithUnspent === true && /did not answer/.test(fb.replanned.reason) && calls.some((c) => c[0] === "a"), `a re-plan that cannot run falls back to the saved plan and says so (${JSON.stringify(fb.replanned)})`);
+  ok(fb.unspent && Math.abs(fb.unspent.amountUsd - (0.02 + planFee - fb.spentUsd)) < 1e-9 && fb.spentUsd <= 0.02, `...and the plan price is returned with the unspent budget, never charged (${fb.unspent?.amountUsd})`);
 
-  // Past the saved decision's credit window the price could not come back: refused, nothing spent.
+  // No credit window any more: a failed re-plan on an older decision runs the
+  // saved plan, and the plan price still comes back with the unspent budget.
   ledger.saveDecision({ decisionId: "rp_old", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock - 25 * 3600_000 });
   ledger.markDecisionSettled("rp_old");
   calls.length = 0;
-  await throwsWith(() => exr({ decisionId: "rp_old", replan: true }, mkReq("0xr4")), 503, "Nothing was charged.", "a failed re-plan on a decision past its credit window is refused, not charged");
-  ok(calls.length === 0, "...before any step runs");
+  const old = await exr({ decisionId: "rp_old", replan: true }, mkReq("0xr4"));
+  ok(old.replanned?.ran === false && old.unspent?.amountUsd >= planFee - 1e-9, `a failed re-plan on a decision past a day old runs the saved plan; the plan price comes back (${old.unspent?.amountUsd})`);
   replanMode = "gone";
-  await throwsWith(() => exr({ decisionId: "rp_old", replan: true, runKey: "k-gone" }, mkReq("0xr5")), 503, "no longer held", "a task the planner no longer holds says so");
+  const gone = await exr({ decisionId: "rp_old", replan: true, runKey: "k-gone" }, mkReq("0xr5"));
+  ok(gone.replanned?.ran === false && /no longer held/.test(gone.replanned.reason), "a task the planner no longer holds says so, and the saved plan runs");
 
   // Input checks, and the path without replan is unchanged.
   await throwsWith(() => exr({ decisionId: "rp1", replan: "yes" }, mkReq("0xr6")), 400, '"replan" must be true or false', "replan must be a boolean");
@@ -933,20 +1046,15 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   await throwsWith(() => exNoCredit({ decisionId: "rp1", replan: true, creditToken: "dc_gone", maxBudgetUsd: 0.02, runKey: "k-credit" }, lateReq), 409, "no longer available", "a vanished credit is refused before the planner runs");
   ok(replanCalls.length === 0, "...with zero planner calls");
 
-  // The credit window must outlast the whole run: a failed re-plan whose
-  // decision window closes before the run's deadline is refused uncharged;
-  // one with room returns the plan price as credit.
+  // A failed re-plan close to the decision's credit window is no longer
+  // refused: the plan price is returned with the unspent budget, which has no window.
   replanMode = "down";
   const ttlMs = decideConfig().credit.ttlHours * 3_600_000;
   ledger.saveDecision({ decisionId: "rp_edge", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock - ttlMs + 5 * 60_000 });
   ledger.markDecisionSettled("rp_edge");
   calls.length = 0;
-  await throwsWith(() => exr({ decisionId: "rp_edge", replan: true }, mkReq("0xr11")), 503, "Nothing was charged.", "a failed re-plan whose credit window closes inside the run is refused (5 min left, run up to 4 min plus slack)");
-  ok(calls.length === 0, "...before any step runs");
-  ledger.saveDecision({ decisionId: "rp_room", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock - ttlMs + 10 * 60_000 });
-  ledger.markDecisionSettled("rp_room");
-  const room = await exr({ decisionId: "rp_room", replan: true }, mkReq("0xr12"));
-  ok(room.replanned?.returnedAsCredit === true && room.leftoverCredit?.amountUsd > planFee - 1e-9, `with 10 min left the saved plan runs and the plan price comes back (${room.leftoverCredit?.amountUsd})`);
+  const edge = await exr({ decisionId: "rp_edge", replan: true }, mkReq("0xr11"));
+  ok(edge.replanned?.returnedWithUnspent === true && edge.unspent?.amountUsd > planFee - 1e-9 && calls.length > 0, `with 5 min left the saved plan runs and the plan price comes back (${edge.unspent?.amountUsd})`);
 
   // A re-plan whose run then ends caller-caused (a 4xx, never settled) cost a
   // planner run for nothing: it counts against the payer, and past the limit

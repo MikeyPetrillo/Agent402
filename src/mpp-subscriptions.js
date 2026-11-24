@@ -118,6 +118,7 @@ import { redactSecrets } from "./tools/redact.js";
 import { withSponsorCeiling, sponsorCeilingWord } from "./tempo-sponsor-ceiling.js";
 import { chargeSponsorReserveUsd, chargeSponsorshipWord } from "./tempo-charge-sponsor.js";
 import { screenAddresses, screenFunding, maskAddress, TEMPO_SCREEN_REFUSED_DETAIL } from "./sanctions-screen.js";
+import { recordSanctionsEvent } from "./sanctions-events.js";
 import { TEMPO_PATH_USD_ADDRESS, resolveTempoCurrency } from "./tempo-currencies.js";
 
 // Tempo mainnet. Same constant mpp-tempo.js pins; a subscription authorization
@@ -1739,6 +1740,7 @@ export function createMppSubscriptions({
     if (!v.ok && v.reason === "listed") {
       screenCounts.screened++; screenCounts.refused++; screenCounts.lastRefusedAt = Date.now();
       log(`[sanctions-screen] subscription payer ${maskAddress(payer)} refused ${phase}; nothing sent`);
+      try { recordSanctionsEvent({ kind: "screen-hit", address: payer, rail: "tempo-subscription", detail: `subscription payer, ${phase}` }).catch(() => {}); } catch { /* never changes the refusal */ }
       return { reason: "listed" };
     }
     if (v.ok) screenCounts.screened++;
@@ -1754,6 +1756,7 @@ export function createMppSubscriptions({
     if (f && f.ok === false) {
       screenCounts.refused++; screenCounts.lastRefusedAt = Date.now();
       log(`[sanctions-screen] subscription payer ${maskAddress(payer)} refused ${phase} (funding check); nothing sent`);
+      try { recordSanctionsEvent({ kind: "screen-hit", address: payer, rail: "tempo-subscription", detail: `subscription payer funded by a listed address, ${phase}` }).catch(() => {}); } catch { /* never changes the refusal */ }
       return { reason: "funded" };
     }
     return null;

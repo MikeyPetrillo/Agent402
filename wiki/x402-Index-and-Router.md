@@ -41,14 +41,18 @@ a $3 report without overcharging almost every buyer:
 
 Pick the **cheapest rung that covers the tool**. You do not have to guess:
 `POST /api/route` already quotes the right one per result in `executeVia`
-(`{tool, price, underlyingPriceUsd, routingFeeUsd}`), and asking a rung to run
+(`{tool, price, underlyingPriceUsd, routingFeeUsd}`). Agent402 buys the result
+from the seller for its own account and sells it to you: `underlyingPriceUsd` is
+the seller's price for that result and `routingFeeUsd` is our price less the
+seller's, our margin as the reseller (the field keeps its name for
+compatibility). Asking a rung to run
 something above its cap returns a self-correcting `409` naming the exact tier
 that covers it, or the tool's direct route. A `409` is a `4xx`, so it cancels
 settlement: an under-budget attempt costs nothing.
 
 ### External execution: run any proven x402 or MPP seller in one call
 
-With `include: "external"`, route-execute goes beyond this host's catalog: it resolves the best **external** seller for the task - an x402 seller from the open index, or an **MPP seller on Tempo** from the live-verified [MPP marketplace](https://agent402.tools/mpp-marketplace) - pays them from Agent402's own spending wallet over the seller's wire (x402 or MPP), and relays the result. One payment from you, one request, cross-vendor and cross-protocol settlement underneath.
+With `include: "external"`, route-execute goes beyond this host's catalog: it resolves the best **external** seller for the task - an x402 seller from the open index, or an **MPP seller on Tempo** from the live-verified [MPP marketplace](https://agent402.tools/mpp-marketplace) - buys the result from them with Agent402's own spending wallet over the seller's wire (x402 or MPP), and sells it to you. One payment from you, one request, cross-vendor and cross-protocol settlement underneath.
 
 The reliability filter is the point. The open ecosystem is full of endpoints that answer a 402 but never deliver a paid result, so route-execute ranks sellers with **proven settled volume** first (on Base: on-chain completed deliveries on the [[x402-Leaderboard]]; on Algorand: verification counts from the Algorand facilitator; on Tempo/MPP: recent inbound USDC.e transfers to the seller's own recipient, read on-chain) and then probes the candidate for a live 402 before committing. A Base or Solana seller with no history yet is tried only after every proven candidate, under a small per-call ceiling (on Base, also a rolling daily cap per seller), and flagged unproven on the receipt. External settlement is **chain-matched**: pay on Base and the router pays a Base seller from its Base spending wallet; pay on Solana and it pays a Solana seller from its SVM wallet; pay on Algorand and it pays an Algorand seller from its AVM wallet; pay over MPP on Tempo and it pays a Tempo/MPP seller from its Tempo wallet - the chain you fund is the chain it spends. (An operator can additionally let Base buyers fall through to Tempo/MPP sellers.) A payment on a chain without a spending wallet gets an honest 409 naming the supported chains, and on x402 a 4xx/5xx cancels your settlement, so you are not charged for a failure. Relayed bodies are marked `untrustedContent` (the seller's output, not ours). Default remains local-only: external routing is an explicit opt-in. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 

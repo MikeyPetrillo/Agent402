@@ -11,6 +11,8 @@
 // Listed only when DECIDE_SERVICE_URL and DECIDE_INTERNAL_TOKEN are set.
 
 import { runInAbortableScope, drainSignal, clientGoneSignal } from "../drain-abort.js";
+import { setActualCharge, chargesActualSpend } from "../actual-charge.js";
+import { payerFromPaymentResponse, paymentHeaderOf } from "../payer.js";
 import { decideConfig, priceForDepth, DEPTHS } from "../decide/config.js";
 import { recordWish } from "../wish.js";
 import { payerFromRequest } from "../payer.js";
@@ -231,11 +233,28 @@ export function makeDecideHandler({ ledger, now = () => Date.now(), isOwnTraffic
 
 // ---------------------------------------------------------------- execute
 
+/** The least any payment settles: a charge never goes under it. */
+const SETTLE_FLOOR_USD = 0.001;
+/** The refund-ledger class of an exact payment's unspent budget: the row's
+ *  note starts with it. It is owed and repaid like every other owed row, and
+ *  reads on the refundsOwed word past the same notice grace. */
+export const DECIDE_UNSPENT = "decide-unspent";
+/** The note such a row carries: the class, then the run it came from. */
+export function decideUnspentNote(runId) { return `${DECIDE_UNSPENT}: run ${String(runId || "?").slice(0, 64)}`; }
+/** Is this refund row a decide-execute run's unspent budget? */
+export function isDecideUnspentRefund(row) {
+  return typeof row?.note === "string" && row.note.startsWith(DECIDE_UNSPENT);
+}
+
 /** What an execute call is priced at: its budget less a valid credit, never
  *  under the settlement floor. Sync: reads the ledger's synchronous view
  *  (the file, or the mirror on the state database, which the handler then
- *  re-validates against the database before anything is charged). */
-export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = null }) {
+ *  re-validates against the database before anything is charged).
+ *  `fixed: true` is the price of a payment whose amount is fixed at the 402
+ *  (an exact accept, Tempo): the plan's listed step prices, never a
+ *  maxBudgetUsd above them (see executeBudgetUsd). Without it, the ceiling an
+ *  upto buyer signs. */
+export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = null, fixed = false }) {
   const floor = 0.001;
   const d = body?.decisionId ? (ledger.getDecisionSync ? ledger.getDecisionSync(String(body.decisionId)) : ledger.getDecision(String(body.decisionId))) : null;
   if (!d) {
@@ -243,18 +262,15 @@ export function executeQuoteUsd(body, { ledger, now = Date.now(), getCatalog = n
     // the handler refuses a step it cannot run before anything is charged.
     if (!body?.decisionId && Array.isArray(body?.steps) && typeof getCatalog === "function") {
       const sum = sketchListPriceUsd(body.steps, getCatalog());
-      if (sum > 0) return Math.max(floor, executeBudgetUsd(body, { costViaUsd: sum }));
+      if (sum > 0) return Math.max(floor, executeBudgetUsd(body, { costViaUsd: sum }, undefined, 0, { fixed }));
     }
     return floor;
   }
   const credit = ledger.creditAvailableUsdSync ? ledger.creditAvailableUsdSync(body?.creditToken, d.id, now) : ledger.creditAvailableUsd(body?.creditToken, d.id, now);
-  const budget = executeBudgetUsd(body, d, undefined, credit);
+  const budget = executeBudgetUsd(body, d, undefined, credit, { fixed });
   return Math.max(floor, roundUsd(budget - credit + replanPriceUsd(body, d)));
 }
 
-// Past the run's deadline: the final ledger writes, then the mint's own
-// one-minute floor (decisionExpiry > now + 60 s at mint).
-const REPLAN_CREDIT_SLACK_MS = 120_000;
 
 /** What `replan: true` adds to an execute quote: the plan price at the saved
  *  decision's own depth, the same as a fresh POST /api/decide at that depth.
@@ -286,12 +302,19 @@ export function planChanges(before = [], after = []) {
 // caller already holds for this decision when that is larger: a backup tool
 // pricier than the planned one can then still run (2026-10-01 prod run: step 1
 // fell through to a dearer seller and the estimate left nothing for step 2
-// while $0.02 of credit sat unused). Unspent budget returns as credit.
-export function executeBudgetUsd(body, d, cfg = decideConfig(), creditUsd = 0) {
+// while $0.02 of credit sat unused).
+// `fixed: true` (a payment whose amount the 402 fixed: exact, Tempo): a
+// maxBudgetUsd above the plan's listed step prices is headroom the run may
+// not spend, and on a fixed payment every unspent cent is a refund owed, so
+// the fixed budget stops at the plan's own figure. The headroom stays on the
+// upto ceiling, where unspent budget is never charged. A lower maxBudgetUsd,
+// and a plan with no priced steps, read the same either way.
+export function executeBudgetUsd(body, d, cfg = decideConfig(), creditUsd = 0, { fixed = false } = {}) {
   const asked = Number(body?.maxBudgetUsd);
   const planned = Number(d?.costViaUsd) || 0;
   const held = Number(creditUsd) > 0 ? Number(creditUsd) : 0;
-  const base = Number.isFinite(asked) && asked > 0 ? asked : Math.max(planned, held);
+  const ownFigure = Math.max(planned, held);
+  const base = Number.isFinite(asked) && asked > 0 ? (fixed && planned > 0 ? Math.min(asked, ownFigure) : asked) : ownFigure;
   // A re-plan's price rides on the same quote, which never passes the
   // published per-call maximum (quoteRange.maxUsd): near it, the steps get
   // the maximum less the plan price.
@@ -455,7 +478,12 @@ function defaultRunStopSignal() {
   return parts.length ? AbortSignal.any(parts) : null;
 }
 
-export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(), isOwnTraffic = () => false, isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus(), ledgerRetryMs = LEDGER_RETRY_MS, runStopSignal = defaultRunStopSignal, replan = (body, opts) => callService("/internal/replan", body, opts), replanGuard = createReplanGuard() }) {
+/** What the execute answer's charge fields are. Outside results are bought
+ *  by Agent402 for its own account and resold; nothing is paid on the buyer's
+ *  behalf. The field names predate this wording and are kept. */
+export const CHARGES_NOTE = "firstPartyUsd: our own tools at list price. passThroughUsd: what we paid outside sellers for the results we bought for our own account and resold to you. routingFeesUsd: our markup over those sellers' prices (the names are kept for compatibility).";
+
+export function makeExecuteHandler({ ledger, getCatalog, bookUnspent = async (row) => (await import("../refund-ledger.js")).recordRefundOwed(row), now = () => Date.now(), isOwnTraffic = () => false, isComposite = (slug) => EXPENSIVE_COMPOSITE_SLUGS.has(slug), runBudgetMs = (req) => evmCredentialBudgetMs(req), spendingWalletStatus = async () => (await import("../upstream-buyer-status.js")).upstreamBuyerStatus(), ledgerRetryMs = LEDGER_RETRY_MS, runStopSignal = defaultRunStopSignal, replan = (body, opts) => callService("/internal/replan", body, opts), replanGuard = createReplanGuard() }) {
   // A write after money may have moved: awaited once, then retried and
   // journaled (kind, payload) on local disk before the run answers.
   const afterSpend = (label, kind, payload, thunk) => ledgerWriteAfterSpend(label, thunk, ledgerRetryMs, journalOf(ledger, kind, payload));
@@ -540,13 +568,18 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       throw bad(`"decisionId" (from POST /api/decide) or "steps" (the tool slugs of a free plan sketch from /api/find or /api/route, ${SKETCH_MIN_STEPS} to ${SKETCH_MAX_STEPS}, in order) is required`);
     }
     const startedAt = Date.now();
-    const budget = executeBudgetUsd(input, d, cfg, await ledger.creditAvailableUsd(input.creditToken, d.id, t));
+    // A payment whose amount the 402 fixed (exact, Tempo) was quoted on the
+    // fixed budget (the plan's listed step prices); an upto payment, and a
+    // call with no payment, on the ceiling. The run's budget is read the same
+    // way, so the credit the quote assumed is the credit redeemed below.
+    const fixed = !chargesActualSpend(req) && !!(paymentHeaderOf(req) || req?.mppTempoCredential);
+    const budget = executeBudgetUsd(input, d, cfg, await ledger.creditAvailableUsd(input.creditToken, d.id, t), { fixed });
     if (budget <= 0) throw bad("Nothing to execute: the plan has no priced steps; pass maxBudgetUsd", 400);
 
     // WHAT WAS PAID is the quote the payment gate settled against (stashed on
     // the request by every gate), never a recomputation: a credit raced away
     // since the quote would otherwise make an unpaid budget spendable.
-    const quoted = Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : executeQuoteUsd(input, { ledger, now: t, getCatalog });
+    const quoted = Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : executeQuoteUsd(input, { ledger, now: t, getCatalog, fixed });
     // A re-plan's price rides on the same payment and is never spent on steps.
     const planCharge = replanPriceUsd(input, d, cfg);
     const runPaid = roundUsd(Math.max(0, quoted - planCharge));
@@ -594,9 +627,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     // on the saved decision (its run key, credit and budget are the ones the
     // quote priced); the new plan is recorded as a decision of its own, with
     // its own feedback token. A re-plan that does not happen runs the saved
-    // plan and returns its price as credit, which the saved decision's credit
-    // window must still be open to hold; when it is not, the call is refused
-    // before anything is spent (not charged).
+    // plan, and its price is part of the run's unspent amount (below).
     let replanned = null;
     if (wantsReplan) {
       const saved = d;
@@ -635,13 +666,10 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         const changes = planChanges(saved.plan, fresh.plan);
         replanned = { ran: true, decisionId: id, feedbackToken, priceUsd: planCharge, unchanged: changes.length === 0, changes, estimatedCostViaAgent402Usd: row.costViaUsd };
         d = { ...saved, plan: fresh.plan, plannerVersion: row.plannerVersion, shapeKey: row.shapeKey };
-      } else if (saved.createdAt + cfg.credit.ttlHours * 3_600_000 > t + Math.min(Number.isFinite(creditMs) && creditMs > 0 ? creditMs : Infinity, cfg.execute.runDeadlineMs ?? 240_000) + REPLAN_CREDIT_SLACK_MS) {
-        // The leftover credit is minted when the run ends (its deadline at the
-        // latest) and only while the decision's window has a minute left, so
-        // the window must outlast the whole run, not just this moment.
-        replanned = { ran: false, reason: why, priceUsd: planCharge, returnedAsCredit: true };
       } else {
-        throw bad(`The re-plan could not run (${why}).${notChargedOn(req)} Retry, or send the same body without "replan" to run the saved plan.`, 503);
+        // The re-plan's price is not spent: it is part of the run's unspent
+        // amount, which is not charged (upto) or is repaid (exact) below.
+        replanned = { ran: false, reason: why, priceUsd: planCharge, returnedWithUnspent: true };
       }
     }
 
@@ -961,59 +989,57 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const finishedAt = now();
     const finalSteps = results.map(({ result, ...r }) => r);
     await finish({ runId, status: okSteps === results.length ? "complete" : "partial", spentUsd: spent, steps: finalSteps, now: finishedAt });
-    // Unspent funds (what was paid plus the credit, less what was spent)
-    // return as a credit on the same decision, live once this payment settles
-    // and expiring WITH the decision, so a credit is never rolled forward.
-    const leftover = roundUsd(quoted + redeemed - spent - (replanned?.ran ? planCharge : 0));
-    const decisionExpiry = d.createdAt + cfg.credit.ttlHours * 3_600_000;
-    let leftoverCredit = null;
-    if (leftover >= 0.001 && decisionExpiry > now() + 60_000) {
-      // The token is drawn first, so every attempt mints the same credit: a
-      // mint that fails here is queued for retry like the other writes after
-      // a spend, and the buyer gets the token now. The credit is activated
-      // once the payment settles and the mint has landed (the activation
-      // retries until the row exists); a settlement that fails leaves it
-      // pending, never spendable.
-      const token = newCreditToken();
-      const hash = hashToken(token);
-      const mintArgs = { decisionId: d.id, amountUsd: leftover, expiresAt: decisionExpiry, payer, now: now(), token };
-      let c = null;
-      for (let i = 0; i < 2 && !c; i++) {
-        try { c = await ledger.mintCredit(mintArgs); }
-        catch (e) { console.warn(`[decide] mint leftover credit ${runId}: ledger write failed (${String(e?.message || e).slice(0, 120)})`); }
-      }
-      const minted = Boolean(c);
-      // A mint that did not land is journaled before the answer and retried;
-      // the activation (after settlement) retries until the mint is in, and
-      // is journaled too, behind the mint. Both are idempotent.
-      if (!minted) {
-        journalOf(ledger, "mintCredit", mintArgs)?.();
-        retryLedgerWrite(`mint leftover credit ${runId}`, () => ledger.mintCredit(mintArgs), ledgerRetryMs);
-      }
-      onSettled(req, (settledOk) => {
+    // THE BUYER PAYS FOR WHAT WAS SPENT, never for budget left over, and no
+    // part of a payment is kept as a credit. Spend draws on the execution
+    // credit first (our own rebate of the plan fee), then on this payment;
+    // a re-plan that ran adds its price. The rest of the payment is unspent:
+    //  - on `upto` (the buyer signed the budget as a ceiling) it is never
+    //    charged: the settlement names only `chargedUsd` (src/actual-charge.js);
+    //  - otherwise (an `exact` payment fixed the amount at the 402) it is
+    //    booked as a refund owed to the paying wallet once the payment
+    //    settles, and repaid on chain like every other owed refund.
+    // The settlement floor ($0.001, the least any payment settles) is the
+    // price of the call itself, never unspent budget.
+    const chargedUsd = roundUsd(Math.min(quoted, Math.max(SETTLE_FLOOR_USD, (replanned?.ran ? planCharge : 0) + Math.max(0, spent - redeemed))));
+    const unspentUsd = roundUsd(Math.max(0, quoted - chargedUsd));
+    let unspent = null;
+    if (unspentUsd >= 0.001) {
+      const upto = chargesActualSpend(req);
+      unspent = { amountUsd: unspentUsd, handling: upto ? "not-charged" : "refund-owed" };
+      onSettled(req, (settledOk, res) => {
         if (!settledOk) return;
-        fireRetry(`activate credit ${runId}`, () => activateRecorded(ledger, token, hash), ledgerRetryMs, journalOf(ledger, "activateCredit", { hash }));
+        // The upto override landed: nothing was charged past what was spent.
+        if (upto && res?.getHeader?.("X-Charged-Usd")) return;
+        let receipt = null;
+        try { receipt = JSON.parse(Buffer.from(String(res?.getHeader?.("payment-response") || ""), "base64").toString("utf-8")); } catch { receipt = null; }
+        const owedPayer = payerFromPaymentResponse(String(res?.getHeader?.("payment-response") || "")) || payerFromRequest(req) || req?.mppTempoSender || null;
+        Promise.resolve(bookUnspent({ slug: "decide-execute", network: receipt?.network ?? null, payer: owedPayer, priceUsd: unspentUsd, tx: typeof receipt?.transaction === "string" && receipt.transaction ? receipt.transaction : null, httpStatus: 200, requestId: runId, note: decideUnspentNote(runId) }))
+          .catch((e) => console.error(`[decide] unspent budget of ${runId} ($${unspentUsd}) NOT booked as owed (${String(e?.message || e).slice(0, 120)}); book it by hand`));
       });
-      const expiresAt = c ? c.expiresAt : decisionExpiry;
-      leftoverCredit = { amountUsd: c ? c.amountUsd : roundUsd(leftover), expiresAt: new Date(expiresAt).toISOString(), token, activeAfterPaymentSettles: true, ...(minted ? {} : { recordPending: true }) };
     }
     // A settlement that fails after this run spent money forfeits the credit:
     // restoring it would let the same credit fund run after run.
     if (redeemed && nothingSpent) onSettled(req, (settledOk) => { if (!settledOk) fireRetry(`restore credit ${runId}`, () => ledger.restoreCredit(input.creditToken, runId), ledgerRetryMs, journalOf(ledger, "restoreCredit", { token: input.creditToken, runId })); });
-    // What the spend was, on separate lines: our own tools, what was passed
-    // through to outside sellers, and the routing fee on it.
+    // What the spend was, on separate lines: our own tools, what we paid
+    // outside sellers for the results we bought and resold, and our markup
+    // over their prices. The field names are kept for compatibility;
+    // `chargesNote` states what each one is.
     const okResults = results.filter((r) => r.status === "ok");
     const routingFeesUsd = roundUsd(okResults.reduce((a, r) => a + (r.routingFeeUsd || 0), 0));
     const passThroughUsd = roundUsd(okResults.filter((r) => !r.tool.firstParty).reduce((a, r) => a + (r.costUsd || 0), 0) - routingFeesUsd);
     const firstPartyUsd = roundUsd(okResults.filter((r) => r.tool.firstParty).reduce((a, r) => a + (r.costUsd || 0), 0));
-    return {
+    const answer = {
       runId, decisionId: d.id, status: okSteps === results.length ? "complete" : "partial",
       ...(sketchFeedbackToken ? { feedbackToken: sketchFeedbackToken, feedback: "POST /api/decide/feedback { decisionId, feedbackToken, step, outcome: success|failure, quality?: 1-5, latencyMs? } - free, one verdict per step" } : {}),
-      steps: results, budgetUsd: spendable, spentUsd: spent, paidUsd: quoted, creditAppliedUsd: redeemed,
+      steps: results, budgetUsd: spendable, spentUsd: spent, paidUsd: quoted, chargedUsd, creditAppliedUsd: redeemed, unspent,
       charges: { firstPartyUsd, passThroughUsd, routingFeesUsd, uncertainUsd: roundUsd(Math.max(0, spent - firstPartyUsd - passThroughUsd - routingFeesUsd)) },
-      routingFeePct: cfg.routingFeePct, leftoverCredit,
+      chargesNote: CHARGES_NOTE,
+      routingFeePct: cfg.routingFeePct,
+      // Kept for compatibility: no part of a payment is held as a credit.
+      leftoverCredit: null,
       ...(replanned ? { replanned } : {}),
     };
+    return setActualCharge(answer, chargedUsd);
   };
 }
 
@@ -1162,11 +1188,17 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       // Outside steps are bought from the Base spending wallet, which only a
       // Base payment funds: other EVM chains are not offered.
       onlyNetworks: ["eip155:8453"],
-      quote: (body) => executeQuoteUsd(body, { ledger, now: now(), getCatalog }),
+      // Settles what the run spent (src/actual-charge.js): its upto accepts
+      // come first and carry the budget as a ceiling (uptoQuote); its exact
+      // accept, and Tempo, are priced at the plan's listed step prices
+      // (quote), so an exact payment leaves as little unspent as possible.
+      chargesActualSpend: true,
+      quote: (body) => executeQuoteUsd(body, { ledger, now: now(), getCatalog, fixed: true }),
+      uptoQuote: (body) => executeQuoteUsd(body, { ledger, now: now(), getCatalog }),
       // The budget is capped per call (executeBudgetUsd), so that is the ceiling.
       quoteMaxUsd: decideConfig().execute.perCallMaxUsd,
       description:
-        "Run a decision's plan (decisionId from POST /api/decide), or a free plan sketch (steps), through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you at Agent402's price (paid with a wallet on Base; prepaid credits and cards do not pay this route). Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and any unspent amount comes back as a credit. A run where no step succeeds is not charged on x402. Reusing a saved plan: send its decisionId with replan: true and the saved task is planned again on current prices and reliability before the run, for the POST /api/decide price at that decision's depth added to the quote; the answer's replanned field gives the new decisionId and each step whose tool, seller or price changed (or unchanged: true), and a re-plan that cannot run falls back to the saved plan with its price returned as credit. Also runs a free plan sketch: pass the sketch's tool slugs as steps (no decisionId) with params for step 1, and each later step takes its one required input from the step before, at list price.",
+        "Run a decision's plan (decisionId from POST /api/decide), or a free plan sketch (steps), through Agent402: first-party steps run directly, third-party steps are bought from the seller and resold to you at Agent402's price (paid with a wallet on Base; prepaid credits and cards do not pay this route). Priced at the plan's budget (or your maxBudgetUsd, whichever you set) less a valid execution credit; spend stops at that budget, fallbacks are tried in order, and you pay only for what the run spent. The 402 lists upto first: you sign the budget as a ceiling and are charged what the run spent. Exact follows, priced at the plan's listed step prices (never a larger maxBudgetUsd), and any part a run does not spend is repaid on chain to the paying wallet (the answer's unspent field says which). A run where no step succeeds is not charged on x402. Reusing a saved plan: send its decisionId with replan: true and the saved task is planned again on current prices and reliability before the run, for the POST /api/decide price at that decision's depth added to the quote; the answer's replanned field gives the new decisionId and each step whose tool, seller or price changed (or unchanged: true), and a re-plan that cannot run falls back to the saved plan, its price unspent (never charged on upto, repaid on exact). Also runs a free plan sketch: pass the sketch's tool slugs as steps (no decisionId) with params for step 1, and each later step takes its one required input from the step before, at list price.",
       tags: ["agents", "execute", "planning", "router", "x402"],
       discovery: {
         bodyType: "json",
@@ -1184,7 +1216,7 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
           },
           required: [],
         },
-        output: { example: { runId: "run_…", decisionId: "dec_…", status: "complete", steps: [{ step: 1, status: "ok", tool: { slug: "search", seller: "agent402", firstParty: true }, costUsd: 0.02, result: {} }], budgetUsd: 0.02, spentUsd: 0.02, paidUsd: 0.001, creditAppliedUsd: 0.02, routingFeePct: 5, leftoverCredit: null } },
+        output: { example: { runId: "run_…", decisionId: "dec_…", status: "complete", steps: [{ step: 1, status: "ok", tool: { slug: "search", seller: "agent402", firstParty: true }, costUsd: 0.02, result: {} }], budgetUsd: 0.02, spentUsd: 0.02, paidUsd: 0.001, chargedUsd: 0.001, creditAppliedUsd: 0.02, unspent: null, routingFeePct: 5, leftoverCredit: null } },
       },
       handler: makeExecuteHandler({ ledger, getCatalog, now, isOwnTraffic }),
     },

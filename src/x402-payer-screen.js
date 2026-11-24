@@ -75,6 +75,8 @@ import { screenAddresses, maskAddress } from "./sanctions-screen.js";
 import { nonEvmScreenAddressesFromRequest } from "./non-evm-payer.js";
 import { screenAddressForPayment } from "./tools/sanctions-kit.js";
 import { decodePaymentHeader } from "./payment-header.js";
+import { recordSanctionsEvent } from "./sanctions-events.js";
+import { sanctionsScreenOperatorView } from "./sanctions-screen.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -219,6 +221,14 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
     counts.refused++;
     counts.lastRefusedAt = Date.now();
     log(`[sanctions-screen] x402 payer ${maskAddress(v.address)} refused before the handler (${req.method} ${req.path}); nothing settles`);
+    // The rejected transaction, in full, for the records rule and its report
+    // (src/sanctions-events.js). Never awaited: the refusal does not wait on it.
+    try {
+      const acc = (() => { const p = x402ScreenedPaymentOf(req)?.payload; return p?.accepted || p || {}; })();
+      let listDate = null;
+      try { listDate = sanctionsScreenOperatorView().publishDate || null; } catch { /* no list view */ }
+      recordSanctionsEvent({ kind: "screen-hit", address: v.address, rail: "x402", network: acc.network ?? null, amount: acc.amount ?? acc.maxAmountRequired ?? null, asset: acc.asset ?? null, route: `${req.method} ${req.path}`, ip: req.ip, listPublishDate: listDate }).catch(() => {});
+    } catch { /* recording never breaks the refusal */ }
     res.status(403);
     res.setHeader("Cache-Control", "no-store");
     return res.json({ error: X402_PAYER_REFUSED_TEXT, reason: "payer-not-accepted", charged: false });

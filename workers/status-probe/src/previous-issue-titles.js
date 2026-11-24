@@ -100,6 +100,7 @@ export const PREVIOUS_TITLES = Object.freeze({
   "referral-settlement": ["referralSettlement: referral settlements need attention"],
   "refund-ledger": ["Refund ledger needs attention"],
   "refunds": ["Refunds owed to a buyer are waiting"],
+  "sanctions-report": [],
   "replay-store-marks": ["Replay store marks PENDING (Redis)"],
   "upstream-caps": [],
   "report-quality": ["Paid report quality REGRESSED"],

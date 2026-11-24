@@ -199,6 +199,8 @@ t node scripts/test-stellar-xdr-fixtures.js
 t node scripts/test-svm-clarify.js
 # Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)
 t node scripts/test-refund-ledger.js
+# Money records past retention (sales and resolved refunds 7 years, sanctions 10; dry run unless LEDGER_RETENTION=apply; owed and blocked refunds never removed - offline)
+t node scripts/test-ledger-retention.js
 # Outbound new-destination watch (first sighting per chain+recipient, ok/new/burst words, window expiry, file-mode persistence across a restart, word-only public field - offline +
 t node scripts/test-outbound-destinations.js
 # Refund lookup (exact tx only, unknown == no refund, no payer leak, own rows on my-usage, rate limited - boots its own server)
@@ -384,6 +386,8 @@ t node scripts/test-mppx-production-store.js
 t node scripts/test-sanctions-screen.js
 # An x402 payer on the same EVM set is refused after verify and before the handler, nothing settles; no list serves (paid-mode boot vs stub facilitator - offline)
 t node scripts/test-x402-payer-screen.js
+# Sanctioned regions answer 451 before any payment work (a payment from one is never verified or settled; live control from an allowed country); the sanctions events store keeps each event and reads due until filed (paid-mode boot vs stub facilitator - offline)
+t node scripts/test-sanctioned-regions.js
 # Every rail that carries a payer address screens it (x402 EVM, Gateway, MPP evm, Solana, Stellar, Algorand, Tempo relay); a payer not listed is served; card and credits name no address (offline)
 t node scripts/test-payer-screen-rails.js
 # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
