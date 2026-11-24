@@ -16,6 +16,7 @@ import { failedCallFootnote } from "./settlement-footnote.js";
 import { connectorWires } from "./connector-pay.js";
 import { stockDataEnabled } from "./tools/stock-provider.js";
 import { firstFit } from "./seo-meta.js";
+import { AWS_MARK_NOTICE } from "./mark-notices.js";
 // Prepaid credits are only presented as a way to pay while packs are sold.
 const CREDITS_ON = creditsSalesEnabled();
 export const CREDITS_HELD = CREDITS_ON ? "a prepaid credits key" : "a credits key bought earlier";
@@ -29,12 +30,12 @@ const payClient = new x402Client();
 registerExactEvmScheme(payClient, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
 const payFetch = wrapFetchWithPayment(fetch, payClient);`;
 
-// The first example on each page is a web search followed by a cited answer,
-// paid per call from a wallet. The free tier sits directly under it.
+// The first example on each page reads a company's SEC filings, then its
+// reported financials (public-domain SEC data), paid per call from a wallet. The free tier sits directly under it.
 export const NO_WALLET_NOTE = "The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet:";
-const SEARCH_THEN_ANSWER = "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?";
-const PER_SLUG_PAID = `// web search, then a cited answer: both paid per call from the wallet
-const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });`;
+const FILINGS_THEN_FACTS = "List Apple's latest 10-K filings, then report its revenue and total assets from the filed financials.";
+const PER_SLUG_PAID = `// SEC filings, then the filed financials: both paid per call from the wallet
+const { tools, execute } = await agent402Tools({ slugs: ["edgar-filings", "edgar-company-facts"], freeOnly: false, fetch: payFetch });`;
 const META_NO_WALLET = `// the same four tools with no fetch: agent402_call pays pure-CPU tools with proof-of-work
 const tools = await agent402Tools();`;
 
@@ -88,6 +89,7 @@ export const ADAPTER_CONFIG = {
 export const INTEGRATIONS = [
   {
     slug: "openai",
+    markOwner: "OpenAI",
     meta: "Agent402 tools as OpenAI function-calling definitions for chat.completions and the Responses API. Free tier by proof-of-work; paid tools over x402 or MPP.",
     name: "OpenAI function calling",
     short: "OpenAI",
@@ -105,7 +107,7 @@ ${X402_FETCH}
 const openai = new OpenAI();
 ${PER_SLUG_PAID}
 
-const messages = [{ role: "user", content: "${SEARCH_THEN_ANSWER}" }];
+const messages = [{ role: "user", content: "${FILINGS_THEN_FACTS}" }];
 for (let turn = 0; turn < 4; turn++) {
   const res = await openai.chat.completions.create({ model: "gpt-6-luna", messages, tools });
   const msg = res.choices[0].message;
@@ -125,6 +127,7 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
   },
   {
     slug: "anthropic",
+    markOwner: "Anthropic, PBC",
     meta: "Agent402 tools as Anthropic Messages API tool definitions with an execute helper. Free tier by proof-of-work; paid tools over x402 or MPP.",
     name: "Anthropic tool use",
     short: "Anthropic",
@@ -142,7 +145,7 @@ ${X402_FETCH}
 const client = new Anthropic();
 ${PER_SLUG_PAID}
 
-const messages = [{ role: "user", content: "${SEARCH_THEN_ANSWER}" }];
+const messages = [{ role: "user", content: "${FILINGS_THEN_FACTS}" }];
 for (let turn = 0; turn < 4; turn++) {
   const res = await client.messages.create({ model: "claude-opus-5-5", max_tokens: 1024, tools, messages });
   messages.push({ role: "assistant", content: res.content });
@@ -161,6 +164,7 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
   },
   {
     slug: "ai-sdk",
+    markOwner: "Vercel, Inc.",
     meta: "Four meta tools that give a Vercel AI SDK agent the whole Agent402 catalog: find, route, call, about. Proof-of-work free tier; paid tools over x402 or MPP.",
     name: "Vercel AI SDK",
     short: "Vercel AI SDK",
@@ -176,14 +180,14 @@ import { generateText, stepCountIs } from "ai";
 import { openai } from "@ai-sdk/openai";
 ${X402_FETCH}
 
-// an object keyed by tool name; agent402_call pays search and answer through this fetch
+// an object keyed by tool name; agent402_call pays each paid tool through this fetch
 const tools = await agent402Tools({ fetch: payFetch });
 
 const { text } = await generateText({
   model: openai("gpt-6.1-terra"),
   tools,
-  stopWhen: stepCountIs(6),   // find, search, answer, then reply
-  prompt: "${SEARCH_THEN_ANSWER}",
+  stopWhen: stepCountIs(6),   // find, filings, financials, then reply
+  prompt: "${FILINGS_THEN_FACTS}",
 });`,
     noWalletExample: META_NO_WALLET,
     exposes: META_EXPOSES,
@@ -193,6 +197,7 @@ const { text } = await generateText({
   },
   {
     slug: "langchain",
+    markOwner: "LangChain, Inc.",
     metaDescription: "LangChain.js and LangGraph tools for Agent402: four meta tools that reach the whole catalog, free tools over proof of work and paid ones over x402 or MPP.",
     meta: "LangChain.js and LangGraph tools for Agent402: four meta tools that reach the whole catalog, with proof-of-work for free tools and x402 or MPP for paid ones.",
     name: "LangChain.js and LangGraph",
@@ -210,12 +215,12 @@ import { createAgent } from "langchain";
 
 ${X402_FETCH}
 
-// an array of four tools; agent402_call pays search and answer through this fetch
+// an array of four tools; agent402_call pays each paid tool through this fetch
 const tools = await agent402Tools({ fetch: payFetch });
 const agent = createAgent({ model: new ChatOpenAI({ model: "gpt-6-luna" }), tools });
 
 const result = await agent.invoke({
-  messages: [{ role: "user", content: "${SEARCH_THEN_ANSWER}" }],
+  messages: [{ role: "user", content: "${FILINGS_THEN_FACTS}" }],
 });`,
     noWalletExample: META_NO_WALLET,
     exposes: META_EXPOSES,
@@ -225,6 +230,7 @@ const result = await agent.invoke({
   },
   {
     slug: "langchain-python",
+    markOwner: "LangChain, Inc. or CrewAI",
     meta: "Agent402 for Python LangChain and CrewAI agents: a toolkit with four meta tools, free pure-CPU tools by proof-of-work, paid tools through a signed fetch.",
     name: "LangChain and CrewAI (Python)",
     short: "LangChain (Python)",
@@ -257,6 +263,7 @@ toolkit = Agent402Toolkit(base_url="https://agent402.tools", x402_fetch=my_signe
   },
   {
     slug: "llamaindex",
+    markOwner: "LlamaIndex, Inc.",
     meta: "Agent402 tools as LlamaIndex TS FunctionTools built from the catalog's JSON Schema. Free tier by proof-of-work; paid tools over x402 or MPP.",
     name: "LlamaIndex TS",
     short: "LlamaIndex",
@@ -272,11 +279,11 @@ import { openai } from "@llamaindex/openai";
 import { agent402Tools } from "agent402-llamaindex";
 ${X402_FETCH}
 
-// web search, then a cited answer: both paid per call from the wallet
-const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
+// SEC filings, then the filed financials: both paid per call from the wallet
+const { tools } = await agent402Tools({ slugs: ["edgar-filings", "edgar-company-facts"], freeOnly: false, fetch: payFetch });
 
 const myAgent = agent({ tools, llm: openai({ model: "gpt-6-luna" }) });
-const res = await myAgent.run("${SEARCH_THEN_ANSWER}");
+const res = await myAgent.run("${FILINGS_THEN_FACTS}");
 console.log(res.data.result);`,
     noWalletExample: `// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
 const { tools } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "text-stats", "uuid"] });`,
@@ -287,6 +294,8 @@ const { tools } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "tex
   },
   {
     slug: "google-adk",
+    markOwner: "Google LLC",
+    forName: "the Google Agent Development Kit",
     meta: "Agent402 tools for Gemini agents on Google's Agent Development Kit: find, route, call and about, with proof-of-work or x402 and MPP payment underneath.",
     name: "Google Agent Development Kit",
     short: "Google ADK",
@@ -319,6 +328,7 @@ const tools = await agent402Tools({ fetch: payFetch });`,
   },
   {
     slug: "openai-agents",
+    markOwner: "OpenAI",
     meta: "Agent402 tools for the OpenAI Agents SDK: four meta tools that reach the whole catalog, paid by proof-of-work or over x402 or MPP.",
     name: "OpenAI Agents SDK",
     short: "OpenAI Agents SDK",
@@ -333,7 +343,7 @@ const tools = await agent402Tools({ fetch: payFetch });`,
 import { Agent, run } from "@openai/agents";
 ${X402_FETCH}
 
-// agent402_call pays search and answer through this fetch
+// agent402_call pays each paid tool through this fetch
 const tools = await agent402Tools({ fetch: payFetch });
 
 const agent = new Agent({
@@ -341,7 +351,7 @@ const agent = new Agent({
   instructions: "Use agent402 to find and call paid web tools when needed.",
   tools,
 });
-const result = await run(agent, "${SEARCH_THEN_ANSWER}");`,
+const result = await run(agent, "${FILINGS_THEN_FACTS}");`,
     noWalletExample: META_NO_WALLET,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
@@ -350,6 +360,7 @@ const result = await run(agent, "${SEARCH_THEN_ANSWER}");`,
   },
   {
     slug: "strands",
+    markOwner: "Amazon.com, Inc. or its affiliates",
     meta: "Agent402 tools as Strands Agents tool instances, including on Amazon Bedrock AgentCore. Free tier by proof-of-work; paid tools over x402.",
     name: "Strands Agents",
     short: "Strands",
@@ -365,15 +376,15 @@ const result = await run(agent, "${SEARCH_THEN_ANSWER}");`,
 import { agent402Tools } from "agent402-strands";
 ${X402_FETCH}
 
-// web search, then a cited answer: both paid per call from the wallet
+// SEC filings, then the filed financials: both paid per call from the wallet
 const { tools } = await agent402Tools({
-  slugs: ["search", "answer"],
+  slugs: ["edgar-filings", "edgar-company-facts"],
   freeOnly: false,
   fetch: payFetch,
 });
 
 const agent = new Agent({ tools });
-const out = await agent.invoke("${SEARCH_THEN_ANSWER}");`,
+const out = await agent.invoke("${FILINGS_THEN_FACTS}");`,
     noWalletExample: `// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
 const { tools } = await agent402Tools({
   slugs: ["hash", "markdown-to-html", "text-stats", "uuid"],
@@ -388,6 +399,7 @@ const { tools } = await agent402Tools({
   },
   {
     slug: "agentkit",
+    markOwner: "Coinbase, Inc.",
     meta: "An AgentKit action provider: agents with CDP, Privy, ZeroDev or viem wallets find and call Agent402 tools, paying over x402 in USDC on Base.",
     name: "Coinbase AgentKit",
     short: "AgentKit",
@@ -433,6 +445,8 @@ await agent402ActionProvider({
   },
   {
     slug: "eliza",
+    markOwner: "the elizaOS project",
+    forName: "elizaOS",
     meta: `An elizaOS plugin to find and call Agent402 tools, paid in USDC over x402${CREDITS_ON ? " or by prepaid credits" : ""}, inside a per-call spend ceiling and an optional daily one.`,
     name: "elizaOS plugin",
     short: "elizaOS",
@@ -534,10 +548,10 @@ ${X402_FETCH}
 
 const a = new Agent402({ fetch: payFetch });   // https://agent402.tools, paying from the wallet
 
-// web search, then a cited answer: each call paid on its own
-const found = await a.call("search", { q: "x402 payment protocol adoption", count: 5 });
-const answer = await a.call("answer", { q: "what is the x402 payment protocol?" });
-console.log(found.results, answer.answer, answer.citations);
+// SEC filings, then the filed financials: each call paid on its own
+const filings = await a.call("edgar-filings", { ticker: "AAPL", form: "10-K", limit: 5 });
+const facts = await a.call("edgar-company-facts", { ticker: "AAPL", tags: "Revenues,Assets" });
+console.log(filings, facts);
 
 const matches = await a.find("extract the article from a url");
 // [{ slug: "extract", route, price, inputSchema, example, ... }]`,
@@ -626,6 +640,8 @@ npx agent402-tollbooth   # testnet dry run; for mainnet, drop TOLLBOOTH_NETWORK 
   },
   {
     slug: "openclaw",
+    markOwner: "the OpenClaw project",
+    forName: "OpenClaw",
     meta: `Agent402 as an OpenClaw model provider: routed and explicit models priced per call, paid in USDC over x402${CREDITS_ON ? " or by credits key" : ""} through a local proxy.`,
     name: "OpenClaw model provider",
     short: "OpenClaw",
@@ -711,11 +727,23 @@ const pre = (code) => codeBlock(`<code>${code}</code>`, { html: true, style: "ma
 const LI = 'style="color:var(--muted);font-size:var(--fs-base);line-height:1.65;margin:0 0 8px;"';
 const A = 'style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);"';
 
+/** The line under a third-party framework's page title: the framework's name
+ *  is its owner's, and the package is ours and independent of that owner. The
+ *  Strands page names AgentCore too, so it carries AWS's notice as well. */
+export function integrationMarkNotice(i) {
+  if (!i?.markOwner) return "";
+  const own = `Product names on this page are trademarks of their owners. ${i.pkg} is an independent package published by Havok Holdings LLC; it is not affiliated with, sponsored by or endorsed by ${i.markOwner}.`;
+  return i.slug === "strands" ? `${own} ${AWS_MARK_NOTICE}` : own;
+}
+
 export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
   const i = integrationBySlug(slug);
   if (!i) return null;
   const canonical = `${baseUrl}/integrations/${i.slug}`;
-  const title = `${i.name} integration (${i.pkg})`;
+  // Our name leads; a framework's name only says what the package works with.
+  const heading = i.markOwner ? `Agent402 for ${i.forName || i.name}` : i.name;
+  const title = `${heading} (${i.pkg})`;
+  const markNotice = integrationMarkNotice(i);
   const description = firstFit([i.metaDescription, i.meta]) || i.meta;
   const github = repoUrl(`tree/main/${i.dir}`);
   const tools = toolsFor(i, catalog);
@@ -754,7 +782,8 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
   const body = `
   <div style="max-width:980px;margin:0 auto;padding:50px 30px 64px;">
     <nav class="ml-crumb" aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><span class="ml-crumb-cur">&#160;/ <span style="color:var(--ink);">${esc(i.name)}</span></span></nav>
-    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 10px;">${esc(i.name)}</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 10px;">${esc(heading)}</h1>
+    ${markNotice ? `<p class="ml-mark-notice" style="color:var(--faint);font-size:var(--fs-xs);margin:0 0 10px;max-width:760px;">${esc(markNotice)}</p>` : ""}
     <div style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--accent);margin-bottom:18px;">${esc(i.pkg)} &middot; ${esc(registryLabel(i))} &middot; MIT</div>
     <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 34px;max-width:760px;">${inline(i.what)}</p>
 
