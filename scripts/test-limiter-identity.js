@@ -273,7 +273,10 @@ await drive({
   const slowLimits = (ms) => {
     const m = createMemoryLimits();
     const slow = (f) => async (...a) => { await sleep(ms); return f(...a); };
-    return { ...m, counterAdd: slow(m.counterAdd), counterGet: slow(m.counterGet), windowAdd: slow(m.windowAdd), windowRead: slow(m.windowRead) };
+    // Every counter's net change by name, so a test reads what a refused ask left behind.
+    const moved = new Map();
+    const counterAdd = async (name, key, delta, ...rest) => { const r = await slow(m.counterAdd)(name, key, delta, ...rest); moved.set(name, (moved.get(name) || 0) + Math.trunc(Number(delta) || 0)); return r; };
+    return { ...m, moved, counterAdd, counterGet: slow(m.counterGet), windowAdd: slow(m.windowAdd), windowRead: slow(m.windowRead) };
   };
   async function harness(table = {}) {
     // The table is drawn at random per run (scripts/lib/credits-guards-table.js):
@@ -282,12 +285,13 @@ await drive({
     const wide = { authorizePerIp: 10_000, registerPerIp: 10_000, pendingMax: 10_000, pendingPerAddress: 10_000, pendingPerClient: 10_000, pendingPerNetwork: 10_000, tokenPerIp: 10_000, lockoutMs: 3_600_000 };
     useGuardsTable({ ...BASE, mcpOAuth: { ...BASE.mcpOAuth, ...wide, ...table } });
     const sent = [];
-    const oa = createMcpOAuth({ credits: { balancesForEmail: async () => [], grantSpentToday: async () => 0 }, store: memStore(), clientStore: memStore(), requestStore: memStore(), secret: "s".repeat(32), baseUrl: "https://agent402.tools", limits: slowLimits(3), sendEmail: async (m) => { sent.push({ to: m.to, code: (/\b(\d{6})\b/.exec(m.text) || [])[1] }); return true; }, log: () => {} });
+    const limits = slowLimits(3);
+    const oa = createMcpOAuth({ credits: { balancesForEmail: async () => [], grantSpentToday: async () => 0 }, store: memStore(), clientStore: memStore(), requestStore: memStore(), secret: "s".repeat(32), baseUrl: "https://agent402.tools", limits, sendEmail: async (m) => { sent.push({ to: m.to, code: (/\b(\d{6})\b/.exec(m.text) || [])[1] }); return true; }, log: () => {} });
     const app = express();
     oa.mount(app, { express, clientIp: (r) => String(r.headers["x-test-ip"] || "127.0.0.1") });
     const server = await new Promise((r) => { const x = app.listen(0, "127.0.0.1", () => r(x)); });
     const U = `http://127.0.0.1:${server.address().port}`;
-    const h = { sent, U, close: () => new Promise((r) => server.close(r)) };
+    const h = { sent, U, moved: limits.moved, close: () => new Promise((r) => server.close(r)) };
     h.register = (ip) => fetch(`${U}/oauth/register`, { method: "POST", headers: { "content-type": "application/json", "x-test-ip": ip }, body: JSON.stringify({ redirect_uris: ["https://claude.ai/cb"] }) });
     h.start = async (ip, client) => {
       const a = await fetch(`${U}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: client, redirect_uri: "https://claude.ai/cb", state: "s", code_challenge_method: "S256", code_challenge: "A".repeat(43) })}`, { redirect: "manual", headers: { "x-test-ip": ip } });
@@ -338,6 +342,52 @@ await drive({
         };
       }),
     });
+    // The counts a refused ask charged and gives back (the requester's own
+    // per-address and per-mailbox rate counters are its own, and stay).
+    const GIVEN_BACK = new Set(["send-email-day", "send-mailbox-day", "send-mailbox-cold-day", "send-net-hour", "send-net-day", "send-wide-day", "send-global"].map((n) => `mcpo-${n}`));
+    // A refused code-mail ask gives back every count it charged: network A's
+    // refused asks for one mailbox leave nothing another requester is judged
+    // by, so network B's first send to that mailbox is served.
+    {
+      const perDay = 2;
+      // The service budget is wide enough that one network's hourly share is 2.
+      const h = await harness({ sendsPerEmailDay: perDay, sendsGlobalPerHour: 40, sendsPerEmail: 50, sendsPerIp: 500 });
+      hs.push(h);
+      const client = (await (await h.register("198.18.80.1")).json()).client_id;
+      const ask = async (ip, email) => { const s = await h.start(ip, client); if (!s?.csrf) return false; await (await h.post(s, { action: "email", email })).text(); return h.sent.some((m) => m.to === email); };
+      const victim = (tag) => `victim+${tag}@gmail.com`;
+      // The mailbox at its day ceiling and one first send from its allowance.
+      const filled = [await ask("198.18.81.1", victim("c1")), await ask("198.18.82.1", victim("c2")), await ask("198.18.83.1", victim("c3"))];
+      // Network A spends its hourly share on other mailboxes, then asks for the victim's.
+      const A = "198.18.84.1";
+      const own = [await ask(A, "a1@example.com"), await ask(A, "a2@example.com")];
+      const before = new Map(h.moved);
+      const refused = [];
+      for (let i = 0; i < 4; i++) refused.push(await ask(A, victim(`a${i}`)));
+      const left = [...h.moved].filter(([n, v]) => GIVEN_BACK.has(n) && v !== (before.get(n) || 0)).map(([n, v]) => `${n}:${v - (before.get(n) || 0)}`);
+      ok(filled.every(Boolean) && own.every(Boolean) && refused.every((x) => !x), `connector code mail: network A's asks past its share are refused (setup ${filled}, ${own}, refused ${refused})`);
+      ok(left.length === 0, `connector code mail: a refused ask gives back every count it charged (left: ${left.join(", ") || "none"})`);
+      ok(await ask("198.18.85.1", victim("b")), "connector code mail: network B's first send to the mailbox is served after A's refused asks");
+    }
+    // Refused at the service-wide budget: the global counter gives its count back.
+    {
+      const G = 21; // one network's hourly share: ceil(21 * 0.05) = 2
+      const h = await harness({ sendsGlobalPerHour: G, sendsPerEmailDay: 50, sendsPerEmail: 50, sendsPerIp: 500 });
+      hs.push(h);
+      const client = (await (await h.register("198.18.90.1")).json()).client_id;
+      const ask = async (ip, email) => { const s = await h.start(ip, client); if (!s?.csrf) return false; await (await h.post(s, { action: "email", email })).text(); return h.sent.some((m) => m.to === email); };
+      const A = "198.18.91.1";
+      const setup = [await ask(A, "ga0@example.com")];
+      for (let i = 0; i < G - 1; i++) setup.push(await ask(`198.19.${i + 1}.1`, `g-fill${i}@example.com`));
+      const before = new Map(h.moved);
+      const refused = [];
+      for (let i = 0; i < 3; i++) refused.push(await ask(A, `ga-next${i}@example.com`));
+      const global = (h.moved.get("mcpo-send-global") || 0) - (before.get("mcpo-send-global") || 0);
+      const left = [...h.moved].filter(([n, v]) => GIVEN_BACK.has(n) && v !== (before.get(n) || 0)).map(([n, v]) => `${n}:${v - (before.get(n) || 0)}`);
+      ok(setup.every(Boolean) && refused.every((x) => !x), `connector code mail: a second send past the service budget is refused (refused ${refused})`);
+      ok(global === 0 && left.length === 0, `connector code mail: refused at the service budget, the global counter is unmoved (global ${global}; left: ${left.join(", ") || "none"})`);
+      ok(await ask("198.19.200.1", "gb@example.com"), "CONTROL: past the service budget, a new network's first send is served");
+    }
     // Wrong codes in parallel from one address: at most the bound compared.
     {
       const fails = 3;
