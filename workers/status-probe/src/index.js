@@ -626,15 +626,10 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
       `/api/gateway-status reports chargedFailures.status=recent: at least one paid call in the last ${Number(b.chargedFailures?.windowHours) || 6} h settled on chain and then answered an error, so a buyer paid and got nothing. The itemised rows (slug, status, time) are on /__operator/stats -> chargedFailures; each is also a debt in the refund ledger (/__operator/refunds.json). Fix the failing tool, then run the refund job for the owed rows. Auto-closes when the window reads clear.`,
   },
   {
-    // Money we owe a buyer (refundsOwed on /api/gateway-status). The refund
-    // job is dispatched by hand, so a debt can sit unpaid with nothing else
-    // noticing (2026-10-06: 44 debts to one buyer, found by reading the
-    // ledger). owed (any buyer's debt past a short grace), aging and stuck
-    // page; ok clears; unknown or absent does neither.
-    title: "Scheduled check needs review: sanctions-report",
     // A sanctions event that needs a report (sanctionsReport on
     // /api/gateway-status, src/sanctions-events.js): due pages until an
     // operator marks it filed; clear closes; unknown or absent does neither.
+    title: "Scheduled check needs review: sanctions-report",
     verdict: ({ gateway: b }) => {
       const w = b.sanctionsReport?.status;
       if (w === "due") return "bad";
