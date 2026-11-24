@@ -391,7 +391,7 @@ export const LLM_GEMINI_TOOLS = Object.entries(GEMINI_PATH_BY_TIER).map(([tierSl
   const tier = TIERS[tierSlug];
   return {
     route: `POST ${path}`,
-    name: `Gemini generateContent (${TIER_LABEL[tierSlug]} tier)`,
+    name: `generateContent-format chat (${TIER_LABEL[tierSlug]} tier, Gemini wire format)`,
     slug: `${tierSlug}-gemini`,
     category: "llm",
     price: tier.metered ? `$${tier.price.toFixed(3)}` : `$${tier.price.toFixed(3)}`,
