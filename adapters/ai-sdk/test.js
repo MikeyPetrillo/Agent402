@@ -109,4 +109,4 @@ ok(call?.hex?.startsWith("b94d27b9"), `agent402_call returns the hash result (go
   ok(typeof t.inputSchema.safeParse === "function" && t.inputSchema.safeParse({ slug: "hash" }).success === true, "inputSchema is the zod schema and accepts a call");
 }
 
-console.log(`PASS — agent402-stream-tools: ${pass} assertions passed against ${BASE}`);
+console.log(`PASS: agent402-stream-tools: ${pass} assertions passed against ${BASE}`);

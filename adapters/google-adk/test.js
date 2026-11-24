@@ -91,4 +91,4 @@ ok(call?.hex?.startsWith("b94d27b9"), `agent402_call returns the hash result (go
   ok(decl?.name === "agent402_call" && decl?.parameters?.properties?.slug && (decl.parameters.required || []).includes("slug"), `native FunctionTool declares slug/params to the model (@google/adk@${adkVersion})`);
 }
 
-console.log(`PASS — agent402-dev-kit-tools: ${pass} assertions passed against ${BASE}`);
+console.log(`PASS: agent402-dev-kit-tools: ${pass} assertions passed against ${BASE}`);

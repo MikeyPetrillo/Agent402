@@ -62,7 +62,7 @@ async function main() {
   const out3 = await execute("hash", { text: "hello world", algo: "sha256" });
   if (JSON.stringify(out) !== JSON.stringify(out3)) throw new Error("bundled execute() disagreed with tool.call");
 
-  console.log(`PASS — agent402-function-tools: ${tools.length} tool(s) generated, call() returned a real result.`);
+  console.log(`PASS: agent402-function-tools: ${tools.length} tool(s) generated, call() returned a real result.`);
 }
 
 // Spending caps pass through to agent402-client: with none set the client's

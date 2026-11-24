@@ -965,7 +965,7 @@ jobs:
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
-      - name: CDP kit live check (onramp session and SQL — skips without secrets)
+      - name: CDP kit live check (onramp session and SQL; skips without secrets)
         env:
           CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
           CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
@@ -974,7 +974,7 @@ jobs:
       - name: Buyer SDK (agent402-client — resolve + auto-pay via PoW; boots paid-mode)
         run: node client/test.js
 
-      - name: OpenClaw provider plugin (agent402-model-provider — offline, stub gateway)
+      - name: OpenClaw provider plugin (agent402-model-provider, offline, stub gateway)
         run: node openclaw/test.js
 
       # The plugin against a REAL OpenClaw (npm openclaw@latest): plugins install,
@@ -4031,7 +4031,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
           if npm view "agent402-mcp@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-mcp@$VERSION is already on npm — nothing to do"
+            echo "agent402-mcp@$VERSION is already on npm, nothing to do"
             exit 0
           fi
           npm publish --provenance
@@ -4054,7 +4054,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
           if npm view "agent402-tollbooth@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-tollbooth@$VERSION is already on npm — nothing to do"
+            echo "agent402-tollbooth@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-tollbooth@$VERSION → https://www.npmjs.com/package/agent402-tollbooth"
@@ -4066,7 +4066,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
           if npm view "agent402-client@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-client@$VERSION is already on npm — nothing to do"
+            echo "agent402-client@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-client@$VERSION → https://www.npmjs.com/package/agent402-client"
@@ -4081,7 +4081,7 @@ jobs:
           # package that does not exist yet); the trusted publisher on npmjs.com
           # carries every version after it.
           if npm view "agent402-model-provider@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-model-provider@$VERSION is already on npm — nothing to do"
+            echo "agent402-model-provider@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-model-provider@$VERSION → https://www.npmjs.com/package/agent402-model-provider"
@@ -4093,7 +4093,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
           if npm view "agent402-function-calling@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-function-calling@$VERSION is already on npm — nothing to do"
+            echo "agent402-function-calling@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-function-calling@$VERSION → https://www.npmjs.com/package/agent402-function-calling"
@@ -4105,7 +4105,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
           if npm view "agent402-tool-use@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-tool-use@$VERSION is already on npm — nothing to do"
+            echo "agent402-tool-use@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-tool-use@$VERSION → https://www.npmjs.com/package/agent402-tool-use"
@@ -4116,7 +4116,7 @@ jobs:
           cd adapters/ai-sdk
           VERSION=$(node -p "require('./package.json').version")
           if npm view "agent402-stream-tools@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-stream-tools@$VERSION is already on npm — nothing to do"
+            echo "agent402-stream-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-stream-tools@$VERSION → https://www.npmjs.com/package/agent402-stream-tools"
@@ -4127,7 +4127,7 @@ jobs:
           cd adapters/langchain
           VERSION=$(node -p "require('./package.json').version")
           if npm view "agent402-structured-tools@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-structured-tools@$VERSION is already on npm — nothing to do"
+            echo "agent402-structured-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-structured-tools@$VERSION → https://www.npmjs.com/package/agent402-structured-tools"
@@ -4138,7 +4138,7 @@ jobs:
           cd adapters/openai-agents
           VERSION=$(node -p "require('./package.json').version")
           if npm view "agent402-runner-tools@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-runner-tools@$VERSION is already on npm — nothing to do"
+            echo "agent402-runner-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-runner-tools@$VERSION → https://www.npmjs.com/package/agent402-runner-tools"
@@ -4149,7 +4149,7 @@ jobs:
           cd adapters/llamaindex
           VERSION=$(node -p "require('./package.json').version")
           if npm view "agent402-function-tools@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-function-tools@$VERSION is already on npm — nothing to do"
+            echo "agent402-function-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-function-tools@$VERSION → https://www.npmjs.com/package/agent402-function-tools"
@@ -4160,7 +4160,7 @@ jobs:
           cd adapters/strands
           VERSION=$(node -p "require('./package.json').version")
           if npm view "agent402-agent-loop-tools@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-agent-loop-tools@$VERSION is already on npm — nothing to do"
+            echo "agent402-agent-loop-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-agent-loop-tools@$VERSION → https://www.npmjs.com/package/agent402-agent-loop-tools"
@@ -4196,7 +4196,7 @@ jobs:
           cd adapters/google-adk
           VERSION=$(node -p "require('./package.json').version")
           if npm view "agent402-dev-kit-tools@$VERSION" version >/dev/null 2>&1; then
-            echo "agent402-dev-kit-tools@$VERSION is already on npm — nothing to do"
+            echo "agent402-dev-kit-tools@$VERSION is already on npm, nothing to do"
           else
             npm publish --provenance --access public
             echo "published agent402-dev-kit-tools@$VERSION → https://www.npmjs.com/package/agent402-dev-kit-tools"
@@ -5288,7 +5288,7 @@ jobs:
           echo "=== watch an agent pay an agent (live, no wallet) ==="
           TARGET_URL=https://agent402.tools node scripts/demo-payment.js
           echo "=== live M2M stats (informational; present once deployed) ==="
-          curl -s https://agent402.tools/api/stats | jq '{tools}' || echo "(/api/stats not live yet — will appear after this image rolls out)"
+          curl -s https://agent402.tools/api/stats | jq '{tools}' || echo "(/api/stats not live yet; it appears after this image rolls out)"
 
       # The render/media worker (agent402-worker) is its own Railway service,
       # built from Dockerfile.worker by an upload of this checkout; nothing
