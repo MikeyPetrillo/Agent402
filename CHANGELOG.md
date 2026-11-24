@@ -20,6 +20,22 @@ Tools:
   data. The HKEX day has its 12:00 to 13:00 break.
 - settlement-calendar cites each rail's rule to public sources and carries
   their credits; CHAPS answers no longer state operating hours.
+- token-safety, token-risk and token-risk-pro compute every token fact here:
+  supply, owner and proxy from chain reads, buy and sell tax and the honeypot
+  reading from a simulated buy and sell that sends nothing, privileged
+  functions from the Sourcify ABI, and holders from the Transfer history where
+  it is small enough. A fact not computed is null with its reason in limits,
+  and every answer lists its sources. Celo joins the report chains, and an
+  unsupported chain answers 422 naming the supported ones.
+- token-safety no longer returns a verdict: its verdict, because, blocking and
+  warnings fields are removed. Each answer lists the named facts found (flags,
+  each an id, a description and the measured value), what could not be checked
+  and why (unknown), its sources and limits, and a notice that these are
+  on-chain facts only and not investment advice. token-risk and token-risk-pro
+  carry the same notice, and a report that judges the token is written once
+  more and then withheld. The Solana token tools and the token brief list
+  named facts computed from their sources' fields and never pass through a
+  source's score, risk levels or verdict words.
 - fx-rate, fx-historical, fx-timeseries and fx-dashboard say before payment
   and in every answer that the ECB reference rates are available free of
   charge at ecb.europa.eu, and each answer says whether its rate is the ECB's
@@ -133,7 +149,7 @@ Tools:
   asking the archive, and cert-transparency makes its second search only with
   its key. search-suggest reads Wikipedia's opensearch.
 - Answers carry their source's credit where the source asks for one (crt.sh,
-  Team Cymru, Hyperliquid, RugCheck, EAS, GoPlus and Wikipedia), and contract
+  Team Cymru, Hyperliquid, RugCheck, EAS and Wikipedia), and contract
   source answers carry each file's license; the catalog text and the 402
   samples are unchanged.
 - A tool that reads a URL the caller names sends the Agent402-Fetch token in

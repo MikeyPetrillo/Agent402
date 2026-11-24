@@ -235,10 +235,10 @@ const flat = (s) => { let out = "", inTag = false; for (const ch of s) { if (inT
   const ASSURANCE = /Safety (?:verdict|headline)|one compact verdict|before an agent buys, quotes, or recommends/;
   ok(ASSURANCE.test("Safety verdict for one Solana token mint") && ASSURANCE.test("Safety headline for any") && ASSURANCE.test("one compact verdict for pre-trade"), "control: the assurance wording is read");
   const bazaar = read("src/payments.js").split("\n").find((l) => /"sol-token-safety": ["`]/.test(l)) || "";
-  ok(bazaar.length > 0 && !ASSURANCE.test(bazaar) && /^\s*"sol-token-safety": ["`]Risk summary for one Solana token mint/.test(bazaar) && /not a 'safe' or 'scam' verdict/.test(bazaar), "the listing description of sol-token-safety is a risk summary and says it is not a verdict");
+  ok(bazaar.length > 0 && !ASSURANCE.test(bazaar) && /^\s*"sol-token-safety": ["`]Risk facts for one Solana token mint/.test(bazaar) && /No verdict, rating or score/.test(bazaar), "the listing description of sol-token-safety lists risk facts and says there is no verdict");
   const { SOLANA_INTEL_TOOLS } = await import("../src/tools/solana-intel-kit.js");
   const def = (SOLANA_INTEL_TOOLS || []).find((x) => x.slug === "sol-token-safety");
-  ok(!!def && !ASSURANCE.test(def.description) && def.description.startsWith("Risk summary for any Solana SPL token mint") && /never a 'safe' or 'scam' verdict/.test(def.description), "the catalog description of sol-token-safety is a risk summary and says it is not a verdict");
+  ok(!!def && !ASSURANCE.test(def.description) && def.description.startsWith("Risk facts for any Solana SPL token mint") && /there is no verdict/.test(def.description), "the catalog description of sol-token-safety lists risk facts and says there is no verdict");
 }
 
 // --- README: tollbooth is described on its own terms -----------------------------

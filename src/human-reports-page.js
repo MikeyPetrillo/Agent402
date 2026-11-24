@@ -212,10 +212,10 @@ export function humanReportsPage(baseUrl) {
 ${R["token-brief"] ? `
       <div class="pcard receipt" data-kind="token">
         <div class="k">Token due diligence</div>
-        <h3>Solana token risk evidence</h3>
-        <p>Mint and freeze authority, LP lock, holder concentration, liquidity and every named risk flag, each cited from on-chain sources.</p>
+        <h3>Solana token on-chain facts</h3>
+        <p>Mint and freeze authority, LP lock, holder concentration, liquidity and each named fact found, each cited from on-chain sources.</p>
         <form class="pcard-form" data-kind="token" novalidate>${cardField("token", "Solana mint address", "")}
-        <div class="gets"><b>What you get:</b> risk evidence, not a rating: authorities, liquidity, holder concentration, trading flow and every named risk flag, cited on-chain.</div>
+        <div class="gets"><b>What you get:</b> on-chain facts, not a rating: authorities, liquidity, holder concentration, trading flow and each named fact found, cited on-chain. Not investment advice.</div>
         ${cardError("token")}
         ${buyBtn("token", "token-brief", "Get the brief")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("token-brief")}<a href="/tools/token-brief" style="color:var(--muted);">Sample output + API docs →</a></div>

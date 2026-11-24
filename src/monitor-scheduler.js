@@ -492,9 +492,9 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   // of the FDA feeds; a recall number not seen before = paid re-run + "recall"
   // email listing the new records. The seen-set advances only after success.
   // token: a welcome brief on first sight; then a FREE keyless probe every
-  // TOKEN_CHECK_MS. A changed safety fingerprint (authority flipped, LP lock
-  // bucket moved, concentration bucket moved, risk band changed) triggers one
-  // paid re-run and a "safety-change" email. The baseline advances only after a
+  // TOKEN_CHECK_MS. A changed fact fingerprint (authority flipped, LP lock
+  // bucket moved, concentration bucket moved) triggers one paid re-run and a
+  // "safety-change" email (the key is kept; the email names the moved facts). The baseline advances only after a
   // filing: welcome report on first sight; then a FREE one-request probe of the
   // company's EDGAR submissions index every FILING_CHECK_MS. An accession not
   // seen before means a paid re-run plus a "filing-new" email naming what
@@ -539,7 +539,10 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     st.lastCheckAt = now();
     const prevSignals = st.tokenSignals || null, prevFp = st.tokenFingerprint || null;
     const first = !prevFp;
-    const changed = !first && pr.fingerprint !== prevFp;
+    // A baseline stored before the risk band was dropped from the signals has
+    // a different fingerprint with the same facts: it is re-based quietly, and
+    // only a moved fact bucket is a change.
+    const changed = !first && pr.fingerprint !== prevFp && !(prevSignals && typeof describeTokenChanges === "function" && describeTokenChanges(prevSignals, pr.signals).length === 0);
     st.tokenSignals = pr.signals; st.tokenFingerprint = pr.fingerprint;
     if (!first && !changed) { recovered(st); persist(); return "checked"; }
     const changes = first || typeof describeTokenChanges !== "function" ? [] : describeTokenChanges(prevSignals, pr.signals);

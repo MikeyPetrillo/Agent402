@@ -121,7 +121,7 @@
     return /^[A-Z][a-z]/.test(t) ? t.charAt(0).toLowerCase() + t.slice(1) : t;
   }
   function reasonLabel(r) {
-    return { welcome: "first report", scheduled: "scheduled re-run", change: "change detected", "tls-expiring": "certificate expiring", filing: "new 13F filing", recall: "new recall activity", "safety-change": "token safety changed", "filing-new": "new SEC filing", digest: "weekly digest", problem: "we could not complete this run" }[r] || r;
+    return { welcome: "first report", scheduled: "scheduled re-run", change: "change detected", "tls-expiring": "certificate expiring", filing: "new 13F filing", recall: "new recall activity", "safety-change": "token facts changed", "filing-new": "new SEC filing", digest: "weekly digest", problem: "we could not complete this run" }[r] || r;
   }
   // ctx.locale and ctx.timeZone are set on the server (one fixed reading); a browser uses its own.
   function fmtDate(iso, ctx) {

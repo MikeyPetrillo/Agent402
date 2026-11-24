@@ -11,7 +11,9 @@ import { parse13fCover } from "../src/tools/edgar-kit.js";
 import { classifyFromSubmissions } from "../src/tools/ipo-report-kit.js";
 import { parse13GCover } from "../src/tools/ticker-pack-kit.js";
 import { upstreamDeadline } from "../src/upstream-deadline.js";
-import { shapeGoPlus, privilegedFunctions, makeTokenRiskHandler, probeGoPlus, CHAINS, GOPLUS_CHAIN_IDS, DEXSCREENER_CHAINS, TOKEN_RISK_TOOLS } from "../src/tools/token-risk-kit.js";
+import { privilegedFunctions, makeTokenRiskHandler, probeDexPairs, CHAINS, TOKEN_RISK_TOOLS } from "../src/tools/token-risk-kit.js";
+import { TOKEN_CHAINS, tokenRpcLanes } from "../src/tools/token-facts.js";
+import { isNonCommercialRpc } from "../src/rpc-terms.js";
 import { auditCitations } from "../src/tools/research-deep-kit.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
@@ -129,10 +131,6 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
 
 // ---- token-risk control plane + research citation audit (round 3) ----------
 {
-  const g = shapeGoPlus({ is_open_source: "1", is_proxy: "0", is_mintable: "0", is_honeypot: "0", owner_address: "0x0000000000000000000000000000000000000000", hidden_owner: "0", buy_tax: "0.05", sell_tax: "0", transfer_pausable: "1", is_blacklisted: "0", lp_holder_count: "39", lp_holders: [{ address: "0xa", percent: "0.4", is_locked: 1 }, { address: "0xb", percent: "0.1", is_locked: 0 }], dex: [{ name: "UniswapV3", liquidity_type: "UniV3", liquidity: "120348.9", pair: "0xp" }], creator_percent: "0.02", fake_token: { value: 0 } });
-  ok(g.proxy === false && g.mintable === false && g.honeypot === false && g.ownerRenounced === true && g.buyTaxPct === 5 && g.sellTaxPct === 0 && g.transferPausable === true, "GoPlus flags are typed booleans and taxes are percentages (BRETT-shaped record)");
-  ok(g.lpLockedPct === 40 && g.lpHolderCount === 39 && g.dexes[0].liquidityUsd > 120000 && g.creatorPct === 2, "LP lock share is summed from locked LP holders; DEX liquidity and creator share ride along");
-  ok(shapeGoPlus({ is_proxy: "", owner_address: "" }).proxy === null && shapeGoPlus({ is_proxy: "" }).ownerRenounced === null, "an absent flag is unknown, never false");
   const abi = [{ type: "function", name: "transfer", stateMutability: "nonpayable" }, { type: "function", name: "balanceOf", stateMutability: "view" }, { type: "function", name: "excludeFromFees", stateMutability: "nonpayable" }, { type: "function", name: "enableTrading" }, { type: "function", name: "upgradeTo" }, { type: "event", name: "Transfer" }];
   const pf = privilegedFunctions(abi);
   ok(pf.total === 5 && pf.writable === 4 && pf.privileged.join(",") === "enableTrading,excludeFromFees,upgradeTo", "privileged function names are read off the ABI (the owner privileges the prompt used to call invisible)");
@@ -143,114 +141,124 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
   ok(r.unverified.length === 1 && r.unverified[0].numbers.includes("5,000,000") && !r.unverified.some((u) => u.numbers.includes("41%")), "a number absent from the cited source's text is flagged; one present in its FULL TEXT is not");
   ok(auditCitations("Revenue grew 23% [1].", src, "sub-answer says 23% growth").unverified.length === 0, "a number supported by the sub-answers passes");
 }
-// ---- token-risk after the explorer legs were retired (2026-09-22) ----------
-// Every token fact now comes from keyless probes: GoPlus carries name, symbol,
-// supply, holder count and the top holders; DexScreener carries the market.
-// The refusal must still stop a thin report before any synthesis is bought,
-// and the prompt must not name a source the kit no longer reads.
+// ---- token-risk on computed token facts (src/tools/token-facts.js) ----------
+// Every token fact comes from the token-facts probe: chain reads for name,
+// symbol, supply, owner and proxy, a simulated buy and sell for taxes and the
+// honeypot reading, Sourcify for the ABI and source, Transfer logs for the
+// holders where the history is small, DexScreener for the market. The refusal
+// must still stop a token that is not one before any synthesis is bought, an
+// outage must never read as the buyer's mistake, and a fact not computed must
+// reach the prompt as not checked, with its reason.
 {
-  const rec = {
-    token_name: "Wrapped Ether", token_symbol: "WETH", total_supply: "249781.88", holder_count: "5267408",
-    is_open_source: "1", is_proxy: "0", is_mintable: "0", owner_address: "",
-    holders: [
-      { address: "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb", tag: "", is_contract: 1, balance: "79269.07", percent: "0.317353156510870296", is_locked: 0 },
-      { address: "0x000000000000000000000000000000000000dead", tag: "Burn", is_contract: 0, balance: "20013.25", percent: "0.080122913726510124", is_locked: 1 },
-      { address: "0x1111111111111111111111111111111111111111", tag: "", is_contract: 0, balance: "13306.43", percent: "0.05327218858135073", is_locked: 0 },
+  const facts = (over = {}) => ({
+    tokenName: "Wrapped Ether", tokenSymbol: "WETH", decimals: 18, totalSupply: "249781.88",
+    topHolders: [
+      { address: "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb", tag: null, isContract: true, percent: 31.7353, locked: null },
+      { address: "0x000000000000000000000000000000000000dead", tag: null, isContract: false, percent: 8.0123, locked: null },
+      { address: "0x1111111111111111111111111111111111111111", tag: null, isContract: false, percent: 5.3272, locked: null },
     ],
-  };
-  const g = shapeGoPlus(rec);
-  ok(g.tokenName === "Wrapped Ether" && g.tokenSymbol === "WETH" && g.totalSupply === "249781.88" && g.holderCount === 5267408, "GoPlus supplies name, symbol, supply and holder count");
-  ok(g.topHolders.length === 3 && g.topHolders[0].percent === 31.7353 && g.topHolders[0].isContract === true && g.topHolders[1].locked === true && g.topHolders[1].tag === "Burn",
-    "GoPlus top holders carry share of supply as a percentage, contract and lock flags, and the tag");
-  ok(shapeGoPlus({}).topHolders.length === 0 && shapeGoPlus({}).totalSupply === null, "a record with no holder list or supply reads as none, never invented");
-
+    holderCount: 5267, openSource: true, proxy: false, proxyImplementation: null, proxyAdmin: null, mintable: false, honeypot: false,
+    ownerAddress: "0x0000000000000000000000000000000000000000", ownerRenounced: true, pendingOwner: null, hiddenOwner: null, canTakeBackOwnership: false, ownerChangeBalance: null,
+    buyTaxPct: 5, sellTaxPct: 0, cannotSellAll: false, cannotBuy: false, transferPausable: true, blacklist: false, whitelist: false,
+    slippageModifiable: false, tradingCooldown: false, antiWhale: false, antiWhaleModifiable: false, selfdestruct: false, externalCall: null,
+    lpHolderCount: null, lpTotalSupply: 12.5, lpLockedPct: 40, lpTopHolders: [], dexes: [], creatorAddress: null, creatorPct: null, ownerPct: 0, trustList: null, fakeToken: null,
+    pool: { address: "0xp", dex: "uniswap", simulated: true },
+    verification: { verified: true, match: "exact_match", compiler: "0.8.20", verifiedAt: "2024-01-01T00:00:00Z" },
+    sourceText: "pragma solidity ^0.8.20; contract T {}", abiInfo: { total: 1, privileged: [], writable: 1 },
+    dex: null, sources: ["chain RPC: ERC-20 calls, owner and proxy slots (eth_call, eth_getStorageAt)"],
+    limits: [{ field: "hiddenOwner", reason: "a hidden owner needs bytecode analysis, which this tool does not run" }],
+    ...over,
+  });
   const ADDR = "0x4200000000000000000000000000000000000006";
   let asked = 0, prompt = "";
   const chat = async (body) => { asked++; prompt = String(body?.messages?.[0]?.content || ""); return { choices: [{ message: { content: "# Report\n\nBody." } }], usage: { cost: 0.01 } }; };
-  const tool = (slug) => async () => {
-    if (slug === "contract-source") return { verified: true, match: "exact_match", compiler: { version: "0.8.20" } };
-    if (slug === "contract-abi") return { abi: [{ type: "function", name: "transfer", stateMutability: "nonpayable" }] };
-    throw new Error(`unexpected tool ${slug}`);
-  };
+  const tool = (slug) => async () => { throw new Error(`unexpected tool ${slug}`); };
   // The deepest pair QUOTES the token (another token is its base, so its price
   // is that token's price); the report must read the market from the second.
-  const dex = async () => ({ totalPairs: 2, liquidityUsd: 9e6, volume24h: 2e6, txns24h: 1800, pairs: [{ dex: "aerodrome", pair: "0xq", baseAddress: "0x940181a94A35A4569E4529A3CDfB74e38FD98631", quote: "WETH", priceUsd: 0.68, liquidityUsd: 4e6, volume24h: 1e6, volume1h: 1e4, buys24h: 400, sells24h: 500, buys1h: 10, sells1h: 12, fdv: 1e9, marketCap: 1e9, createdAt: null, hasProfile: true, websites: [] }, { dex: "uniswap", pair: "0xp", baseAddress: "0x4200000000000000000000000000000000000006", quote: "USDC", priceUsd: 2500, liquidityUsd: 5e6, volume24h: 1e6, volume1h: 1e4, buys24h: 400, sells24h: 500, buys1h: 10, sells1h: 12, fdv: 6e8, marketCap: 6e8, createdAt: null, hasProfile: true, websites: [] }] });
-  const run = (deps) => makeTokenRiskHandler("token-risk", { tool, probeDexPairs: dex, chat, ...deps });
+  const dex = { totalPairs: 2, liquidityUsd: 9e6, volume24h: 2e6, txns24h: 1800, pairs: [{ dex: "aerodrome", pair: "0xq", baseAddress: "0x940181a94A35A4569E4529A3CDfB74e38FD98631", quote: "WETH", priceUsd: 0.68, liquidityUsd: 4e6, volume24h: 1e6, volume1h: 1e4, buys24h: 400, sells24h: 500, buys1h: 10, sells1h: 12, fdv: 1e9, marketCap: 1e9, createdAt: null, hasProfile: true, websites: [] }, { dex: "uniswap", pair: "0xp", baseAddress: "0x4200000000000000000000000000000000000006", quote: "USDC", priceUsd: 2500, liquidityUsd: 5e6, volume24h: 1e6, volume1h: 1e4, buys24h: 400, sells24h: 500, buys1h: 10, sells1h: 12, fdv: 6e8, marketCap: 6e8, createdAt: null, hasProfile: true, websites: [] }] };
+  const run = (deps) => makeTokenRiskHandler("token-risk", { tool, chat, ...deps });
   const { runAsRouteCall } = await import("../src/not-charged.js");
   const refusal = async (deps) => { try { await runAsRouteCall(() => run(deps)({ address: ADDR, chain: "base" })); return null; } catch (e) { return e; } };
 
   asked = 0;
-  const e1 = await refusal({ probeGoPlus: async () => { throw Object.assign(new Error("GoPlus has no record for this token"), { statusCode: 422 }); } });
-  ok(e1?.statusCode === 422 && /token-security probe failed/.test(e1.message) && /Nothing was charged\./.test(e1.message) && asked === 0,
-    "a failed token-security probe refuses 422 before any synthesis is bought");
-  ok(/only the contract source and the DEX pairs were readable/.test(e1?.message || ""), "the refusal names what WAS readable, so the buyer knows why");
+  const e1 = await refusal({ probeTokenFacts: async () => { throw Object.assign(new Error(`${ADDR} on base has no contract code: it is not a token contract.`), { statusCode: 422 }); } });
+  ok(e1?.statusCode === 422 && /not a token contract/.test(e1.message) && /Confirm the address and chain/.test(e1.message) && /Nothing was charged\./.test(e1.message) && asked === 0,
+    "an address the probe finds is not a token refuses 422 before any synthesis is bought");
   asked = 0;
-  const e2 = await refusal({ probeGoPlus: async () => shapeGoPlus({ is_honeypot: "0" }) });
-  ok(e2?.statusCode === 422 && /neither supply nor holders/.test(e2.message) && asked === 0,
-    "a token-security record with neither supply nor holders is thin evidence: 422, nothing bought");
+  const e2 = await refusal({ probeTokenFacts: async () => facts({ totalSupply: null }) });
+  ok(e2?.statusCode === 422 && /carried no supply/.test(e2.message) && asked === 0, "facts without a supply are thin evidence: 422, nothing bought");
 
   asked = 0;
-  const out = await run({ probeGoPlus: async () => shapeGoPlus(rec) })({ address: ADDR, chain: "base" });
-  ok(asked === 1 && out.report && out.meta.symbol === "WETH" && out.meta.holder_count === 5267408 && out.meta.top1_share_pct === 31.7353,
-    "a readable record produces one synthesis and meta from the token-security probe");
-  ok(!/blockscout/i.test(prompt) && !/token-info|token-holders|address-profile/.test(prompt), "the synthesis prompt names no retired source or tool");
-  ok(/Top holders as listed by GoPlus/.test(prompt) && /31\.74%/.test(prompt) && /\[burn\/dead\]\s+LOCKED \(Burn\)/.test(prompt) && /price \$2500/.test(prompt),
-    "the prompt carries the GoPlus holder shares, the burn label and the DEX market read");
+  const out = await run({ probeTokenFacts: async () => facts({ dex }) })({ address: ADDR, chain: "base" });
+  ok(asked === 1 && out.report && out.meta.symbol === "WETH" && out.meta.holder_count === 5267 && out.meta.top1_share_pct === 31.7353,
+    "computed facts produce one synthesis and meta from the probe");
+  ok(!/blockscout|go\s?plus/i.test(prompt) && !/token-info|token-holders|address-profile/.test(prompt), "the synthesis prompt names no retired or barred source or tool");
+  ok(/Top holders computed from the token's full Transfer history/.test(prompt) && /31\.74%/.test(prompt) && /\[burn\/dead\]/.test(prompt) && /price \$2500/.test(prompt),
+    "the prompt carries the computed holder shares, the burn label and the DEX market read");
+  ok(/simulated buy then sell/.test(prompt) && /buy tax 5\.00%/.test(prompt) && /HONEYPOT no/.test(prompt) && /transfers pausable YES/.test(prompt),
+    "the control block carries the simulated taxes and the honeypot reading as computed facts");
+  ok(/hidden owner unknown \(not computed: a hidden owner needs bytecode analysis/.test(prompt), "a fact not computed reaches the prompt as not checked, with its reason");
+  ok(/burn addresses 40\.00%/.test(prompt) && /locker contracts is not counted/.test(prompt), "the LP share is named for what it is: LP held by burn addresses");
   ok(!/price \$0\.68/.test(prompt), "the market read never comes from a pair that only quotes the token (that price is the other token's)");
   ok(out.meta.top10_share_pct === 45.0748, `the top-10 share is rounded, not a float sum (got ${out.meta.top10_share_pct})`);
-  ok(Object.keys(out.meta.probes).sort().join(",") === "abi,dexPairs,scan,source,tokenSecurity", "meta.probes lists exactly the legs that ran");
-  ok(out.tables[0]?.name === "holders" && out.tables[0].rows.length === 3, "the holders appendix is built from the GoPlus list");
+  ok(Object.keys(out.meta.probes).sort().join(",") === "chain,dexPairs,holders,scan,simulation,sourcify", "meta.probes lists the legs of the probe");
+  ok(Array.isArray(out.meta.sources) && out.meta.sources.length === 1 && out.meta.limits[0]?.field === "hiddenOwner", "meta carries the probe's sources and limits");
+  ok(out.tables[0]?.name === "holders" && out.tables[0].rows.length === 3, "the holders appendix is built from the computed list");
+
+  asked = 0;
+  await run({ probeTokenFacts: async () => facts({ topHolders: [], holderCount: null, limits: [{ field: "topHolders", reason: "holder index not available for this token" }, { field: "holderCount", reason: "holder index not available for this token" }] }) })({ address: ADDR, chain: "base" });
+  ok(asked === 1 && /Holder concentration was NOT checked: holder index not available for this token\./.test(prompt) && /Holder count unknown \(not computed: holder index not available/.test(prompt),
+    "no holder index: the report is still written, and says concentration was not checked and why");
 
   // An UPSTREAM that did not answer must not read as the buyer's mistake. The
-  // probe's own 422 ("no record", "chain not covered") is its answer about the
-  // token; every other failure is the source, and an our-4xx on a valid input
-  // is what the probe classifier files as a defect.
+  // probe's own 422 is its answer about the token; every other failure is the
+  // source, and an our-4xx on a valid input is what the probe classifier files
+  // as a defect.
   asked = 0;
-  // The shapes the probe throws (its getJson): the source's own status is
-  // attributed to it; our limit passing is the shared deadline class.
-  const e3 = await refusal({ probeGoPlus: async () => { throw Object.assign(new Error("upstream HTTP 429"), { statusCode: 503, upstreamStatus: 429, attribution: "upstream" }); } });
-  ok(e3?.statusCode === 503 && /token-security source answered with a failure \(upstream HTTP 429\)/.test(e3.message) && /Nothing was charged\./.test(e3.message) && asked === 0,
-    "a rate-limited token-security source refuses 503, not a 422 blaming the address");
-  const e4 = await refusal({ probeGoPlus: async () => { throw Object.assign(new Error("upstream HTTP 500"), { statusCode: 502 }); } });
-  ok(e4?.statusCode === 502, "an upstream error from the token-security source refuses 502");
-  const e5 = await refusal({ probeGoPlus: async () => { throw upstreamDeadline("Token-security source", "token security", 12_000); } });
-  ok(e5?.statusCode === 503 && /our 12 s limit/.test(e5.message) && e5.attribution === "ours", "a read our limit cut refuses 503 naming our limit, not the source as down");
-  const e6 = await refusal({ probeGoPlus: async () => { throw new Error("boom"); } });
+  const e3 = await refusal({ probeTokenFacts: async () => { throw Object.assign(new Error("chain RPC refused token reads"), { statusCode: 503, attribution: "upstream" }); } });
+  ok(e3?.statusCode === 503 && /chain read answered with a failure \(chain RPC refused token reads\)/.test(e3.message) && /Nothing was charged\./.test(e3.message) && asked === 0,
+    "a refusing chain lane refuses 503, not a 422 blaming the address");
+  const e4 = await refusal({ probeTokenFacts: async () => { throw Object.assign(new Error("chain RPC answered HTTP 500 for token reads"), { statusCode: 502 }); } });
+  ok(e4?.statusCode === 502, "an upstream error from the chain lanes refuses 502");
+  const e5 = await refusal({ probeTokenFacts: async () => { throw upstreamDeadline("Chain RPC", "token reads", 6_000); } });
+  ok(e5?.statusCode === 503 && /our 6 s limit/.test(e5.message) && e5.attribution === "ours", "a read our limit cut refuses 503 naming our limit, not the source as down");
+  const e6 = await refusal({ probeTokenFacts: async () => { throw new Error("boom"); } });
   ok(e6?.statusCode === 503 && /internal error on our side/.test(e6.message) && e6.attribution === "ours", "a throw of our own with no status refuses 503 as our internal error");
   ok(asked === 0, "no synthesis is bought on any unavailable-source refusal");
   ok(!/Confirm the address and chain/.test(`${e3?.message} ${e4?.message} ${e5?.message}`), "an unavailable source never tells the buyer to check a correct address");
 
-  // getJson's mapping is what decides the class above, so pin it at the probe:
-  // both sources answer 200 with an empty result for a token they do not hold,
-  // so no HTTP status from them means "your address is wrong".
+  // The DexScreener read's mapping: it answers 200 with an empty list for a
+  // token it does not hold, so no HTTP status from it means "your address is
+  // wrong".
   const realFetch = globalThis.fetch;
-  const stubFetch = (status, body) => { globalThis.fetch = async () => new Response(JSON.stringify(body ?? {}), { status, headers: { "content-type": "application/json" } }); };
-  const probeStatus = async (status, body) => { stubFetch(status, body); try { await probeGoPlus({ chain: "base", address: ADDR }); return null; } catch (e) { return Number(e?.statusCode) || null; } };
+  const stubFetch = (status, body) => { globalThis.fetch = async () => new Response(JSON.stringify(body ?? []), { status, headers: { "content-type": "application/json" } }); };
+  const probeStatus = async (status, body) => { stubFetch(status, body); try { const r = await probeDexPairs({ chain: "base", address: ADDR }); return r; } catch (e) { return Number(e?.statusCode) || null; } };
   try {
-    ok(await probeStatus(429) === 503, "a 429 from the token-security source is a 503, never a 422");
-    ok(await probeStatus(500) === 502, "a 5xx from the token-security source is a 502");
+    ok(await probeStatus(429) === 503, "a 429 from the DEX pairs source is a 503, never a 422");
+    ok(await probeStatus(500) === 502, "a 5xx from the DEX pairs source is a 502");
     ok(await probeStatus(403) === 502, "a refusal aimed at us is a 502, not the buyer's 422");
-    ok(await probeStatus(200, { result: {} }) === 422, "a 200 holding no record for the token is the 422");
+    const empty = await probeStatus(200, []);
+    ok(empty?.totalPairs === 0 && empty.pairs.length === 0, "a 200 holding no pairs reads as none listed");
   } finally { globalThis.fetch = realFetch; }
 }
 
-// ---- token-risk advertises only chains the token-security probe serves ------
+// ---- token-risk advertises only chains the token-facts probe reads ----------
 // The kit sells a chain in three places: the set the handler enforces, the
-// GoPlus id it probes with and the DexScreener slug it reads the market from.
-// They must be the same list, or an advertised chain refuses every call while
+// RPC lanes it reads and the DexScreener slug it reads the market from. They
+// must be the same list, or an advertised chain refuses every call while
 // /openapi.json, the Bazaar listing and the catalog keep offering it.
 {
   const advertised = [...CHAINS].sort().join(",");
-  ok(advertised === Object.keys(GOPLUS_CHAIN_IDS).sort().join(","), "every advertised chain has a token-security id, and no id is unadvertised");
-  ok(advertised === Object.keys(DEXSCREENER_CHAINS).sort().join(","), "every advertised chain has a market slug, and no slug is unadvertised");
-  ok(!CHAINS.has("celo") && !("celo" in GOPLUS_CHAIN_IDS), "celo is not advertised: the token-security source answers \"main chain is not supported\" for it");
+  ok(advertised === Object.keys(TOKEN_CHAINS).sort().join(","), "every advertised chain is a token-facts chain, and no chain is unadvertised");
+  ok([...CHAINS].every((c) => tokenRpcLanes(c, {}).length >= 1 && TOKEN_CHAINS[c].dex), "every advertised chain has a permitted RPC lane with no key set, and a market slug");
+  ok([...CHAINS].every((c) => tokenRpcLanes(c, {}).every((u) => !isNonCommercialRpc(u))), "no advertised chain reads an endpoint whose terms bar commercial use");
   for (const t of TOKEN_RISK_TOOLS) {
     const desc = t.discovery.inputSchema.properties.chain.description;
-    ok([...CHAINS].every((c) => desc.includes(c)) && !/celo/.test(desc), `${t.slug}: the published chain list is the enforced one`);
+    ok([...CHAINS].every((c) => desc.includes(c)), `${t.slug}: the published chain list is the enforced one`);
   }
   const handler = TOKEN_RISK_TOOLS[0].handler;
-  const refused = await handler({ address: "0x4200000000000000000000000000000000000006", chain: "celo" }).then(() => null, (e) => e);
-  ok(refused?.statusCode === 400 && !/celo/.test(refused.message) && /gnosis/.test(refused.message), "an unadvertised chain is a 400 that names only the chains that work");
+  const refused = await handler({ address: "0x4200000000000000000000000000000000000006", chain: "avalanche" }).then(() => null, (e) => e);
+  ok(refused?.statusCode === 422 && !/avalanche/.test(refused.message) && /gnosis/.test(refused.message) && /celo/.test(refused.message), "an unadvertised chain is a 422 that names only the chains that work");
 }
 console.log(`${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

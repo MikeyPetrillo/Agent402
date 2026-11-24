@@ -25,6 +25,12 @@ export const NON_COMMERCIAL_RPC_HOSTS = Object.freeze([
 
 /** PublicNode's public endpoints for the chains it serves. */
 export const PUBLICNODE_RPCS = Object.freeze({
+  base: "https://base-rpc.publicnode.com",
+  ethereum: "https://ethereum-rpc.publicnode.com",
+  polygon: "https://polygon-bor-rpc.publicnode.com",
+  arbitrum: "https://arbitrum-one-rpc.publicnode.com",
+  bsc: "https://bsc-rpc.publicnode.com",
+  gnosis: "https://gnosis-rpc.publicnode.com",
   avalanche: "https://avalanche-c-chain-rpc.publicnode.com",
   optimism: "https://optimism-rpc.publicnode.com",
   robinhood: "https://robinhood-rpc.publicnode.com",

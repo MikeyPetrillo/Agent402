@@ -1,5 +1,5 @@
 {
-  "about": "Tier 1: sanctions screening and token safety, on free public upstreams (OFAC SDN, GoPlus). These three sat OUTSIDE the corpus until 2026-09-13, which is why a live buy - not a test - found sanctions-name returning zero matches for \"Vladimir Putin\" against a correctly loaded 19,388-entry list. A false negative on a sanctions screen is the dangerous direction: the buyer reads no_match as clean and acts on it. Every case here asserts a VALUE, because the failure looked exactly like a clean answer.",
+  "about": "Tier 1: sanctions screening and token safety, on free public sources (OFAC SDN, and token facts computed from chain reads). These three sat OUTSIDE the corpus until 2026-09-13, which is why a live buy - not a test - found sanctions-name returning zero matches for \"Vladimir Putin\" against a correctly loaded 19,388-entry list. A false negative on a sanctions screen is the dangerous direction: the buyer reads no_match as clean and acts on it. Every case here asserts a VALUE, because the failure looked exactly like a clean answer.",
   "cases": [
     {
       "slug": "sanctions-name",
@@ -107,23 +107,21 @@
     },
     {
       "slug": "token-safety",
-      "name": "USDC on Base: a verdict, a reason, and unknowns named rather than assumed safe",
+      "name": "USDC on Base: named facts and unknowns with the notice, never a verdict",
       "input": {
         "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         "chain": "base"
       },
       "expect": {
         "populated": [
-          "verdict",
-          "because"
+          "notice"
         ],
-        "isArray": [
-          "blocking",
-          "warnings",
-          "unknown"
-        ],
+        "minCount": {
+          "flags": 0,
+          "unknown": 0
+        },
         "matches": {
-          "verdict": "^(safe|caution|unsafe|unknown)$"
+          "notice": "^These are on-chain facts only\\."
         }
       }
     },

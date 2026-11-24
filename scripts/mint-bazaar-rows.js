@@ -129,18 +129,13 @@ const LEGS = [
     // regression check against the live list rather than a fixture.
     check: (r) => { const n = Array.isArray(r.matches) ? r.matches.length : 0; return (n > 0 && Number(r.entriesOnList) > 0) || `expected a listed name to match, got ${JSON.stringify(r).slice(0, 220)}`; } },
 
-  // ---- token safety ----------------------------------------------------
+  // ---- token risk facts -----------------------------------------------
   { slug: "token-safety", priceUsd: 0.005, method: "POST",
     path: "/api/token-safety", body: { address: USDC_BASE, chain: "base" },
-    // USDC must not come back "unsafe", and the verdict must be a real word
-    // from the table rather than an empty string.
-    // `because` is a SENTENCE, not an array - the first draft demanded an array
-    // and failed a good answer. What matters is that the verdict is real and
-    // that "unknown" is a first-class list: USDC on Base answers "caution -
-    // upgradeable proxy" with mintable/hidden-owner listed as UNKNOWN, which is
-    // the honest shape. A tool that silently treated unknown as safe would pass
-    // a laxer check than this one.
-    check: (r) => (typeof r.verdict === "string" && r.verdict.length > 0 && typeof r.because === "string" && Array.isArray(r.unknown)) || `expected a verdict, a reason and an explicit unknown list, got ${JSON.stringify(r).slice(0, 220)}` },
+    // The answer is facts, never a verdict: flags (each an id and a measured
+    // value), an explicit unknown list and the fixed notice. USDC on Base
+    // lists the upgradeable-proxy flag with the uncomputed checks as unknown.
+    check: (r) => (Array.isArray(r.flags) && Array.isArray(r.unknown) && typeof r.notice === "string" && !("verdict" in r)) || `expected flags, an explicit unknown list and the notice, got ${JSON.stringify(r).slice(0, 220)}` },
 
   // ---- identity-bound: must run AFTER the buys above -------------------
   { slug: "receipts", priceUsd: 0.005, method: "POST", path: "/api/receipts", body: {}, after: true,

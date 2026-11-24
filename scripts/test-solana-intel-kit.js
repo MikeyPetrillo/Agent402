@@ -13,6 +13,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { isHost, urlMatches } from "./lib/url-host.js";
 import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders, tokenIndexLookup, priceOfMint, SOL_PRICE_MAX_MINTS } from "../src/tools/solana-intel-kit.js";
 import { RUGCHECK_ATTRIBUTION, JUPITER_ATTRIBUTION } from "../src/data-attribution.js";
+import { TOKEN_FACTS_NOTICE } from "../src/token-claims.js";
 
 const realFetch = globalThis.fetch;
 let pass = 0, fail = 0;
@@ -197,9 +198,12 @@ try {
   let r = await h("sol-token-safety")({ mint: JUP });
   ok(calls.length === 2 && calls.some((c) => c.url === `https://api.rugcheck.xyz/v1/tokens/${JUP}/report/summary`), "safety: RugCheck summary URL carries the mint");
   ok(calls.some((c) => c.url.includes(`/tokens/v2/search?query=${JUP}`)), "safety: Jupiter search URL carries the mint");
-  ok(r.score === 3550201 && r.scoreNormalised === 97 && r.lpLockedPct === 8.98, "safety: score, normalised, lpLockedPct");
-  ok(r.risks.length === 2 && r.risks[0].level === "danger" && r.riskCounts.danger === 1 && r.riskCounts.warn === 1, "safety: risks shaped + counted");
-  ok(r.riskLevel === "danger", "safety: riskLevel danger when a danger risk exists");
+  ok(r.lpLockedPct === 8.98, "safety: lpLockedPct");
+  // The source's own score, risk levels and verdict words never reach the
+  // answer (owner decision 2026-11-24): only facts computed here.
+  ok(!["score", "scoreNormalised", "risks", "riskCounts", "riskLevel", "rugged", "verdict"].some((k) => k in r) && !/danger|"warn"|"good"/i.test(JSON.stringify(r)), "safety: no score, risk level, risk label or verdict word is passed through");
+  ok(r.flags.map((f) => f.id).join() === "lp-locked-under-50" && r.flags[0].value === 8.98 && r.unknown.length === 0, `safety: the named facts found, with values (${JSON.stringify(r.flags)})`);
+  ok(r.notice === TOKEN_FACTS_NOTICE, "safety: the fixed notice rides the answer");
   ok(r.token.symbol === "JUP" && r.token.holderCount === 835540 && r.token.isVerified === true, "safety: Jupiter exact-mint match picked (not the first row)");
   ok(r.authorities.mintAuthorityDisabled === true && r.authorities.freezeAuthorityDisabled === true, "safety: authorities from Jupiter audit");
   ok(r.holders.topHoldersPct === 15.28 && r.holders.devMints === 1, "safety: holder facts");
@@ -213,7 +217,7 @@ try {
   stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith(`/tokens/${PUMP}/report`) ? Promise.resolve(jsonRes({ ...RC_REPORT, mint: PUMP })) : Promise.resolve(jsonRes([])));
   r = await h("sol-token-safety")({ mint: PUMP });
   ok(calls.length === 3 && calls.filter((c) => c.url.endsWith(`/tokens/${PUMP}/report`)).length === 1, `safety: a Jupiter miss reads the full report once (${calls.length} reads)`);
-  ok(r.riskLevel === "good" && r.scoreNormalised === 1 && r.risks.length === 0, "safety: score and risks still come from the summary (it carried them)");
+  ok(!("riskLevel" in r) && !("scoreNormalised" in r) && r.flags.some((f) => f.id === "freeze-authority-live" && f.value === "7dGbd2QZcCKcTndnHcTL8q7SMVXAkp688NTQYwrRCrar"), "safety: a live freeze authority from the report is a flag with its address; no score");
   ok(r.token?.symbol === "JUP" && r.token.decimals === 6 && r.token.holderCount === 2873512 && r.token.isVerified === true && r.token.organicScore === null && r.token.launchpad === "Pump.Fun", "safety: token block from the report; Jupiter-only organic score stays null");
   ok(r.authorities?.mintAuthorityDisabled === true && r.authorities.freezeAuthorityDisabled === false && r.authorities.freezeAuthority === "7dGbd2QZcCKcTndnHcTL8q7SMVXAkp688NTQYwrRCrar", "safety: authorities from the report (a live freeze authority reads live, with its address)");
   ok(r.holders === null, "safety: holders stays null without Jupiter (no measure is substituted)");
@@ -223,12 +227,13 @@ try {
   // the answer still lands, and fullReport says why.
   stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes(RC_SUMMARY_CLEAN)) : url.endsWith("/report") ? Promise.resolve(textRes("x", 500)) : Promise.resolve(jsonRes([])));
   r = await h("sol-token-safety")({ mint: PUMP });
-  ok(r.riskLevel === "good" && r.token === null && r.authorities === null && r.fullReport?.read === false && r.fullReport.why === "upstream-error" && !r.source.includes("rugcheck-report"), `safety: a failed report read leaves null blocks and names why (${JSON.stringify(r.fullReport)})`);
+  ok(r.token === null && r.authorities === null && r.unknown.some((u) => u.field === "mintAuthorityDisabled" && /full report/.test(u.reason)) && r.fullReport?.read === false && r.fullReport.why === "upstream-error" && !r.source.includes("rugcheck-report"), `safety: a failed report read leaves null blocks and names why (${JSON.stringify(r.fullReport)})`);
 
-  // A summary with no score: the report fills score and risks.
+  // A summary with no score no longer reads the full report: no published
+  // field needs it while Jupiter indexes the mint.
   stub((url) => url.endsWith("/report/summary") ? Promise.resolve(jsonRes({ tokenProgram: "T", risks: [], lpLockedPct: 5 })) : url.endsWith("/report") ? Promise.resolve(jsonRes(RC_REPORT)) : Promise.resolve(jsonRes([JUP_TOKEN_OTHER, JUP_TOKEN])));
   r = await h("sol-token-safety")({ mint: JUP });
-  ok(r.scoreNormalised === 97 && r.risks.length === 2 && r.riskLevel === "danger" && r.lpLockedPct === 5 && r.token.symbol === "JUP" && r.fullReport.filled.join(",") === "score,risks", `safety: a scoreless summary is completed from the report (${JSON.stringify(r.fullReport)})`);
+  ok(r.lpLockedPct === 5 && r.token.symbol === "JUP" && r.fullReport === null && !calls.some((c) => c.url.endsWith("/report")), `safety: a scoreless summary needs no report read (${JSON.stringify(r.fullReport)})`);
 
   // Concurrent reads of one mint's full report share one request.
   stub((url) => url.endsWith(`/tokens/${JUP}/report`) ? new Promise((res) => setTimeout(() => res(jsonRes(RC_REPORT)), 20)) : Promise.reject(new Error("bad url " + url)));
@@ -256,6 +261,8 @@ try {
   ok(r.launchpad === "Pump.Fun" && r.totalHolders === 2873512 && r.verification.jupVerified === true && r.transferFee.pct === 0, "report: launchpad/holders/verification/transferFee");
   ok(!("knownAccounts" in r) && JSON.stringify(r).length < 4000, "report: compact (no knownAccounts echo)");
   ok(r.source === "rugcheck" && typeof r.fetchedAt === "string", "report: source + fetchedAt");
+  ok(!["score", "scoreNormalised", "risks", "riskCounts", "riskLevel", "rugged", "verdict"].some((k) => k in r) && !/"danger"|"warn"|LP Vault unlocked/.test(JSON.stringify(r)), "report: no score, risk level, risk label, rugged flag or verdict word is passed through");
+  ok(r.flags.map((f) => f.id).join() === "freeze-authority-live,metadata-mutable,top-holders-50-or-more" && r.flags[2].value === r.holders.concentration.top10Pct && r.notice === TOKEN_FACTS_NOTICE, `report: named facts computed from the report's fields, with the notice (${r.flags.map((f) => f.id)})`);
   ok(r.credit === RUGCHECK_ATTRIBUTION, "report: the answer credits RugCheck by name and link");
 
   // --------------------------------------------------------------------------
@@ -627,7 +634,7 @@ try {
     const t0 = Date.now();
     const out = await h("sol-token-safety")({ mint: PUMP });
     const ms = Date.now() - t0;
-    ok(out.fullReport?.read === false && out.fullReport.why === "deadline-or-refused" && out.token === null && out.riskLevel === "good" && ms >= D.RUGCHECK_FALLBACK_MS - 50 && ms < D.RUGCHECK_FALLBACK_MS + 1500 && D.RUGCHECK_FALLBACK_MS < D.RUGCHECK_REPORT_MS,
+    ok(out.fullReport?.read === false && out.fullReport.why === "deadline-or-refused" && out.token === null && !("riskLevel" in out) && ms >= D.RUGCHECK_FALLBACK_MS - 50 && ms < D.RUGCHECK_FALLBACK_MS + 1500 && D.RUGCHECK_FALLBACK_MS < D.RUGCHECK_REPORT_MS,
       `a stalled report fill gives up at its own ${D.RUGCHECK_FALLBACK_MS} ms cap and the safety answer still lands (${ms} ms, ${JSON.stringify(out.fullReport)})`);
   }
   // The RPC fallback is bounded: with RugCheck publishing no holder table and

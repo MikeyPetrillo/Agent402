@@ -96,10 +96,9 @@ const LEGS = [
     expect: (r) => (r && typeof r === "object" ? null : "no object returned"),
   },
   {
-    name: "token-risk    probeGoPlus",
-    run: () => import("../src/tools/token-risk-kit.js").then((m) => m.probeGoPlus({ chain: "base", address: BRETT })),
-    expect: (r) => (r && typeof r === "object" ? null : "no object returned"),
-    consumers: [async (r) => { const m = await import("../src/tools/token-risk-kit.js"); m.shapeGoPlus(r); }],
+    name: "token-risk    readTokenFacts",
+    run: () => import("../src/tools/token-facts.js").then((m) => m.readTokenFacts({ chain: "base", address: BRETT })),
+    expect: (r) => (r && typeof r === "object" && r.totalSupply != null ? null : "no token facts returned"),
   },
   {
     name: "token-risk    probeDexPairs",
@@ -157,7 +156,7 @@ const CLASSIFIER_CASES = [
   [new TypeError("reportingUris is not iterable"), "our-bug", "the real 08-29 shape"],
   [new TypeError("Cannot read properties of undefined"), "our-bug", "programming error"],
   [Object.assign(new Error("probe needs an issuer name"), { statusCode: 500 }), "our-bug", "our own 500"],
-  [Object.assign(new Error("GoPlus does not cover foo"), { statusCode: 422 }), "our-bug", "our own 4xx: the probe refused its input"],
+  [Object.assign(new Error("DexScreener does not cover foo"), { statusCode: 422 }), "our-bug", "our own 4xx: the probe refused its input"],
   [Object.assign(new Error("upstream error"), { statusCode: 502 }), "upstream", "502 is the house definition of a third party failing"],
   [Object.assign(new Error("gateway busy"), { statusCode: 503 }), "upstream", "503"],
   [Object.assign(new Error("slow down"), { statusCode: 429 }), "upstream", "429 is throttling, not a defect"],
