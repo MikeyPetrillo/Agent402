@@ -140,7 +140,7 @@ skill packs built on them. When you use them:</p>
 .tm-body a:hover{text-decoration:underline}
 .tm-body b,.tm-body strong{color:var(--ink);font-weight:600}
 .tm-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--panel);color:var(--on-panel);padding:2px 7px;border:1px solid var(--hairline)}
-@media(max-width:600px){.tm-h1{font-size:var(--fs-3xl) !important}}
+@media(max-width:600px){.tm-h1{font-size:var(--fs-3xl) !important}.tm-body h2{font-size:var(--fs-2xl)}}
 `;
 
   const body = `

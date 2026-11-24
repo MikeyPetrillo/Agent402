@@ -34,7 +34,7 @@ export function accessibilityPage(baseUrl) {
 <section>
 <div class="ac-eyebrow">$ GET /accessibility</div>
 <h1 class="ac-h1">Accessibility statement</h1>
-<p class="ac-updated">Agent402 (agent402.tools) - updated ${ACCESSIBILITY_STATEMENT_DATE}.</p>
+<p class="ac-updated">Agent402 - updated ${ACCESSIBILITY_STATEMENT_DATE}.</p>
 </section>
 <section>
 <div class="ac-body">

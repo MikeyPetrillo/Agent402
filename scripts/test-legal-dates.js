@@ -22,7 +22,7 @@ const PINS = {
   // The refund sentences /terms prints live in src/refund-terms.js (the
   // conformance document reads them too), so that file is hashed with it.
   // Both print the credits figures (src/credits-figures.js), so it is hashed with them.
-  "src/terms.js": { date: "2026-11-25", sha: "0a0aed5d0d850bc3", with: ["src/refund-terms.js", "src/credits-figures.js", "src/aws-unanswered-copy.js"] },
+  "src/terms.js": { date: "2026-11-25", sha: "ef6a79dbcbb59caf", with: ["src/refund-terms.js", "src/credits-figures.js", "src/aws-unanswered-copy.js"] },
   "src/privacy.js": { date: "2026-11-25", sha: "0804d6a992b80a51", with: ["src/credits-figures.js"] },
 };
 let pass = 0, fail = 0;

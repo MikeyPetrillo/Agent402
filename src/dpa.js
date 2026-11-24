@@ -55,7 +55,7 @@ export function dpaPage(baseUrl) {
 <section>
 <div class="dp-eyebrow">$ GET /dpa</div>
 <h1 class="dp-h1">Data Processing Addendum</h1>
-<p class="dp-updated">Agent402 (agent402.tools) - last updated ${DPA_DATE}.</p>
+<p class="dp-updated">Agent402 - last updated ${DPA_DATE}.</p>
 </section>
 <section>
 <div class="dp-body">
