@@ -58,8 +58,8 @@ import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf, noteSettleAsked } from "./settle-demotion.js";
-import { screenOwnSettlerPayer } from "./own-settler-screen.js";
-import { isComplianceSettleRefusal, isOwnScreenRefusal, noteComplianceRefusal, complianceRefusedResult, OWN_SETTLER_SCREEN_REFUSED, OWN_SETTLER_SCREEN_REFUSED_TEXT } from "./settle-compliance.js";
+import { screenStellarBeforeSettle } from "./own-settler-screen.js";
+import { isComplianceSettleRefusal, isOwnScreenRefusal, noteComplianceRefusal, complianceRefusedResult } from "./settle-compliance.js";
 import { withSettleDeadline, noteSettleContext, settleDeadlineStopOf, noteCappedRequest } from "./settle-deadlines.js";
 import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
@@ -2098,11 +2098,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // The payer screen before any submission (src/own-settler-screen.js):
       // the primary may be our own facilitator. A listed payer is refused
       // with nothing sent, final (src/settle-compliance.js).
-      const signedPayer = (await stellarSignedPaymentOf(paymentPayload, { ...paymentRequirements, payTo }).catch(() => null))?.payer;
-      if (signedPayer && (await screenOwnSettlerPayer(signedPayer).catch(() => "unscreened")) === "listed") {
-        noteComplianceRefusal({ network, via: "stellar settle", kind: "own-screen" });
-        return { success: false, errorReason: OWN_SETTLER_SCREEN_REFUSED, errorMessage: OWN_SETTLER_SCREEN_REFUSED_TEXT, transaction: "", network, payer: signedPayer };
-      }
+      return screenStellarBeforeSettle({
+        paymentPayload, requirements: { ...paymentRequirements, payTo }, network,
+        submit: () => this.#settleScreened(paymentPayload, paymentRequirements, { payTo, network, startedAt, claimTx }),
+      });
+    }
+
+    async #settleScreened(paymentPayload, paymentRequirements, { payTo, network, startedAt, claimTx }) {
       const res = await settleWithStellarFallback({
         primary: () => super.settle(paymentPayload, paymentRequirements),
         fallback: stellarFallbackClient ? () => stellarFallbackClient.settle(paymentPayload, paymentRequirements) : null,

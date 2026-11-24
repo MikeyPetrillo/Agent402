@@ -25,7 +25,7 @@ import {
 import { complianceSettleRefusal, REJECTION_REASONS } from "../src/payment-reject.js";
 import { withSettleDemotion, noteSettleOutcome, _resetSettleDemotion } from "../src/settle-demotion.js";
 import { settleWithStellarFallback } from "../src/stellar-confirm.js";
-import { screenOwnSettlerPayer } from "../src/own-settler-screen.js";
+import { screenOwnSettlerPayer, evmSettlePayersOf, screenStellarBeforeSettle } from "../src/own-settler-screen.js";
 import { __seedPayoutListForTests, __resetPayoutListForTests } from "../src/tools/sanctions-kit.js";
 import { createOwnRelayerClient } from "../src/robinhood-relayer.js";
 
@@ -194,11 +194,48 @@ await check("Stellar: a primary compliance refusal is not re-submitted through t
   await settleWithStellarFallback({ primary: async () => ({ success: false, errorReason: "settle_channel_service_failed" }), fallback: async () => { controlCalls++; return { success: true, transaction: "abc" }; }, confirm: async () => null, log: quiet });
   assert.equal(controlCalls, 1, "control: another refusal still goes to the fallback");
 });
-await check("Stellar settle client screens the signed payer before any submission (source)", () => {
+await check("Stellar settle client runs the shared screen before any submission (source)", () => {
   const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
-  const cls = src.slice(src.indexOf("class StellarConfirmingFacilitatorClient"), src.indexOf("const res = await settleWithStellarFallback({"));
-  assert.match(cls, /screenOwnSettlerPayer\(signedPayer\)/);
-  assert.match(cls, /errorReason: OWN_SETTLER_SCREEN_REFUSED/);
+  const cls = src.slice(src.indexOf("class StellarConfirmingFacilitatorClient"), src.indexOf("if (stellarEnabled) {"));
+  assert.match(cls, /return screenStellarBeforeSettle\(\{/);
+  assert.ok(cls.indexOf("screenStellarBeforeSettle(") < cls.indexOf("settleWithStellarFallback({"), "the fallback chain runs inside the screened submit");
+});
+const G_LISTED = "G" + "A".repeat(55), G_CLEAN = "G" + "B".repeat(55);
+const stellarGate = async (payer, verdict) => {
+  const calls = [], screened = [];
+  const r = await screenStellarBeforeSettle({
+    paymentPayload: { payload: { transaction: "x" } }, requirements: { network: "stellar:pubnet" }, network: "stellar:pubnet", log: quiet,
+    signedPaymentOf: async () => (payer ? { payer } : null),
+    screen: async (a) => { screened.push(a); return verdict(a); },
+    submit: () => settleWithStellarFallback({
+      primary: async () => { calls.push("primary"); return { success: true, transaction: "t1" }; },
+      fallback: async () => { calls.push("fallback"); return { success: true, transaction: "t2" }; },
+      confirm: async () => null, log: quiet,
+    }),
+  });
+  return { r, calls, screened };
+};
+await check("Stellar: a listed signed payer is refused, final, with neither the primary nor the fallback asked", async () => {
+  __resetSettleComplianceForTests();
+  const { r, calls, screened } = await stellarGate(G_LISTED, (a) => (a === G_LISTED ? "listed" : "clear"));
+  assert.deepEqual(screened, [G_LISTED]);
+  assert.deepEqual(calls, [], "nothing submitted");
+  assert.equal(r.success, false);
+  assert.equal(r.errorReason, OWN_SETTLER_SCREEN_REFUSED);
+  assert.equal(r.transaction, "");
+  assert.equal(r.payer, G_LISTED);
+  assert.equal(r.network, "stellar:pubnet");
+  assert.ok(isComplianceSettleRefusal(r), "final");
+  assert.equal(settleComplianceView().ownScreenRefused, 1);
+});
+await check("Stellar: a clean or unscreened payer, or none read, goes on to the primary", async () => {
+  for (const [payer, verdict] of [[G_CLEAN, "clear"], [G_CLEAN, "unscreened"], [null, "listed"]]) {
+    const { r, calls } = await stellarGate(payer, () => verdict);
+    assert.deepEqual(calls, ["primary"], `${payer} ${verdict}`);
+    assert.equal(r.success, true);
+  }
+  const thrown = await screenStellarBeforeSettle({ paymentPayload: {}, requirements: {}, network: "stellar:pubnet", log: quiet, signedPaymentOf: async () => ({ payer: G_CLEAN }), screen: async () => { throw new Error("boom"); }, submit: async () => ({ success: true, transaction: "t" }) });
+  assert.equal(thrown.success, true, "a screen that throws reads unscreened");
 });
 
 // --- our own settler's screen -----------------------------------------------
@@ -234,6 +271,33 @@ await check("own relayer: a listed payer is refused before anything is read or s
 await check("own relayer: a clean payer passes the screen to the settle", async () => {
   const screened = [];
   const r = await relayerOf(async (a) => { screened.push(a); return "clear"; }).settle(payloadFrom(CLEAN), reqs);
+  assert.deepEqual(screened, [CLEAN]);
+  assert.notEqual(r.errorReason, OWN_SETTLER_SCREEN_REFUSED, "the screen did not refuse it");
+});
+
+const permit2From = (from) => ({ x402Version: 2, accepted: reqs, payload: { signature: "0x" + "00".repeat(65), permit2Authorization: { from, permitted: { token: TOKEN, amount: "10000" }, spender: "0x" + "77".repeat(20), nonce: "1", deadline: String(Math.floor(Date.now() / 1000) + 600), witness: { to: TREASURY, validAfter: "0" } } } });
+await check("payers: an EIP-3009 and a Permit2 payload each name their signer", () => {
+  assert.deepEqual(evmSettlePayersOf(payloadFrom(CLEAN)), [CLEAN]);
+  assert.deepEqual(evmSettlePayersOf(permit2From(LISTED)), [LISTED]);
+  assert.deepEqual(evmSettlePayersOf({ payload: { authorization: { from: CLEAN }, permit2Authorization: { from: LISTED } } }), [CLEAN, LISTED]);
+  assert.deepEqual(evmSettlePayersOf({ payload: {} }), []);
+});
+await check("own relayer: a listed Permit2 payer is refused before anything is read or sent", async () => {
+  __resetSettleComplianceForTests();
+  const screened = [];
+  const r = await relayerOf(async (a) => { screened.push(a); return a === LISTED ? "listed" : "clear"; }).settle(permit2From(LISTED), reqs);
+  assert.deepEqual(screened, [LISTED]);
+  assert.equal(r.success, false);
+  assert.equal(r.errorReason, OWN_SETTLER_SCREEN_REFUSED);
+  assert.equal(r.nothingSent, true);
+  assert.equal(r.transaction, "");
+  assert.equal(r.payer, LISTED, "the refusal names the Permit2 signer");
+  assert.ok(isComplianceSettleRefusal(r));
+  assert.equal(settleComplianceView().ownScreenRefused, 1);
+});
+await check("own relayer: a clean Permit2 payer passes the screen", async () => {
+  const screened = [];
+  const r = await relayerOf(async (a) => { screened.push(a); return "clear"; }).settle(permit2From(CLEAN), reqs);
   assert.deepEqual(screened, [CLEAN]);
   assert.notEqual(r.errorReason, OWN_SETTLER_SCREEN_REFUSED, "the screen did not refuse it");
 });

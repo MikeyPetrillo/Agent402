@@ -113,7 +113,8 @@ const alreadyKnown = (e) => /already known|known transaction|already imported/i.
 export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, settings = relayerSettings(), minUnits = robinhoodRelayerMinUnits(), leaseImpl = null, log = console.warn, screen = null } = {}) {
   // The payer screen before any submission (src/own-settler-screen.js),
   // loaded on first use; a test passes its own.
-  const screenPayer = async (a) => (screen || (await import("./own-settler-screen.js")).screenOwnSettlerPayer)(a);
+  const ownScreen = () => import("./own-settler-screen.js");
+  const screenPayer = async (a) => (screen || (await ownScreen()).screenOwnSettlerPayer)(a);
   if (network !== "eip155:4663") throw new Error("the own relayer settles eip155:4663 only");
   if (!rpcUrl) throw new Error("no RPC for eip155:4663");
   const account = privateKeyToAccount(key);
@@ -250,7 +251,10 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
       return scheme.verify(paymentPayload, requirements);
     },
     async settle(paymentPayload, requirements) {
-      const payer = paymentPayload?.payload?.authorization?.from;
+      // Every payer the payload names (EIP-3009 and Permit2, as the x402
+      // payer screen reads them); the refusal names the one that settles.
+      const payers = (await ownScreen()).evmSettlePayersOf(paymentPayload);
+      let payer = payers[payers.length - 1];
       const why = ours(requirements);
       if (why) return refuse("own_relayer_refused", why, payer);
       if (paymentPayload?.accepted?.network && paymentPayload.accepted.network !== network) return refuse("own_relayer_refused", "payload names another network", payer);
@@ -259,13 +263,17 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
       if (!covers(requirements)) return refuse("own_relayer_below_minimum", "the sale's price is under the own relayer's minimum (ROBINHOOD_RELAYER_MIN_PRICE_USD)", payer);
       // A payer on the sanctions list is never submitted: nothing is read or
       // sent, and the refusal is final (src/settle-compliance.js).
-      let verdict = "unscreened";
-      try { verdict = await screenPayer(payer); } catch { verdict = "unscreened"; }
-      if (verdict === "listed") {
+      let listed = false;
+      for (const a of payers.length ? payers : [undefined]) {
+        let verdict = "unscreened";
+        try { verdict = await screenPayer(a); } catch { verdict = "unscreened"; }
+        if (verdict === "listed") { listed = true; payer = a; break; }
+      }
+      if (listed) {
         noteComplianceRefusal({ network, via: OWN_RELAYER_NAME, kind: "own-screen", log });
         return refuse(OWN_SETTLER_SCREEN_REFUSED, OWN_SETTLER_SCREEN_REFUSED_TEXT, payer);
       }
-      const key = authKey(payer, paymentPayload?.payload?.authorization?.nonce);
+      const key = authKey(paymentPayload?.payload?.authorization?.from, paymentPayload?.payload?.authorization?.nonce);
       refusedAuth.delete(key);
       const result = await scheme.settle(paymentPayload, requirements);
       // A refusal raised before anything was signed or accepted by the node:
