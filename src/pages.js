@@ -1331,6 +1331,11 @@ export function openapiSpec(baseUrl, catalog) {
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
       contact: { name: "Havok Holdings LLC", email: "help@agent402.tools", url: baseUrl },
+      // The terms every paid and free call is made under (the same URL the
+      // x402 manifest, every 402 body and the MCP connector name), and the
+      // server's own license.
+      termsOfService: `${baseUrl}/terms`,
+      license: { name: "AGPL-3.0-or-later", identifier: "AGPL-3.0-or-later" },
       // Agent-facing quickstart read by MPP/x402 discovery crawlers
       // (info.x-guidance in MPPScan's audit).
       "x-guidance":

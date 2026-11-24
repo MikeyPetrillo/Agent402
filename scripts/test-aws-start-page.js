@@ -175,7 +175,7 @@ try {
     ok(flat(termsHtml).includes(ELIGIBILITY_SENTENCE), "/terms prints the eligibility sentence word for word");
     ok(flat(html).includes(ELIGIBILITY_SENTENCE) && /<h2 id="eligibility">/.test(html), "/aws/start prints the same eligibility and sanctions sentence under its own heading");
   }
-  ok(/id="aws-marketplace"/.test(termsHtml) && /standard\s+contract for AWS Marketplace/.test(termsHtml), "/terms carries the AWS Marketplace purchases section while the gate is on");
+  ok(/id="aws-marketplace"/.test(termsHtml) && /Standard\s+Contract\s+for\s+AWS\s+Marketplace and these terms both apply, and where they conflict the AWS contract\s+governs/.test(termsHtml), "/terms carries the AWS Marketplace purchases section while the gate is on, and the AWS contract governs a conflict");
   ok(/Every paid call that ends without an answer is recorded with its payment id, the tool, the time, why it ended and whether the payment can still be retried; one that is not answered on a later attempt is reviewed, and an approved correction is made as a billing adjustment on your AWS invoice through AWS Marketplace\./.test(termsHtml) && !/is corrected as a billing adjustment/.test(termsHtml), "/terms: every paid call that ends without an answer is recorded; one never answered is reviewed, and an approved correction is an invoice adjustment");
 } finally {
   await srv.stop();

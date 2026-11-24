@@ -1,7 +1,7 @@
 # Agent402 Trademark Policy
 
 "Agent402", "Agent402.Tools", and the Agent402 logo are trademarks of
-**Havok Holdings LLC** (™, unregistered). The AGPL-3.0 license covers the
+**Cardhavok LLC** (doing business as Havok Holdings LLC) (™, unregistered). The AGPL-3.0 license covers the
 code in this repository; it does **not** grant any right to use these marks.
 Copyright law protects the code - trademark protects the name, and the two
 are independent: forking the code is welcome, adopting the identity is not.

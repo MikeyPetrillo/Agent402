@@ -68,6 +68,7 @@ export const PAGE_SOURCES = {
   "/markets": ["src/markets.js"],
   "/decide": ["src/decide-page.js"],
   "/security": ["src/security-page.js"],
+  "/accessibility": ["src/accessibility-page.js"],
   "/wholesale": ["src/wholesale-page.js", "src/wholesale.js", "src/stable-error-code.js"],
   "/trust": ["src/trust-page.js"],
   "/crawler": ["src/crawler-page.js"],

@@ -553,6 +553,7 @@ import { speechPage } from "./speech-page.js";
 import { agenticFinancePage } from "./agentic-finance.js";
 import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
+import { accessibilityPage } from "./accessibility-page.js";
 import { trustPage } from "./trust-page.js";
 import { markGateMounted, gateMounted } from "./gate-mounts.js";
 import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, receiptsServed, createCheckoutReceipt, createSubscriptionReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_FETCH_PATH, RECEIPT_HEADER, isReceiptFetchKey } from "./receipt-signing.js";
@@ -5124,6 +5125,7 @@ app.get("/.well-known/*doc", async (req, res, next) => {
 });
 app.get("/privacy", (_req, res) => htmlCache(res, 300, 900).send(privacyPage(BASE_URL)));
 app.get("/terms", (_req, res) => htmlCache(res, 300, 900).send(termsPage(BASE_URL)));
+app.get("/accessibility", (_req, res) => htmlCache(res, 300, 900).send(accessibilityPage(BASE_URL)));
 app.get("/transparency", async (_req, res) => htmlCache(res, 300, 900).send(transparencyPage(BASE_URL, await repoTraffic().catch(() => null))));
 // /contact folded into /company (2026-09-09): one page for who we are and how to reach us.
 app.get("/contact", (_req, res) => res.redirect(301, "/company#contact"));
@@ -12464,7 +12466,7 @@ if (!FREE_MODE) {
   // With the compact option on, the mirror also picks the compact header for
   // a request that asks (src/payment-required-compact.js); the header is
   // swapped by the hook mounted first on the app.
-  if (process.env.PAYMENT_REQUIRED_BODY !== "off") app.use(paymentRequiredBodyMiddleware({ compact: PAYMENT_REQUIRED_COMPACT_ON }));
+  if (process.env.PAYMENT_REQUIRED_BODY !== "off") app.use(paymentRequiredBodyMiddleware({ compact: PAYMENT_REQUIRED_COMPACT_ON, termsUrl: `${BASE_URL}/terms` }));
   // A slow route's 402 recommends Prefer: respond-async (X-Async-Recommended
   // header, `async` block in the JSON body). Mounted after the mirror so its
   // send wrapper runs first and the mirror's protocol keys still win.

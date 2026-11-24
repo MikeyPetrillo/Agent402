@@ -13,7 +13,9 @@ taken seriously and acted on fast.
 - Maintainer: [Havok Holdings LLC](https://havok.holdings) - [github.com/MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402).
 
 Please include reproduction steps and impact. Good-faith research inside the scope below will not be met
-with legal action. You can expect an acknowledgement within two business days; fixes for real issues ship through the normal CI pipeline
+with legal action, provided you test only against wallets, keys and data you own, do not access or keep anyone
+else's data (stop and tell us if you reach it), do not move or spend anyone else's funds or credits, do not
+degrade the service for others, and report to us promptly and before any disclosure. You can expect an acknowledgement within two business days; fixes for real issues ship through the normal CI pipeline
 (which re-tests every endpoint) as soon as they're ready.
 
 ## Scope

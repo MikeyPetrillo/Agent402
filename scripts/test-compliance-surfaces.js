@@ -159,8 +159,19 @@ ok(/counter-notice/i.test(cr) && /10 to 14 business days/.test(cr) && /repeat in
 ok(/the person who sent the notice or that person's agent/.test(cr.replace(/&#39;/g, "'")), "terms: counter-notice consent to service from the notifier or that person's agent");
 ok(/take reasonable steps to notify the person who provided it, where we can identify them/.test(cr) && !/promptly and tell the person/.test(cr), "terms: notice to the provider is reasonable steps, not a promise");
 ok(/shared answer page deletes it, so it cannot be restored/.test(cr) && /for material we can restore, restore it/.test(cr), "terms: no restoration promised for a deleted shared answer");
-const subsTerms = termsText.slice(termsText.indexOf("Subscriptions (monitors)"));
+const subsTerms = termsText.slice(termsText.indexOf("Monitors renew automatically"));
 ok(/POST request to the cancel link/.test(subsTerms) && /revoking the authorization/.test(subsTerms) && /stays active until the end of the period you already paid for and is not renewed/.test(subsTerms) && /no partial refund for the remaining days/.test(subsTerms), "terms: each rail's cancel path and what canceling does");
+ok(/renews automatically at the price shown when you subscribed until you cancel/.test(subsTerms) && /Cancel anytime online/.test(subsTerms) && /at least 30 days before it applies/.test(subsTerms), "terms: automatic renewal, its price, online cancel and the price-change notice");
+{
+  const disputes = termsText.slice(termsText.indexOf("Governing law"));
+  ok(/give up the right to a jury trial for any dispute that is arbitrated/.test(disputes) && !/waive the right to a jury trial/.test(disputes) && /Consumer Arbitration Rules/.test(disputes), "terms: the jury waiver covers arbitrated disputes only, under the AAA consumer rules");
+  ok(/never applies to a dispute that arose before the change/.test(termsText) && /at least 30 days before it takes effect/.test(termsText), "terms: a change never reaches an existing dispute; material changes are emailed 30 days ahead");
+  ok(/DOES NOT REDUCE ANY REFUND OR REPAYMENT THESE TERMS SAY WE OWE YOU/.test(termsText), "terms: the liability cap never reduces a refund we owe");
+  ok(/may be blocked permanently/.test(termsText) && !/report as required by law/.test(termsText), "terms: no permanent-block or reporting promise the code does not keep");
+  ok(/Export Administration Regulations/.test(termsText) && /comprehensive U\.S\. sanctions/.test(termsText), "terms: export controls and sanctioned regions");
+  ok(/keep the attribution and license notice with it/.test(termsText), "terms: open data licenses travel with the data");
+  ok(/right of withdrawal/.test(termsText) && /id="withdrawal"/.test(terms) && /id="refunds"/.test(terms) && /id="arbitration"/.test(terms) && /href="\/accessibility"/.test(terms), "terms: the withdrawal clause and the anchors checkout links to; the accessibility statement is linked");
+}
 ok(/under penalty of perjury/.test(cr) && /physical or electronic signature/.test(cr), "terms: the notice elements");
 delete process.env.COMPANY_POSTAL_ADDRESS;
 const termsNoAddr = strip(termsPage(BASE));

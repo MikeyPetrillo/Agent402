@@ -670,6 +670,13 @@ export function mcpInstallHints(baseUrl) {
   };
 }
 
+// The terms every call through a connector is made under, one line, in the
+// initialize instructions of every mount (the hosted connector and each
+// product profile; src/mcp-http.js adds it to a profile's own text).
+export function mcpTermsLine(baseUrl) {
+  return `Terms: use of this server is subject to the Terms of Service at ${baseUrl}/terms.`;
+}
+
 /**
  * MCP initialize.instructions — orientation for clients that never call
  * server.describe. Keep tool names listed-only (dotted Smithery form) (self-consistency).
@@ -693,6 +700,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
     `Hosted connector (proof-of-work tools free; ${x402 || mpp ? `other tools paid in the call over ${[x402 && "x402", mpp && "MPP"].filter(Boolean).join(" or ")} from a wallet` : "others need a wallet on the npm package"}): ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
     `Docs: ${baseUrl}/llms.txt · status ${baseUrl}/status`,
+    mcpTermsLine(baseUrl),
   ].join("\n");
 }
 

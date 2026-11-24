@@ -17,7 +17,8 @@ import { ROBOTS_UNGATED_READS } from "./tools/robots-gate.js";
 import { refundClauseText } from "./refund-terms.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { connectorWires } from "./connector-pay.js";
-import { COMPANY_PHONE, LEGAL_ENTITY_SENTENCE } from "./company.js";
+import { COMPANY_PHONE } from "./company.js";
+import { LEGAL_ENTITY_NAME, LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 import { companyPostalLine } from "./email.js";
 import { lowBalanceWords, signInLifeWords } from "./credits-figures.js";
 // Where a fraud-warning refund goes (src/credits.js fraudWarning and
@@ -162,10 +163,11 @@ If you do not agree to these terms, do not use the service.</p>
   <li>You must be <b>18 or older</b> (or the age of majority where you live, if higher) to use the service or buy anything on it. The service is not directed at children, and we do not knowingly collect anything from anyone under 13.</li>
   <li>Don't use the service to break the law, infringe others' rights, or attack the service or third parties (e.g. using the URL-fetching tools against targets you don't control).</li>
   <li>Don't attempt to bypass rate limits, payment, or the proof-of-work gate, or to disrupt availability for others.</li>
-  <li><b>Generative paths:</b> don't use the AI gateway or any generative tool to create or attempt to create: child sexual abuse material (zero tolerance - we will block the wallet and report as required by law); non-consensual intimate imagery or sexual content depicting real people; content that impersonates a real person to deceive; material that infringes others' intellectual-property rights; or content whose creation or distribution is otherwise illegal in your jurisdiction or ours.</li>
+  <li><b>Generative paths:</b> don't use the AI gateway or any generative tool to create or attempt to create: child sexual abuse material (zero tolerance: we block the wallet); non-consensual intimate imagery or sexual content depicting real people; content that impersonates a real person to deceive; material that infringes others' intellectual-property rights; or content whose creation or distribution is otherwise illegal in your jurisdiction or ours.</li>
   <li>Traffic through the AI gateway is also subject to the <b>usage policies of the upstream model providers</b> (including OpenAI's usage policies and the terms of OpenRouter and the model operators it serves). Those providers apply their own safety filtering and may refuse requests; their policies apply to your use through us. The GPT Image tools (image-gen, image-gen-hd and image-gen-premium) ask the provider for its less restrictive filtering level by default, and a caller may choose its stricter level; the provider's usage policies apply at either level. Don't attempt to circumvent, probe, or disable that safety filtering.</li>
   <li>Don't use the service to create malware or exploits for unauthorized use, to defraud, phish, spam, or deceive, or to process other people's personal data unlawfully.</li>
   <li><b>High-risk use is prohibited:</b> the service is not designed for, and must not be relied on in, any context where failure or inaccuracy could lead to death, personal injury, or severe damage - including medical treatment, life-safety systems, and operation of critical infrastructure.</li>
+  <li><b>Sanctions and export controls:</b> don't use or export the service or its outputs in violation of U.S. sanctions or U.S. export control laws (the Export Administration Regulations), including for a prohibited end use or by a prohibited end user. We screen the paying wallets on our crypto rails against U.S. sanctions lists, and we may refuse requests from countries and regions under comprehensive U.S. sanctions.</li>
   <li>You are responsible for the inputs you send and how you use the outputs.</li>
 </ul>
 
@@ -182,11 +184,20 @@ mark it as AI-generated where the law or the section below requires, is your res
 <p>A web.answer call made with <code>share=true</code>${sharesOffered ? " publishes" : " while sharing was offered published"} a shared answer page: it shows the
 caller-supplied question and a model-generated answer, and we may remove it at any time.</p>` : ""}
 
+<h2 id="answers">Your use of answers</h2>
+<p>As between you and us, you may use the answers you buy for any lawful purpose, subject to these terms, to the
+license and attribution fields an answer carries for its third-party data, and to the model provider terms below. We
+keep all rights in the service, the site content, the structure of the reports and our compiled data. Bulk extraction
+of answers to rebuild a competing catalog or dataset is not permitted.</p>
+<p id="data-licenses"><b>Open data licenses.</b> Some answers contain third-party data under an open license (for
+example CC BY 4.0, ODbL 1.0 or the UK government's open license). Such an answer names its source and license in its
+fields. If you publish or redistribute that data, you must keep the attribution and license notice with it and follow
+that license, including its share-alike terms for a database you build from ODbL data.</p>
 ${modelOutputsSection}${callerUrlSection}
 <h2>Enforcement</h2>
 <p>We may refuse service to, rate-limit, or block any wallet at our sole discretion, with or without
 notice, including for violations of these terms or of upstream provider policies. Wallets used for
-repeated violations are blocked permanently. We cooperate with law enforcement and will disclose
+repeated violations may be blocked permanently. We cooperate with law enforcement and will disclose
 information and preserve records in response to valid legal process, and report content where the law
 requires it. To report abuse, infringement, or illegal content involving this service, email
 <a href="mailto:help@agent402.tools">help@agent402.tools</a> - reports are reviewed promptly.</p>
@@ -268,6 +279,7 @@ send, hold or exchange funds for you on these routes, and you have no account wi
 Where a route returns part of a payment as a service credit (for example the unspent budget of
 <code>/api/decide/execute</code>), that credit is redeemable only for Agent402 services, for the period
 stated on that route.</p>
+<h2 id="refunds">Refunds</h2>
 <p><b>Refunds on-chain.</b> ${clause("ordinary-failure")} ${clause("charged-but-failed")}
 ${clause("repayment-process")} ${clause("repayment-proof")}
 ${clause("connection-closed-review")} ${clause("unidentified-payer")}
@@ -301,6 +313,12 @@ payment processing and are shown before you pay. Prices are the same everywhere 
 sales tax where it applies: for a credits key or a card payment billed to a North Carolina address, a
 call that returns generated speech, audio or video, or that edits an image or audio file you send, includes
 that tax.</p>
+<p id="withdrawal"><b>Withdrawal right (EU and UK consumers).</b> If you are a consumer in the European Union or the
+United Kingdom, you normally have 14 days to withdraw from a purchase of digital content or a digital service. A report
+is digital content that we produce and deliver right after you pay, and a monitor delivers each report as it is
+produced. At checkout you ask us to start at once and acknowledge that you lose the right of withdrawal for a report
+once its delivery has begun. A monitor can also be canceled at any time, as described under
+<a href="#subscriptions">Subscriptions and automatic renewal</a>.</p>
 <p><b>If the service stops.</b> A prepaid credits balance is a prepayment for services we have not yet
 delivered, and it should not depend on us being here forever. If we decide to stop operating the hosted
 service, we will give at least 30 days notice on this site and by email to the address on each purchase,
@@ -309,8 +327,13 @@ balance to the card that bought it, or, where that card can no longer be credite
 agree with you through the email on the purchase. The same applies to an unused monitor period. Nothing here waives a right you have by law,
 and it does not apply to a balance disabled for a refund or dispute.</p>
 <p><b>Free email alerts.</b> A free alert watches one subject with the same daily check a monitor uses and emails you when something changes, at most once a day. It is free, best-effort and not a monitor: no report is generated, delivery is not guaranteed, and we may pause or discontinue alerts at any time. It starts only after you confirm by email and ends the moment you use the unsubscribe link in any alert.</p>
-<p><b>Subscriptions (monitors).</b> A monitor bills monthly in advance, by card through Stripe or over
-MPP on Tempo from an authorization you sign, and renews each month until you cancel. Cancel a card subscription any
+<h2 id="subscriptions">Subscriptions and automatic renewal</h2>
+<p><b>Monitors renew automatically.</b> A monitor is a subscription that bills in advance, by card through Stripe each
+month, or over MPP on Tempo each 30 days from an authorization you sign, and <b>renews automatically at the price shown
+when you subscribed until you cancel</b>. The price and the renewal terms are stated beside the Subscribe button and
+again before you pay, and the welcome email repeats them with how to cancel. The price of an active subscription does
+not change at a renewal unless we email you the new price at least 30 days before it applies, so you can cancel first;
+an MPP subscription never pulls more than the amount you signed. <b>Cancel anytime online.</b> Cancel a card subscription any
 time in the Stripe Customer Portal, opened by the manage link in your monitor emails; if you no longer have those
 emails, enter your checkout email under "Already subscribed?" on <a href="/monitors#manage">/monitors</a> and we email
 you a new link. Cancel an MPP subscription with a POST request to the cancel link in your monitor emails (it carries
@@ -321,8 +344,9 @@ no further paid reports until the subject is readable again; each subscription a
 re-runs per 30 days, above which it alerts without re-running.</p>
 
 ${awsOn ? `<h2 id="aws-marketplace">AWS Marketplace purchases</h2>
-<p>Tools bought through AWS Marketplace are paid through AWS and billed on your AWS invoice. AWS's standard
-contract for AWS Marketplace governs those purchases together with our refund rule for them: an input we refuse
+<p>Tools bought through AWS Marketplace are paid through AWS and billed on your AWS invoice. For those purchases
+the AWS Standard Contract for AWS Marketplace and these terms both apply, and where they conflict the AWS contract
+governs. Our refund rule for them: an input we refuse
 before running the tool does not use the payment, and a call that does not complete can be sent again with the same
 payment while it is valid. ${AWS_UNANSWERED_SENTENCE}</p>
 ` : ""}
@@ -334,16 +358,22 @@ Amazon Bedrock AgentCore are trademarks of Amazon.com, Inc. or its affiliates. S
 Development Foundation. Arc is a trademark of Circle Internet Group, Inc. and/or its affiliates. EDGAR is a registered
 trademark of the U.S. Securities and Exchange Commission. FRED is a registered trademark of the Federal Reserve Bank of
 St. Louis. All other product and company names are trademarks of their respective owners.</p>
+<p>Agent402, Agent402.Tools, Ask402 and their logos are trademarks of ${LEGAL_ENTITY_SENTENCE}. These terms grant no
+right to use them.</p>
 
 <h2>Availability & changes</h2>
-<p>The service may change, be rate-limited, or be discontinued at any time. We may update these terms;
-the "last updated" date reflects the current version. Continued use after a change means you accept it.</p>
+<p>The service may change, be rate-limited, or be discontinued at any time, subject to what these terms say under
+"If the service stops". We may update these terms. We post the new version here with a new "last updated" date. For a
+material change we also email the address on any active subscription or prepaid balance at least 30 days before it
+takes effect. A change applies only to use after it takes effect. A change to the
+<a href="#disputes">Governing law and disputes</a> section never applies to a dispute that arose before the change;
+that dispute is governed by the version in effect when it arose.</p>
 
 <h2>Indemnification</h2>
-<p>You agree to indemnify and hold harmless Cardhavok LLC (doing business as Havok Holdings LLC) and the service's maintainers and
-contributors from claims, damages, and reasonable costs (including legal fees) arising from your use of
-the service, the inputs you send, the outputs you generate, or your violation of these terms or of
-applicable law.</p>
+<p>You agree to indemnify and hold harmless ${LEGAL_ENTITY_SENTENCE} and the service's maintainers and
+contributors from third-party claims, damages, and reasonable costs (including legal fees) arising from your
+violation of these terms or of applicable law, the inputs you send, or your use of outputs in breach of these
+terms. If you use the service as a consumer, this applies only to the extent the law allows.</p>
 
 <h2>Disclaimer of warranties</h2>
 <p>THE SERVICE, THE TOOLS, AND ALL OUTPUTS (INCLUDING GENERATED CONTENT) ARE PROVIDED "AS IS" AND
@@ -352,44 +382,49 @@ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCU
 UNINTERRUPTED OR ERROR-FREE OPERATION. YOU USE THE SERVICE AT YOUR OWN RISK.</p>
 
 <h2>Liability</h2>
-<p>TO THE MAXIMUM EXTENT PERMITTED BY LAW, CARDHAVOK LLC (DOING BUSINESS AS HAVOK HOLDINGS LLC), AGENT402, AND THEIR MAINTAINERS AND
+<p>TO THE MAXIMUM EXTENT PERMITTED BY LAW, ${LEGAL_ENTITY_SENTENCE}, AGENT402, AND THEIR MAINTAINERS AND
 CONTRIBUTORS ARE NOT LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR
 PUNITIVE DAMAGES, OR FOR ANY LOSS OF PROFITS, DATA, GOODWILL, OR DIGITAL ASSETS, ARISING FROM OR
 RELATING TO USE OF THE SERVICE, THE TOOLS, GENERATED CONTENT, OR ON-CHAIN PAYMENTS - WHETHER IN
 CONTRACT, TORT, OR OTHERWISE, AND EVEN IF ADVISED OF THE POSSIBILITY. TOTAL AGGREGATE LIABILITY FOR
 ALL CLAIMS WILL NOT EXCEED THE GREATER OF THE AMOUNT YOU PAID FOR THE CALL AT ISSUE OR ONE U.S.
-DOLLAR (US$1). Some jurisdictions do not allow certain limitations; where a limitation is not
+DOLLAR (US$1). THIS LIMIT DOES NOT REDUCE ANY REFUND OR REPAYMENT THESE TERMS SAY WE OWE YOU. Some jurisdictions do not allow certain limitations; where a limitation is not
 permitted, liability is limited to the smallest amount the law allows.</p>
 
-<h2>Governing law &amp; disputes</h2>
+<h2 id="disputes">Governing law &amp; disputes</h2>
 <p>These terms are governed by the laws of the <b>State of North Carolina</b> and applicable U.S.
 federal law, without regard to conflict-of-laws rules. Before filing any claim, you agree to first
 contact <a href="mailto:help@agent402.tools">help@agent402.tools</a> and attempt in good faith to
 resolve the dispute informally for 30 days.</p>
-<p><b>Arbitration and class-action waiver.</b> Any dispute not resolved informally will be settled by
+<p id="arbitration"><b>Arbitration and class-action waiver.</b> Any dispute not resolved informally will be settled by
 <b>binding individual arbitration</b> administered by the American Arbitration Association under its
-rules, conducted in English. <b>You and we each waive the right to a jury trial and to participate in
-a class action, class arbitration, or representative proceeding</b> - disputes may be brought only in
-an individual capacity. Either party may instead bring an individual claim in small-claims court, and
-either party may seek injunctive relief in court for intellectual-property infringement, unauthorized
-access, or abuse of the service. For any matter not subject to arbitration, you consent to the
+Consumer Arbitration Rules (if you are an individual using the service for personal purposes) or its
+Commercial Arbitration Rules (otherwise), conducted in English. <b>By agreeing to arbitration, you and we
+each give up the right to a jury trial for any dispute that is arbitrated. You and we each waive the right
+to participate in a class action, class arbitration, or representative proceeding</b> - disputes may be
+brought only in an individual capacity. Either party may instead bring an individual claim in small-claims
+court, and either party may seek injunctive relief in court for intellectual-property infringement,
+unauthorized access, or abuse of the service. For any matter not subject to arbitration, you consent to the
 exclusive jurisdiction and venue of the state and federal courts located in North Carolina. Any claim
 must be filed within one year of when it arose, or it is permanently barred.</p>
 
 <h2>General</h2>
-<p>These terms are the entire agreement between you and Cardhavok LLC (doing business as Havok Holdings LLC) regarding the hosted
+<p>These terms are the entire agreement between you and ${LEGAL_ENTITY_SENTENCE} regarding the hosted
 service, superseding any prior understanding. If any provision is found unenforceable, it will be
 limited to the minimum extent necessary and the rest remains in effect. Our not enforcing a provision
 is not a waiver of it. You may not assign these terms; we may assign them in connection with a merger,
 acquisition, or sale of assets. We are not liable for delay or failure caused by events beyond our
 reasonable control (including outages of blockchains, facilitators, or upstream model providers).
-Sections on generated content, payments, indemnification, warranty disclaimer, liability, and disputes
-survive any termination of your use.</p>
+Sections on generated content, your use of answers, payments, refunds, "If the service stops", indemnification,
+warranty disclaimer, liability, and disputes survive any termination of your use. Legal notices to us go to
+<a href="mailto:help@agent402.tools">help@agent402.tools</a> and by mail to the postal address on
+<a href="/company">/company</a>.</p>
 
 <h2>Operator &amp; contact</h2>
-<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:help@agent402.tools">help@agent402.tools</a>,
+<p>Agent402.Tools is operated by <strong>${LEGAL_ENTITY_NAME}</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:help@agent402.tools">help@agent402.tools</a>,
 <a href="${REPO_URL}" rel="noopener">the source repository on GitHub</a>,
-or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.</p>
+or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>. Accessibility:
+<a href="/accessibility">our accessibility statement</a>.</p>
 </div>
 </section>
 </div>

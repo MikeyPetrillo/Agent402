@@ -454,6 +454,7 @@ try {
     ok(REJECTION_REASONS.some((x) => x.reason === body.reason), `B5 body.reason is a published refusal class (${body.reason})`);
     ok(typeof body.hint === "string" && body.hint && typeof body.retry === "string" && body.retry, "B5 hint and retry are present");
     ok(isDeepStrictEqual(Object.keys(body).slice(0, 3), ["reason", "hint", "retry"]), `B5 the first three keys are reason, hint, retry (${Object.keys(body).join(",")})`);
+    ok(body.terms === `${BASE_URL}/terms` && typeof body.termsNote === "string" && body.termsNote.includes(`${BASE_URL}/terms`) && !("terms" in decoded), `B5 the body names the terms the payment is made under; the header does not (${body.terms})`);
     await assertErrorFirstReaders("B5", r.status, text, decoded, body.hint);
     ok((decoded.accepts || []).some((a) => a.scheme === "upto"), "B5 control: this boot offers upto on Base (the configuration the /x402-test sample reflects)");
     // The /x402-test page calls its sample "a real one": it must be this body,

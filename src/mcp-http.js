@@ -147,6 +147,7 @@ import {
   MCP_SERVER_WEBSITE,
   mcpInstallHints,
   mcpInitializeInstructions,
+  mcpTermsLine,
   clipToolDescription,
   mcpJsonResult,
   outputSchemaFromExample,
@@ -795,7 +796,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // paid call here cannot be settled at all.
           ...(mppLoopback ? { experimental: { payment: { methods: mcpPaymentMethods() } } } : {}),
         },
-        instructions: plainText(profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], stock: flagshipSet.has("stock-quote"), mpp: payMpp, x402: payX402, mppOffered: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed() })),
+        instructions: plainText(profile?.instructions ? `${profile.instructions}\n${mcpTermsLine(baseUrl)}` : mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], stock: flagshipSet.has("stock-quote"), mpp: payMpp, x402: payX402, mppOffered: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed() })),
       },
     );
     // A plain-names listing (?tool_names=underscore) names every tool in its
