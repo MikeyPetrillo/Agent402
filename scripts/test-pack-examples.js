@@ -78,6 +78,10 @@ console.log(`stock data provider ${STOCK_ON ? "on: us-macro-series misses excuse
 // anchored to its start, is excused here and nothing broader. A 4xx that
 // means the URL is wrong ("Source URL returned HTTP 404") still fails.
 const NOT_OURS_BASE = /not configured|rate.?limited|HTTP 5\d\d|upstream|timed? out|ECONN|ENOTFOUND|socket hang up|temporarily|HTTP 429|did not respond within|ERR_SSL|ERR_TLS|TLS_ALERT|EPROTO|handshake failure|^terminated$/i;
+// A source's own daily query allowance, spent (us-macro-series' BLS day cap,
+// the run's read cap in CI): the source's quota, worded in one fixed clause.
+// It is not ours; nothing broader is excused with it.
+const SOURCE_ALLOWANCE_SPENT = /daily query allowance of this server is used up/;
 const ACCESS_REFUSED = /^The host refused this server's request \(HTTP (401|403|407|451)\)/i;
 // Most examples now target agent402.tools: an access refusal from our own site
 // is our defect and is NOT excused for a pack whose input names it.
@@ -85,9 +89,13 @@ const ACCESS_REFUSED = /^The host refused this server's request \(HTTP (401|403|
 // (fredMaintenanceError), only when FRED serves its maintenance page in place
 // of data. That exact sentence is excused, nothing broader.
 const FRED_MAINTENANCE = fredMaintenanceError().message;
-const baseNotOurs = (s) => NOT_OURS_BASE.test(s) || String(s) === FRED_MAINTENANCE;
+const baseNotOurs = (s) => NOT_OURS_BASE.test(s) || String(s) === FRED_MAINTENANCE || SOURCE_ALLOWANCE_SPENT.test(s);
 if (!baseNotOurs(FRED_MAINTENANCE) || baseNotOurs("FRED returned no rows") || baseNotOurs(`${FRED_MAINTENANCE} x`)) {
   console.error("FAIL - control: only FRED's exact maintenance sentence is excused");
+  process.exit(1);
+}
+if (!baseNotOurs("The U.S. Bureau of Labor Statistics daily query allowance of this server is used up; retry tomorrow.") || baseNotOurs("us-macro-series: unsupported series id")) {
+  console.error("FAIL - control: a spent source allowance is excused, an unsupported series is not");
   process.exit(1);
 }
 let NOT_OURS = { test: baseNotOurs };
