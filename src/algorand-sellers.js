@@ -42,27 +42,71 @@ import { algorandProofBinding } from "./dispatch-eligibility.js";
 const GP_BASE = (process.env.ALGORAND_FACILITATOR_URL || "https://facilitator.goplausible.xyz").replace(/\/+$/, "");
 const TTL_MS = Number(process.env.ALGORAND_SELLERS_TTL_MS || 30 * 60 * 1000);
 const USDC_ASA = "31566704";
-const PAGE = 500;
-const MAX_PAGES = 40; // 20k resources — far above today's catalog, bounded forever
+// PAGING. The facilitator's listings answer at most 100 rows a page whatever
+// `limit` asks, and name the whole count in `pagination.total`. A loop that
+// stopped on a page shorter than the one it asked for read only the first
+// page. Each listing is read page by page, advancing by the rows each page
+// returned, until `pagination.total` (or an empty page, or a short page when
+// no total is named), and never past MAX_PAGES pages: a hostile or huge total
+// costs at most MAX_PAGES reads per listing per build, each under its own
+// time limit, and the build as a whole stays under its build limit. Rows past
+// the cap are not read: the router then knows fewer sellers, never wrong ones.
+const PAGE = 100;
+const MAX_PAGES = Math.max(1, Math.min(500, Number(process.env.ALGORAND_SELLERS_MAX_PAGES) || 80)); // 8,000 rows a listing
+// TIME LIMITS. A build started while a buyer waits (a cold catalog with no
+// build running) keeps the short per-read limit; the background build (the
+// boot warm-up and the scheduled refresh) reads with its own longer one,
+// since a cold merchant read was measured at about twice the short limit.
+const READ_TIMEOUT_MS = 15_000;
+const BG_READ_TIMEOUT_MS = Math.max(READ_TIMEOUT_MS, Number(process.env.ALGORAND_SELLERS_BG_READ_TIMEOUT_MS) || 60_000);
+const BUILD_MAX_MS = 120_000;
+const BG_BUILD_MAX_MS = Math.max(BUILD_MAX_MS, Number(process.env.ALGORAND_SELLERS_BG_BUILD_MAX_MS) || 10 * 60_000);
 
 let cache = { at: 0, resources: [] };
 let inFlight = null;
+let lastBuild = null; // { background, readTimeoutMs } of the last build started
+/** Which per-read limit the last build used (the offline test reads it). */
+export function algorandCatalogBuildInfo() {
+  return { ...(lastBuild || {}), readTimeoutMs: lastBuild?.readTimeoutMs ?? null, shortReadTimeoutMs: READ_TIMEOUT_MS, backgroundReadTimeoutMs: BG_READ_TIMEOUT_MS, maxPages: MAX_PAGES, pageSize: PAGE };
+}
 
-async function getJson(path) {
-  const res = await fetch(`${GP_BASE}${path}`, { signal: AbortSignal.timeout(15000), headers: { Accept: "application/json" } });
+async function getJson(path, timeoutMs = READ_TIMEOUT_MS) {
+  const res = await fetch(`${GP_BASE}${path}`, { signal: AbortSignal.timeout(timeoutMs), headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+/** Every row of one facilitator listing, page by page (PAGING above).
+ *  `read(path)` answers one page's JSON; `onRows(items)` takes each page.
+ *  Exported for the offline test. */
+export async function readListing(listPath, read, { onRows, maxPages = MAX_PAGES, pageSize = PAGE, deadline = Infinity } = {}) {
+  let offset = 0, pages = 0, total = null;
+  while (pages < maxPages) {
+    if (Date.now() > deadline) throw new Error("catalog build passed its time limit");
+    const j = await read(`${listPath}?limit=${pageSize}&offset=${offset}`);
+    pages++;
+    const items = Array.isArray(j?.items) ? j.items : [];
+    const t = Number(j?.pagination?.total);
+    if (Number.isSafeInteger(t) && t >= 0) total = t;
+    if (items.length) onRows?.(items);
+    offset += items.length;
+    if (!items.length) break;
+    if (total != null ? offset >= total : items.length < pageSize) break;
+  }
+  return { rows: offset, pages, total, capped: pages >= maxPages && (total == null || offset < total) };
 }
 
 // Algorand addresses are case-sensitive base32: kept exactly, never folded.
 const algoAddr = (a) => (typeof a === "string" && /^[A-Z2-7]{58}$/.test(a) ? a : null);
 
-async function build() {
+async function build({ background = false } = {}) {
+  const timeoutMs = background ? BG_READ_TIMEOUT_MS : READ_TIMEOUT_MS;
+  const deadline = Date.now() + (background ? BG_BUILD_MAX_MS : BUILD_MAX_MS);
+  lastBuild = { background, readTimeoutMs: timeoutMs };
+  const read = (path) => getJson(path, timeoutMs);
   const verifsByMerchant = new Map();
   const payToByMerchant = new Map();
-  for (let offset = 0; offset < MAX_PAGES * PAGE; offset += PAGE) {
-    const j = await getJson(`/discovery/merchants?limit=${PAGE}&offset=${offset}`);
-    const items = j.items || [];
+  await readListing("/discovery/merchants", read, { deadline, onRows: (items) => {
     for (const m of items) {
       if (typeof m?.id === "string") verifsByMerchant.set(m.id, Number(m.totalVerifications) || 0);
       // The merchant's receiving address, when the record names one (an id
@@ -70,12 +114,9 @@ async function build() {
       const addr = [m?.payTo, m?.address, m?.id].find(algoAddr);
       if (typeof m?.id === "string" && addr) payToByMerchant.set(m.id, addr);
     }
-    if (items.length < PAGE) break;
-  }
+  } });
   const resources = [];
-  for (let offset = 0; offset < MAX_PAGES * PAGE; offset += PAGE) {
-    const j = await getJson(`/discovery/resources?limit=${PAGE}&offset=${offset}`);
-    const items = j.items || [];
+  await readListing("/discovery/resources", read, { deadline, onRows: (items) => {
     for (const r of items) {
       const verifs = verifsByMerchant.get(r?.merchantId) || 0;
       // Only USDC-ASA exact accepts are payable from the AVM spending wallet;
@@ -104,8 +145,7 @@ async function build() {
         facilitatorPayTo: algoAddr(accept?.payTo) || payToByMerchant.get(r?.merchantId) || null,
       });
     }
-    if (items.length < PAGE) break;
-  }
+  } });
   return resources;
 }
 
@@ -223,14 +263,62 @@ export function makeIndexerInboundCount(getJson, bases) {
     return r.json.transactions.filter((t) => t?.["asset-transfer-transaction"]?.receiver === payTo && t?.sender !== payTo).length;
   };
 }
-export function setAlgorandCrawlSources({ crawledResources, countInbound } = {}) {
-  sources = { crawledResources: crawledResources || null, countInbound: countInbound || null };
+// `crawlReady()` (optional) says whether our own index has loaded: a build
+// made before it has folds in no crawled rows, so it is re-read in minutes
+// (like an unread count) rather than kept for the whole TTL.
+export function setAlgorandCrawlSources({ crawledResources, countInbound, crawlReady } = {}) {
+  sources = { crawledResources: crawledResources || null, countInbound: countInbound || null, crawlReady: typeof crawlReady === "function" ? crawlReady : null };
+}
+
+/** The catalog, never waiting more than `maxWaitMs` for a COLD build (no
+ *  completed build yet): `{ resources, warming }`. `warming: true` means the
+ *  first build is still running and this answer knows no seller yet; the
+ *  build goes on and fills the cache for the next call. With no `maxWaitMs`
+ *  a cold call waits for the build, as algorandCatalog() always did. */
+export async function algorandCatalogWithin(maxWaitMs = null, { background = false } = {}) {
+  startBuildIfStale({ background });
+  if (!cache.at && inFlight) {
+    if (maxWaitMs == null) await inFlight;
+    else {
+      let timer;
+      const timedOut = await Promise.race([
+        inFlight.then(() => false),
+        new Promise((r) => { timer = setTimeout(() => r(true), Math.max(0, Math.floor(maxWaitMs))); }),
+      ]);
+      clearTimeout(timer);
+      if (timedOut && !cache.at) return { resources: [], warming: true };
+    }
+  }
+  return { resources: cache.resources, warming: false };
+}
+
+/** Start a background build when the cache is stale (the boot warm-up and
+ *  the scheduled refresh): never awaited by a caller, never throws. */
+export function warmAlgorandCatalog() {
+  startBuildIfStale({ background: true });
+  return inFlight || Promise.resolve();
+}
+
+/** Warm the catalog now and keep it fresh on its own schedule (the TTL, or
+ *  the minutes-long re-read after an unread count or a failed build): a
+ *  check every `checkMs` that builds only when the cache is stale. Off the
+ *  request path; the timer never holds the process open. Returns a stop. */
+export function startAlgorandCatalogRefresh({ checkMs = 60_000 } = {}) {
+  warmAlgorandCatalog();
+  const t = setInterval(() => { warmAlgorandCatalog(); }, Math.max(1000, checkMs));
+  t.unref?.();
+  return () => clearInterval(t);
 }
 
 export async function algorandCatalog() {
+  return (await algorandCatalogWithin(null)).resources;
+}
+
+function startBuildIfStale({ background = false } = {}) {
   const stale = Date.now() - cache.at > TTL_MS;
   if (stale && !inFlight) {
-    inFlight = build()
+    let crawlWasReady = true;
+    inFlight = build({ background })
       .then(async (resources) => {
         // Our own index, folded in and then proven from the chain. Wrapped so a
         // failure in either half leaves the facilitator catalog exactly as it
@@ -239,22 +327,22 @@ export async function algorandCatalog() {
         let out = resources;
         try {
           if (typeof sources.crawledResources === "function") {
+            try { crawlWasReady = sources.crawlReady ? sources.crawlReady() !== false : true; } catch { crawlWasReady = false; }
             const { merged } = mergeCrawledResources(out, await sources.crawledResources());
             out = merged;
             await proveCrawledResources(out, sources.countInbound);
           }
         } catch { out = resources; }
-        // A count we could not read is not cached as one: the catalog is
-        // re-read in minutes (proveCrawledResources).
-        const unread = out.some((r) => r?.verifsUnknown === true);
+        // A count we could not read is not cached as one, and neither is a
+        // build made before our index loaded: the catalog is re-read in
+        // minutes (proveCrawledResources, crawlReady).
+        const unread = !crawlWasReady || out.some((r) => r?.verifsUnknown === true);
         cache = { at: unread ? Date.now() - TTL_MS + UNKNOWN_COUNT_RETRY_MS : Date.now(), resources: out };
       })
       // Keep the last known list; back-date so the next call retries in ~5 min.
       .catch(() => { cache.at = Date.now() - TTL_MS + 5 * 60 * 1000; })
       .finally(() => { inFlight = null; });
   }
-  if (!cache.at && inFlight) await inFlight; // build() rejection is swallowed above
-  return cache.resources;
 }
 
 const tokenize = (s) => String(s || "").toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 2);
@@ -312,4 +400,5 @@ export function algorandRouterCandidates(resources, task, { capUsd, minVerifs = 
 export function _resetForTest(resources = null) {
   cache = resources ? { at: Date.now(), resources } : { at: 0, resources: [] };
   inFlight = null;
+  lastBuild = null;
 }

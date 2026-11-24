@@ -601,7 +601,7 @@ import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers, markWeakMatches, markMissRows } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
-import { setAlgorandCrawlSources, makeIndexerInboundCount } from "./algorand-sellers.js";
+import { setAlgorandCrawlSources, makeIndexerInboundCount, startAlgorandCatalogRefresh } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus, NETWORK_VALUE_MAX } from "./x402-index.js";
@@ -1946,7 +1946,7 @@ async function labelledSnapshotAsync(snapshot) {
 }
 // The bound GET probe's timeout (the bare probe has 6 s): see resolveExternalSeller.
 const BOUND_PROBE_TIMEOUT_MS = 3000;
-async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null, params = null } = {}) {
+async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null, params = null, catalogWaitMs = null } = {}) {
   const sameUrl = (u) => { try { return new URL(u).href === new URL(onlyUrl).href; } catch { return false; } };
   // Filled by the dispatch gate below; read by route-execute when nothing
   // resolves, so the refusal can say which world it is in.
@@ -2015,9 +2015,16 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // else the facilitator's recorded receiving address) and the probe loop
     // below refuses it unless the live 402 asks us to pay that same one. A
     // row with no address to bind is not a candidate. Same shape out.
-    const { algorandCatalog, algorandRouterCandidates } = await import("./algorand-sellers.js");
+    // A COLD catalog (the first build after a boot still running) is waited
+    // on for at most `catalogWaitMs`, the payment's time budget less what the
+    // rest of the run needs; past it the resolver answers "warming" (gate
+    // reason catalog_warming) and route-execute refuses uncharged with a
+    // retry, instead of spending the whole budget and answering 504.
+    const { algorandCatalogWithin, algorandRouterCandidates } = await import("./algorand-sellers.js");
     const ourOrigin = (() => { try { return new URL(BASE_URL).origin.toLowerCase(); } catch { return ""; } })();
-    const algo = algorandRouterCandidates(await algorandCatalog(), task, { capUsd: cap, minVerifs: SOR_MIN_SETTLED_TX, excludeOrigin: ourOrigin, network: PAY_NETWORKS.algorand, limit: 5 });
+    const catalog = await algorandCatalogWithin(catalogWaitMs);
+    if (catalog.warming) gateDrops.byReason.catalog_warming = 1;
+    const algo = algorandRouterCandidates(catalog.resources, task, { capUsd: cap, minVerifs: SOR_MIN_SETTLED_TX, excludeOrigin: ourOrigin, network: PAY_NETWORKS.algorand, limit: 5 });
     candidates = algo.candidates;
     for (const [why, n] of Object.entries(algo.dropped)) {
       gateDrops.total += n;
@@ -15417,8 +15424,18 @@ bootStep("setAlgorandCrawlSources", () => {
     // The indexer's 404 is a definite 0; any other read that did not
     // complete is unknown (src/algorand-sellers.js makeIndexerInboundCount).
     countInbound: makeIndexerInboundCount(getJsonAcross, ALGORAND_INDEXER_BASES),
+    // A build made before the index loaded is re-read in minutes.
+    crawlReady: () => indexReadiness().ready,
   });
 });
+// The router is the catalog's only caller, so without a warm-up the first
+// Algorand route-execute call after a deploy waited on the whole build. Built
+// in the background at boot and refreshed on the catalog's own schedule, only
+// where the Algorand router can run (the AVM spending wallet is configured);
+// never awaited, so boot and listen never wait on the facilitator.
+if (avmBuyerConfigured() && process.env.ALGORAND_SELLERS_WARM !== "off") {
+  bootStep("algorandCatalogRefresh", () => { startAlgorandCatalogRefresh(); });
+}
 // A board rebuild that is due waits while an index crawl is in flight.
 addBoardRefreshQuietCheck(() => (crawlInProgress() ? "an index crawl is in flight" : null));
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh({

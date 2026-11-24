@@ -55,6 +55,8 @@ t node scripts/test-server-tools.js
 t node scripts/test-algorand-router.js
 # Algorand payTo binding: every candidate is paid only at the address its proof was counted at; no address, not dispatched (offline)
 t node scripts/test-algorand-payto-proof.js
+# Algorand seller catalog after a deploy: paging to the listing total under a page cap, background build limit, boot warm-up, cold catalog answers 503 uncharged within the payment budget (offline, stubbed facilitator)
+t node scripts/test-algorand-catalog-warm.js
 # Solana external routing: accept pinning (devnet never matches), env gate, pay-time proven-seller gate fails closed, offline e2e signed buy vs stub seller + stub RPC
 t node scripts/test-solana-router.js
 # PayAI Solana listing sweep: the diff between the routes sold on Solana and the registry's rows, from fixtures (offline)

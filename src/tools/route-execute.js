@@ -379,6 +379,14 @@ export function closedSentence(text) {
 /** The refusal while the spending wallet reads low; the charge sentence on a
  *  route call only (src/not-charged.js). */
 export const walletLowMessage = (req) => `Paying outside sellers is temporarily unavailable.${notChargedOn(req)} Retry later.`;
+/** A cold seller list (the first catalog build after a restart) is waited on
+ *  for at most the payment window's remaining time less this reserve: the 4 s
+ *  the run needs after resolution (the budget check below) plus one bound
+ *  probe (3 s) of the candidates the list yields. */
+export const CATALOG_WAIT_RESERVE_MS = 7000;
+export const CATALOG_WARMING_RETRY_AFTER_S = 30;
+/** The uncharged refusal while a chain's seller list is still loading. */
+export const catalogWarmingMessage = (req, chain) => `The list of outside sellers on ${chain} is still loading after a restart, so no seller was tried. Nothing was spent.${notChargedOn(req)} Retry in about ${CATALOG_WARMING_RETRY_AFTER_S} seconds.`;
 
 // Buyer payment network (CAIP-2) -> the external settlement chain it can fund.
 // External routing is SELF-FUNDING per chain: the buyer's settlement lands on
@@ -664,15 +672,26 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // publishes a model list without it is skipped before anything is
           // probed or paid (a seller can charge on the 400 it answers).
           const wantModel = typeof input.params?.model === "string" && input.params.model.trim() ? input.params.model.trim() : null;
-          let candidateList = []; let chain = chains[0]; let lastDrops = null; let lastNoMatch = null;
+          let candidateList = []; let chain = chains[0]; let lastDrops = null; let lastNoMatch = null; let warmingChain = null;
           for (const c of chains) {
-            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, params, ...(target ? { onlyUrl: target } : {}) });
+            // A seller list still loading (a cold catalog) is waited on for
+            // at most what this payment's window has left less the reserve
+            // the rest of the run needs; null (no window) waits as before.
+            const catalogWaitMs = windowBudgetMs != null ? Math.max(0, remainingMs() - CATALOG_WAIT_RESERVE_MS) : null;
+            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, params, catalogWaitMs, ...(target ? { onlyUrl: target } : {}) });
+            if (found && found.__gateDrops?.byReason?.catalog_warming) warmingChain = warmingChain || c;
             const list = Array.isArray(found) ? found : (found ? [found] : []);
             // Keep the tally from the LAST chain tried even when it resolved
             // nothing, or an all-empty run would report no reason at all.
             if (found && found.__gateDrops) lastDrops = found.__gateDrops;
             if (found && found.__judgedNoMatch) lastNoMatch = found.__judgedNoMatch;
             if (list.length) { candidateList = list; chain = c; break; }
+          }
+          // The seller list for this chain is still loading after a restart:
+          // nothing was tried and nothing spent. Answered at once, uncharged,
+          // with a short Retry-After, never as a spent time budget.
+          if (!candidateList.length && warmingChain) {
+            throw Object.assign(bad(catalogWarmingMessage(req, warmingChain), 503), { retryAfter: CATALOG_WARMING_RETRY_AFTER_S, attribution: "ours" });
           }
           if ((avmBudgetMs != null || svmBudgetMs != null) && remainingMs() < 4000) {
             throw bad(`Resolving an external seller used this payment's time budget. Nothing was spent.${notChargedOn(req)} Retry with a fresh payment, or pay this route over an EVM rail.`, 504);

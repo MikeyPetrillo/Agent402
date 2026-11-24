@@ -272,7 +272,7 @@ const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 {
   const { readFileSync } = await import("node:fs");
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/algorandRouterCandidates\(await algorandCatalog\(\), task,/.test(srv),
+  ok(/algorandRouterCandidates\(catalog\.resources, task,/.test(srv),
      "every Algorand candidate carries the address its proof was counted at (test-algorand-payto-proof.js drives it)");
   // The whole guard, not just its shape: `if (false && ...)` keeps every token
   // a looser pattern matches while disabling the refusal entirely, and that
