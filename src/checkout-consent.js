@@ -28,8 +28,8 @@ export function termsAcceptanceMessage(baseUrl) {
   return `I agree to the [Terms of Service](${b}/terms), including [binding individual arbitration and the class-action waiver](${b}/terms#disputes).`;
 }
 
-/** The report's line above the pay button: the refund rule, before purchase. */
-export const REPORT_REFUND_LINE = "One-time charge. Your report is generated once for this payment; if it cannot be generated, the charge is refunded automatically. A delivered report is final.";
+/** The report's line above the Stripe Checkout pay button (card path): the refund rule, before purchase. */
+export const REPORT_REFUND_LINE = "One-time charge. Your report is generated once for this payment; if it cannot be generated, the charge is refunded automatically to this card. A delivered report is final.";
 
 /** The follow-up email choice on a report checkout: on by default, off with one choice. */
 export const FOLLOWUPS_FIELD = Object.freeze({
