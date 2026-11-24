@@ -18,7 +18,8 @@
 //      (the published examples, the listing, the kit), or import the floor
 //      constant (scripts/sync-count.js CATALOG_FLOOR, BRAND_FLOOR,
 //      PACK_BRAND_FLOOR), which this scan accepts.
-//   2. Public markdown (README.md, wiki/, docs/, the package READMEs): a
+//   2. Public markdown (README.md, wiki/, docs/, the package READMEs) and
+//      the served page modules (src/pages.js, src/guides.js and the rest): a
 //      number typed before what the catalog counts (tools, endpoints, routes,
 //      packs, series, indicators, chains, sources). The evergreen "500+
 //      tools" is the one public count (CLAUDE.md); anything else is derived
@@ -75,6 +76,19 @@ function mdFindings(text) {
   return out;
 }
 
+// A served page module (the copy surfaces test-copy-absolutes reads: pages,
+// guides, learn, seo, terms, privacy and the rest): the markdown scan on its
+// lines, comment lines skipped.
+export const PAGE_MODULE = /^src\/[\w-]*(?:page|pages|guides?|learn|seo|blog|skill-md|how-to-pay|what-is-x402|webhooks|terms|privacy|company|glossary|faq|why|docs|integration|front-door)[\w-]*\.js$/;
+function pageFindings(text) {
+  const out = [];
+  text.split("\n").forEach((line, i) => {
+    if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+    for (const m of line.matchAll(MD_TYPED)) if (!MD_ACCEPT(m)) out.push({ line: i + 1, text: m[0].trim() });
+  });
+  return out;
+}
+
 // ---- controls: each past instance is caught, the accepted forms are not ----
 for (const [t, want] of [
   ["ok(counts.fred >= 8 && counts.jupiter >= 5, \"x\")", 2],
@@ -99,6 +113,14 @@ for (const [t, want] of [
   ["Timeout is 30 seconds.", 0],
 ]) ok(mdFindings(t).length === want, `control (markdown): ${JSON.stringify(t)} gives ${want} finding(s) (${mdFindings(t).length})`);
 
+for (const [t, want] of [
+  ["  <p>Agent402 serves 612 tools an agent can pay for.</p>", 1],
+  ["  const lead = `Pay for ${n} tools`;", 0],
+  ["  // 612 tools in a comment is not served copy", 0],
+  ["  <p>500+ tools on one key.</p>", 0],
+]) ok(pageFindings(t).length === want, `control (page modules): ${JSON.stringify(t.trim())} gives ${want} finding(s) (${pageFindings(t).length})`);
+ok(PAGE_MODULE.test("src/pages.js") && PAGE_MODULE.test("src/guides.js") && PAGE_MODULE.test("src/integration-pages.js") && !PAGE_MODULE.test("src/server.js") && !PAGE_MODULE.test("src/tools/web-kit.js"), "control (page modules): the served page modules are read, the server and the kits are not");
+
 // ---- the scan ----
 const files = [];
 for (const f of readdirSync(join(ROOT, "scripts"))) if (/^test-.*\.js$/.test(f) && f !== "test-typed-counts.js") files.push(["test", join(ROOT, "scripts", f)]);
@@ -106,11 +128,13 @@ const mdWalk = (d) => { if (!existsSync(d)) return; for (const f of readdirSync(
 mdWalk(join(ROOT, "wiki"));
 mdWalk(join(ROOT, "docs"));
 for (const p of ["README.md", "mcp/README.md", "client/README.md", "tollbooth/README.md", "openclaw/README.md"]) if (existsSync(join(ROOT, p))) files.push(["md", join(ROOT, p)]);
+for (const f of readdirSync(join(ROOT, "src"))) if (PAGE_MODULE.test(`src/${f}`)) files.push(["page", join(ROOT, "src", f)]);
+ok(files.filter(([k]) => k === "page").length >= 20 && files.some(([k, p]) => k === "page" && p.endsWith("/src/pages.js")), `the scan reads the served page modules (${files.filter(([k]) => k === "page").length})`);
 for (const d of existsSync(join(ROOT, "adapters")) ? readdirSync(join(ROOT, "adapters")) : []) { const p = join(ROOT, "adapters", d, "README.md"); if (existsSync(p)) files.push(["md", p]); }
 
 const found = {};
 for (const [kind, p] of files) {
-  const f = (kind === "test" ? testFindings : mdFindings)(readFileSync(p, "utf8"));
+  const f = (kind === "test" ? testFindings : kind === "page" ? pageFindings : mdFindings)(readFileSync(p, "utf8"));
   if (f.length) found[relative(ROOT, p)] = f;
 }
 if (LIST) for (const [f, list] of Object.entries(found)) for (const x of list) console.log(`  ${f}:${x.line}: ${x.text}`);
@@ -143,6 +167,7 @@ const BASELINE = {
   "scripts/test-stock-copy-off.js": 1,
   "scripts/test-web-kit.js": 1,
   "scripts/test-x-data-kit.js": 1,
+  "src/blog.js": 1, // a dated post's history ("We started with 50 tools in the first week")
   "wiki/AWS-Bedrock-AgentCore.md": 1,
   "wiki/MCP-Connector.md": 1,
   "wiki/Tool-Catalog.md": 1,

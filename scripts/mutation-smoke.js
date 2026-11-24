@@ -57,6 +57,8 @@ export const MUTATIONS = [
     find: 'update(mailboxKey(String(b.email || "")))', replace: 'update(String(b.email || "").trim().toLowerCase())', suite: "test-limiter-identity.js" },
   { id: "typed-source-floor", origin: "batch 7 (fred >= 8, jupiter >= 5)", file: "scripts/test-bazaar-descriptions.js",
     find: 'ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0), ', replace: 'ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0) && counts.coingecko >= 24, ', suite: "test-typed-counts.js" },
+  { id: "typed-count-in-page-module", origin: "batch 8 devil (a count typed in a served page module)", file: "src/pages.js",
+    find: "  const item = (it, open) =>", replace: "  const planted = `<p>Agent402 serves 612 tools today.</p>`; void planted;\n  const item = (it, open) =>", suite: "test-typed-counts.js" },
   { id: "new-unscoped-absolute", origin: "batch 8 (the class of batches 6 and 7: a claim broader than the code)", file: "wiki/FAQ.md",
     find: "so they are never charged.", replace: "so they are never charged. A refund always arrives within a day.", suite: "test-claim-registry.js" },
   { id: "code-mail-refusal-keeps-counts", origin: "batch 8 devil (a refused ask kept its counts)", file: "src/mcp-oauth.js",
