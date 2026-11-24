@@ -36,7 +36,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[Paying with x402]] | USDC payments: the 402 flow, code, spend controls, Stripe's `purl` |
 | [[Paying with MPP]] | The Machine Payments Protocol wire: `WWW-Authenticate: Payment`, mppx clients, Base/Celo, native Tempo settlement, cards over MPP, native MPP on the `/mcp` connector |
 | [[Paying with Compute]] | The proof-of-work tier: spec + reference solver |
-| [[MCP Connector]] | Hosted connector (dotted tools: `catalog.find`, `catalog.call`, `web.search`, …, payable in the call over x402 or MPP) + the `agent402-mcp` npm server (wallet or prepaid credits) |
+| [[MCP Connector]] | Hosted connector (dotted tools: `catalog.find`, `catalog.call`, `pdf.markdown`, …, payable in the call over x402 or MPP) + the `agent402-mcp` npm server (wallet or prepaid credits) |
 | [[Adapters]] | Drop-in tools for OpenAI / Anthropic / AI SDK / LangChain / LlamaIndex |
 | [[agent402-client]] | The buyer SDK: find a tool, call it, payment handled (proof-of-work, wallet, credits key or a Circle Gateway deposit) |
 | [[Amazon Bedrock AgentCore|AWS-Bedrock-AgentCore]] | Call Agent402 from an AgentCore-hosted agent through AgentCore Payments and the Gateway |

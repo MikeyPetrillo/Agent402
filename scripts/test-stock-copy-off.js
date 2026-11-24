@@ -119,7 +119,7 @@ for (const f of samples) {
   const flag = (d) => /Flagships:[^;]*\bmarket data\b/.test(d);
   ok(!flag(mcpServerDescription({ stock: false })) && flag(mcpServerDescription({ stock: true })), "the hosted serverInfo description names the market data flagship only with a stock provider");
   ok(!flag(HOSTED) && !flag(STDIO), "the published descriptions (hosted default, stdio package) name no market data flagship");
-  ok(/description: mcpServerDescription\(\{[^}]*\bstock: stockDataEnabled\(\)/.test(readFileSync(join(ROOT, "src/mcp-http.js"), "utf8")), "the hosted connector's description reads the stock switch");
+  ok(/description: (?:plainText\()?mcpServerDescription\(\{[^}]*\bstock: stockDataEnabled\(\)/.test(readFileSync(join(ROOT, "src/mcp-http.js"), "utf8")), "the hosted connector's description reads the stock switch");
   const line = (llmsTxt("https://example.test", []).split("\n").find((l) => l.includes("Hosted MCP connector")) || "");
   ok(line && !/render\/data\//.test(line) && (stockDataEnabled() ? /\/quote\//.test(line) : !/\/quote\//.test(line)), `llms.txt names the quote flagship only with a stock provider (${line.slice(0, 120)})`);
 }

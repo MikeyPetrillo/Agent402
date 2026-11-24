@@ -65,8 +65,9 @@ catalog without that check.
   re-runs weekly.
 - **MCP:** hosted connector `https://agent402.tools/mcp` (dotted tools:
   `catalog.search`, `catalog.find`, `catalog.call`, `payment.info`,
-  `server.describe`, `demand.request` (and `sellers.list` when a wallet is set), plus flagship
-  tools such as `browser.render`, `memory.read` and `memory.write`); wallet-only tools are payable on the connector
+  `server.describe`, `demand.request` (and `sellers.list` when a wallet is set), plus flagships `pdf.markdown`,
+  `macro.series`, `weather.current`, `browser.render`, `audio.transcribe`,
+  `memory.read`, `memory.write`); wallet-only tools are payable on the connector
   in the call, over x402 or MPP (the offer arrives in the tool result, the
   payment goes back in `_meta`). npm: `agent402-mcp` (stdio, pays by
   wallet or credits key), `agent402-client` (buyer SDK), `agent402-tollbooth`

@@ -119,12 +119,12 @@ function assertAccess(label, text, powCount, wires) {
   const catOn = cat(3, "$0.777");
   const on = frontDoorMarkdown(catOn, B);
   ok(firstCallAllowanceEnabled() && FIRST_CALL_FREE_COPY.test(on), "unit: switch on, the access line offers the free first call");
-  ok(on.includes(`to ${FLAGSHIP_MCP_NAMES.answer} or ${frontName} (at or under $0.90)`), "unit: the clause names the eligible tools and the cap from the allowance config");
+  ok(on.includes(`to answer or ${frontName} (at or under $0.90)`), "unit: the clause names the eligible tools (a tool that is not a flagship by its slug) and the cap from the allowance config");
   ok([agentsMd(B, catOn), JSON.stringify(frontDoorJson(catOn, B)), JSON.stringify(frontDoor402Json(catOn, B))].every((s) => FIRST_CALL_FREE_COPY.test(s)), "unit: switch on, agents.md, the JSON block and the 402 part carry the clause (the JSON memo follows the switch)");
   ok(agentsMd(B, catOn).includes("nor for a free first call (a re-send of its payment inside the replay window is refused and not charged)"), "unit: switch on, the replay line excludes a free first call");
   process.env.FIRST_CALL_ALLOWANCE_MAX_USD = "0.6";
   const capped = frontDoorMarkdown(catOn, B);
-  ok(capped.includes(`to ${FLAGSHIP_MCP_NAMES.answer} (at or under $0.60)`) && !new RegExp(`call to [^(]*${frontName.replace(".", "\\.")}`).test(capped), "unit: a tool over the cap is left out of the clause");
+  ok(capped.includes("to answer (at or under $0.60)") && !new RegExp(`call to [^(]*\\b${frontName}\\b`).test(capped), "unit: a tool over the cap is left out of the clause");
   process.env.FIRST_CALL_ALLOWANCE = "off";
   ok(!agentsMd(B, catOn).includes("free first call (a re-send"), "unit: switch off, the replay line does not mention a free first call");
   ok(!FIRST_CALL_FREE_COPY.test(frontDoorMarkdown(catOn, B)) && !FIRST_CALL_FREE_COPY.test(JSON.stringify(frontDoorJson(catOn, B))), "unit: switch back off, the clause is gone from markdown and the memoized JSON");
@@ -318,7 +318,7 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
   const assertFirstCall = (label, text) => {
     ok(text.includes(`${PRICE} per call`), `${label}: the first call quotes the catalog price ${PRICE}`);
     ok(strip(text).includes(`${row.method} ${BASE_URL}${row.path}?${FRONT_DOOR_QUERY}`), `${label}: ...and the catalog route ${ROUTE}`);
-    ok(text.startsWith(mcpName), `${label}: ...named by its MCP name ${mcpName}`);
+    ok(strip(text).startsWith(mcpName), `${label}: ...named ${mcpName}`);
     const priced = [...text.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((m) => `$${m[1]}`);
     const catalogPrices = new Set((pricing.endpoints || []).map((e) => e.price));
     ok(priced.length >= 1 && priced.every((p) => catalogPrices.has(p)), `${label}: every price in the first-call line is a catalog price (${priced.join(", ")})`);
@@ -488,7 +488,7 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
     const e = (s.pricing.endpoints || []).find((x) => x.slug === slug);
     return e ? Number(String(e.price).replace(/[^0-9.]/g, "")) : NaN;
   };
-  ok(named.length > 0 && named.every((n) => priceOf(n) > 0 && priceOf(n) <= cap), `on: every tool the clause names is a catalog route at or under the cap (${named.join(", ")})`);
+  ok(named.length > 0 && named.includes(FLAGSHIP_MCP_NAMES["pdf-to-markdown"]) && named.every((n) => priceOf(n) > 0 && priceOf(n) <= cap), `on: every tool the clause names is a catalog route at or under the cap, pdf.markdown among them (${named.join(", ")})`);
   ok(named.every((n) => Object.values(FLAGSHIP_MCP_NAMES).includes(n)), "on: with no slug list set, the clause names flagships only");
   stopProc();
 }

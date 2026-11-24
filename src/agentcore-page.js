@@ -116,7 +116,7 @@ export function agentcorePage(baseUrl, catalog = {}, { tempo = tempoEnabled(), e
       <p ${P}>Each catalog route is one operation in the document, with its ${code("operationId")} and input schema.</p>
       <h3 ${H3}>MCP server target</h3>
       ${pre(`agentcore add gateway-target \\\n  --name Agent402MCP \\\n  --type mcp-server \\\n  --endpoint ${baseUrl}/mcp \\\n  --gateway Agent402Gateway \\\n  --outbound-auth NONE\nagentcore deploy --yes`)}
-      <p ${P}>The connector takes no authentication. Its tools include ${code("web.search")}, ${code("web.answer")}, ${code("catalog.search")}, ${code("catalog.find")} and ${code("catalog.call")}, and ${code("catalog.call")} runs a catalog tool by slug. The pure-CPU tools run free on the connector, rate-limited per client.</p>
+      <p ${P}>The connector takes no authentication. Its tools include ${code("pdf.markdown")}, ${code("weather.current")}, ${code("catalog.search")}, ${code("catalog.find")} and ${code("catalog.call")}, and ${code("catalog.call")} runs a catalog tool by slug. The pure-CPU tools run free on the connector, rate-limited per client.</p>
     </section>
 
     <section id="pay" style="margin-bottom:34px;">

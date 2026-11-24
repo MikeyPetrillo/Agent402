@@ -99,7 +99,7 @@ This is a streamable-HTTP MCP server. Four meta-tools drive it - `catalog.search
 (browse candidates), `catalog.find` (resolve a task to one pick), `catalog.call`
 (run by slug) and `payment.info` (how paying and spend caps work) - alongside
 `server.describe`, `demand.request` (`sellers.list` too when a wallet is set) and the flagship tools listed
-first-class by name (`web.search`, `web.answer`, `web.news`, `browser.render`,
+first-class by name (`pdf.markdown`, `macro.series`, `weather.current`, `browser.render`,
 `audio.transcribe`, `memory.read`, `memory.write`). A
 Cloudflare Agent can connect to it as a remote MCP server:
 

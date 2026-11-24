@@ -64,7 +64,13 @@ const TOTAL_MS = Number(process.env.MCP_CHECK_TOTAL_TIMEOUT_MS) || 180_000;
 const META_TOOLS = ["catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe", "demand.request"];
 // sellers.list is listed only on a connector that opts in (AGENT402_SHOW_ROUTER=1);
 // it is checked when listed and never required.
-const CORE_FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news", "browser.render", "audio.transcribe", "memory.read", "memory.write"];
+const CORE_FLAGSHIP_TOOLS = ["pdf.markdown", "weather.current", "browser.render", "audio.transcribe", "memory.read", "memory.write"];
+// The former flagships: callable by these names, never listed.
+const FORMER_FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news"];
+// macro.series is a flagship exactly when the catalog lists its slug, read
+// from /api/pricing as the stock listing is.
+const MACRO_FLAGSHIP = "macro.series";
+const MACRO_SLUG = "us-macro-series";
 // market.quote is a flagship exactly when the server's catalog lists
 // stock-quote (a server with no stock data provider lists neither), so the
 // expected set is read from the live catalog (/api/pricing) before tools/list.
@@ -155,6 +161,7 @@ if (!connected) finish(MODERN ? "could not discover" : "could not initialize");
 
 // 2. the catalog's stock listing, then tools/list
 let stockListed = null;
+let macroListed = null;
 await check(`catalog: /api/pricing reads, and says whether ${STOCK_SLUG} is listed`, async () => {
   const ctl = AbortSignal.timeout(PER_CALL_MS);
   const res = await fetch(`${base}/api/pricing`, { signal: ctl, headers: { accept: "application/json" } });
@@ -162,9 +169,10 @@ await check(`catalog: /api/pricing reads, and says whether ${STOCK_SLUG} is list
   const j = await res.json();
   assert(Array.isArray(j?.endpoints) && j.endpoints.length > 0, "endpoints missing or empty");
   stockListed = j.endpoints.some((e) => e?.slug === STOCK_SLUG);
-  return stockListed ? `${STOCK_SLUG} listed` : `${STOCK_SLUG} not listed`;
+  macroListed = j.endpoints.some((e) => e?.slug === MACRO_SLUG);
+  return `${stockListed ? `${STOCK_SLUG} listed` : `${STOCK_SLUG} not listed`}, ${macroListed ? `${MACRO_SLUG} listed` : `${MACRO_SLUG} not listed`}`;
 });
-const FLAGSHIP_TOOLS = stockListed ? [...CORE_FLAGSHIP_TOOLS.slice(0, 4), STOCK_FLAGSHIP, ...CORE_FLAGSHIP_TOOLS.slice(4)] : CORE_FLAGSHIP_TOOLS;
+const FLAGSHIP_TOOLS = [...CORE_FLAGSHIP_TOOLS, ...(macroListed ? [MACRO_FLAGSHIP] : []), ...(stockListed ? [STOCK_FLAGSHIP] : [])];
 const EXPECTED_TOOLS = [...META_TOOLS, ...FLAGSHIP_TOOLS];
 
 let listed = [];
@@ -176,6 +184,9 @@ await check("tools/list: every expected dotted tool is listed with a description
   assert(missing.length === 0, `missing: ${missing.join(", ")} (listed: ${tools.map((t) => t.name).join(", ")})`);
   // The other direction: never a flagship for a tool the catalog does not sell.
   assert(stockListed !== false || !byName.has(STOCK_FLAGSHIP), `${STOCK_FLAGSHIP} is listed but the catalog does not list ${STOCK_SLUG}`);
+  assert(macroListed !== false || !byName.has(MACRO_FLAGSHIP), `${MACRO_FLAGSHIP} is listed but the catalog does not list ${MACRO_SLUG}`);
+  const former = FORMER_FLAGSHIP_TOOLS.filter((n) => byName.has(n));
+  assert(former.length === 0, `former flagships are listed: ${former.join(", ")}`);
   const bad = [];
   for (const t of tools) {
     if (typeof t.description !== "string" || !t.description.trim()) bad.push(`${t.name}: empty description`);
@@ -241,9 +252,11 @@ await check("catalog.call: the free hash tool runs on the free tier and matches 
 // a payment ask shaped as structured content is thrown as -32602 before a
 // host ever sees it.
 const UNPAID_CALLS = [
+  ["pdf.markdown", { url: "https://example.com/a.pdf" }],
+  ["weather.current", { lat: 48.86, lon: 2.35 }],
+  ...(macroListed ? [[MACRO_FLAGSHIP, { seriesId: "UNRATE" }]] : []),
+  // A former flagship, called by its old name: unlisted, still the same pointer.
   ["web.search", { q: "x402" }],
-  ["web.answer", { q: "what is x402" }],
-  ["web.news", { q: "x402" }],
   ["browser.render", { url: "https://example.com" }],
   ...(stockListed ? [[STOCK_FLAGSHIP, { symbol: "AAPL" }]] : []),
   ["audio.transcribe", { url: "https://example.com/a.mp3" }],

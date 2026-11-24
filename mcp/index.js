@@ -54,6 +54,7 @@ import { Server, ProtocolError, ProtocolErrorCode as ErrorCode } from "@modelcon
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import {
   FLAGSHIP_MCP_NAMES,
+  FORMER_FLAGSHIP_MCP_NAMES,
   META_MCP_NAMES,
   resolveListedName,
   FLAGSHIP_OUTPUT_SCHEMAS,
@@ -278,8 +279,8 @@ function signAllowance() {
 
 const DEFAULT_CURATED = [
   // Flagship demand set, keep aligned with src/mcp-flagship.js FLAGSHIP_SLUGS.
-  // Search/answer is the front door; long tail stays behind catalog.search/catalog.call.
-  "search", "answer", "search-news", "render",
+  // The long tail stays behind catalog.search/catalog.call.
+  "pdf-to-markdown", "us-macro-series", "weather-current", "render",
   "stock-quote", "transcribe", "memory-read", "memory-write",
   // Present only on hosts running the decide service; skipped elsewhere.
   "decide", "decide-execute",
@@ -1304,7 +1305,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
           npm: "npx -y agent402-mcp@0.17.0",
           maintainer: "Havok Holdings LLC",
         },
-        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Flagship search/answer first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
+        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Flagship tools first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
         ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog.",
       });
     }
@@ -1315,7 +1316,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
         maintainer: "Havok Holdings LLC",
         positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, over x402 or MPP (Machine Payments Protocol) - both answered on the same 402. ${BASE}/agentic-finance, ${BASE}/glossary.`,
         startHere: {
-          firstJob: "Search the web and answer questions. Call web.search or web.answer directly, or catalog.find with your task.",
+          firstJob: "Call a flagship tool directly (pdf.markdown, macro.series, weather.current, browser.render), or catalog.find with your task and catalog.call to run any catalog tool by slug.",
           mode: HAS_WALLET ? "usdc" : HAS_CREDITS ? "credits" : "proof-of-work",
         },
         install: {
@@ -1447,7 +1448,8 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
     }
     // Curated tools are exposed verb_noun for tools/list consistency, but the
     // real slug is kebab, accept exposed name, plain snake, or raw slug.
-    const mcpToSlug = new Map(Object.entries(FLAGSHIP_MCP_NAMES).map(([slug, mcp]) => [mcp, slug]));
+    // Former flagships (web.search and the rest) stay callable by name.
+    const mcpToSlug = new Map([...Object.entries(FORMER_FLAGSHIP_MCP_NAMES), ...Object.entries(FLAGSHIP_MCP_NAMES)].map(([slug, mcp]) => [mcp, slug]));
     const wanted = name === "catalog.call"
       ? String(args.slug ?? "")
       : (catalog.has(name) ? name

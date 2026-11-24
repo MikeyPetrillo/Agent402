@@ -19,7 +19,9 @@ LLC: credit the entity, never a personal name.
 - `src/pow.js`: proof-of-work tier. `WALLET_ONLY_SLUGS` = tools with no free tier.
 - `src/mcp-http.js`: hosted MCP connector at `/mcp` (dotted tool names: `catalog.search`,
   `catalog.find`, `catalog.call`, `payment.info`, `server.describe`, `sellers.list`,
-  `demand.request`, flagship aliases). Old snake names remain CallTool aliases only.
+  `demand.request`, the flagships `pdf.markdown`, `macro.series`, `weather.current`, `browser.render`,
+  `audio.transcribe`, `memory.*`). Old snake names, and the former flagships `web.search`, `web.news`
+  and `web.answer`, remain CallTool aliases only.
 - `src/mcp-oauth.js`, `src/mcp-oauth-page.js`: connector sign-in (OAuth 2.1, off unless `MCP_OAUTH=on` and
   credits on sale): an app pays for tool calls from one credits key under a daily cap (`.claude/rules/mcp.md`).
 - `src/mcp-mpp.js`, `src/mcp-tasks.js`, `src/mcp-skills.js`, `src/mcp-x402.js`, `src/mcp-x402-routes.js`:
@@ -285,7 +287,8 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   `BAZAAR_PRESENCE_MAX_USD` caps one run's buy (default 2; more than 10 routes also refuses).
   One issue opens on a route missing two checks in a row, or three unreadable checks in a row.
 - `bazaar-mcp-listings.yml` buys the hosted connector's MCP tool listings (the six fixed-price
-  flagship tools, `scripts/lib/mcp-listings.js`) through the connector's x402 transport, once each:
+  flagship tools: pdf.markdown, macro.series, weather.current, market.quote, browser.render,
+  memory.read; `scripts/lib/mcp-listings.js`) through the connector's x402 transport, once each:
   `refresh-bazaar.js` MODE=mcp takes an explicit list (catalog slugs or dotted tool names) and
   refuses the run on any other entry. It signs only an offer that pays the address the server
   publishes at `/.well-known/x402`, holds exactly one plain exact USDC accept on Base at the list
@@ -298,7 +301,8 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   listings (`/mcp#<tool>`), names in its log each one that was listed and left, pages on one
   missing two checks in a row under its own issue (fixed text, never the route issue) whatever
   that switch says, and never buys one;
-  `bazaar-validate.js --mcp` checks the offers.
+  `bazaar-validate.js --mcp` checks the offers. A listing retired by a deliberate flagship change
+  (`RETIRED_MCP_LISTING_TOOLS`) is logged as expected while it stays in the feed and never counted.
 - The heartbeat also pages (one issue) on a security advisory in triage longer than the repo
   variable `ADVISORY_TRIAGE_MAX_HOURS` (default 24), and on a read it cannot make
   (`scripts/advisory-triage-check.js`): it reads with the Actions secret `ADVISORY_READ_TOKEN`

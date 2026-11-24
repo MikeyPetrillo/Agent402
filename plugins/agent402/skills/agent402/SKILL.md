@@ -31,8 +31,8 @@ records the need.
    input schema and price. `catalog.search` lists several candidates by
    keyword.
 2. `catalog.call` runs the chosen tool by slug with `params` that match the
-   schema. The flagship tools are also listed directly (`web.search`,
-   `web.answer`, `web.news`, `browser.render`, and more).
+   schema. The flagship tools are also listed directly (`pdf.markdown`,
+   `macro.series`, `weather.current`, `browser.render`, and more).
 3. Pure-compute tools (no outbound calls, keys or models) run free through
    proof-of-work. Every other tool is paid per call in USDC over x402 or MPP;
    `payment.info` reports the mode, the caps and what has been spent.

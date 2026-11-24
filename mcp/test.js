@@ -559,10 +559,11 @@ try {
   for (const t of tools) if ((t.description || "").length > 400) fail(`${t.name} description is ${t.description.length} characters (limit 400)`);
   // market.quote is first-class exactly when the API's catalog lists
   // stock-quote (a server with no stock data provider lists neither).
-  const stockListed = (await (await fetch(`${API}/api/pricing`)).json()).endpoints.some((e) => e.slug === "stock-quote");
+  const apiSlugs = new Set((await (await fetch(`${API}/api/pricing`)).json()).endpoints.map((e) => e.slug));
+  const stockListed = apiSlugs.has("stock-quote");
   for (const required of [
     "catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe",
-    "web.search", "web.answer", "web.news", "browser.render", ...(stockListed ? ["market.quote"] : []),
+    "pdf.markdown", ...(apiSlugs.has("us-macro-series") ? ["macro.series"] : []), "weather.current", "browser.render", ...(stockListed ? ["market.quote"] : []),
     "audio.transcribe", "memory.read", "memory.write",
   ]) {
     if (!names.includes(required)) fail(`tools/list missing "${required}" (got: ${names.join(", ")})`);
@@ -572,6 +573,8 @@ try {
   for (const hidden of ["sellers.list", "router.execute"]) {
     if (names.includes(hidden)) fail(`tools/list lists "${hidden}" without a wallet (got: ${names.join(", ")})`);
   }
+  // The former flagships are callable by their old names, never listed.
+  for (const former of ["web.search", "web.answer", "web.news"]) if (names.includes(former)) fail(`tools/list lists the former flagship ${former} (got: ${names.join(", ")})`);
   if (names.some((n) => n.includes("-"))) fail(`tools/list names must not use kebab, found: ${names.filter((n) => n.includes("-")).join(", ")}`);
   if (
     names.includes("payment_info") || names.includes("top_x402_sellers") ||
@@ -590,8 +593,11 @@ try {
   if (kebabCall.isError && /Unknown tool/i.test(text(kebabCall))) fail("kebab slug memory-write must still resolve (backward compat)");
   if (tools.length > 20) fail(`tools/list too large (${tools.length}) — must stay flagship-sized, not dump the catalog`);
   if (tools.length < 10) fail(`tools/list too small (${tools.length}) — flagships + meta missing`);
-  const searchTool = tools.find((t) => t.name === "web.search");
-  if (!searchTool?.inputSchema?.properties?.q) fail("web.search tool lost its input schema");
+  const pdfTool = tools.find((t) => t.name === "pdf.markdown");
+  if (!pdfTool?.inputSchema?.properties?.url) fail("pdf.markdown tool lost its input schema");
+  // A former flagship's name still reaches its tool (no query: answered before any read).
+  const formerCall = await client.callTool({ name: "web.search", arguments: {} });
+  if (/Unknown tool/i.test(text(formerCall))) fail(`the former flagship name web.search must still resolve: ${text(formerCall).slice(0, 200)}`);
   if (!tools.every((t) => t.outputSchema?.type === "object" && t.outputSchema?.properties && Object.keys(t.outputSchema.properties).length > 0)) {
     fail("every tools/list entry must carry a named-field outputSchema");
   }
@@ -607,7 +613,7 @@ try {
     if (!is("catalog.find", { readOnlyHint: true, destructiveHint: false, openWorldHint: true })) fail(`catalog.find is a read-only open-world lookup: ${JSON.stringify(ann("catalog.find"))}`);
     if (!is("catalog.call", { readOnlyHint: false, destructiveHint: true, openWorldHint: true })) fail(`catalog.call can charge and write: ${JSON.stringify(ann("catalog.call"))}`);
     if (!is("memory.write", { readOnlyHint: false, destructiveHint: true })) fail(`memory.write replaces a value: ${JSON.stringify(ann("memory.write"))}`);
-    if (!is("web.search", { readOnlyHint: false, destructiveHint: false, openWorldHint: true })) fail(`a paid flagship is not read-only: ${JSON.stringify(ann("web.search"))}`);
+    if (!is("pdf.markdown", { readOnlyHint: false, destructiveHint: false, openWorldHint: true })) fail(`a paid flagship is not read-only: ${JSON.stringify(ann("pdf.markdown"))}`);
     if (!is("payment.info", { readOnlyHint: true }) || !is("server.describe", { readOnlyHint: true })) fail("payment.info and server.describe are read-only");
     console.log("tool annotations: lookups read-only, catalog.call and memory.write destructive ✓");
   }

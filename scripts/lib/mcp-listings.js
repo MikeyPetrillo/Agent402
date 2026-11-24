@@ -17,13 +17,18 @@ import { usdMicros, exemptKind } from "./keepalive-plan.js";
  *  own list is MCP_X402_SLUGS x FLAGSHIP_MCP_NAMES (src/mcp-x402-routes.js,
  *  src/mcp-flagship.js); scripts/test-mcp-listing-tools.js holds the two equal. */
 export const MCP_LISTING_TOOLS = Object.freeze({
-  search: "web.search",
-  "search-news": "web.news",
-  answer: "web.answer",
+  "pdf-to-markdown": "pdf.markdown",
+  "us-macro-series": "macro.series",
+  "weather-current": "weather.current",
   "stock-quote": "market.quote",
   render: "browser.render",
   "memory-read": "memory.read",
 });
+/** MCP tool listings this server no longer offers (a deliberate flagship
+ *  change): the Bazaar may keep their rows for a while after the twins are
+ *  gone. The presence check logs one still in the feed as expected and never
+ *  counts it seen or missing; a buy or validation never names one. */
+export const RETIRED_MCP_LISTING_TOOLS = Object.freeze(["web.search", "web.news", "web.answer"]);
 export const MCP_ENDPOINT_PATH = "/mcp";
 export const MCP_LISTING_TRANSPORT = "streamable-http";
 export const MCP_LISTING_NETWORK = "eip155:8453";

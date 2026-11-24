@@ -98,7 +98,7 @@ for (const mpp of [true, false]) {
 ok(mcpServerDescription() === HOSTED_DESC && HOSTED_DESC === STDIO_DESC, "the default description is the published one, identical to the stdio package's");
 {
   const src = read("src/mcp-http.js");
-  ok(/description: mcpServerDescription\(\{ mpp: payWires \? Boolean\(payWires\.mpp\) : mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\), stock: stockDataEnabled\(\) \}\)/.test(src), "the hosted connector's description reads the mount's pay wires (the MPP switch without them) and the receipt switch");
+  ok(/description: (?:plainText\()?mcpServerDescription\(\{ mpp: payWires \? Boolean\(payWires\.mpp\) : mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\), stock: stockDataEnabled\(\) \}\)/.test(src), "the hosted connector's description reads the mount's pay wires (the MPP switch without them) and the receipt switch");
   // The initialize lead names MPP from the mount's own pay wires (the boot's
   // account, src/connector-pay.js), and from the MPP switch on a mount given none.
   ok(/mppOffered: payWires \? Boolean\(payWires\.mpp\) : mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\) \}/.test(src), "the hosted connector's initialize lead reads the mount's pay wires (the MPP switch without them) and the receipt switch");

@@ -28,8 +28,8 @@ const ok = (cond, msg) => { assert.ok(cond, msg); pass++; };
 const eq = (a, b, msg) => { assert.equal(a, b, msg); pass++; };
 const BASE = "https://example.test";
 const CATALOG = {
-  "GET /api/search": { slug: "search", name: "Web search", price: "$0.010" },
-  "GET /api/answer": { slug: "answer", name: "Cited answer", price: "$0.02", modelBacked: true },
+  "POST /api/pdf-to-markdown": { slug: "pdf-to-markdown", name: "PDF to Markdown", price: "$0.003" },
+  "GET /api/weather-current": { slug: "weather-current", name: "Current weather (global)", price: "$0.002" },
   "POST /api/hash": { slug: "hash", name: "Hash", price: "$0.001" },
   "POST /api/uuid": { slug: "uuid", name: "UUID", price: "$0.001" },
 };
@@ -67,8 +67,8 @@ const PLAIN = /^[a-zA-Z0-9_-]{1,113}$/; // the tool name rule Claude Managed Age
   // Figures from the code.
   ok(t.includes(`${MAX_CALLS_PER_BURST} a minute and ${MAX_CALLS_PER_WINDOW} an hour`), "the free limits are the rate limiter's");
   ok(/\b2 pure-CPU tools run free on the connector/.test(t), "the free count is the catalog's free-tier count");
-  ok(t.includes("free on /mcp") && t.includes("$0.01") && t.includes("$0.02"), "cards: free label for a free-tier tool, catalog prices for paid ones");
-  ok(t.includes("model-backed"), "the model-backed tool is labeled");
+  ok(t.includes("free on /mcp") && t.includes("$0.003") && t.includes("$0.002"), "cards: free label for a free-tier tool, catalog prices for paid ones");
+  ok(t.includes("PDF to Markdown") && t.includes("Current weather (global)") && !t.includes("model-backed"), "the cards are the flagship tools, none model-backed");
   ok(!/\$\d/.test(main(managedAgentsPage(BASE, {}, { env: { MPP_SECRET_KEY: "k" } }))), "no catalog, no price");
   // Wires: the connector's own account.
   ok(t.includes("payable in the call on this connector over x402 or MPP"), "paid boot with MPP: both wires");
