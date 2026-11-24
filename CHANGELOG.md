@@ -4,6 +4,47 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.16.0 - 2026-11-24
+
+### 2026-11-24 (plain connector names, Algorand catalog, Ink relayer, dependency moves)
+Tools:
+- rwa-markets says why a reference rate is missing (referenceStatus read,
+  rate_table_unreadable or rate_not_listed) and never reports a missing rate
+  as 0.
+- image-ocr runs on tesseract.js 7 and reads its lines from the recognized
+  page tree.
+Payments:
+- A refusal says nothing was charged only on a call answered to its own
+  caller; a step inside a charged answer (a skill pack, decide, route-execute
+  or a bundle leg) does not print it, and a delivered answer never carries it.
+- The Algorand seller catalog builds in the background at boot and refreshes
+  on its own schedule, reading each listing page by page to its total under a
+  page cap; a route-execute call that meets a cold catalog waits only within
+  its payment window, then answers an uncharged 503 with Retry-After.
+- A server that sets INK_RELAYER_KEY settles an Ink payment through its own
+  relayer after the listed settlement providers, only after a refusal that
+  moved nothing, under its own caps and minimum.
+- Tempo payments from a configurable account envelope are read and screened
+  like any other, and a subscription key authorization carrying a high-s
+  signature is refused. Stellar payments are read with stellar-sdk 17 and
+  @x402/stellar 2.32.
+- Rate limits read every spelling of one address (IPv6 case, leading zeros, an
+  IPv4-mapped form) as one key, and the connector sign-in counts a code mail
+  before it compares the count.
+MCP:
+- The hosted connector lists every tool under a plain name (catalog_search for
+  catalog.search) at /mcp?tool_names=underscore, for hosts that accept only
+  letters, digits, underscores and dashes in a tool name; either spelling
+  runs.
+Site:
+- A /docs slug typed in another case 301s to its canonical path. A retired
+  route's 410 suggests its declared replacement first, then tools in its
+  category. /aws/start states the sanctions eligibility /terms sets, and
+  /crawler lists the search-suggest User-Agent.
+- The server images install dependencies in a builder stage and ship no
+  compiler; the server moves to undici 8, better-sqlite3 13, jsdom 31,
+  TypeScript 7 and mppx 0.21.
+
 ## v2.15.0 - 2026-11-24
 
 ### 2026-11-24 (chain reads, source credits, caller URLs, receipts by token)
