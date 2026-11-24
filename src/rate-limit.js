@@ -42,17 +42,31 @@ export const perReplica = (n) => Math.max(1, Math.floor(Number(n) / REPLICAS));
 
 // A client that rotates addresses inside one IPv6 /64 (which a single host is
 // routinely assigned) used to get a fresh bucket per address. IPv6 keys fold
-// to their /64; IPv4 and non-IP keys are used as given.
+// to their /64; IPv4 and non-IP keys are used as given. Every spelling of one
+// address is one key: hextets are read as numbers (case and leading zeros do
+// not count, "::" may stand anywhere), and an IPv4-mapped address
+// (::ffff:a.b.c.d in any spelling) is its IPv4 address
+// (scripts/test-limiter-identity.js).
+function ipv6Hextets(addr) {
+  let s = addr.toLowerCase();
+  // A trailing dotted IPv4 part is two hextets.
+  const v4 = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (v4) s = `${v4[1]}${((Number(v4[2]) << 8) | Number(v4[3])).toString(16)}:${((Number(v4[4]) << 8) | Number(v4[5])).toString(16)}`;
+  const [left, right] = s.includes("::") ? s.split("::") : [s, null];
+  const l = left ? left.split(":") : [];
+  const r = right === null ? [] : (right ? right.split(":") : []);
+  const fill = right === null ? [] : Array(Math.max(0, 8 - l.length - r.length)).fill("0");
+  return [...l, ...fill, ...r].map((h) => parseInt(h, 16));
+}
 export function limiterKey(key) {
   const k = String(key ?? "");
   // Only a bare IPv6 address folds; a composite key (ip|tool, ...) is used as given.
-  if (!isIPv6(k.split("%")[0]) || k.startsWith("::ffff:")) return k;
-  const parts = k.split("%")[0].split(":");
-  // Expand "::" enough to take the first four hextets.
-  const gap = parts.indexOf("");
-  const head = gap === -1 ? parts : parts.slice(0, gap);
-  const out = [...head, "0", "0", "0", "0"].slice(0, 4);
-  return `${out.join(":")}::/64`;
+  const bare = k.split("%")[0];
+  if (!isIPv6(bare)) return k;
+  const h = ipv6Hextets(bare);
+  if (h.length !== 8 || h.some((x) => !Number.isInteger(x))) return k;
+  if (h.slice(0, 5).every((x) => x === 0) && h[5] === 0xffff) return `${h[6] >> 8}.${h[6] & 255}.${h[7] >> 8}.${h[7] & 255}`;
+  return `${h.slice(0, 4).map((x) => x.toString(16)).join(":")}::/64`;
 }
 /** A wider network than limiterKey: an IPv6 address by its /48, an IPv4
  *  address by its /24 (a composite or unparsed key is used as given). For an

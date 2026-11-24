@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (8 scripts, one process each)
+# @step 1: Offline suites (9 scripts, one process each)
 # /api/route neutral cross-seller router envelope (per-row shape, include filter, missing-query)
 t node scripts/test-route-envelope.js
 # Tool correctness regressions (20 wrong-answer bugs from the review; boots free-mode, TZ=UTC)
@@ -39,6 +39,8 @@ t node scripts/test-mcp-loopback-cut.js
 t node scripts/test-mcp-oauth.js
 # Connector sign-in pages as a person and a screen reader meet them: one h1 per step and on the error page, error lines with role=alert tied to their field and in the error color after the cascade, a lockout that disables the code form and offers a new code, Allow before Deny, the balance page linked, no key named (paid boot, Stripe stub, mail sink)
 t node scripts/test-mcp-oauth-pages.js
+# Class guard, per-key limits: every spelling of an address or mailbox is one key, every limiter in src/ registered with its identity, and the limiters batches 6 and 7 touched hold their bound rotated across a /64, a /48, mailbox spellings and payment headers, sequentially and in parallel (offline, bare express, port 0)
+t node scripts/test-limiter-identity.js
 
 # @step 2: Offline suites (21 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
