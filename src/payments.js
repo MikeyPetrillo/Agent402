@@ -5249,20 +5249,33 @@ export function isRevertedAuthorizationTransfer(err) {
 
 /**
  * A settler's node refused the transaction before it was sent, and the answer
- * names no transaction: a failed gas estimate for the settler's own gas
- * ("gas required exceeds allowance", or "failed to estimate gas" / "gas
- * estimation failed" with no revert, such as insufficient funds for gas) or a
- * submission refused for its own signer's nonce ("nonce too high"). Nothing
+ * names no transaction. An ALLOWLIST: the answer must name at least one
+ * recognized pre-broadcast refusal for the settler's own transaction, and
+ * every other word in it must be a known wrapper (a reason code, "failed to
+ * estimate gas", "Error"). The refusals are the settler's own gas ("gas
+ * required exceeds allowance", "insufficient funds for gas * price + value"),
+ * its fee ("max fee per gas less than block base fee", "fee cap less than
+ * block base fee", "transaction underpriced") and its signer's nonce ("nonce
+ * too high"), each with the node's own address and number detail. Nothing
  * reached the chain, so the authorization is unused, like a reverted transfer.
- * Never this: an estimate that REVERTED (the token refuses the transfer, and
- * a spent nonce is one reason it does, with the reason sometimes stripped),
- * any wording that the authorization or nonce is used or canceled (an earlier
- * send, maybe the settler's own, may have landed: the chain read owns those),
- * "nonce too low" (it can follow the settler's own landed send), timeouts,
- * transport errors and any answer naming a transaction.
+ * Anything the list does not recognize goes to the chain read: a revert in
+ * any spelling (AuthorizationUsed(), AuthorizationCanceled, "out of gas",
+ * revert data), a used or canceled authorization, a bare "failed to estimate
+ * gas", "replacement transaction underpriced" (a pending send may be this
+ * payment) and "nonce too low" (it can follow the settler's own landed send;
+ * our own relayer reads authorizationState under its lock instead,
+ * src/robinhood-relayer.js). Timeouts, transport errors and any answer naming
+ * a transaction are never this.
  */
-const NOTHING_SENT_NODE_WORDS = /\bgas required exceeds allowance\b|\b(?:failed|unable|cannot|could not) (?:to )?estimate gas\b|\bgas estimation (?:failed|error)\b|\bestimateGas\b[^.]{0,40}\b(?:failed|error)\b|\bnonce too high\b/i;
-const NOTHING_SENT_SPENT_WORDS = /\brevert(?:ed|s)?\b|\b(?:nonce|authorization)\b[^.]{0,60}\b(?:used|consumed|canceled|cancelled|spent)\b|\balready (?:been )?(?:used|spent)\b/i;
+const NOTHING_SENT_REFUSALS = [
+  /\bgas required exceeds allowance(?:\s*\(\d+\))?/g,
+  /\binsufficient funds for gas \* price \+ value(?::? address 0x[0-9a-f]{1,40},? have \d+ want \d+)?/g,
+  /\bmax fee per gas less than block base fee(?::? address 0x[0-9a-f]{1,40},? maxfeepergas: \d+,? basefee: \d+)?/g,
+  /\bfee cap less than block base fee(?::? address 0x[0-9a-f]{1,40},? gasfeecap: \d+,? basefee: \d+)?/g,
+  /(?<!replacement )\btransaction underpriced\b/g,
+  /\bnonce too high(?::? address 0x[0-9a-f]{1,40},? tx: \d+,? state: \d+)?/g,
+];
+const NOTHING_SENT_WRAPPERS = /\b(?:(?:failed|unable|cannot|could not) (?:to )?estimate gas|gas estimation (?:failed|error)|estimategas (?:failed|error)|unexpected_settle_error|invalid_exact_evm_transaction_failed|settlement failed|error)\b/g;
 export function isNothingSentNodeRefusal(err) {
   if (!err || typeof err !== "object") return false;
   if (typeof err.transaction === "string" && err.transaction.trim()) return false;
@@ -5270,9 +5283,12 @@ export function isNothingSentNodeRefusal(err) {
   if (isUnreadableSettleAnswer(err)) return false;
   const reason = String(err.errorReason || "").trim();
   if (isUsedAuthorizationReason(reason) || isUsedAuthorizationReason(String(err.errorMessage || ""))) return false;
-  const text = `${reason} ${err.errorMessage || ""} ${err.message || ""}`;
-  if (NOTHING_SENT_SPENT_WORDS.test(text)) return false;
-  return NOTHING_SENT_NODE_WORDS.test(text);
+  let rest = `${reason} ${err.errorMessage || ""} ${err.message || ""}`.toLowerCase();
+  let named = false;
+  for (const re of NOTHING_SENT_REFUSALS) rest = rest.replace(re, () => { named = true; return " "; });
+  if (!named) return false;
+  // Every word left must be a known wrapper; anything else reads the chain.
+  return /^[\s:;,.()-]*$/.test(rest.replace(NOTHING_SENT_WRAPPERS, " "));
 }
 
 // Networks settled through an operator-listed facilitator list, where the

@@ -252,7 +252,11 @@ await check("another network keeps its rules: a no-verdict refusal in words ther
 const GAS_EST = "gas required exceeds allowance (0)";
 await check("a failed gas estimate or a nonce-too-high submission with no transaction is nothing-sent, on 4663 and Ink only", async () => {
   const { isRetryableSettleRefusal, isNothingSentNodeRefusal } = await import("../src/payments.js");
-  for (const [reason, msg] of [["unexpected_settle_error", GAS_EST], ["unexpected_settle_error", "failed to estimate gas: insufficient funds for gas * price + value"], ["", "Error: nonce too high: address 0xabc, tx: 7 state: 5"], [GAS_EST, ""]]) {
+  for (const [reason, msg] of [["unexpected_settle_error", GAS_EST], ["unexpected_settle_error", "failed to estimate gas: insufficient funds for gas * price + value"], ["", "Error: nonce too high: address 0xabc, tx: 7 state: 5"], [GAS_EST, ""],
+    ["unexpected_settle_error", "insufficient funds for gas * price + value: address 0x00000000000000000000000000000000000000aa have 0 want 21000000"],
+    ["unexpected_settle_error", "max fee per gas less than block base fee: address 0x00000000000000000000000000000000000000aa, maxFeePerGas: 1, baseFee: 7"],
+    ["unexpected_settle_error", "fee cap less than block base fee"],
+    ["unexpected_settle_error", "transaction underpriced"]]) {
     const e = asCoreError({ success: false, errorReason: reason, errorMessage: msg, transaction: "", network: RH });
     assert.equal(isNothingSentNodeRefusal(e), true, `${reason} ${msg}`);
     assert.equal(isRetryableSettleRefusal(e, RH), true, `4663: ${msg}`);
@@ -273,6 +277,20 @@ await check("an estimate that reverted, or names a used or canceled authorizatio
     ["unexpected_settle_error", "gas estimation failed: authorization already used"],
     ["unexpected_settle_error", "estimateGas failed: nonce is canceled"],
     [`failed to estimate gas: ${NONCE_USED}`, ""],
+    // Spellings with no "revert" word: the allowlist reads anything it does
+    // not recognize as possibly sent, so the chain read owns these too.
+    ["unexpected_settle_error", "failed to estimate gas: ContractFunctionRevertedError: AuthorizationUsed()"],
+    ["unexpected_settle_error", "gas estimation failed: AuthorizationCanceled"],
+    ["unexpected_settle_error", "failed to estimate gas: authorizationState true (used)"],
+    ["unexpected_settle_error", "failed to estimate gas: out of gas"],
+    ["unexpected_settle_error", "failed to estimate gas: invalid opcode"],
+    ["unexpected_settle_error", "failed to estimate gas: execution failed, data 0x08c379a0"],
+    ["unexpected_settle_error", "gas required exceeds allowance (0); data: 0x1f6a65b6"],
+    ["unexpected_settle_error", "estimateGas failed: custom error 0x1f6a65b6"],
+    ["unexpected_settle_error", "failed to estimate gas"],
+    ["unexpected_settle_error", "replacement transaction underpriced"],
+    ["unexpected_settle_error", "nonce too low: address 0xabc, tx: 5 state: 6"],
+    ["unexpected_settle_error", "insufficient funds for gas * price + value, then AuthorizationUsed()"],
   ]) {
     const e = asCoreError({ success: false, errorReason: reason, errorMessage: msg, transaction: "", network: RH });
     assert.equal(isNothingSentNodeRefusal(e), false, `${reason} ${msg}`);
