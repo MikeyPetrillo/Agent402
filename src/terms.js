@@ -190,7 +190,7 @@ license and attribution fields an answer carries for its third-party data, and t
 keep all rights in the service, the site content, the structure of the reports and our compiled data. Bulk extraction
 of answers to rebuild a competing catalog or dataset is not permitted.</p>
 <p id="data-licenses"><b>Open data licenses.</b> Some answers contain third-party data under an open license (for
-example CC BY 4.0, ODbL 1.0 or the Open Government Licence). Such an answer names its source and license in its
+example CC BY 4.0, ODbL 1.0 or the UK government's open license). Such an answer names its source and license in its
 fields. If you publish or redistribute that data, you must keep the attribution and license notice with it and follow
 that license, including its share-alike terms for a database you build from ODbL data.</p>
 ${modelOutputsSection}${callerUrlSection}

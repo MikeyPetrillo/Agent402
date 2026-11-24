@@ -334,6 +334,8 @@ t node scripts/test-legal-dates.js
 t node scripts/test-trademark-notices.js
 # The legal entity's name: one spelling in src/legal-entity.js, no other casing in any tracked text file (offline)
 t node scripts/test-legal-entity-name.js
+# The terms reach the machine surfaces: openapi info, mirrored 402 bodies, MCP initialize instructions, the /x402-test sample (offline)
+t node scripts/test-terms-links.js
 # Legal, security, trust and machine copy state what the code does (backups, refunds, CSP, MPP chains, payer screens, kept receipts, receipt scope, audit refunds; offline)
 t node scripts/test-legal-claims.js
 # /trust and the /company contact block state only what the code runs (offline)
