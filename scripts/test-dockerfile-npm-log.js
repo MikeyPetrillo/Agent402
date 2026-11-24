@@ -2,7 +2,8 @@
 // Both images (Dockerfile, Dockerfile.worker) install with `npm ci`, and a
 // failed install must say why in the build log: the dependency step prints
 // the tail of npm's debug log and the build still fails with npm's own exit
-// code. A success prints nothing extra and goes on to the rest of the step.
+// code. A success prints nothing extra and goes on to the rest of the step,
+// which loads better-sqlite3 (the native addon the install builds).
 //
 // The install group is read out of each Dockerfile and run under /bin/sh
 // (the shell Docker's RUN uses) with a stub `npm` on PATH that writes a debug
@@ -73,6 +74,9 @@ for (const df of ["Dockerfile", "Dockerfile.worker"]) {
   ok(runs.length === 1, `${df} has one RUN that runs npm ci (${runs.length})`);
   const group = runs[0] ? installGroup(runs[0]) : null;
   ok(!!group && /npm ci --omit=dev/.test(group), `${df} installs inside a group that handles a failed npm ci (${(group || runs[0] || "").slice(0, 80)})`);
+  // The builder loads better-sqlite3 right after the install, in the same
+  // step, so an image whose native addon did not build fails there.
+  ok(/\}\s*&&\s*node -e "new \(require\('better-sqlite3'\)\)\(':memory:'\)\.prepare\('select 1'\)\.get\(\)"$/.test(runs[0] || ""), `${df}: the install step loads better-sqlite3 after npm ci`);
   if (!group) continue;
   const bad = runGroup(group, 7);
   ok(bad.code === 7, `${df}: a failed npm ci fails the step with npm's exit code (${bad.code})`);

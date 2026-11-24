@@ -102,5 +102,15 @@ const junk = F.cases.plain.envelope.slice(0, 40) + "!!" + F.cases.plain.envelope
 const j = await readAll(junk);
 ok(same({ ...j }, F.cases.plain.expect), `characters outside the alphabet: every reader answers as 16.4.1 did (${JSON.stringify(j.expiry)})`);
 
+// The verifier these readers stand beside is pinned exactly, at the version
+// the self-hosted facilitator pins, and that version is the one installed.
+{
+  const root = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).dependencies["@x402/stellar"];
+  const fac = JSON.parse(readFileSync(new URL("../facilitator/package.json", import.meta.url), "utf8")).dependencies["@x402/stellar"];
+  const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")).packages;
+  ok(/^\d+\.\d+\.\d+$/.test(root) && root === fac, `@x402/stellar is pinned exactly, as the facilitator pins it (${root}, facilitator ${fac})`);
+  ok(lock[""].dependencies["@x402/stellar"] === root && lock["node_modules/@x402/stellar"].version === root, `the lockfile records the pin and installs it (${lock["node_modules/@x402/stellar"].version})`);
+}
+
 console.log(`\n${fail ? "FAILED" : "PASSED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
