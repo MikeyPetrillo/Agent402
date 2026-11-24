@@ -201,7 +201,7 @@ export function managedAgentsPage(baseUrl, catalog = {}, { env = process.env } =
       ${setupCommands(baseUrl).map(pre).join("\n      ")}
       <p ${P}>With ${code(`?tool_names=${PLAIN_TOOL_NAMES_VALUE}`)} the connector lists every tool under a name of letters, digits, ${code("_")} and ${code("-")} (${code("catalog_search")} for ${code("catalog.search")}), the form a managed agent session accepted when this page was checked; it skipped the dotted names. Either spelling runs the same tool.</p>
       <p ${P}>The connector takes no credential, so the session names no vault. ${docLink(DOCS.mcp, "Anthropic's documentation")} says a server with no matching vault credential is connected unauthenticated, that an ${code("mcp_toolset")} defaults to the ${code("always_ask")} permission policy, and that with ${code("limited")} networking, ${code("allow_mcp_servers")} lets a session start whose agent declares an MCP server outside the environment's ${code("allowed_hosts")}.</p>
-      <p ${P}>The agent above allows the four discovery tools (${DISCOVERY_TOOLS.map((n) => code(plainToolName(n))).join(", ")}), which never charge or write on this connector, and leaves ${code("catalog_call")} at ${code("always_ask")}. ${docLink(DOCS.permissions, "Permission policies")} covers the other choices.</p>
+      <p ${P}>The agent above allows the four discovery tools (${DISCOVERY_TOOLS.map((n) => code(plainToolName(n))).join(", ")}), which take no payment and write nothing on this connector, and leaves ${code("catalog_call")} at ${code("always_ask")}. ${docLink(DOCS.permissions, "Permission policies")} covers the other choices.</p>
     </section>
 
     <section id="run" style="margin-bottom:34px;">
