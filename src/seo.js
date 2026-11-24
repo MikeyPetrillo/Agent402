@@ -190,7 +190,8 @@ export function robotsTxt(baseUrl) {
   // /agents.md, /llms.txt and every free tool page tell an agent to take
   // (GET /api/pow/challenge?slug=<tool>), so the AI agents named above may
   // fetch it. It answers JSON, not a page, so the search engines, the
-  // training crawlers and the unnamed crawler are kept off it.
+  // data-only crawlers (TRAINING_CRAWLERS below) and the unnamed crawler are
+  // kept off it.
   const powSearch = ["Disallow: /api/pow/"];
   // PRICED ROUTES ARE NOT PAGES. Every /api/<tool> answers an unpaid crawler
   // 402, which a search console files as a crawl error ("other 4xx") against
@@ -244,9 +245,15 @@ export function robotsTxt(baseUrl) {
   // errors are filed. The AI agents named above keep reading per-route
   // quotes as before; a paying client never consults this file.
   const SEARCH_ENGINES = new Set(["Googlebot", "Bingbot", "Applebot", "DuckDuckBot"]);
-  // The crawlers that gather training data, not agents acting for a user:
-  // they keep every page and quote, but not the proof-of-work challenge, which
-  // is a step an agent takes to call a tool.
+  // The crawlers that only gather data: no agent acting for a user fetches
+  // under these names. They keep every page and quote, but not the
+  // proof-of-work challenge, which is a step an agent takes to call a tool.
+  // The other AI names keep the challenge though some also gather training
+  // data: GPTBot and ClaudeBot are names /agents.md's readers may fetch under
+  // (scripts/test-robots-policy.js holds every /api/pow/ path it names open to
+  // them), and Google-Extended, Applebot-Extended and anthropic-ai are
+  // training-use tokens that make no fetch of their own, so a Disallow there
+  // would refuse nothing.
   const TRAINING_CRAWLERS = new Set(["CCBot", "Bytespider", "cohere-ai", "Meta-ExternalAgent"]);
   const rules = [...catalog, ...priv, ...costly, ...sellerScoped, ...traps].join("\n");
   const trainingRules = [...catalog, ...priv, ...powSearch, ...costly, ...sellerScoped, ...traps].join("\n");
