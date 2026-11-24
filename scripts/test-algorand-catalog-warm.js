@@ -216,6 +216,42 @@ const realFetch = globalThis.fetch;
   } finally { globalThis.fetch = realFetch; sellers.setAlgorandCrawlSources({}); sellers._resetForTest(); }
 }
 
+// --- 4b. the scheduled refresh skips an idle catalog; a read brings it back ------------
+{
+  const fac = facilitator({ total: 250 });
+  globalThis.fetch = fac.fetchImpl;
+  sellers._resetForTest();
+  const realNow = Date.now;
+  const logs = [];
+  const realLog = console.log;
+  console.log = (...a) => { const m = a.join(" "); if (m.startsWith("[algorand-sellers]")) logs.push(m); else realLog(...a); };
+  let stop = () => {};
+  try {
+    stop = sellers.startAlgorandCatalogRefresh({ checkMs: 1000 });
+    for (const until = realNow() + 5000; realNow() < until && !sellers.scheduledRefreshWanted() && sellers.algorandCatalogBuildInfo().cacheBuildStartedAt === 0;) await new Promise((r) => setTimeout(r, 20));
+    ok(sellers.algorandCatalogBuildInfo().cacheBuildStartedAt > 0, "the boot warm-up builds with no read");
+    ok(logs.some((m) => /read 1 merchant page\(s\) and 3 resource page\(s\)/.test(m)), `each build logs the pages it read (${logs[0] || "no log"})`);
+    ok(sellers.scheduledRefreshWanted() === false, "no read since the warm-up: the scheduled check does not want a rebuild");
+    // Past the TTL with no read: the timer's checks read nothing.
+    Date.now = () => realNow() + 31 * 60_000;
+    const idleCalls = fac.calls.length;
+    await new Promise((r) => setTimeout(r, 2300));
+    ok(fac.calls.length === idleCalls, `a stale catalog nobody read is not rebuilt by the schedule (${fac.calls.length - idleCalls} reads)`);
+    // A router read records use and starts the build on the stale cache.
+    const w = await sellers.algorandCatalogWithin(0);
+    ok(w.warming === false && w.resources.length === 250, "the read is answered from the stale list at once");
+    for (const until = realNow() + 5000; realNow() < until && fac.calls.length === idleCalls;) await new Promise((r) => setTimeout(r, 20));
+    ok(fac.calls.length > idleCalls, "a read on a stale catalog starts the next build");
+    for (const until = realNow() + 5000; realNow() < until && sellers.algorandCatalogBuildInfo().cacheBuildStartedAt < sellers.algorandCatalogBuildInfo().lastUseAt;) await new Promise((r) => setTimeout(r, 20));
+    ok(sellers.scheduledRefreshWanted() === true, "a read at or after the last build's start lets the schedule rebuild next time");
+    // Used, then past the TTL again: the timer rebuilds without another read.
+    Date.now = () => realNow() + 62 * 60_000;
+    const usedCalls = fac.calls.length;
+    for (const until = realNow() + 5000; realNow() < until && fac.calls.length === usedCalls;) await new Promise((r) => setTimeout(r, 50));
+    ok(fac.calls.length > usedCalls, "after a read, the scheduled check rebuilds the stale catalog");
+  } finally { stop(); Date.now = realNow; console.log = realLog; globalThis.fetch = realFetch; sellers._resetForTest(); }
+}
+
 // --- the server wiring -----------------------------------------------------------------
 {
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");

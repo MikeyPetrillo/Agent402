@@ -14,7 +14,7 @@
 // run before any spend.
 //
 // Cached ~30 min (the economy-snapshot convention), single-flighted, and
-// NEVER throws — a facilitator outage yields an empty catalog, which simply
+// rebuilt on schedule only while the router reads it (IDLE below); NEVER throws — a facilitator outage yields an empty catalog, which simply
 // gates external Algorand routing closed until the next successful refresh.
 //
 // OUR OWN CRAWL IS A SECOND SOURCE (2026-09-18). Until today this catalog was
@@ -64,10 +64,18 @@ const BG_BUILD_MAX_MS = Math.max(BUILD_MAX_MS, Number(process.env.ALGORAND_SELLE
 
 let cache = { at: 0, resources: [] };
 let inFlight = null;
-let lastBuild = null; // { background, readTimeoutMs } of the last build started
+let lastBuild = null; // { background, readTimeoutMs, startedAt, pages } of the last build started
+// IDLE. A build reads up to MAX_PAGES pages of each listing, so the scheduled
+// refresh does not rebuild a catalog nobody has read: the router's read
+// records `lastUseAt`, and the timer's check rebuilds only when a read came
+// at or after the start of the build that made the current cache. With no
+// read since, the cache goes stale and the next read starts the build (it is
+// served the stale list meanwhile). The boot warm-up always builds.
+let lastUseAt = 0;
+let cacheBuildStartedAt = 0; // start of the build that last finished (success or failure)
 /** Which per-read limit the last build used (the offline test reads it). */
 export function algorandCatalogBuildInfo() {
-  return { ...(lastBuild || {}), readTimeoutMs: lastBuild?.readTimeoutMs ?? null, shortReadTimeoutMs: READ_TIMEOUT_MS, backgroundReadTimeoutMs: BG_READ_TIMEOUT_MS, maxPages: MAX_PAGES, pageSize: PAGE };
+  return { ...(lastBuild || {}), readTimeoutMs: lastBuild?.readTimeoutMs ?? null, shortReadTimeoutMs: READ_TIMEOUT_MS, backgroundReadTimeoutMs: BG_READ_TIMEOUT_MS, maxPages: MAX_PAGES, pageSize: PAGE, lastUseAt, cacheBuildStartedAt };
 }
 
 async function getJson(path, timeoutMs = READ_TIMEOUT_MS) {
@@ -102,11 +110,12 @@ const algoAddr = (a) => (typeof a === "string" && /^[A-Z2-7]{58}$/.test(a) ? a :
 async function build({ background = false } = {}) {
   const timeoutMs = background ? BG_READ_TIMEOUT_MS : READ_TIMEOUT_MS;
   const deadline = Date.now() + (background ? BG_BUILD_MAX_MS : BUILD_MAX_MS);
-  lastBuild = { background, readTimeoutMs: timeoutMs };
+  const info = { background, readTimeoutMs: timeoutMs, startedAt: Date.now(), pages: null };
+  lastBuild = info;
   const read = (path) => getJson(path, timeoutMs);
   const verifsByMerchant = new Map();
   const payToByMerchant = new Map();
-  await readListing("/discovery/merchants", read, { deadline, onRows: (items) => {
+  const merchantsRead = await readListing("/discovery/merchants", read, { deadline, onRows: (items) => {
     for (const m of items) {
       if (typeof m?.id === "string") verifsByMerchant.set(m.id, Number(m.totalVerifications) || 0);
       // The merchant's receiving address, when the record names one (an id
@@ -116,7 +125,7 @@ async function build({ background = false } = {}) {
     }
   } });
   const resources = [];
-  await readListing("/discovery/resources", read, { deadline, onRows: (items) => {
+  const resourcesRead = await readListing("/discovery/resources", read, { deadline, onRows: (items) => {
     for (const r of items) {
       const verifs = verifsByMerchant.get(r?.merchantId) || 0;
       // Only USDC-ASA exact accepts are payable from the AVM spending wallet;
@@ -146,6 +155,8 @@ async function build({ background = false } = {}) {
       });
     }
   } });
+  info.pages = { merchants: merchantsRead.pages, resources: resourcesRead.pages };
+  console.log(`[algorand-sellers] catalog build (${background ? "background" : "on read"}) read ${merchantsRead.pages} merchant page(s) and ${resourcesRead.pages} resource page(s)${merchantsRead.capped || resourcesRead.capped ? " (page cap reached)" : ""}, ${resources.length} payable route(s)`);
   return resources;
 }
 
@@ -276,6 +287,7 @@ export function setAlgorandCrawlSources({ crawledResources, countInbound, crawlR
  *  build goes on and fills the cache for the next call. With no `maxWaitMs`
  *  a cold call waits for the build, as algorandCatalog() always did. */
 export async function algorandCatalogWithin(maxWaitMs = null, { background = false } = {}) {
+  if (!background) lastUseAt = Date.now();
   startBuildIfStale({ background });
   if (!cache.at && inFlight) {
     if (maxWaitMs == null) await inFlight;
@@ -299,13 +311,21 @@ export function warmAlgorandCatalog() {
   return inFlight || Promise.resolve();
 }
 
+/** Whether the scheduled check may rebuild: never before a build has
+ *  finished (the warm-up's own build is in flight), and after one only when
+ *  the router read the catalog at or after that build's start (IDLE above). */
+export function scheduledRefreshWanted() {
+  return cacheBuildStartedAt > 0 && lastUseAt >= cacheBuildStartedAt;
+}
+
 /** Warm the catalog now and keep it fresh on its own schedule (the TTL, or
  *  the minutes-long re-read after an unread count or a failed build): a
- *  check every `checkMs` that builds only when the cache is stale. Off the
- *  request path; the timer never holds the process open. Returns a stop. */
+ *  check every `checkMs` that builds only when the cache is stale and the
+ *  router has read it since the last build (IDLE above). Off the request
+ *  path; the timer never holds the process open. Returns a stop. */
 export function startAlgorandCatalogRefresh({ checkMs = 60_000 } = {}) {
   warmAlgorandCatalog();
-  const t = setInterval(() => { warmAlgorandCatalog(); }, Math.max(1000, checkMs));
+  const t = setInterval(() => { if (scheduledRefreshWanted()) warmAlgorandCatalog(); }, Math.max(1000, checkMs));
   t.unref?.();
   return () => clearInterval(t);
 }
@@ -318,6 +338,7 @@ function startBuildIfStale({ background = false } = {}) {
   const stale = Date.now() - cache.at > TTL_MS;
   if (stale && !inFlight) {
     let crawlWasReady = true;
+    const startedAt = Date.now();
     inFlight = build({ background })
       .then(async (resources) => {
         // Our own index, folded in and then proven from the chain. Wrapped so a
@@ -341,7 +362,7 @@ function startBuildIfStale({ background = false } = {}) {
       })
       // Keep the last known list; back-date so the next call retries in ~5 min.
       .catch(() => { cache.at = Date.now() - TTL_MS + 5 * 60 * 1000; })
-      .finally(() => { inFlight = null; });
+      .finally(() => { inFlight = null; cacheBuildStartedAt = startedAt; });
   }
 }
 
@@ -401,4 +422,6 @@ export function _resetForTest(resources = null) {
   cache = resources ? { at: Date.now(), resources } : { at: 0, resources: [] };
   inFlight = null;
   lastBuild = null;
+  lastUseAt = 0;
+  cacheBuildStartedAt = resources ? Date.now() : 0;
 }
