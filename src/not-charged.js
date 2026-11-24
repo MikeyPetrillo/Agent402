@@ -39,8 +39,12 @@
 // search failed), so the leg cannot know which it will be. The route call
 // knows: when a call that printed the sentence returns, runAsRouteCall removes
 // the sentence from the strings of the returned object (copied, never changed
-// in place); when it throws, the refusal goes out as written. A streamed body
-// is not read: a stream writes no leg error into a delivered answer.
+// in place); when it throws, the refusal goes out as written. A leg can also
+// receive an error another call printed (a shared in-flight read rejects every
+// waiter with the error built in its starter's scope), so a call during which
+// any call printed the sentence is read the same way; an answer from a call
+// during which none was printed is returned unread. A streamed body is not
+// read: a stream writes no leg error into a delivered answer.
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export const NOT_CHARGED = "Nothing was charged.";
@@ -83,8 +87,11 @@ export function withoutChargeSentence(value) {
 let removals = 0;
 /** Delivered answers whose strings carried the sentence since boot. */
 export function chargeSentenceRemovals() { return removals; }
+// Every sentence printed since boot, in any scope: a call whose count moved
+// while it ran may hold a leg error another call printed.
+let printed = 0;
 function delivered(store, value) {
-  if (!store.claimed) return value;
+  if (!store.claimed && printed === store.printedAtStart) return value;
   let r;
   try { r = withoutChargeSentence(value); } catch { return value; }
   if (!r.removed) return value;
@@ -96,7 +103,7 @@ function delivered(store, value) {
  *  it returns is the delivered answer (the sentence is removed from it, see
  *  above); what it throws is the refusal, passed on unchanged. */
 export function runAsRouteCall(fn) {
-  const store = { kind: ROUTE, claimed: false };
+  const store = { kind: ROUTE, claimed: false, printedAtStart: printed };
   const out = scope.run(store, fn);
   if (out && typeof out.then === "function") return out.then((v) => delivered(store, v));
   return delivered(store, out);
@@ -126,7 +133,7 @@ function stepError(err) {
 export function inStep() {
   return kindOf(scope.getStore()) === STEP;
 }
-const said = () => { const store = scope.getStore(); if (kindOf(store) === ROUTE) store.claimed = true; return ` ${NOT_CHARGED}`; };
+const said = () => { printed++; const store = scope.getStore(); if (kindOf(store) === ROUTE) store.claimed = true; return ` ${NOT_CHARGED}`; };
 
 /** True when the handler was called by the route binder (it passes `req`)
  *  and is not running as a step of another answer. */

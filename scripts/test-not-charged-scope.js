@@ -100,6 +100,16 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
   const [a, b] = await Promise.all([first, joined]);
   ok(/ Nothing was charged\. Retry shortly\.$/.test(a.message), "the route call that started a shared read gets its refusal as written");
   ok(b.message === "The upstream did not answer. Retry shortly." && b.statusCode === 503 && b.hint === "our-deadline" && b !== a && / Nothing was charged\./.test(a.message), `a step that joined it gets a copy without the sentence, its fields kept, the shared error untouched (${b.message})`);
+  // A route call's composite that joined another route call's shared read,
+  // caught its rejection and delivered the leg's text: the answer is charged,
+  // so it carries no sentence, though this call never printed one itself.
+  let shared2 = null;
+  const read2 = () => (shared2 ??= (async () => { await new Promise((r) => setTimeout(r, 10)); throw Object.assign(new Error(`The publisher did not answer.${notChargedHere()} Retry shortly.`), { statusCode: 503 }); })());
+  const starter = runAsRouteCall(() => read2()).catch((e) => e);
+  const composite = runAsRouteCall(async () => { await null; try { await read2(); return { legs: [] }; } catch (e) { return { legs: [{ series: "a", value: 1 }, { series: "b", error: e.message }] }; } });
+  const [s1, delivered] = await Promise.all([starter, composite]);
+  ok(/ Nothing was charged\./.test(s1.message), "the call that started the shared read refuses with the sentence");
+  ok(delivered.legs[1].error === "The publisher did not answer. Retry shortly." && !JSON.stringify(delivered).includes(NOT_CHARGED), `a composite that delivers a joined leg's error carries no sentence (${delivered.legs[1].error})`);
 }
 
 // ---- 1d. a worker pool's late error: the office pool's job timer ----

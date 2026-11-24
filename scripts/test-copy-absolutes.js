@@ -28,6 +28,7 @@
 // that were wrong are forbidden outright in served copy.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { RAILS } from "../src/rails.js";
 import { failedCallFootnote } from "../src/settlement-footnote.js";
 import { execFileSync } from "node:child_process";
@@ -1041,16 +1042,96 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     ["src/tools/decide-kit.js", [2, "the decide-execute description (scoped to x402; Tempo is not offered for a long-running route) and UNKNOWN_DECISION_MESSAGE, the exact sentence, also the pre-payment 404 server.js answers"]],
     ["src/tools/llm-gateway-kit.js", [4, "three descriptions scoped to x402 or carrying the Tempo exception, and inputTooLargeError's metered branch: the exact sentence, never a step (dispatchable refuses a def.quote tool), also the pre-payment refusal answered through withPushException"]],
   ]);
+  // file -> digest of its kept lines (digestOf below): the lines KEEP counts.
+  const KEEP_TEXT = {
+    "src/async-jobs.js": "9d56634172b6",
+    "src/avm-validity.js": "edaedc34a4d5",
+    "src/cdn-sync-window.js": "3a140c7b17d4",
+    "src/challenge-life.js": "49662e5b39dd",
+    "src/conformance.js": "16f4212b1d19",
+    "src/credits-account.js": "6d9e5be31612",
+    "src/credits.js": "e55688fadbae",
+    "src/discovery.js": "a7fd1cfbd6f1",
+    "src/evm-validity.js": "faeb2c9d2597",
+    "src/first-call-allowance.js": "e3fa889310ca",
+    "src/gateway-nanopayments.js": "8195a65add13",
+    "src/gateway-settle-breaker.js": "271c4552d092",
+    "src/gateway-wire.js": "47c1f5dbf3d4",
+    "src/hangup-settlement.js": "39b7a8f9bd39",
+    "src/idempotency.js": "aae111b2e1fc",
+    "src/inflight-cover.js": "757b7352f77d",
+    "src/ledger-catalog.js": "ad7b15abca2d",
+    "src/mcp-http.js": "5315d5b9dffe",
+    "src/mcp-oauth.js": "d6e99eb92b8e",
+    "src/mcp-tasks.js": "a5c50e019ed3",
+    "src/model-catalog.js": "f96f3dd01c15",
+    "src/mpp-stripe.js": "1d2acf78f02b",
+    "src/mpp-subscriptions.js": "016e6171f1ea",
+    "src/mpp-tempo.js": "9fe94d0f1e45",
+    "src/not-charged.js": "fc818bcb71aa",
+    "src/og-cards.js": "46909f1e756d",
+    "src/payment-reject.js": "c121513e5fd1",
+    "src/payment-verify.js": "1b38526bfbd6",
+    "src/payments.js": "b6d08afcb90e",
+    "src/plan-sketch.js": "4cadea04b304",
+    "src/prepayment-refusal.js": "160294f17ecd",
+    "src/push-refusal-body.js": "8063db9fb6ca",
+    "src/referral-gate.js": "aa2c21786af1",
+    "src/refund-lookup.js": "af094b08a40a",
+    "src/returning-wallet.js": "608dd5b31b28",
+    "src/sanctions-screen.js": "b85694d37ee4",
+    "src/search-landings.js": "1f5673d60270",
+    "src/server.js": "ec5a19844841",
+    "src/settle-compliance.js": "681d7db3bda8",
+    "src/settlement-footnote.js": "e70e62457c89",
+    "src/stripe-unconfirmed-readback.js": "0d1626729a57",
+    "src/svm-facilitator-split.js": "3afac15f3c3a",
+    "src/svm-funding-refusal.js": "c00679c3beff",
+    "src/tempo-buyer.js": "1407c610e202",
+    "src/tools/attest-kit.js": "7f4fe318f486",
+    "src/tools/cdp-kit.js": "a081d5aac2f7",
+    "src/tools/decide-kit.js": "70d63ba14e6a",
+    "src/tools/dub-kit.js": "1dd69d7461ab",
+    "src/tools/image-gen-kit.js": "6880524cbf4f",
+    "src/tools/llm-gateway-kit.js": "fecc02fa0e5c",
+    "src/tools/llm-images-fast-kit.js": "8cf052b9164e",
+    "src/tools/price-webhook-kit.js": "80b132972db7",
+    "src/tools/redact-chat-kit.js": "cfc201c0b1d5",
+    "src/tools/search.js": "aa3228d46d93",
+    "src/tools/weather-kit.js": "0b0bfd77c1f2",
+    "src/verify-hint.js": "0bdb69dae5ad",
+    "src/what-is-mpp.js": "2c6f81654c74",
+    "src/x402-buyer.js": "3fbb3bc1c69d",
+    "src/x402-payer-screen.js": "9baacb05f5e1",
+  };
   const typed = (text) => text.split("\n").filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line) && CLAIM.test(line));
+  // A claim split across lines ("not " + "charged", or a message wrapped
+  // inside one literal) is read on the module with its comment lines dropped,
+  // string pieces joined and every run of whitespace one space: more claims
+  // there than on the lines one by one is a split claim.
+  const CLAIM_G = new RegExp(CLAIM.source, "gi");
+  const joined = (text) => text.split("\n").filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line)).join("\n")
+    .replace(/(["'`])\s*\+\s*\n\s*\1/g, "").replace(/(["'`])\s*\n\s*\+\s*\1/g, "").replace(/\s+/g, " ");
+  const perLine = (text) => text.split("\n").filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line)).reduce((n, line) => n + (line.match(CLAIM_G) || []).length, 0);
+  const splitClaims = (text) => Math.max(0, (joined(text).match(CLAIM_G) || []).length - perLine(text));
+  // The kept lines' own text is pinned too (a digest of the lines, each with
+  // its whitespace closed up), so one claim swapped for another under the
+  // same count fails until the new line is read and the digest updated.
+  const digestOf = (lines) => createHash("sha256").update(lines.map((l) => l.trim().replace(/\s+/g, " ")).sort().join("\n")).digest("hex").slice(0, 12);
   const served = files.filter((f) => /^src\/.*\.js$/.test(f) && !COPY_SURFACES.test(f) && f !== "src/changelog.js");
   ok(served.length >= 250 && served.includes("src/tools/cdp-kit.js") && served.includes("src/upstream-deadline.js"), `read ${served.length} served modules (a collapsed list must fail)`);
   const wrong = [];
   for (const rel of served) {
     const lines = typed(read(rel) || "");
     const kept = KEEP.get(rel)?.[0] ?? 0;
+    const text = read(rel) || "";
     if (lines.length > kept) wrong.push(`${rel}: ${lines.length} typed claim line(s), ${kept} kept - ${lines.map((l) => l.trim().slice(0, 80)).join(" | ").slice(0, 400)}`);
     else if (lines.length < kept) wrong.push(`${rel}: the kept count (${kept}) is stale, ${lines.length} found; lower it so a new typed claim cannot hide under it`);
+    else if (kept && KEEP_TEXT[rel] !== digestOf(lines)) wrong.push(`${rel}: a kept claim line changed (digest ${digestOf(lines)}, pinned ${KEEP_TEXT[rel] || "none"}); read each line against the reason kept, then pin the new digest in KEEP_TEXT - ${lines.map((l) => l.trim().slice(0, 80)).join(" | ").slice(0, 400)}`);
+    const split = splitClaims(text);
+    if (split) wrong.push(`${rel}: ${split} claim(s) split across lines - ${(joined(text).match(CLAIM_G) || []).slice(0, 4).join(" | ")}; write it on one line through the shared sentence`);
   }
+  for (const rel of Object.keys(KEEP_TEXT)) if (!KEEP.has(rel)) wrong.push(`${rel}: a pinned digest with no kept count`);
   for (const rel of KEEP.keys()) if (!served.includes(rel)) wrong.push(`${rel}: kept but not a served module`);
   ok(typed('throw bad("The service failed - not charged; retry shortly", 503);').length === 1
      && typed("  ? \"a. Nothing was charged.\"\n  : \"b\", 504);").length === 1
@@ -1060,6 +1141,13 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
      && typed('throw bad("Busy, not billed. Retry shortly.", 503);').length === 1
      && typed("// a 4xx is not charged\nthrow bad(`The service failed.${notChargedOn(req)} Retry shortly.`, 503);\nthrow bad(`Busy.${notChargedHere()}`, 503);\nconst OUTCOMES = [\"charged\", \"uncharged\"];\nconst NAME = \"decide-replan-uncharged\";").length === 0,
      "control: a typed claim in a refusal, a split message, a hint, a contraction, \"uncharged\" and \"not billed\" is caught; the shared sentence, a comment and a quoted token are not");
+  ok(splitClaims('throw bad("The service failed, you were not " +\n  "charged.", 503);') === 1
+     && splitClaims("throw bad(`The service failed, you were not\n  charged.`, 503);") === 1
+     && splitClaims('throw bad("Busy. Nothing was charged.", 503);') === 0
+     && splitClaims('throw bad("Busy.", 503);\n// not\n// charged') === 0,
+     "control: a claim split over concatenated pieces or wrapped inside one literal is caught; a claim on one line and words in comments are not");
+  ok(digestOf(["  a  b "]) === digestOf(["a b"]) && digestOf(["x", "y"]) === digestOf(["y", "x"]) && digestOf(["Nothing was charged."]) !== digestOf(["You were not charged."]),
+     "control: the pinned digest ignores spacing and order, and a swapped claim changes it");
   ok(wrong.length === 0, `no served module types a "not charged" claim outside the kept list${wrong.length ? ` - ${wrong.join(" || ")}` : ""}`);
   // The sentence is printed where it is true: the direct dispatchers mark a
   // route call, every in-process executor marks its step.

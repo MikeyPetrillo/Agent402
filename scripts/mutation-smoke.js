@@ -59,6 +59,8 @@ export const MUTATIONS = [
     find: 'ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0), ', replace: 'ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0) && counts.coingecko >= 24, ', suite: "test-typed-counts.js" },
   { id: "typed-count-in-page-module", origin: "batch 8 devil (a count typed in a served page module)", file: "src/pages.js",
     find: "  const item = (it, open) =>", replace: "  const planted = `<p>Agent402 serves 612 tools today.</p>`; void planted;\n  const item = (it, open) =>", suite: "test-typed-counts.js" },
+  { id: "delivered-reads-own-claim-only", origin: "batch 8 devil (a joined leg's sentence in a charged answer)", file: "src/not-charged.js",
+    find: "if (!store.claimed && printed === store.printedAtStart) return value;", replace: "if (!store.claimed) return value;", suite: "test-not-charged-scope.js" },
   { id: "new-unscoped-absolute", origin: "batch 8 (the class of batches 6 and 7: a claim broader than the code)", file: "wiki/FAQ.md",
     find: "so they are never charged.", replace: "so they are never charged. A refund always arrives within a day.", suite: "test-claim-registry.js" },
   { id: "code-mail-refusal-keeps-counts", origin: "batch 8 devil (a refused ask kept its counts)", file: "src/mcp-oauth.js",
