@@ -36,8 +36,8 @@ import { Challenge, Credential } from "mppx";
 import { Account as TempoAccount, Abis, Addresses } from "viem/tempo";
 import { encodeFunctionResult, decodeFunctionData } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { P256, Secp256k1 } from "ox";
-import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, MultisigConfig } from "ox/tempo";
+import { P256, Secp256k1, Hash, Hex } from "ox";
+import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, AccountConfig } from "ox/tempo";
 import { getFreePorts } from "./lib/free-port.js";
 
 let pass = 0;
@@ -137,7 +137,7 @@ const env = {
 process.env.TEMPO_API_KEY = "test-tempo-key";
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 process.env.TEMPO_CURRENCY = CURRENCY;
-const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, keychainCallerOf, KEYCHAIN_UNAVAILABLE, TEMPO_SENDER_CHECK_RETRY_AFTER_S, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED, TEMPO_KEYCHAIN_UNCONFIRMED, tempoHighSSignature, TEMPO_HIGH_S_REASON } = await import("../src/mpp-tempo.js");
+const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, keychainCallerOf, KEYCHAIN_UNAVAILABLE, TEMPO_SENDER_CHECK_RETRY_AFTER_S, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED, TEMPO_KEYCHAIN_UNCONFIRMED, tempoHighSSignature, TEMPO_HIGH_S_REASON, tempoPaymentParties } = await import("../src/mpp-tempo.js");
 const { gatewaySettleBreakerKey } = await import("../src/gateway-settle-breaker.js");
 
 // Signed transactions, one per shape.
@@ -172,11 +172,25 @@ const msAccount = lc(privateKeyToAccount(generatePrivateKey()).address);
 function oxMultisig({ account = msAccount, signers = msOwners.map((o) => o.k), threshold = 2 } = {}) {
   const base = TxEnvelopeTempo.from(TX);
   const config = { version: 0n, threshold, owners: msOwners.map((o) => ({ owner: o.a, weight: 1 })) };
-  const digest = MultisigConfig.getSignPayload({ account, config, payload: TxEnvelopeTempo.getSignPayload(base) });
+  const digest = AccountConfig.getSignPayload({ account, config, payload: TxEnvelopeTempo.getSignPayload(base) });
   const signatures = signers.map((k) => SignatureEnvelope.from(Secp256k1.sign({ payload: digest, privateKey: k })));
   return TxEnvelopeTempo.serialize(base, { signature: SignatureEnvelope.from({ account, config, signatures }) });
 }
 const TX_MULTISIG_REAL = oxMultisig();
+// The approval digest written out by hand, independent of ox: keccak256(domain
+// || inner sign payload || account || uint64be(version)). The Tempo node's
+// domain since TIP-1107 is "tempo:configurable-account:signature"; the
+// pre-release "tempo:multisig:signature" was never on any network.
+const approvalDigest = (domain, { account, version = 0n, payload }) => Hash.keccak256(Hex.concat(Hex.fromString(domain), payload, account, Hex.fromNumber(version, { size: 8 })));
+function oxMultisigUnderDomain(domain) {
+  const base = TxEnvelopeTempo.from(TX);
+  const config = { version: 0n, threshold: 2, owners: msOwners.map((o) => ({ owner: o.a, weight: 1 })) };
+  const digest = approvalDigest(domain, { account: msAccount, payload: TxEnvelopeTempo.getSignPayload(base) });
+  const signatures = msOwners.map((o) => SignatureEnvelope.from(Secp256k1.sign({ payload: digest, privateKey: o.k })));
+  return TxEnvelopeTempo.serialize(base, { signature: SignatureEnvelope.from({ account: msAccount, config, signatures }) });
+}
+const TX_MULTISIG_NEW_DOMAIN = oxMultisigUnderDomain("tempo:configurable-account:signature");
+const TX_MULTISIG_OLD_DOMAIN = oxMultisigUnderDomain("tempo:multisig:signature");
 const TX_MULTISIG_SHORT = oxMultisig({ signers: [msOwners[0].k] });
 const TX_MULTISIG_TWICE = oxMultisig({ signers: [msOwners[0].k, msOwners[0].k] });
 const TX_FEE_SLOT_VICTIM = oxSigned({ sender: victim });
@@ -246,18 +260,29 @@ const TX_FIRST_USE_OX = await firstUse(oxAgent, oxKeyAuthorization({ address: ox
   const kf = inspectTempoSender(credential(TX_KEYCHAIN_FORGED_P256));
   ok(kf.verified === null && kf.keychain === null, `A: a keychain envelope carrying a real access key's public key with a signature that key never made yields no key to check (${kf.reason})`);
   const m = inspectTempoSender(credential(TX_MULTISIG));
-  ok(m.envelope === "multisig" && m.claimed === victim && m.verified === null && m.keychain === null, `A: a multisig envelope naming an account is never verified here (${m.reason})`);
+  ok(m.envelope === "configurable" && m.claimed === victim && m.verified === null && m.keychain === null, `A: a multisig envelope naming an account is never verified here (${m.reason})`);
   const fs = inspectTempoSender(credential(TX_FEE_SLOT_VICTIM));
   ok(fs.claimed === victim && fs.verified === null && fs.keychain === null, `A: an address placed in the fee-payer slot is not taken as the sender (${fs.reason})`);
   // What an unverified sender is booked against by the coverage check (never a key for a per-buyer bound).
   ok(m.booking?.account === victim && m.booking?.ledger === "unverified", `A: a multisig envelope whose approvals do not verify is booked against the account it names, in the unverified ledger (${JSON.stringify(m.booking)})`);
   ok(fs.booking?.account === attacker && fs.booking?.ledger === null, `A: another address in the fee-payer slot is booked against the signer, whose balance the transaction draws on (${JSON.stringify(fs.booking)})`);
   const mr = inspectTempoSender(credential(TX_MULTISIG_REAL));
-  ok(mr.envelope === "multisig" && mr.claimed === msAccount && mr.verified === null && mr.booking?.account === msAccount && mr.booking?.ledger === "unverified", `A: a multisig whose owner approvals reach its threshold is still not verified, and is booked in the named account's one unverified ledger, never one per config (${mr.booking?.ledger})`);
+  ok(mr.envelope === "configurable" && mr.claimed === msAccount && mr.verified === null && mr.booking?.account === msAccount && mr.booking?.ledger === "unverified", `A: a multisig whose owner approvals reach its threshold is still not verified, and is booked in the named account's one unverified ledger, never one per config (${mr.booking?.ledger})`);
   for (const [name, raw] of [["one approval of two", TX_MULTISIG_SHORT], ["one owner approving twice", TX_MULTISIG_TWICE]]) {
     const x = inspectTempoSender(credential(raw));
     ok(x.verified === null && x.booking?.account === msAccount && x.booking?.ledger === "unverified", `A: a multisig with ${name} is booked in the unverified ledger, not the config's (${x.booking?.ledger})`);
   }
+  // Signing domains: the wire type is 0x05 either way, and only the domain the
+  // node checks ("tempo:configurable-account:*") makes approvals verify.
+  ok(/^0x76/.test(TX_MULTISIG_NEW_DOMAIN) && TxEnvelopeTempo.deserialize(TX_MULTISIG_NEW_DOMAIN).signature?.type === "configurable" && TxEnvelopeTempo.deserialize(TX_MULTISIG_OLD_DOMAIN).signature?.type === "configurable", "M: (fixture) both envelopes are Tempo transactions carrying a configurable account (0x05) signature");
+  ok(AccountConfig.getSignPayload({ account: msAccount, config: { version: 0n, threshold: 2, owners: msOwners.map((o) => ({ owner: o.a, weight: 1 })) }, payload: TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(TX)) }) === approvalDigest("tempo:configurable-account:signature", { account: msAccount, payload: TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(TX)) }), "M: the installed ox signs approvals under the node's domain, tempo:configurable-account:signature");
+  const nd = inspectTempoSender(credential(TX_MULTISIG_NEW_DOMAIN));
+  ok(nd.envelope === "configurable" && nd.verified === null && nd.booking?.ledger === "unverified" && nd.booking?.commitment === lc(AccountConfig.getCommitment({ version: 0n, threshold: 2, owners: msOwners.map((o) => ({ owner: o.a, weight: 1 })) })) && nd.booking.commitment === inspectTempoSender(credential(TX_MULTISIG_REAL)).booking.commitment, `M: approvals under tempo:configurable-account:signature verify and carry the config's commitment (${nd.reason})`);
+  const od = inspectTempoSender(credential(TX_MULTISIG_OLD_DOMAIN));
+  ok(od.envelope === "configurable" && od.verified === null && od.booking?.account === msAccount && od.booking?.ledger === "unverified" && od.booking?.commitment === null && /do not verify/.test(od.reason), `M: approvals under the pre-release tempo:multisig:signature domain do not verify, and the pull stays unproven on the client address (${od.reason})`);
+  const ndParties = tempoPaymentParties(credential(TX_MULTISIG_NEW_DOMAIN));
+  ok(msOwners.every((o) => ndParties.includes(o.a)) && ndParties.includes(msAccount), "M: the payment parties screened for a configurable account envelope include every owner whose approval recovers, beside the account");
+  ok(!msOwners.some((o) => tempoPaymentParties(credential(TX_MULTISIG_OLD_DOMAIN)).includes(o.a)), "M: approvals under the pre-release domain recover to no owner, so none is named");
   ok(inspectTempoSender(credential(TX_PLAIN)).booking === null, "A: control - a verified sender has no separate booking");
   const fsSelf = inspectTempoSender(credential(TX_FEE_SLOT_SELF));
   ok(fsSelf.claimed === attacker && fsSelf.verified === attacker, "A: control - the fee-payer slot naming the real signer is proven by the signature");
@@ -706,7 +731,7 @@ async function listen(app) {
     const k = generatePrivateKey();
     const base = TxEnvelopeTempo.from(TX);
     const config = { version: 0n, threshold: 1, owners: [{ owner: lc(privateKeyToAccount(k).address), weight: 1 }] };
-    const digest = MultisigConfig.getSignPayload({ account, config, payload: TxEnvelopeTempo.getSignPayload(base) });
+    const digest = AccountConfig.getSignPayload({ account, config, payload: TxEnvelopeTempo.getSignPayload(base) });
     return TxEnvelopeTempo.serialize(base, { signature: SignatureEnvelope.from({ account, config, signatures: [SignatureEnvelope.from(Secp256k1.sign({ payload: digest, privateKey: k }))] }) });
   };
   ok(/approvals verify/.test(inspectTempoSender(credential(freshConfigFor(victim))).reason) && /^0x[0-9a-f]{64}$/.test(inspectTempoSender(credential(freshConfigFor(victim))).booking.commitment), "C2: (control) a config made for the request verifies against itself, for any account it names");

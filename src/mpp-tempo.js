@@ -42,7 +42,7 @@ import { receiptHeader as tempoReceiptHeader, txFromReceiptHeader as tempoTxFrom
 import { tempo } from "mppx/server";
 import { mppxReplayStore } from "./mppx-store.js";
 import { mppChallengesSuppressed, clientFingerprint } from "./mpp-fallback.js";
-import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, MultisigConfig } from "ox/tempo";
+import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, AccountConfig } from "ox/tempo";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { Abis, Addresses } from "viem/tempo";
 import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -963,6 +963,10 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const lcAddress = (a) => (typeof a === "string" && ADDRESS_RE.test(a) ? a.toLowerCase() : null);
 const PRIMITIVE_ENVELOPES = new Set(["secp256k1", "p256", "webAuthn"]);
+// Tempo's multisig: a configurable account envelope (TIP-1107, wire type 0x05).
+// The ox decoder names it "configurable"; "multisig" is the pre-rename name,
+// kept so a decoder that still uses it is read the same way.
+const MULTISIG_ENVELOPES = new Set(["configurable", "multisig"]);
 
 /** Does a key authorization carried inline by a keychain transaction prove
  *  that `account` authorized `accessKey`? It must authorize exactly that key,
@@ -987,18 +991,23 @@ function inlineAuthorizationProves(ka, { account, accessKey, keyType, now }) {
   }
 }
 
-/** Do the owner approvals of a multisig envelope verify against the config
- *  it carries? Each must be a primitive signature over the multisig digest of
- *  `signPayload` (MultisigConfig.getSignPayload) by a distinct owner of that
- *  config, and their weights together must reach its threshold. Returns the
- *  config's commitment (lowercased) when they do, else null. Offline; never
- *  throws. It does not prove the config is the account's own on chain. */
+/** Do the owner approvals of a configurable account envelope (Tempo's
+ *  multisig, TIP-1107, wire type 0x05) verify against the config it carries?
+ *  Each must be a primitive signature over the account's approval digest of
+ *  `signPayload` (AccountConfig.getSignPayload, domain
+ *  "tempo:configurable-account:signature", the one the Tempo node checks) by
+ *  a distinct owner of that config, and their weights together must reach its
+ *  threshold. An approval made under the pre-release "tempo:multisig:*"
+ *  domain recovers to no owner here and is refused, as the node refuses it.
+ *  Returns the config's commitment (lowercased) when they verify, else null.
+ *  Offline; never throws. It does not prove the config is the account's own
+ *  on chain. */
 function multisigApprovalsCommitment(sig, signPayload) {
   try {
     const cfg = sig?.config;
     if (!cfg || !Array.isArray(cfg.owners) || !Array.isArray(sig.signatures) || !lcAddress(sig.account)) return null;
     const weightOf = new Map(cfg.owners.map((o) => [lcAddress(o.owner), Number(o.weight)]));
-    const digest = MultisigConfig.getSignPayload({ account: sig.account, config: cfg, payload: signPayload });
+    const digest = AccountConfig.getSignPayload({ account: sig.account, config: cfg, payload: signPayload });
     const seen = new Set();
     let total = 0;
     for (const s of sig.signatures) {
@@ -1010,7 +1019,7 @@ function multisigApprovalsCommitment(sig, signPayload) {
       total += weightOf.get(owner);
     }
     if (!(total >= Number(cfg.threshold)) || !(Number(cfg.threshold) >= 1)) return null;
-    return String(MultisigConfig.getCommitment(cfg)).toLowerCase();
+    return String(AccountConfig.getCommitment(cfg)).toLowerCase();
   } catch {
     return null;
   }
@@ -1084,7 +1093,8 @@ export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {
       const inlineAuthorization = inlineAuthorizationProves(tx.keyAuthorization, { account, accessKey, keyType: inner.type, now });
       return { ...out, keychain: { account, accessKey, inlineAuthorization }, reason: inlineAuthorization ? "access key authorized in this transaction" : "the key authorization it carries does not prove the account" };
     }
-    if (sig.type === "multisig") {
+    // A configurable account envelope (wire type 0x05).
+    if (MULTISIG_ENVELOPES.has(sig.type)) {
       if (lcAddress(sig.account) !== out.claimed) return { ...out, reason: "the multisig account is not the named sender" };
       const commitment = multisigApprovalsCommitment(sig, signPayload);
       // Unproven whatever the approvals say: they are checked only against
@@ -1398,6 +1408,18 @@ export function tempoPaymentParties(authorizationHeader) {
           if (sig.type === "keychain" && sig.inner && PRIMITIVE_ENVELOPES.has(sig.inner.type)) {
             const keyPayload = sig.version === "v1" ? signPayload : TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx), { from: lcAddress(sig.userAddress) });
             add(SignatureEnvelope.extractAddress({ payload: keyPayload, signature: sig.inner }));
+          }
+          // A configurable account acting as an access key (TIP-1111) names
+          // its own account inside the keychain envelope.
+          if (sig.type === "keychain" && MULTISIG_ENVELOPES.has(sig.inner?.type)) add(sig.inner.account);
+          // Every owner whose approval of a configurable account envelope
+          // recovers under the account's digest is screened too.
+          if (MULTISIG_ENVELOPES.has(sig.type) && sig.config && Array.isArray(sig.signatures) && sig.signatures.length <= AccountConfig.maxSignatures) {
+            const digest = AccountConfig.getSignPayload({ account: sig.account, config: sig.config, payload: signPayload });
+            for (const s of sig.signatures) {
+              if (!s || !PRIMITIVE_ENVELOPES.has(s.type)) continue;
+              try { add(SignatureEnvelope.extractAddress({ payload: digest, signature: s })); } catch { /* nothing to add */ }
+            }
           }
         }
       } catch { /* an unrecoverable signer adds nothing; verification refuses it */ }
