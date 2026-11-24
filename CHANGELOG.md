@@ -27,6 +27,15 @@ Tools:
   it is small enough. A fact not computed is null with its reason in limits,
   and every answer lists its sources. Celo joins the report chains, and an
   unsupported chain answers 422 naming the supported ones.
+- token-safety no longer returns a verdict: its verdict, because, blocking and
+  warnings fields are removed. Each answer lists the named facts found (flags,
+  each an id, a description and the measured value), what could not be checked
+  and why (unknown), its sources and limits, and a notice that these are
+  on-chain facts only and not investment advice. token-risk and token-risk-pro
+  carry the same notice, and a report that judges the token is written once
+  more and then withheld. The Solana token tools and the token brief list
+  named facts computed from their sources' fields and never pass through a
+  source's score, risk levels or verdict words.
 - fx-rate, fx-historical, fx-timeseries and fx-dashboard say before payment
   and in every answer that the ECB reference rates are available free of
   charge at ecb.europa.eu, and each answer says whether its rate is the ECB's

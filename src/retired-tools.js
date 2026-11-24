@@ -48,7 +48,7 @@ export const RETIRED_TOOLS = Object.freeze({
   // the crypto options book, Solana swap routing and token profiles, image
   // judgment, FRED search, metadata and the release calendar, crypto
   // headlines, avatar lookup), so it names none.
-  "solana-rpc": { retiredAt: "2026-11-23", replacement: null, note: "Nothing live serves raw Solana JSON-RPC; the sol-token tools read Solana token prices, pairs and safety." },
+  "solana-rpc": { retiredAt: "2026-11-23", replacement: null, note: "Nothing live serves raw Solana JSON-RPC; the sol-token tools read Solana token prices, pairs and risk facts." },
   "onchain-sql-week": { retiredAt: "2026-11-23", replacement: "onchain-sql" },
   "onchain-sql-range": { retiredAt: "2026-11-23", replacement: "onchain-sql" },
   "x-post-counts": { retiredAt: "2026-11-23", replacement: null, note: "x-search-recent returns the matching posts from the last 7 days, not counts by period." },
