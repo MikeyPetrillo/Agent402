@@ -276,7 +276,11 @@ await drive({
     return { ...m, counterAdd: slow(m.counterAdd), counterGet: slow(m.counterGet), windowAdd: slow(m.windowAdd), windowRead: slow(m.windowRead) };
   };
   async function harness(table = {}) {
-    useGuardsTable({ ...BASE, mcpOAuth: { ...BASE.mcpOAuth, ...table } });
+    // The table is drawn at random per run (scripts/lib/credits-guards-table.js):
+    // every bound a driver does not measure is opened wide, so only the one
+    // under test can refuse (a low pending cap per app would refuse the control).
+    const wide = { authorizePerIp: 10_000, registerPerIp: 10_000, pendingMax: 10_000, pendingPerAddress: 10_000, pendingPerClient: 10_000, pendingPerNetwork: 10_000, tokenPerIp: 10_000, lockoutMs: 3_600_000 };
+    useGuardsTable({ ...BASE, mcpOAuth: { ...BASE.mcpOAuth, ...wide, ...table } });
     const sent = [];
     const oa = createMcpOAuth({ credits: { balancesForEmail: async () => [], grantSpentToday: async () => 0 }, store: memStore(), clientStore: memStore(), requestStore: memStore(), secret: "s".repeat(32), baseUrl: "https://agent402.tools", limits: slowLimits(3), sendEmail: async (m) => { sent.push({ to: m.to, code: (/\b(\d{6})\b/.exec(m.text) || [])[1] }); return true; }, log: () => {} });
     const app = express();
