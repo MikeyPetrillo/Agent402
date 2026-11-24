@@ -103,7 +103,7 @@ const ALGO_PAYER = "A".repeat(58), ALGO_PAYTO = "B".repeat(58);
   ok(h.retry === "fresh-authorization" && !/covers/.test(h.hint) && /holds less of the asset than this call costs/.test(h.hint) && /\$0\.0050/.test(h.hint) && /Nothing was charged\./.test(h.hint), `EVM, balance unread: both readings, the amount, never "covers" (${h.hint})`);
   ok(/covers \$0\.0050/.test(hintFor({ reason: REVERT, balanceUsd: 1, priceUsd: 0.005, network: "eip155:8453", payer: "0x00000000000000000000000000000000000000a1" }).hint), "EVM on Base with a balance read that covers the price keeps its wording");
   const f = hintFor({ reason: "invalid_exact_evm_insufficient_balance", balanceUsd: null, priceUsd: 0.005, network: "eip155:10", payer: "0x00000000000000000000000000000000000000a1" });
-  ok(f.reason === "insufficient-funds" && f.retry === "fund-wallet" && /holds less of the asset than this call costs \(\$0\.0050\) on Optimism\./.test(f.hint), `EVM, the facilitator's own balance code: insufficient-funds with the amount (${f.hint})`);
+  ok(f.reason === "insufficient-funds" && f.retry === "fund-wallet" && /holds less of the asset than this call costs \(\$0\.0050\) on OP Mainnet\./.test(f.hint), `EVM, the facilitator's own balance code: insufficient-funds with the amount (${f.hint})`);
   // A message about the submitter's gas is not the buyer's balance.
   const g = hintFor({ reason: "invalid_exact_evm_transaction_simulation_failed", detail: "insufficient funds for gas * price + value", balanceUsd: null, priceUsd: 0.005, network: "eip155:10" });
   ok(g.reason !== "insufficient-funds", "an EVM message is not read for balance words (it can be the submitter's gas)");
