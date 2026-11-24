@@ -625,7 +625,7 @@ import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMo
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
 import { settleComplianceView } from "./settle-compliance.js";
-import { sanctionedRegionsMiddleware, sanctionedRegionsView } from "./sanctioned-regions.js";
+import { sanctionedRegionsMiddleware, sanctionedRegionsView, verifiedGeoPayer } from "./sanctioned-regions.js";
 import { applyActualCharge } from "./actual-charge.js";
 import { startLedgerRetention, ledgerRetentionStatus } from "./ledger-retention.js";
 import { recordSanctionsEvent, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
@@ -3113,16 +3113,20 @@ app.use(securityHeaders());
 // proved came through Cloudflare (req.viaCdn). A refused request that carried
 // a payment is kept in the sanctions events store as a rejected transaction.
 app.use(sanctionedRegionsMiddleware({
+  // A payment is recorded as a reportable event only when its signature
+  // proves its payer: an x402 exact authorization to our payTo, its signer
+  // recovered (verifiedGeoPayer). Anything else is counted only.
+  verify: (req) => verifiedGeoPayer(req, { payTo: WALLET_ADDRESS }),
   // The location headers are read in memory; the event keeps only the
   // sanctioned country or region code that is the refusal's reason.
-  record: ({ req, country, region }) => {
+  record: ({ req, payer, country, region }) => {
     let network = null, amount = null, asset = null;
     try {
       const p = decodePaymentHeader(paymentHeaderOf(req));
       const acc = p?.accepted || p;
       network = acc?.network ?? null; amount = acc?.amount ?? acc?.maxAmountRequired ?? null; asset = acc?.asset ?? null;
     } catch { /* an unreadable payment is still recorded */ }
-    return recordSanctionsEvent({ kind: "geo-payment", address: payerFromRequest(req), rail: req.headers?.authorization ? "mpp" : "x402", network, amount, asset, route: `${req.method} ${req.path}`, ip: req.ip, country, region });
+    return recordSanctionsEvent({ kind: "geo-payment", address: payer, rail: "x402", network, amount, asset, route: `${req.method} ${req.path}`, ip: req.ip, country, region });
   },
 }));
 // The report word's first read of the database (file mode reads at first use).

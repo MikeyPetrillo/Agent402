@@ -11,7 +11,8 @@
 // WHERE IT LIVES. With a state database: the `records` table, collection
 // `sanctions-events` (one row per event; ids sort by time). Without one: a
 // JSON-lines file (SANCTIONS_EVENTS_FILE, else agent402-sanctions-events.jsonl
-// under /data or the temp directory), read once and rewritten on a change.
+// under /data or the temp directory), read once; a new event is appended, a
+// filed or pruned one rewrites the file.
 //
 // THE REPORT WORD. An event that needs a report (`report`: "rejected" or
 // "blocked") is due from its time until an operator marks it filed
@@ -24,7 +25,7 @@
 // RETENTION. pruneSanctionsEvents removes events older than ten years
 // (SANCTIONS_EVENTS_RETENTION_YEARS, never less than 10), dry run by default;
 // an unfiled reportable event is never removed.
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { stateDbEnabled, stateDbSchema, stateQuery, records } from "./state-db.js";
@@ -72,6 +73,13 @@ function loadFile() {
     }
   } catch (e) { console.warn(`[sanctions-events] could not read ${f}: ${String(e?.message || e).slice(0, 120)}`); }
   return fileRows;
+}
+// A new row is appended (one line); a change to earlier rows (filed, pruned)
+// rewrites the file.
+function appendFileRow(row) {
+  const f = fileOf();
+  try { mkdirSync(dirname(f), { recursive: true }); } catch { /* exists */ }
+  appendFileSync(f, JSON.stringify(row) + "\n", { mode: 0o600 });
 }
 function saveFile() {
   const f = fileOf();
@@ -135,7 +143,7 @@ export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
       if (row.report && Array.isArray(dbCache.unfiled)) dbCache.unfiled.push(row);
     } else {
       loadFile().push(row);
-      saveFile();
+      appendFileRow(row);
     }
     console.warn(`[sanctions-events] recorded ${kind}${row.report ? ` (a ${row.report === "blocked" ? "blocked-property" : "rejected-transaction"} report is due by ${row.dueBy.slice(0, 10)})` : ""}`);
     return row;

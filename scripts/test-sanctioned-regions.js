@@ -60,7 +60,8 @@ const run = (mw, r) => new Promise((resolve) => {
 });
 {
   const recorded = [];
-  const mw = geo.sanctionedRegionsMiddleware({ env: {}, record: (e) => recorded.push(e) });
+  const logged = [];
+  const mw = geo.sanctionedRegionsMiddleware({ env: {}, record: (e) => recorded.push(e), log: (l) => logged.push(l) });
   const a = await run(mw, { ...req({ "cf-ipcountry": "KP" }), viaCdn: true });
   ok(a.status === 451 && a.body.charged === false && a.body.reason === "unavailable_in_region" && a.headers["cache-control"] === "no-store", "a blocked request is answered 451, charged:false, no-store");
   ok(!/sanction|ofac|treasury/i.test(JSON.stringify(a.body)), "the 451 body is neutral");
@@ -71,11 +72,75 @@ const run = (mw, r) => new Promise((resolve) => {
   ok((await run(mw, { ...req({ "cf-ipcountry": "KP" }), viaCdn: false })).status === "next", "a request that did not come through the CDN is not blocked on its own header");
   ok(recorded.length === 0, "a blocked request with no payment is counted, not stored");
   await run(mw, { ...req({ "cf-ipcountry": "IR", "payment-signature": "e30=" }), viaCdn: true });
-  ok(recorded.length === 1 && recorded[0].country === "IR", "a blocked request that carried a payment is recorded");
+  await new Promise((r) => setTimeout(r, 20));
+  ok(recorded.length === 0, "a blocked request whose payment proves no payer is counted, not stored");
+  // Paid route classes are never exempt; the legal pages' own assets are.
+  for (const p of ["/mcp", "/v1/chat/completions", "/api/uuid", "/api/decide/execute", "/ref/whois", "/aws/uuid", "/fonts/../server.js", "/fonts/x.js", "/terms/x", "/health/x"]) {
+    ok((await run(mw, { ...req({ "cf-ipcountry": "KP" }, p), viaCdn: true })).status === 451, `${p} is refused from a blocked region (never exempt)`);
+  }
+  for (const p of ["/fonts/geist-400-latin.woff2", "/logo.svg", "/favicon.svg", "/favicon.ico"]) {
+    ok((await run(mw, { ...req({ "cf-ipcountry": "KP" }, p), viaCdn: true })).status === "next", `${p} answers from anywhere (a legal page's asset)`);
+  }
   const off = geo.sanctionedRegionsMiddleware({ env: { SANCTIONS_GEO_BLOCK: "off" } });
   ok((await run(off, { ...req({ "cf-ipcountry": "IR" }), viaCdn: true })).status === "next", "SANCTIONS_GEO_BLOCK=off turns the block off");
   const v = geo.sanctionedRegionsView({});
-  ok(v.refused >= 2 && v.refusedWithPayment === 1 && v.byCountry.KP >= 1 && v.regionHeaders === "absent", "the operator view counts refusals and says region headers are absent");
+  ok(v.refused >= 2 && v.refusedWithPayment === 1 && v.countedOnly.unverified === 1 && v.eventsRecorded === 0 && v.byCountry.KP >= 1 && v.regionHeaders === "absent", "the operator view counts refusals, the unverified payment as counted only, and says region headers are absent");
+  ok(!/sanction|IR|KP|UA-/.test(logged.join(" ").replace(/\[sanctions-geo\]/g, "")), `the refusal log line names no location (${logged[0] || "none"})`);
+}
+
+// ---- the geo-payment gate: only a payment whose signature proves its payer is reportable
+{
+  const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
+  const PAY_TO = "0x000000000000000000000000000000000000dEaD";
+  const accept = { scheme: "exact", network: "eip155:8453", amount: "10000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: PAY_TO, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const TYPES = { TransferWithAuthorization: [{ name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" }] };
+  const signed = async (account, nonce = `0x${randomBytes(32).toString("hex")}`) => {
+    const t = Math.floor(Date.now() / 1000);
+    const authorization = { from: account.address, to: PAY_TO, value: "10000", validAfter: String(t - 60), validBefore: String(t + 300), nonce };
+    const signature = await account.signTypedData({ domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: accept.asset }, types: TYPES, primaryType: "TransferWithAuthorization", message: { ...authorization, value: 10000n, validAfter: BigInt(authorization.validAfter), validBefore: BigInt(authorization.validBefore) } });
+    return Buffer.from(JSON.stringify({ x402Version: 2, accepted: accept, payload: { signature, authorization } })).toString("base64");
+  };
+  const outerFile = process.env.SANCTIONS_EVENTS_FILE;
+  process.env.SANCTIONS_EVENTS_FILE = join(mkdtempSync(join(tmpdir(), "geo-gate-")), "events.jsonl");
+  ev.__resetSanctionsEventsForTests();
+  geo.__resetSanctionedRegionsForTests();
+  const mw = geo.sanctionedRegionsMiddleware({ env: {}, log: () => {}, verify: (r) => geo.verifiedGeoPayer(r, { payTo: PAY_TO }),
+    record: ({ req: r, payer, country, region }) => ev.recordSanctionsEvent({ kind: "geo-payment", address: payer, rail: "x402", route: `${r.method} ${r.path}`, ip: r.ip, country, region }) });
+  // 500 forged payments (a stated address, no valid signature; and the MPP form) from one client.
+  const victim = privateKeyToAccount(generatePrivateKey());
+  const forged = Buffer.from(JSON.stringify({ x402Version: 2, accepted: accept, payload: { signature: "0x" + "11".repeat(65), authorization: { from: victim.address, to: PAY_TO, value: "10000", validAfter: "0", validBefore: "9999999999", nonce: "0x" + "22".repeat(32) } } })).toString("base64");
+  for (let i = 0; i < 500; i++) {
+    const h = i % 2 ? { "payment-signature": forged } : { authorization: "Payment x" };
+    await run(mw, { ...req({ "cf-ipcountry": "IR", ...h }), ip: "203.0.113.9", viaCdn: true });
+  }
+  await new Promise((r) => setTimeout(r, 50));
+  ok(ev.sanctionsReportStatus() === "clear" && (await ev.sanctionsEventsOperatorView()).recent.length === 0, "500 forged payments from a blocked region record no reportable event; the word stays clear");
+  // One genuinely signed payment: one event, naming the signer.
+  const buyer = privateKeyToAccount(generatePrivateKey());
+  const hdr = await signed(buyer);
+  await run(mw, { ...req({ "cf-ipcountry": "IR", "payment-signature": hdr }), ip: "203.0.113.10", viaCdn: true });
+  await new Promise((r) => setTimeout(r, 50));
+  let rows = (await ev.sanctionsEventsOperatorView()).recent;
+  ok(rows.length === 1 && rows[0].address?.toLowerCase() === buyer.address.toLowerCase() && rows[0].country === "IR" && ev.sanctionsReportStatus() === "due", "a payment whose signature verifies is recorded once, naming its signer; the word reads due");
+  // The same payment again: deduped per payer and nonce.
+  for (let i = 0; i < 3; i++) await run(mw, { ...req({ "cf-ipcountry": "IR", "payment-signature": hdr }), ip: "203.0.113.10", viaCdn: true });
+  await new Promise((r) => setTimeout(r, 50));
+  ok((await ev.sanctionsEventsOperatorView()).recent.length === 1, "the same payment re-sent records nothing more");
+  // One client address: at most GEO_EVENTS_PER_CLIENT_DAY events a day.
+  for (let i = 0; i < geo.GEO_EVENTS_PER_CLIENT_DAY + 4; i++) await run(mw, { ...req({ "cf-ipcountry": "IR", "payment-signature": await signed(privateKeyToAccount(generatePrivateKey())) }), ip: "203.0.113.11", viaCdn: true });
+  await new Promise((r) => setTimeout(r, 100));
+  rows = (await ev.sanctionsEventsOperatorView()).recent;
+  ok(rows.filter((r) => r.ip === "203.0.113.11").length === geo.GEO_EVENTS_PER_CLIENT_DAY, `one client address records at most ${geo.GEO_EVENTS_PER_CLIENT_DAY} events a day`);
+  // Syria: in the block list by choice, not a program: refused, counted, never reported.
+  const before = rows.length;
+  const sy = await run(mw, { ...req({ "cf-ipcountry": "SY", "payment-signature": await signed(privateKeyToAccount(generatePrivateKey())) }), ip: "203.0.113.12", viaCdn: true });
+  await new Promise((r) => setTimeout(r, 50));
+  ok(sy.status === 451 && (await ev.sanctionsEventsOperatorView()).recent.length === before && geo.sanctionedRegionsView({}).countedOnly.nonProgram === 1, "a verified payment from SY is refused and counted, never recorded as a report");
+  // File mode appends one line per event (never rewrites the file for a new one).
+  const { readFileSync: rf } = await import("node:fs");
+  ok(rf(process.env.SANCTIONS_EVENTS_FILE, "utf8").trim().split("\n").length === rows.length, "file mode holds one line per event");
+  process.env.SANCTIONS_EVENTS_FILE = outerFile;
+  ev.__resetSanctionsEventsForTests();
 }
 
 // ---- unit: the store
@@ -149,14 +214,29 @@ try {
   const accepted = (pr.accepts || []).find((a) => a.scheme === "exact" && a.network === "eip155:8453");
   ok(!!accepted, "the offer names an exact Base accept");
   const now = Math.floor(Date.now() / 1000);
-  const payment = Buffer.from(JSON.stringify({ x402Version: 2, resource: pr.resource, accepted, payload: { signature: "0x" + "11".repeat(65), authorization: { from: "0x1111111111111111111111111111111111111111", to: accepted.payTo, value: accepted.amount, validAfter: String(now - 60), validBefore: String(now + 300), nonce: "0x" + randomBytes(32).toString("hex") } } })).toString("base64");
-  const paid = (country, extra = {}) => fetch(`${B}/api/hash`, { method: "POST", headers: { "Content-Type": "application/json", "PAYMENT-SIGNATURE": payment, ...cdn(country), ...extra }, body: JSON.stringify({ text: "hi" }) });
+  const forged = Buffer.from(JSON.stringify({ x402Version: 2, resource: pr.resource, accepted, payload: { signature: "0x" + "11".repeat(65), authorization: { from: "0x1111111111111111111111111111111111111111", to: accepted.payTo, value: accepted.amount, validAfter: String(now - 60), validBefore: String(now + 300), nonce: "0x" + randomBytes(32).toString("hex") } } })).toString("base64");
+  // A genuinely signed payment (a fresh nonce each), as a buyer's client sends it.
+  const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
+  const buyer = privateKeyToAccount(generatePrivateKey());
+  const signedPayment = async () => {
+    const authorization = { from: buyer.address, to: accepted.payTo, value: String(accepted.amount), validAfter: String(now - 60), validBefore: String(now + 300), nonce: "0x" + randomBytes(32).toString("hex") };
+    const signature = await buyer.signTypedData({ domain: { name: accepted.extra.name, version: accepted.extra.version, chainId: Number(accepted.network.split(":")[1]), verifyingContract: accepted.asset },
+      types: { TransferWithAuthorization: [{ name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" }] },
+      primaryType: "TransferWithAuthorization", message: { ...authorization, value: BigInt(authorization.value), validAfter: BigInt(authorization.validAfter), validBefore: BigInt(authorization.validBefore) } });
+    return Buffer.from(JSON.stringify({ x402Version: 2, resource: pr.resource, accepted, payload: { signature, authorization } })).toString("base64");
+  };
+  const paidWith = (payment, country, extra = {}) => fetch(`${B}/api/hash`, { method: "POST", headers: { "Content-Type": "application/json", "PAYMENT-SIGNATURE": payment, ...cdn(country), ...extra }, body: JSON.stringify({ text: "hi" }) });
+  const payment = forged;
+  const paid = (country, extra = {}) => paidWith(payment, country, extra);
 
-  const blocked = await paid("IR");
+  for (let i = 0; i < 20; i++) await paid("IR");
+  await new Promise((r) => setTimeout(r, 100));
+  ok((await (await fetch(`${B}/api/gateway-status`)).json()).sanctionsReport?.status === "clear", "forged payments from a blocked region leave the public word clear (nothing reportable recorded)");
+  const blocked = await paidWith(await signedPayment(), "IR");
   const bb = await blocked.json().catch(() => ({}));
   ok(blocked.status === 451 && bb.charged === false, `a paid request from Iran through the CDN is answered 451, charged:false (got ${blocked.status})`);
   ok(verifies === 0 && settles === 0, "the blocked payment was never verified or settled");
-  const ukr = await paid("UA", { "cf-region-code": "43" });
+  const ukr = await paidWith(await signedPayment(), "UA", { "cf-region-code": "43" });
   ok(ukr.status === 451 && verifies === 0, "a paid request from Crimea is answered 451 before verification");
 
   const control = await paid("US");
@@ -169,14 +249,15 @@ try {
   ok((await fetch(`${B}/terms`, { headers: cdn("KP") })).status === 200, "/terms answers from North Korea");
   ok((await fetch(`${B}/api/pricing`, { headers: cdn("KP") })).status === 451, "a free route is blocked too");
 
+  await new Promise((r) => setTimeout(r, 100));
   const status = await (await fetch(`${B}/api/gateway-status`)).json();
   ok(status.sanctionsReport?.status === "due" && Object.keys(status.sanctionsReport).length === 1, "the public status reads one word: due");
   const opView = await (await fetch(`${B}/__operator/sanctions-events.json`, { headers: { "X-Operator-Token": OP } })).json();
-  ok(opView.unfiled.length === 2 && opView.unfiled.every((e) => e.kind === "geo-payment" && e.address === "0x1111111111111111111111111111111111111111" && e.network === "eip155:8453"), "the operator view holds both refused payments in full");
+  ok(opView.unfiled.length === 2 && opView.unfiled.every((e) => e.kind === "geo-payment" && e.address?.toLowerCase() === buyer.address.toLowerCase() && e.network === "eip155:8453"), "the operator view holds both verified refused payments in full, naming the signer");
   const byCountry = Object.fromEntries(opView.unfiled.map((e) => [e.country, e.region]));
   ok(byCountry.IR === null && byCountry.UA === "UA-43", `each event keeps the refusal's country or region code (got ${JSON.stringify(byCountry)})`);
   ok(opView.unfiled.every((e) => !JSON.stringify(e).includes("Crimea") && !("city" in e) && !("latitude" in e)), "no other location value is stored with an event");
-  ok(opView.geo.refusedWithPayment === 2, "the operator view counts the refused payments");
+  ok(opView.geo.refusedWithPayment === 22 && opView.geo.eventsRecorded === 2 && opView.geo.countedOnly.unverified === 20, `the operator view counts the refused payments, recorded and counted only (${JSON.stringify(opView.geo.countedOnly)})`);
   ok((await fetch(`${B}/__operator/sanctions-events.json`)).status === 404, "the events are not readable without the token");
   const filed = await fetch(`${B}/__operator/sanctions-events/filed`, { method: "POST", headers: { "Content-Type": "application/json", "X-Operator-Token": OP }, body: JSON.stringify({ all: true, reference: "RS-TEST-1" }) });
   ok(filed.status === 200 && (await filed.json()).marked === 2, "an operator marks them filed");
