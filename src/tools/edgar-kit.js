@@ -357,18 +357,20 @@ export const EDGAR_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "All XBRL concepts reported by a company. Default returns a compact summary per tag (label, unit, latest value, latest end date) - typically a few hundred KB. Pass tags=Revenues,Assets,NetIncomeLoss to get full time-series for just those concepts. Source: data.sec.gov/api/xbrl/companyfacts. ?ticker=AAPL&tags=Revenues,Assets",
+      "All XBRL concepts reported by a company. Default returns a compact summary per tag (label, unit, latest value, latest end date) - typically a few hundred KB. Pass tags=RevenueFromContractWithCustomerExcludingAssessedTax,Assets,NetIncomeLoss to get full time-series for just those concepts. Revenue sits under different tags by filer: most companies report it as RevenueFromContractWithCustomerExcludingAssessedTax since ASC 606 (Apple's Revenues series ends in fiscal 2018), while some, such as many banks and insurers, still use Revenues; pass both to cover either. Source: data.sec.gov/api/xbrl/companyfacts. ?ticker=AAPL&tags=RevenueFromContractWithCustomerExcludingAssessedTax,Assets",
     tags: ["edgar", "sec", "xbrl", "financials", "fundamentals", "facts", "company"],
     discovery: {
       // The published example names two concepts: its answer is tens of KB,
-      // where the summary of every tag (no `tags`) is over a hundred.
-      input: { ticker: "AAPL", tags: "Revenues,Assets" },
+      // where the summary of every tag (no `tags`) is over a hundred. Apple's
+      // revenue concept since fiscal 2019 is the ASC 606 one (its Revenues
+      // series stops at fiscal 2018), so the example answers current years.
+      input: { ticker: "AAPL", tags: "RevenueFromContractWithCustomerExcludingAssessedTax,Assets" },
       inputSchema: {
         properties: {
           ticker: { type: "string", description: "US stock ticker (alternative to cik)" },
           cik: { type: "string", description: "SEC CIK number (alternative to ticker)" },
           taxonomy: { type: "string", description: 'Optional taxonomy filter, e.g. "us-gaap" or "dei"' },
-          tags: { type: "string", description: "Optional comma-separated tag list - when set, returns full time series for ONLY these tags (e.g. Revenues,Assets,NetIncomeLoss)" },
+          tags: { type: "string", description: "Optional comma-separated tag list - when set, returns full time series for ONLY these tags (e.g. RevenueFromContractWithCustomerExcludingAssessedTax,Assets,NetIncomeLoss; some filers report revenue as Revenues instead)" },
         },
       },
       output: {
@@ -376,8 +378,13 @@ export const EDGAR_TOOLS = [
           cik: "0000320193",
           entityName: "Apple Inc.",
           mode: "full",
-          tagsFilter: ["Revenues", "Assets"],
-          taxonomies: { "us-gaap": { Revenues: { label: "Revenues", units: { USD: [{ end: "2018-09-29", val: 265595000000, fy: 2018, fp: "FY", form: "10-K" }] } } } },
+          tagsFilter: ["RevenueFromContractWithCustomerExcludingAssessedTax", "Assets"],
+          taxonomies: {
+            "us-gaap": {
+              RevenueFromContractWithCustomerExcludingAssessedTax: { label: "Revenue from Contract with Customer, Excluding Assessed Tax", units: { USD: [{ start: "2025-09-28", end: "2026-09-26", val: 478834000000, fy: 2026, fp: "FY", form: "10-K", filed: "2026-11-03" }] } },
+              Assets: { label: "Assets", units: { USD: [{ end: "2026-09-26", val: 404548000000, fy: 2026, fp: "FY", form: "10-K", filed: "2026-11-03" }] } },
+            },
+          },
         },
       },
     },
