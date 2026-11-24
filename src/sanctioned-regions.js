@@ -21,9 +21,12 @@
 // SANCTIONS_GEO_COUNTRIES (a comma list replacing the default country set).
 // The exempt paths (/health and the legal pages) answer from anywhere.
 //
-// RECORDS. Every refusal is counted (operator view). A refused request that
-// carried a payment is recorded in the sanctions events store
-// (src/sanctions-events.js) as a rejected transaction.
+// RECORDS. Every refusal is counted in memory (operator view, by country). A
+// refused request that carried a payment is recorded in the sanctions events
+// store (src/sanctions-events.js) as a rejected transaction. No location
+// header is ever stored: the country and region are read in memory for the
+// verdict, and Cloudflare's other location headers (city, postal code,
+// coordinates, time zone) are not read at all.
 import { paymentHeaderOf } from "./payer.js";
 
 export const DEFAULT_SANCTIONED_COUNTRIES = Object.freeze(["CU", "IR", "KP", "SY"]);

@@ -96,7 +96,9 @@ export function addBusinessDays(ms, days = REPORT_BUSINESS_DAYS) {
  * row, or null when the store did not take it (logged).
  * Fields: kind (required, a SANCTIONS_EVENT_KINDS key), address, rail,
  * network, amount (atomic units or USD as `amountUsd`), asset, route,
- * country, region, ip, listPublishDate, via, refundId, detail.
+ * ip, listPublishDate, via, refundId, detail. Location headers (country,
+ * region, city, coordinates) are never stored: a geo-payment event's kind says
+ * it came from a sanctioned region, and nothing more of the location is kept.
  */
 export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
   try {
@@ -114,8 +116,6 @@ export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
       amountUsd: num(ev.amountUsd),
       asset: clip(ev.asset, 80),
       route: clip(ev.route, 200),
-      country: clip(ev.country, 8),
-      region: clip(ev.region, 40),
       ip: clip(ev.ip, 64),
       listPublishDate: clip(ev.listPublishDate, 40),
       via: clip(ev.via, 80),

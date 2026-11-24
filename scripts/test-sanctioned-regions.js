@@ -164,6 +164,7 @@ try {
   ok(status.sanctionsReport?.status === "due" && Object.keys(status.sanctionsReport).length === 1, "the public status reads one word: due");
   const opView = await (await fetch(`${B}/__operator/sanctions-events.json`, { headers: { "X-Operator-Token": OP } })).json();
   ok(opView.unfiled.length === 2 && opView.unfiled.every((e) => e.kind === "geo-payment" && e.address === "0x1111111111111111111111111111111111111111" && e.network === "eip155:8453"), "the operator view holds both refused payments in full");
+  ok(opView.unfiled.every((e) => !("country" in e) && !("region" in e) && !JSON.stringify(e).includes("Crimea") && !/"(IR|UA)"/.test(JSON.stringify(e))), "no location header is stored with an event");
   ok(opView.geo.refusedWithPayment === 2, "the operator view counts the refused payments");
   ok((await fetch(`${B}/__operator/sanctions-events.json`)).status === 404, "the events are not readable without the token");
   const filed = await fetch(`${B}/__operator/sanctions-events/filed`, { method: "POST", headers: { "Content-Type": "application/json", "X-Operator-Token": OP }, body: JSON.stringify({ all: true, reference: "RS-TEST-1" }) });

@@ -3099,14 +3099,15 @@ app.use(securityHeaders());
 // proved came through Cloudflare (req.viaCdn). A refused request that carried
 // a payment is kept in the sanctions events store as a rejected transaction.
 app.use(sanctionedRegionsMiddleware({
-  record: ({ req, country, region }) => {
+  // The location headers are read in memory only; the event keeps none of them.
+  record: ({ req }) => {
     let network = null, amount = null, asset = null;
     try {
       const p = decodePaymentHeader(paymentHeaderOf(req));
       const acc = p?.accepted || p;
       network = acc?.network ?? null; amount = acc?.amount ?? acc?.maxAmountRequired ?? null; asset = acc?.asset ?? null;
     } catch { /* an unreadable payment is still recorded */ }
-    return recordSanctionsEvent({ kind: "geo-payment", address: payerFromRequest(req), rail: req.headers?.authorization ? "mpp" : "x402", network, amount, asset, route: `${req.method} ${req.path}`, country, region, ip: req.ip });
+    return recordSanctionsEvent({ kind: "geo-payment", address: payerFromRequest(req), rail: req.headers?.authorization ? "mpp" : "x402", network, amount, asset, route: `${req.method} ${req.path}`, ip: req.ip });
   },
 }));
 // The report word's first read of the database (file mode reads at first use).
