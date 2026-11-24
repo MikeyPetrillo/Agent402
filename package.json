@@ -141,6 +141,6 @@
   "devDependencies": {
     "@modelcontextprotocol/client": "2.4.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   }
 }
