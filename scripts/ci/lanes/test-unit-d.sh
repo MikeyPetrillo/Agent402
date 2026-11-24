@@ -260,6 +260,8 @@ t node scripts/test-package-shed-retry.js
 t node scripts/test-skill-pack-steps.js
 # Every skill-pack step sends only input keys its tool declares (boots its own FREE_MODE server on port 0)
 t node scripts/test-skill-step-inputs.js
+# The charge sentence prints on a route call and never inside a step (marks offline, then its own FREE_MODE server on port 0)
+t node scripts/test-not-charged-scope.js
 # A pack's copy matches its run mode (chain vs fanout); wallet-audit reads a token the wallet holds (offline)
 t node scripts/test-pack-copy-modes.js
 # The content-pipeline guide and wiki derive the EVM-only, no-Tempo stages from isLongRunningSlug (offline)

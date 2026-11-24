@@ -19,6 +19,7 @@ import { Worker } from "node:worker_threads";
 import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 import { createPoolAdmission, poolCaller } from "../pool-admission.js";
+import { notChargedHere } from "../not-charged.js";
 
 const PDF_WORKER = fileURLToPath(new URL("./pdf-worker.js", import.meta.url));
 // What the worker's import graph reads (lazy-deps.js).
@@ -41,8 +42,8 @@ let running = 0;
 const waiting = [];
 const admission = createPoolAdmission({ soft: PDF_QUEUE_MAX, hard: PDF_QUEUE_HARD_MAX, hardBytes: PDF_QUEUE_HARD_BYTES });
 const shed = (message) => Object.assign(new Error(message), { statusCode: 503, retryAfter: 5, shed: true });
-const busy = () => shed("PDF processing is busy; retry in a few seconds. Nothing was charged.");
-const busyOwn = () => shed("PDF processing is busy, with this caller's earlier documents already waiting; send this one once one of them is answered. Nothing was charged.");
+const busy = () => shed(`PDF processing is busy; retry in a few seconds.${notChargedHere()}`);
+const busyOwn = () => shed(`PDF processing is busy, with this caller's earlier documents already waiting; send this one once one of them is answered.${notChargedHere()}`);
 function acquire(who, bytes) {
   if (running < PDF_WORKERS_MAX && waiting.length === 0) { running++; admission.hold(who); return Promise.resolve(); }
   const admitted = admission.admit(waiting, who, bytes);

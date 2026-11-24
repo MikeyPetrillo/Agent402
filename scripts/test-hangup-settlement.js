@@ -530,7 +530,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   ok(/registerWalletBlocklistHook\(server\);\s*\n\s*registerClientGoneSettleHook\(server\);/.test(payments), "payments.js registers the client-gone settle hook beside the wallet blocklist");
   ok(/transportContext\?\.request\?\.adapter\?\.req/.test(payments) && /if \(!req \|\| !chargeCancelledForClientGone\(req\)\) return;/.test(payments) && /reason: "client_disconnected"/.test(payments), "the x402 hook aborts only when the charge is cancelled (gone + ticket)");
   const belt = server.indexOf("if (clientGoneBeforeFirstByte(req)) throw clientGoneError(");
-  const handlerCall = server.indexOf("? await runInAbortableScope(() => runAsCallerOf(req, () => tool.handler(input, req))");
+  const handlerCall = server.indexOf("? await runInAbortableScope(() => runAsCallerOf(req, () => runAsRouteCall(() => tool.handler(input, req)))");
   ok(belt > 0 && handlerCall > belt && handlerCall - belt < 2500, "the dispatcher's belt runs immediately before the handler call");
   ok(belt > 0 && handlerCall > belt && !/\bawait\b/.test(server.slice(belt, handlerCall).replace(/\/\/[^\n]*/g, "")), "nothing between the belt and the handler call awaits");
   // The caller scope (src/dispatch-caller.js) starts the handler in the same
@@ -627,7 +627,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   ok(/const denied = hangupTicketDenial\(req\);[\s\S]{0,1400}\$\{denied \? `; not forgiven: \$\{denied\}` : ""\}/.test(server), "the owed line names why the run was not forgiven");
   ok(/priceFor: \(method, path, req\) => \{[\s\S]{0,700}longRunning: isLongRunningSlug\(def\.slug\), runSeconds: routeRunSeconds\(def\.slug\) \} : null;\s*\n\s*\},\s*\n\s*\/\/ Input check before the relay round trip/.test(server), "the Tempo GATE's priceFor carries longRunning and the route's run seconds (not only the challenge appender)");
   // The composite's client-gone signal aborts only when the charge is cancelled.
-  ok(/\? await runInAbortableScope\(\(\) => runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\), \{ signal: clientGoneCtl\.signal \}\)/.test(server), "the dispatcher runs a composite with the client-gone signal ({ signal })");
+  ok(/\? await runInAbortableScope\(\(\) => runAsCallerOf\(req, \(\) => runAsRouteCall\(\(\) => tool\.handler\(input, req\)\)\), \{ signal: clientGoneCtl\.signal \}\)/.test(server), "the dispatcher runs a composite with the client-gone signal ({ signal })");
   ok(/res\.once\("close", \(\) => \{ if \(chargeCancelledForClientGone\(req\)\) ctl\.abort\(clientGoneError\(\)\); \}\);/.test(server), "the dispatcher aborts the composite's signal only when the charge is cancelled");
   const gatewayKit = readFileSync(new URL("../src/tools/llm-gateway-kit.js", import.meta.url), "utf8");
   const imagesKit = readFileSync(new URL("../src/tools/llm-images-fast-kit.js", import.meta.url), "utf8");

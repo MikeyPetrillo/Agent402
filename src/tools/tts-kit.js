@@ -62,6 +62,7 @@ import { currentCallerKey } from "../request-timing.js";
 import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, KIND } from "../upstream-deadline.js";
 import { settleBeforeUpstream } from "../settle-first.js";
 import { setServedModelHeaders, logSpeechServed } from "../speech-served.js";
+import { notChargedHere } from "../not-charged.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
@@ -539,7 +540,7 @@ function makeRouteHandler(tierSlug) {
     const gated = Number(req?.__meteredQuoteUsd);
     if (TTS_QUOTE[tierSlug] && Number.isFinite(gated) && gated > 0) {
       const q = ttsQuoteUsd(tierSlug, ttsQuoteChars(input));
-      if (q > gated + 1e-9) throw bad(`This request was quoted at $${gated} but the text being served quotes $${q}. Nothing was charged; resend the request exactly as it should be served.`);
+      if (q > gated + 1e-9) throw bad(`This request was quoted at $${gated} but the text being served quotes $${q}.${notChargedHere()} Resend the request exactly as it should be served.`);
     }
     const out = await inner(input);
     if (out?.model) {

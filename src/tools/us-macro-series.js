@@ -65,6 +65,7 @@
 // need a key this server does not hold.
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { CAP_NAMES } from "../upstream-cap-refusals.js";
+import { notChargedHere } from "../not-charged.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -254,7 +255,7 @@ export function _resetUsMacroForTest() { cache.clear(); inflight.clear(); blsDay
 
 // The publisher did not answer, or answered a refusal (a BLS daily threshold
 // on its side included): the upstream's outage, not ours.
-const busy = (what) => Object.assign(bad(`${what} did not answer or refused the read (the publisher's own limit or outage); retry shortly. Nothing was charged.`, 503), { retryAfter: 60, attribution: "upstream" });
+const busy = (what) => Object.assign(bad(`${what} did not answer or refused the read (the publisher's own limit or outage); retry shortly.${notChargedHere()}`, 503), { retryAfter: 60, attribution: "upstream" });
 
 // ---- BLS ---------------------------------------------------------------------
 /** One decade of a BLS series (startYear a multiple of 10), oldest first. */
@@ -264,7 +265,7 @@ async function blsDecade(id, startYear) {
   const hit = cached(k);
   if (hit) return hit;
   return once(k, async () => {
-    if (!takeBlsQuery()) throw Object.assign(bad("The U.S. Bureau of Labor Statistics daily query allowance of this server is used up; this decade of the series is not held yet. Retry tomorrow, or ask for a window this server has read today. Nothing was charged.", 503), { retryAfter: 3600, capRefusal: CAP_NAMES.blsDay });
+    if (!takeBlsQuery()) throw Object.assign(bad(`The U.S. Bureau of Labor Statistics daily query allowance of this server is used up; this decade of the series is not held yet. Retry tomorrow, or ask for a window this server has read today.${notChargedHere()}`, 503), { retryAfter: 3600, capRefusal: CAP_NAMES.blsDay });
     const key = blsKey();
     const body = { seriesid: [id], startyear: String(startYear), endyear: String(endYear), ...(key ? { registrationkey: key } : {}) };
     const url = key ? "https://api.bls.gov/publicAPI/v2/timeseries/data/" : "https://api.bls.gov/publicAPI/v1/timeseries/data/";
@@ -388,7 +389,7 @@ async function withinWait(p, what) {
   let timer;
   p.catch(() => {});
   try {
-    return await Promise.race([p, new Promise((_, rej) => { timer = setTimeout(() => rej(Object.assign(bad(`${what} is being read; retry in 30 s. Nothing was charged.`, 503), { retryAfter: 30 })), PUBLISHER_WAIT_MS); timer.unref?.(); })]);
+    return await Promise.race([p, new Promise((_, rej) => { timer = setTimeout(() => rej(Object.assign(bad(`${what} is being read; retry in 30 s.${notChargedHere()}`, 503), { retryAfter: 30 })), PUBLISHER_WAIT_MS); timer.unref?.(); })]);
   } finally { clearTimeout(timer); }
 }
 const csvCells = (line) => { const out = []; let cur = "", q = false; for (const ch of line) { if (ch === '"') q = !q; else if (ch === "," && !q) { out.push(cur); cur = ""; } else cur += ch; } out.push(cur); return out.map((c) => c.trim()); };

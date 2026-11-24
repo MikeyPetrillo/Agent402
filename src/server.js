@@ -128,6 +128,7 @@ import { PRE_PAYMENT_WIRES, meteredPrePaymentRefusal } from "./gateway-prepaymen
 import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, createCoverRefusalLogSampler, stripControlChars, withPushExceptionText } from "./prepayment-refusal.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
+import { runAsRouteCall } from "./not-charged.js";
 // Metered settlement ships DARK, like the upto scheme it rides on: it changes
 // what a buyer is charged, so it turns on deliberately and can be turned off
 // without a deploy. Off means every settle is the flat ceiling, as today.
@@ -4102,6 +4103,7 @@ app.use(createLargeBodyGate({
   isPaid: (req) => looksLikePayment(req.headers),
   bodyQuoted: (req) => Boolean(priceFnOf(CATALOG[`POST ${String(req.path).toLowerCase().replace(/\/+$/, "")}`])),
   freeMode: FREE_MODE,
+  pushException: (req, message) => withPushException(req, message),
   unpaidLimiter: largeBodyUnpaidLimiter,
   clientKey: clientIp,
   maxInflightBytes: largeBodyInflightMaxBytes(),
@@ -4345,14 +4347,16 @@ app.use((req, res, next) => {
   const twin = m === "GET" ? "POST" : m === "POST" ? "GET" : null;
   if (!COMPOSITE_METHOD_PATHS.has(`${m} ${req.path}`) && !(twin && COMPOSITE_METHOD_PATHS.has(`${twin} ${req.path}`))) return next();
   res.set("Cache-Control", "no-store").set("Retry-After", "60");
-  return res.status(503).json({ error: "This server is redeploying; premium report generation restarts on the new build in about a minute. Not charged - please retry." });
+  return res.status(503).json({ error: withPushException(req, "This server is redeploying; premium report generation restarts on the new build in about a minute. Nothing was charged. Please retry.") });
 });
 
 // RugCheck-backed tools pause themselves while RugCheck is not answering
 // (src/rugcheck-pause.js): ahead of every payment gate, so the paused answer
 // is a free 503 with Retry-After, never a 402 for a call that can only fail.
 app.use(rugcheckPauseMiddleware(
-  Object.entries(CATALOG).filter(([, d]) => RUGCHECK_SLUGS.has(d.slug)).map(([route]) => route)
+  Object.entries(CATALOG).filter(([, d]) => RUGCHECK_SLUGS.has(d.slug)).map(([route]) => route),
+  undefined,
+  { pushException: (req, message) => withPushException(req, message) },
 ));
 
 // With no active stock provider (src/tools/stock-provider.js) the stock tools
@@ -11859,6 +11863,7 @@ const asyncRouteOf = (req) => { const def = CATALOG[`POST ${req.path}`]; return 
 const asyncJobs = createAsyncJobs({
   port: () => loopbackPort, store: asyncJobStore, onChargedFailure: bookAsyncChargedFailure,
   asyncRouteOf,
+  pushException: (req, message) => withPushException(req, message),
   profileOfSlug: (slug) => asyncProfileBySlug(slug),
   // A job's debt books what the buyer paid: the gated price (list or the
   // request's quote) on the chain the receipt names, or the meter's amount.
@@ -14543,7 +14548,7 @@ for (const tool of ALL_KIT) {
         // Belt for the global drain middleware: a composite that reaches the
         // dispatcher while draining is refused here too (503, not charged).
         if (draining) {
-          const e = new Error("This server is redeploying; premium report generation restarts on the new build in about a minute. Not charged - please retry.");
+          const e = new Error("This server is redeploying; premium report generation restarts on the new build in about a minute. Nothing was charged. Please retry.");
           e.statusCode = 503;
           throw e;
         }
@@ -14698,8 +14703,8 @@ for (const tool of ALL_KIT) {
         res.once("close", () => { if (chargeCancelledForClientGone(req)) ctl.abort(clientGoneError()); });
       }
       const result = EXPENSIVE_COMPOSITE_SLUGS.has(tool.slug)
-        ? await runInAbortableScope(() => runAsCallerOf(req, () => tool.handler(input, req)), { signal: clientGoneCtl.signal })
-        : await runAsCallerOf(req, () => tool.handler(input, req));
+        ? await runInAbortableScope(() => runAsCallerOf(req, () => runAsRouteCall(() => tool.handler(input, req))), { signal: clientGoneCtl.signal })
+        : await runAsCallerOf(req, () => runAsRouteCall(() => tool.handler(input, req)));
       coverRelease?.settling?.();
       // A handler that answered although its payment did not settle at the
       // settle point (it caught the refusal) is answered as that refusal.
@@ -14811,7 +14816,7 @@ for (const tool of ALL_KIT) {
       refusalClass = refusalReason(err?.message, status, err);
       // A composite cut off by the drain is a 503 with the reason, whatever
       // shape the aborted upstream call surfaced it in (>= 400: not charged).
-      if (isDrainAbort(err)) { status = 503; err = Object.assign(new Error("This host is redeploying and stopped the run before it finished; nothing was charged. Retry in a minute."), { statusCode: 503 }); }
+      if (isDrainAbort(err)) { status = 503; err = Object.assign(new Error("This host is redeploying and stopped the run before it finished. Nothing was charged. Retry in a minute."), { statusCode: 503 }); }
       // The buyer left before the first byte (src/hangup-settlement.js): a 499
       // whatever shape the handler surfaced it in. >= 400, so no rail settles
       // it (a Tempo push credential, already on chain, is booked as owed by

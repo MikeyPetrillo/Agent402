@@ -594,7 +594,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   const evm = server.indexOf("assertEvmValidityCovers(req, tool.slug);");
   const cover = server.indexOf("const coverRelease = await admitPaidRun(req, res, tool);");
   const belt = server.indexOf("if (clientGoneBeforeFirstByte(req)) throw clientGoneError(");
-  const handler = server.indexOf("? await runInAbortableScope(() => runAsCallerOf(req, () => tool.handler(input, req))");
+  const handler = server.indexOf("? await runInAbortableScope(() => runAsCallerOf(req, () => runAsRouteCall(() => tool.handler(input, req)))");
   ok(avm > 0 && evm > avm && cover > evm && belt > cover && handler > belt, "the dispatcher runs the EVM floor, then the concurrency cover, then the client-gone belt, then the handler");
   ok(/const coverRelease = await admitPaidRun\(req, res, tool\);/.test(server)
     && /async function admitPaidRun\(req, res, def\) \{\s*\n\s*if \(FREE_MODE \|\| !def \|\| isComputePayable\(def\) \|\| !ownTrue\(req, "__a402Dispatched"\)\) return null;\s*\n(?:\s*\/\/[^\n]*\n)?\s*const release = (?:settledFirstResendOf\(req\) \? null : )?await admitCoveredRun\(req, \{ expensive: EXPENSIVE_COMPOSITE_SLUGS\.has\(def\.slug\), arrivedAt: req\.__a402ArrivedAt \}\);\s*\n\s*if \(release && !onResponseEnd\(req, res, release\)\) release\(\);\s*\n\s*await gatewaySettleBreakerCheck\(req, \{ global: false \}\);/.test(server),
@@ -621,7 +621,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     ok(added.length >= 7 && added.filter((m) => !m[1]).length === 1 && /for \(const tool of ALL_KIT\) \{\n  if \(CATALOG\[tool\.route\]\) throw new Error\(`Duplicate route in kit/.test(server), `every other catalog entry is added from ALL_KIT or pushed onto it, so the kit dispatcher binds it (${added.length} places, ${added.filter((m) => !m[1]).length} of them the ALL_KIT loop itself)`);
     ok([...server.matchAll(/\nfor \(const tool of ALL_KIT\) \{\n  const \[method, path\] = tool\.route\.split\(" "\);/g)].length === 1, "one loop binds every ALL_KIT route to the kit dispatcher");
   }
-  ok(/: await runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\);\s*\n\s*coverRelease\?\.settling\?\.\(\);/.test(server), "the covered run counts as settling from the moment its handler returns");
+  ok(/: await runAsCallerOf\(req, \(\) => runAsRouteCall\(\(\) => tool\.handler\(input, req\)\)\);\s*\n\s*coverRelease\?\.settling\?\.\(\);/.test(server), "the covered run counts as settling from the moment its handler returns");
 }
 
 // ---------------------------------------------------------------- part 2

@@ -24,6 +24,7 @@ import { Worker } from "node:worker_threads";
 import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 import { createPoolAdmission, poolCaller } from "../pool-admission.js";
+import { claimLater, claimNow, notChargedHere } from "../not-charged.js";
 
 const OFFICE_WORKER = fileURLToPath(new URL("./office-worker.js", import.meta.url));
 const intEnv = (v, d) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : d; };
@@ -41,8 +42,8 @@ let nextJobId = 1;
 const admission = createPoolAdmission({ soft: OFFICE_QUEUE_MAX, hard: OFFICE_QUEUE_HARD_MAX });
 
 const unavailable = (message, extra = {}) => Object.assign(new Error(message), { statusCode: 503, ...extra });
-const busy = () => unavailable("Office builders are busy; retry in a few seconds. Nothing was charged.", { retryAfter: 5, shed: true });
-const busyOwn = () => unavailable("Office builders are busy, with this caller's earlier files already waiting; send this one once one of them is answered. Nothing was charged.", { retryAfter: 5, shed: true });
+const busy = () => unavailable(`Office builders are busy; retry in a few seconds.${notChargedHere()}`, { retryAfter: 5, shed: true });
+const busyOwn = () => unavailable(`Office builders are busy, with this caller's earlier files already waiting; send this one once one of them is answered.${notChargedHere()}`, { retryAfter: 5, shed: true });
 
 function settle(slot, fn, arg) {
   const job = slot.job;
@@ -73,12 +74,12 @@ function spawnSlot() {
     goIdle(slot);
     pump();
   });
-  const die = (message) => {
-    settle(slot, slot.job?.reject, unavailable(message));
+  const die = (message, claim = false) => {
+    settle(slot, slot.job?.reject, claim ? claimLater(unavailable(message)) : unavailable(message));
     retire(slot);
     pump();
   };
-  slot.worker.on("error", (e) => die(e?.code === "ERR_WORKER_OUT_OF_MEMORY" ? "The file is too large to build. Nothing was charged." : `office worker error: ${e?.message || e}`));
+  slot.worker.on("error", (e) => (e?.code === "ERR_WORKER_OUT_OF_MEMORY" ? die("The file is too large to build.", true) : die(`office worker error: ${e?.message || e}`)));
   slot.worker.on("exit", () => { if (slot.job) die("office worker stopped unexpectedly"); });
   slots.push(slot);
   return slot;
@@ -89,7 +90,7 @@ function assign(slot, job) {
   clearTimeout(slot.idleTimer);
   slot.worker.ref();
   job.timer = setTimeout(() => {
-    settle(slot, job.reject, Object.assign(new Error(`Building the file took longer than ${job.timeoutMs / 1000}s. Nothing was charged.`), { statusCode: 422 }));
+    settle(slot, job.reject, claimLater(Object.assign(new Error(`Building the file took longer than ${job.timeoutMs / 1000}s.`), { statusCode: 422 })));
     retire(slot);
     pump();
   }, job.timeoutMs);
@@ -134,5 +135,7 @@ export function runOfficeOp(op, spec, { timeoutMs = OFFICE_JOB_TIMEOUT_MS } = {}
       }, timeoutMs);
       job.queueTimer.unref();
     }
-  });
+  // A worker's error is built outside this call's async context: its charge
+  // sentence is added here, in the caller's (src/not-charged.js).
+  }).catch((e) => { throw claimNow(e); });
 }

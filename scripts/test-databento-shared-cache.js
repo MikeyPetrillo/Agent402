@@ -125,7 +125,7 @@ const call = async (srv, path, ms = 10_000) => {
 };
 const perf = (srv) => fetch(`http://127.0.0.1:${srv.port}/__operator/perf.json?top=1`, { headers: { Authorization: `Bearer ${OP}` }, signal: AbortSignal.timeout(5000) }).then((r) => r.json()).then((j) => j.stockQuoteWarmer).catch(() => null);
 const errText = (r) => r.body?.error || r.body?.message || r.body?.detail || r.text;
-const NOT_CHARGED = /nothing was charged - retry shortly/;
+const NOT_CHARGED = /\. Nothing was charged\. Retry shortly\.$/;
 const kill = (srv) => { try { srv.child?.kill("SIGKILL"); } catch { /* gone */ } };
 
 try {

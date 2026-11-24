@@ -35,6 +35,7 @@ import { clientGoneError, clientGoneBeforeFirstByte } from "../hangup-settlement
 import { noteSqlCall } from "../sql-query-stats.js";
 import { ONCHAIN_SQL_SCHEMA, SCHEMA_UPDATED } from "./onchain-sql-schema.js";
 import { readWalletBalances } from "./wallet-balances-rpc.js";
+import { notChargedHere } from "../not-charged.js";
 const SCHEMA_NOTE = "Table and column names with their types, as this service maintains them; on Base Sepolia the base tables are read under the base_sepolia. prefix.";
 
 const CDP_HOST = "api.cdp.coinbase.com";
@@ -430,7 +431,7 @@ function slotWaitMs() {
 export const SQL_BUSY_RETRY_AFTER_MIN_S = 4;
 export const SQL_BUSY_RETRY_AFTER_SPREAD_S = 2;
 function sqlBusyRefusal(text) {
-  const e = bad(`${text} Nothing was charged.`, 429);
+  const e = bad(`${text}${notChargedHere()}`, 429);
   e.retryAfter = SQL_BUSY_RETRY_AFTER_MIN_S + Math.floor(Math.random() * (SQL_BUSY_RETRY_AFTER_SPREAD_S + 1));
   e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
   try { const scope = currentRequestScope(); if (scope) scope.onchainSqlBusy = true; } catch { /* bookkeeping only */ }
@@ -493,7 +494,7 @@ function narrowQueryError(status, tookMs, sql = "", answerStatus = 502) {
   const span = days === null ? null : days < 1 ? `${Math.max(1, Math.round(days * 24))} hours` : `${Math.round(days)} days`;
   const covered = span ? ` This query covers about ${span} of solana.instructions; what it reads depends on its columns and filters (measured: a day answers in seconds, a week does for some filters and not others).` : "";
   const range = solana ? "a shorter block_time range (start at a day, e.g. WHERE block_time > now() - INTERVAL 1 DAY, and cover a longer period in steps)" : "a block_number range or an address filter";
-  const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a query runs past its answer window of about 10 s, reads more than its 100 GB per-query limit, or returns a result too large to send.${covered} Narrow it: select fewer columns, add ${range}, or lower the LIMIT; resending it unchanged fails the same way. Nothing was charged.`, answerStatus);
+  const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a query runs past its answer window of about 10 s, reads more than its 100 GB per-query limit, or returns a result too large to send.${covered} Narrow it: select fewer columns, add ${range}, or lower the LIMIT; resending it unchanged fails the same way.${notChargedHere()}`, answerStatus);
   e.hint = "narrow-query";
   return e;
 }
@@ -595,7 +596,7 @@ function countedSqlCall(run) {
 let maxQueriesPerCall = 0;
 export function _maxQueriesPerCallForTest() { return maxQueriesPerCall; }
 function queryBudgetSpentError(queries = null) {
-  const e = bad(`This query could not be answered inside the ${SQL_QUERY_BUDGET} queries a call may send to the query service (the query itself and its recovery runs): narrow it (fewer or narrower columns, a smaller range or LIMIT) and send it again. Nothing was charged.`, 422);
+  const e = bad(`This query could not be answered inside the ${SQL_QUERY_BUDGET} queries a call may send to the query service (the query itself and its recovery runs): narrow it (fewer or narrower columns, a smaller range or LIMIT) and send it again.${notChargedHere()}`, 422);
   e.hint = "narrow-query"; e.queryBudgetSpent = true;
   return unchargedFields(e, queries);
 }
@@ -658,14 +659,14 @@ function sendRuleText() {
   return `a row over ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB is never sent, and a whole answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB usually is`;
 }
 function resultTooLargeError(status, tookMs) {
-  const e = bad(`CDP's query service failed inside this query (HTTP ${status}, its internal error), which it answers when a result cannot be sent (${sendRuleText()}): lower the LIMIT or select fewer or narrower columns. Nothing was charged.`, 502);
+  const e = bad(`CDP's query service failed inside this query (HTTP ${status}, its internal error), which it answers when a result cannot be sent (${sendRuleText()}): lower the LIMIT or select fewer or narrower columns.${notChargedHere()}`, 502);
   e.hint = "narrow-query"; e.resultTooLarge = true; e.cdpStatus = status; e.tookMs = tookMs;
   return e;
 }
 
 /** A 2xx from the query service with no readable JSON body: an upstream failure to retry, never an empty result. */
 function unreadableAnswerError() {
-  return bad("CDP upstream error: the query service's answer could not be read (cut off, empty or not JSON); retry shortly. Nothing was charged.", 502);
+  return bad(`CDP upstream error: the query service's answer could not be read (cut off, empty or not JSON); retry shortly.${notChargedHere()}`, 502);
 }
 
 // Bytes read from the query service's answer at most. Its own sends fail
@@ -676,7 +677,7 @@ function unreadableAnswerError() {
 // stops (the rest is never buffered) and the call ends 502, uncharged.
 export const SQL_READ_MAX_BYTES = 16 * 1024 * 1024;
 function answerTooLargeError() {
-  const e = bad(`CDP's query service sent an answer larger than this server reads (${Math.round(SQL_READ_MAX_BYTES / (1024 * 1024))} MB), so it was not read: lower the LIMIT or select fewer or narrower columns. Nothing was charged.`, 502);
+  const e = bad(`CDP's query service sent an answer larger than this server reads (${Math.round(SQL_READ_MAX_BYTES / (1024 * 1024))} MB), so it was not read: lower the LIMIT or select fewer or narrower columns.${notChargedHere()}`, 502);
   e.hint = "narrow-query";
   return e;
 }
@@ -751,18 +752,18 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // A buyer who left while its first query waited for an in-flight place
     // takes no send slot: the slot would push every query behind it later.
     if (path === SQL_QUERY_PATH && buyerQuery && queries && queries.sent === 0 && queries.callerGone?.()) {
-      throw clientGoneError("The connection closed before the query took its send slot; it was not sent and nothing was charged.");
+      throw clientGoneError(`The connection closed before the query took its send slot, so it was not sent.${notChargedHere()}`);
     }
     if (path === SQL_QUERY_PATH && !(await takeSqlSendSlot(own ? sqlSendGap : slotWaitMs()))) {
       if (own && queries.sent === 0) throw Object.assign(bad("Queries are waiting for the query service, so this server's own read is tried again later.", 429), { retryAfter: 5 });
       if (buyerQuery && queries && queries.sent === 0) throw sqlBusyRefusal("The query service is taking this server's queries as fast as its rate limit allows; retry in a few seconds.");
-      throw lastErr ?? bad("Coinbase Developer Platform is busy right now - retry shortly. Nothing was charged.", 503);
+      throw lastErr ?? bad(`Coinbase Developer Platform is busy right now - retry shortly.${notChargedHere()}`, 503);
     }
     // A buyer who left while its first query waited for its slot: nothing
     // could be delivered, so the query is not sent and the call ends 499,
     // which cancels settlement (as for a buyer gone before the call started).
     if (path === SQL_QUERY_PATH && buyerQuery && queries && queries.sent === 0 && queries.callerGone?.()) {
-      throw clientGoneError("The connection closed while the query waited for its send slot; it was not sent and nothing was charged.");
+      throw clientGoneError(`The connection closed while the query waited for its send slot, so it was not sent.${notChargedHere()}`);
     }
     // A buyer's call sends at most SQL_QUERY_BUDGET queries, retries
     // included: the budget is spent here, where the query goes out.
@@ -816,7 +817,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       throw bad("This tool is temporarily unavailable: Coinbase Developer Platform access is not configured on this deployment.", 503);
     }
     if (res.status === 429) {
-      lastErr = bad("Coinbase Developer Platform is busy right now - retry shortly. Nothing was charged.", 503);
+      lastErr = bad(`Coinbase Developer Platform is busy right now - retry shortly.${notChargedHere()}`, 503);
       if (++rateLimited > 1) throw lastErr;
       waitMs = retryAfterMs(res);
       continue;
@@ -853,7 +854,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
         // known (our check timed out), a query at the gateway's time limit
         // is the common cause and is the buyer's to narrow.
         if (await queryServiceHealth(body?.sql) !== "failing") throw Object.assign(unchargedFields(narrowQueryError(res.status, tookMs, body?.sql, 422), queries), { pastTimeWindow: true });
-        throw bad(`CDP's query service is failing (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, and a known-good query failed too); retry later. Nothing was charged.`, 502);
+        throw bad(`CDP's query service is failing (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, and a known-good query failed too); retry later.${notChargedHere()}`, 502);
       }
       // An instant 500 is the result too large to send: never resent as is
       // (the handler re-runs it with a small row cap instead).
@@ -863,9 +864,9 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       // 502 or 504 that came back before the service's time window could
       // have run out: the query did not run into it.
       lastErr = res.status === 503
-        ? bad(`CDP upstream error (HTTP 503): the query service is unavailable; retry shortly. Nothing was charged.`, 502)
+        ? bad(`CDP upstream error (HTTP 503): the query service is unavailable; retry shortly.${notChargedHere()}`, 502)
         : res.status === 502 || res.status === 504
-          ? bad(`CDP upstream error (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, too soon to be a query that ran past the service's time limit): retry shortly. Nothing was charged.`, 502)
+          ? bad(`CDP upstream error (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, too soon to be a query that ran past the service's time limit): retry shortly.${notChargedHere()}`, 502)
           : narrowQueryError(res.status, tookMs, body?.sql);
       if (attempt + 1 >= ATTEMPTS) { logFailed(res.status, tookMs); throw lastErr; }
       continue;
@@ -944,7 +945,7 @@ export function solanaRangeRefusal(sql) {
   // A range is block_time in a comparison or BETWEEN, not the column named
   // elsewhere (selected, ordered by, or an alias).
   if (/\bblock_time\s*(?:>=?|<=?|=|between\b)|(?:>=?|<=?|=)\s*block_time\b/i.test(s)) return null;
-  return 'A query on solana.instructions that filters, groups, orders or aggregates needs a block_time range: add, for example, WHERE block_time > now() - INTERVAL 1 DAY (a day answers in seconds; the full history does not finish within the query service\'s limit). Nothing was charged.';
+  return `A query on solana.instructions that filters, groups, orders or aggregates needs a block_time range: add, for example, WHERE block_time > now() - INTERVAL 1 DAY (a day answers in seconds; the full history does not finish within the query service's limit).${notChargedHere()}`;
 }
 
 // The query service reads at most 100 GB per query (its documented limit;
@@ -1425,17 +1426,17 @@ function sqlRun(route) {
         while (res2 === null) {
           if (queries.left() <= 0) {
             const text = tries
-              ? `Even ${SQL_RECOVER_ROWS} rows of this query could not be sent by the query service${tries > 1 ? `, ${tries} times` : ""} (it answers its internal error, HTTP ${last.cdpStatus}; ${sendRuleText()}): select fewer or narrower columns (map and array columns are the usual cause). Nothing was charged.`
+              ? `Even ${SQL_RECOVER_ROWS} rows of this query could not be sent by the query service${tries > 1 ? `, ${tries} times` : ""} (it answers its internal error, HTTP ${last.cdpStatus}; ${sendRuleText()}): select fewer or narrower columns (map and array columns are the usual cause).${notChargedHere()}`
               : queryBudgetSpentError().message;
             if (await queryServiceHealth(sql) !== "failing") { const e3 = bad(text, 422); e3.hint = "narrow-query"; e3.queryBudgetSpent = true; throw unchargedFields(e3, queries); }
-            throw bad(`CDP's query service is failing (HTTP ${last?.cdpStatus ?? 500} on this query and on a known-good query); retry later. Nothing was charged.`, 502);
+            throw bad(`CDP's query service is failing (HTTP ${last?.cdpStatus ?? 500} on this query and on a known-good query); retry later.${notChargedHere()}`, 502);
           }
           tries++;
           try { res2 = await cdpFetch("POST", "/platform/v2/data/query/run", small, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: capped.lineOffset, queries }); }
           catch (e2) { if (!e2?.resultTooLarge) throw e2; last = e2; }
         }
         const got = res2?.result ?? res2?.rows ?? res2?.data ?? res2;
-        if (!Array.isArray(got)) throw bad("CDP upstream error: the query service answered without a result list. Nothing was charged.", 502);
+        if (!Array.isArray(got)) throw bad(`CDP upstream error: the query service answered without a result list.${notChargedHere()}`, 502);
         // Fewer rows than the cap: that is the whole result, so the 500 was
         // not its size; served as a complete answer.
         if (got.length < SQL_RECOVER_ROWS) { res = res2; }
@@ -1582,7 +1583,7 @@ export const CDP_TOOLS = [
       const tx = res?.transactionHash || res?.transactionSignature || null;
       if (!tx) {
         gate.release();
-        throw bad("The faucet did not return a transaction - retry shortly. Nothing was charged.", 502);
+        throw bad(`The faucet did not return a transaction - retry shortly.${notChargedHere()}`, 502);
       }
       return {
         funded: true,

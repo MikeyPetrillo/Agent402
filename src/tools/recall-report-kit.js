@@ -17,6 +17,7 @@ import { checkReportGrounding, sanitizeReportProse, quotedMaterial, QUOTED_MATER
 import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { GOV_TOOLS } from "./gov-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
+import { notChargedHere } from "../not-charged.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -83,7 +84,7 @@ export async function probeRecalls(query, { perFeed = 20, scope = "all" } = {}) 
   const okFeeds = feeds.filter((f) => status[f.kind] === "ok").length;
   // Minimum evidence: a report sold as "drug, food and device" must have read
   // at least two of the three feeds (or the single feed of a narrowed scope).
-  if (okFeeds < Math.min(2, feeds.length)) throw bad(`Could not read enough FDA enforcement feeds (openFDA: ${Object.entries(status).map(([k, v]) => `${k} ${v}`).join("; ")}) - not charged; please retry.`, 502);
+  if (okFeeds < Math.min(2, feeds.length)) throw bad(`Could not read enough FDA enforcement feeds (openFDA: ${Object.entries(status).map(([k, v]) => `${k} ${v}`).join("; ")}).${notChargedHere()} Please retry.`, 502);
   // Newest first; stable on recall number so the fingerprint is deterministic.
   items.sort((a, b) => String(b.recallInitiated || "").localeCompare(String(a.recallInitiated || "")) || String(a.recallNumber || "").localeCompare(String(b.recallNumber || "")));
   const ids = [...new Set(items.map((x) => x.recallNumber).filter(Boolean))].sort();
@@ -131,7 +132,7 @@ function makeRecallHandlerInner(tierSlug) {
 
     // 1) PROBES (free, deterministic).
     const pr = await probeRecalls(query, { perFeed: t.perFeed, scope });
-    if (!pr.items.length && !allowEmpty) throw bad(`No FDA recall records match "${query}" across drug, food and device enforcement feeds (as of today). Not charged - try a broader term (brand, ingredient, generic name).`, 422);
+    if (!pr.items.length && !allowEmpty) throw bad(`No FDA recall records match "${query}" across drug, food and device enforcement feeds (as of today).${notChargedHere()} Try a broader term (brand, ingredient, generic name).`, 422);
 
     // 2) GROUNDING BLOCK.
     const byClass = {};
@@ -175,7 +176,7 @@ Write a clear, well-structured report of up to ${t.words} words with these secti
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
-    if (!prose) throw bad("Recall report synthesis produced nothing - not charged", 502);
+    if (!prose) throw bad(`Recall report synthesis produced nothing.${notChargedHere()}`, 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
     const header = `# FDA Recall Report: ${query}\n\n**${pr.items.length} most recent of ${pr.totalAll} record${pr.totalAll === 1 ? "" : "s"}** (${pr.events} recall event${pr.events === 1 ? "" : "s"} among those shown) across ${Object.keys(pr.status).length} FDA enforcement feed${Object.keys(pr.status).length === 1 ? "" : "s"} · ${ongoing} of the shown records ongoing\n`;

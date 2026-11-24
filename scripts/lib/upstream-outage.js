@@ -177,7 +177,7 @@ export function declaresUpstreamHosts(slug, root = ROOT) {
 // helper's upstream answers, a failed request to a host the bundle declares
 // was recorded during the call, and the runner's direct read of that request
 // fails the same way. Any other answer of a bundle is not read here.
-const BUNDLE_FAILURE = /^\d+ of \d+ unit\(s\) could not be completed on the source's side \(first: ([^]*)\)\. Nothing was charged; retry later$/;
+const BUNDLE_FAILURE = /^\d+ of \d+ unit\(s\) could not be completed on the source's side \(first: ([^]*)\)\.(?: Nothing was charged\.)? Retry later\.$/;
 /** The leg answer inside a bundle's source-side failure: { leg, status, body }
  *  for a leg in `legs`, else null. */
 export function bundleLegAnswer(status, body, legs) {

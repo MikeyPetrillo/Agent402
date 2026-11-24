@@ -37,6 +37,7 @@ import { fetchXmlText, edgarGetJson, edgarUserAgent } from "./edgar-kit.js";
 import { parseForm4 } from "./insider-flow-kit.js";
 import { extractFilingExcerpts } from "./dossier-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
+import { notChargedHere } from "../not-charged.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -631,7 +632,7 @@ function makeFilingHandlerInner(tierSlug) {
     const name = pr.name || ticker || pr.cik;
     const symbol = pr.ticker || ticker || (pr.tickers?.[0] || "");
     if (!pr.filings.length && !allowEmpty) {
-      throw bad(`${name} (CIK ${pr.cik}) has no SEC filings in the last ${days} days${forms.length ? ` matching ${forms.join(", ")}` : ""}${exclude.length ? ` after excluding ${exclude.join(", ")}` : ""}. Not charged - widen "days" (max 365) or drop the form filter.`, 422);
+      throw bad(`${name} (CIK ${pr.cik}) has no SEC filings in the last ${days} days${forms.length ? ` matching ${forms.join(", ")}` : ""}${exclude.length ? ` after excluding ${exclude.join(", ")}` : ""}.${notChargedHere()} Widen "days" (max 365) or drop the form filter.`, 422);
     }
 
     // 2) DOCUMENTS (bounded count AND bytes).
@@ -680,7 +681,7 @@ function makeFilingHandlerInner(tierSlug) {
     // at least one primary document whenever there was one to read. A >= 400
     // cancels settlement, so an EDGAR incident is never charged for.
     if (selected.length && !read.length) {
-      throw bad(`Could not read any of the ${selected.length} primary document${selected.length === 1 ? "" : "s"} from SEC EDGAR (upstream: ${fetched.map((x) => x.err).filter(Boolean).slice(0, 2).join("; ")}). Not charged - please retry.`, 502);
+      throw bad(`Could not read any of the ${selected.length} primary document${selected.length === 1 ? "" : "s"} from SEC EDGAR (upstream: ${fetched.map((x) => x.err).filter(Boolean).slice(0, 2).join("; ")}).${notChargedHere()} Please retry.`, 502);
     }
 
     // 3) SOURCES: each document read, then every other filing, then the index.
@@ -739,7 +740,7 @@ ${docBlocks || "(no primary document was read for this window)"}`;
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
-    if (!prose) throw bad("Filing report synthesis produced nothing - not charged", 502);
+    if (!prose) throw bad(`Filing report synthesis produced nothing.${notChargedHere()}`, 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
 

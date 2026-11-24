@@ -204,7 +204,7 @@ const DATA = { query: "q", answer: "a", citations: [] };
   ok(AS.reserveShare(first) !== null, "the first claim in the minute is granted");
   let refused = null;
   try { AS.reserveShare(mk()); } catch (e) { refused = e; }
-  ok(refused?.statusCode === 429 && /Not charged/.test(refused.message), "a second claim while the first is still running is refused 429 (counted at claim time)");
+  ok(refused?.statusCode === 429 && / Nothing was charged\./.test(refused.message), "a second claim while the first is still running is refused 429 (counted at claim time)");
   first.res.statusCode = 500; first.res.emit("finish"); await sleep(20);
   const again = mk();
   let regranted = null;

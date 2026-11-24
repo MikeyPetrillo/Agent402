@@ -236,14 +236,15 @@ function stubs(over = {}) {
 // ---------------------------------------------------------------------------
 // 6. Thin-evidence refusal: fewer than 2 of the 3 legs have data
 // ---------------------------------------------------------------------------
+const { runAsRouteCall } = await import("../src/not-charged.js");
 {
   const s = stubs({
     probeInsiderFilings: async () => ({ ...INSIDER_PROBE, filings: [] }),
     probeHolders: async () => ({ ...HOLDERS, managers: [] }),
   });
-  const e = await throws(() => s.handler({ ticker: "AAPL" }), 422, "only one leg with data refuses the sale");
+  const e = await throws(() => runAsRouteCall(() => s.handler({ ticker: "AAPL" })), 422, "only one leg with data refuses the sale");
   ok(/at least two of the three legs/i.test(e.message), "the refusal explains the two-of-three rule");
-  ok(/Not charged/i.test(e.message), "the refusal says the buyer is not charged");
+  ok(/Nothing was charged\./.test(e.message), "the refusal says the buyer is not charged");
   eq(s.calls.synth, 0, "the thin-evidence refusal NEVER calls the synthesis");
   eq(s.calls.dossier + s.calls.insider, 0, "the thin-evidence refusal never runs a paid part handler");
 }
@@ -265,9 +266,9 @@ function stubs(over = {}) {
     runDossier: async () => { throw Object.assign(new Error("Upstream error (HTTP 502)"), { statusCode: 502 }); },
     runInsider: async () => { throw Object.assign(new Error("Upstream rate-limited - retry shortly"), { statusCode: 503 }); },
   });
-  const e = await throws(() => s.handler({ ticker: "AAPL" }), 502, "dossier AND insider failing refuses the sale");
+  const e = await throws(() => runAsRouteCall(() => s.handler({ ticker: "AAPL" })), 502, "dossier AND insider failing refuses the sale");
   ok(/dossier leg failed/.test(e.message) && /insider leg failed/.test(e.message), "the refusal names BOTH failed legs");
-  ok(/Not charged/i.test(e.message), "the post-run refusal says the buyer is not charged");
+  ok(/Nothing was charged\./.test(e.message), "the post-run refusal says the buyer is not charged");
   eq(s.calls.synth, 0, "a refused pack never pays for the connective synthesis");
 }
 

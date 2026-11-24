@@ -27,7 +27,7 @@ import { planShape } from "../decide/plan-shape.js";
 import { attemptErrorCode } from "../decide/skip-codes.js";
 import { createReplanGuard } from "../decide/replan-guard.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
-import { notChargedOn, withoutChargeClaim } from "../not-charged.js";
+import { notChargedOn, withoutChargeClaim, runAsStep } from "../not-charged.js";
 export { SKIP_CODES, attemptErrorCode, skipCodeOf } from "../decide/skip-codes.js";
 
 export const NEUTRALITY_NOTE = "Every candidate is scored by one formula with the same weights: fit to the step, observed reliability, price, schema quality and a freshness pass mark. It has no term for who sells the tool, and every tool carries firstParty. Fit is judged from the same bounded description for every tool; reliability counts one observation per payer per day. Outside tools are eligible when a live 402 was seen within the configured window and their input schema is known.";
@@ -784,7 +784,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
             // outbound calls are cut off too, so a late step cannot keep
             // spending upstream while the fallback runs.
             const stepStop = new AbortController();
-            const result = await raceStop(withTimeout(runInAbortableScope(() => runAsCallerOf(req, () => Promise.resolve(def.handler(toolParams))), { stopSignal: stepStop.signal }), Math.min(cfg.execute.stepTimeoutMs, left()), tool.slug), stop)
+            const result = await raceStop(withTimeout(runInAbortableScope(() => runAsCallerOf(req, () => runAsStep(() => Promise.resolve(def.handler(toolParams)))), { stopSignal: stepStop.signal }), Math.min(cfg.execute.stepTimeoutMs, left()), tool.slug), stop)
               .catch((e) => { stepStop.abort(e); throw e; });
             pool.commit(held, cost);
             done = { tool: { id: tool.id, slug: tool.slug, seller: tool.seller, firstParty: true }, costUsd: cost, result, latencyMs: Date.now() - t0 };
@@ -847,7 +847,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
           }
           if (hold === false) { pool.release(held); attempts.push({ id: tool.id, skipped: "this seller's daily execution ceiling is reached", code: "budget" }); continue; }
           try {
-            const r = await withTimeout(router.handler({ task: `${step.purpose} (${tool.name})`, include: "external", target: tool.endpoint, params: toolParams, maxUsd }, req), Math.min(left(), cfg.execute.externalStepTimeoutMs), tool.seller);
+            const r = await withTimeout(runAsStep(() => router.handler({ task: `${step.purpose} (${tool.name})`, include: "external", target: tool.endpoint, params: toolParams, maxUsd }, req)), Math.min(left(), cfg.execute.externalStepTimeoutMs), tool.seller);
             const underlying = Number(r?.receipt?.underlyingPriceUsd);
             const paidOut = Number.isFinite(underlying) && underlying > 0 ? underlying : maxUsd; // unknown: book the worst case
             const fee = roundUsd(paidOut * cfg.routingFeePct / 100);

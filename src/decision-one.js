@@ -12,6 +12,7 @@
 // Model-backed: an answer is a model's judgment, not a computed value.
 import { OPENROUTER_ATTRIBUTION } from "./openrouter-attribution.js";
 import { upstreamFetch, bodyUnderDeadline, attributed, ATTRIBUTION, KIND } from "./upstream-deadline.js";
+import { notChargedHere } from "./not-charged.js";
 
 export const DECISION_ONE_MODEL = "microsoft/microsoft-decision-1";
 // Google's decisions model (2026-11-11), the same wire. Its input list also
@@ -83,8 +84,8 @@ export const decisionOneEnabled = (apiKey = keyOf()) => openRouterDecisionsEnabl
 
 /** Our own key refused, or our own balance with the provider spent: ours,
  *  never the caller's input, and never the provider's outage. */
-export const JUDGMENT_KEY_REFUSED = "Judgment is unavailable right now: the judgment provider refused this server's key. This is on our side, not your input; nothing was charged. Retry later.";
-export const JUDGMENT_BALANCE_OUT = "Judgment is unavailable right now: this server's balance with the judgment provider is spent. This is on our side, not your input; nothing was charged. Retry later.";
+export const JUDGMENT_KEY_REFUSED = "Judgment is unavailable right now: the judgment provider refused this server's key. This is on our side, not your input.";
+export const JUDGMENT_BALANCE_OUT = "Judgment is unavailable right now: this server's balance with the judgment provider is spent. This is on our side, not your input.";
 const fail = (msg, statusCode, mayBeBilled = false) => {
   const e = new Error(msg);
   e.statusCode = statusCode;
@@ -125,8 +126,8 @@ export async function askDecisionOne(body, { fetchImpl = fetch, timeoutMs = TIME
   try { text = await bodyUnderDeadline(res.text(), ctx); }
   catch (err) { if (err?.statusCode) { err.mayBeBilled = true; throw err; } throw fail("Judgment upstream returned an unreadable body.", 502, true); }
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw attributed(fail(JUDGMENT_KEY_REFUSED, 503), ATTRIBUTION.OURS, KIND.OUR_KEY);
-    if (res.status === 402) throw attributed(fail(JUDGMENT_BALANCE_OUT, 503), ATTRIBUTION.OURS, KIND.OUR_ALLOWANCE);
+    if (res.status === 401 || res.status === 403) throw attributed(fail(`${JUDGMENT_KEY_REFUSED}${notChargedHere()} Retry later.`, 503), ATTRIBUTION.OURS, KIND.OUR_KEY);
+    if (res.status === 402) throw attributed(fail(`${JUDGMENT_BALANCE_OUT}${notChargedHere()} Retry later.`, 503), ATTRIBUTION.OURS, KIND.OUR_ALLOWANCE);
     if (res.status === 429) throw fail("Judgment upstream is rate limiting. Retry shortly.", 503);
     if (res.status >= 400 && res.status < 500) throw fail(`Judgment upstream refused the request (${res.status}). Check the question shapes against /v1/judge's schema.`, 400);
     throw fail(`Judgment upstream returned ${res.status}.`, 502);

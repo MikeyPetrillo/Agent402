@@ -26,7 +26,7 @@ ok(/const plannerFellBack = !subQuestions\.length/.test(src),
   "the fallback is recorded, not just applied - a silent substitution cannot be reasoned about");
 ok(/if \(plannerFellBack && t\.subQ > 1\) \{[\s\S]{0,400}?throw bad\(/.test(src),
   "a tier that plans more than one sub-question REFUSES when planning produced none");
-ok(/Not charged; please retry\.`, 502\)/.test(src.slice(src.indexOf("plannerFellBack && t.subQ > 1"))),
+ok(/\$\{notChargedHere\(\)\} Please retry\.`, 502\)/.test(src.slice(src.indexOf("plannerFellBack && t.subQ > 1"))),
   "and it refuses with a 502, which cancels settlement, so the buyer pays nothing");
 
 // --- the reason is kept ------------------------------------------------------

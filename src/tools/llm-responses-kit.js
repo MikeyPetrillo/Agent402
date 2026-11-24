@@ -42,6 +42,7 @@ import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { settleBeforeUpstream } from "../settle-first.js";
 import { flattenNamespaceForResponses, attributeNamespaces } from "./tool-namespaces.js";
+import { notChargedHere } from "../not-charged.js";
 const OPENROUTER_RESPONSES_URL = "https://openrouter.ai/api/v1/responses";
 const MAX_TOOLS = 64;
 const MAX_INPUT_ITEMS = 200; // default; a tier may raise it (`maxInputItems`) - the metered tier does
@@ -430,7 +431,7 @@ export function makeResponsesHandler(routeTier) {
     if (tier.metered && Number.isFinite(req?.__meteredQuoteUsd)) {
       const q = meteredResponsesQuoteUsd(input);
       if (q.invalid || q.overCap || q.usd > req.__meteredQuoteUsd * (1 + 1e-6) + 1e-9) {
-        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}. Nothing was charged; resend the request exactly as it should be served.`, 400);
+        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}.${notChargedHere()} Resend the request exactly as it should be served.`, 400);
       }
     }
     // Metered: the quote priced THIS model at its MODEL_COST row, so the

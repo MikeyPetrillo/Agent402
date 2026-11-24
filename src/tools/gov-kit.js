@@ -29,6 +29,7 @@ import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { partialFields, clampFields } from "../partial-answer.js";
 import { markResaleCleared } from "../resale-terms.js";
+import { notChargedHere } from "../not-charged.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -108,7 +109,7 @@ export function isOpenFdaNoMatch(e) {
 }
 const openFdaFailure = (url, what, upstreamStatus) => {
   let host = "the source"; try { host = new URL(url).hostname; } catch { /* keep the generic name */ }
-  return Object.assign(bad(`${host} ${what} - an upstream issue, not your input; nothing was charged, retry shortly`, 502), { ...(upstreamStatus ? { upstreamStatus } : {}), attribution: "upstream" });
+  return Object.assign(bad(`${host} ${what} - an upstream issue, not your input.${notChargedHere()} Retry shortly.`, 502), { ...(upstreamStatus ? { upstreamStatus } : {}), attribution: "upstream" });
 };
 async function getJsonAllowEmpty(url, opts = {}) {
   let data;
@@ -1389,7 +1390,7 @@ export const GOV_TOOLS = [
           }));
           return { state: st, count: disasters.length, disasters, source: "OpenFEMA FemaWebDisasterDeclarations (fema.gov)", ...femaCitation(FEMA_WEB_ENDPOINT, accessed) };
         }
-        if (KNOWN_STATE_CODES.has(st)) throw bad(`openFEMA returned no disaster declarations for ${st} from either dataset; every state has declarations on record, so this is an outage at FEMA. Nothing was charged.`, 502);
+        if (KNOWN_STATE_CODES.has(st)) throw bad(`openFEMA returned no disaster declarations for ${st} from either dataset; every state has declarations on record, so this is an outage at FEMA.${notChargedHere()}`, 502);
       }
       const seen = new Set();
       const disasters = [];

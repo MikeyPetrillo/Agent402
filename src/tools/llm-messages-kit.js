@@ -49,6 +49,7 @@ import {
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { settleBeforeUpstream } from "../settle-first.js";
+import { notChargedHere } from "../not-charged.js";
 
 const OPENROUTER_MESSAGES_URL = "https://openrouter.ai/api/v1/messages";
 const MAX_STOP_SEQUENCES = 8;
@@ -514,7 +515,7 @@ export function makeMessagesHandler(routeTier) {
     if (tier.metered && Number.isFinite(req?.__meteredQuoteUsd)) {
       const q = meteredMessagesQuoteUsd(input);
       if (q.invalid || q.overCap || q.usd > req.__meteredQuoteUsd * (1 + 1e-6) + 1e-9) {
-        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}. Nothing was charged; resend the request exactly as it should be served (no query-string or wrapped fields).`, 400);
+        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}.${notChargedHere()} Resend the request exactly as it should be served (no query-string or wrapped fields).`, 400);
       }
     }
     // Metered: the quote priced THIS model at its MODEL_COST row, so the
@@ -671,7 +672,7 @@ export function makeMessagesHandler(routeTier) {
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
           assertUpstreamBody(parsed, { model: sendBody?.model });
-          if (!Array.isArray(parsed?.content)) throw bad("Upstream returned no answer (no content) - not charged", 502);
+          if (!Array.isArray(parsed?.content)) throw bad(`Upstream returned no answer (no content).${notChargedHere()}`, 502);
           return parsed;
         }, { delays: rateLimitDelaysFor(flex) });
         let data = await callOnce(outbound, timeoutMs);

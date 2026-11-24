@@ -110,7 +110,8 @@ const err = (p) => p.then((v) => v, (e) => e);
     if (String(v).trim().toLowerCase() === "good") { ok(!(e instanceof Error), "case and surrounding space are tolerated on a real verdict"); continue; }
     ok(e instanceof Error && e.statusCode === 400, `"${v}" is not a verdict`);
   }
-  const noReason = await err(handler({ tx: "0xtx3", verdict: "bad" }, as(MINE)));
+  const { runAsRouteCall } = await import("../src/not-charged.js");
+  const noReason = await err(runAsRouteCall(() => handler({ tx: "0xtx3", verdict: "bad" }, as(MINE))));
   ok(noReason instanceof Error && noReason.statusCode === 400, "a BAD verdict with no words is refused: a count nobody can act on is not worth charging for");
   const thin = await err(handler({ tx: "0xtx3", verdict: "bad", reason: "bad" }, as(MINE)));
   ok(thin instanceof Error, "...and neither is a token one");

@@ -23,7 +23,7 @@
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingLeftMs } from "../run-ceiling.js";
 import { attribute, US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION, WORLD_BANK_LICENSE, WORLD_BANK_LICENSE_URL, worldBankCredit } from "../data-attribution.js";
-import { notChargedOn } from "../not-charged.js";
+import { notChargedOn, notChargedHere } from "../not-charged.js";
 import { useHeldTreasuryYields, usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 import { markResaleCleared } from "../resale-terms.js";
@@ -290,7 +290,7 @@ export function stopTreasuryYieldRefresh() {
 function treasuryYieldUnavailable(cause) {
   console.warn(`[treasury-yield] answered 503 (${String(cause?.message || cause).slice(0, 120)})`);
   return Object.assign(
-    bad(`The U.S. Treasury yield curve file could not be read in time; nothing was charged - retry in ${TREASURY_YIELD_RETRY_AFTER_S} s`, 503),
+    bad(`The U.S. Treasury yield curve file could not be read in time.${notChargedHere()} Retry in ${TREASURY_YIELD_RETRY_AFTER_S} s.`, 503),
     { retryAfter: TREASURY_YIELD_RETRY_AFTER_S, attribution: "upstream", upstreamFailure: "deadline" },
   );
 }
@@ -374,7 +374,7 @@ export function isFredMaintenancePage(text) {
   return /<html[\s>]/i.test(head) && /maintenance/i.test(head);
 }
 export function fredMaintenanceError() {
-  return Object.assign(bad("FRED (St. Louis Fed) is in scheduled maintenance and is serving no data right now. Retry later; you were not charged.", 503), { retryAfter: 900, attribution: "upstream", noRetry: true });
+  return Object.assign(bad(`FRED (St. Louis Fed) is in scheduled maintenance and is serving no data right now.${notChargedHere()} Retry later.`, 503), { retryAfter: 900, attribution: "upstream", noRetry: true });
 }
 
 // G10 majors quoted vs USD — the standard FX dashboard most callers want.
@@ -903,7 +903,7 @@ MACRO_TOOLS.push(
     handler: async () => {
       const got = await usMacroSeries({ seriesId: "UNRATE", startDate: monthsBack(30), limit: 100000 });
       const out = sahmFromMonthly(got.observations);
-      if (!out) throw bad("The U.S. Bureau of Labor Statistics unemployment series has too few recent months to compute the Sahm Rule right now; retry later. Nothing was charged.", 503);
+      if (!out) throw bad(`The U.S. Bureau of Labor Statistics unemployment series has too few recent months to compute the Sahm Rule right now; retry later.${notChargedHere()}`, 503);
       return {
         date: out.date, value: out.value,
         triggered: out.value >= 0.5,
@@ -933,7 +933,7 @@ MACRO_TOOLS.push(
     handler: async () => {
       const got = await usMacroSeries({ seriesId: "CPIAUCSL", units: "pc1", startDate: monthsBack(26), limit: 100000 });
       const obs = got.observations;
-      if (!obs.length) throw bad("The U.S. Bureau of Labor Statistics CPI series returned no recent months; retry later. Nothing was charged.", 503);
+      if (!obs.length) throw bad(`The U.S. Bureau of Labor Statistics CPI series returned no recent months; retry later.${notChargedHere()}`, 503);
       const last = obs[obs.length - 1];
       // The 12 calendar months ending at the latest; a month with no
       // published value is reported, never dropped silently.
@@ -973,7 +973,7 @@ MACRO_TOOLS.push(
       const months = Math.min(Math.max(parseInt(i.months, 10) || 12, 1), 120);
       const got = await usMacroSeries({ seriesId: "UNRATE", startDate: monthsBack(months + 3), limit: 100000 });
       const all = got.observations;
-      if (!all.length) throw bad("The U.S. Bureau of Labor Statistics unemployment series returned no recent months; retry later. Nothing was charged.", 503);
+      if (!all.length) throw bad(`The U.S. Bureau of Labor Statistics unemployment series returned no recent months; retry later.${notChargedHere()}`, 503);
       const last = all[all.length - 1];
       const window = monthRange(addMonthsIso(last.date, -(months - 1)), last.date);
       const obs = all.filter((o) => o.date >= window[0]);
@@ -1009,7 +1009,7 @@ MACRO_TOOLS.push(
       const days = Math.min(Math.max(parseInt(i.days, 10) || 30, 1), 365);
       const got = await usMacroSeries({ seriesId: "EFFR", startDate: daysBack(days + 21), limit: 100000 });
       const daily = got.observations;
-      if (!daily.length) throw bad("The New York Fed's EFFR returned no recent business days; retry later. Nothing was charged.", 503);
+      if (!daily.length) throw bad(`The New York Fed's EFFR returned no recent business days; retry later.${notChargedHere()}`, 503);
       const last = daily[daily.length - 1];
       const history = carryCalendarDays(daily, days);
       return {

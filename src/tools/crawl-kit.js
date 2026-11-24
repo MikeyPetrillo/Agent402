@@ -42,6 +42,7 @@ import { ssrfDispatcher, assertPublicUrl, isSsrfBlock, isPrivateIp, UNRESOLVED_O
 import { assertRobotsAllow } from "./robots-gate.js";
 import { parseRobots, robotsAllowsForToken } from "./kit.js";
 import { markUntrusted } from "./provenance.js";
+import { notChargedHere } from "../not-charged.js";
 
 // Its own string and robots.txt product token (RFC 9309), from the one list
 // of our User-Agents (src/user-agents.js).
@@ -539,7 +540,7 @@ async function siteCrawlHandler(input) {
   // Overflow is a 503 (capacity), never a 400, and a >= 400 cancels settlement
   // so the caller is not charged for it.
   if (crawlInFlight >= CRAWL_GLOBAL_MAX) {
-    const e = new Error("Crawler is at capacity right now, retry in a few seconds. You were not charged.");
+    const e = new Error(`Crawler is at capacity right now, retry in a few seconds.${notChargedHere()}`);
     e.statusCode = 503; throw e;
   }
   crawlInFlight++;

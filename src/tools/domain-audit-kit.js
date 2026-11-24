@@ -22,6 +22,7 @@ import { promises as dnsPromises } from "node:dns";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { testSeamOn } from "../test-seams.js";
 import { CRTSH_ATTRIBUTION, withCredit } from "../data-attribution.js";
+import { notChargedHere } from "../not-charged.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -260,7 +261,7 @@ export async function probeDomain(domain, { pro = false } = {}) {
     whois = proTools[2].ok ? proTools[2].data : null;
   }
   // If EVERY core probe failed, we cannot produce an audit (not charged).
-  if (!emailR.ok && !tlsR.ok && !hdrR.ok) throw bad(`Could not reach "${domain}" on any probe (DNS, TLS, or HTTP). Confirm the domain is live. Not charged.`, 422);
+  if (!emailR.ok && !tlsR.ok && !hdrR.ok) throw bad(`Could not reach "${domain}" on any probe (DNS, TLS, or HTTP). Confirm the domain is live.${notChargedHere()}`, 422);
 
   const email = emailR.ok ? emailR.data : null;
   const tls = tlsR.ok ? tlsR.data : null;
@@ -275,7 +276,7 @@ export async function probeDomain(domain, { pro = false } = {}) {
   if (emailScore != null) { dims.push([0.40, emailScore]); assessed.push("email auth"); }
   if (headerScore != null) { dims.push([0.35, headerScore]); assessed.push("security headers"); }
   if (tlsScore != null) { dims.push([0.25, tlsScore]); assessed.push("TLS"); }
-  if (!dims.length) throw bad(`Could not assess any security dimension for "${domain}" (all probes failed). Not charged.`, 422);
+  if (!dims.length) throw bad(`Could not assess any security dimension for "${domain}" (all probes failed).${notChargedHere()}`, 422);
   const wsum = dims.reduce((a, [w]) => a + w, 0) || 1;
   const composite = Math.round(dims.reduce((a, [w, s]) => a + w * s, 0) / wsum);
   const grade = letterFor(composite);
@@ -410,7 +411,7 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     // The audited domain is the one source a link may name.
     const prose = sanitizeReportProse(proseOf(sd, cutShort), [{ url: `https://${domain}/` }, { url: `https://www.${domain}/` }]);
-    if (!prose) throw bad("Domain audit synthesis produced nothing - not charged", 502);
+    if (!prose) throw bad(`Domain audit synthesis produced nothing.${notChargedHere()}`, 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
     const header = `# Domain Security Audit: ${domain}\n\n**Overall grade: ${grade}** (${composite}/100)${gradeCaveat}\n`;

@@ -8,8 +8,11 @@ import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub
 import { MACRO_TOOLS, retryTransient, withStaleFallback, parseTreasuryYieldCsv, treasuryYieldCsvUrl, TREASURY_YIELD_SOURCE, _resetTreasuryYieldCacheForTest, _ageTreasuryYieldCacheForTest, refreshTreasuryYields, startTreasuryYieldRefresh, stopTreasuryYieldRefresh, TREASURY_YIELD_MAX_AGE_MS } from "../src/tools/macro-kit.js";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { runAsRouteCall } from "../src/not-charged.js";
 
-const h = (slug) => MACRO_TOOLS.find((t) => t.slug === slug).handler;
+// Each handler is called as the route binder calls it (src/not-charged.js
+// runAsRouteCall), so a refusal carries the charge sentence a buyer reads.
+const h = (slug) => { const fn = MACRO_TOOLS.find((t) => t.slug === slug).handler; return (...args) => runAsRouteCall(() => fn(...args)); };
 let assertFail = 0, liveOk = 0, liveErr = 0;
 const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; console.error(`ASSERT FAIL - ${m}`); } };
 
@@ -119,7 +122,7 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
       t0 = Date.now(); err = null; r = null;
       try { r = await h("treasury-yield-curve")({}); } catch (x) { err = x; }
       const capMs = Date.now() - t0;
-      ok(!r && err?.statusCode === 503 && err.retryAfter > 0 && /nothing was charged/.test(err.message) && capMs < 1_000, `a slow upstream past the bound answers 503 with Retry-After at the bound (${capMs} ms, ${err?.statusCode} retryAfter=${err?.retryAfter})`);
+      ok(!r && err?.statusCode === 503 && err.retryAfter > 0 && / Nothing was charged\. Retry in \d+ s\.$/.test(err.message) && capMs < 1_000, `a slow upstream past the bound answers 503 with Retry-After at the bound (${capMs} ms, ${err?.statusCode} retryAfter=${err?.retryAfter})`);
       await new Promise((res) => setTimeout(res, 800));
       t0 = Date.now(); r = await h("treasury-yield-curve")({});
       const warmMs = Date.now() - t0;
@@ -174,7 +177,7 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
         err = null; r = null; mark = slowReads.length;
         try { r = await h(slug)(slug === "treasury-yield-history" ? { days: 5 } : {}); } catch (x) { err = x; }
         await tick();
-        ok(!r && err?.statusCode === 503 && err.retryAfter > 0 && /nothing was charged/.test(err.message), `${slug}: held rows past the age limit answer 503, never the old yields (${err?.statusCode ?? JSON.stringify(r)})`);
+        ok(!r && err?.statusCode === 503 && err.retryAfter > 0 && / Nothing was charged\. Retry in \d+ s\.$/.test(err.message), `${slug}: held rows past the age limit answer 503, never the old yields (${err?.statusCode ?? JSON.stringify(r)})`);
         _ageTreasuryYieldCacheForTest(61_000);
       }
       failWith = 0; _ageTreasuryYieldCacheForTest(61_000);

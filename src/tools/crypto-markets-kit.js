@@ -33,6 +33,7 @@ function bad(message, statusCode = 400) {
 }
 
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
+import { notChargedHere } from "../not-charged.js";
 const SOURCE = "coingecko";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
@@ -267,7 +268,7 @@ async function cgLoad(key, path, reduce = null) {
       let code = null;
       try { const b = await res.json(); code = Number(b?.status?.error_code ?? b?.error?.status?.error_code); } catch { /* no body */ }
       if (code === 10005 || code === 10012) throw bad("Market data upstream refused the request: outside the plan's allowed range (history is limited to the past 365 days) or an endpoint this plan does not serve", 422);
-      throw bad("Market data is not configured on this deployment. You were not charged.", 503);
+      throw bad(`Market data is not configured on this deployment.${notChargedHere()}`, 503);
     }
     if (s >= 500) throw bad(`Market data upstream HTTP ${s} - try again later`, 502);
     throw bad(`Market data upstream rejected the request (HTTP ${s}) - check the inputs`, 422);

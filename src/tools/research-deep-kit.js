@@ -17,6 +17,7 @@ import { extractArticle } from "./extract.js";
 import { stepProgress } from "../job-progress.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { testSeamOn } from "../test-seams.js";
+import { notChargedHere } from "../not-charged.js";
 
 // Per-buyer OpenRouter `user` id, so one abusive buyer can't get our whole
 // account provider-blocked (matches every gateway tier). Never throws.
@@ -174,7 +175,7 @@ function makeResearchHandlerInner(tierSlug) {
     // report also disarmed the guard meant to catch it. A >= 400 cancels
     // settlement, so refusing here costs the buyer nothing and they retry.
     if (plannerFellBack && t.subQ > 1) {
-      throw bad(`Research planning failed for this question, so the ${t.subQ}-part decomposition this tier is priced for could not be built${planError ? ` (${planError})` : ""}. Not charged; please retry.`, 502);
+      throw bad(`Research planning failed for this question, so the ${t.subQ}-part decomposition this tier is priced for could not be built${planError ? ` (${planError})` : ""}.${notChargedHere()} Please retry.`, 502);
     }
     const outline = Array.isArray(plan?.outline) ? plan.outline.filter((s) => typeof s === "string").slice(0, 8) : [];
 
@@ -207,7 +208,7 @@ function makeResearchHandlerInner(tierSlug) {
     // Dedupe sources by URL across all searches.
     const byUrl = new Map();
     for (const r of good) for (const s of r.sources) if (s.url && !byUrl.has(s.url)) byUrl.set(s.url, s);
-    if (good.length < need || byUrl.size < Math.min(3, toRun.length)) throw bad(`Only ${good.length} of ${toRun.length} grounded searches returned cited evidence (${byUrl.size} distinct sources) - not enough for this report. Not charged; please retry.`, 502);
+    if (good.length < need || byUrl.size < Math.min(3, toRun.length)) throw bad(`Only ${good.length} of ${toRun.length} grounded searches returned cited evidence (${byUrl.size} distinct sources) - not enough for this report.${notChargedHere()} Please retry.`, 502);
     let sources = [...byUrl.values()];
 
     // 3) RERANK the pooled sources against the ORIGINAL question, keep top-K.
@@ -260,7 +261,7 @@ ${t.synthFrame ? `${t.synthFrame}\n\n` : ""}Write a thorough, well-structured, w
     const { sd, calls: synthCalls, cutShort } = await completeSynthesis((note) => reportChat({ model: synthModel, messages: [{ role: "user", content: synthPrompt + note }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user), t.words);
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     const prose0 = proseOf(sd, cutShort);
-    if (!prose0) throw bad("Synthesis produced no report - not charged", 502);
+    if (!prose0) throw bad(`Synthesis produced no report.${notChargedHere()}`, 502);
     const audit = auditCitations(prose0, sources, good.map((r) => r.answer).join(" "));
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(audit.prose, sources);

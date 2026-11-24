@@ -35,6 +35,7 @@ const X_MAX_USERS_PER_LOOKUP = 10;
 
 const X_API = "https://api.x.com/2";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { notChargedHere } from "../not-charged.js";
 // DEADLINES (src/upstream-deadline.js): one read per handler under its own
 // cap and the handler budget; a read that outlives it is a 503 naming the
 // upstream and the step, never a 504 (the spend reservation is kept, as for
@@ -126,7 +127,7 @@ function takeBool(raw, field) {
 // `vendor.x`. Without it the cap cannot be enforced, so reads refuse 503.
 function xRate(k) {
   const v = upstreamCosts().vendor?.x?.[k];
-  if (v == null) { const e = new Error("X data tools are temporarily unavailable. This call is not charged on x402."); e.statusCode = 503; throw e; }
+  if (v == null) { const e = new Error(`X data tools are temporarily unavailable.${notChargedHere()}`); e.statusCode = 503; throw e; }
   return v;
 }
 // Both ceilings are read by src/daily-ceilings.js (shared with the Exa kit).
@@ -256,7 +257,7 @@ async function xGet(path, params = {}) {
   const estimate = estimateXReadUsd(path, params);
   // A refusal at the hard ceiling (not the 0 switch, whose word is off) is
   // noted here and on the shared store, so every replica's word reads capped.
-  const capped = () => { xSpendToday(); xSpend.refused++; if (cap > 0) { xSpend.refusedAt = Date.now(); xShared.noteRefused(REFUSAL_HOLD_MS); } return bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
+  const capped = () => { xSpendToday(); xSpend.refused++; if (cap > 0) { xSpend.refusedAt = Date.now(); xShared.noteRefused(REFUSAL_HOLD_MS); } return bad(`X data tools have reached today's usage cap - retry after 00:00 UTC.${notChargedHere()}`, 503); };
   // The shared reserve first (an atomic add on the store, awaited only when
   // there is one): over the hard ceiling there, nothing is booked here. Then this
   // process's check and booking, with no await between them, so concurrent
@@ -673,7 +674,7 @@ export const X_DATA_TOOLS = [
 
       const data = await xGet("/users/by", { usernames: usernames.join(","), "user.fields": USER_FIELDS });
       // No `data` array is an upstream answer we cannot read, not an empty result: say so, never report the handles as missing.
-      if (!Array.isArray(data.data)) throw Object.assign(new Error("X answered without the account list; retry later. Not charged on x402."), { statusCode: 502 });
+      if (!Array.isArray(data.data)) throw Object.assign(new Error(`X answered without the account list; retry later.${notChargedHere()}`), { statusCode: 502 });
       const users = data.data.map(shapeUser).filter(Boolean);
       const found = new Set(users.map((u) => String(u.username || "").toLowerCase()));
       // X lists unresolved handles under `errors`; fall back to a set difference.

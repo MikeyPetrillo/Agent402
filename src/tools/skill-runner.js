@@ -35,7 +35,7 @@ import { assertRobotsAllow } from "./robots-gate.js";
 import { capturePostHogPackStep } from "../posthog.js";
 import { callerInputError } from "../caller-input-errors.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
-import { withoutChargeClaim } from "../not-charged.js";
+import { withoutChargeClaim, notChargedHere, runAsStep } from "../not-charged.js";
 
 // Cap for the media-pipeline URL→base64 bridge below. Must route through
 // safeFetch (SSRF guard + size cap), never raw fetch — the URL is caller-supplied.
@@ -2133,7 +2133,7 @@ async function runPack(packSlug, args, ctx) {
       let lastErr;
       for (const input of inputs) {
         try {
-          const result = await handler(input);
+          const result = await runAsStep(() => handler(input));
           prior[keyOf(step)] = result;
           capturePostHogPackStep({ pack: packSlug, slug: step.slug, ok: true, ms: Date.now() - startedAt });
           return { slug: step.slug, ...tag(step), ok: true, result };
@@ -2177,7 +2177,7 @@ async function runPack(packSlug, args, ctx) {
     const allClientErrors = attempted.every((s) => s.statusCode >= 400 && s.statusCode < 500);
     const reasons = attempted.map((s) => `${s.slug}: ${s.error}`).join("; ");
     throw Object.assign(
-      new Error(`No step in the "${packSlug}" pack succeeded, so there is nothing to return (not charged). ${reasons}`),
+      new Error(`No step in the "${packSlug}" pack succeeded, so there is nothing to return.${notChargedHere()} ${reasons}`),
       { statusCode: allClientErrors ? 400 : 502 }
     );
   }

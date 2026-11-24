@@ -104,7 +104,7 @@ ok(rugcheckInputKey("https://api.rugcheck.xyz/v1/tokens/MINTA/report/summary") =
   const body = await r.json();
   ok(r.status === 503 && reachedGate === 1, "paused: the call answers 503 before the payment gate");
   ok(r.headers.get("retry-after") === "300" && body.retryAfterSeconds === 300, `the 503 carries Retry-After (${r.headers.get("retry-after")})`);
-  ok(/Not charged - retry in about 300 s/.test(body.error) && body.attribution === "upstream", `the 503 says not charged and when to retry (${body.error})`);
+  ok(/ Nothing was charged\. Retry in about 300 s\.$/.test(body.error) && body.attribution === "upstream", `the 503 says not charged and when to retry (${body.error})`);
   ok(body.errorCode === "unavailable", `the paused 503 carries the stable errorCode a paused or switched-off tool answers with (${JSON.stringify(body.errorCode)})`);
   r = await call("/api/sol-token-holders", "GET");
   ok(r.status === 503, "the GET twin of a POST tool is paused too");

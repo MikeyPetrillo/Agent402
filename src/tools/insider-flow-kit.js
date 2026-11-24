@@ -20,6 +20,7 @@ import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { resolveCompany, eftsSearch, fetchXmlText, issuerHits } from "./edgar-kit.js";
 import { mapLimit } from "./map-limit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
+import { notChargedHere } from "../not-charged.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -167,7 +168,7 @@ function makeInsiderHandlerInner(tierSlug) {
 
     // 1) FILINGS (cheap) -> 2) XML per filing (bounded concurrency).
     const pf = await (deps.probeInsiderFilings || probeInsiderFilings)({ ticker: ticker || undefined, cik: cikIn || undefined, days, limit: t.maxFilings });
-    if (!pf.filings.length) throw bad(`No Form 4 filings against ${ticker || pf.name || pf.cik} in the last ${days} days. Not charged - widen "days" (max 365) or check the ticker.`, 422);
+    if (!pf.filings.length) throw bad(`No Form 4 filings against ${ticker || pf.name || pf.cik} in the last ${days} days.${notChargedHere()} Widen "days" (max 365) or check the ticker.`, 422);
     const parsed = await mapLimit(pf.filings, XML_CONCURRENCY, async (f) => {
       if (!f.url) return { f, err: "no-url" };
       try { const xml = await withTimeout((deps.fetchXmlText || fetchXmlText)(f.url), XML_TIMEOUT_MS); return { f, p: parseForm4(xml) }; }
@@ -178,7 +179,7 @@ function makeInsiderHandlerInner(tierSlug) {
     const good = parsed.filter((x) => x.p && (!x.p.issuerCik || /^0+$/.test(x.p.issuerCik) || x.p.issuerCik === pf.cik));
     // Minimum evidence: at least half the filings in the window must have been
     // read, else this is an EDGAR incident and the report is not charged.
-    if (!good.length || good.length < Math.ceil(pf.filings.length / 2)) throw bad(`Could only read ${good.length} of ${pf.filings.length} Form 4 filings from EDGAR (upstream). Not charged - please retry.`, 502);
+    if (!good.length || good.length < Math.ceil(pf.filings.length / 2)) throw bad(`Could only read ${good.length} of ${pf.filings.length} Form 4 filings from EDGAR (upstream).${notChargedHere()} Please retry.`, 502);
 
     // 3) AGGREGATE (deterministic).
     const rows = [], drows = [], holdRows = [];
@@ -258,7 +259,7 @@ NOTE: a gap in this material is never a finding about the company or an insider 
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
-    if (!prose) throw bad("Insider report synthesis produced nothing - not charged", 502);
+    if (!prose) throw bad(`Insider report synthesis produced nothing.${notChargedHere()}`, 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
     const header = `# Insider Flow Report: ${name} (${symbol})\n\n**${pf.total > pf.filings.length ? `${readOldest} to ${pf.endDate} (the newest ${good.length} of ${pf.total} filings in the ${days}-day window)` : `${pf.startDate} to ${pf.endDate}`}** · ${good.length} Form 4 filing${good.length === 1 ? "" : "s"} read · ${buys.length} open-market buy${buys.length === 1 ? "" : "s"} (${fmtUsd(sum(buys, "valueUsd"))}) · ${sells.length} open-market sale${sells.length === 1 ? "" : "s"} (${fmtUsd(sum(sells, "valueUsd"))})\n`;
