@@ -156,7 +156,7 @@ skill packs built on them. When you use them:</p>
 <p>Agent402 provides web tools that clients - human-operated or autonomous agents - call over HTTP.
 By using the service, including programmatically via the x402 payment protocol or the MCP connector,
 you agree to these terms. If you operate an agent that uses the service, you are responsible for that
-agent's use. You must be able to form a binding contract, not barred from receiving
+agent's use. You must be at least 18, able to form a binding contract, not barred from receiving
 services under U.S. or other applicable law, and not located in an embargoed jurisdiction or listed on
 any U.S. government sanctions list. The service is
 <a href="${REPO_URL}" rel="noopener">open source</a>; these terms cover the hosted instance at agent402.tools.
