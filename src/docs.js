@@ -357,7 +357,8 @@ function renderMarkdown(md) {
 }
 
 /** Meta description from a page's first real prose paragraph: skips headings,
- * blockquote banners, tables, lists, code and HTML, then strips markdown. */
+ * blockquote banners, tables, lists, code, HTML and an owner's trademark
+ * notice, then strips markdown. */
 // A page whose opening paragraphs have no sentence that fits a snippet gets
 // one written for it here (the wiki text stays as it is on GitHub).
 const DOC_DESCRIPTIONS = {
@@ -372,6 +373,8 @@ export function docDescription(md, title, slug = "") {
   for (const raw of paras) {
     const t = raw.trim();
     if (!t || /^(#|>|\||[-*+] |\d+\. |<|!\[|---|\*\*\*)/.test(t)) continue;
+    // An owner's trademark notice is a notice, not what the page is about.
+    if (/\b(?:are|is a) (?:registered )?trademarks? of\b/.test(t) && /not affiliated with/.test(t)) continue;
     let text = t
       .replace(/\[\[([^\]|]+)\|[^\]]+\]\]/g, "$1").replace(/\[\[([^\]]+)\]\]/g, "$1")
       .replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
