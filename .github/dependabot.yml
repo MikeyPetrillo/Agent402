@@ -111,13 +111,6 @@ updates:
       # lines are held and a 0.17.x patch still comes in.
       - dependency-name: "mppx"
         versions: [">=0.18.0"]
-      # typescript major: 7 is the native compiler, and its package exports no
-      # compiler API at the root (only the version and unstable/* subpaths), so
-      # scripts/test-package-types.js, which drives ts.createProgram and the type
-      # checker for the published packages' declarations, dies on import (#2072).
-      # Revisit when a 7.x line ships a stable programmatic API the check can use.
-      - dependency-name: "typescript"
-        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
