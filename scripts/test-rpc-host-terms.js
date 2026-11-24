@@ -7,8 +7,9 @@
 //     shows a chain's own published endpoint to a reader are the exceptions);
 //   - every reader's default lane list holds only permitted endpoints;
 //   - each settlement chain keeps at least two permitted lanes with the keyed
-//     lane configured, and the chains left with one are named here, so a
-//     change that drops a lane shows up as a failure.
+//     lane configured, and Monad and Sei keep two on operators whose terms
+//     are cited in PERMITTED_RPC_SOURCES, so a change that drops a lane shows
+//     up as a failure.
 //
 //   node scripts/test-rpc-host-terms.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -74,13 +75,20 @@ ok(T.isNonCommercialRpc("https://api.mainnet-beta.solana.com") && T.isNonCommerc
   const chains = [...new Set([...Object.keys(EVM_RPCS), ...Object.keys(T.ALCHEMY_NETWORKS)])];
   const counts = Object.fromEntries(chains.map((n) => [n, evmRpcLanesFor(n, env).length]));
   const single = chains.filter((n) => counts[n] < 2).sort();
-  // Chains with one permitted lane today, named so a change shows up:
-  // Monad (no public endpoint whose terms permit commercial use: the keyed
-  // lane only) and Sei (its public endpoint, no keyed network).
-  const KNOWN_SINGLE = ["eip155:1329", "eip155:143"];
-  ok(JSON.stringify(single) === JSON.stringify(KNOWN_SINGLE), `every other settlement chain keeps two permitted lanes with the keyed lane set (one lane: ${single.join(", ") || "none"})`);
+  ok(single.length === 0, `every settlement chain keeps two permitted lanes with the keyed lane set (one lane: ${single.join(", ") || "none"})`);
+  // Monad and Sei each keep two lanes whose operators' terms are cited in
+  // PERMITTED_RPC_SOURCES (Sei's own default publishes no terms, so it is not
+  // counted toward the two).
+  for (const [n, name] of [["eip155:143", "Monad"], ["eip155:1329", "Sei"]]) {
+    const cited = evmRpcLanesFor(n, env).filter((u) => T.permittedRpcSource(u));
+    ok(cited.length >= 2, `${name}: at least two lanes on a cited permitted source (${cited.map((u) => new URL(u).hostname).join(", ")})`);
+  }
+  ok(T.PERMITTED_RPC_SOURCES.every((s) => /^https:\/\//.test(s.terms) && s.clause.length > 20 && /^\d{4}-\d{2}-\d{2}$/.test(s.read) && !T.NON_COMMERCIAL_RPC_HOSTS.some((h) => s.hosts.test(h))), "every permitted source names its terms, clause and read date, and matches no barred host");
+  ok(!T.permittedRpcSource("https://rpc.monad.xyz") && !T.permittedRpcSource("https://evil-publicnode.com.example") && T.permittedRpcSource("https://sei-evm-rpc.publicnode.com"), "CONTROL: the permitted-source check reads the host, not a substring");
   ok(chains.every((n) => counts[n] >= 1 && evmRpcLanesFor(n, env).every((u) => !T.isNonCommercialRpc(u))), "every chain has at least one lane, all permitted");
-  ok(evmRpcFor("eip155:143", env) === "https://monad-mainnet.g.alchemy.com/v2/k" && evmRpcFor("eip155:143", {}) === null, "Monad reads the keyed lane, and with no key has none (refused loudly, never a guessed endpoint)");
+  ok(evmRpcFor("eip155:143", env) === "https://monad-mainnet.g.alchemy.com/v2/k" && evmRpcFor("eip155:143", {}) === T.ONFINALITY_RPCS.monad, "Monad reads the keyed lane first, and with no key its cited backup");
+  ok(evmRpcFor("eip155:1329", env) === "https://evm-rpc.sei-apis.com" && evmRpcLanesFor("eip155:1329", env).includes("https://sei-mainnet.g.alchemy.com/v2/k") && evmRpcLanesFor("eip155:1329", {}).includes(T.PUBLICNODE_RPCS.sei), "Sei keeps its default first, with the keyed lane and PublicNode behind it");
+  ok(evmRpcFor("eip155:999999", env) === null, "a chain with no lane has none (refused loudly, never a guessed endpoint)");
   ok(evmRpcFor("eip155:10", {}) === T.PUBLICNODE_RPCS.optimism && evmRpcFor("eip155:4663", {}) === T.PUBLICNODE_RPCS.robinhood && evmRpcFor("eip155:43114", {}) === T.PUBLICNODE_RPCS.avalanche, "OP Mainnet, Robinhood Chain and Avalanche read PublicNode by default");
   ok(evmRpcFor("eip155:10", { EVM_RPC_10: "https://op.example/rpc" }) === "https://op.example/rpc", "an operator override still wins");
   ok(T.defaultSolanaRpcs(env).length >= 2 && T.defaultSolanaRpcs({}).length === 1, "Solana: the keyed lane and PublicNode with the key set, PublicNode alone without it");
