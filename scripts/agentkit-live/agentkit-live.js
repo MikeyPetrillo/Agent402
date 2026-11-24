@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// LIVE proof of agent402-agentkit against production: a real AgentKit wallet
+// LIVE proof of agent402-action-provider against production: a real AgentKit wallet
 // provider (ViemWalletProvider over the canary burner on Base mainnet) drives
 // agent402_find, then agent402_call on a wallet-only tool, which must pay a
 // real x402 USDC micropayment and return the tool's result. Asserts the
@@ -20,7 +20,7 @@ if (!pk) { console.error("need BURNER_KEY"); process.exit(2); }
 // run before any Agent402 call). Their telemetry must not decide our proof.
 process.on("unhandledRejection", (e) => console.warn("ignored unhandled rejection (third-party):", String(e?.message || e).slice(0, 120)));
 const { ViemWalletProvider } = await import("@coinbase/agentkit");
-const { agent402Actions } = await import(process.env.AGENTKIT_ADAPTER || "agent402-agentkit");
+const { agent402Actions } = await import(process.env.AGENTKIT_ADAPTER || "agent402-action-provider");
 
 const account = privateKeyToAccount(pk.startsWith("0x") ? pk : `0x${pk}`);
 const walletProvider = new ViemWalletProvider(createWalletClient({ account, chain: base, transport: http(process.env.BASE_RPC_URL || "https://mainnet.base.org") }));

@@ -25,7 +25,7 @@ We publish a runnable sample: [`examples/agentcore-x402-buyer`](https://github.c
 - 500+ pay-per-call tools + 80+ multi-tool skill packs from Agent402, callable from an AgentCore-hosted agent
 - Free tier with **no wallet** on the pure-CPU tools (proof-of-work through the adapters, or free and rate-limited through the hosted `/mcp` connector)
 - USDC settlement for wallet-only tools through the Payments plugin (the live-proven path above)
-- A Strands adapter (`agent402-strands`) for embedding a chosen tool subset in a Strands agent
+- A Strands adapter (`agent402-agent-loop-tools`) for embedding a chosen tool subset in a Strands agent
 
 ## Option 1: Gateway target (zero code, free tier + discovery)
 
@@ -40,15 +40,15 @@ For **wallet-only (paid) tools**, remember the Gateway cannot settle a 402 on th
 
 ## Option 2: Strands adapter (curated tool subset, embedded in the agent)
 
-When you want to ship a small, curated set of tools rather than the whole catalog - better tool-selection accuracy, smaller token cost. Use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands), the drop-in adapter:
+When you want to ship a small, curated set of tools rather than the whole catalog - better tool-selection accuracy, smaller token cost. Use [`agent402-agent-loop-tools`](https://www.npmjs.com/package/agent402-agent-loop-tools), the drop-in adapter:
 
 ```bash
-npm install agent402-strands @strands-agents/sdk zod
+npm install agent402-agent-loop-tools @strands-agents/sdk zod
 ```
 
 ```ts
 import { Agent } from "@strands-agents/sdk";
-import { agent402Tools } from "agent402-strands";
+import { agent402Tools } from "agent402-agent-loop-tools";
 
 // web search, then a cited answer: both wallet-only, paid per call through payFetch,
 // an @x402/fetch-wrapped fetch (the Adapters page builds one from a viem account)
@@ -72,7 +72,7 @@ const { tools } = await agent402Tools({
 
 More wallet-only tools (extract, render, screenshot and most of the catalog) go in the same `slugs` list beside `freeOnly: false`.
 
-That's the whole adapter. It has the same shape as the [OpenAI](https://www.npmjs.com/package/agent402-openai-tools), [Anthropic](https://www.npmjs.com/package/agent402-anthropic-tools) and [LlamaIndex](https://www.npmjs.com/package/agent402-llamaindex) adapters; the [LangChain](https://www.npmjs.com/package/agent402-langchain) and [Vercel AI SDK](https://www.npmjs.com/package/agent402-ai-sdk) adapters register four meta tools instead (see [[Adapters]]) - pick the one your code already uses.
+That's the whole adapter. It has the same shape as the [OpenAI](https://www.npmjs.com/package/agent402-function-calling), [Anthropic](https://www.npmjs.com/package/agent402-tool-use) and [LlamaIndex](https://www.npmjs.com/package/agent402-function-tools) adapters; the [LangChain](https://www.npmjs.com/package/agent402-structured-tools) and [Vercel AI SDK](https://www.npmjs.com/package/agent402-stream-tools) adapters register four meta tools instead (see [[Adapters]]) - pick the one your code already uses.
 
 ## Option 3: Sell side - charge AgentCore agents with `agent402-tollbooth`
 
@@ -112,7 +112,7 @@ Adaptive proof-of-work means cash-poor agents can still pay in CPU. Edge-deploya
 ┌──────────────────────────────────────────────────────────────┐
 │  AgentCore Runtime                                           │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │  Strands Agent  (your code, agent402-strands wired in) │  │
+│  │  Strands Agent  (your code, agent402-agent-loop-tools wired in) │  │
 │  │       │                                                │  │
 │  │       │ tool.callback({...})                           │  │
 │  │       ▼                                                │  │
@@ -136,7 +136,7 @@ No bridging code, no protocol translation - x402 on both ends.
 
 - **AgentCore Payments speaks x402.** Per the AWS docs, AgentCore orchestrates payments using `HTTP 402 Payment Required` (x402) with the `exact` scheme. That's exactly what Agent402 emits.
 - **Agent402 is x402 v2 native.** Agent402 serves x402 v2, the protocol AgentCore Payments pays.
-- **The `agent402-strands` adapter returns native Strands `tool({...})` instances**, so a Strands Agent built with it needs no shape changes.
+- **The `agent402-agent-loop-tools` adapter returns native Strands `tool({...})` instances**, so a Strands Agent built with it needs no shape changes.
 
 ## See also
 

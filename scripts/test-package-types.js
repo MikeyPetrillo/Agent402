@@ -19,7 +19,7 @@
 // Every compile is the typescript package's own `tsc` CLI (the package
 // exports no compiler API since 7.0), run by this node with --noEmit on a
 // tsconfig written per consumer; diagnostics are read by file and line.
-// elizaos-plugin-agent402's declarations import its host's @elizaos/core,
+// agent402-actions-plugin's declarations import its host's @elizaos/core,
 // which an Eliza project always has and this repository does not install;
 // it gets checks 1 and 3 only. agent402-tollbooth's root and ./edge are
 // typed; its other subpaths (the Worker entry, the replay stores, the MPP

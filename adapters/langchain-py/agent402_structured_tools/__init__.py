@@ -1,4 +1,4 @@
-"""agent402-langchain - turn Agent402 into LangChain tools a Python agent can
+"""agent402-structured-tools - turn Agent402 into LangChain tools a Python agent can
 pick up directly.
 
 Four meta-tools, all free to discover (the same design as the JS adapter):
@@ -12,7 +12,7 @@ Why four and not one-tool-per-slug? Frameworks balk at registering 500+ tools
 at once and an LLM can't reason over that many. The agent picks a task, `find`/
 `route` picks the tool, and `call` handles payment.
 
-    from agent402_langchain import Agent402Toolkit
+    from agent402_structured_tools import Agent402Toolkit
     toolkit = Agent402Toolkit(base_url="https://agent402.tools")
     tools = toolkit.get_tools()          # free tier (proof-of-work), no wallet
 
@@ -46,10 +46,10 @@ from typing import Any, Callable, Optional
 
 import requests
 
-__version__ = "0.1.7"
+__version__ = "0.2.0"
 DEFAULT_BASE = "https://agent402.tools"
 # The User-Agent product token that names this package on every request.
-_USER_AGENT = f"agent402-langchain-py/{__version__}"
+_USER_AGENT = f"agent402-structured-tools-py/{__version__}"
 _TIMEOUT = 60
 # The per-call ceiling a toolkit gets when none is given (agent402-client's
 # default, which covers every fixed price in the catalog).

@@ -711,40 +711,40 @@ Other published npm packages
 ============================
 These bundle no third-party code. Their dependencies are installed by the user's own package manager under each dependency's own license.
 
-  agent402-agentkit (MIT)
+  agent402-action-provider (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: @coinbase/agentkit >=0.10.0 <1, @x402/evm >=2.0.0 <3, @x402/fetch >=2.0.0 <3, zod >=3.23.0 <5
-  agent402-ai-sdk (MIT)
+  agent402-stream-tools (MIT)
     dependencies: none
     peer dependencies: ai >=3 <8, zod >=3 <5
-  agent402-anthropic-tools (MIT)
+  agent402-tool-use (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: none
-  elizaos-plugin-agent402 (MIT)
+  agent402-actions-plugin (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: @x402/evm >=2.0.0 <3, @x402/fetch >=2.0.0 <3, viem >=2.0.0 <3
-  agent402-google-adk (MIT)
+  agent402-dev-kit-tools (MIT)
     dependencies: none
     peer dependencies: @google/adk >=1 <3, zod >=3 <5
-  agent402-langchain (MIT)
+  agent402-structured-tools (MIT)
     dependencies: none
     peer dependencies: @langchain/core >=0.3 <2, zod >=3 <5
-  agent402-llamaindex (MIT)
+  agent402-function-tools (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: llamaindex >=0.12.0 <1
-  agent402-openai-agents (MIT)
+  agent402-runner-tools (MIT)
     dependencies: none
     peer dependencies: @openai/agents >=0.0.1 <1
-  agent402-openai-tools (MIT)
+  agent402-function-calling (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: none
-  agent402-strands (MIT)
+  agent402-agent-loop-tools (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: @strands-agents/sdk >=1 <2, zod >=3 <5
   agent402-client (MIT)
     dependencies: none
     peer dependencies: none
-  agent402-openclaw (MIT)
+  agent402-model-provider (MIT)
     dependencies: none
     peer dependencies: @x402/evm >=2.20.0 <3, @x402/fetch >=2.20.0 <3, viem >=2.48.11 <3
   agent402-tollbooth (MIT)
@@ -755,7 +755,7 @@ Published Python packages
 =========================
 These bundle no third-party code. Their dependencies are installed by the user's pip under each dependency's own license.
 
-  agent402-langchain (adapters/langchain-py/)
+  agent402-structured-tools (adapters/langchain-py/)
     dependencies: requests>=2.25
     optional dependencies: langchain: langchain-core>=0.2, pydantic>=2
 

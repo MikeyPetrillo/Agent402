@@ -313,7 +313,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp@0.17.0\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.17.1\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -513,7 +513,7 @@ npx -y agent402-mcp@${AGENT402_MCP_VERSION}
 
 ${getWalletMarkdown()}
 
-**agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
+**agent402-model-provider.** \`maxPerCallUsd\` in the plugin config, or
 \`AGENT402_MAX_PER_CALL_USD\`, defaults to $5; \`0\` or \`off\` turns it off.
 
 In both packages a value that is not a USD amount keeps the default ceiling
@@ -1854,7 +1854,7 @@ carries a \`WWW-Authenticate: Payment\` challenge - see
 Coinbase Business now takes payments from AI agents over x402: an agent pays
 your x402 URL in USDC and the funds settle into your Coinbase Business account,
 where you reconcile, withdraw, or hold them. Coinbase's own path is a hosted
-checkout that returns an x402 URL. If you sell an API and want a price on every
+checkout that returns an x402 URL ([Accept Agentic Payments with x402](https://docs.cdp.coinbase.com/coinbase-business/checkout-apis/accept-x402-payments)). If you sell an API and want a price on every
 request, this guide puts x402 in front of the API itself and settles into the
 same account.
 
@@ -1974,7 +1974,7 @@ its normal schedule.
 Agent402 opens two doors to an agent host:
 
 - **Models**: an OpenAI-compatible gateway. Run the local wallet proxy
-  (\`agent402-openclaw proxy\`, below) and point any client that accepts a
+  (\`agent402-model-provider proxy\`, below) and point any client that accepts a
   base URL at \`http://127.0.0.1:8412/v1\`: it pays each call from your wallet
   over x402. With ${CREDITS_ON ? "a credits key" : "a credits key you already hold"}, a client can instead use
   \`https://agent402.tools/v1/metered\` directly with the key as its API key. Each request is quoted from its own
@@ -2005,10 +2005,10 @@ wallet you hold (the key never leaves the machine), and forwards to the
 gateway. Any OpenAI-compatible client then uses it as its base URL:
 
 \`\`\`bash
-npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
+npm i agent402-model-provider @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
 export AGENT402_MAX_PER_CALL_USD=5    # per-call ceiling checked before signing (the default; 0 or off turns it off)
-npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1
+npx agent402-model-provider proxy           # run from that folder; serves http://127.0.0.1:8412/v1
 \`\`\`
 
 Install the four packages together and run the proxy from the same folder: the
@@ -2016,7 +2016,7 @@ wallet packages are optional peers, so a proxy started without them runs unpaid
 and logs that x402 payment is unavailable.
 
 Use model \`auto\` or any id from \`GET /v1/models\`. Run
-\`npx agent402-openclaw permit2-approve\` once to settle metered calls at actual
+\`npx agent402-model-provider permit2-approve\` once to settle metered calls at actual
 usage instead of the quote. The proxy also answers the Anthropic wire
 (\`POST /v1/messages\`), so Claude Code pays from the same wallet (next section).
 
@@ -2061,7 +2061,7 @@ claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.0
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.1
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -2075,7 +2075,7 @@ Or in \`.mcp.json\` at the project root:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
@@ -2098,7 +2098,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2198,9 +2198,9 @@ model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING.toLo
 
 ## ElizaOS
 
-Tools: the [\`elizaos-plugin-agent402\`](https://www.npmjs.com/package/elizaos-plugin-agent402)
+Tools: the [\`agent402-actions-plugin\`](https://www.npmjs.com/package/agent402-actions-plugin)
 plugin adds \`AGENT402_FIND\` / \`AGENT402_CALL\` / \`AGENT402_ABOUT\` actions
-(\`"plugins": ["elizaos-plugin-agent402"]\`, setting \`AGENT402_WALLET_KEY\` to an
+(\`"plugins": ["agent402-actions-plugin"]\`, setting \`AGENT402_WALLET_KEY\` to an
 EVM key holding USDC, or \`AGENT402_CREDITS_KEY\` for a credits key you already hold).
 Models: the OpenAI plugin reads its base URL from the environment, so no code
 changes. With the local wallet proxy running (above):
@@ -2327,7 +2327,7 @@ prompted input (VS Code stores it, the file never carries it):
     "agent402": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
@@ -2353,7 +2353,7 @@ interpolation is Windsurf's own):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
@@ -2380,7 +2380,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
@@ -2418,7 +2418,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
@@ -2442,7 +2442,7 @@ Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio serve
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
-args = ["-y", "agent402-mcp@0.17.0"]
+args = ["-y", "agent402-mcp@0.17.1"]
 env = { AGENT_KEY = "0x..." }
 \`\`\`
 
@@ -2486,7 +2486,7 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.17.0"],
+      "args": ["-y", "agent402-mcp@0.17.1"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2513,7 +2513,7 @@ result, proven sellers first. Why pay here, with the proof links:
     description:
       CREDITS_ON
         ? "Point OpenClaw at Agent402's OpenAI-compatible gateway with a prepaid credits key: one config block, auto-routed models at a flat per-call price, paid by card. Or pay per call in USDC from a wallet over x402."
-        : "Point OpenClaw at Agent402's OpenAI-compatible gateway and pay per call in USDC from a wallet over x402: the agent402-openclaw plugin mints the wallet and writes the provider block. A credits key bought earlier still works in the plain config block.",
+        : "Point OpenClaw at Agent402's OpenAI-compatible gateway and pay per call in USDC from a wallet over x402: the agent402-model-provider plugin mints the wallet and writes the provider block. A credits key bought earlier still works in the plain config block.",
     md: `
 [OpenClaw](https://openclaw.ai) talks to any OpenAI-compatible provider through
 one block in \`openclaw.json\`. Agent402's LLM gateway is one of those. ${CREDITS_ON ? `It can be paid **by card**, through a prepaid credits key, so an agent
@@ -2609,15 +2609,15 @@ tier's price, and the paid call is served under that tier's caps.
 
 Every tier answers an x402 \`402\` (${RAILS_COUNT_MD}) and an MPP challenge, so any
 x402-capable client can pay per call with no key at all. For OpenClaw the
-[\`agent402-openclaw\`](https://www.npmjs.com/package/agent402-openclaw) plugin
+[\`agent402-model-provider\`](https://www.npmjs.com/package/agent402-model-provider) plugin
 runs a loopback proxy that pays and forwards, with a credits key or an x402
 wallet, and writes the provider block for you. Explicit models go to the metered
 route by default (each request quoted from its body, from
 $${TIERS["v1-chat-metered"].price}); \`--flat\` keeps the flat tiers:
 
 \`\`\`bash
-openclaw plugins install agent402-openclaw
-npx agent402-openclaw setup --write        # no key? it mints a wallet and prints the address to fund
+openclaw plugins install agent402-model-provider
+npx agent402-model-provider setup --write        # no key? it mints a wallet and prints the address to fund
 openclaw gateway restart
 \`\`\`
 
@@ -2630,7 +2630,7 @@ provider and a service, and uses no feature OpenClaw keeps for trusted plugins.
 With no credits key and no \`AGENT402_WALLET_KEY\`, \`setup\` generates a wallet
 into \`~/.openclaw/agent402/wallet.key\` (0600, never printed) and tells you the
 address: send it USDC on Base and every call is paid from it over x402, from
-$${TIERS["v1-chat-metered"].price} a call. \`agent402-openclaw wallet\` shows the
+$${TIERS["v1-chat-metered"].price} a call. \`agent402-model-provider wallet\` shows the
 balance; \`--credits-key a402_...\` uses a credits key you already hold instead. Every forwarded
 call carries an \`Idempotency-Key\`, so a retry replays the paid answer instead
 of paying twice. The plain config block above needs no plugin and

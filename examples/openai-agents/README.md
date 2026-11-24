@@ -1,6 +1,6 @@
 # OpenAI Agents SDK + Agent402 -- runnable demo
 
-Proves that the [`agent402-openai-agents`](https://www.npmjs.com/package/agent402-openai-agents) adapter works: `agent402ToolSpecs()` returns four meta-tools (find/route/call/about) with built-in proof-of-work payment. No wallet, no API key, no framework install required.
+Proves that the [`agent402-runner-tools`](https://www.npmjs.com/package/agent402-runner-tools) adapter works: `agent402ToolSpecs()` returns four meta-tools (find/route/call/about) with built-in proof-of-work payment. No wallet, no API key, no framework install required.
 
 ## Run it
 
@@ -27,7 +27,7 @@ Install the peer dependencies (`npm install @openai/agents zod`) and use `agent4
 
 ```js
 import { Agent, run } from "@openai/agents";
-import { agent402Tools } from "agent402-openai-agents";
+import { agent402Tools } from "agent402-runner-tools";
 
 const tools = await agent402Tools();
 const agent = new Agent({ name: "x402-agent", tools });
@@ -37,7 +37,7 @@ const out = await run(agent, "Hash 'hello world' with SHA-256");
 ## Troubleshooting
 
 - **`ECONNREFUSED agent402.tools`** -- point at a local instance: `AGENT402_BASE_URL=http://localhost:3000 node run.js` after `FREE_MODE=true npm start` in the repo root.
-- **`agent402-openai-agents` not found** -- run `npm install` in this folder first.
+- **`agent402-runner-tools` not found** -- run `npm install` in this folder first.
 
 ## See also
 

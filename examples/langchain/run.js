@@ -10,7 +10,7 @@
 // `@langchain/core` and `zod` as peer dependencies. See "Using with real
 // LangChain" in README.md.
 
-import { agent402ToolSpecs } from "agent402-langchain";
+import { agent402ToolSpecs } from "agent402-structured-tools";
 
 const BASE = process.env.AGENT402_BASE_URL || "https://agent402.tools";
 console.log(`[demo] Agent402 base: ${BASE}`);

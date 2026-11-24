@@ -38,7 +38,7 @@ export { MAX_POW_DIFFICULTY, MAX_POW_TRIES_FACTOR, solvePowAsync } from "./pow-s
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.12.1";
+const VERSION = "0.12.2";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token

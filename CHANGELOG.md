@@ -78,6 +78,22 @@ Site:
 - The server images install dependencies in a builder stage and ship no
   compiler; the server moves to undici 8, better-sqlite3 13, jsdom 31,
   TypeScript 7 and mppx 0.21.
+Packages:
+- The framework packages take neutral names, same API: agent402-function-calling
+  0.3.0 (was agent402-openai-tools), agent402-tool-use 0.3.0
+  (agent402-anthropic-tools), agent402-stream-tools 0.3.0 (agent402-ai-sdk),
+  agent402-structured-tools 0.3.0 on npm and 0.2.0 on PyPI (agent402-langchain),
+  agent402-function-tools 0.3.0 (agent402-llamaindex), agent402-dev-kit-tools
+  0.2.0 (agent402-google-adk), agent402-agent-loop-tools 0.3.0
+  (agent402-strands), agent402-action-provider 0.3.0 (agent402-agentkit),
+  agent402-runner-tools 0.2.0 (agent402-openai-agents), agent402-actions-plugin
+  0.4.0 (elizaos-plugin-agent402) and agent402-model-provider 0.7.0
+  (agent402-openclaw, CLI `agent402-model-provider`). Each earlier name's last
+  release depends on its new name, re-exports it and prints a one-time notice.
+- Package license files and author fields name Cardhavok LLC (doing business as
+  Havok Holdings LLC); agent402-mcp 0.17.1, agent402-client 0.12.2 and
+  agent402-tollbooth 0.13.1 carry them. The tollbooth README cites Coinbase's
+  own documentation for its Coinbase Business section.
 
 ## v2.15.0 - 2026-11-24
 

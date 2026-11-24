@@ -48,7 +48,7 @@ const publicClient = createPublicClient({ chain: base, transport: http(RPC) });
 
 // ---- 1. the wallet, as an AgentKit wallet provider --------------------------
 const { ViemWalletProvider } = await import("@coinbase/agentkit");
-const { agent402Actions } = await import(process.env.AGENTKIT_ADAPTER || "agent402-agentkit");
+const { agent402Actions } = await import(process.env.AGENTKIT_ADAPTER || "agent402-action-provider");
 const walletProvider = new ViemWalletProvider(createWalletClient({ account, chain: base, transport: http(RPC) }));
 console.log(`wallet ${account.address} on Base`);
 

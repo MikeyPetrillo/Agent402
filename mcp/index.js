@@ -1302,7 +1302,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
           claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.17.0",
+          npm: "npx -y agent402-mcp@0.17.1",
           maintainer: "Havok Holdings LLC",
         },
         positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Flagship tools first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
@@ -1322,7 +1322,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
         install: {
           claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.17.0",
+          npm: "npx -y agent402-mcp@0.17.1",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,

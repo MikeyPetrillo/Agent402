@@ -640,7 +640,7 @@ await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}
 
   <h2 class="tp-h2">From an MCP client</h2>
   ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.17.0</code>.</p>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.17.1</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>

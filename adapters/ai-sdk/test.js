@@ -1,4 +1,4 @@
-// Smoke test for agent402-ai-sdk. Expects a FREE_MODE server reachable at
+// Smoke test for agent402-stream-tools. Expects a FREE_MODE server reachable at
 // AGENT402_BASE_URL (defaults to http://localhost:3000). Tests the framework-
 // agnostic spec path only — the AI SDK-native wrapper is verified by the
 // peerDeps install path in consumers' projects.
@@ -52,8 +52,8 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m)
   };
   const call = agent402ToolSpecs({ baseUrl: "http://offline.test", fetchImpl: stub }).find((s) => s.name === "agent402_call");
   await call.execute({ slug: "hash", params: { text: "hello world" } });
-  ok(seen.length === 1 && seen[0] === `agent402-ai-sdk/${version}`, `a tool call sends User-Agent agent402-ai-sdk/${version} (got ${JSON.stringify(seen)})`);
-  ok(discovery.length >= 1 && discovery.every((u) => u === `agent402-ai-sdk/${version}`), `the catalog read sends it too (got ${JSON.stringify(discovery)})`);
+  ok(seen.length === 1 && seen[0] === `agent402-stream-tools/${version}`, `a tool call sends User-Agent agent402-stream-tools/${version} (got ${JSON.stringify(seen)})`);
+  ok(discovery.length >= 1 && discovery.every((u) => u === `agent402-stream-tools/${version}`), `the catalog read sends it too (got ${JSON.stringify(discovery)})`);
 }
 
 const specs = agent402ToolSpecs({ baseUrl: BASE });
@@ -109,4 +109,4 @@ ok(call?.hex?.startsWith("b94d27b9"), `agent402_call returns the hash result (go
   ok(typeof t.inputSchema.safeParse === "function" && t.inputSchema.safeParse({ slug: "hash" }).success === true, "inputSchema is the zod schema and accepts a call");
 }
 
-console.log(`PASS — agent402-ai-sdk: ${pass} assertions passed against ${BASE}`);
+console.log(`PASS — agent402-stream-tools: ${pass} assertions passed against ${BASE}`);

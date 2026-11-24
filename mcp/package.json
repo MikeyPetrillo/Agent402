@@ -1,8 +1,8 @@
 {
   "name": "agent402-mcp",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "mcpName": "io.github.MikeyPetrillo/agent402",
-  "author": "Havok Holdings LLC <mike@agent402.tools> (https://agent402.tools)",
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC) <mike@agent402.tools> (https://agent402.tools)",
   "homepage": "https://agent402.tools",
   "repository": {
     "type": "git",
@@ -44,8 +44,6 @@
     "agent-tools",
     "llm-tools",
     "ai-tools",
-    "claude",
-    "openai",
     "self-hosted",
     "agents",
     "ai",

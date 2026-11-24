@@ -1,4 +1,4 @@
-// Type declarations for agent402-openclaw, the OpenClaw model provider
+// Type declarations for agent402-model-provider, the OpenClaw model provider
 // plugin. The runtime is index.js (plain ES modules); these declarations
 // describe its public API. The x402 packages it can pay with are optional
 // peers and are typed loosely here.

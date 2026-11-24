@@ -39,6 +39,20 @@ export const CLIENT_PACKAGES = Object.freeze([
   "agent402-openai-agents",
   "agent402-openai-tools",
   "agent402-strands",
+  // The same packages under their current names (the names above are their
+  // earlier ones; installs that still pin them keep sending those tokens).
+  "agent402-model-provider",
+  "agent402-action-provider",
+  "agent402-stream-tools",
+  "agent402-tool-use",
+  "agent402-actions-plugin",
+  "agent402-dev-kit-tools",
+  "agent402-structured-tools",
+  "agent402-structured-tools-py",
+  "agent402-function-tools",
+  "agent402-runner-tools",
+  "agent402-function-calling",
+  "agent402-agent-loop-tools",
 ]);
 const PACKAGE_SET = new Set(CLIENT_PACKAGES);
 const TOKEN_RE = /^[A-Za-z0-9./-]{1,40}$/;

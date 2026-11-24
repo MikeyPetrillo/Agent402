@@ -1,4 +1,4 @@
-// Smoke test for agent402-agentkit. Spawns its own paywalled server
+// Smoke test for agent402-action-provider. Spawns its own paywalled server
 // (X402_SYNC_ON_START=false so no facilitator is contacted; proof-of-work
 // bypasses settlement) and drives the three actions the way AgentKit's
 // customActionProvider does: schema.parse(args), then invoke(args) or
@@ -182,7 +182,7 @@ async function main() {
   const provider = await agent402ActionProvider({ baseUrl: BASE });
   ok(provider.__stub === true && provider.actions.length === 3 && provider.actions[1].name === "agent402_call", "agent402ActionProvider wraps the three actions with @coinbase/agentkit's customActionProvider");
 
-  console.log(`PASS - agent402-agentkit: ${pass} checks`);
+  console.log(`PASS - agent402-action-provider: ${pass} checks`);
 }
 
 main().then(() => { if (proc) proc.kill(); process.exit(0); }).catch((e) => { console.error("FAIL:", e); if (proc) proc.kill(); process.exit(1); });

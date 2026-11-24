@@ -1,6 +1,9 @@
-name: Publish agent402-langchain (PyPI)
+name: Publish agent402-structured-tools (PyPI)
 
-# Publishes the Python adapter (adapters/langchain-py) to PyPI via Trusted
+# Publishes the Python adapter (adapters/langchain-py, agent402-structured-tools)
+# and the last release of the renamed project agent402-langchain
+# (renamed/agent402-langchain-py: it depends on the new one and re-exports it)
+# to PyPI via Trusted
 # Publishing (OpenID Connect) — no API token stored anywhere. PyPI verifies the
 # request came from THIS repo + THIS workflow via a short-lived OIDC token.
 #
@@ -39,6 +42,7 @@ jobs:
         run: |
           python -m pip install --quiet build==1.5.0 hatchling==1.27.0
           python -m build --no-isolation adapters/langchain-py
+          python -m build --no-isolation --outdir adapters/langchain-py/dist renamed/agent402-langchain-py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: langchain-py-dist
@@ -60,3 +64,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: dist/
+          # A later run re-uploads the earlier name's release, which PyPI already
+          # holds: that file is skipped, never an error.
+          skip-existing: true

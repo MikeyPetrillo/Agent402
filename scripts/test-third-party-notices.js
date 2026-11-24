@@ -65,7 +65,7 @@ for (const dir of live.published) {
   const name = JSON.parse(readFileSync(new URL(`../${dir}/package.json`, import.meta.url), "utf8")).name;
   ok(built.includes(`  ${name} (`), `lists the published package ${name}`);
 }
-ok(/agent402-langchain \(adapters\/langchain-py\/\)\n {4}dependencies: requests/.test(built), "the Python package's dependencies are read from its pyproject.toml");
+ok(/agent402-structured-tools \(adapters\/langchain-py\/\)\n {4}dependencies: requests/.test(built), "the Python package's dependencies are read from its pyproject.toml");
 
 const unknown = built.split("\n").filter((l) => /^ {2}\S+@\S+ {2}/.test(l) && /UNKNOWN/.test(l));
 ok(unknown.every((l) => built.includes(`${l.trim().split(/\s+/)[0]} declares no license`)), "a package with no declared license is called out in the notes");

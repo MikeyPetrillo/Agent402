@@ -95,7 +95,7 @@ export function maxPerCallProblem(pluginConfig = {}) {
   const set = capSetting(pluginConfig);
   if (!set || readCap(set.raw) != null) return null;
   const shown = String(set.raw).length <= 16 ? JSON.stringify(String(set.raw)) : "(a long value, not shown)";
-  return `[agent402-openclaw] ${set.name}=${shown} is not a USD amount, 0 or "off"; keeping the default $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`;
+  return `[agent402-model-provider] ${set.name}=${shown} is not a USD amount, 0 or "off"; keeping the default $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`;
 }
 // The dollar value of an accept's quote is acceptUsd (./known-assets.js):
 // the field the challenge's version signs (`amount` in v2, `maxAmountRequired`
@@ -111,18 +111,18 @@ export function maxPerCallProblem(pluginConfig = {}) {
 export function selectAccept(accepts, { preferUpto = true, maxUsd = Infinity, x402Version = undefined } = {}) {
   const offered = Array.isArray(accepts) ? accepts : [];
   const list = offered.filter((a) => !acceptValidityTooLong(a));
-  if (offered.length && !list.length) throw new Error(`agent402-openclaw: every payment option asks to stay valid for more than ${MAX_VALIDITY_SECONDS} seconds; nothing was signed`);
+  if (offered.length && !list.length) throw new Error(`agent402-model-provider: every payment option asks to stay valid for more than ${MAX_VALIDITY_SECONDS} seconds; nothing was signed`);
   const pick = (preferUpto && list.find((a) => a?.scheme === "upto" && a?.network === BASE_CAIP2))
     || list.find((a) => a?.scheme === "exact" && a?.network === BASE_CAIP2) || list[0];
   // An accept with no amount its version signs cannot be paid at all (this is
   // a malformed offer, not a ceiling), so it is refused before the signer runs.
   if (pick && x402Version != null && acceptAmount(pick, x402Version) == null) {
-    throw new Error("agent402-openclaw: the payment option names no amount its x402 version signs; nothing was signed");
+    throw new Error("agent402-model-provider: the payment option names no amount its x402 version signs; nothing was signed");
   }
   if (pick && Number.isFinite(maxUsd)) {
     const usd = acceptUsd(pick, x402Version);
     if (usd == null || usd > maxUsd) {
-      throw new Error(`agent402-openclaw: quote ${usd == null ? "unreadable" : `$${usd}`} exceeds the per-call ceiling $${maxUsd}; nothing was signed (raise maxPerCallUsd / AGENT402_MAX_PER_CALL_USD, or set it to 0 or \"off\", to allow it)`);
+      throw new Error(`agent402-model-provider: quote ${usd == null ? "unreadable" : `$${usd}`} exceeds the per-call ceiling $${maxUsd}; nothing was signed (raise maxPerCallUsd / AGENT402_MAX_PER_CALL_USD, or set it to 0 or \"off\", to allow it)`);
     }
   }
   return pick;
@@ -154,12 +154,12 @@ export async function resolvePayFetch(pluginConfig = {}, log = () => {}) {
       registerExactEvmScheme(client, { signer });
       if (upto) client.register(BASE_CAIP2, new UptoEvmScheme(signer));
       log(upto
-        ? `[agent402-openclaw] x402 wallet ${account.address}: paying actual usage (upto, Permit2 allowance present) on Base; exact elsewhere`
-        : `[agent402-openclaw] x402 wallet ${account.address}: paying the per-request quote (exact). To pay actual usage instead, run \`agent402-openclaw permit2-approve\` once (one USDC approval transaction on Base; needs a little ETH for gas)`);
+        ? `[agent402-model-provider] x402 wallet ${account.address}: paying actual usage (upto, Permit2 allowance present) on Base; exact elsewhere`
+        : `[agent402-model-provider] x402 wallet ${account.address}: paying the per-request quote (exact). To pay actual usage instead, run \`agent402-model-provider permit2-approve\` once (one USDC approval transaction on Base; needs a little ETH for gas)`);
       return wrapFetchWithPayment(fetch, client);
     } catch (e) {
       // The allowance read or the upto scheme failed: exact still works.
-      log(`[agent402-openclaw] upto unavailable (${String(e?.message || e).slice(0, 120)}) - paying exact`);
+      log(`[agent402-model-provider] upto unavailable (${String(e?.message || e).slice(0, 120)}) - paying exact`);
       const client = new x402Client((v, accepts) => selectAccept(accepts, { preferUpto: false, maxUsd, x402Version: v }));
       client.setSpendControls?.(false); // the vendor default ($1, its own default assets only) would refuse USDG and any quote over $1; selectAccept holds the accept that is signed to our own maxPerCallUsd instead
       guardSignedAmount(client, { allowance: () => maxUsd });
@@ -167,7 +167,7 @@ export async function resolvePayFetch(pluginConfig = {}, log = () => {}) {
       return wrapFetchWithPayment(fetch, client);
     }
   } catch (e) {
-    log(`[agent402-openclaw] x402 wallet payment unavailable (${e?.message || e}); install @x402/fetch @x402/evm viem, or use a credits key`);
+    log(`[agent402-model-provider] x402 wallet payment unavailable (${e?.message || e}); install @x402/fetch @x402/evm viem, or use a credits key`);
     return null;
   }
 }
@@ -194,10 +194,10 @@ const plugin = {
           if (started) return;
           const creditsKey = resolveCreditsKey(cfg);
           const payFetch = creditsKey ? null : await resolvePayFetch(cfg, log);
-          try { setCachedRoutes(await loadRoutes(upstream, fetch, { pricing })); } catch (e) { log(`[agent402-openclaw] could not read ${upstream}/v1/models yet: ${e?.message || e}`); }
+          try { setCachedRoutes(await loadRoutes(upstream, fetch, { pricing })); } catch (e) { log(`[agent402-model-provider] could not read ${upstream}/v1/models yet: ${e?.message || e}`); }
           started = await startProxy({ upstream, creditsKey, payFetch, port, pricing, log });
           setActiveProxy(started);
-          if (started.mode === "unpaid") log("[agent402-openclaw] no payment configured: run `agent402-openclaw setup` (a wallet key, or a credits key already issued) - paid calls will answer 402 until then");
+          if (started.mode === "unpaid") log("[agent402-model-provider] no payment configured: run `agent402-model-provider setup` (a wallet key, or a credits key already issued) - paid calls will answer 402 until then");
         },
         stop: async () => { if (started) { await started.close(); started = null; setActiveProxy(null); } },
       });

@@ -1,7 +1,7 @@
 {
-  "name": "agent402-agentkit",
-  "version": "0.2.1",
-  "description": "Agent402 (500+ pay-per-call web tools and skill packs over x402 or MPP; Agentic Finance) as a Coinbase AgentKit action provider for CDP, Privy, ZeroDev or viem wallets: find, call, about. Pays over x402 in USDC on Base from the agent's wallet, or with a prepaid credits key for Agent402's own services; the pure-CPU tools are free via proof-of-work.",
+  "name": "agent402-action-provider",
+  "version": "0.3.0",
+  "description": "Agent402 action provider for use with AgentKit: find, call and about actions over Agent402's 500+ pay-per-call web tools and skill packs (x402 or MPP; Agentic Finance) for agents with CDP, Privy, ZeroDev or viem wallets. Pays over x402 in USDC on Base from the agent's wallet, or with a prepaid credits key for Agent402's own services; the pure-CPU tools are free via proof-of-work. Formerly agent402-agentkit.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -24,8 +24,6 @@
   },
   "keywords": [
     "agentkit",
-    "coinbase",
-    "cdp",
     "x402",
     "ai-agents",
     "agent-tools",
@@ -42,7 +40,7 @@
     "aifi",
     "mpp"
   ],
-  "author": "Havok Holdings LLC",
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC)",
   "license": "MIT",
   "repository": {
     "type": "git",

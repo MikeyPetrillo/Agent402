@@ -1,5 +1,5 @@
 {
-  "name": "agent402-llamaindex-demo",
+  "name": "agent402-function-tools-demo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     "test": "node run.js"
   },
   "dependencies": {
-    "agent402-llamaindex": "file:../../adapters/llamaindex",
+    "agent402-function-tools": "file:../../adapters/llamaindex",
     "agent402-client": "file:../../client"
   }
 }

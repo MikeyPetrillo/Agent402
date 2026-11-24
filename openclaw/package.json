@@ -1,7 +1,7 @@
 {
-  "name": "agent402-openclaw",
-  "version": "0.6.2",
-  "description": "OpenClaw model provider for Agent402: an auto-routed tier at a flat per-call price and explicit LLM models priced per request, paid in USDC over x402, or with a prepaid credits key, through a local proxy. Zero dependencies; x402 wallet payment is an optional peer.",
+  "name": "agent402-model-provider",
+  "version": "0.7.0",
+  "description": "Agent402 model provider for use with OpenClaw (Agentic Finance over x402 or MPP): an auto-routed tier at a flat per-call price and explicit LLM models priced per request, paid in USDC over x402, or with a prepaid credits key, through a local proxy. Zero dependencies; x402 wallet payment is an optional peer. Formerly agent402-openclaw.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -20,7 +20,7 @@
     }
   },
   "bin": {
-    "agent402-openclaw": "cli.js"
+    "agent402-model-provider": "cli.js"
   },
   "files": [
     "index.js",
@@ -47,7 +47,7 @@
     },
     "install": {
       "minHostVersion": ">=2026.7.1",
-      "npmSpec": "agent402-openclaw"
+      "npmSpec": "agent402-model-provider"
     }
   },
   "engines": {
@@ -83,7 +83,7 @@
     "agent402",
     "agentic-commerce"
   ],
-  "author": "Havok Holdings LLC",
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC)",
   "license": "MIT",
   "repository": {
     "type": "git",

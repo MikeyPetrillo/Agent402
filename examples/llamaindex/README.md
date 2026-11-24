@@ -1,17 +1,17 @@
 # LlamaIndex + Agent402 -- runnable demo
 
-Proves that the [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) adapter works: `agent402-client` calls an Agent402 tool with built-in proof-of-work payment. The adapter wraps the same client to produce LlamaIndex `FunctionTool` instances for a LlamaIndex agent workflow. The first snippet below runs a web search and then a cited answer, each paid per call from a wallet.
+Proves that the [`agent402-function-tools`](https://www.npmjs.com/package/agent402-function-tools) adapter works: `agent402-client` calls an Agent402 tool with built-in proof-of-work payment. The adapter wraps the same client to produce LlamaIndex `FunctionTool` instances for a LlamaIndex agent workflow. The first snippet below runs a web search and then a cited answer, each paid per call from a wallet.
 
 ## Search the web, then answer (paid from a wallet)
 
 ```bash
-npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex @x402/fetch @x402/core @x402/evm viem
+npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-function-tools @x402/fetch @x402/core @x402/evm viem
 ```
 
 ```js
 import { agent } from "@llamaindex/workflow";
 import { openai } from "@llamaindex/openai";
-import { agent402Tools } from "agent402-llamaindex";
+import { agent402Tools } from "agent402-function-tools";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";

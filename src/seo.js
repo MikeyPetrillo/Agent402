@@ -634,7 +634,7 @@ Determine it from the response you already hold, without asking us:
 
 ${PAYMENT_RETRY_VERBS_NOTE}
 
-Every x402 authorization is single-use, so a retry needs a fresh signature unless the refusal's retry is same-payment, watch-transaction or check-wallet. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again.${returningWalletSentence() ? ` ${returningWalletSentence()}` : ""} A request re-sent with the same signed EVM payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer too, marked \`X-Replayed-Answer: 1\`, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted). **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails; agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key${creditsKeyQualifier()} also skips the per-call signature.
+Every x402 authorization is single-use, so a retry needs a fresh signature unless the refusal's retry is same-payment, watch-transaction or check-wallet. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again.${returningWalletSentence() ? ` ${returningWalletSentence()}` : ""} A request re-sent with the same signed EVM payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer too, marked \`X-Replayed-Answer: 1\`, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted). **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails; agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-model-provider permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key${creditsKeyQualifier()} also skips the per-call signature.
 
 The settlement rule: on x402 a response of 400 or above is not settled, and each response shows whether anything settled, so you can check it yourself. ${SETTLE_FIRST_SENTENCE}
 
@@ -687,21 +687,21 @@ ${flatTiersLine()}
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - ${connectorPayShort()}
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
-- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.17.0\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0\`
+- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.17.1\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.1\`
 ${listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
 
 ## Framework adapters (zero-dependency npm)
-- [agent402-openai-tools](https://www.npmjs.com/package/agent402-openai-tools): OpenAI function-calling (chat.completions / Assistants / Responses)
-- [agent402-anthropic-tools](https://www.npmjs.com/package/agent402-anthropic-tools): Anthropic Messages API \`tool_use\`
-- [agent402-ai-sdk](https://www.npmjs.com/package/agent402-ai-sdk): Vercel AI SDK (\`streamText\` / \`generateText\`)
-- [agent402-langchain](https://www.npmjs.com/package/agent402-langchain): LangChain JS / LangGraph
-- [agent402-llamaindex](https://www.npmjs.com/package/agent402-llamaindex): LlamaIndex TS
-- [agent402-google-adk](https://www.npmjs.com/package/agent402-google-adk): Google ADK (Gemini agents)
-- [agent402-strands](https://www.npmjs.com/package/agent402-strands): AWS Strands agent runtime
-- [agent402-agentkit](https://www.npmjs.com/package/agent402-agentkit): Coinbase AgentKit action provider (CDP, Privy, ZeroDev, viem wallets)
-- [agent402-openai-agents](https://www.npmjs.com/package/agent402-openai-agents): OpenAI Agents SDK tools (find, route, call, about)
-- [elizaos-plugin-agent402](https://www.npmjs.com/package/elizaos-plugin-agent402): elizaOS plugin: find and call tools, paid over x402 from an EVM wallet or with a credits key
-- [agent402-openclaw](https://www.npmjs.com/package/agent402-openclaw): OpenClaw model provider: the auto-routed tier and explicit models through a local proxy, paid over x402 or with a credits key
+- [agent402-function-calling](https://www.npmjs.com/package/agent402-function-calling): with OpenAI function calling
+- [agent402-tool-use](https://www.npmjs.com/package/agent402-tool-use): with the Claude Messages API \`tool_use\`
+- [agent402-stream-tools](https://www.npmjs.com/package/agent402-stream-tools): with the AI SDK by Vercel
+- [agent402-structured-tools](https://www.npmjs.com/package/agent402-structured-tools): with LangChain.js / LangGraph
+- [agent402-function-tools](https://www.npmjs.com/package/agent402-function-tools): with LlamaIndex TS
+- [agent402-dev-kit-tools](https://www.npmjs.com/package/agent402-dev-kit-tools): with the Agent Development Kit (ADK)
+- [agent402-agent-loop-tools](https://www.npmjs.com/package/agent402-agent-loop-tools): with Strands Agents
+- [agent402-action-provider](https://www.npmjs.com/package/agent402-action-provider): AgentKit action provider (CDP, Privy, ZeroDev, viem wallets)
+- [agent402-runner-tools](https://www.npmjs.com/package/agent402-runner-tools): with the OpenAI Agents SDK
+- [agent402-actions-plugin](https://www.npmjs.com/package/agent402-actions-plugin): elizaOS plugin: find and call tools, paid over x402 from an EVM wallet or with a credits key
+- [agent402-model-provider](https://www.npmjs.com/package/agent402-model-provider): OpenClaw model provider: the auto-routed tier and explicit models through a local proxy, paid over x402 or with a credits key
 
 ## Skill packs (a whole job, one payment)
 ${packItems}

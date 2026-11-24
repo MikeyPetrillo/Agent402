@@ -1,7 +1,7 @@
 {
-  "name": "agent402-anthropic-tools",
-  "version": "0.2.2",
-  "description": "Drop-in Anthropic tool-use tools for Agent402.Tools (the applied layer of Agentic Finance): turn tools from its catalog of 500+ pay-per-call tools and skill packs (x402 or MPP) into Claude tool definitions, one per catalog tool, with payment handled by agent402-client. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 13 chains or USDG on Robinhood Chain.",
+  "name": "agent402-tool-use",
+  "version": "0.3.0",
+  "description": "Agent402 tools as tool-use definitions, for use with the Claude Messages API (Agentic Finance over x402 or MPP): turn tools from Agent402's catalog of 500+ pay-per-call tools and skill packs into tool definitions, one per catalog tool, with payment handled by agent402-client. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 13 chains or USDG on Robinhood Chain. Formerly agent402-anthropic-tools.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -23,8 +23,6 @@
     "test": "node test.js"
   },
   "keywords": [
-    "anthropic",
-    "claude",
     "tool-use",
     "tools",
     "x402",
@@ -45,9 +43,10 @@
     "aifi",
     "mpp",
     "machine-payments-protocol",
-    "agentic-payments"
+    "agentic-payments",
+    "messages-api"
   ],
-  "author": "Havok Holdings LLC <mike@agent402.tools> (https://github.com/MikeyPetrillo/Agent402)",
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC) <mike@agent402.tools> (https://github.com/MikeyPetrillo/Agent402)",
   "license": "MIT",
   "repository": {
     "type": "git",

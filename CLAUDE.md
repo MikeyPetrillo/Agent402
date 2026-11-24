@@ -97,7 +97,11 @@ LLC: credit the entity, never a personal name.
 - `facilitator/`: self-hosted Stellar facilitator (own lockfile; redeploys only on
   `facilitator/**` changes).
 - `scripts/`: tests and ops (canaries, sweeps, corpus, refunds, backups).
-- `mcp/` (`agent402-mcp`), `tollbooth/`, `client/`, `adapters/`, `openclaw/`: published packages.
+- `mcp/` (`agent402-mcp`), `tollbooth/`, `client/`, `adapters/`, `openclaw/` (`agent402-model-provider`):
+  published packages. A package name starts with `agent402-` and carries no other party's mark; a
+  framework is named only in a description or README, as what the package works with. `renamed/`
+  holds each earlier name's last release, which forwards to its new name; the map is
+  `scripts/lib/package-renames.js` (`scripts/test-package-renames.js`).
 - `workers/`: Cloudflare workers (status probe, relays). `wiki/`: GitHub wiki source (CI-synced).
   `docs/`: ecosystem-listing copy.
 

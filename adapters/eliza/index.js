@@ -1,4 +1,5 @@
-// elizaOS plugin for Agent402: three actions (find / call / about) and one
+// agent402-actions-plugin (formerly elizaos-plugin-agent402): Agent402 for use
+// with elizaOS: three actions (find / call / about) and one
 // context provider. No runtime import of @elizaos/core (types only), so the
 // package installs with nothing but agent402-client.
 //
@@ -12,7 +13,7 @@ import { Agent402 } from "agent402-client";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "elizaos-plugin-agent402/0.3.2";
+const USER_AGENT = "agent402-actions-plugin/0.4.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -104,7 +105,7 @@ export function maxPerCallFrom(raw, warn = (m) => console.error(m)) {
   const shown = String(raw).length <= 16 ? JSON.stringify(String(raw)) : "(a long value, not shown)";
   if (!warnedCaps.has(String(raw))) {
     warnedCaps.add(String(raw));
-    warn(`[elizaos-plugin-agent402] AGENT402_MAX_PER_CALL_USD=${shown} is not a USD amount, 0 or "off"; keeping the default $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`);
+    warn(`[agent402-actions-plugin] AGENT402_MAX_PER_CALL_USD=${shown} is not a USD amount, 0 or "off"; keeping the default $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`);
   }
   return DEFAULT_MAX_PER_CALL_USD;
 }

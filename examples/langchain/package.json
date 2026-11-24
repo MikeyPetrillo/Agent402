@@ -1,5 +1,5 @@
 {
-  "name": "agent402-langchain-demo",
+  "name": "agent402-structured-tools-demo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,6 @@
     "test": "node run.js"
   },
   "dependencies": {
-    "agent402-langchain": "file:../../adapters/langchain"
+    "agent402-structured-tools": "file:../../adapters/langchain"
   }
 }

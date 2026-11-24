@@ -11,7 +11,7 @@
     "@coinbase/agentkit": "0.10.4",
     "@x402/evm": "2.32.0",
     "@x402/fetch": "2.32.0",
-    "agent402-agentkit": "^0.1.0",
+    "agent402-action-provider": "^0.1.0",
     "agent402-client": "0.10.0",
     "viem": "2.38.3",
     "zod": "4.6.7"

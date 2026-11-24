@@ -3,13 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent402-langchain"
+name = "agent402-structured-tools"
 dynamic = ["version"]
-description = "Agent402 for LangChain (the applied layer of Agentic Finance): turn Agent402's catalog of 500+ pay-per-call tools and skill packs (x402 or MPP) into LangChain tools for Python agents via four meta-tools. The pure-CPU tools are free via proof-of-work - no wallet, no API keys."
+description = "Agent402 tools for use with LangChain in Python (the applied layer of Agentic Finance): turn Agent402's catalog of 500+ pay-per-call tools and skill packs (x402 or MPP) into structured tools for Python agents via four meta-tools. The pure-CPU tools are free via proof-of-work - no wallet, no API keys. Formerly agent402-langchain."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Havok Holdings LLC", email = "mike@agent402.tools" }]
+authors = [{ name = "Cardhavok LLC (doing business as Havok Holdings LLC)", email = "mike@agent402.tools" }]
 keywords = ["langchain", "x402", "mpp", "agentic-commerce", "agentic-finance", "aifi", "agent", "tools", "mcp", "agent402", "ai-agents"]
 dependencies = ["requests>=2.25"]
 
@@ -21,7 +21,7 @@ Homepage = "https://agent402.tools"
 Source = "https://github.com/MikeyPetrillo/Agent402"
 
 [tool.hatch.version]
-path = "agent402_langchain/__init__.py"
+path = "agent402_structured_tools/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["agent402_langchain"]
+packages = ["agent402_structured_tools"]

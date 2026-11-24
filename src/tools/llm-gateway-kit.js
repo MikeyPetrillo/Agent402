@@ -5470,7 +5470,7 @@ export function modelsList() {
               meteredResponsesEndpoint: "/v1/metered/responses",
               // The metered route validates against ITS caps, not the flat home
               // tier's: a client deriving a context window from this entry must
-              // not carry the flat cap onto the metered route (agent402-openclaw
+              // not carry the flat cap onto the metered route (agent402-model-provider
               // did, and OpenClaw refused every turn as a context overflow).
               // Each model's own cap (maxInputCharsFor: the floor, raised by a
               // larger live context window); a vendor wildcard reads the floor.
