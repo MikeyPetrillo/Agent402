@@ -332,6 +332,8 @@ t node scripts/test-cache-repeat-copy.js
 t node scripts/test-legal-dates.js
 # Third-party marks: /terms clause and footer link, owner notices, chain and integration titles, EDGAR notice (offline)
 t node scripts/test-trademark-notices.js
+# The legal entity's name: one spelling in src/legal-entity.js, no other casing in any tracked text file (offline)
+t node scripts/test-legal-entity-name.js
 # Legal, security, trust and machine copy state what the code does (backups, refunds, CSP, MPP chains, payer screens, kept receipts, receipt scope, audit refunds; offline)
 t node scripts/test-legal-claims.js
 # /trust and the /company contact block state only what the code runs (offline)
