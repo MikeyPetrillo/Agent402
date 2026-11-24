@@ -138,7 +138,13 @@ const COINGECKO_SLUGS = new Set([
 export const CG_KEYLESS_SAMPLE_SIZE = 2;
 export const CG_KEYED_SAMPLE_SIZE = 6;
 export const CG_RUN_READ_CAP = 40;
-export const CG_RUN_MAX_PER_MIN = 30;
+// The minute pacing holds a whole keyed run (with room for one retry in four)
+// and stays well under the per-minute limit of the key's plan: the lowest one
+// src/tools/coingecko-rate.js records is 100 calls a minute (the Demo plan; the
+// CI key's paid pro-tier plan allows more), and under the service's own
+// default bucket of 80, so a keyed 429 is still ours to explain.
+export const CG_RUN_MAX_PER_MIN = 40;
+export const CG_PLAN_MIN_PER_MIN = 100;
 // The BLS key (BLS_API_KEY, the BLS-backed macro tools) is capped per run the
 // same way: the sweep server's BLS_DAILY_MAX is this (a fresh server's day is
 // the run). The examples read a handful of series decades, each read once and
@@ -799,6 +805,7 @@ function runControls() {
       "control: every read count names a family tool or a metered screen the lenient sweep drives");
     ok(CG_NIGHTLY_READ_CAP >= cgRunReadBound(COINGECKO_SLUGS.size).total, `control: the nightly corpus cap (${CG_NIGHTLY_READ_CAP}) covers every family example once (${cgRunReadBound(COINGECKO_SLUGS.size).total})`);
     ok(CG_RUN_MAX_PER_MIN >= 30 && CG_RUN_MAX_PER_MIN >= Math.ceil(cgRunReadBound().total * 1.25), `control: the minute pacing (${CG_RUN_MAX_PER_MIN}) holds a whole keyed run inside one minute, so the pacing never refuses the sweep`);
+    ok(CG_RUN_MAX_PER_MIN <= Math.floor(CG_PLAN_MIN_PER_MIN * 0.8) && readFileSync(new URL("../src/tools/coingecko-rate.js", import.meta.url), "utf8").includes(`${CG_PLAN_MIN_PER_MIN} calls/min`), `control: the minute pacing (${CG_RUN_MAX_PER_MIN}) stays under the lowest plan limit the rate module records (${CG_PLAN_MIN_PER_MIN}/min) with room for its retry path`);
     // The answers: our own cap refusal, the source's rate limit, anything else.
     const ownDay = { error: "This server's daily CoinGecko allowance is used up; it renews at 00:00 UTC. This is on our side, not your input. You were not charged." };
     const ownPace = { error: "This server paces its Market data requests and has no room this moment; retry in 1 s. This is on our side, not your input. You were not charged." };

@@ -2905,7 +2905,7 @@ jobs:
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_CI_API_KEY }}
           COINGECKO_API_TIER: pro
           COINGECKO_DAILY_MAX: "40"
-          COINGECKO_MAX_PER_MIN: "30"
+          COINGECKO_MAX_PER_MIN: "40"
         run: |
           cg=keyless; if [ -n "$COINGECKO_API_KEY" ]; then cg=keyed; fi
           om=keyless; if [ -n "$OPEN_METEO_API_KEY" ]; then om=keyed; fi
@@ -2937,7 +2937,7 @@ jobs:
         run: node scripts/test-crypto-kit.js
 
       # The strict sweep runs FIRST so its sampled CoinGecko calls land before
-      # the lenient sweep touches that shared 30/min budget; then test-all hands
+      # the lenient sweep touches that shared minute budget; then test-all hands
       # it every route it covers (TEST_ALL_SKIP_STRICT_COVERED) and sweeps the rest.
       - name: Non-metered paid examples (strict — 502/503/504 fail; NETWORK leniency hole)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-non-metered-examples.js
