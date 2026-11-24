@@ -8,11 +8,11 @@
 # Moved here from test-unit-a (2026-08-25 rebalance): the pricing lane was
 # one 4.5-minute test; with that test bounded (see countTokensBounded in
 # llm-gateway-kit.js) it had four minutes of headroom.
-# Deterministic correctness proofs run FIRST — a flaky live upstream
+# Deterministic correctness proofs run FIRST - a flaky live upstream
 # (e.g. data.gov downtime) must never mask whether the tools actually work.
 # Ox Alpha tier (locked stealth model, zdr refusal, zero-cost clamp, reasoning floor, vanish gate - offline)
 t node scripts/test-ox-tier.js
-# Macro-kit tests (Treasury yield curve, debt + avg rates, ECB FX series, World Bank — live keyless APIs)
+# Macro-kit tests (Treasury yield curve, debt + avg rates, ECB FX series, World Bank - live keyless APIs)
 t node scripts/test-macro-kit.js
 # No macro tool serves FRED data; fred-series and the computed tools read BLS, the New York Fed and Treasury; third-party series screened by their notes (offline)
 t node scripts/test-fred-terms.js
@@ -22,15 +22,15 @@ t node scripts/test-macro-computed-sources.js
 t node scripts/test-source-credits.js
 # World Bank license check and credit; Open Food Facts credit, contact User-Agent and pace; country-info ODbL notice and /data/countries.json (stubbed upstream, booted server)
 t node scripts/test-open-data-terms.js
-# MPP dual-stack shim (real mppx client buys over WWW-Authenticate/Authorization wire; single settle; x402 pass-through; HMAC tamper — offline)
+# MPP dual-stack shim (real mppx client buys over WWW-Authenticate/Authorization wire; single settle; x402 pass-through; HMAC tamper - offline)
 t node scripts/test-mpp-shim.js
-# MPP evm EIP-712 domain fallback (a wrong-domain credential is refused locally, its 402 carries no challenge so the client takes x402, healthy clients untouched — boots a paid
+# MPP evm EIP-712 domain fallback (a wrong-domain credential is refused locally, its 402 carries no challenge so the client takes x402, healthy clients untouched - boots a paid
 t node scripts/test-mpp-evm-domain.js
 # MPP offers by client: a python-httpx 402 carries no Payment challenge (x402 header and body unchanged), X-Payment-Offers: mpp restores them, an MPP credential is never gated, every other client's 402 unchanged on every route (boots a paid server three times, offline)
 t node scripts/test-mpp-offer-gate.js
 # Report products' free probe stage + the pure handler helpers it feeds
 t node scripts/test-report-probes.js
-# Checkout rate limit runs BEFORE the body parser (a malformed body used to 400 at the parser and be counted against nothing) — boots a server, offline
+# Checkout rate limit runs BEFORE the body parser (a malformed body used to 400 at the parser and be counted against nothing) - boots a server, offline
 t node scripts/test-checkout-limiter.js
 # Client address behind the CDN proxy: CF-Connecting-IP only from a CDN peer and only when valid, IPv4 and IPv6, a forged header never mints a limiter bucket (boots a server, offline)
 t node scripts/test-cdn-client-ip.js
@@ -38,9 +38,9 @@ t node scripts/test-cdn-client-ip.js
 t node scripts/test-trust-proxy.js
 # FREE_MODE holds no paid fact: a forged payment header names no wallet on the identity-bound routes, and a paid server answers a FREE_MODE sibling's job 404 (boots a FREE_MODE and
 t node scripts/test-free-mode-isolation.js
-# A refused payment says WHY on the 402 (the vendor answers a bare {} and drops the reason; one client looped ~9/min for 12h) — boots a paid server, offline
+# A refused payment says WHY on the 402 (the vendor answers a bare {} and drops the reason; one client looped ~9/min for 12h) - boots a paid server, offline
 t node scripts/test-payment-reject.js
-# A v1-era client names the price maxAmountRequired; x402 v2 deep-equals the echoed accepts block, so that one rename made a correct payment unmatchable — boots a paid server, offline
+# A v1-era client names the price maxAmountRequired; x402 v2 deep-equals the echoed accepts block, so that one rename made a correct payment unmatchable - boots a paid server, offline
 t node scripts/test-x402-v1-accepts.js
 # The 402 JSON body carries the same PaymentRequired object as the PAYMENT-REQUIRED header
 t node scripts/test-payment-required-body.js
@@ -50,7 +50,7 @@ t node scripts/test-price-from-catalog.js
 t node scripts/test-payment-required-compact.js
 # The three-line front door leads /llms.txt, /agents.md, the MCP server.describe answer and the unpaid 402 body; /llms.txt keeps one clause per machine surface and stays under 16,384 bytes on a boot with production's switches
 t node scripts/test-front-door.js
-# HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched — offline)
+# HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched - offline)
 t node scripts/test-head-paywall.js
 # Anthropic SDK base-URL alias (/v1/<tier>/v1/messages) + 1 MB body limit on the metered routes (boots a paid server, offline)
 t node scripts/test-messages-sdk-alias.js
@@ -191,7 +191,7 @@ t node scripts/test-accept-output-schema.js
 # guard and the runtime can never disagree about what a call costs. That
 # property is worth more than four minutes, so the step is untouched and
 # moved off the critical path instead, where its duration stops mattering.
-# Pricing margin invariant (worst-case upstream < price on every gateway tier, failover links included; cap-before-spend; 410 tool_gone telemetry — offline)
+# Pricing margin invariant (worst-case upstream < price on every gateway tier, failover links included; cap-before-spend; 410 tool_gone telemetry - offline)
 t node scripts/test-pricing-margin.js
 # A model whose reasoning bills outside max_tokens is quoted and clamped for it: the metered quote covers the measured token mixes at the markup (private table, offline)
 t node scripts/test-metered-uncapped-reasoning.js

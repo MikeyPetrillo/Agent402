@@ -153,6 +153,10 @@ try {
   const POW = ["/api/pow/challenge?slug=hash", "/api/pow"];
   for (const ua of [...AI_AGENTS, "Claude-User", "Perplexity-User", "OAI-SearchBot", "SmitheryBot"]) for (const p of POW) ok(allows(ua, p), `${ua} may fetch ${p}, the step agents.md names`);
   for (const ua of SEARCH) ok(!allows(ua, "/api/pow/challenge?slug=hash"), `${ua} is refused the proof-of-work challenge (not a page)`);
+  // The crawlers that gather training data keep the pages and quotes, not the challenge.
+  for (const ua of ["CCBot", "Bytespider", "cohere-ai", "Meta-ExternalAgent"]) {
+    ok(!allows(ua, "/api/pow/challenge?slug=hash") && allows(ua, "/api/pricing") && allows(ua, "/tools/hash"), `${ua} (a training crawler) is refused the proof-of-work challenge and keeps the pages`);
+  }
   {
     const agentsMd = await (await fetch(`${BASE}/agents.md`)).text();
     const told = [...agentsMd.matchAll(/\/api\/pow\/[A-Za-z0-9_/?=.-]*/g)].map((m) => m[0]);

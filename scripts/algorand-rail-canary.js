@@ -1,11 +1,11 @@
-// Algorand rail canary — buy EVERY tool in the catalog paying USDC on Algorand
+// Algorand rail canary - buy EVERY tool in the catalog paying USDC on Algorand
 // mainnet, and prove each one settles AND renders its payload.
 //
 // WHY THIS EXISTS (and how it differs from the two scripts next to it)
 //   • scripts/paid-canary.js has ONE Algorand leg (/api/hash). It proves
 //     the rail is alive; it cannot prove the rail works for the whole catalog.
 //   • scripts/challenge-sweep.js buys every tool on Algorand but SKIPS anything
-//     already in GoPlausible's catalog — it is a one-shot registration tool, so
+//     already in GoPlausible's catalog - it is a one-shot registration tool, so
 //     on a second run it buys almost nothing and verifies almost nothing.
 //   This canary is the recurring health check: no skip-set, every tool bought
 //   every run, and each buy asserted end-to-end (402 → sign → settle → 200 →
@@ -22,13 +22,13 @@
 //
 // SAFETY / CONTROL
 //   • Pays ONLY on Algorand, ONLY to the accept the live 402 quotes. No EVM.
-//   • Hard total-spend cap (CANARY_MAX_USD, default 15) — stops cleanly before
+//   • Hard total-spend cap (CANARY_MAX_USD, default 15) - stops cleanly before
 //     a buy that would exceed it. Per-tool cap (CANARY_TOOL_MAX_USD, default
 //     0.25) skips the expensive skill packs by default.
 //   • CANARY_DRY=1 / --dry reports what it WOULD buy, signs nothing.
 //   • Carries the POW_SECRET-signed X-Heartbeat-Token when available, which
 //     marks the traffic synthetic in our own analytics WITHOUT bypassing the
-//     paywall (src/server.js isSyntheticRequest) — the payments are real, they
+//     paywall (src/server.js isSyntheticRequest) - the payments are real, they
 //     just don't masquerade as external demand.
 //   • Signs a 1000-round validity window, never algokit's 10-round default:
 //     settlement happens AFTER the handler, so a slow tool outlives the default
@@ -172,7 +172,7 @@ const heartbeatHeaders = () =>
     ? { "X-Heartbeat-Token": createHmac("sha256", secret).update(`heartbeat:${Math.floor(Date.now() / 60_000)}`).digest("base64url").slice(0, 32) }
     : {};
 
-// ── Algorand signer (skipped in dry mode — quoting needs no key) ──────────────
+// ── Algorand signer (skipped in dry mode - quoting needs no key) ──────────────
 let client, http, payerAddress = "(dry)";
 if (!DRY) {
   const mnemonic = (process.env.ALGORAND_BURNER_MNEMONIC || "").trim();
@@ -298,9 +298,9 @@ console.log(`catalog: ${tools.length} routes · dry=${DRY} · total cap $${MAX_U
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 // ok          settled on Algorand and returned a non-empty payload
 // railFail    we paid and still got a 402 AFTER a genuine (slow) settlement
-//             attempt — settlement was actually refused (RAIL DEFECT)
+//             attempt - settlement was actually refused (RAIL DEFECT)
 // rateLimited a 402 that came back too fast to have reached the chain, and
-//             survived one backoff-and-retry — the facilitator throttling
+//             survived one backoff-and-retry - the facilitator throttling
 //             this wallet, not a rail defect (see FAST_REJECT_MS above)
 // toolFail    the handler answered an error twice (a >=400 cancels settlement)
 // chargedEmpty a 200 (settled) whose body was empty or unreadable: charged,
@@ -755,7 +755,7 @@ if (capped) console.log("[TOTAL CAP REACHED]");
 
 if (report.railFail.length) {
   console.log(`\nRAIL FAILURES (Algorand settlement refused after a genuine, slow attempt):`);
-  for (const f of report.railFail) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.railFail) console.log(`  ${f.key} - ${f.reason}`);
 }
 if (report.chargedNoAnswer.length) {
   console.log(`\nCHARGED WITH NO ANSWER (the request got no HTTP answer and its payment is on chain; counted in the spend):`);
@@ -784,28 +784,28 @@ if (report.blocked.length) {
 }
 if (report.rateLimited.length) {
   console.log(`\nRATE-LIMITED (fast 402s that survived a backoff - likely the facilitator throttling this wallet's volume, not a rail defect):`);
-  for (const f of report.rateLimited) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.rateLimited) console.log(`  ${f.key} - ${f.reason}`);
   console.log(`  NOTE: this sweep buys ~500 tools back to back, which no real buyer does.`);
   console.log(`  Raise CANARY_DELAY_MS or CANARY_THROTTLE_BACKOFF_MS if this recurs.`);
 }
 if (report.toolFail.length) {
   console.log(`\nTOOL FAILURES (settled path fine, handler did not deliver):`);
-  for (const f of report.toolFail.slice(0, 40)) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.toolFail.slice(0, 40)) console.log(`  ${f.key} - ${f.reason}`);
   if (report.toolFail.length > 40) console.log(`  … ${report.toolFail.length - 40} more (see the report artifact)`);
 }
 if (report.throttled.length) {
   console.log(`\nUPSTREAM THROTTLES (handler fine, vendor refused us even after a backoff):`);
-  for (const f of report.throttled) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.throttled) console.log(`  ${f.key} - ${f.reason}`);
   console.log(`  NOTE: this sweep buys every tool back to back, which no real buyer does.`);
   console.log(`  Raise CANARY_DELAY_MS or CANARY_THROTTLE_BACKOFF_MS if this recurs.`);
 }
 if (report.upstreamFail.length) {
   console.log(`\nTHIRD-PARTY / EDGE OUTAGES (an HTTP error answer that persisted through a fresh retry; a >=400 cancels settlement, so the buyer was NOT charged - their outage or an edge blip, not our rail/tool defect, so these do NOT fail the run):`);
-  for (const f of report.upstreamFail) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.upstreamFail) console.log(`  ${f.key} - ${f.reason}`);
 }
 if (report.noSeller.length) {
   console.log(`\nNO OUTSIDE SELLER FOR THE TASK (a router tier's 4xx: nothing in the index does its task on Algorand; nothing was settled, and the seller set is not a rail defect, so these do NOT fail the run):`);
-  for (const f of report.noSeller) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.noSeller) console.log(`  ${f.key} - ${f.reason}`);
 }
 if (unexpectedNoAvm.length) {
   console.log(`\nUNEXPECTED: these tools offer no algorand accept and are not identity-bound:`);
@@ -814,7 +814,7 @@ if (unexpectedNoAvm.length) {
 
 if (report.buyerNetwork.length) {
   console.log(`\nRUNNER NETWORK (the runner could not reach the chain to prepare a payment, twice; no paid request was sent and nothing was charged, so these do NOT fail the run):`);
-  for (const f of report.buyerNetwork) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.buyerNetwork) console.log(`  ${f.key} - ${f.reason}`);
 }
 // The classes that fail the run, by name, for the alert's text.
 report.failedClasses = failedClasses(report, unexpectedNoAvm);
@@ -823,7 +823,7 @@ if (OUT) { const { spentUsd: _spent, ...kept } = report; writeFileSync(OUT, JSON
 
 // Rail failures and tool failures are both real defects. Unexpected missing
 // accepts mean the rail silently stopped being offered, which is the exact
-// regression this canary exists to catch — all three fail the run.
+// regression this canary exists to catch - all three fail the run.
 //
 // Upstream throttles deliberately do NOT. This sweep buys ~500 tools back to
 // back and hits one vendor repeatedly; no real buyer produces that shape, so a

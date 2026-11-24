@@ -119,6 +119,7 @@ export function floorGasSettings(env = process.env) {
 export function createFloorGasCheck({ network, floorUsd, readEthUsd, settings = floorGasSettings(), now = Date.now, log = console.warn } = {}) {
   let lastPrice = null; // { usd, at }
   let lastState = null;
+  let lastKnownNear = false;
   const row = (fields) => ({ network, facilitator: "price floor", signer: null, balanceEth: null, runway: null, ...fields });
   async function check(gasPriceWei) {
     const at = now();
@@ -144,7 +145,9 @@ export function createFloorGasCheck({ network, floorUsd, readEthUsd, settings = 
       // Near once past the share; a near reading clears only once the gas is
       // under the share by the clear margin (the price of ETH and of gas both
       // move it, so one threshold flapped).
-      const wasNear = lastState === "low:gasNearFloor";
+      // The last KNOWN reading holds the band: an unknown one in between
+      // (an unread price or gas) does not reset it.
+      const wasNear = lastKnownNear;
       const near = gasUsd > floor * settings.share || (wasNear && gasUsd > (floor * settings.share) / (1 + (Number(settings.clearMargin ?? 0.2) || 0)));
       reading = row({
         status: near ? "low" : "ok", ...(near ? { reason: "gasNearFloor" } : {}),
@@ -152,6 +155,7 @@ export function createFloorGasCheck({ network, floorUsd, readEthUsd, settings = 
         ethUsd: lastPrice.usd, ...(error ? { error: `last good ETH price kept: ${error}` } : {}), at,
       });
     }
+    if (reading.status !== "unknown") lastKnownNear = reading.status === "low" && reading.reason === "gasNearFloor";
     const state = `${reading.status}:${reading.reason || ""}`;
     if (state !== lastState) {
       lastState = state;

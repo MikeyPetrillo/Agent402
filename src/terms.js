@@ -21,10 +21,11 @@ import { COMPANY_PHONE, LEGAL_ENTITY_SENTENCE } from "./company.js";
 import { companyPostalLine } from "./email.js";
 import { lowBalanceWords, signInLifeWords } from "./credits-figures.js";
 // Where a fraud-warning refund goes (src/credits.js fraudWarning and
-// approveFraudRefund): automatically only to the warned payment's own card,
-// and only when it can take the whole balance back; otherwise a person
-// approves the ordinary refund, to the cards that paid, newest first.
-const FRAUD_WARNING_REFUND = "automatically to that payment's card when that payment can take all of it back, otherwise after our review to the cards that paid for the key, newest payment first";
+// approveFraudRefund): to the warned payment's own card when it can take the
+// whole balance back, automatically only while CREDITS_EFW_AUTO_REFUND is on
+// and within the automatic day total (else a person approves it); otherwise a
+// person approves the ordinary refund, to the cards that paid, newest first.
+const FRAUD_WARNING_REFUND = "to that payment's card when that payment can take all of it back (automatically while our automatic refunds are on and within their daily limit, otherwise after our review), or else after our review to the cards that paid for the key, newest payment first";
 const FRAUD_WARNING_RULE = `A key whose payment the card network reports as possibly fraudulent is frozen, and its unspent balance is refunded ${FRAUD_WARNING_REFUND}.`;
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.

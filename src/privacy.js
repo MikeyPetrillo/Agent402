@@ -442,7 +442,8 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   public resolver: 8.8.8.8 (Google Public DNS) first, then 9.9.9.9 (Quad9) and then 1.1.1.1
   (Cloudflare), each only if the one before it does not answer. A resolver that is asked sees the
   query and our server's address, not yours.</li>
-  <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
+  <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results;
+  <code>/api/search-suggest</code> sends the partial query to Wikipedia's search suggestions instead.
   The <code>/api/x-*</code> tools send the handle, post id or query to the X API.
   Report products and <code>/v1</code> calls that search the web send their search queries to Exa, through OpenRouter's web search.</li>
   <li><code>/api/route</code>, <code>/api/route/execute</code> and <code>/api/decide</code> may send the

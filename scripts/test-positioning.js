@@ -142,7 +142,16 @@ for (const file of ["CHANGELOG.md", "src/changelog.js"]) {
   const h1 = pageText((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || "").trim();
   const desc = (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
   ok(/Havok Holdings LLC/.test(title) && /Agent402/.test(title) && /Havok Holdings LLC/.test(h1) && /Agent402/.test(h1), `/company title and h1 name the company and Agent402 ("${title}" / "${h1}")`);
-  ok(/x402 and MPP/.test(desc) && /payment and trust layer for agentic commerce/.test(desc), "/company description states the layer and its wires");
+  ok(/payment and trust layer for agentic commerce/.test(desc), "/company description states the layer");
+  // The wires follow the MPP switch, as the home h1 does.
+  const keep = process.env.MPP_SECRET_KEY;
+  const descOf = () => (companyPage("https://agent402.tools").match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  process.env.MPP_SECRET_KEY = "test-mpp-secret";
+  const on = descOf();
+  delete process.env.MPP_SECRET_KEY;
+  const off = descOf();
+  if (keep === undefined) delete process.env.MPP_SECRET_KEY; else process.env.MPP_SECRET_KEY = keep;
+  ok(/over x402 and MPP,/.test(on) && /over x402,/.test(off) && !/MPP/.test(off), `/company names MPP only while MPP is offered ("${off.slice(0, 120)}")`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

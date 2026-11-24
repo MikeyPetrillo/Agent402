@@ -189,8 +189,8 @@ export function robotsTxt(baseUrl) {
   // The proof-of-work challenge is the first step of the free path that
   // /agents.md, /llms.txt and every free tool page tell an agent to take
   // (GET /api/pow/challenge?slug=<tool>), so the AI agents named above may
-  // fetch it. It answers JSON, not a page, so the search engines and the
-  // unnamed crawler are still kept off it.
+  // fetch it. It answers JSON, not a page, so the search engines, the
+  // training crawlers and the unnamed crawler are kept off it.
   const powSearch = ["Disallow: /api/pow/"];
   // PRICED ROUTES ARE NOT PAGES. Every /api/<tool> answers an unpaid crawler
   // 402, which a search console files as a crawl error ("other 4xx") against
@@ -244,9 +244,14 @@ export function robotsTxt(baseUrl) {
   // errors are filed. The AI agents named above keep reading per-route
   // quotes as before; a paying client never consults this file.
   const SEARCH_ENGINES = new Set(["Googlebot", "Bingbot", "Applebot", "DuckDuckBot"]);
+  // The crawlers that gather training data, not agents acting for a user:
+  // they keep every page and quote, but not the proof-of-work challenge, which
+  // is a step an agent takes to call a tool.
+  const TRAINING_CRAWLERS = new Set(["CCBot", "Bytespider", "cohere-ai", "Meta-ExternalAgent"]);
   const rules = [...catalog, ...priv, ...costly, ...sellerScoped, ...traps].join("\n");
+  const trainingRules = [...catalog, ...priv, ...powSearch, ...costly, ...sellerScoped, ...traps].join("\n");
   const searchRules = [...catalog, ...priv, ...powSearch, ...costly, ...sellerScoped, ...traps, ...priced].join("\n");
-  const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${SEARCH_ENGINES.has(a) ? searchRules : rules}`).join("\n\n");
+  const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${SEARCH_ENGINES.has(a) ? searchRules : TRAINING_CRAWLERS.has(a) ? trainingRules : rules}`).join("\n\n");
   return `${blocks}
 
 User-agent: *

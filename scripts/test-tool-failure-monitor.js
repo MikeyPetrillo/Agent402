@@ -984,6 +984,12 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       assert.equal((await f.check(20_000_000n)).status, "ok", "under the share by the margin reads ok");
       eth = 2500;
       assert.equal((await f.check(20_000_000n)).status, "ok", "once ok, under the share stays ok");
+      // One unknown reading between two lows does not reset the band.
+      eth = 3500;
+      assert.equal((await f.check(20_000_000n)).status, "low");
+      assert.equal((await f.check(null)).status, "unknown", "a gas price that could not be read is unknown");
+      eth = 2500;
+      assert.equal((await f.check(20_000_000n)).status, "low", "after one unknown reading a low still clears only past the margin");
     });
     await check("floor gas: a failed ETH price read keeps the last good price, then reads unknown (never a page by itself)", async () => {
       const c = clock();
