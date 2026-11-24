@@ -10,7 +10,8 @@
 // video row, two models that quote apart), so they failed there while CI, which
 // holds the private table, stayed green. The placeholder now carries those rows
 // with placeholder numbers; this runs each suite on it and requires exit 0 and
-// no skip. It prints exit codes and counts only, never a figure from a table.
+// no skip. It prints exit codes, counts and each failing check's words with
+// every number masked, never a figure from a table.
 //
 //   node scripts/test-example-costs-suites.js
 // EXAMPLE_COSTS_FILE points it at another table (the mutation check uses it).
@@ -41,6 +42,9 @@ for (const [s, { code, out }] of results) {
   const good = code === 0 && fails === 0 && !skipped;
   if (!good) failed++;
   console.log(`${good ? "ok" : "FAIL"} - ${s} on the placeholder table: exit ${code}, ${fails} failing check(s)${skipped ? ", SKIPPED" : ""}`);
+  // Which check failed, by its words: every number masked, so no figure of a
+  // table (or one derived from it) is printed.
+  if (!good) for (const l of out.split("\n").filter((x) => /^\s*FAIL\b/.test(x)).slice(0, 10)) console.log(`    ${l.trim().replace(/\d+(?:[.,]\d+)*/g, "#").slice(0, 240)}`);
 }
 if (failed) { console.error(`\n${failed} suite(s) need a row the placeholder table lacks`); process.exit(1); }
 console.log("\nall gateway suites pass on the placeholder cost table");
