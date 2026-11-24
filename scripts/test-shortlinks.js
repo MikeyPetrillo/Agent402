@@ -160,6 +160,20 @@ try {
     ok(h.status === 301 && h.headers.get("location") === "/docs", "/docs/Home -> /docs");
     const g = await fetch(`${base}/docs/Getting-Started`, { redirect: "manual" });
     ok(g.status === 200, "other wiki pages still render");
+    // A docs slug in another case 301s to its canonical path, query kept;
+    // only a known slug is redirected, and only to a path of this host.
+    const loc = async (p) => { const r = await fetch(`${base}${p}`, { redirect: "manual" }); return `${r.status} ${r.headers.get("location") || ""}`.trim(); };
+    for (const [from, to] of [
+      ["/docs/solana", "/docs/Solana"], ["/docs/ARC", "/docs/Arc"], ["/docs/stellar?x=1&y=2", "/docs/Stellar?x=1&y=2"],
+      ["/docs/algorand", "/docs/Algorand"], ["/docs/getting-started", "/docs/Getting-Started"], ["/docs/ADAPTERS", "/docs/adapters"], ["/docs/home", "/docs"],
+    ]) ok((await loc(from)) === `301 ${to}`, `${from} -> ${to} (got ${await loc(from)})`);
+    const head = await fetch(`${base}/docs/solana`, { method: "HEAD", redirect: "manual" });
+    ok(head.status === 301 && head.headers.get("location") === "/docs/Solana", `HEAD /docs/solana -> /docs/Solana (got ${head.status})`);
+    ok((await loc("/docs/Solana")) === "200", "the canonical path itself answers 200");
+    for (const p of ["/docs/no-such-doc", "/docs//evil.com", "/docs/%2F%2Fevil.com", "/docs/sol%61na", "/docs/solana%2F..%2Fevil", "/docs/solana/extra"]) {
+      const got = await loc(p);
+      ok(got === "404", `${p} answers 404, never a redirect (got ${got})`);
+    }
   }
   // A skill pack's /tools/skill-<pack> page canonicalises to /skills/<pack>,
   // and the two carry different descriptions.

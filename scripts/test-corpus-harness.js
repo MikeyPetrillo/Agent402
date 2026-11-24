@@ -27,6 +27,14 @@ ok(checkExpect({ count: { list: 1 }, minCount: { text: 1 }, maxCount: { list: 1 
 ok(checkExpect({ count: { n: 1 } }, 200, body).length === 1, "count on a number fails, never passes by accident");
 ok(checkExpect({ matches: { text: "^T$" } }, 200, body).length === 0, "matches is case-insensitive");
 ok(checkExpect({ gt: { n: -1 }, gte: { n: 0 }, lt: { n: 1 } }, 200, body).length === 0 && checkExpect({ gt: { text: 0 } }, 200, body).length === 1, "numeric comparisons; a non-number never satisfies gt");
+// null, a missing path, "" and false are not 0: Number() would read them as 0
+// and pass lt/gte, and a gt failure would print "= 0" for a null field.
+for (const p of ["nul", "missing", "s", "obj"]) {
+  ok(checkExpect({ lt: { [p]: 1 } }, 200, body).length === 1 && checkExpect({ gte: { [p]: 0 } }, 200, body).length === 1, `${p} never satisfies lt or gte`);
+  const f = checkExpect({ gt: { [p]: 0 } }, 200, body);
+  ok(f.length === 1 && !/= 0,/.test(f[0]), `a gt failure on ${p} names the value it read, never 0 (${f[0]})`);
+}
+ok(checkExpect({ gt: { v: 1 } }, 200, { v: "2.5" }).length === 0, "a numeric string still compares as its number");
 // status
 ok(checkExpect({}, 500, body).length === 1 && checkExpect({}, 200, body).length === 0, "default status is 200");
 ok(checkExpect({ status: 400 }, 400, { error: "x" }).length === 0, "a 4xx case passes with a self-explaining error");

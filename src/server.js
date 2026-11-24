@@ -7,7 +7,7 @@ import { securityHeaders, answerClientError, addApiHeaderPrefix } from "./securi
 import { operatorRoutesOf } from "./operator-routes.js";
 import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAID_LIMITS as LARGE_BODY_UNPAID_LIMITS } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
-import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
+import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT, goneSuggestions } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { createFunnel, funnelEventOf, emptyFunnelRow, ARRIVALS as FUNNEL_ARRIVALS } from "./funnel.js";
 import { createDiscoveryTrail, discoveryDocOf, noPaymentReasonsOf, conversionBySource } from "./funnel-sources.js";
@@ -850,7 +850,7 @@ import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteCha
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH, MOVED_GUIDES } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
-import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
+import { docsPage, docsApi, DOCS_SITE_ROUTES, docsSlugs } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { playgroundPage, playgroundToolEntry, PLAYGROUND_TOOL_PATH } from "./playground.js";
 import { payPerCallApiPage, paidMcpToolsPage, comparePage } from "./search-landings.js";
@@ -6597,10 +6597,27 @@ app.get("/sdk-playground", (_req, res) => htmlCache(res, 300, 900).send(sdkPlayg
 // Capitalised wiki URLs whose page the site serves at a lowercase route: 301
 // there (exact-case match; Express string routes are case-insensitive).
 const DOCS_REDIRECTS = { "/docs/Home": "/docs", ...Object.fromEntries(Object.entries(DOCS_SITE_ROUTES).map(([slug, href]) => [`/docs/${slug}`, href])) };
+// A docs slug in another case (/docs/solana, /docs/ARC: link checkers and
+// hand-typed links lowercase them) 301s to the canonical path of the slug it
+// names. The target is always one of the known docs paths, built here from
+// the wiki's own slugs, never from the request; an unknown slug, an encoded
+// character or a second segment falls through to the 404. A lowercase form
+// two slugs share is left out (no guess).
+const DOCS_CANONICAL_BY_LOWER = (() => {
+  const m = new Map(), dup = new Set();
+  for (const slug of docsSlugs()) {
+    const k = slug.toLowerCase();
+    if (m.has(k)) dup.add(k);
+    m.set(k, DOCS_REDIRECTS[`/docs/${slug}`] || `/docs/${slug}`);
+  }
+  for (const k of dup) m.delete(k);
+  return m;
+})();
 app.get(/^\/docs\/[^/]+$/i, (req, res, next) => {
-  if (!Object.hasOwn(DOCS_REDIRECTS, req.path)) return next();
+  const target = Object.hasOwn(DOCS_REDIRECTS, req.path) ? DOCS_REDIRECTS[req.path] : (/^\/docs\/[A-Za-z0-9-]+$/.test(req.path) ? DOCS_CANONICAL_BY_LOWER.get(req.path.slice(6).toLowerCase()) : undefined);
+  if (!target || target === req.path) return next();
   const q = req.originalUrl.indexOf("?");
-  res.redirect(301, DOCS_REDIRECTS[req.path] + (q >= 0 ? req.originalUrl.slice(q) : ""));
+  res.redirect(301, target + (q >= 0 ? req.originalUrl.slice(q) : ""));
 });
 app.get("/docs/api/explorer", (_req, res) => htmlCache(res, 300, 900).send(apiExplorerPage(BASE_URL)));
 app.get("/blog", (_req, res) => htmlCache(res, 300, 900).send(blogIndex(BASE_URL)));
@@ -14973,12 +14990,18 @@ app.use((req, res) => {
     const retiredV1 = req.path.startsWith("/v1/") ? retiredEntryFor(req.path) : null;
     if (retiredV1 || (req.path.startsWith("/api/") && !req.path.startsWith("/api/convert/"))) {
       const slug = (retiredV1 ? retiredV1.slug : req.path.replace(/^\/api\/(skill\/)?/, "").split("/")[0]).replace(/[-_]+/g, " ").slice(0, 80);
-      let suggestions = [];
-      try { suggestions = (findTools(CATALOG, slug, { k: 3, baseUrl: BASE_URL, powSlugs: POW_SLUGS }).results || []).map((r) => ({ slug: r.slug, route: r.route, price: r.price, name: r.name })); } catch { suggestions = []; }
       // A route we RETIRED is gone on purpose: 410, dated, with the
       // replacement (src/retired-tools.js). A 404 here read to outside probes
       // as a broken seller rather than a retired route.
       const gone = retiredV1 || retiredEntryFor(req.path);
+      // Suggestions by meaning (goneSuggestions): the declared replacement
+      // first; a retirement with none, only the tools its note names; word
+      // matching only for an unknown path, held to one category.
+      let suggestions = [];
+      try {
+        const matches = gone && !gone.replacement ? [] : (findTools(CATALOG, slug, { k: 10, baseUrl: BASE_URL, powSlugs: POW_SLUGS }).results || []);
+        suggestions = goneSuggestions({ gone, defs: Object.values(CATALOG), matches });
+      } catch { suggestions = []; }
       if (gone) {
         const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
         const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}`, price: rep.price } : null;
@@ -14986,7 +15009,7 @@ app.use((req, res) => {
         res.set(retirementHeaders(gone.retiredAt, replacement?.url));
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
-          hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}${!replacement && gone.note ? ` ${gone.note}` : ""}`,
+          hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : suggestions.length ? " There is no direct replacement; the live tools its note names are listed, or ask /api/find?q=<task>." : " There is no direct replacement; ask /api/find?q=<task>."}${!replacement && gone.note ? ` ${gone.note}` : ""}`,
           find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions, ...errorCodeField(410),
         });
       }

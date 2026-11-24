@@ -64,7 +64,7 @@ Loaded when an index, discovery, router or buyer file is read.
   network probes; `probePublicUrl`'s default), `Agent402-Router` (the pre-payment probe, the
   model-list read and the purchase, with `X-Agent402-Via: router`), `Agent402-Fetch` (a tool
   fetching a caller's URL; `safeFetch`'s default, or `NETWORK_KIT_USER_AGENT` in network-kit2 when
-  set) and `Agent402Bot` (the site-crawl tool). The older `Agent402/1.0` token is left only in the
+  set), `Agent402Bot` (the site-crawl tool) and `Agent402SuggestBot` (search-suggest's one source). The older `Agent402/1.0` token is left only in the
   kits that call one data provider's fixed API, a list `scripts/test-user-agents.js` pins. Every
   robots.txt group naming one of our tokens is combined (RFC 9309; `robotsAllows` in kit.js).
 - **Seller load:** `src/seller-load.js`. Process memory decides every request; the shared limits

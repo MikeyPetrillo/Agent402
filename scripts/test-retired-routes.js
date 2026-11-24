@@ -23,6 +23,30 @@ throws(() => assertRetiredRegistryConsistent(new Set([...liveSet, "skill-market-
 throws(() => assertRetiredRegistryConsistent(new Set([...liveSet].filter((s) => s !== "coin-search"))), /names replacement "coin-search", which is not a live/, "a replacement that is not live fails the boot");
 ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retiredAt)) && Object.values(RETIRED_PACKS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retiredAt)), "every entry carries a retirement date");
 
+// --- what a 410 or 404 suggests (goneSuggestions) ---------------------------------
+// By meaning, never word overlap: a retired route's declared replacement leads,
+// a route with none suggests only the live tools its note names, and only an
+// unknown path falls back to matching, held to the best match's category.
+{
+  const { goneSuggestions } = await import("../src/retired-tools.js");
+  const D = (slug, category) => ({ slug, category, route: `GET /api/${slug}`, price: "$0.001", name: slug });
+  const defs = [D("coin-search", "crypto"), D("crypto-price", "crypto"), D("search", "search"), D("search-news", "search"), D("fred-series", "data"), D("dex-volume-board", "crypto"), D("uuid", "dev"), D("hash", "dev")];
+  const slugsOf = (xs) => xs.map((x) => x.slug).join(",");
+  // A word-overlap match that leads with an unrelated tool (web search for "coins list").
+  const overlap = [D("search", "search"), D("crypto-price", "crypto"), D("coin-search", "crypto")];
+  const rep = goneSuggestions({ gone: { replacement: "coin-search" }, defs, matches: overlap });
+  ok(slugsOf(rep) === "coin-search,crypto-price", `a declared replacement leads, and the rest share its category (${slugsOf(rep)})`);
+  ok(rep[0].route === "GET /api/coin-search" && rep[0].price === "$0.001" && Object.keys(rep[0]).sort().join() === "name,price,route,slug", "each suggestion carries slug, route, price and name");
+  const noted = goneSuggestions({ gone: { replacement: null, note: "fred-series reads a series' observations; search-news answers a news search for any query." }, defs, matches: overlap });
+  ok(slugsOf(noted) === "fred-series,search-news", `no replacement: only the live tools the note names, in its order, never a matched word (${slugsOf(noted)})`);
+  ok(goneSuggestions({ gone: { replacement: null, note: "nothing-live-here reads it." }, defs, matches: overlap }).length === 0, "a note naming no live tool suggests nothing");
+  ok(goneSuggestions({ gone: { replacement: null }, defs, matches: overlap }).length === 0, "no replacement and no note: nothing suggested by word overlap");
+  const unknown = goneSuggestions({ gone: null, defs, matches: [D("uuid", "dev"), D("search", "search"), D("hash", "dev")] });
+  ok(slugsOf(unknown) === "uuid,hash", `an unknown path falls back to matching, held to the best match's category (${slugsOf(unknown)})`);
+  ok(goneSuggestions({ gone: null, defs, matches: [] }).length === 0, "no match, no suggestion");
+  ok(goneSuggestions({ gone: { replacement: "coin-search" }, defs, matches: [D("coin-search", "crypto"), D("crypto-price", "crypto"), D("dex-volume-board", "crypto"), D("coin-search", "crypto")] }).length === 3, "at most three, the replacement once");
+}
+
 // A retired capability is not offered in prose either: code execution
 // (code-run, code-run-pro, retired 2026-11-23) is named in no page module,
 // tool text, README, wiki, docs or package README, except the changelog and
@@ -399,6 +423,21 @@ try {
   ok(gb.replacement?.slug === "coin-search" && /^GET \/api\/coin-search$/.test(gb.replacement?.route || "") && gb.replacement?.url === "http://agent402.test/api/coin-search", "...naming the live replacement's slug, route and url");
   ok(gb.retiredAt === "2026-11-21" && /retired on 2026-11-21/.test(gb.hint) && /coin-search/.test(gb.hint), "...with the date and the replacement in the hint");
   ok(Array.isArray(gb.suggestions) && typeof gb.find === "string", "...and the same find + suggestions the 404 carries");
+  {
+    // Suggestions by meaning on the wire: the declared replacement first, the
+    // rest in its category; a note's live tools only; an unknown path held to
+    // one category.
+    const pricing = await (await fetch(`${base}/api/pricing`)).json();
+    const catOf = new Map((pricing.endpoints || []).map((e) => [e.slug, e.category]));
+    ok(gb.suggestions[0]?.slug === "coin-search" && gb.suggestions.every((s) => catOf.get(s.slug) === catOf.get("coin-search")), `the coins-list 410 suggests coin-search first, the rest in its category (${gb.suggestions.map((s) => s.slug).join(",")})`);
+    const fr = await (await fetch(`${base}/api/fred-search`)).json();
+    ok(fr.suggestions.map((s) => s.slug).join() === "fred-series" && /no direct replacement/.test(fr.hint), `the fred-search 410 suggests only the tool its note names (${fr.suggestions.map((s) => s.slug).join(",")})`);
+    const xt = await (await fetch(`${base}/api/x-trends`)).json();
+    ok(xt.suggestions.length === 0 && !/closest live tools are listed/.test(xt.hint) && /api\/find/.test(xt.hint), `a 410 with no replacement and no note suggests nothing by word overlap (${xt.suggestions.map((s) => s.slug).join(",")})`);
+    const un = await fetch(`${base}/api/uuid-v99-generator-thing`);
+    const ub = await un.json();
+    ok(un.status === 404 && ub.suggestions.length > 0 && new Set(ub.suggestions.map((s) => catOf.get(s.slug))).size === 1, `an unknown path's suggestions share one category (${ub.suggestions.map((s) => `${s.slug}:${catOf.get(s.slug)}`).join(",")})`);
+  }
   ok(pastSunset(get, "2026-11-21"), `...with a past Sunset header on the retirement date (got ${get.headers.get("sunset")})`);
   ok(successorOf(get) === "http://agent402.test/api/coin-search", `...and Link rel="successor-version" to the replacement (got ${get.headers.get("link")})`);
   {

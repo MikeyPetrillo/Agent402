@@ -99,6 +99,20 @@ try {
     const n = (await logged("crawl-me.example.com", "site-crawl")) - loggedBefore;
     ok(n === sent.length, `and the request log counts each of them for the host (${n} of ${sent.length})`);
   }
+  // search-suggest: the string /crawler lists (one source), and its reads in the log.
+  {
+    ok(all.some((u) => u.ua === UA.SUGGEST_UA && u.role === "suggest"), "the search-suggest string is on the list /crawler renders");
+    const ws = await import("../src/tools/wikipedia-suggest.js");
+    ok(ws.SUGGEST_USER_AGENT === UA.SUGGEST_UA, "wikipedia-suggest sends the listed string, not one of its own");
+    const before = seen.length;
+    const loggedBefore = await logged("en.wikipedia.org", "suggest");
+    const orig402 = globalThis.fetch;
+    globalThis.fetch = async (url, init) => { seen.push({ url: String(url), ua: uaOf(init) }); return new Response(JSON.stringify(["ag", ["Agent"]]), { status: 200, headers: { "content-type": "application/json" } }); };
+    try { await ws.wikipediaSuggestions("ag", 1); } finally { globalThis.fetch = orig402; }
+    const sent = seen.slice(before).filter((r) => isHost(r.url, "en.wikipedia.org"));
+    ok(sent.length === 1 && sent[0].ua === UA.SUGGEST_UA, `search-suggest sends its own string (${sent[0]?.ua})`);
+    ok((await logged("en.wikipedia.org", "suggest")) - loggedBefore === 1, "and the request log counts its read for the host");
+  }
   // safeFetch for the index crawler is counted where the crawl budgets it,
   // never twice here.
   {
