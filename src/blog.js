@@ -12,11 +12,11 @@ import { articleDates } from "./page-dates.js";
 export const BLOG_POSTS = [
   {
     slug: "pay-per-call-tools-on-arc",
-    metaDescription: "Agent402 now settles on Arc mainnet: an agent pays for one tool call at a time in USDC on Arc, settled through Circle's facilitator.",
+    metaDescription: "Agent402 now settles on Arc mainnet: an agent pays for one tool call at a time in USDC on Arc Network, settled on chain by an x402 facilitator.",
     date: "2026-10-21",
     title: "Pay-per-call tools for agents, now on Arc",
-    excerpt: "Agent402 now settles on Arc mainnet. An agent pays for one tool call at a time in USDC on Arc, settled through Circle's facilitator, with gas paid in USDC too. What Agent402 is, how a paid call works, and one real Arc payment, end to end.",
-    body: `<p>Agent402 now settles on <a href="/arc">Arc mainnet</a>. An agent that holds USDC on Arc can pay for any wallet-priced tool in the catalog one call at a time, and the payment settles through Circle's facilitator. Arc pays gas in USDC, so the wallet that pays for the call needs nothing else.</p>
+    excerpt: "Agent402 now settles on Arc mainnet. An agent pays for one tool call at a time in USDC on Arc Network, settled on chain by an x402 facilitator, with gas paid in USDC too. What Agent402 is, how a paid call works, and one real Arc payment, end to end.",
+    body: `<p>Agent402 now settles on <a href="/arc">Arc Network</a> mainnet. An agent that holds USDC on Arc can pay for any wallet-priced tool in the catalog one call at a time, and the payment settles on chain through an x402 facilitator. Arc pays gas in USDC, so the wallet that pays for the call needs nothing else.</p>
 
 <h2>What Agent402 is</h2>
 
@@ -33,7 +33,7 @@ export const BLOG_POSTS = [
   <li>The tool runs, and only a successful answer is settled on x402: an answer with an error status is not settled. ${SETTLE_FIRST_SENTENCE} The successful answer carries a receipt with the transaction.</li>
 </ol>
 
-<p>The agent signs; it never sends a raw transfer and never hands over a key. On Arc, the settlement goes through Circle's facilitator, which submits the transfer on chain.</p>
+<p>The agent signs; it never sends a raw transfer and never hands over a key. On Arc, a facilitator submits the transfer on chain.</p>
 
 <h2>One real payment on Arc</h2>
 
@@ -47,7 +47,9 @@ export const BLOG_POSTS = [
   <li><strong>Any x402 client:</strong> the offer is a standard x402 v2 <code>exact</code> accept on <code>eip155:5042</code>, so a stock x402 client that signs EVM transfers pays it as is.</li>
 </ul>
 
-<p>Fund the wallet with USDC on Arc and that is the whole setup. Every chain, with its asset and how to pay on it, is on <a href="/how-to-pay">how to pay</a>, and the Arc details are on the <a href="${REPO_URL}/wiki/Arc">wiki</a>.</p>`,
+<p>Fund the wallet with USDC on Arc and that is the whole setup. Every chain, with its asset and how to pay on it, is on <a href="/how-to-pay">how to pay</a>, and the Arc details are on the <a href="${REPO_URL}/wiki/Arc">wiki</a>.</p>
+
+<p><small>Arc is a trademark of Circle Internet Group, Inc. and/or its affiliates. Agent402 is independent and is not affiliated with or endorsed by Circle.</small></p>`,
   },
   {
     slug: "decide-plans-for-agents",

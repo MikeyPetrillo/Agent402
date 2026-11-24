@@ -2193,9 +2193,10 @@ export function qualityFromStored(q) {
 }
 
 // Public x402 seller registries we crawl. Each exposes an unauthenticated
-// discovery endpoint; we extract unique origins from the listings.
+// discovery endpoint; we extract unique origins from the listings. `label` is
+// the name a public answer prints; `name` is the internal key.
 const DISCOVERY_SOURCES = [
-  { name: "Coinbase CDP Bazaar", url: "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources" },
+  { name: "Coinbase CDP Bazaar", label: "x402 Bazaar (Coinbase Developer Platform)", url: "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources" },
   // GoPlausible's facilitator registry (multi-chain - AVM/EVM/SVM - despite
   // the name; Algorand-native x402 sellers live here, registering by settling
   // through the facilitator rather than on the CDP Bazaar). Same
@@ -2210,7 +2211,7 @@ const DISCOVERY_SOURCES = [
   // "testnet"-labeled string the existing EVM-shaped check could see).
   // synthesizeTools makes their sellers list with tools even when they serve
   // no /.well-known/x402 manifest.
-  { name: "GoPlausible registry", url: "https://facilitator.goplausible.xyz/discovery/resources", paginate: true, synthesizeTools: true, seedImmediately: true, strict: true },
+  { name: "GoPlausible registry", label: "facilitator discovery registry 1", url: "https://facilitator.goplausible.xyz/discovery/resources", paginate: true, synthesizeTools: true, seedImmediately: true, strict: true },
   // PayAI's facilitator registry — where non-Base-native sellers (Solana
   // especially) that settle through PayAI register instead of the Base-centric
   // CDP Bazaar (added 2026-07-12; the Bazaar showed ~378 Solana sellers, PayAI
@@ -2220,7 +2221,7 @@ const DISCOVERY_SOURCES = [
   // base-sepolia entries, example.com, and staging URLs); health routing then
   // self-heals anything dead. synthesizeTools so PayAI sellers with no manifest
   // still list with tools.
-  { name: "PayAI facilitator registry", url: "https://facilitator.payai.network/discovery/resources", paginate: true, synthesizeTools: true, strict: true },
+  { name: "PayAI facilitator registry", label: "facilitator discovery registry 2", url: "https://facilitator.payai.network/discovery/resources", paginate: true, synthesizeTools: true, strict: true },
   // Solvador's registry — settlement-harvested like the Bazaar (confirmed
   // 2026-07-28: our first two Optimism settles auto-registered our routes
   // within the hour), keyless reads, identical {items, pagination.total}
@@ -2228,7 +2229,7 @@ const DISCOVERY_SOURCES = [
   // Chain, Linea, NEAR and XRPL, so this is the discovery home for sellers
   // on those chains as they appear (watch issue #586). Same hygiene as
   // PayAI's open registry: paginate + synthesizeTools + strict.
-  { name: "Solvador registry", url: "https://api.solvador.com/discovery/resources", paginate: true, synthesizeTools: true, strict: true },
+  { name: "Solvador registry", label: "facilitator discovery registry 3", url: "https://api.solvador.com/discovery/resources", paginate: true, synthesizeTools: true, strict: true },
 ];
 
 // Operator-curated seeds committed in-repo — the version-controlled companion
@@ -10747,7 +10748,9 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
   const discoverySources = DISCOVERY_SOURCES.map((s) => {
     const st = discoveryStatus.get(s.name);
     return {
-      name: s.name,
+      // The public answer names a registry by a neutral label (its URL is
+      // beside it); `name` stays the internal key the crawl state is kept under.
+      name: s.label || s.name,
       url: s.url,
       fetchedAt: st?.fetchedAt || null,
       resources: st?.resources ?? null,

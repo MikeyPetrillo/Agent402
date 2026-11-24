@@ -66,7 +66,7 @@ holds it.
 | --- | --- | --- | --- |
 | `ALGORAND_ALGOD_URL` | Algorand algod URL. | `https://mainnet-api.algonode.cloud` | `src/x402-buyer.js` |
 | `ALGORAND_ALGOD_URLS` | Algorand algod URLs. |  | `src/revenue-live.js` |
-| `ALGORAND_FACILITATOR_URL` | Algorand facilitator URL. | `https://facilitator.goplausible.xyz` | `src/algorand-sellers.js`, `src/payments.js` |
+| `ALGORAND_FACILITATOR_URL` | Algorand facilitator URL (unset, a built-in facilitator). | built in | `src/algorand-sellers.js`, `src/payments.js` |
 | `ALGORAND_INDEXER_URL` | Algorand indexer URL. |  | `src/revenue-ledger.js` |
 | `ALGORAND_INDEXER_URLS` | Algorand indexer URLs. |  | `src/revenue-live.js` |
 | `ALGORAND_PAGE_WAIT_MS` | Algorand page wait, in milliseconds. | `8000` | `src/server.js` |
@@ -614,7 +614,7 @@ holds it.
 | --- | --- | --- | --- |
 | `INK_FACILITATOR_URL` | Ink facilitator URL. |  | `src/facilitator-public-index.js`, `src/payments.js` |
 | `INK_RELAYER_GAS_CAP` | Ink relayer gas cap. |  | `src/robinhood-relayer.js` |
-| `INK_RELAYER_KEY` | Ink relayer key (a credential, set on the host); its own wallet, never the Robinhood relayer's key. |  | `src/payments.js` |
+| `INK_RELAYER_KEY` | Ink relayer key (a credential, set on the host); its own wallet, never the Robinhood Chain relayer's key. |  | `src/payments.js` |
 | `INK_RELAYER_LOCK_WAIT_MS` | Ink relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `INK_RELAYER_MAX_GWEI` | Ink relayer maximum gwei. |  | `src/robinhood-relayer.js` |
 | `INK_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Ink relayer settles (0: any). | not listed | `src/network-floors.js`, `src/robinhood-relayer.js` |
@@ -717,7 +717,7 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `MONAD_FACILITATOR_URL` | Monad facilitator URL. | `https://x402-facilitator.molandak.org` | `src/payments.js` |
+| `MONAD_FACILITATOR_URL` | Monad facilitator URL (unset, a built-in facilitator). | built in | `src/payments.js` |
 | `MONAD_USDC_ADDRESS` | Monad USDC address. | `0x754704Bc059F8C67012fEd69BC8A327a5aafb603` | `src/payments.js` |
 | `MONAD_USDC_EIP712_NAME` | Monad USDC EIP-712 name. | `USDC` | `src/payments.js` |
 | `MONAD_USDC_EIP712_VERSION` | Monad USDC EIP-712 version. | `2` | `src/payments.js` |
@@ -834,9 +834,9 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `PAYAI_API_KEY_ID` | PayAI facilitator key id for multi-chain settlement (optional; a keyless allowance exists). |  | `src/payments.js` |
-| `PAYAI_API_KEY_SECRET` | PayAI facilitator key secret (a credential, set on the host). |  | `src/payments.js` |
-| `PAYAI_FACILITATOR_URL` | Payai facilitator URL. |  | `src/payments.js` |
+| `PAYAI_API_KEY_ID` | Key id for an optional multi-chain fallback facilitator (optional; it also settles without a key). |  | `src/payments.js` |
+| `PAYAI_API_KEY_SECRET` | Key secret for the same fallback facilitator (a credential, set on the host). |  | `src/payments.js` |
+| `PAYAI_FACILITATOR_URL` | URL of the same fallback facilitator. |  | `src/payments.js` |
 
 ## PAYMENT
 
@@ -1067,17 +1067,17 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `ROBINHOOD_AMBIGUOUS_WAIT_MS` | Robinhood ambiguous wait, in milliseconds. |  | `src/robinhood-outage.js` |
-| `ROBINHOOD_FACILITATOR_URL` | Robinhood facilitator URL. |  | `src/facilitator-public-index.js`, `src/payments.js` |
+| `ROBINHOOD_FACILITATOR_URL` | Robinhood Chain facilitator URL. |  | `src/facilitator-public-index.js`, `src/payments.js` |
 | `ROBINHOOD_FALLBACK_RECHECK_MS` | Robinhood fallback recheck, in milliseconds. |  | `src/payments.js` |
 | `ROBINHOOD_MIN_PRICE_USD` | Price floor on Robinhood Chain, in USD (unset or 0: none, the list price is quoted). |  | `src/changelog.js`, `src/network-floors.js` |
 | `ROBINHOOD_ORDER_REFRESH_MS` | Robinhood order refresh, in milliseconds. |  | `src/payments.js` |
-| `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS` | Robinhood relayer first alert, in hours. |  | `src/robinhood-order.js` |
-| `ROBINHOOD_RELAYER_GAS_CAP` | Robinhood relayer gas cap. |  | `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_KEY` | Robinhood relayer key (a credential, set on the host). |  | `src/changelog.js`, `src/payments.js` |
-| `ROBINHOOD_RELAYER_LOCK_WAIT_MS` | Robinhood relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_MAX_GWEI` | Robinhood relayer maximum gwei. |  | `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood relayer settles (0: any). | not listed | `src/changelog.js`, `src/network-floors.js`, `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_RECEIPT_MS` | Robinhood relayer receipt, in milliseconds. |  | `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS` | Robinhood Chain relayer first alert, in hours. |  | `src/robinhood-order.js` |
+| `ROBINHOOD_RELAYER_GAS_CAP` | Robinhood Chain relayer gas cap. |  | `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_KEY` | Robinhood Chain relayer key (a credential, set on the host). |  | `src/changelog.js`, `src/payments.js` |
+| `ROBINHOOD_RELAYER_LOCK_WAIT_MS` | Robinhood Chain relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_MAX_GWEI` | Robinhood Chain relayer maximum gwei. |  | `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood Chain relayer settles (0: any). | not listed | `src/changelog.js`, `src/network-floors.js`, `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_RECEIPT_MS` | Robinhood Chain relayer receipt, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` | Robinhood skip dry below settlements. |  | `src/robinhood-order.js` |
 | `ROBINHOOD_USDG_ADDRESS` | Robinhood usdg address. | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` | `src/payments.js` |
 | `ROBINHOOD_USDG_EIP712_NAME` | Robinhood usdg EIP-712 name. | `Global Dollar` | `src/payments.js` |
@@ -1252,9 +1252,9 @@ holds it.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `SOLVADOR_CELO_PRIMARY` | Solvador celo primary. |  | `src/payments.js` |
-| `SOLVADOR_FACILITATOR_URL` | Solvador facilitator URL. | `https://api.solvador.com` | `src/payments.js` |
-| `SOLVADOR_KEY` | Solvador key (a credential, set on the host). |  | `src/payments.js` |
+| `SOLVADOR_CELO_PRIMARY` | Tries the second fallback facilitator first on Celo. |  | `src/payments.js` |
+| `SOLVADOR_FACILITATOR_URL` | URL of a second fallback facilitator (unset, a built-in URL). | built in | `src/payments.js` |
+| `SOLVADOR_KEY` | Key for the second fallback facilitator (a credential, set on the host). |  | `src/payments.js` |
 
 ## SOR
 
@@ -1352,7 +1352,7 @@ holds it.
 | --- | --- | --- | --- |
 | `STELLAR_FACILITATOR_KEY` | Stellar facilitator key (a credential, set on the host). |  | `src/payments.js` |
 | `STELLAR_FACILITATOR_STATUS_TIMEOUT_MS` | Stellar facilitator status timeout, in milliseconds. |  | `src/stellar-facilitator-status.js` |
-| `STELLAR_FACILITATOR_URL` | Stellar facilitator URL. | `https://channels.openzeppelin.com/x402` | `src/payments.js`, `src/stellar-facilitator-status.js` |
+| `STELLAR_FACILITATOR_URL` | Stellar facilitator URL (unset, a built-in facilitator). | built in | `src/payments.js`, `src/stellar-facilitator-status.js` |
 | `STELLAR_FALLBACK_FACILITATOR_KEY` | Stellar fallback facilitator key (a credential, set on the host). |  | `src/payments.js` |
 | `STELLAR_FALLBACK_FACILITATOR_URL` | Stellar fallback facilitator URL. |  | `src/payments.js` |
 | `STELLAR_HORIZON_URL` | Stellar horizon URL. |  | `src/rail-cover.js`, `src/stellar-confirm.js` |
@@ -1629,7 +1629,7 @@ holds it.
 | `GITHUB_TOKEN` | GitHub token (a credential, set on the host); the github-repo tool sends it to lift the keyless rate limit. |  | `src/tools/enrich-kit.js` |
 | `GITHUB_TRAFFIC_TOKEN` | Github traffic token (a credential, set on the host). |  | `src/transparency.js` |
 | `GIT_COMMIT_SHA` | Build id for /health, the MCP version and asset URLs when the host platform does not provide one. | `dev` | `src/ledger-chrome.js`, `src/mcp-http.js`, `src/server.js` |
-| `GLAMA_MAINTAINER_EMAIL` | Maintainer address published in /.well-known/glama.json (a fork sets its own). | `mike@agent402.tools` | `src/server.js` |
+| `GLAMA_MAINTAINER_EMAIL` | Maintainer address published in /.well-known/glama.json (a fork sets its own). | `help@agent402.tools` | `src/server.js` |
 | `GOOGLE_SITE_VERIFICATION` | Google site verification. |  | `src/ledger-chrome.js` |
 | `GSC_SERVICE_ACCOUNT_JSON` | Search Console service account JSON. |  | `src/search-data.js` |
 | `GSC_SITE_URL` | Search Console site URL. | `sc-domain:agent402.tools` | `src/search-data.js` |
