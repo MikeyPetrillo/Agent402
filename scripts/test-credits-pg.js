@@ -526,7 +526,7 @@ try {
     const TE = await W1.claim("cs_tea");
     await W2.disputeClosed("pi_tea", { won: false, status: "status-not-known", disputeId: "dp_te" });
     await W1.disableByPaymentIntent("pi_tea", "disputed", { disputeId: "dp_te" });
-    ok((await W2.authorize(TE.key, 0.001)).ok === true && (await W1.disputesToReview()).some((d) => d.keyId === TE.keyId) && (await W2.refundsOwedWord(0)) === "owed", "pg: an unrecognized close before its create freezes nothing, is listed for review and reads owed");
+    ok((await W2.authorize(TE.key, 0.001)).reason === "frozen" && (await W1.disputesToReview()).some((d) => d.keyId === TE.keyId) && (await W2.refundsOwedWord(0)) === "owed", "pg: an unrecognized close before its create freezes the key until a person resolves it, is listed for review and reads owed");
     ok((await W1.resolveDispute(TE.keyId, "pi_tea", "lost")) === TE.keyId && !(await W2.disputesToReview()).some((d) => d.keyId === TE.keyId), "pg: a person's resolution clears it");
   }
   // The balance page's lookups find rows by email and key id in the

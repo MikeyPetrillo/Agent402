@@ -23,8 +23,11 @@ function addLinkHeader(res) {
   res.setHeader("Link", list ? `${list}, ${LLMS_LINK_HEADER}` : LLMS_LINK_HEADER);
 }
 
-export function llmsLinkMiddleware() {
+/** `skip(req)`: a request whose answer names nothing past itself (the AWS
+ *  Marketplace listing's /aws surfaces) is left as it is. */
+export function llmsLinkMiddleware({ skip = null } = {}) {
   return (req, res, next) => {
+    if (skip) { try { if (skip(req)) return next(); } catch { /* a failed check adds the link */ } }
     const send = res.send;
     res.send = function (body) {
       // Express defaults an untyped string body to text/html AFTER this runs,

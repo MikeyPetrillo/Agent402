@@ -502,6 +502,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       facilitator: String(r?.facilitator || "unknown").slice(0, 120),
       signer: r?.signer ? String(r.signer).slice(0, 64) : null,
       ...(r?.own === true ? { own: true } : {}),
+      ...(r?.own === true && typeof r?.coversLowestPrice === "boolean" ? { coversLowestPrice: r.coversLowestPrice } : {}),
       balanceEth: Number.isFinite(r?.balanceEth) ? r.balanceEth : null,
       // A Solana fee payer's row (createSvmFeePayerGasCheck): its SOL balance,
       // its facilitator's share of Solana quotes, and standby at share 0.
@@ -835,7 +836,10 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     // own relayer on that network reads ok: payments settle through ours
     // first, so the word does not wait on a wallet we do not fund. Our own
     // relayer low or unread, and the gas-against-floor row, are never covered.
-    const ownOk = new Set(gas.filter((r) => r.own && r.status === "ok").map((r) => r.network));
+    // Our relayer takes only sales at or over its minimum price: when that
+    // is over the lowest price sold on the chain (coversLowestPrice false),
+    // the cheapest sales still need the facilitator, so it covers nothing.
+    const ownOk = new Set(gas.filter((r) => r.own && r.status === "ok" && r.coversLowestPrice !== false).map((r) => r.network));
     const covered = gas.filter((r) => !r.own && !r.reason && r.facilitator !== "price floor" && (r.status === "low" || r.status === "empty" || r.status === "unread") && ownOk.has(r.network));
     // A Solana fee payer whose facilitator takes no share of quotes (standby)
     // is reported and never pages; empty (cannot pay one settlement) reads low.

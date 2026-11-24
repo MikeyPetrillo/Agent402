@@ -1,6 +1,6 @@
 # Architecture
 
-One Node 22 / Express process serving everything; deliberately boring where possible.
+One Node 24 / Express process serving everything; deliberately boring where possible.
 
 ```
                       ┌──────────────────────────────────────────────┐
@@ -83,7 +83,7 @@ sole settlement authority.
 `src/stripe-subscriptions.js`, `src/monitor-scheduler.js`, `src/credits.js`, all gated
 on `STRIPE_SECRET_KEY`): `/reports` sells the report products by card (Stripe
 Checkout, generate-once per paid session, auto-refund on failure, report at
-`/r/:session`), `/monitors` sells $5/month subscriptions whose fulfilment is a
+`/r/:session`), `/monitors` sells $5/month subscriptions whose fulfillment is a
 10-minute scheduler tick (free daily probes, a paid re-run only on change or cadence,
 reports at `/m/:id`, emails via `src/email.js`), and `/credits` sells prepaid credit
 packs while `CREDITS_SALES=on` (off by default; existing keys spend either way). The Stripe webhook endpoint is signature-verified with

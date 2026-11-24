@@ -74,7 +74,7 @@ A monitor is a Stripe subscription that keeps one report fresh for one target. T
 | SEC filing watch (`filing-monitor`) | a US ticker or CIK | Daily probe of the company's EDGAR submissions; a fresh filing report the moment a new filing lands |
 | Solana token risk watch (`token-monitor`) | a Solana mint | Daily free probe of the risk facts; a fresh brief only when they change. Sold while its data source answers |
 | Research question watch (`research-monitor`) | a research question | A fresh research report every 7 days, inside the per-subscription paid-run cap |
-| IPO pipeline watch (`ipo-monitor`) | a keyword, or `all` | Weekly digest of 424B4 pricings and new S-1 / F-1 registrations; no email on an empty week |
+| IPO pipeline watch (`ipo-monitor`) | a keyword, or `all` | A weekly email of 424B4 pricings and new S-1 / F-1 registrations; no email on an empty week |
 
 Operational bounds: a target is validated at checkout (the domain must parse, the manager must resolve on EDGAR); paid re-runs are capped per subscription per 30 days (alerts keep coming); a failing run backs off (1h doubling to 24h) and never sends an email, and a target that keeps failing tells the subscriber once. Billing is Stripe's recurring invoice and the Customer Portal (the manage link in every monitor email) cancels or updates it; subscription status is re-read from Stripe before every paid run, so a canceled monitor stops being fulfilled.
 

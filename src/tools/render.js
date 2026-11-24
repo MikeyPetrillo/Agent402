@@ -1,6 +1,7 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { assertPublicUrl, hostIsPublic, UNRESOLVED_OR_PRIVATE } from "./fetch-guard.js";
 import { childEnv } from "./child-env.js";
+import { BROWSER_FETCH_UA, BROWSER_FETCH_MOBILE_UA } from "../user-agents.js";
 import { htmlToArticle } from "./extract.js";
 import { partialFields } from "../partial-answer.js";
 import { buildOpportunities } from "./page-speed-opportunities.js";
@@ -256,8 +257,10 @@ async function inSlot(contextOptions, body, { signal, browserKind = "pages" } = 
   }
 }
 
-const DESKTOP_UA =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+// A desktop browser's string with the caller-fetch token appended
+// (src/user-agents.js), so pages render as for a visitor and a site can
+// still tell the request is ours.
+const DESKTOP_UA = BROWSER_FETCH_UA;
 
 // WebSocket connections are not requests context.route sees, so its public-
 // host check never runs for them: refuse every one at the context. Each route
@@ -432,7 +435,7 @@ export const PAGE_SPEED_DEVICES = Object.freeze({
   desktop: { viewport: { width: 1350, height: 940 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false, userAgent: DESKTOP_UA },
   mobile: {
     viewport: { width: 412, height: 823 }, deviceScaleFactor: 1.75, isMobile: true, hasTouch: true,
-    userAgent: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36",
+    userAgent: BROWSER_FETCH_MOBILE_UA,
   },
 });
 

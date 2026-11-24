@@ -16,7 +16,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
-import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage, objectFieldsSample } from "../src/pages.js";
+import { paramLimits, toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage, objectFieldsSample } from "../src/pages.js";
 import { mppOffersFor, mppRailsPhrase } from "../src/mpp-offers.js";
 import { creditsSalesEnabled } from "../src/credits-sales.js";
 import { stripScripts, stripTags as stripTagsWith } from "./lib/html-text.js";
@@ -31,6 +31,14 @@ let pass = 0;
 let proc = null;
 const fail = (m) => { console.error("FAIL:", m); if (proc) proc.kill("SIGKILL"); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; if (process.env.VERBOSE) console.log(`ok - ${m}`); } else fail(m); };
+
+// The parameters table states what the schema says about each field (allowed
+// values, default, range, length, the example's value), escaped, and nothing
+// the schema does not say.
+ok(paramLimits({ enum: ["md5", "sha256"], default: "sha256" }, "sha256") === "One of <code>md5</code>, <code>sha256</code>. Default <code>sha256</code>.", "a field's allowed values and default come from its schema");
+ok(paramLimits({ minimum: 1, maximum: 100 }, 5) === "From 1 to 100. The example sends <code>5</code>.", "a range and the example's value");
+ok(paramLimits({ maxLength: 10 }, "<b>") === "Up to 10 characters. The example sends <code>&lt;b&gt;</code>.", "an example value is escaped");
+ok(paramLimits({ type: "string", description: "x" }) === "" && paramLimits(null) === "", "a field with no constraint adds nothing");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decode = (s) => String(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 const mainOf = (html) => (html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || [, html])[1];
@@ -91,6 +99,35 @@ for (const computePayable of [true, false]) {
   ok(!/<a href="x"/.test(html) && !/<a href=\\"x\\"/.test(html), `hostile def (pow=${computePayable}): no live <a href="x"> from the example`);
   ok(!/<h1>(Title|headings|Hi|HTML)/.test(html), `hostile def (pow=${computePayable}): example <h1> text is escaped`);
   ok(html.includes("&lt;h1&gt;Title&lt;/h1&gt;"), `hostile def (pow=${computePayable}): example rendered as escaped text`);
+}
+// The first-call path: on a proof-of-work tool the free call comes before the
+// 402 example, in JavaScript and Python; the paid JavaScript sample reads the
+// key from AGENT_KEY with the get-a-wallet step under it; a wallet-only tool
+// shows its quote from Python. Each Python sample parses (python3 required
+// under CI).
+{
+  const { pythonExample } = await import("../src/pages.js");
+  const { execFileSync } = await import("node:child_process");
+  const getDef = { ...hostile, route: "GET /api/fake-get", method: "GET", path: "/api/fake-get", slug: "fake-get", discovery: { ...hostile.discovery, input: { text: "a 'quoted' \"value\"" } } };
+  for (const def of [hostile, getDef]) {
+    const free = toolPage("https://example.test", def, [], { computePayable: true, powDifficulty: 16 });
+    const paid = toolPage("https://example.test", def, [], { computePayable: false });
+    const at = (h, s) => h.indexOf(s);
+    ok(at(free, ">Free call, no wallet<") > 0 && at(free, ">Free call, no wallet<") < at(free, ">Example request<"), `${def.method} proof-of-work page: the free call comes before the 402 example`);
+    ok(at(paid, ">Free call, no wallet<") === -1 && at(paid, ">The quote (Python)<") > at(paid, ">Paid call (JavaScript agent)<"), `${def.method} wallet-only page: no free call, and a Python quote after the paid call`);
+    for (const h of [free, paid]) {
+      ok(decode(h).includes("privateKeyToAccount(process.env.AGENT_KEY)") && !/privateKeyToAccount\(KEY\)/.test(h) && h.includes('href="/start#fund"') && /wallet new/.test(h), `${def.method}: the paid sample reads AGENT_KEY, with the get-a-wallet step`);
+    }
+    ok(decode(free).includes("import hashlib, json, urllib.request") && decode(free).includes(`/api/pow/challenge?slug=${def.slug}`) && decode(paid).includes('e.headers["PAYMENT-REQUIRED"]'), `${def.method}: each page carries its Python sample`);
+    for (const computePayable of [true, false]) {
+      const py = pythonExample("https://example.test", def, { computePayable });
+      let parsed = null;
+      try { execFileSync("python3", ["-c", "import ast,sys; ast.parse(sys.stdin.read())"], { input: py, stdio: ["pipe", "ignore", "pipe"] }); parsed = true; }
+      catch (e) { parsed = e.code === "ENOENT" ? (process.env.CI ? false : null) : false; }
+      if (parsed !== null) ok(parsed, `${def.method} Python sample (pow ${computePayable}) parses`);
+      ok(py.includes(powSnippetRequest("https://example.test", def).url.replace(/\\/g, "\\\\").replace(/"/g, '\\"')) || py.includes(JSON.stringify(powSnippetRequest("https://example.test", def).url)), `${def.method} Python sample (pow ${computePayable}) sends the published request`);
+    }
+  }
 }
 // A tool page quotes only its own catalog price: against an odd price a typed
 // figure cannot match by coincidence.

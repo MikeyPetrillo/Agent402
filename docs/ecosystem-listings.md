@@ -6,8 +6,8 @@ Use this block (or any subset) wherever a directory asks what Agent402 is. Every
 claim below is served live; verify prices against `/api/pricing` before pasting.
 
 - **What it is:** Agent402 is the payment and trust layer for agentic commerce:
-  agents find, pay for and verify every paid call to Agent402, across x402 and
-  MPP, with a signed receipt for each one. The applied layer of Agentic Finance (AIFI).
+  agents find, pay for and verify paid calls to Agent402, across x402 and
+  MPP, with signed receipts on successful direct calls. The applied layer of Agentic Finance (AIFI).
 - **Payment and trust:** x402 across chains with facilitator fallbacks, MPP with
   Tempo and card, and proof of work for the pure-CPU tools, on one server. An
   x402 payment settles after a successful answer, a hang-up before the answer
@@ -26,18 +26,15 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   yourself, or through `/api/decide/execute` with the decision fee back as credit.
 - **Market and onchain intel (keyless, deterministic, per call):** live perpetuals
   (`perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`,
-  `perp-open-interest`, `perp-klines`, `perp-orderbook`, $0.001 to $0.003) and the
-  options book (`options-summary`, `crypto-options-chain`, `options-ticker`,
-  $0.002 to $0.005); computed market answers at $0.005 a call (`lending-rates`
+  `perp-open-interest`, `perp-klines`, `perp-orderbook`, $0.001 to $0.003);
+  computed market answers at $0.005 a call (`lending-rates`
   from the Aave v3 and Compound v3 contracts, `funding-screener` across venues,
   `stablecoin-depeg-watch`, `exchange-spread`, `dex-pool-health`,
-  `dex-volume-board`, `defi-screener`, `chain-board`); Solana token markets (pairs, search, trending, prices, swap
-  quotes);
-  crypto news, computed technical indicators and a whole-market pulse
+  `dex-volume-board`, `defi-screener`, `chain-board`); Solana token markets (pairs, search, trending, prices);
+  computed technical indicators and a whole-market pulse
   ($0.002 to $0.004); broad coin/exchange coverage including price by token
   contract address; indexed EVM chain reads (transfers, balances, allowances,
-  decoded receipts, block receipts, token price history); Farcaster social
-  (search, feeds, threads, engagement metrics); whole-site crawling
+  decoded receipts, block receipts, token price history); whole-site crawling
   (`site-map` $0.005, `site-crawl` $0.02); and page change detection
   (`page-change` $0.004).
 - **Images and video, flat per call:** `POST /v1/images/fast` $0.02,

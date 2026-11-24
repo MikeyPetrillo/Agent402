@@ -17,6 +17,7 @@ import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling } from "../run-ceiling.js";
 import { OPEN_METEO_ATTRIBUTION, ATTRIBUTIONS, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
 import { redactSecrets } from "./redact.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 export function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -815,3 +816,6 @@ export const WEATHER_TOOLS = [
 // its data: every answer of these tools carries them (src/data-attribution.js).
 openMeteoLicensed(WEATHER_TOOLS, ["place-lookup"]);
 markEndsAtCeiling(WEATHER_TOOLS, ["place-lookup", "weather-air-quality", "weather-current", "weather-daily", "weather-history", "weather-hourly"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(WEATHER_TOOLS, ["weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality", "place-lookup"], "Open-Meteo commercial plan, CC BY 4.0");

@@ -8,6 +8,7 @@ import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum, codeBlock } from "./ledger-chrome.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, powCostPhrase } from "./pow.js";
+import { RAILS_OR } from "./rails.js";
 
 
 const TABS = [
@@ -116,6 +117,7 @@ table{border-collapse:collapse;width:100%}
       <input id="cat-search" type="text" placeholder="Describe a task: decode a JWT, OCR an image, verify a settlement…" style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:15px 0;" aria-label="Describe a task: decode a JWT, OCR an image, verify a settlement…">
     </div>
     <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:11px 0 0;">Searches every tool as you type - same free <span style="color:var(--muted);white-space:nowrap;">GET /api/find</span> agents call, no wallet.</p>
+    <p id="cat-find-status" role="status" aria-live="polite" style="display:none;max-width:760px;margin:14px 0 0;font-size:var(--fs-md);line-height:1.5;color:var(--muted);"></p>
     <div id="cat-results" style="display:none;max-width:760px;margin:14px 0 0;border:1px solid var(--hairline);background:var(--card);"></div>
 
     <div style="display:flex;flex-wrap:wrap;margin-top:30px;border-top:1px dashed var(--dash);">
@@ -163,7 +165,7 @@ table{border-collapse:collapse;width:100%}
     <div style="padding:28px;background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">PAID TOOLS</div>
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Prices</h2>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed x402 call is not charged (a payment that lands late is repaid after on-chain proof), and there is no key to leak. ${SETTLE_FIRST_SENTENCE}</p>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed x402 call is not charged (a payment that lands late is repaid after on-chain proof), and there is no key to leak. x402 settles in ${esc(RAILS_OR)}. ${SETTLE_FIRST_SENTENCE}</p>
       ${codeBlock(`<span style="color:var(--on-panel-faint);"># price, asset and rail, before paying
 </span>curl -i "https://agent402.tools/api/search?q=x402+adoption"`, { name: "the price check", html: true, wrap: true, size: "xs", style: "margin:0 0 16px" })}
       <a href="/pricing" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the full price list →</a>

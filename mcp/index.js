@@ -3,7 +3,7 @@
 // web tools) to any MCP client (Claude, ChatGPT, custom agents) and settles
 // payment underneath, so the model never sees the 402 dance:
 //
-//   • AGENT_KEY=0x…          pay in USDC via x402 on the EVM chains (Base/Polygon/Arbitrum)
+//   • AGENT_KEY=0x…          pay in USDC via x402 on the EVM chains (Base and the others in known-assets.js)
 //   • SOLANA_AGENT_KEY=base58 pay in USDC via x402 on Solana
 //   • no key                  pay with compute (proof-of-work) on the eligible tools
 //
@@ -13,7 +13,7 @@
 //
 // Config (env):
 //   AGENT402_URL          target service (default https://agent402.tools)
-//   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base/Polygon/Arbitrum), optional;
+//   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base or another EVM chain in known-assets.js), optional;
 //                         with or without 0x. Unset, the key `npx agent402-mcp setup` stored is read
 //                         from the OS keychain (./key-store.js; AGENT402_KEY_STORE=off skips it)
 //   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana), optional
@@ -80,6 +80,17 @@ class McpError extends ProtocolError {
 if (process.argv[2] === "setup") {
   const { runSetup } = await import("./setup.js");
   process.exit(await runSetup());
+}
+// `npx agent402-mcp wallet new` makes a fresh wallet key here, stores it the
+// same way and prints the address and config (./wallet-new.js); the key is
+// never printed and the server below never starts.
+if (process.argv[2] === "wallet") {
+  const { runWalletNew, WALLET_USAGE } = await import("./wallet-new.js");
+  // --help (or -h) anywhere after the command prints the usage and makes nothing.
+  if (process.argv.slice(3).some((a) => a === "--help" || a === "-h")) { process.stdout.write(`${WALLET_USAGE}\n`); process.exit(0); }
+  if (process.argv[3] === "new") process.exit(await runWalletNew());
+  process.stderr.write(`${WALLET_USAGE}\n`);
+  process.exit(1);
 }
 
 const DEFAULT_URL = "https://agent402.tools";
@@ -1290,10 +1301,10 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
           claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.16.0",
+          npm: "npx -y agent402-mcp@0.17.0",
           maintainer: "Havok Holdings LLC",
         },
-        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Flagship search/answer first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
+        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Flagship search/answer first, the long tail via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
         ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog.",
       });
     }
@@ -1302,7 +1313,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
         service: BASE,
         connector: "stdio npm package (agent402-mcp)",
         maintainer: "Havok Holdings LLC",
-        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, over x402 or MPP (Machine Payments Protocol) - both answered on the same 402. ${BASE}/agentic-finance, ${BASE}/glossary.`,
+        positioning: `Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, over x402 or MPP (Machine Payments Protocol) - both answered on the same 402. ${BASE}/agentic-finance, ${BASE}/glossary.`,
         startHere: {
           firstJob: "Search the web and answer questions. Call web.search or web.answer directly, or catalog.find with your task.",
           mode: HAS_WALLET ? "usdc" : HAS_CREDITS ? "credits" : "proof-of-work",
@@ -1310,7 +1321,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
         install: {
           claudeCodeHosted: `claude mcp add --transport http -s user agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.16.0",
+          npm: "npx -y agent402-mcp@0.17.0",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,
@@ -1503,6 +1514,11 @@ log(`catalog: ${catalog.size} tools from ${BASE}; ${curated.length} first-class,
       : HAS_CREDITS
         ? `payment: credits key configured (${caps})`
         : "payment: proof-of-work on eligible tools (no AGENT_KEY / SOLANA_AGENT_KEY)");
+  // A paying server with no daily cap says so once, and how to set one; it
+  // refuses nothing for it.
+  if ((parsed.length || (!HAS_WALLET && HAS_CREDITS)) && !Number.isFinite(LEDGER.dayCap)) {
+    log("info: no daily spending cap is set; AGENT402_MAX_USD_PER_DAY sets one that holds across restarts");
+  }
 }
 
 await server.connect(new StdioServerTransport());

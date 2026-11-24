@@ -20,7 +20,8 @@ import { isComputePayable } from "./pow.js";
 import { creditsSalesEnabled, creditsConnectorOn, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
 import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
 import { cardReportPriceRange } from "./report-tiers.js";
-import { BASE_NO_GAS_SENTENCE } from "./base-no-gas.js";
+import { BASE_NO_GAS_PLAIN } from "./base-no-gas.js";
+import { WALLET_NEW_COMMAND } from "./get-a-wallet.js";
 import { CHAIN_PAGES } from "./market-page.js";
 
 export const START_PATH = "/start";
@@ -57,6 +58,11 @@ export function startApps(baseUrl, { connector = false } = {}) {
   ];
 }
 
+// The daily budget the npm server applies: none by default, for a new setup
+// or an existing one (mcp/spend-ledger.js DAY_CAP_HOW, which
+// scripts/test-package-readme-claims.js holds this sentence to).
+export const SETUP_DAY_CAP_SENTENCE = "No daily budget is written or applied by default; setup prints one line showing how to set AGENT402_MAX_USD_PER_DAY if you want one, and the per-call cap (AGENT402_MAX_PER_CALL) still applies.";
+
 /** The wallet path: the npm server, set up once from a terminal (it keeps the key in the OS keychain), then one config per app. */
 export function walletSetup(baseUrl) {
   const install = mcpInstallHints(baseUrl);
@@ -81,7 +87,7 @@ export function walletSetup(baseUrl) {
 export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled(), connector = creditsConnectorOn(), storefront = humanCheckoutEnabled() } = {}) {
   const canonical = `${baseUrl}${START_PATH}`;
   const title = "Start here - add Agent402 to Claude or Cursor";
-  const description = "Add Agent402 to Claude desktop, Claude Code or Cursor in one step, see what runs with no wallet, and pay for paid tools by card or from a wallet holding USDC on Base.";
+  const description = "Add Agent402 to Claude desktop, Claude Code or Cursor in one step. See what runs with no wallet, then pay by card or with USDC on Base.";
   const tools = Object.values(catalog || {}).filter((d) => d && d.slug);
   const powCount = tools.filter(isComputePayable).length;
   const reportRange = storefront ? cardReportPriceRange(HUMAN_PRODUCTS) : null;
@@ -103,7 +109,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
     : `<p class="ml-measure" ${P}>This connector runs the free tools with no wallet and no signup.${credits ? " Paid tools take a credits key or a wallet (below)." : " Paid tools take a wallet (below)."}</p>`;
 
   const noWallet = [
-    powCount ? `<li><strong>Free tools.</strong> ${powCount} tools run free with proof of work on the connector above, rate-limited, with no wallet and no signup. <a href="/tools" ${A}>Browse the tools</a>.</li>` : "",
+    powCount ? `<li><strong>Free tools.</strong> ${powCount} tools run free on the connector above, rate-limited, with no wallet and no signup. <a href="/tools" ${A}>Browse the tools</a>.</li>` : "",
     reportRange ? `<li><strong>Reports by card.</strong> Finished, model-backed reports at <a href="/reports" ${A}>/reports</a>, ${esc(reportRange.text)} by card.</li>` : "",
     credits ? `<li><strong>Credits by card.</strong> Prepaid credits at <a href="/credits" ${A}>/credits</a>: ${viaCredits ? "the connector above pays from your balance after an email sign-in, and " : ""}a credits key pays for most paid tools with no wallet.</li>` : "",
   ].filter(Boolean).join("\n        ");
@@ -111,6 +117,7 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
   const walletSection = `<section id="fund" style="margin-bottom:24px;">
       <h2 ${H2}>Pay from a wallet</h2>
       <p class="ml-measure" ${P}>A wallet pays through the Agent402 npm server, which runs on your computer and needs Node.js. ${esc(wallet.warning)}</p>
+      <p class="ml-measure" ${P}>No wallet yet? Run ${code(WALLET_NEW_COMMAND)} on your computer: it makes one, stores the key (never shown) and prints the address to fund.</p>
       <ol class="ml-measure" style="padding-left:22px;margin:0 0 16px;color:var(--ink);font-size:var(--fs-base);line-height:1.6;">
         <li style="margin:0 0 8px;">Create a new wallet in a wallet app and copy its private key.</li>
         <li style="margin:0 0 8px;">Buy USDC on Base and send it to that wallet's address. Where you buy it, choose Base as the network.</li>
@@ -118,11 +125,12 @@ export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled
         <li style="margin:0 0 8px;">Run this once in a terminal. It asks for the key (the input is hidden), keeps it in your system's keychain, and prints the setup for each app:</li>
       </ol>
       ${block(wallet.setup, "Wallet setup")}
+      <p class="ml-measure" ${P}>${esc(SETUP_DAY_CAP_SENTENCE)}</p>
       <p class="ml-measure" style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:16px 0 12px;">Then add the npm server to your app:</p>
       <div class="st-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:16px;">
       ${walletCards}
       </div>
-      <p class="ml-measure" ${P}>${esc(BASE_NO_GAS_SENTENCE)}</p>
+      <p class="ml-measure" ${P}>${esc(BASE_NO_GAS_PLAIN)}</p>
       <p class="ml-measure" ${P}>More on paying from a wallet: <a href="/how-to-pay" ${A}>how to pay</a>.</p>
     </section>`;
 

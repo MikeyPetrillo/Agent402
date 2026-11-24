@@ -53,14 +53,16 @@
     },
     {
       "slug": "archive-snapshot",
-      "name": "a long-archived site",
+      "name": "a link to the capture closest to a year",
       "input": {
         "url": "https://www.wikipedia.org",
         "timestamp": "2015"
       },
       "expect": {
         "equals": {
-          "available": true
+          "available": null,
+          "checked": false,
+          "snapshot.url": "https://web.archive.org/web/2015/https://www.wikipedia.org"
         },
         "populated": [
           "snapshot"
@@ -125,7 +127,7 @@
       "slug": "feed-parse",
       "name": "an atom feed",
       "input": {
-        "url": "https://github.com/nodejs/node/releases.atom",
+        "url": "https://go.dev/blog/feed.atom",
         "limit": 3
       },
       "expect": {
@@ -813,7 +815,7 @@
       "slug": "skill-feed-watch",
       "name": "an atom feed",
       "input": {
-        "url": "https://github.com/nodejs/node/releases.atom"
+        "url": "https://go.dev/blog/feed.atom"
       },
       "expect": {
         "equals": {
@@ -1341,8 +1343,7 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      },
-      "requires": "FRED_API_KEY"
+      }
     },
     {
       "slug": "skill-macro-dashboard",
@@ -1355,8 +1356,7 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      },
-      "requires": "FRED_API_KEY"
+      }
     },
     {
       "slug": "skill-inflation-check",
@@ -1369,8 +1369,7 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      },
-      "requires": "FRED_API_KEY"
+      }
     },
     {
       "slug": "skill-fred-snapshot",
@@ -1383,8 +1382,7 @@
         "matches": {
           "summary": "^[1-9]"
         }
-      },
-      "requires": "FRED_API_KEY"
+      }
     },
     {
       "slug": "skill-trend-analysis",

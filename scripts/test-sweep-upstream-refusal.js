@@ -5,9 +5,10 @@
 //     for a listed upstream is a refusal; a 500, a 502 in other words, an
 //     upstream 4xx and an unlisted upstream are not;
 //   - the caller path: the server booted with Jupiter answering 503 (stubbed
-//     at the fetch layer) answers POST /api/sol-swap-quote with exactly the
-//     body the rule recognizes; with Jupiter answering garbage, the tool's
-//     own 502 is NOT recognized, so the sweep fails it.
+//     at the fetch layer, the risk summary beside it answering clean) answers
+//     POST /api/sol-token-safety with exactly the body the rule recognizes;
+//     with Jupiter answering garbage, the tool's own 502 is NOT recognized,
+//     so the sweep fails it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { fileURLToPath } from "node:url";
 import { bootServer } from "./lib/boot-server.js";
@@ -28,11 +29,11 @@ async function callWith(mode) {
   const srv = await bootServer({
     stores: "sweep-refusal",
     args: ["--import", PRELOAD],
-    env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", STATE_DATABASE_URL: "", STUB_JUPITER_MODE: mode, JUPITER_API_BASE: "", POSTHOG_API_KEY: "" },
+    env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", STATE_DATABASE_URL: "", STUB_JUPITER_MODE: mode, JUPITER_API_BASE: "", POSTHOG_API_KEY: "", RUGCHECK_TOOLS: "on" },
   });
   const base = srv.url;
   try {
-    const res = await fetch(`${base}/api/sol-swap-quote`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ inputMint: "So11111111111111111111111111111111111111112", outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", amount: "1000000000", slippageBps: 50 }) });
+    const res = await fetch(`${base}/api/sol-token-safety`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN" }) });
     return { status: res.status, body: await res.json().catch(() => null) };
   } finally {
     await srv.stop();

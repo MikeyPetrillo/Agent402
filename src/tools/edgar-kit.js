@@ -20,6 +20,7 @@
 import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, currentBudget, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { dataSetsIndex, dataSetHead } from "./edgar-13f-datasets.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 // Hard per-request socket bound for every EDGAR read (undici defaults to 300 s).
 const EDGAR_FETCH_TIMEOUT_MS = Math.max(2_000, parseInt(process.env.EDGAR_FETCH_TIMEOUT_MS || "12000", 10) || 12_000);
@@ -447,7 +448,7 @@ export const EDGAR_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "All US public companies that reported a given XBRL tag for a given period, in one call. Killer endpoint for cross-sectional screens: 'every issuer's Revenues for CY2023Q1' or 'every issuer's Assets as of CY2023Q4I (instantaneous)'. Period format: CY{YYYY} (annual), CY{YYYY}Q{1-4} (quarterly), or CY{YYYY}Q{1-4}I (instantaneous balance-sheet items). Source: data.sec.gov/api/xbrl/frames. ?taxonomy=us-gaap&tag=Revenues&unit=USD&period=CY2023Q1",
+      "All US public companies that reported a given XBRL tag for a given period, in one call. Use it for cross-sectional screens, such as: 'every issuer's Revenues for CY2023Q1' or 'every issuer's Assets as of CY2023Q4I (instantaneous)'. Period format: CY{YYYY} (annual), CY{YYYY}Q{1-4} (quarterly), or CY{YYYY}Q{1-4}I (instantaneous balance-sheet items). Source: data.sec.gov/api/xbrl/frames. ?taxonomy=us-gaap&tag=Revenues&unit=USD&period=CY2023Q1",
     tags: ["edgar", "sec", "xbrl", "frames", "screen", "cross-section", "fundamentals", "financials"],
     discovery: {
       input: { taxonomy: "us-gaap", tag: "Revenues", unit: "USD", period: "CY2023Q1" },
@@ -1429,3 +1430,6 @@ export { resolveCompany, eftsSearch, fetchXmlText, edgarGetJson, parse13fInforma
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(EDGAR_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(EDGAR_TOOLS, ["edgar-13f-dataset-head", "edgar-13f-datasets", "edgar-13f-holdings", "edgar-company-concept", "edgar-company-facts", "edgar-company-lookup", "edgar-filings", "edgar-recent-ipos", "edgar-search", "edgar-xbrl-frame", "edgar-insider-trades"], "SEC EDGAR public filings");

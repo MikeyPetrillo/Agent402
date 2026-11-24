@@ -1,10 +1,13 @@
-// Solana intel kit - token safety, liquidity, price and swap intel for SPL
-// tokens, all from public keyless APIs:
+// Solana intel kit - token safety, liquidity and price intel for SPL tokens,
+// from public keyless APIs and our own Solana RPC:
 //
 //   RugCheck    api.rugcheck.xyz      risk score, risks, authorities, LP lock,
 //                                     top holders, markets, lockers, insiders
-//   DexScreener api.dexscreener.com   pairs per mint, search, boosted/new tokens
-//   Jupiter     lite-api.jup.ag       price v3, swap quote, token search/audit
+//   DexScreener api.dexscreener.com   pairs per mint (and the price read from
+//                                     them), search, boosted/new tokens
+//   Jupiter     lite-api.jup.ag       token search/audit (an input to the
+//                                     safety and search answers)
+//   Solana RPC  SOLANA_RPC_URL        holder accounts, mint decimals and slot
 //
 // Every handler validates the base58 mint BEFORE any egress, keeps ONE request
 // per upstream (sol-token-safety fans out to two small ones in parallel), bounds
@@ -15,9 +18,6 @@
 // upstream and the step, see DEADLINES below).
 //
 // Shapes were verified live on 2026-08-22 with curl; notes on drift:
-//   - Jupiter price v2 (api.jup.ag/price/v2) answers 404 - v3 on lite-api is
-//     the keyless host. The v3 map only carries mints it knows; unknown mints
-//     are simply absent (no error).
 //   - The public Solana RPC (api.mainnet-beta.solana.com) throttles
 //     getTokenLargestAccounts per method ("Too many requests for a specific RPC
 //     call") even at one call per minute, so holder concentration comes from
@@ -40,7 +40,7 @@ import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugchec
 export { RUGCHECK_SLUGS, rugcheckEnabled };
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // the hard ceiling on any one upstream document read here.
 import { readBytesCapped, readTextCapped, decodeUtf8 } from "../capped-body.js";
-import { JUPITER_ATTRIBUTION, attribute } from "../data-attribution.js";
+import { JUPITER_ATTRIBUTION, RUGCHECK_ATTRIBUTION, attribute, creditAnswers } from "../data-attribution.js";
 // Read a body under a byte cap: `res.text()` has no cap of its own, so a
 // broken or hostile upstream could push an unbounded buffer into memory once
 // per concurrent call. A declared Content-Length over the cap is refused before
@@ -191,7 +191,7 @@ async function upstreamJsonOnce(url, { label, step = "data", timeoutMs = JUPITER
   if (res.status >= 500) throw bad(`${label} upstream error (HTTP ${res.status})`, 502);
   if (res.status === 404 || res.status === 400) {
     // RugCheck answers 400 {"error":"invalid token mint"} for a non-mint
-    // pubkey; Jupiter quote answers 400 TOKEN_NOT_TRADABLE. Both are "we
+    // pubkey. That is "we
     // cannot say anything about this input", not a server fault. But RugCheck
     // also answers 400/404 {"error":"unable to generate report"} for EVERY
     // mint while its report builder is down (measured 2026-09-25 on JUP and
@@ -645,6 +645,55 @@ function shapeLinks(links) {
 }
 
 // ---------------------------------------------------------------------------
+// sol-price: a mint's USD price from the deepest pair that trades it
+// ---------------------------------------------------------------------------
+export const SOL_PRICE_MAX_MINTS = 50;
+// The pair index reads at most this many token addresses in one request.
+const PAIR_READ_MAX_MINTS = 30;
+
+/** A mint's price from the pairs read: the deepest pair holding it as the
+ *  base token gives its USD price and 24h change; with none, the deepest pair
+ *  holding it as the quote gives the price (the base's USD price over its
+ *  price in the quote token) and no change. Liquidity sums every pair read
+ *  that holds the mint, each pair once. Null when no pair prices it. */
+export function priceOfMint(mint, rawPairs) {
+  const seen = new Set();
+  const rows = [];
+  for (const p of rawPairs) {
+    const base = p?.baseToken?.address, quote = p?.quoteToken?.address;
+    if (base !== mint && quote !== mint) continue;
+    const key = p?.pairAddress ?? `${base}/${quote}/${rows.length}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ side: base === mint ? "base" : "quote", priceUsd: num(p?.priceUsd), priceNative: num(p?.priceNative), liquidityUsd: num(p?.liquidity?.usd) || 0, change24h: num(p?.priceChange?.h24) });
+  }
+  const deepest = (side) => rows.filter((r) => r.side === side && r.priceUsd > 0 && (side === "base" || r.priceNative > 0)).sort((x, y) => y.liquidityUsd - x.liquidityUsd)[0] || null;
+  const liquidityUsd = round(rows.reduce((sum, r) => sum + r.liquidityUsd, 0), 2);
+  const b = deepest("base");
+  if (b) return { priceUsd: b.priceUsd, priceChange24hPct: round(b.change24h, 4), liquidityUsd, from: "base" };
+  const q = deepest("quote");
+  if (q) return { priceUsd: Number((q.priceUsd / q.priceNative).toPrecision(10)), priceChange24hPct: null, liquidityUsd, from: "quote" };
+  return null;
+}
+
+/** The mint accounts, read once on OUR Solana RPC (SOLANA_RPC_URL): each
+ *  account's parsed data carries the mint's decimals, and the answer's
+ *  context names the slot. { accounts: null, slot: null } when the RPC is
+ *  unset, the budget cannot hold the read, or it fails; never a throw. */
+async function mintAccountsOnChain(mints, budget) {
+  const url = (process.env.SOLANA_RPC_URL || "").trim();
+  if (!url || (budget && budget.remaining() < RPC_FLOOR_MS)) return { accounts: null, slot: null };
+  try {
+    const r = await upstreamJson(url, { label: "Solana RPC", step: "getMultipleAccounts", timeoutMs: RPC_MS, budget, method: "POST", body: { jsonrpc: "2.0", id: 1, method: "getMultipleAccounts", params: [mints, { encoding: "jsonParsed" }] } });
+    const value = r?.result?.value;
+    if (r?.error || !Array.isArray(value)) return { accounts: null, slot: null };
+    return { accounts: value, slot: num(r?.result?.context?.slot) };
+  } catch {
+    return { accounts: null, slot: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Jupiter shaping
 // ---------------------------------------------------------------------------
 // Jupiter's audit block omits mintAuthorityDisabled/freezeAuthorityDisabled
@@ -1074,7 +1123,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order. When that search holds no matching Solana pair (a ticker busy on other chains), the mints come from a Solana token index, verified first, and their pairs are read by mint. Each row: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not), with computed signals per row (liquidity and age bands, 24h buy share, turnover, flags). When several mints answer to the query's ticker, the answer names the one with the most liquidity and marks every other one's rows tickerShadow. Resolve a ticker to a mint before calling sol-token-safety or sol-swap-quote. Keyless.",
+      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order. When that search holds no matching Solana pair (a ticker busy on other chains), the mints come from a Solana token index, verified first, and their pairs are read by mint. Each row: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not), with computed signals per row (liquidity and age bands, 24h buy share, turnover, flags). When several mints answer to the query's ticker, the answer names the one with the most liquidity and marks every other one's rows tickerShadow. Resolve a ticker to a mint before calling sol-token-safety or sol-price. Keyless.",
     tags: ["solana", "search", "token", "ticker", "dex", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
@@ -1269,7 +1318,7 @@ export const SOLANA_INTEL_TOOLS = [
   },
 
   // =========================================================================
-  // sol-price - Jupiter price v3, up to 50 mints
+  // sol-price - the deepest DEX pair per mint, decimals and slot on chain
   // =========================================================================
   {
     route: "POST /api/sol-price",
@@ -1278,162 +1327,60 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "USD price for up to 50 Solana token mints in one call from a Solana DEX aggregator's price API: price, 24h change, liquidity, decimals and the block the price was read at. Mints the aggregator does not price come back listed under missing rather than erroring the batch. Pass mint addresses, not tickers (resolve tickers with sol-token-search or sol-token-lookup). Keyless.",
+      `USD prices for up to ${SOL_PRICE_MAX_MINTS} Solana token mints in one batch call: each mint's price and 24h change from the deepest DEX market that trades it, its liquidity, and its decimals with the slot they were read at on chain. A mint nothing prices comes back listed under missing rather than erroring the batch. Pass mint addresses, not tickers (resolve tickers with sol-token-search).`,
     tags: ["solana", "price", "token", "spl", "batch"],
     discovery: {
       bodyType: "json",
-      input: { mints: [MINTS.SOL, MINTS.JUP, MINTS.USDC] },
+      input: { mints: [MINTS.SOL, MINTS.JUP] },
       inputSchema: {
         properties: {
-          mints: { type: "array", items: { type: "string" }, description: "1-50 base58 mint addresses (array, or a comma-separated string)." },
+          mints: { type: "array", items: { type: "string" }, description: `1-${SOL_PRICE_MAX_MINTS} base58 mint addresses (array, or a comma-separated string).` },
         },
         required: ["mints"],
       },
       output: {
         example: {
-          count: 3, missing: [],
-          prices: { [MINTS.SOL]: { priceUsd: 93.7085, priceChange24hPct: 3.93, liquidityUsd: 748142746.9, decimals: 9, blockId: 440919037 }, [MINTS.JUP]: { priceUsd: 0.2035, priceChange24hPct: -2.4, liquidityUsd: 3092234.59, decimals: 6, blockId: 440919030 } },
-          source: "jupiter", fetchedAt: "2026-08-22T12:00:00.000Z",
+          count: 2, missing: [],
+          prices: { [MINTS.SOL]: { priceUsd: 93.7085, priceChange24hPct: 3.93, liquidityUsd: 48142746.9, decimals: 9, blockId: 440919037 }, [MINTS.JUP]: { priceUsd: 0.2035, priceChange24hPct: -2.4, liquidityUsd: 3092234.59, decimals: 6, blockId: 440919037 } },
+          priceFrom: { [MINTS.SOL]: "base", [MINTS.JUP]: "base" },
+          source: "dexscreener", fetchedAt: "2026-11-23T12:00:00.000Z",
         },
       },
     },
     handler: async (i) => {
       let raw = i.mints;
       if (typeof raw === "string") raw = raw.split(",");
-      if (!Array.isArray(raw) || raw.length === 0) throw bad('"mints" is required: 1-50 base58 mint addresses');
-      if (raw.length > 50) throw bad(`"mints" must contain at most 50 entries (got ${raw.length})`);
+      if (!Array.isArray(raw) || raw.length === 0) throw bad(`"mints" is required: 1-${SOL_PRICE_MAX_MINTS} base58 mint addresses`);
+      if (raw.length > SOL_PRICE_MAX_MINTS) throw bad(`"mints" must contain at most ${SOL_PRICE_MAX_MINTS} entries (got ${raw.length})`);
       const mints = [...new Set(raw.map((m) => takeMint(m, "mints[]")))];
-      const data = await upstreamJson(`${jupiterBase()}/price/v3?ids=${mints.join(",")}`, { label: "Jupiter", step: "price", timeoutMs: JUPITER_MS });
+      // The handler's own budget: every read here ends inside it.
+      const budget = currentBudget() || undefined;
+      const chunks = [];
+      for (let k = 0; k < mints.length; k += PAIR_READ_MAX_MINTS) chunks.push(mints.slice(k, k + PAIR_READ_MAX_MINTS));
+      // The pair reads decide the answer; the on-chain read only fills
+      // decimals and the slot, so it runs beside them and may come back empty.
+      const [lists, chain] = await Promise.all([
+        Promise.all(chunks.map((ids) => upstreamJson(`${DEXSCREENER}/tokens/v1/solana/${ids.join(",")}`, { label: "DexScreener", step: "pairs by mint", timeoutMs: DEXSCREENER_MS, budget }))),
+        mintAccountsOnChain(mints, budget),
+      ]);
+      const pairs = lists.flatMap((l) => (Array.isArray(l) ? l : [])).filter((p) => p?.chainId === "solana");
       const prices = {};
+      const priceFrom = {};
       const missing = [];
-      for (const m of mints) {
-        const p = data && typeof data === "object" ? data[m] : null;
-        if (!p || typeof p !== "object") { missing.push(m); continue; }
+      mints.forEach((m, idx) => {
+        const p = priceOfMint(m, pairs);
+        if (!p) { missing.push(m); return; }
+        const acct = chain.accounts ? chain.accounts[idx] : null;
         prices[m] = {
-          priceUsd: num(p.usdPrice),
-          priceChange24hPct: round(p.priceChange24h, 4),
-          liquidityUsd: round(p.liquidity, 2),
-          decimals: num(p.decimals),
-          blockId: num(p.blockId),
+          priceUsd: p.priceUsd,
+          priceChange24hPct: p.priceChange24hPct,
+          liquidityUsd: p.liquidityUsd,
+          decimals: num(acct?.data?.parsed?.info?.decimals),
+          blockId: chain.slot,
         };
-      }
-      return { count: Object.keys(prices).length, missing, prices, source: "jupiter", fetchedAt: stamp() };
-    },
-  },
-
-  // =========================================================================
-  // sol-swap-quote - Jupiter quote
-  // =========================================================================
-  {
-    route: "POST /api/sol-swap-quote",
-    name: "Solana swap quote",
-    slug: "sol-swap-quote", aliases: ["solana-swap-quote-jupiter", "solana-swap-quote", "jupiter-quote"],
-    category: "crypto",
-    price: "$0.003",
-    description:
-      "Executable swap quote on Solana from a DEX aggregator: input and output mint, amount in base units, slippage in bps - returns out amount, minimum out after slippage, price impact percent, the routed DEX labels in hop order with split percentages, the USD value of the swap and the context slot. A real multi-hop route across Solana DEX liquidity, so the number reflects depth, not a spot price. Quote only - nothing is signed or sent. Keyless.",
-    tags: ["solana", "swap", "quote", "dex", "price-impact", "spl"],
-    discovery: {
-      bodyType: "json",
-      input: { inputMint: MINTS.SOL, outputMint: MINTS.USDC, amount: "1000000000", slippageBps: 50 },
-      inputSchema: {
-        properties: {
-          inputMint: { type: "string", maxLength: 44, description: "Base58 mint you sell." },
-          outputMint: { type: "string", maxLength: 44, description: "Base58 mint you buy." },
-          amount: { type: "string", description: "Input amount in base units (integer string; 1 SOL = 1000000000 lamports, 1 USDC = 1000000)." },
-          slippageBps: { type: "number", description: "Slippage tolerance in basis points (0-5000, default 50 = 0.5%)." },
-        },
-        required: ["inputMint", "outputMint", "amount"],
-      },
-      output: {
-        example: {
-          inputMint: MINTS.SOL, outputMint: MINTS.USDC, inAmount: "1000000000", outAmount: "93708783", minOutAmount: "93240240",
-          slippageBps: 50, priceImpactPct: 0, swapUsdValue: 93.7, swapMode: "ExactIn", hops: 2,
-          route: [{ label: "BisonFi", percent: 100, inputMint: MINTS.SOL, outputMint: "Es9v...", inAmount: "1000000000", outAmount: "93720054" }, { label: "SolFi V2", percent: 100, inputMint: "Es9v...", outputMint: MINTS.USDC, inAmount: "93720054", outAmount: "93708783" }],
-          contextSlot: 440919041, source: "jupiter", fetchedAt: "2026-08-22T12:00:00.000Z",
-        },
-      },
-    },
-    handler: async (i) => {
-      const inputMint = takeMint(i.inputMint, "inputMint");
-      const outputMint = takeMint(i.outputMint, "outputMint");
-      if (inputMint === outputMint) throw bad('"inputMint" and "outputMint" must differ');
-      const amountStr = typeof i.amount === "number" ? String(i.amount) : String(i.amount ?? "").trim();
-      if (!/^[1-9]\d{0,29}$/.test(amountStr)) throw bad('"amount" must be a positive integer in base units (string or number, e.g. "1000000000" for 1 SOL)');
-      let slippageBps = 50;
-      if (i.slippageBps != null && i.slippageBps !== "") {
-        slippageBps = Number.parseInt(i.slippageBps, 10);
-        if (!Number.isFinite(slippageBps) || slippageBps < 0 || slippageBps > 5000) throw bad('"slippageBps" must be an integer between 0 and 5000');
-      }
-      const url = `${jupiterBase()}/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountStr}&slippageBps=${slippageBps}`;
-      const q = await upstreamJson(url, { label: "Jupiter", step: "swap quote", timeoutMs: JUPITER_MS, notFound: "Jupiter cannot route that swap (token not tradable or no liquidity)" });
-      const plan = Array.isArray(q?.routePlan) ? q.routePlan : [];
-      return {
-        inputMint,
-        outputMint,
-        inAmount: q?.inAmount != null ? String(q.inAmount) : amountStr,
-        outAmount: q?.outAmount != null ? String(q.outAmount) : null,
-        minOutAmount: q?.otherAmountThreshold != null ? String(q.otherAmountThreshold) : null,
-        slippageBps,
-        priceImpactPct: round(q?.priceImpactPct, 6),
-        swapUsdValue: round(q?.swapUsdValue, 4),
-        swapMode: q?.swapMode ?? null,
-        hops: plan.length,
-        route: plan.slice(0, 12).map((h) => ({
-          label: h?.swapInfo?.label ?? null,
-          percent: num(h?.percent),
-          inputMint: h?.swapInfo?.inputMint ?? null,
-          outputMint: h?.swapInfo?.outputMint ?? null,
-          inAmount: h?.swapInfo?.inAmount != null ? String(h.swapInfo.inAmount) : null,
-          outAmount: h?.swapInfo?.outAmount != null ? String(h.swapInfo.outAmount) : null,
-        })),
-        contextSlot: num(q?.contextSlot),
-        source: "jupiter",
-        fetchedAt: stamp(),
-      };
-    },
-  },
-
-  // =========================================================================
-  // sol-token-lookup - Jupiter token search (mint, ticker or name)
-  // =========================================================================
-  {
-    route: "POST /api/sol-token-lookup",
-    name: "Solana token lookup",
-    slug: "sol-token-lookup", aliases: ["solana-token-lookup-jupiter", "solana-token-lookup"],
-    category: "crypto",
-    price: "$0.002",
-    description:
-      "Resolve a Solana token by mint, ticker or name through a Solana DEX aggregator's token index and get its profile in one read: name, symbol, decimals, price, market cap, FDV, liquidity, holder count, circulating and total supply, verified flag, organic score (the aggregator's wash-trade-resistant activity score), tags, launchpad, dev wallet, first pool and date, audit facts (mint and freeze authority disabled, top-holder share, dev mints) and 24h stats (price, holder and liquidity change, buy/sell volume, traders, net buyers). Up to 20 matches for a name search; a mint returns its exact match first. Keyless.",
-    tags: ["solana", "token", "lookup", "metadata", "ticker", "spl"],
-    discovery: {
-      bodyType: "json",
-      input: { query: MINTS.JUP, limit: 3 },
-      inputSchema: {
-        properties: {
-          query: { type: "string", maxLength: 80, description: "Mint address, ticker, or token name (1-80 chars)." },
-          limit: { type: "number", description: "Matches to return (1-20, default 5)." },
-        },
-        required: ["query"],
-      },
-      output: {
-        example: {
-          query: MINTS.JUP, count: 1,
-          tokens: [{ mint: MINTS.JUP, name: "Jupiter", symbol: "JUP", decimals: 6, priceUsd: 0.2034, marketCapUsd: 675335464.98, fdvUsd: 1395785031.78, liquidityUsd: 3092754.48, holderCount: 835540, circulatingSupply: 3320312968.08, totalSupply: 6862431164.93, isVerified: true, organicScore: 99.31, organicScoreLabel: "high", tags: ["strict", "verified", "defi"], audit: { mintAuthorityDisabled: true, freezeAuthorityDisabled: true, topHoldersPct: 15.28, devBalancePct: null, devMints: 1 }, mintAuthority: null, freezeAuthority: null, launchpad: null, dev: "JUPh...", firstPool: { id: "2psp...", createdAt: "2024-01-29T17:33:29Z" }, stats24h: { priceChangePct: -2.4, holderChangePct: 0.1, liquidityChangePct: -1.2, buyVolumeUsd: 26000000, sellVolumeUsd: 25000000, numBuys: 1696, numSells: 1735, numTraders: 1191, numNetBuyers: 668 }, createdAt: "2025-07-25T13:18:02Z" }],
-          source: "jupiter", fetchedAt: "2026-08-22T12:00:00.000Z",
-        },
-      },
-    },
-    handler: async (i) => {
-      if (typeof i.query !== "string" || !i.query.trim()) throw bad('"query" is required (mint address, ticker, or token name)');
-      const query = i.query.trim();
-      if (query.length > 80) throw bad('"query" must be 80 characters or fewer');
-      const limit = takeLimit(i.limit, 5, 20);
-      const list = await upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(query)}`, { label: "Jupiter", step: "token search", timeoutMs: JUPITER_MS });
-      let rows = (Array.isArray(list) ? list : []).map(shapeJupToken).filter(Boolean);
-      // Exact mint match first when the query is an address.
-      if (BASE58_RE.test(query)) rows.sort((a, b) => (b.mint === query) - (a.mint === query));
-      return { query, count: Math.min(rows.length, limit), tokens: rows.slice(0, limit), source: "jupiter", fetchedAt: stamp() };
+        priceFrom[m] = p.from;
+      });
+      return { count: Object.keys(prices).length, missing, prices, priceFrom, source: "dexscreener", fetchedAt: stamp() };
     },
   },
 ];
@@ -1443,18 +1390,35 @@ export const SOLANA_INTEL_TOOLS = [
 // that read Jupiter end their description with it; the vendor-name check in
 // scripts/test-no-third-party-names.js allows it there and nowhere else.
 export { JUPITER_ATTRIBUTION };
-const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-price", "sol-swap-quote", "sol-token-lookup", "sol-token-search"]);
+const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-token-search"]);
 for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) attribute(t, "jupiter");
+// RugCheck's report is the source of these three answers (the safety read's
+// summary, the trimmed report, the holder table and count), credited by name
+// and link on every answer (src/data-attribution.js).
+const RUGCHECK_CREDITED = new Set(["sol-token-safety", "sol-token-report", "sol-token-holders"]);
+for (const t of SOLANA_INTEL_TOOLS) if (RUGCHECK_CREDITED.has(t.slug)) creditAnswers(t, RUGCHECK_ATTRIBUTION);
+
+/** The token index entries for a mint, ticker or name, exact mint match
+ *  first: one input the token brief reads (src/tools/token-brief-kit.js) and
+ *  computes from. Not a catalog route. */
+export async function tokenIndexLookup(query, limit = 1) {
+  const q = String(query || "").trim();
+  if (!q || q.length > 80) throw bad('"query" must be 1-80 characters');
+  const list = await upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(q)}`, { label: "Jupiter", step: "token search", timeoutMs: JUPITER_MS });
+  const rows = (Array.isArray(list) ? list : []).map(shapeJupToken).filter(Boolean);
+  if (BASE58_RE.test(q)) rows.sort((a, b) => (b.mint === q) - (a.mint === q));
+  return { query: q, count: Math.min(rows.length, limit), tokens: rows.slice(0, limit) };
+}
 
 // Exported for offline unit tests (pure shaping, no network).
-export const __test = { PAIR_SIGNAL_FLAGS, pairSignals, takeMint, takeLimit, searchKeys, pairMatchesQuery, mergeFallbackRows, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
+export const __test = { PAIR_SIGNAL_FLAGS, pairSignals, takeMint, takeLimit, searchKeys, pairMatchesQuery, mergeFallbackRows, shapeHolders, shapeMarkets, shapePair, shapeJupToken, priceOfMint, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
   DEADLINES: Object.freeze({ HANDLER_BUDGET_MS, RUGCHECK_SUMMARY_MS, RUGCHECK_REPORT_MS, JUPITER_MS, DEXSCREENER_MS, RPC_MS, RPC_FLOOR_MS, FULL_REPORT_FLOOR_MS, RUGCHECK_FALLBACK_MS }), reportReadsInflight: () => reportReads.inflightSize() };
 
 // Free text in these results is written by third parties (headlines, posts,
 // casts, token names and descriptions, page titles). Anyone can mint a token or
 // publish a post, so this is the cheapest prompt-injection delivery vehicle in
 // the catalog: flag it as data, never instructions, the way site-crawl does.
-const UNTRUSTED_TEXT_SLUGS = new Set(["sol-trending", "sol-token-search", "sol-token-pairs", "sol-token-lookup", "sol-token-report", "sol-token-safety"]);
+const UNTRUSTED_TEXT_SLUGS = new Set(["sol-trending", "sol-token-search", "sol-token-pairs", "sol-token-report", "sol-token-safety"]);
 for (const t of SOLANA_INTEL_TOOLS) {
   if (!UNTRUSTED_TEXT_SLUGS.has(t.slug)) continue;
   const inner = t.handler;

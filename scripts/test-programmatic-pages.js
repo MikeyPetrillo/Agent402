@@ -305,7 +305,11 @@ const insiderData = {
   kind: "insider", ticker: "EXMP", name: "Example Corp", cik: "0000000042",
   startDate: "2026-05-24", endDate: "2026-08-22", windowDays: 90, filingsInWindow: 17, filingsRead: 3,
   latestFiledDate: "2026-08-12",
-  rows: [{ insider: "Doe Jane", role: "Chief Financial Officer", date: "2026-08-10", filedDate: "2026-08-12", code: "S", kind: "open-market sale", shares: 5000, price: 120.5, ownedAfter: 12345, url: "https://www.sec.gov/x/1.xml" }],
+  rows: [
+    { insider: "Doe Jane", role: "Chief Financial Officer", date: "2026-08-10", filedDate: "2026-08-12", code: "S", kind: "open-market sale", shares: 5000, price: 120.5, ownedAfter: 12345, url: "https://www.sec.gov/x/1.xml" },
+    { insider: "Roe Rick", role: "Director", date: "2026-08-04", filedDate: "2026-08-06", code: "P", kind: "open-market purchase", shares: 1000, price: 118, ownedAfter: 4000, url: "https://www.sec.gov/x/2.xml" },
+    { insider: "Doe Jane", role: "Chief Financial Officer", date: "2026-07-20", filedDate: "2026-07-22", code: "M", kind: "option exercise", shares: 2000, price: 40, ownedAfter: 17345, url: "https://www.sec.gov/x/3.xml" },
+  ],
 };
 const fundData = {
   kind: "fund", slug: "example-capital", name: "Example Capital", cik: "0000000123",
@@ -321,6 +325,7 @@ const dossierData = {
   latest10K: { form: "10-K", filingDate: "2025-10-31", reportDate: "2025-09-27", accession: "a5" },
   latest10Q: { form: "10-Q", filingDate: "2026-07-31", reportDate: "2026-06-27", accession: "a3" },
   latest8K: null, form4Count: 2, filingsIndexed: 5,
+  activity: { since: "2025-08-22", total: 12, byForm: [{ form: "4", n: 6 }, { form: "8-K", n: 4 }, { form: "10-Q", n: 2 }], eightKItems: [] },
 };
 
 const pages = {
@@ -331,6 +336,20 @@ const pages = {
   hubFund: hubPage({ kind: "fund", baseUrl: BASE }),
   hubDossier: hubPage({ kind: "dossier", baseUrl: BASE }),
 };
+
+// Thin pages: served, but noindex and out of the sitemap until the data fills
+// them (too few insider rows, no holdings table, no results and no activity).
+{
+  const { entityThin, THIN_INSIDER_ROWS } = await import("../src/programmatic-pages.js");
+  const thinInsider = { ...insiderData, rows: insiderData.rows.slice(0, THIN_INSIDER_ROWS - 1) };
+  const thinFund = { ...fundData, holdingsAvailable: false, holdings: [] };
+  const { activity, ...thinDossier } = dossierData;
+  ok(entityThin("insider", thinInsider) && entityThin("insider", { ...insiderData, partial: true }) && !entityThin("insider", insiderData), `an insider page under ${THIN_INSIDER_ROWS} rows (or partial) is thin`);
+  ok(entityThin("fund", thinFund) && !entityThin("fund", fundData) && entityThin("dossier", thinDossier) && !entityThin("dossier", dossierData), "a fund page with no holdings and a company page with no results or activity are thin");
+  ok(/noindex/.test(robotsOf(insiderPage({ ticker: "EXMP", data: thinInsider, baseUrl: BASE }))) && /noindex/.test(robotsOf(fundPage({ slug: "example-capital", data: thinFund, baseUrl: BASE }))) && /noindex/.test(robotsOf(dossierPage({ ticker: "EXMP", data: thinDossier, baseUrl: BASE }))), "each thin page carries noindex, follow");
+  const byInsider = (pages.insider.match(/<h2 class="pg-h2">By insider<\/h2>[\s\S]*?<\/table>/) || [""])[0];
+  ok(/Doe Jane/.test(byInsider) && /Roe Rick/.test(byInsider), "the insider page totals the rows per insider");
+}
 
 // Each hub's buy copy states what that family's paid report reads, and only
 // the ticker hubs promise pages for tickers off the list (a manager page needs

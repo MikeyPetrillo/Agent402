@@ -84,8 +84,9 @@ on:
         description: "Ticker for mode=demo (US symbol)."
         default: "NVDA"
 
-# Least privilege by default: jobs get a read-only GITHUB_TOKEN. The only job
-# that needs more (publish → OIDC) overrides this with its own permissions block.
+# Least privilege by default: jobs get a read-only GITHUB_TOKEN. A job that
+# needs more (publish → OIDC, github-release → tags and releases) overrides
+# this with its own permissions block.
 permissions:
   contents: read
 
@@ -166,13 +167,16 @@ jobs:
             done
             exit 0
           fi
-          # Collect subject lines for every commit in this push range.
+          # Collect subject lines for every commit in this push range, less an
+          # outside contributor's commits (scripts/marker-subjects.js: a merge
+          # of another account's pull request and what it brings in, and a
+          # squash merge's title), so outside text never starts a job.
           # Fall back to the head commit alone if BEFORE is empty/zero
           # (new branch or force-push with no shared ancestor) or unreachable.
           if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            TITLES=$(git log -1 --format='%s' "$AFTER")
+            TITLES=$(node scripts/marker-subjects.js "$AFTER^!" || true)
           else
-            TITLES=$(git log --format='%s' "$BEFORE..$AFTER" 2>/dev/null || git log -1 --format='%s' "$AFTER")
+            TITLES=$(node scripts/marker-subjects.js "$BEFORE..$AFTER" || node scripts/marker-subjects.js "$AFTER^!" || true)
           fi
           # On main a pending run can be replaced by a newer push before it
           # starts (one pending run per concurrency group), and the pushed range
@@ -185,7 +189,7 @@ jobs:
             LAST=$(node scripts/marker-base.js || true)
             if printf '%s' "$LAST" | grep -qE '^[0-9a-f]{40}$' && git cat-file -e "$LAST^{commit}" 2>/dev/null && git merge-base --is-ancestor "$LAST" "$AFTER" 2>/dev/null; then
               echo "Reading subjects since the last run that read its markers: $LAST"
-              SINCE=$(git log --format='%s' "$LAST..$AFTER")
+              SINCE=$(node scripts/marker-subjects.js "$LAST..$AFTER")
               TITLES=$(printf '%s\n%s\n' "$TITLES" "$SINCE" | awk 'NF && !seen[$0]++')
             else
               echo "No earlier run to read from; the pushed range stands."
@@ -239,7 +243,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       # The gate reads deploy.yml with the real YAML parser rather than a
       # bespoke regex, so it needs node_modules. Omitting this is what made its
@@ -250,13 +254,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
@@ -264,7 +268,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       - id: gate
@@ -285,9 +288,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 viem@2.52.2
 
       # Run FIRST (before the slow faucet-funding E2E) for fast iteration. Live
       # proof of the agent402-client 402-inspection preflight (v0.6.0): a real Base
@@ -558,9 +561,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 @x402/svm@2.30.0 @solana/kit@8.6.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 @x402/svm@2.32.0 @solana/kit@8.6.0 viem@2.52.2
       - name: Sweep the catalog via Solana settlement
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
@@ -583,9 +586,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Refresh stale Bazaar listings
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -621,9 +624,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Register missing Bazaar routes
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -655,9 +658,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Sweep the catalog via Base settlement (4 batches)
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -683,9 +686,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Drain the burner into the revenue wallet via paid tool calls
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -713,16 +716,22 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
     steps:
-      - name: Install Stripe purl
+      # The burner key is handed to this binary below, so it is one pinned
+      # release checked against its published SHA-256, never a tap or a clone
+      # of whatever the default branch holds that day. A new release is a
+      # version and checksum change here, read before it is taken.
+      - name: Install Stripe purl (pinned release, checksum verified)
+        env:
+          PURL_VERSION: v0.2.13
+          PURL_SHA256: cf3b393d53fca419ba48b08a5443312e914625f9786a596a6cf72a83a95a4ab6
         run: |
-          if brew install stripe/purl/purl 2>&1; then
-            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
-          else
-            echo "brew install failed — building from source"
-            git clone --depth 1 https://github.com/stripe/purl /tmp/purl
-            cargo install --locked --path /tmp/purl/cli
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
+          set -euo pipefail
+          dir="$RUNNER_TEMP/purl-bin"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/purl" "https://github.com/stripe/purl/releases/download/${PURL_VERSION}/purl-linux-amd64"
+          echo "${PURL_SHA256}  $dir/purl" | sha256sum -c -
+          chmod 0755 "$dir/purl"
+          echo "$dir" >> "$GITHUB_PATH"
       - name: Show purl CLI surface (for the logs)
         run: |
           purl --version || true
@@ -790,9 +799,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 viem@2.52.2
       - name: Run the demo (real paid buys from the burner)
         env:
           AGENT_KEY: ${{ secrets.BURNER_KEY }}
@@ -824,7 +833,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Build the SBOMs
         run: node scripts/sbom-release.js --out sbom
       - name: Upload the SBOMs
@@ -903,7 +912,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Full history: scripts/test-page-dates.js dates every page module
@@ -913,7 +921,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -924,13 +932,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -941,7 +949,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -958,7 +965,7 @@ jobs:
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
-      - name: CDP kit live check (real balances + onramp session — skips without secrets)
+      - name: CDP kit live check (onramp session and SQL — skips without secrets)
         env:
           CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
           CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
@@ -988,7 +995,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: node openclaw/test-real-install.js
       # The same file against the PREVIOUS pin, so raising the pin never drops
@@ -999,7 +1005,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: node openclaw/test-real-install.js
       # The pinned host (2026.9.x and later) requires Node >= 24.16; the lane itself
@@ -1007,14 +1012,14 @@ jobs:
       # the lane's version is restored right after.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       # elizaos-plugin-agent402 against a REAL elizaOS runtime (2026-09-15): the
       # packed artifact + @elizaos/core, plugin-sql (PGlite) and plugin-bootstrap
       # from the registry, a real AgentRuntime, the runtime's own dispatcher on a
       # plain user message. Once on `latest` (1.x) and once on `beta` (2.x). The
       # registry review asked for exactly this; a stub runtime proved nothing.
       # Same key shadowing as above: third-party install with network access.
-      # AFTER the Node 22 restore: the step boots src/server.js, whose native
+      # AFTER the lane's Node restore: the step boots src/server.js, whose native
       # modules were built for the lane's Node (a first cut ran under the
       # openclaw step's Node 24 and the server never answered).
       - name: elizaOS plugin against a REAL elizaOS runtime (latest + beta)
@@ -1032,9 +1037,9 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           SOCKET_API_TOKEN: ""
           OPEN_METEO_API_KEY: ""
+          BLS_API_KEY: ""
           COINGECKO_API_KEY: ""
           TEST_PAYER_STELLAR_SECRET: ""
           CLAWHUB_TOKEN: ""
@@ -1129,12 +1134,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1145,13 +1149,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1162,7 +1166,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # The official x402 MCP client, for test-mcp-x402.js and
@@ -1178,9 +1181,8 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
-        run: npm install --no-save --ignore-scripts --no-audit --no-fund @x402/mcp@2.30.0
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @x402/mcp@2.32.0
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
       # the reveal suite, burger-aria-label, compare-scroll,
@@ -1197,12 +1199,6 @@ jobs:
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Offline suites (7 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a3 1
-
-      - name: Code-run-kit tests (E2B sandbox — validation always runs; live calls opt-in via E2B_LIVE_TEST=1)
-        run: node scripts/test-code-run-kit.js
-        env:
-          E2B_LIVE_TEST: ${{ secrets.E2B_API_KEY && '1' || '' }}
-          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
 
       - name: Offline suites (20 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a3 2
@@ -1261,12 +1257,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1277,13 +1272,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1294,7 +1289,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -1456,12 +1450,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1472,13 +1465,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1489,7 +1482,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # The real HTTP clients scripts/test-402-real-clients.js reads a full-rail
@@ -1506,7 +1498,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
         run: |
           python3 -m venv "$RUNNER_TEMP/real-clients"
           "$RUNNER_TEMP/real-clients/bin/python" -m pip install --quiet --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r /dev/stdin <<'PINS'
@@ -1647,12 +1638,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1663,13 +1653,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1680,7 +1670,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -1798,12 +1787,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1814,13 +1802,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1831,7 +1819,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -1893,12 +1880,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -1909,13 +1895,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -1926,7 +1912,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # scripts/test-facilitator-access-policy.js boots facilitator/index.js,
@@ -1940,7 +1925,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci --ignore-scripts
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -1957,7 +1941,7 @@ jobs:
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
-      - name: Offline suites (28 scripts, one process each)
+      - name: Offline suites (30 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b2 1
 
   test-unit-b4:
@@ -2017,12 +2001,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2033,13 +2016,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2050,7 +2033,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -2124,12 +2106,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2140,7 +2121,7 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: ffmpeg for the media-kit tests (ubuntu-latest ships none; test-media SKIPPED on every CI run until 2026-09-06)
         timeout-minutes: 10
         run: bash scripts/ci-apt-install.sh ffmpeg && ffmpeg -version | head -1
@@ -2149,7 +2130,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2160,7 +2141,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # NO Playwright in this lane on purpose: it runs no browser-driven
@@ -2285,12 +2265,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2301,13 +2280,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2318,7 +2297,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       - name: Start server in free mode
@@ -2430,7 +2408,7 @@ jobs:
         run: bash scripts/test-heartbeat-probe.sh
 
       # Strict FREE_MODE sweep of paid tools that do NOT burn Brave/OpenAI/
-      # OpenRouter/E2B/FRED/Neynar/etc. Fails on 502/503/504
+      # OpenRouter/FRED/Neynar/etc. Fails on 502/503/504
       # (unlike test-all.js NETWORK leniency — that hole kept gov-data green
       # while dead; issue #730). Filter never calls metered routes; own-boot
       # strips keys too. Uses the shared FREE_MODE server when TARGET_URL is set.
@@ -2484,12 +2462,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2500,13 +2477,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2517,7 +2494,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       - name: Deep security audit (payment gate + PoW replay/slug-bind/tamper + SSRF + attribution; boots paid-mode)
@@ -2547,7 +2523,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: |
           X402_SYNC_ON_START=false FREE_MODE=true PORT=3091 node src/server.js > /tmp/a402-test.log 2>&1 &
@@ -2757,12 +2732,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2773,13 +2747,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2790,7 +2764,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # Moved here from test-unit-b (2026-08-25 rebalance): self-booting suites
@@ -2832,12 +2805,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -2848,7 +2820,7 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: ffmpeg for the three media tools in the example sweep (ubuntu-latest ships none; they answered 503 "not installed" once that stopped being a silent 422)
         timeout-minutes: 10
         run: bash scripts/ci-apt-install.sh ffmpeg && ffmpeg -version | head -1
@@ -2859,7 +2831,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -2870,7 +2842,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # Chromium is ~150 MB from Playwright's CDN plus an apt round for fonts,
@@ -2912,7 +2883,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
         run: bash scripts/ci-apt-install.sh --playwright-chromium
       # The CI data keys reach THIS step alone: the server it boots is the only
       # process that reads them (scripts/test-ci-secretless-install.js). The CI
@@ -2925,16 +2895,23 @@ jobs:
       - name: Start server in free mode (the strict sweep's server; the CI data keys)
         env:
           OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
+          # The BLS-backed macro tools (fred-series, sahm-rule, cpi-yoy,
+          # unemployment-rate, fed-funds) read BLS v2 with it, keyless v1 without.
+          BLS_API_KEY: ${{ secrets.BLS_CI_API_KEY }}
+          # The sweep's per-run BLS read cap (BLS_RUN_READ_CAP in
+          # scripts/test-non-metered-examples.js): past it a BLS read answers
+          # the cap refusal, never another query on the key.
+          BLS_DAILY_MAX: "12"
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_CI_API_KEY }}
           COINGECKO_API_TIER: pro
           COINGECKO_DAILY_MAX: "40"
-          COINGECKO_MAX_PER_MIN: "30"
+          COINGECKO_MAX_PER_MIN: "40"
         run: |
           cg=keyless; if [ -n "$COINGECKO_API_KEY" ]; then cg=keyed; fi
           om=keyless; if [ -n "$OPEN_METEO_API_KEY" ]; then om=keyed; fi
-          echo "CoinGecko: $cg; Open-Meteo: $om"
-          echo "NON_METERED_CG_MODE=$cg" >> "$GITHUB_ENV"
-          echo "NON_METERED_OM_MODE=$om" >> "$GITHUB_ENV"
+          bls=keyless; if [ -n "$BLS_API_KEY" ]; then bls=keyed; fi
+          echo "CoinGecko: $cg; Open-Meteo: $om; BLS: $bls"
+          { echo "NON_METERED_CG_MODE=$cg"; echo "NON_METERED_OM_MODE=$om"; } >> "$GITHUB_ENV"
           # The run's own operator token: the CoinGecko check after the sweeps
           # reads the server's read count from the operator view with it.
           token=$(openssl rand -hex 24)
@@ -2960,7 +2937,7 @@ jobs:
         run: node scripts/test-crypto-kit.js
 
       # The strict sweep runs FIRST so its sampled CoinGecko calls land before
-      # the lenient sweep touches that shared 30/min budget; then test-all hands
+      # the lenient sweep touches that shared minute budget; then test-all hands
       # it every route it covers (TEST_ALL_SKIP_STRICT_COVERED) and sweeps the rest.
       - name: Non-metered paid examples (strict — 502/503/504 fail; NETWORK leniency hole)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-non-metered-examples.js
@@ -2994,7 +2971,6 @@ jobs:
           BRAVE_SUGGEST_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
@@ -3087,12 +3063,11 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           # Restores ~/.npm keyed on package-lock.json. `npm ci` still runs and
           # still installs exactly what the lockfile pins, so this only saves
           # the network fetch - a stale or poisoned cache cannot change which
@@ -3103,13 +3078,13 @@ jobs:
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         # F07: shadow the job-scope provider keys to EMPTY for this step only, so
@@ -3120,7 +3095,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
       # Chromium is ~150 MB from Playwright's CDN plus an apt round for fonts,
@@ -3162,7 +3136,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
         run: bash scripts/ci-apt-install.sh --playwright-chromium
       - name: Start server in free mode
         run: |
@@ -3252,7 +3225,7 @@ jobs:
           echo "=== kit: live network tools ==="
           curl -s -X POST localhost:3000/api/http-check -H 'Content-Type: application/json' -d '{"url":"https://example.com"}' | jq -c '{up, status, latencyMs}'
           curl -s -X POST localhost:3000/api/tls-cert -H 'Content-Type: application/json' -d '{"host":"github.com"}' | jq -c '{subject, issuer, daysRemaining, chainTrusted}'
-          curl -s -X POST localhost:3000/api/whois -H 'Content-Type: application/json' -d '{"domain":"github.com"}' | jq -c '{registrar, created, expires}'
+          curl -s -X POST localhost:3000/api/whois -H 'Content-Type: application/json' -d '{"domain":"github.com"}' | jq -c '{registered, ageDays, daysToExpiry}'
           curl -s -X POST localhost:3000/api/robots-check -H 'Content-Type: application/json' -d '{"url":"https://www.google.com/search","userAgent":"TestBot"}' | jq -c '{allowed, matchedRule}'
           curl -s -X POST localhost:3000/api/sitemap -H 'Content-Type: application/json' -d '{"url":"https://www.sitemaps.org/sitemap.xml"}' | jq -c '{type, count}'
           echo "=== discovery surfaces ==="
@@ -3307,6 +3280,12 @@ jobs:
 
       - name: Hamburger menu aria-label toggles with aria-expanded (real browser click, not a static string check)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-burger-aria-label.js
+
+      - name: Copied text carries no word joiner or no-break space the widow pass put in (real browser copy event)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-copy-joiners.js
+
+      - name: Phone and touch checks (pricing badge, no-match search line, 24 px arrow links, reports h1 on the scale, status strip by tap; real browser)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-phone-ux.js
 
       - name: Input labels (every text input has an accessible name; session replay stays off)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-input-labels.js
@@ -3389,23 +3368,22 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
@@ -3413,7 +3391,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
 
@@ -3469,23 +3446,22 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
@@ -3493,7 +3469,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
 
@@ -3604,23 +3579,22 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       # node_modules restored by lockfile hash (2026-08-25): npm ci was 13-17 s in
       # every lane. On a hit the install is skipped outright, so no install script
       # runs at all - stricter than the secretless-env install below. Native
-      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
+      # modules (better-sqlite3) ship prebuilt per Node ABI, hence node24 in the key.
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies (secretless)
         if: steps.nm-cache.outputs.cache-hit != 'true'
         env:
@@ -3628,7 +3602,6 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
 
@@ -3682,7 +3655,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       # NOTE: this job and the test lanes are the ONLY installs that still run
       # dependency lifecycle scripts, because better-sqlite3 downloads its
       # prebuilt binary from one (the server cannot boot without it). Every
@@ -3718,9 +3691,9 @@ jobs:
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
-          E2B_API_KEY: ""
           SOCKET_API_TOKEN: ""
           OPEN_METEO_API_KEY: ""
+          BLS_API_KEY: ""
           COINGECKO_API_KEY: ""
           TEST_PAYER_STELLAR_SECRET: ""
           CLAWHUB_TOKEN: ""
@@ -3894,9 +3867,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
-      # Trusted publishing (OIDC) needs npm >= 11.5.1; node 22 ships npm 10.x.
+      # Trusted publishing (OIDC) needs npm >= 11.5.1, pinned here whatever npm the runner's Node ships.
       # Pinned exactly (our own supply-chain doctrine: no floating installs of
       # anything that can execute). Still 11.x, the line every publish so far
       # has gone out on; npm 12's default of disabling install scripts no
@@ -4007,7 +3980,8 @@ jobs:
               # the ref.
               echo "--- npm exchange verdict, every publishable package ---"
               UNMATCHED_PENDING=""
-              for DIR in mcp tollbooth client adapters/*/; do
+              # Every directory a publish step below enters (scripts/test-deploy-release-order.js holds the two lists equal).
+              for DIR in mcp tollbooth client openclaw adapters/*/; do
                 [ -f "$DIR/package.json" ] || continue
                 PKG=$(node -p "const p=require('./$DIR/package.json'); p.private ? '' : (p.name || '')" 2>/dev/null || echo "")
                 [ -n "$PKG" ] || continue
@@ -5150,7 +5124,7 @@ jobs:
       # before it shipped (2026-08-25). Cache the fetch instead of skipping it.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - name: Install dependencies for the production smoke check
         run: npm ci --ignore-scripts
@@ -5232,6 +5206,9 @@ jobs:
           ck "robots welcomes AI crawlers" 'has "$PROD/robots.txt" GPTBot'
           ck "MCP connector on landing"  'has "$PROD/" agent402-mcp'
           ck "MCP connector in llms.txt" 'has "$PROD/llms.txt" agent402-mcp'
+          # The short index's bound (scripts/test-front-door.js measures the tree under test).
+          LLMS_BYTES=$(curl -sf --max-time 20 "$PROD/llms.txt" | wc -c | tr -d ' ')
+          ck "llms.txt under 16,384 bytes ($LLMS_BYTES)" '[ "${LLMS_BYTES:-0}" -gt 1000 ] && [ "${LLMS_BYTES:-0}" -lt 16384 ]'
           ck "unit-convert tool page"    'has "$PROD/tools/unit-convert" "Unit convert"'
           ck "guides with TechArticle JSON-LD" 'has "$PROD/guides/x402-in-5-minutes" TechArticle'
           [ "$FAILS" -eq 0 ] || { echo "$FAILS production surface(s) regressed"; exit 1; }
@@ -5599,3 +5576,29 @@ jobs:
           MODE=sweep PAY_NETWORK=base SLUGS="$SLUGS" REQUIRE_SLUGS=1 MAX_PRICE_USD="$MAXP" STALE_DAYS=0 BATCH_COUNT=1 node scripts/refresh-bazaar.js; RB=$?
           set -e
           [ "$RB" = "0" ] || echo "::warning::A price-change buy did not complete (exit $RB): $SLUGS. Run bazaar-keepalive.yml with those slugs and stale_days=0."
+
+  # The GitHub release for package.json's version, cut from its CHANGELOG.md
+  # section once that version is live: only after a deploy from main
+  # succeeded, and only when no release of that version exists yet (a tag made
+  # by hand is released as it is). The job's token can write the tree's tags
+  # and releases and nothing else; it installs no packages
+  # (scripts/github-release.js imports node: only; scripts/test-github-release.js).
+  github-release:
+    needs: [deploy]
+    if: >-
+      !cancelled() && needs.deploy.result == 'success'
+      && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create the release for this version when none exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+        run: node scripts/github-release.js

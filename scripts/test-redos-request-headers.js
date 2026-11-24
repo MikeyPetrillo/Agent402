@@ -130,7 +130,12 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   // Read only with MCP_OAUTH=on and credits on sale (off on the boots below).
   const mcpOAuth = await import("../src/mcp-oauth.js");
   const creditsAccount = await import("../src/credits-account.js");
+  // Read only while the load gate sheds (src/discovery-snapshots.js), which the boots below never do.
+  const snapshots = (await import("../src/discovery-snapshots.js")).createDiscoverySnapshots();
+  snapshots.keep("/llms.txt", Buffer.from("x"), { etag: '"a"' });
+  const snapRes = { set() { return this; }, status() { return this; }, end() { return this; } };
   const readers = {
+    "discovery-snapshots serve (if-none-match)": (v) => snapshots.serve({ method: "GET", path: "/llms.txt", originalUrl: "/llms.txt", headers: { "if-none-match": v } }, snapRes),
     "mcp-oauth bearerShape (authorization)": (v) => mcpOAuth.bearerShape(v),
     "credits-account readCookie (cookie)": (v) => creditsAccount.readCookie({ headers: { cookie: v } }, "a402_oauth"),
     "mpp-offer-gate requestOptsIntoMppOffers (x-payment-offers)": (v) => offerGate.requestOptsIntoMppOffers({ headers: { "x-payment-offers": v } }),
@@ -196,7 +201,7 @@ const srv = await bootPaidServer({
     AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "1", MPP_SECRET_KEY: "redos-headers-local-secret",
     X402_PAYWALL_PROBES_PER_CYCLE: "0", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
     // The referral gate reads its own headers on its unpaid 402 (the facilitator is never reached).
-    REFERRAL_PAY_TO: "0x00000000000000000000000000000000000000a1", REFERRAL_FACILITATOR_URL: "http://127.0.0.1:9/", REFERRAL_SIGNER_KEY: "11".repeat(32), REFERRAL_SLUGS: "hash,v1-chat-metered", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_SETUP_URL: "https://setup.example/referral", REFERRAL_COMMISSION_BPS: "default:1234", REFERRAL_MERCHANT_ID: "4242", REFERRAL_PAYOUT_ADDRESS: "0x00000000000000000000000000000000000000b2",
+    RESALE_CLEARED_FOR_TEST: "v1-chat-metered", REFERRAL_PAY_TO: "0x00000000000000000000000000000000000000a1", REFERRAL_FACILITATOR_URL: "http://127.0.0.1:9/", REFERRAL_SIGNER_KEY: "11".repeat(32), REFERRAL_SLUGS: "hash,v1-chat-metered", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_SETUP_URL: "https://setup.example/referral", REFERRAL_COMMISSION_BPS: "default:1234", REFERRAL_MERCHANT_ID: "4242", REFERRAL_PAYOUT_ADDRESS: "0x00000000000000000000000000000000000000b2",
   },
 });
 

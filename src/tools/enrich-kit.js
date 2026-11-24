@@ -1,11 +1,11 @@
 // Entity/enrichment kit — who-is-this-company/person/site lookups for agents:
-// GLEIF legal-entity records (LEI), Wikidata entity facts, Gravatar existence
-// signal, GitHub repository enrichment, and site favicon capture.
+// GLEIF legal-entity records (LEI), Wikidata entity facts, GitHub repository
+// enrichment, and site favicon capture.
 //
 // Every upstream is KEYLESS — no new required env vars. github-repo optionally
 // sends `Authorization: Bearer ${GITHUB_TOKEN}` when that env var is set (lifts
 // the shared 60 req/hr/IP ceiling to 5k/hr); env-gated no-op if unset, never
-// required. All five tools reach the network and live in WALLET_ONLY_SLUGS.
+// required. All four tools reach the network and live in WALLET_ONLY_SLUGS.
 //
 // SSRF: favicon-grab takes a caller URL and rides safeFetch/assertPublicUrl
 // end-to-end (page fetch AND the icon fetch derived from the page's HTML).
@@ -19,8 +19,8 @@
 // Covered by scripts/test-enrich-kit.js (offline validation; live upstream
 // checks opt-in via ENRICH_LIVE_TEST=1).
 
-import { createHash } from "node:crypto";
 import { ssrfDispatcher, safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
@@ -163,21 +163,6 @@ function renderSnak(snak) {
     default:
       return null;
   }
-}
-
-// ============================================================================
-// gravatar-check — MD5/SHA-256 the email (pure CPU), then one small probe.
-// ============================================================================
-const HASH_RE = /^[a-f0-9]{32}$|^[a-f0-9]{64}$/;
-
-async function gravatarProbe(url, upstream, accept = "*/*") {
-  const res = await upstreamFetch(url, {
-    method: "GET",
-    headers: { Accept: accept, "User-Agent": "Agent402/1.0 (+https://agent402.tools)" },
-    dispatcher: ssrfDispatcher,
-  }, { label: upstream, step: "probe", timeoutMs: TIMEOUT_MS, tag: "[enrich]" });
-  if (res.status === 429) throw bad(`${upstream} rate limit reached - retry shortly`, 503);
-  return res;
 }
 
 // ============================================================================
@@ -469,79 +454,6 @@ export const ENRICH_TOOLS = [
   },
 
   // ===========================================================================
-  // gravatar-check — email → avatar existence + public profile signal.
-  // ===========================================================================
-  {
-    route: "POST /api/gravatar-check",
-    name: "Gravatar existence check",
-    slug: "gravatar-check",
-    category: "network",
-    price: "$0.001",
-    description:
-      "Check whether an email address has a Gravatar: hashes the normalized email (MD5, pure CPU - the raw address is never sent upstream), probes gravatar.com for an avatar, and fetches the public profile when one exists (display name, username, profile URL). Accepts a raw email or a precomputed MD5/SHA-256 hash. Signal-only: a Gravatar's existence suggests a real, web-active address but does NOT verify identity or deliverability - pair with /api/email-validate for MX checks.",
-    tags: ["network", "email", "gravatar", "avatar", "enrichment", "people", "signal"],
-    discovery: {
-      bodyType: "json",
-      input: { hash: "205e460b479e2e5b48aec07710c08d50" },
-      inputSchema: {
-        properties: {
-          email: { type: "string", description: "Email address to check (hashed locally; never sent upstream)." },
-          hash: { type: "string", description: "Precomputed lowercase MD5 (32 hex) or SHA-256 (64 hex) of the normalized email. Provide email OR hash." },
-        },
-      },
-      output: {
-        example: {
-          hash: "205e460b479e2e5b48aec07710c08d50",
-          exists: true,
-          avatarUrl: "https://gravatar.com/avatar/205e460b479e2e5b48aec07710c08d50",
-          profile: { displayName: "Beau Lebens", preferredUsername: "beau", profileUrl: "https://gravatar.com/beau" },
-          note: "Existence is a web-activity signal only - it does not verify identity or deliverability.",
-        },
-      },
-    },
-    handler: async (i) => {
-      const email = typeof i.email === "string" ? i.email.trim().toLowerCase() : "";
-      let hash = typeof i.hash === "string" ? i.hash.trim().toLowerCase() : "";
-      if (email) {
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw bad(`"email" does not look like an email address`);
-        hash = createHash("md5").update(email).digest("hex");
-      } else if (hash) {
-        if (!HASH_RE.test(hash)) throw bad(`"hash" must be a lowercase 32-char MD5 or 64-char SHA-256 hex digest`);
-      } else {
-        throw bad(`Provide "email" or a precomputed "hash"`);
-      }
-      // d=404 turns the default-image fallback into a miss; s=1 keeps the probe tiny.
-      const avatar = await gravatarProbe(`https://gravatar.com/avatar/${hash}?d=404&s=1`, "Gravatar", "image/*");
-      const exists = avatar.status === 200;
-      try { avatar.body?.cancel?.(); } catch { /* probe body unused */ }
-      let profile = null;
-      if (exists) {
-        try {
-          const res = await gravatarProbe(`https://gravatar.com/${hash}.json`, "Gravatar", "application/json");
-          if (res.status === 200) {
-            const entry = (await res.json())?.entry?.[0];
-            if (entry) {
-              profile = {
-                displayName: entry.displayName ?? null,
-                preferredUsername: entry.preferredUsername ?? null,
-                profileUrl: entry.profileUrl ?? null,
-                location: entry.currentLocation ?? null,
-              };
-            }
-          }
-        } catch { /* profile is optional signal — avatar existence already answered */ }
-      }
-      return {
-        hash,
-        exists,
-        avatarUrl: exists ? `https://gravatar.com/avatar/${hash}` : null,
-        profile,
-        note: "Existence is a web-activity signal only - it does not verify identity or deliverability.",
-      };
-    },
-  },
-
-  // ===========================================================================
   // github-repo — public repository enrichment via GitHub REST.
   // ===========================================================================
   {
@@ -679,6 +591,7 @@ export const ENRICH_TOOLS = [
       if (raw.length > 2048) throw bad(`"url" is capped at 2048 characters`);
       if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) && !/^https?:\/\//i.test(raw)) throw bad(`"url" must be http(s) or a bare domain`);
       if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+      await assertRobotsAllow(raw);
       // Page fetch (SSRF-guarded). A page that won't serve HTML still gets the
       // /favicon.ico fallback below.
       let page = null;

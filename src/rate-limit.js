@@ -54,6 +54,18 @@ export function limiterKey(key) {
   const out = [...head, "0", "0", "0", "0"].slice(0, 4);
   return `${out.join(":")}::/64`;
 }
+/** A wider network than limiterKey: an IPv6 address by its /48, an IPv4
+ *  address by its /24 (a composite or unparsed key is used as given). For an
+ *  allowance one network gets once, so rotating addresses inside a provider's
+ *  usual allocation does not multiply it. */
+export function wideNetworkKey(key) {
+  const k = limiterKey(key);
+  const v6 = /^([0-9a-f]{1,4}):([0-9a-f]{1,4}):([0-9a-f]{1,4}):[0-9a-f]{1,4}::\/64$/i.exec(k);
+  if (v6) return `${v6[1]}:${v6[2]}:${v6[3]}::/48`.toLowerCase();
+  const v4 = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/i.exec(k);
+  if (v4) return `${v4[1]}.${v4[2]}.${v4[3]}.0/24`;
+  return k;
+}
 // Most keys one limiter holds. Past it the oldest-inserted key is dropped, so
 // address rotation costs memory at a fixed ceiling rather than without bound.
 const MAX_KEYS = Number(process.env.RATE_LIMIT_MAX_KEYS) || 20_000;

@@ -145,6 +145,13 @@ export function refundClauses({ gatewayBatched = false } = {}) {
       screenedBeforeSend: true,
     },
     {
+      id: "compliance-refusal-final",
+      section: "Refunds on-chain",
+      text: "An x402 payment that a settlement provider's compliance check, or our own sanctions screening, refuses is not sent to another settlement provider for settlement and is not charged.",
+      charged: false,
+      retriedElsewhere: false,
+    },
+    {
       id: "rights-by-law",
       section: "Refunds on-chain",
       text: "None of this reduces a right you have by law.",

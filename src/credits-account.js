@@ -35,7 +35,7 @@ import { SKIP_UPDATE } from "./json-document.js";
 import { escapeHtml, headerText } from "./email-text.js";
 import { creditsGuards } from "./credits-guards.js";
 import { shared, createMemoryLimits } from "./shared-limits.js";
-import { limiterKey } from "./rate-limit.js";
+import { limiterKey, wideNetworkKey } from "./rate-limit.js";
 
 export const ACCOUNT_PATH = "/credits/account";
 export const ACCOUNT_COOKIE = "a402_acct";
@@ -138,12 +138,20 @@ export function buildNewKeyEmail({ keyId, accountUrl }) {
  * @param {(m:object)=>Promise<boolean>} d.sendEmail
  * @param {object} d.store        a json-document (createJsonDocument) for sessions and spent tokens
  * @param {{check:(k:string)=>{limited:boolean}}} d.ipLimiter
- * @param {{check:(k:string)=>{limited:boolean}}} d.emailLimiter
+ * @param {{check:(k:string)=>{limited:boolean}}} d.emailLimiter   per (mailbox, requester network): each asker's own share
+ * @param {{check:(k:string)=>{limited:boolean}, peek:(k:string)=>{limited:boolean}}} [d.mailboxLimiter]  the mailbox's ceiling across askers
+ * @param {{check:(k:string)=>{limited:boolean}}} [d.coldLimiter]   per mailbox: first asks admitted past that ceiling
  * @param {object} [d.limits]     the shared counters the send budgets are kept in (src/shared-limits.js)
  */
-export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, store, ipLimiter, emailLimiter, limits = shared, termsVersion = () => null, now = () => Date.now(), log = console.log, sweepEveryMs = ACCOUNT_SWEEP_MS }) {
+export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, store, ipLimiter, emailLimiter, mailboxLimiter = null, coldLimiter = null, limits = shared, termsVersion = () => null, now = () => Date.now(), log = console.log, sweepEveryMs = ACCOUNT_SWEEP_MS }) {
   const mac = (purpose, body) => createHmac("sha256", secret).update(`${purpose}|${body}`).digest("base64url");
   const accountUrl = `${baseUrl}${ACCOUNT_PATH}`;
+  // The (mailbox, network) pairs that asked within the hour: a pair that has
+  // asked is warm, one that has not is cold. Bounded, oldest first out.
+  const askedPairs = new Map();
+  const ASKED_MAX = 20_000;
+  const askedBefore = (pair, t) => { const at = askedPairs.get(pair); return Number.isFinite(at) && t - at < HOUR_MS; };
+  const noteAsked = (pair, t) => { askedPairs.delete(pair); askedPairs.set(pair, t); while (askedPairs.size > ASKED_MAX) askedPairs.delete(askedPairs.keys().next().value); };
 
   function signInToken(email, at = now()) {
     const body = b64(JSON.stringify({ e: normEmail(email), x: at + SIGN_IN_TTL_MS, n: randomBytes(12).toString("base64url") }));
@@ -179,8 +187,14 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     if (!perNet || !global) return "unset";
     const n = await spend("send-net", limiterKey(String(ip || "?")));
     if (n > perNet) return n === perNet + 1 ? "net-first" : "net";
+    // The service-wide total is a ceiling on networks that have already sent
+    // this hour: a network's first send goes out whatever others spent, so
+    // one requester draining it never stops everyone else's link.
+    // That first send is counted per wider network too (an IPv6 /48, an IPv4
+    // /24), so rotating addresses inside one allocation gets one in all.
     const g = await spend("send-global", "all");
-    if (g > global) return g === global + 1 ? "global-first" : "global";
+    const w = await spend("send-wide", wideNetworkKey(String(ip || "?")));
+    if (g > global && (n > 1 || w > 1)) return g === global + 1 ? "global-first" : "global";
     return "ok";
   }
 
@@ -224,9 +238,26 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     if (ipLimiter?.check(String(ip || "?")).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
     const email = normEmail(rawEmail);
     if (!validEmail(email)) return { status: 400, message: "Enter your email address." };
-    // Counted per mailbox (src/mailbox-key.js), so "+tag" and dotted
-    // spellings of one inbox share the limit; the link goes to the address typed.
-    if (emailLimiter?.check(`e:${digest(mailboxKey(email)).slice(0, 32)}`).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
+    // Counted per mailbox (src/mailbox-key.js, so "+tag" and dotted spellings
+    // of one inbox count as one) together with the asker's network (an IPv6
+    // /64): a stranger's asks spend only its own share for an address it
+    // names, never the owner's. The mailbox's ceiling across askers holds
+    // back an asker that has asked for it this hour; a first ask from a
+    // network is admitted past it from a fixed per-mailbox allowance
+    // (coldLimiter), which does not grow with the networks asking. The link
+    // goes to the address typed.
+    const mb = digest(mailboxKey(email)).slice(0, 32);
+    const net = limiterKey(String(ip || "?"));
+    const pair = `${mb}|${net}`;
+    const t = Date.now();
+    if (emailLimiter?.check(`e:${pair}`).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
+    if (mailboxLimiter) {
+      const full = mailboxLimiter.peek ? mailboxLimiter.peek(`m:${mb}`).limited : false;
+      if (full) {
+        if (askedBefore(pair, t) || !coldLimiter || coldLimiter.check(`c:${mb}`).limited) { noteAsked(pair, t); return { status: 429, message: "Too many requests. Please try again in a few minutes." }; }
+      } else mailboxLimiter.check(`m:${mb}`);
+    }
+    noteAsked(pair, t);
     const work = (async () => {
       await sweepQuietly();
       const room = await sendRoom(ip);

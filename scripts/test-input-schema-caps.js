@@ -48,7 +48,6 @@ const NOT_ONE_FIELD = new Map([
   ["docx-create.markdown", "the limit is on the text of every field together (its own cap is past it)"],
   ["xlsx-create.filename", FILE_NAME], ["docx-create.filename", FILE_NAME], ["pptx-create.filename", FILE_NAME],
   ["image-ocr.image", IMAGE_BYTES], ["image-dominant-color.image", IMAGE_BYTES], ["image-crop.image", IMAGE_BYTES],
-  ["judge-long.state", "the limit is the price guard's on the whole request (its bytes at the cost table's rate against the route's price, answered 413): the example table's number here, not a length of this field"],
 ]);
 // Fields whose handler answers the long value with a 5xx and no read: each
 // with why no cap of the field's is hidden behind that answer.
@@ -64,9 +63,7 @@ const ANSWERS_BEFORE_READING = new Map([
 ]);
 // A cap that holds on a value no generated form makes: the longest value the
 // handler takes, built here from the kit's own rule.
-const LONGEST_FORM = new Map([
-  ["fc-user-casts.username", `@${"a".repeat(63)}.${"a".repeat(63)}.eth`],
-]);
+const LONGEST_FORM = new Map([]);
 
 const online = goOffline();
 try {
@@ -175,7 +172,8 @@ try {
     const taken = async (slug, field, value, alone = false) => !/^4\d\d:/.test(await outcomeOf(tools.get(slug), field, value, alone));
     const prop = (slug, field) => tools.get(slug)?.discovery.inputSchema.properties[field];
     const { SUPPORTED } = await import("../src/tools/dns.js");
-    const { FRED_FREQ } = await import("../src/tools/macro-kit.js");
+    const { SUPPORTED_FREQ } = await import("../src/tools/us-macro-series.js");
+    const FRED_FREQ = new Set([...SUPPORTED_FREQ, "wef"]); // the codes fred-series' sources take
     const { LANG_RE } = await import("../src/tools/llm-context-kit.js");
     const { VIDEOS_MAX_PROMPT_CHARS } = await import("../src/tools/llm-images-fast-kit.js");
     const each = async (slug, field, values) => { const out = []; for (const x of values) if (!fits(prop(slug, field), x) || !(await taken(slug, field, x))) out.push(x); return out; };
@@ -186,8 +184,6 @@ try {
     ok(langs.every((x) => LANG_RE.test(x)) && langOut.length === 0 && prop("llm-context", "lang").maxLength === 17 && !LANG_RE.test("abcdefgh-abcdefghi"), `llm-context.lang's cap is the longest code its rule takes (${langOut.join(", ") || "17: two parts of eight and the hyphen"})`);
     const xName = `@${"a".repeat(15)}`;
     ok(fits(prop("x-user", "username"), xName) && (await taken("x-user", "username", xName)) && fits(prop("x-user-tweets", "username"), xName) && (await taken("x-user-tweets", "username", xName, true)), "an X username's cap counts the leading @ the handler takes");
-    const fcName = LONGEST_FORM.get("fc-user-casts.username");
-    ok(fits(prop("fc-user-casts", "username"), fcName) && (await taken("fc-user-casts", "username", fcName, true)) && !fits(prop("fc-user-casts", "username"), `${fcName}x`), `a Farcaster username's cap is the longest ENS name the handler takes behind an @ (${fcName.length})`);
     ok(prop("v1-videos", "prompt").maxLength === VIDEOS_MAX_PROMPT_CHARS && prop("judge", "state").maxLength === 8000 && prop("decisions", "input").maxLength === 8000, `the caps a key gate hid are published (v1-videos.prompt ${prop("v1-videos", "prompt").maxLength}, judge.state ${prop("judge", "state").maxLength}, decisions.input ${prop("decisions", "input").maxLength})`);
   }
   // /openapi.json carries the cap and the closed set for both request shapes:

@@ -30,7 +30,7 @@
 import { cgGet, knownIdGate } from "./crypto-markets-kit.js";
 import { cgScopeAll } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
-import { markResaleComputed } from "../resale-terms.js";
+import { markResaleComputed, markRefAnswer, markResaleCleared } from "../resale-terms.js";
 import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { partialFields } from "../partial-answer.js";
 
@@ -1064,6 +1064,34 @@ export const KEY_ONLY_SCREEN_SLUGS = Object.freeze(["dex-volume-board", "dex-poo
 for (const t of CRYPTO_SCREENS_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 // Resale terms (src/resale-terms.js): every screen here is computed.
 markResaleComputed(CRYPTO_SCREENS_TOOLS, CRYPTO_SCREENS_TOOLS.map((t) => t.slug));
+// On a /ref copy (src/referral-gate.js only) three screens serve what they
+// compute and the credit, without the source's own figures: one venue's
+// funding and basis (funding-screener), the venue prices
+// (exchange-spread), and the pool's liquidity, volume and trade counts
+// (dex-pool-health). The public route's answer is unchanged.
+export const SCREENS_REF_RAW_FIELDS = Object.freeze({
+  "exchange-spread": Object.freeze(["medianPriceUsd", "volumeWeightedPriceUsd"]),
+  "dex-pool-health": Object.freeze(["liquidityUsd", "volume24hUsd", "activity24h"]),
+  "funding-screener": Object.freeze(["fundingPct", "basisPct"]),
+});
+const withoutTop = (fields) => (answer) => {
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return answer;
+  const kept = { ...answer };
+  for (const k of fields) delete kept[k];
+  return kept;
+};
+markRefAnswer(CRYPTO_SCREENS_TOOLS, ["exchange-spread"], withoutTop(SCREENS_REF_RAW_FIELDS["exchange-spread"]));
+markRefAnswer(CRYPTO_SCREENS_TOOLS, ["dex-pool-health"], withoutTop(SCREENS_REF_RAW_FIELDS["dex-pool-health"]));
+markRefAnswer(CRYPTO_SCREENS_TOOLS, ["funding-screener"], (answer) => {
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return answer;
+  const rows = (list) => (Array.isArray(list) ? list.map((r) => {
+    if (!r || typeof r !== "object") return r;
+    const kept = { ...r };
+    for (const k of SCREENS_REF_RAW_FIELDS["funding-screener"]) delete kept[k];
+    return kept;
+  }) : list);
+  return { ...answer, ...(Object.hasOwn(answer, "highest") ? { highest: rows(answer.highest) } : {}), ...(Object.hasOwn(answer, "lowest") ? { lowest: rows(answer.lowest) } : {}) };
+});
 
 export const __test = { memoCounts, answerMemoSize: () => answerMemo.size, median, quantile, stdev, weightedMean, hhi, reducePerps, reduceStables, reduceCategoryPage, reducePlatforms, reducePoolPage, FUNDING_MIN_OI_USD, PEG_CLASS_BAND, LIST_SLICE_CHARS };
 
@@ -1073,3 +1101,6 @@ export const __test = { memoCounts, answerMemoSize: () => answerMemo.size, media
 // so the others keep it whatever the screens are asked, and the screens can
 // use the rest of the day while the others are quiet.
 underBudgetAll(cgScopeAll(CRYPTO_SCREENS_TOOLS, { ceiling: "screens" }), PAYMENT_WINDOW_BUDGET_MS);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(CRYPTO_SCREENS_TOOLS, ["funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health"], "computed over market data whose terms allow products that incorporate it");

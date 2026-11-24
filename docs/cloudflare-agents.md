@@ -4,7 +4,7 @@ Agent402 is an x402 seller - 500+ pay-per-call tools at
 `https://agent402.tools`. This guide shows how a Cloudflare Worker
 or Agent can discover and call Agent402 tools, paying per request in USDC.
 
-Cloudflare x402 docs: https://developers.cloudflare.com/agents/agentic-payments/x402/
+Cloudflare x402 docs: https://developers.cloudflare.com/agents/tools/payments/x402/
 
 ---
 

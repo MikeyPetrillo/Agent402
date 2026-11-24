@@ -35,7 +35,9 @@ const ALCHEMY_READ_MS = 12_000;
 // All major MEV-Boost relays implement the identical data API. Ordered by
 // preference; verified live 2026-07-21 that each answers
 // /relay/v1/data/bidtraces/proposer_payload_delivered (incl. slot/block_number
-// filters) with the same JSON row shape. `name` rides the response `relay` field.
+// filters) with the same JSON row shape. `name` rides the response `relay`
+// field and `host` its `source` field: every answer names the relay that
+// answered it.
 const MEV_RELAYS = [
   { name: "flashbots", host: "boost-relay.flashbots.net" },
   { name: "ultrasound", host: "relay.ultrasound.money" },
@@ -110,7 +112,7 @@ async function fetchBidtraces(params) {
         "bidtraces",
       );
       if (!Array.isArray(raw)) throw bad(`MEV relay ${host} returned non-array JSON`, 502);
-      return { relay: name, rows: raw };
+      return { relay: name, source: host, rows: raw };
     } catch (e) {
       lastErr = e;
       const next = MEV_RELAYS[i + 1];
@@ -174,7 +176,7 @@ function shortPubkey(pk) {
 // ----------------------------------------------------------------------------
 async function mevRecentBlocks({ limit } = {}) {
   const lim = Math.max(1, Math.min(100, Number.parseInt(limit, 10) || 20));
-  const { relay, rows: arr } = await fetchBidtraces(`limit=${lim}`);
+  const { relay, source, rows: arr } = await fetchBidtraces(`limit=${lim}`);
   const blocks = arr.map((b) => ({
     slot: Number.parseInt(b.slot, 10),
     blockNumber: Number.parseInt(b.block_number, 10),
@@ -196,6 +198,7 @@ async function mevRecentBlocks({ limit } = {}) {
     totalEthToProposers: Math.round(totalEth * 1e6) / 1e6,
     avgEthPerBlock: blocks.length ? Math.round((totalEth / blocks.length) * 1e6) / 1e6 : 0,
     relay,
+    source,
     blocks,
   };
 }
@@ -205,7 +208,7 @@ async function mevRecentBlocks({ limit } = {}) {
 // ----------------------------------------------------------------------------
 async function mevBuilderShare({ window } = {}) {
   const w = Math.max(10, Math.min(200, Number.parseInt(window, 10) || 100));
-  const { relay, rows: arr } = await fetchBidtraces(`limit=${w}`);
+  const { relay, source, rows: arr } = await fetchBidtraces(`limit=${w}`);
   // Aggregate by builder pubkey: count blocks + sum ETH paid to proposers
   // (a builder's payment proxy for the value they extracted, minus their cut).
   // When a fallback relay serves, the aggregate covers THAT relay's block set —
@@ -233,6 +236,7 @@ async function mevBuilderShare({ window } = {}) {
     windowBlocks: arr.length,
     uniqueBuilders: rows.length,
     relay,
+    source,
     builders: rows,
   };
 }
@@ -249,13 +253,14 @@ async function mevBlockPayment({ slot, blockNumber } = {}) {
   const params = new URLSearchParams();
   if (Number.isFinite(s)) params.set("slot", String(s));
   if (Number.isFinite(b)) params.set("block_number", String(b));
-  const { relay, rows: arr } = await fetchBidtraces(String(params));
+  const { relay, source, rows: arr } = await fetchBidtraces(String(params));
   if (!arr.length) {
     return {
       found: false,
       slot: Number.isFinite(s) ? s : null,
       blockNumber: Number.isFinite(b) ? b : null,
       relay,
+      source,
       note: `Slot/block was not delivered via the ${relay} relay (may have been built locally, or via a different MEV-Boost relay).`,
     };
   }
@@ -275,6 +280,7 @@ async function mevBlockPayment({ slot, blockNumber } = {}) {
     gasLimit: Number.parseInt(entry.gas_limit, 10),
     numTx: Number.parseInt(entry.num_tx, 10) || null,
     relay,
+    source,
   };
 }
 
@@ -359,6 +365,7 @@ export const MEV_AND_L2_TOOLS = [
           totalEthToProposers: 0.072345,
           avgEthPerBlock: 0.072345,
           relay: "flashbots",
+          source: "boost-relay.flashbots.net",
           blocks: [{
             slot: 12345678,
             blockNumber: 22345678,
@@ -402,6 +409,7 @@ export const MEV_AND_L2_TOOLS = [
           windowBlocks: 100,
           uniqueBuilders: 5,
           relay: "flashbots",
+          source: "boost-relay.flashbots.net",
           builders: [{
             builderPubkey: "0x9000...",
             builderShort: "0x90000000…abcdef",
@@ -452,6 +460,7 @@ export const MEV_AND_L2_TOOLS = [
           gasLimit: 60000000,
           numTx: 144,
           relay: "flashbots",
+          source: "boost-relay.flashbots.net",
         },
       },
     },

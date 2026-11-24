@@ -164,7 +164,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       # --ignore-scripts is the repo's supply-chain rule; better-sqlite3 is the one
       # native module the server needs, rebuilt explicitly (issue #1233).
       - run: npm ci --ignore-scripts && npm rebuild better-sqlite3
@@ -296,7 +296,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install x402 client
         # No wallet secret is in scope here, and --ignore-scripts blocks every
         # dependency lifecycle script. The x402 client is pinned to the server's
@@ -305,7 +305,7 @@ jobs:
         run: |
           npm ci --ignore-scripts
           VIEM=$(node -p "require('./package-lock.json').packages['node_modules/viem'].version")
-          npm install --no-save --ignore-scripts @x402/core@2.30.0 @x402/evm@2.30.0 "viem@$VIEM"
+          npm install --no-save --ignore-scripts @x402/core@2.32.0 @x402/evm@2.32.0 "viem@$VIEM"
           echo "installed viem@$(node -p "require('viem/package.json').version")"
 
       - name: Buy the catalog from production (real USDC at list price)
@@ -501,9 +501,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 @x402/svm@2.30.0 @solana/kit@8.6.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 @x402/svm@2.32.0 @solana/kit@8.6.0 viem@2.52.2
       - name: Download the purchase memory (records of the last 14 days)
         # The workflow token reads artifacts only; no wallet secret here. A
         # failure stops the job before the step that spends.
@@ -634,7 +634,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install x402 client (EVM only)
         # No secrets in scope here; --ignore-scripts blocks dependency lifecycle
         # scripts. Pinned to the server's protocol version + the repo lock (R-07).
@@ -644,7 +644,7 @@ jobs:
         # match one of [x402V2Pay...]` - our own canary never caught it because
         # it only pays OUR 402s, which the old client still shaped correctly.
         # A buyer workflow that cannot pay a third party is not a buyer test.
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0 viem@2.52.2
       - name: Buy one tool from production (real USDC)
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -691,7 +691,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install the PINNED client tree (x402 client + viem)
         run: |
           mkdir -p /tmp/mint/scripts/lib /tmp/mint/client && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/mint/
@@ -748,9 +748,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install x402 client
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.30.0 @x402/evm@2.30.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.32.0 @x402/evm@2.32.0
       - name: Run the sweep
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -788,7 +788,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       # The same PINNED client tree the single-seller probe pays from, so the
       # signing path here is the one already proven on this rail.
       - name: Install the pinned x402 client
@@ -838,7 +838,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install the PINNED proof tree (x402 client + viem)
         run: |
           mkdir -p /tmp/probe && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/probe/
@@ -877,11 +877,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install x402 client
         # No wallet secrets are in scope for this step (audit R-07), and
         # --ignore-scripts blocks dependency lifecycle scripts entirely.
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.30.0 @x402/avm@2.30.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.32.0 @x402/avm@2.32.0
 
       - name: Buy from external Algorand sellers
         # Wallet secret scoped to THIS step only (audit R-07).
@@ -928,7 +928,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
       - name: Install (lock-pinned; mppx, viem and the MCP SDK from the repo lock)
         run: npm ci --ignore-scripts
       - name: New agent, fresh wallet, first session

@@ -56,21 +56,10 @@ const BRAVE_ROUTES = new Set([
 ]);
 const skipBrave = process.env.BRAVE_LIVE_TEST !== "1";
 
-// E2B-backed routes — same leak shape as Brave (found in the 2026-07-29 paid-
-// upstream audit): the CI test job boots the server with the REAL E2B_API_KEY,
-// so this sweep's example calls spin real sandboxes and bill the E2B account
-// invisibly (CI has no PostHog). The old NETWORK-set comment assumed the key
-// was absent in CI; it is not. Live coverage stays in the dedicated
-// scripts/test-code-run-kit.js step, which runs live deliberately in CI.
-const E2B_ROUTES = new Set([
-  "/api/code-run", "/api/code-run-pro",
-]);
-const skipE2b = process.env.E2B_LIVE_TEST !== "1";
-
 const NETWORK = new Set([
   "/v1/images/fast", "/v1/images/pro", "/v1/images/edits", "/v1/videos/generations",  // llm-images-fast-kit.js
   "/api/asset-transfers", "/api/token-balances", "/api/token-allowance", "/api/tx-receipt", "/api/block-receipts", "/api/token-price-history", "/api/wallet-transfers-multichain",  // alchemy-data-kit.js
-  "/api/fc-cast-search", "/api/fc-channel-feed", "/api/fc-trending", "/api/fc-user-casts", "/api/fc-cast", "/api/fc-cast-replies", "/api/fc-channel", "/api/fc-user-search", "/api/fc-cast-metrics",  // farcaster-social-kit.js
+   // farcaster-social-kit.js
   "/api/coin-price-by-contract", "/api/coin-profile", "/api/coin-history", "/api/coin-ohlc", "/api/coin-market-chart-range", "/api/coin-categories", "/api/global-defi", "/api/exchanges", "/api/exchange-tickers", "/api/exchange-rates", "/api/coin-search",
   "/api/rwa-list", "/api/rwa-markets", "/api/rwa-asset", "/api/rwa-issuers", "/api/rwa-issuer",  // crypto-markets-kit.js
   "/api/attest",  // attest-kit.js (needs the spending wallet + Base gas; keyless CI answers 503)
@@ -86,21 +75,22 @@ const NETWORK = new Set([
   // the two pool tools read endpoints that answer only to a key (503 without).
   "/api/funding-screener", "/api/stablecoin-depeg-watch", "/api/exchange-spread", "/api/defi-screener", "/api/chain-board", "/api/dex-volume-board", "/api/dex-pool-health",
   "/api/lending-rates",  // lending-rates-kit.js (contract reads over keyless public nodes)
-  "/api/crypto-news", "/api/crypto-indicators", "/api/crypto-market-pulse",  // crypto-signals-kit.js
+  "/api/crypto-indicators", "/api/crypto-market-pulse",  // crypto-signals-kit.js
   "/api/site-map", "/api/site-crawl",  // crawl-kit.js
   "/api/perp-markets", "/api/perp-funding", "/api/perp-funding-screener", "/api/perp-open-interest", "/api/perp-klines", "/api/perp-orderbook", "/api/perp-basis",
   "/api/perp-dexs", "/api/perp-dex-markets", "/api/perp-dex-limits",
-  "/api/options-summary", "/api/crypto-options-chain", "/api/options-ticker",
-  "/api/token-safety", "/api/sol-token-safety", "/api/sol-token-report", "/api/sol-token-holders", "/api/sol-token-pairs", "/api/sol-token-search", "/api/sol-trending", "/api/sol-price", "/api/sol-swap-quote", "/api/sol-token-lookup",
-  "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup", "/api/x-post-counts", "/api/x-trends",
+  
+  "/api/token-safety", "/api/sol-token-safety", "/api/sol-token-report", "/api/sol-token-holders", "/api/sol-token-pairs", "/api/sol-token-search", "/api/sol-trending", "/api/sol-price", 
+  "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup", 
   "/api/hunter-domain-search", "/api/hunter-email-finder", "/api/hunter-email-verify", "/api/hunter-company", "/api/apollo-people-search", "/api/apollo-org-enrich", "/api/apollo-person-match",
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/domain-availability", "/api/robots-check", "/api/sitemap",
   "/api/email-validate", "/api/ip-info", "/api/search", "/api/search-lite", "/api/search-news", "/api/search-images", "/api/search-videos", "/api/search-suggest", "/api/answer", "/api/multi-search",
   "/api/llm-context",  // llm-context-kit.js (Brave grounding context - live egress, skipped by BRAVE_ROUTES)
-  // Web-content kit: archive.org (archive-snapshot), caller feed URLs
-  // (feed-parse), caller redirect chains (unshorten-url) — all live egress.
-  "/api/archive-snapshot", "/api/feed-parse", "/api/unshorten-url",
+  // Web-content kit: caller feed URLs (feed-parse) and caller redirect chains
+  // (unshorten-url), live egress. archive-snapshot builds its link here and is
+  // held strictly.
+  "/api/feed-parse", "/api/unshorten-url",
   // a2a-card-fetch: its example names the static sample card on production;
   // the CI sweeps' server answers it from itself (own-examples-preload.js),
   // a local boot without that preload still fetches production - lenient.
@@ -139,8 +129,7 @@ const NETWORK = new Set([
   "/api/image-exif", "/api/image-dominant-color", "/api/image-crop",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
   "/api/public-holidays",
-  // solana-rpc-kit.js: live Solana mainnet JSON-RPC, the same upstream class as evm-rpc.
-  "/api/solana-rpc",
+  
   // Holidays kit: the same holiday-source egress as public-holidays.
   "/api/bank-holidays", "/api/school-holidays", "/api/next-holidays", "/api/long-weekends",
   "/api/country-business-days", "/api/business-day-planner", "/api/settlement-calendar",
@@ -165,18 +154,18 @@ const NETWORK = new Set([
   // (503 without them — the CI test env has none; scripts/test-cdp-live.js
   // covers the real calls where the secrets exist).
   "/api/wallet-balances", "/api/testnet-fund", "/api/onramp-link",
-  "/api/onchain-sql", "/api/onchain-sql-schema", "/api/onchain-sql-range", "/api/onchain-sql-week",
+  "/api/onchain-sql", "/api/onchain-sql-schema", 
   "/api/x402-quote", "/api/usdc-balance", "/api/tx-status", "/api/gas-estimate", "/api/x402-verify", "/api/ens-resolve",
-  // Macro-kit: all routes hit live upstreams (FRED, Treasury Fiscal Data, ECB,
-  // World Bank). FRED-keyed routes return 503 without FRED_API_KEY — the
-  // 502/503/504 tolerance below covers that.
+  // Macro-kit: all routes hit live upstreams (Treasury Fiscal Data, ECB,
+  // World Bank, BLS, the New York Fed). An upstream outage is a 502/503/504,
+  // which the tolerance below covers.
   "/api/treasury-yield-curve", "/api/treasury-yield-history", "/api/yield-curve-spread",
   "/api/treasury-debt", "/api/treasury-avg-rates",
   "/api/fx-historical", "/api/fx-timeseries", "/api/fx-dashboard",
   "/api/world-bank-indicator", "/api/world-bank-search",
-  "/api/fred-series", "/api/fred-search", "/api/fred-series-info", "/api/fred-release-calendar",
+  "/api/fred-series", 
   "/api/sahm-rule", "/api/cpi-yoy", "/api/unemployment-rate", "/api/fed-funds",
-  "/api/fred-release-observations",
+  
   // EDGAR-kit: every route hits data.sec.gov, www.sec.gov, or efts.sec.gov.
   "/api/edgar-company-lookup", "/api/edgar-filings", "/api/edgar-company-concept",
   "/api/edgar-company-facts", "/api/edgar-xbrl-frame",
@@ -217,15 +206,14 @@ const NETWORK = new Set([
   // key needed) but share per-IP rate limits: tolerate transient upstream failures.
   "/api/evm-rpc", "/api/eth-call",
   // Contract-kit egress: Sourcify (contract-source / contract-abi), the
-  // openchain.xyz + 4byte.directory signature DBs (selector-lookup, and
+  // Sourcify + 4byte.directory signature DBs (selector-lookup, and
   // calldata-decode's no-ABI fallback), and the shared public RPC pool
   // (tx-simulate). solidity-scan + address-label are pure CPU and stay strict.
   "/api/contract-source", "/api/contract-abi", "/api/calldata-decode",
   "/api/selector-lookup", "/api/tx-simulate",
-  // Enrich-kit: GLEIF (lei-lookup), Wikidata (wikidata-entity), gravatar.com
-  // (gravatar-check), api.github.com (github-repo — 60/hr per-IP keyless quota
+  // Enrich-kit: GLEIF (lei-lookup), Wikidata (wikidata-entity), api.github.com (github-repo — 60/hr per-IP keyless quota
   // can 403→503 in CI), favicon fetch against a live site (favicon-grab).
-  "/api/lei-lookup", "/api/wikidata-entity", "/api/gravatar-check",
+  "/api/lei-lookup", "/api/wikidata-entity", 
   "/api/github-repo", "/api/favicon-grab",
   // Price-feed-kit: a keyless public upstream (CoinGecko).
   // CoinGecko's free tier shares a per-IP ~30 rpm limit; tolerate 429/502/503/504.
@@ -244,7 +232,7 @@ const NETWORK = new Set([
   // Onchain-identity-kit: keyless public APIs (ensideas, Warpcast, EAS
   // indexers). Tolerate transient upstream errors + 4xx from placeholder
   // example inputs (0x000…0 may return null/empty).
-  "/api/ens-bulk-resolve", "/api/farcaster-profile", "/api/farcaster-by-address",
+  "/api/ens-bulk-resolve", 
   "/api/eas-attestations",
   // NFT-market-kit: Alchemy NFT v3 (503 without key in CI without secrets;
   // 4xx on placeholder contracts that don't exist on a given chain).
@@ -478,7 +466,7 @@ function buildGetUrl(path, op) {
   return `${TARGET}${path}${[...qs].length ? `?${qs}` : ""}`;
 }
 
-let braveSkipped = 0, e2bSkipped = 0, strictSkipped = 0, coingeckoSkipped = 0;
+let braveSkipped = 0, strictSkipped = 0, coingeckoSkipped = 0;
 const timings = [];
 // The sweep used to be one serial await-fetch per endpoint. Locally that is
 // ~2 minutes because almost nothing reaches the network; in CI, where the real
@@ -492,7 +480,6 @@ const timings = [];
 const tasks = [];
 for (const [path, methods] of paths) {
   if (skipBrave && BRAVE_ROUTES.has(path)) { braveSkipped += Object.keys(methods).length; continue; }
-  if (skipE2b && E2B_ROUTES.has(path)) { e2bSkipped += Object.keys(methods).length; continue; }
   for (const [method, op] of Object.entries(methods)) {
     const cat = (op.tags && op.tags[0]) || "other";
     // Discovery/composition surfaces (skill packs) live in the OpenAPI spec so
@@ -616,7 +603,7 @@ for (const r of results) {
 }
 
 const totalOps = paths.reduce((a, [, m]) => a + Object.keys(m).length, 0);
-console.log(`\nExercised ${totalOps - braveSkipped - e2bSkipped - strictSkipped - coingeckoSkipped} endpoints at ${TARGET}${strictSkipped ? ` (handed ${strictSkipped} route(s) to the strict non-metered sweep - TEST_ALL_SKIP_STRICT_COVERED)` : ""}${coingeckoSkipped ? ` (handed ${coingeckoSkipped} CoinGecko route(s) to the sampled sweep + nightly corpus - keyed Demo credits)` : ""}${braveSkipped ? ` (skipped ${braveSkipped} Brave route(s) — set BRAVE_LIVE_TEST=1 to include; paid-canary covers post-deploy verification)` : ""}${e2bSkipped ? ` (skipped ${e2bSkipped} E2B route(s) — set E2B_LIVE_TEST=1 to include; test-code-run-kit covers live in CI)` : ""}\n`);
+console.log(`\nExercised ${totalOps - braveSkipped - strictSkipped - coingeckoSkipped} endpoints at ${TARGET}${strictSkipped ? ` (handed ${strictSkipped} route(s) to the strict non-metered sweep - TEST_ALL_SKIP_STRICT_COVERED)` : ""}${coingeckoSkipped ? ` (handed ${coingeckoSkipped} CoinGecko route(s) to the sampled sweep + nightly corpus - keyed Demo credits)` : ""}${braveSkipped ? ` (skipped ${braveSkipped} Brave route(s) — set BRAVE_LIVE_TEST=1 to include; paid-canary covers post-deploy verification)` : ""}\n`);
 // Where the wall-clock actually went. Printed always: a slow sweep that only
 // reports a total gives the next reader nothing to act on.
 {

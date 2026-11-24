@@ -7,6 +7,7 @@
 // update the entry here in the same change. Tool links are resolved against
 // the live catalog at render time, so a retired slug drops off the page
 // instead of linking to a 404.
+import { getWalletHtml } from "./get-a-wallet.js";
 import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { repoUrl } from "./repo-link.js";
@@ -14,6 +15,7 @@ import { creditsSalesEnabled } from "./credits-sales.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { connectorWires } from "./connector-pay.js";
 import { stockDataEnabled } from "./tools/stock-provider.js";
+import { firstFit } from "./seo-meta.js";
 // Prepaid credits are only presented as a way to pay while packs are sold.
 const CREDITS_ON = creditsSalesEnabled();
 export const CREDITS_HELD = CREDITS_ON ? "a prepaid credits key" : "a credits key bought earlier";
@@ -191,6 +193,7 @@ const { text } = await generateText({
   },
   {
     slug: "langchain",
+    metaDescription: "LangChain.js and LangGraph tools for Agent402: four meta tools that reach the whole catalog, free tools over proof of work and paid ones over x402 or MPP.",
     meta: "LangChain.js and LangGraph tools for Agent402: four meta tools that reach the whole catalog, with proof-of-work for free tools and x402 or MPP for paid ones.",
     name: "LangChain.js and LangGraph",
     short: "LangChain.js",
@@ -312,7 +315,7 @@ const tools = await agent402Tools({ fetch: payFetch });`,
     exposes: META_EXPOSES,
     payment: META_PAYMENT,
     tools: ["search", "answer", "hash", "crypto-market-pulse", "route-execute"],
-    guides: ["x402-in-5-minutes", "why-twelve-chains"],
+    guides: ["x402-in-5-minutes", "why-many-chains"],
   },
   {
     slug: "openai-agents",
@@ -479,13 +482,13 @@ bun add @x402/fetch @x402/evm viem
     pkg: "agent402-mcp",
     dir: "mcp",
     what: "An MCP server for any MCP client (Claude Desktop, Claude Code, Cursor and others). Flagship tools are listed as first-class MCP tools and the rest of the catalog is reachable through `catalog.search`, `catalog.find` and `catalog.call`, with skill packs surfaced as MCP prompts. The hosted connector at /mcp needs no install at all.",
-    install: "npx -y agent402-mcp@0.16.0",
+    install: "npx -y agent402-mcp@0.17.0",
     lang: "json",
     example: `{
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0xYOUR_EVM_PRIVATE_KEY" }
     }
   }
@@ -498,7 +501,7 @@ claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.16.0
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.0
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [
@@ -713,7 +716,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
   if (!i) return null;
   const canonical = `${baseUrl}/integrations/${i.slug}`;
   const title = `${i.name} integration (${i.pkg})`;
-  const description = i.meta;
+  const description = firstFit([i.metaDescription, i.meta]) || i.meta;
   const github = repoUrl(`tree/main/${i.dir}`);
   const tools = toolsFor(i, catalog);
   const config = ADAPTER_CONFIG[i.shape] || [];
@@ -776,6 +779,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
       <h2 ${H2}>How payment works</h2>
       <ul style="padding-left:20px;margin:0 0 16px;">${i.payment.map((e) => `<li ${LI}>${inline(e)}</li>`).join("")}</ul>
       ${i.walletExample ? `${pre(esc(i.walletExample))}` : ""}
+      ${/AGENT_KEY/.test(`${i.example || ""}\n${i.walletExample || ""}`) ? `<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${getWalletHtml({ link: (href, label) => `<a href="${esc(href)}" ${A}>${esc(label)}</a>` })}</p>` : ""}
       <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${esc(i.settleNote || failedCallFootnote())} Background: ${learnLinks}.</p>
     </section>
 

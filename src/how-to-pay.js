@@ -32,6 +32,7 @@ import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { smallHeaderLimitText } from "./payment-required-compact.js";
 import { listAnd, mono, eyebrow, h2, h3, p, link, code, pre, section, th, thead, td, row, table as sharedTable } from "./page-html.js";
+import { getWalletHtml } from "./get-a-wallet.js";
 
 const NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"];
 const words = (n) => NUM_WORDS[n] || String(n);
@@ -66,7 +67,7 @@ export function howToPayPage(baseUrl, catalog = null, { networks = null } = {}) 
   const canonical = `${baseUrl}/how-to-pay`;
   const title = "How to pay for a call: x402, MPP or proof-of-work";
   const description =
-    "From nothing to a paid call on every rail Agent402 takes: a stablecoin over x402 on each listed chain, MPP over Tempo, EVM or card, or the free proof-of-work tier. What you need, the 402 flow, a snippet to paste, what the receipt looks like, and what happens when a call fails.";
+    "How to make a first paid call on every rail Agent402 takes: x402 on each listed chain, MPP, or the free proof-of-work tier, with a snippet to paste.";
 
   // ---- derived facts -------------------------------------------------------
   const usdcRails = rails.filter((r) => r.asset === "USDC");
@@ -186,6 +187,7 @@ ${section("x402", `
   ${p(`x402 is served on every paid route. This server settles it on ${railCount} chain${rails.length === 1 ? "" : "s"}: ${esc(railPhrase)}. On the EVM chains the facilitator sponsors gas, so the wallet needs only the stablecoin; ${esc(listAnd(nonEvmRails.map((r) => r.name)))} each use their own wallet and their own scheme package.`)}
   ${h3("What you need")}
   ${p(`A private key for a wallet that holds a little of the stablecoin on one chain from the table. The key never leaves your process: the client signs a transfer authorization for exactly the quoted amount, and the facilitator moves the funds wallet to wallet. ${evmOnlyCount ? `${evmOnlyCount} routes (the identity-bound ones such as memory, and the long-running report routes) take an EVM authorization only; ${link("/api/pricing", "/api/pricing")} lists each route's networks and its 402 offers only those.` : ""}`)}
+  ${p(getWalletHtml({ link, code }))}
   ${table(["chain", "asset", "wallet", "caip-2"], railsRows)}
   ${h3("See a quote, free")}
   ${pre("the 402 and what it carries", `curl -i -X POST ${baseUrl}/api/hash \\
@@ -296,10 +298,11 @@ claude mcp add --transport http -s user agent402 ${baseUrl}/mcp
 
 # npm server with a funded EVM key: every paid tool over x402
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.16.0
+claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.17.0
 
 # a credits key${creditsKeyQualifier()} works there too
-claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.16.0`)}
+claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.17.0`)}
+  ${p(getWalletHtml({ link, code }))}
   ${p(`Every host's verified config block is in the ${link("/guides/agent-hosts", "agent-hosts guide")}; ${link("/quickstart", "/quickstart")} has the same first call for curl, JavaScript and the model gateway.`)}
 `)}
 

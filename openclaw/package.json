@@ -1,23 +1,36 @@
 {
   "name": "agent402-openclaw",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "OpenClaw model provider for Agent402: an auto-routed tier at a flat per-call price and explicit LLM models priced per request, paid in USDC over x402, or with a prepaid credits key, through a local proxy. Zero dependencies; x402 wallet payment is an optional peer.",
   "type": "module",
   "main": "index.js",
+  "types": "index.d.ts",
   "exports": {
-    ".": "./index.js",
-    "./proxy": "./proxy.js",
-    "./models": "./models.js"
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./proxy": {
+      "types": "./proxy.d.ts",
+      "default": "./proxy.js"
+    },
+    "./models": {
+      "types": "./models.d.ts",
+      "default": "./models.js"
+    }
   },
   "bin": {
     "agent402-openclaw": "cli.js"
   },
   "files": [
     "index.js",
+    "index.d.ts",
     "known-assets.js",
     "provider.js",
     "models.js",
+    "models.d.ts",
     "proxy.js",
+    "proxy.d.ts",
     "cli.js",
     "openclaw.plugin.json",
     "README.md"

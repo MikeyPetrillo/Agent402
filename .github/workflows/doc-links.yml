@@ -1,0 +1,37 @@
+# External links in the repository's markdown (README, CONTRIBUTING, wiki/,
+# docs/ and every package README), weekly: each URL outside this repository is
+# fetched once, and a 404, a 410 or a host that no longer resolves fails the
+# run (scripts/doc-links.js --external; a 401, 403, 429, 5xx or timeout is
+# listed as unverified and does not). It runs on a schedule, never on a push:
+# an outside page moving is not a defect in the change under review. Internal
+# links (files, anchors, wiki pages, links into this repository) are checked
+# offline on every push by scripts/test-doc-links.js. Needs no package install
+# (the script imports node: only) and no secret.
+name: Documentation links (weekly)
+
+on:
+  schedule:
+    - cron: "17 9 * * 1" # Mondays 09:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doc-links
+  cancel-in-progress: false
+
+jobs:
+  doc-links:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Check internal and external links
+        run: node scripts/doc-links.js --external

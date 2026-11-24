@@ -70,7 +70,7 @@ const rep = (hosts) => ({ day: "2026-09-14", hosts });
 {
   const exposure = readFileSync(new URL("./test-ci-key-exposure.js", import.meta.url), "utf8");
   const names = new Set(UPSTREAM_BUDGETS.map((b) => b.name));
-  for (const [cred, name] of [["BRAVE_API_KEY","brave"],["ALCHEMY_API_KEY","alchemy"],["COINGECKO_API_KEY","coingecko"],["E2B_API_KEY","e2b"],["OPENAI_API_KEY","openai"],["NEYNAR_API_KEY","neynar"]]) {
+  for (const [cred, name] of [["BRAVE_API_KEY","brave"],["ALCHEMY_API_KEY","alchemy"],["COINGECKO_API_KEY","coingecko"],["OPENAI_API_KEY","openai"]]) {
     ok(exposure.includes(cred) && names.has(name), `${cred} is both leak-guarded and budget-alarmed`);
   }
 }
@@ -82,14 +82,14 @@ const rep = (hosts) => ({ day: "2026-09-14", hosts });
 {
   const { registerUpstreamCounter } = await import("../src/upstream-budgets.js");
   let toolCalls = 3;
-  registerUpstreamCounter("neynar", () => toolCalls);
-  const crawled = rep([{ host: "api.neynar.com", calls: 6210 }]);
+  registerUpstreamCounter("databento", () => toolCalls);
+  const crawled = rep([{ host: "hist.databento.com", calls: 6210 }]);
   let s = upstreamBudgetStatus(crawled);
-  ok(s.upstreams.neynar.status === "ok" && s.upstreams.neynar.callsToday === 3, `crawler traffic to an indexed seller does not trip its budget (${JSON.stringify(s.upstreams.neynar)})`);
-  ok(s.upstreams.neynar.counts === "tool calls only", "and the row says what it counts");
+  ok(s.upstreams.databento.status === "ok" && s.upstreams.databento.callsToday === 3, `crawler traffic to an indexed seller does not trip its budget (${JSON.stringify(s.upstreams.databento)})`);
+  ok(s.upstreams.databento.counts === "tool calls only", "and the row says what it counts");
   toolCalls = 6000;
   s = upstreamBudgetStatus(crawled);
-  ok(s.upstreams.neynar.status === "elevated", "real tool calls over the budget still trip it");
+  ok(s.upstreams.databento.status === "elevated", "real tool calls over the budget still trip it");
   ok(upstreamBudgetStatus(rep([{ host: "api.search.brave.com", calls: 5000 }])).upstreams.brave.status === "elevated", "a budget with no registered counter still reads host traffic");
 }
 

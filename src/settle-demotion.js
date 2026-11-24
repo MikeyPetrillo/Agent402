@@ -27,6 +27,7 @@
 // Per process: each replica demotes on its own refusals, which a refusal
 // streak reaches on every replica within a few calls.
 import { isFacilitatorBillingRefusal } from "./payment-reject.js";
+import { isComplianceSettleRefusal } from "./settle-compliance.js";
 import { positiveNum as num } from "./env-num.js";
 
 const AFTER = () => num(process.env.SETTLE_DEMOTE_AFTER, 3);
@@ -132,11 +133,12 @@ export function withSettleDemotion(client, { network, label, alternates = () => 
           const r = await alt.client.settle(payload, requirements, ...rest);
           if (r?.success === true) { record(alt.name, r, true); return r; }
           record(alt.name, r, false);
-          if (isPreBroadcast(asError(r))) continue;
+          // A compliance refusal is final: no other facilitator is asked.
+          if (!isComplianceSettleRefusal(r) && isPreBroadcast(asError(r))) continue;
           return r;
         } catch (err) {
           record(alt.name, err, false);
-          if (isPreBroadcast(err)) continue;
+          if (!isComplianceSettleRefusal(err) && isPreBroadcast(err)) continue;
           throw err;
         }
       }

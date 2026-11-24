@@ -1,6 +1,6 @@
 // Contract/EVM kit — smart-contract introspection for agents: verified source +
 // ABI (Sourcify), a deterministic Solidity pattern scan, calldata decoding with
-// a signature-DB fallback (openchain.xyz / 4byte.directory), selector lookup,
+// a signature-DB fallback (Sourcify's signature database / 4byte.directory), selector lookup,
 // read-only tx simulation (eth_call + eth_estimateGas over the same keyless
 // public-RPC pool as evm-rpc), and a curated known-address labeler.
 //
@@ -17,6 +17,7 @@ import sha3 from "js-sha3"; // CommonJS — default import, then destructure
 const { keccak256 } = sha3;
 import { ssrfDispatcher } from "./fetch-guard.js";
 import { publicJsonRpc, pickNetwork } from "./chain-kit.js";
+import { SOURCIFY_ATTRIBUTION, SOURCIFY_SIGDB_ATTRIBUTION, SOURCE_LICENSE_NOTE } from "../data-attribution.js";
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
@@ -163,6 +164,25 @@ function capSourceTree(rawSources) {
   return { sources, truncated };
 }
 
+// Each source file's license, as its own SPDX-License-Identifier line states
+// it (an SPDX expression such as "MIT" or "MIT OR Apache-2.0"), or null when
+// the file states none. Read from the first 4KB of each file, where the
+// identifier sits by convention; the expression is cut at 100 characters.
+const SPDX_SCAN_BYTES = 4096;
+export function spdxLicenseOf(content) {
+  const head = String(content ?? "").slice(0, SPDX_SCAN_BYTES);
+  const at = head.indexOf("SPDX-License-Identifier:");
+  if (at < 0) return null;
+  const lineEnd = head.indexOf("\n", at);
+  const expr = head.slice(at + "SPDX-License-Identifier:".length, lineEnd < 0 ? head.length : lineEnd)
+    .replace(/\*\/.*$/, "").trim().slice(0, 100);
+  return expr || null;
+}
+export function sourceLicenses(sources) {
+  return Object.fromEntries(Object.entries(sources || {}).map(([path, content]) => [path, spdxLicenseOf(content)]));
+}
+export const LICENSE_NOTE = SOURCE_LICENSE_NOTE;
+
 // Derive the human-readable signature lists contract-abi returns from a raw
 // ABI array — same derivation for both providers.
 function deriveAbiViews(abi) {
@@ -175,7 +195,7 @@ function deriveAbiViews(abi) {
   return { functions, events };
 }
 
-// Small JSON GET against a fixed keyless upstream (Sourcify / openchain /
+// Small JSON GET against a fixed keyless upstream (Sourcify / its signature DB /
 // 4byte / Blockscout). Hosts are hardcoded by the handlers, so this is not an
 // SSRF surface, but every fetch still rides the guarded dispatcher by
 // convention.
@@ -351,20 +371,25 @@ function parseSignature(sig) {
 }
 
 // ============================================================================
-// Signature-DB lookup — openchain.xyz primary, 4byte.directory fallback.
-// Shared by selector-lookup and calldata-decode's no-ABI path.
+// Signature-DB lookup — Sourcify's signature database primary (the hosted
+// successor of the openchain.xyz database, same API), 4byte.directory
+// fallback. Shared by selector-lookup and calldata-decode's no-ABI path. An
+// answer from the Sourcify database carries its credit (SIGDB_CREDIT).
 // ============================================================================
+export const SIGDB_HOST = "api.4byte.sourcify.dev";
+export const SIGDB_SOURCE = "4byte.sourcify.dev";
+const SIGDB_CREDIT = SOURCIFY_SIGDB_ATTRIBUTION;
 async function lookupSignatures(hex, kind) {
-  // openchain.xyz — filter=true drops known-junk collisions.
+  // filter=true drops known-junk collisions.
   try {
     const param = kind === "event" ? "event" : "function";
     const { data } = await getJson(
-      `https://api.openchain.xyz/signature-database/v1/lookup?${param}=${hex}&filter=true`,
-      "openchain.xyz"
+      `https://${SIGDB_HOST}/signature-database/v1/lookup?${param}=${hex}&filter=true`,
+      SIGDB_SOURCE
     );
     const rows = data?.result?.[param]?.[hex];
     if (Array.isArray(rows) && rows.length) {
-      return { signatures: rows.map((r) => r.name).filter(Boolean), source: "openchain.xyz" };
+      return { signatures: rows.map((r) => r.name).filter(Boolean), source: SIGDB_SOURCE, credit: SIGDB_CREDIT };
     }
   } catch { /* fall through to 4byte */ }
   const path = kind === "event" ? "event-signatures" : "signatures";
@@ -560,6 +585,9 @@ export const CONTRACT_TOOLS = [
           compiler: { language: "Solidity", version: "0.6.12" },
           sourceCount: 2,
           sources: { "contracts/FiatTokenProxy.sol": "// SPDX-License-Identifier: MIT …" },
+          licenses: { "contracts/FiatTokenProxy.sol": "MIT" },
+          licenseNote: LICENSE_NOTE,
+          credit: SOURCIFY_ATTRIBUTION,
         },
       },
     },
@@ -595,6 +623,8 @@ export const CONTRACT_TOOLS = [
           },
           sourceCount: Object.keys(sources).length,
           sources,
+          licenses: sourceLicenses(sources),
+          licenseNote: LICENSE_NOTE,
           source: `Blockscout (${bs.host})`,
           note: `Served from Blockscout (${bs.host}) - Sourcify was unreachable.${truncated ? " Source tree exceeds 800KB - trailing files truncated." : ""}`,
           ...(truncated ? { truncated: true } : {}),
@@ -623,7 +653,10 @@ export const CONTRACT_TOOLS = [
         },
         sourceCount: Object.keys(data.sources || {}).length,
         sources,
+        licenses: sourceLicenses(sources),
+        licenseNote: LICENSE_NOTE,
         ...(truncated ? { truncated: true, note: "Source tree exceeds 800KB - trailing files truncated." } : {}),
+        credit: SOURCIFY_ATTRIBUTION,
       };
     },
   },
@@ -658,6 +691,7 @@ export const CONTRACT_TOOLS = [
           abi: [{ name: "implementation", type: "function", inputs: [], outputs: [{ type: "address" }] }],
           functions: [{ signature: "implementation()", selector: "0x5c60da1b" }],
           events: [{ signature: "Upgraded(address)" }],
+          credit: SOURCIFY_ATTRIBUTION,
         },
       },
     },
@@ -705,6 +739,7 @@ export const CONTRACT_TOOLS = [
         abi: data.abi,
         functions,
         events,
+        credit: SOURCIFY_ATTRIBUTION,
       };
     },
   },
@@ -770,7 +805,7 @@ export const CONTRACT_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Decode EVM smart-contract transaction calldata into the function name and typed parameters. Supply an ABI (from /api/contract-abi) or a signature like transfer(address,uint256) for a fully offline decode; with neither, the 4-byte selector is resolved via the openchain.xyz signature database (4byte.directory fallback) and each candidate signature is tried. Unknown selectors return a documented partial decode (selector + raw 32-byte words) instead of an error.",
+      "Decode EVM smart-contract transaction calldata into the function name and typed parameters. Supply an ABI (from /api/contract-abi) or a signature like transfer(address,uint256) for a fully offline decode; with neither, the 4-byte selector is resolved via an open, community signature database (4byte.directory fallback) and each candidate signature is tried. Unknown selectors return a documented partial decode (selector + raw 32-byte words) instead of an error.",
     tags: ["crypto", "calldata", "decode", "abi", "selector", "evm", "transaction", "smart-contract"],
     discovery: {
       bodyType: "json",
@@ -793,7 +828,8 @@ export const CONTRACT_TOOLS = [
             { type: "address", name: null, value: "0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0" },
             { type: "uint256", name: null, value: "1000000" },
           ],
-          source: "openchain.xyz",
+          source: "4byte.sourcify.dev",
+          credit: SOURCIFY_SIGDB_ATTRIBUTION,
         },
       },
     },
@@ -846,11 +882,11 @@ export const CONTRACT_TOOLS = [
       // keep it only as a last resort. Dynamic signatures can't be measured
       // cheaply (tail layout is offset-driven; offsets already validate against
       // the data length), so they are accepted as-is.
-      const { signatures, source } = await lookupSignatures(selector, "function");
+      const { signatures, source, credit } = await lookupSignatures(selector, "function");
       let partial = null;
       for (const sig of signatures) {
         try {
-          const res = { ...tryDecode(sig), source };
+          const res = { ...tryDecode(sig), source, ...(credit ? { credit } : {}) };
           const { types } = parseSignature(sig);
           if (types.every((t) => !isDynamicType(t)) &&
               types.reduce((s, t) => s + headBytes(t), 0) * 2 !== body.length) {
@@ -869,7 +905,8 @@ export const CONTRACT_TOOLS = [
         words,
         note: signatures.length
           ? "Known signatures for this selector did not decode cleanly against the calldata - raw 32-byte words returned."
-          : "Unknown selector - not in the openchain.xyz/4byte.directory signature databases. Raw 32-byte words returned.",
+          : "Unknown selector - not in the Sourcify or 4byte.directory signature databases. Raw 32-byte words returned.",
+        ...(credit && signatures.length ? { credit } : {}),
       };
     },
   },
@@ -884,7 +921,7 @@ export const CONTRACT_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Resolve a 4-byte function selector or a 32-byte event topic hash to its known human-readable Solidity signatures, via the openchain.xyz signature database with 4byte.directory as fallback. Unknown selectors return {found:false} with an empty list, not an error.",
+      "Resolve a 4-byte function selector or a 32-byte event topic hash to its known human-readable Solidity signatures, via an open, community signature database with 4byte.directory as fallback. Unknown selectors return {found:false} with an empty list, not an error.",
     tags: ["crypto", "selector", "4byte", "signature", "event", "topic", "evm", "smart-contract", "solidity"],
     discovery: {
       bodyType: "json",
@@ -901,7 +938,8 @@ export const CONTRACT_TOOLS = [
           kind: "function",
           found: true,
           signatures: ["transfer(address,uint256)"],
-          source: "openchain.xyz",
+          source: "4byte.sourcify.dev",
+          credit: SOURCIFY_SIGDB_ATTRIBUTION,
         },
       },
     },
@@ -911,8 +949,8 @@ export const CONTRACT_TOOLS = [
         throw bad(`"selector" must be a 0x-prefixed 4-byte function selector (e.g. 0xa9059cbb) or 32-byte event topic hash`);
       }
       const kind = raw.length === 10 ? "function" : "event";
-      const { signatures, source } = await lookupSignatures(raw, kind);
-      return { selector: raw, kind, found: signatures.length > 0, signatures: signatures.slice(0, 25), source };
+      const { signatures, source, credit } = await lookupSignatures(raw, kind);
+      return { selector: raw, kind, found: signatures.length > 0, signatures: signatures.slice(0, 25), source, ...(credit ? { credit } : {}) };
     },
   },
 

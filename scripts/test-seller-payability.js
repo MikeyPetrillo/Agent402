@@ -129,7 +129,7 @@ function toolWith({ bare, pay, spendOk = true, bareDelayMs = 0, bareAdvanceMs = 
   const rj = await junk402.tool.handler({ url: "https://s.example" }, {});
   ok(rj.challenge.readable === false && rj.payment.attempted === false && rj.flags.some((f) => /could not be parsed/.test(f)), "a 402 with no parseable accepts is reported and never paid");
 
-  const refuses = toolWith({ pay: async () => { throw Object.assign(new Error("Seller refused the payment (HTTP 402); the credential expired unused, nothing charged"), { statusCode: 502, refused: true }); } });
+  const refuses = toolWith({ pay: async () => { throw Object.assign(new Error("Seller refused the payment (HTTP 402); the credential expired unused, so the seller was paid nothing"), { statusCode: 502, refused: true }); } });
   const rr = await refuses.tool.handler({ url: "https://s.example" }, {});
   ok(rr.payable === false && rr.payment.status === 402 && rr.payment.settled === false, "a seller that refuses our signed payment is reported as refused, not as our error");
   ok(rr.flags.some((f) => /stock client produces/.test(f)), "and the flag names the thing the seller has to fix");

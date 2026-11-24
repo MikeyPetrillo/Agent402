@@ -99,10 +99,19 @@ Loaded when a connector or front-door file is read.
   grant. State is three size-capped json-documents (apps, pending sign-ins, grants with codes and tokens as
   digests; `clientStore`/`requestStore` passed from server.js); a registration past the cap evicts the oldest
   app that never completed a sign-in, and such apps are pruned after an idle limit. Pending sign-ins are
-  capped per browser (the sign-in cookie it presents names its owner), per address, per wider network (an
-  IPv6 /48) and per app: a requester over a cap lets go of its own oldest there, or its new request is
-  refused (429), never another requester's; a full map refuses no one and lets go of the oldest request of
-  the network or app holding the most. The `/mcp` reader is
+  capped per browser (the sign-in cookie it presents names its owner), per address and per wider network (an
+  IPv6 /48): a requester over a cap lets go of its own oldest there, or its new request is refused (429),
+  never another requester's. Per app, each requester network (a /64) holds at most its share (the smaller
+  of the per-address and per-app caps; its own oldest gives way) and a full app lets go of the oldest
+  request of the network holding the most there, so a newcomer is never refused for rows others hold; a
+  full map refuses no one and lets go of the oldest request of the network or app holding the most. Code
+  mail (`sendCode`) meters the requester: a per (mailbox, network) share; the mailbox's day ceiling holds
+  first sends too, past it a network's first send of the day comes from a fixed per-mailbox allowance the
+  size of the ceiling; one network takes at most `GLOBAL_SHARE` (5%) of the service-wide hourly budget, and
+  once that is spent a network with no send today still gets one code; shared counters are read first and
+  counted only for mail that goes out. The balance page's sign-in link is limited per (mailbox, network)
+  with a mailbox ceiling across askers and a fixed first-ask allowance past it, and its service-wide send
+  budget still sends a network's first link of the hour. The `/mcp` reader is
   mounted before the connector: a token of ours resolves to a grant (`req.mcpCreditsGrant`) or answers 401
   with `WWW-Authenticate` naming the metadata; no token, or someone else's, passes untouched. `/mcp/credits`
   is the same connector that answers 401 without a token. A paid tool under a grant is replayed with a

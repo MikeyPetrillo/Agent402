@@ -20,6 +20,7 @@
 //     move it, a bucket crossing does) and describeTokenChanges() reads it
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { urlMatches } from "./lib/url-host.js";
 process.env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "test-key-not-real";
 
 const { TOKEN_BRIEF_TOOLS, TOKEN_BRIEF_TIERS, probeTokenBrief, describeTokenChanges, normMint, __test } =
@@ -179,7 +180,7 @@ let happy = null;
 
   ok(e.identity.name === "Jupiter" && e.identity.symbol === "JUP", "identity resolved from the fetched facts");
   ok(e.identity.holderCount === 2873512, "holder count from RugCheck");
-  ok(e.price.usd === 0.2027 && e.price.blockId === 440919030, "price of record from Jupiter price v3 with its block");
+  ok(e.price.usd === 0.2034 && e.price.blockId === null && calls.some((u) => urlMatches(u, "api.dexscreener.com", `/tokens/v1/solana/${MINT}`)), "price of record from the deepest DEX pair (no Solana RPC here, so no slot)");
   ok(e.authorities.mintAuthorityDisabled === true && e.authorities.freezeAuthorityDisabled === true, "authority state read from the audit facts");
   ok(e.authorities.metadataMutable === true && e.authorities.updateAuthority === "UPDATEAUTH61aq", "metadata mutability + update authority carried");
   ok(e.liquidity.totalMarketLiquidityUsd === 3585833.66, "total market liquidity from RugCheck");
@@ -191,6 +192,10 @@ let happy = null;
   ok(e.holders.concentration.top10PctExcludingPools < e.holders.concentration.top10Pct, "pool-excluded concentration is lower than the raw figure");
   ok(e.risk.riskCounts.danger === 1 && e.risk.risks.length === 2, "risk flags and counts carried");
   ok(e.probes.report && e.probes.safety && e.probes.pairs && e.probes.lookup && e.probes.price, "all five probes recorded as ok");
+  {
+    const { RUGCHECK_ATTRIBUTION } = await import("../src/data-attribution.js");
+    ok(happy.credit === RUGCHECK_ATTRIBUTION, "a brief built on RugCheck's report credits it by name and link");
+  }
 
   ok(e.buckets.mint === "revoked" && e.buckets.freeze === "revoked", "authority buckets");
   ok(e.buckets.lpLocked === "partial-low", `LP-locked bucket for 8.98% is "partial-low" (${e.buckets.lpLocked})`);

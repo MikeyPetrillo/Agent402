@@ -505,19 +505,24 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   const cwBal = cr.balance(CW.key).balanceUsd, cwUse = cr.authorize(CW.key, 0.001);
   ok(cwUse.ok === true && cwBal === 2 * usd, "a win that arrives before its create leaves the key usable when the create comes");
   if (cwUse.ok) cr.release(cwUse.hash, cwUse.heldMicro);
-  // A closed status that is neither won nor lost: the hold lifts, the dispute is listed for a person, and refunds wait on it.
+  // A closed status that is neither won nor lost: the key stays frozen, the dispute is listed for a person, and refunds wait on it.
   const UN = await pair("un");
   await wh.handleWebhook(ev("evt_un_c", "charge.dispute.created", { id: "dp_un", charge: "ch_un", payment_intent: "pi_eunb", amount: P }), "goodsig");
   ok(cr.authorize(UN.key, 0.001).reason === "frozen", "guard: the dispute froze the key");
   await wh.handleWebhook(ev("evt_un_x", "charge.dispute.closed", { id: "dp_un", charge: "ch_un", payment_intent: "pi_eunb", status: "status-not-known" }), "goodsig");
   const unBal = cr.balance(UN.key).balanceUsd, unUse = cr.authorize(UN.key, 0.001);
-  ok(unUse.ok === true && unBal === 2 * usd, "a dispute closed with a status not recognized lifts the hold and takes nothing");
+  ok(unUse.ok !== true && unUse.reason === "frozen" && unBal === 2 * usd, `a dispute closed with a status not recognized keeps the key frozen until a person resolves it, and takes nothing (${unUse.reason || "usable"})`);
   if (unUse.ok) cr.release(unUse.hash, unUse.heldMicro);
   const toReview = await cr.disputesToReview();
   ok(toReview.some((d) => d.keyId === UN.keyId && d.paymentIntent === "pi_eunb") && (await cr.refundsOwedWord(0)) === "owed", "...is listed for review and the status word reads owed");
   const unRefunds = refunds.length;
   ok((await cr.requestRefund(UN.key)).status === "disputed" && refunds.length === unRefunds, "...and a refund on request waits on it (nothing sent)");
   ok((await cr.resolveDispute(UN.keyId, "pi_eunb", "lost")) === UN.keyId && cr.balance(UN.key).balanceUsd === usd, `a person's resolution as lost takes that payment (${cr.balance(UN.key).balanceUsd})`);
+  {
+    const after = cr.authorize(UN.key, 0.001);
+    ok(after.ok === true, `...and only then the key thaws, for the payment left on it (${after.reason || "usable"})`);
+    if (after.ok) cr.release(after.hash, after.heldMicro);
+  }
   ok(!(await cr.disputesToReview()).some((d) => d.keyId === UN.keyId) && (await cr.refundsOwedWord(0)) === "ok", "...and the word clears");
   ok((await cr.resolveDispute(UN.keyId, "pi_eunb", "lost")) === null && cr.balance(UN.key).balanceUsd === usd, "a second resolution takes nothing more");
   // The same status, closed before its create.
@@ -525,9 +530,14 @@ paid("cs_flag", "credits-5", "pi_flag", "flag@x.com", { outcome: { type: F.outco
   await wh.handleWebhook(ev("evt_ue_x", "charge.dispute.closed", { id: "dp_ue", charge: "ch_ue", payment_intent: "pi_euea", status: "status-not-known" }), "goodsig");
   await wh.handleWebhook(ev("evt_ue_c", "charge.dispute.created", { id: "dp_ue", charge: "ch_ue", payment_intent: "pi_euea", amount: P }), "goodsig");
   const ueUse = cr.authorize(UE.key, 0.001);
-  ok(ueUse.ok === true && (await cr.disputesToReview()).some((d) => d.keyId === UE.keyId) && (await cr.refundsOwedWord(0)) === "owed", "an unrecognized close before its create freezes nothing and is listed for review");
+  ok(ueUse.ok !== true && ueUse.reason === "frozen" && (await cr.disputesToReview()).some((d) => d.keyId === UE.keyId) && (await cr.refundsOwedWord(0)) === "owed", `an unrecognized close before its create freezes the key and is listed for review (${ueUse.reason || "usable"})`);
   if (ueUse.ok) cr.release(ueUse.hash, ueUse.heldMicro);
   ok((await cr.resolveDispute(UE.keyId, "pi_euea", "won")) === UE.keyId && cr.balance(UE.key).balanceUsd === 2 * usd && (await cr.refundsOwedWord(0)) === "ok", "a resolution as won takes nothing and clears the word");
+  {
+    const after = cr.authorize(UE.key, 0.001);
+    ok(after.ok === true, `...and the key thaws once a person has resolved it (${after.reason || "usable"})`);
+    if (after.ok) cr.release(after.hash, after.heldMicro);
+  }
   // prevented: the network stopped the dispute; the hold lifts with nothing to review.
   const PV = await pair("pv");
   await wh.handleWebhook(ev("evt_pv_c", "charge.dispute.created", { id: "dp_pv", charge: "ch_pv", payment_intent: "pi_epva", amount: P }), "goodsig");

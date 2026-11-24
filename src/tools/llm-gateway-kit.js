@@ -1753,6 +1753,15 @@ function countInPieces(count, text) {
   return n + (pieces - 1);
 }
 const countTokensBounded = (text) => countInPieces(countTokens, text);
+// The quote's floor: each piece counts at least one token per
+// QUOTE_MAX_CHARS_PER_TOKEN characters. The quoting tokenizer (o200k) merges
+// runs (spaces, rule characters, some alternating pairs, ideographic spaces)
+// into tokens of 15 to 125 characters, which another vendor's tokenizer may
+// not; the floor bounds that under-count. Prose, code, JSON and CJK count
+// denser than it (about 2 to 5 characters a token), so their quote does not
+// move. Piece by piece, so a run beside ordinary text is not averaged away.
+export const QUOTE_MAX_CHARS_PER_TOKEN = 8;
+const countQuotePiece = (piece) => Math.max(countTokens(piece), Math.ceil(piece.length / QUOTE_MAX_CHARS_PER_TOKEN));
 
 // A large quote, counted before the gates without holding the loop. Even in
 // 1 KB pieces a 330k-char CJK body is ~250 ms of BPE in one synchronous run,
@@ -1796,7 +1805,7 @@ function countQuoteTokens(text) {
     if (e && Date.now() - e.at < QUOTE_WARM_TTL_MS) { warmHits++; return e.n; }
     if (collecting) { collecting.push(text); return text.length; }
   }
-  return countTokensBounded(text);
+  return countInPieces(countQuotePiece, text);
 }
 const yieldTurn = () => new Promise((r) => setImmediate(r));
 async function countInPiecesYielding(count, text) {
@@ -1826,7 +1835,7 @@ export async function warmQuoteTokenCounts(quote) {
   try { quote(); } catch { /* the real quote answers the refusal */ } finally { collecting = null; }
   let counted = 0;
   for (const t of new Set(texts)) {
-    const n = await countInPiecesYielding(countTokens, t);
+    const n = await countInPiecesYielding(countQuotePiece, t);
     keepWarm(t, n);
     counted++;
   }

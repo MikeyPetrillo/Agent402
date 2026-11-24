@@ -29,6 +29,9 @@ paths:
   - "src/upstream-budgets.js"
   - "src/upstream-hard-caps.js"
   - "src/upstream-call-days.js"
+  - "src/upstream-cap-refusals.js"
+  - "src/tools/rdap-registry-limits.js"
+  - "src/tools/us-macro-series.js"
   - "services/**"
   - "scripts/*-deploy-paths.js"
   - "scripts/backup-restore.js"
@@ -167,8 +170,27 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   run, the API unreadable, or no answer inside the lookup's one deadline (`MARKER_BASE_DEADLINE_MS`,
   default 40000, also its most; half the job's 2-minute limit), it reads its own pushed range; `MARKER_WORKFLOW_FILE` (default
   `deploy.yml`) names the workflow whose runs it lists (`scripts/test-ci-gating.js` runs the
-  step on a three-push sequence and evaluates the group for every mode a job reads).
-- **CI's data keys:** `OPEN_METEO_API_KEY` and `COINGECKO_CI_API_KEY` (never the production
+  step on a three-push sequence and evaluates the group for every mode a job reads). Every
+  subject is read through `scripts/marker-subjects.js`, which leaves out an outside
+  contributor's commits: a merge of another account's pull request ("Merge pull request #N from
+  <owner>/...", owner not this repository's) with everything it brings in, and a squash merge's
+  "(#N)" title on the first-parent line; each one left out is named in the job log. A rebase
+  merge of an outside pull request cannot be told apart from our own commits, so outside pull
+  requests are merged with a merge commit.
+- **Our own upstream caps** (refuse with a 503 before any read and any settle point; counted by
+  `src/upstream-cap-refusals.js`, per cap and slug on `/__operator/upstream-caps.json`; the word
+  `upstreamCaps` on `/api/gateway-status` reads `reached` for an hour after a refusal, and the status
+  Worker and heartbeat page under `Scheduled check needs review: upstream-caps`). A cached answer is
+  not a read and takes no place. `RDAP_REGISTRY_DAILY_MAX`: lookups per registry RDAP host per UTC
+  day per process, shared by whois and domain-availability (default 1000, `off` lifts it).
+  `BLS_API_KEY`: fred-series' BLS reads; keyless the day budget is 20 (the API allows 25), with the
+  key 450 (the API allows 500), reads cached by decade. `CERTSPOTTER_API_KEY`: cert-transparency's
+  second search runs only with it, at most 100 reads an hour per process; past that crt.sh answers
+  alone (no refusal). `SOLANA_DEVNET_RPC_URL`: wallet-balances on solana-devnet (unset, the devnet
+  host of the provider behind `SOLANA_RPC_URL`). search-suggest's per-minute ceiling and queue-wait
+  bound count as a cap too.
+- **CI's data keys:** `OPEN_METEO_API_KEY`, `BLS_CI_API_KEY` (handed to the server as `BLS_API_KEY`, never the production BLS key; the BLS-backed macro tools; the step
+  logs keyed or keyless and caps the run's BLS reads with `BLS_DAILY_MAX` = `BLS_RUN_READ_CAP`, 12) and `COINGECKO_CI_API_KEY` (never the production
   CoinGecko key) reach only test-sweeps' strict-sweep server step and the nightly corpus step; the
   server gets `COINGECKO_API_TIER=pro` and `COINGECKO_DAILY_MAX` = `CG_RUN_READ_CAP`
   (`CG_NIGHTLY_READ_CAP` nightly) from `scripts/test-non-metered-examples.js`;
@@ -204,15 +226,19 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `ok`. Without a bucket, a FREE_MODE boot, a boot outside production and a boot with no state
   database read `off`, which never pages.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
-  re-probed once before it is recorded. The heartbeat signs its paywall read with X-Heartbeat-Token,
+  re-probed once before it is recorded. A rail card on `/status` whose newest reading is more
+  than `RAIL_PEER_LAG_MS` (6 hours) behind the newest rail reading (left out of the latest paid
+  canary run) reads unknown with reason "behind its peers", both ages on the card; that alone
+  does not move the headline, which a rail past the daily bound still degrades (`src/status.js`
+  `markRailsBehindPeers`, `scripts/test-status-store.js`). The heartbeat signs its paywall read with X-Heartbeat-Token,
   so the unpaid budget never refuses it; the status Worker pages "Scheduled check needs review: paywall-read" after three
   unobserved runs (the age of the newest paywall row on /api/status) and closes on its next observed
   read. Roll back the server before (or with) the status Worker, never the
   Worker alone: an older Worker reads the unpaid-quote budget's 429 as a paywall failure.
-  The Base unproven cap keys are versioned (`base-unproven-seller-v2`, `-v2-sum`): a rolled-back
-  build books in its own unversioned window, so for as long as it serves the two builds' caps are
-  independent (each seller and the lane can be paid up to one cap per build), and on the next
-  roll-forward each sum's next rebuild (within a day) folds in that window's unexpired entries.
+  The Base unproven cap keys are versioned (`base-unproven-seller-v2`, `-v2-sum`): a build older
+  than the versioned keys books in its own unversioned window, which no current build reads, so
+  a rollback that far makes the two builds' caps independent (each seller and the lane can be paid
+  up to one cap per build) for as long as it serves.
 - **Every status word has a pager:** each word on `/api/gateway-status` is read by a status Worker
   alarm (`scripts/test-status-word-pagers.js` boots the server and fails on a word no verdict reads;
   none is excused). Paged on their alarm values only, by the Worker and `heartbeat.yml` under one
@@ -411,6 +437,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   claim. `POST /__operator/refunds/update`: 409 only for a state conflict, 503 when the store did not
   confirm, 400 for missing evidence (`refundRowUpdate`). A debt with no settle tx keys on payer,
   slug, minute and request (`fallbackEvidence`).
+- **Discovery documents under load:** while the load gate (`src/load-shed.js`) sheds free work, a
+  GET or HEAD with no query for the x402 manifest (and its aliases), `/openapi.json`, `/llms.txt`,
+  `/llms-full.txt` or `/api/pricing` is answered from that document's last 200 (kept as plain
+  bytes by a capture mounted after the compressor; `src/discovery-snapshots.js`), with its own
+  headers, its ETag and an `Age` header, instead of a 503. A copy older than
+  `DISCOVERY_SNAPSHOT_MAX_AGE_MS` (default one hour) or none since boot is shed as before. Counts
+  on `/__operator/perf.json` (`discoverySnapshots`; `scripts/test-discovery-snapshots.js`).
 - **Search refusals:** `src/discovery-refusals.js` counts every search `/api/find` and `/api/route`
   turn away, per UTC day, by route and rule (`load-gate`, `client-rate`, `client-compute`,
   `shared-compute`, `inflight`, `deadline`) under a keyed, day-scoped digest of the limiter's client
@@ -582,6 +615,14 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   word `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads
   attention on the conditions `.claude/rules/payments.md` lists; the status Worker and
   `heartbeat.yml` page on it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
+- **Referral split legs:** each proven `/ref` sale records what its receipt showed
+  (`src/referral-legs.js`, fed by the gate's `bookSale` from `proveReceipt`'s `split`): the routed
+  event's gross, its four leg words, the merchant amount and every transfer out of the split
+  contract with its recipient address. With a state database one `records` row per payment
+  (collection `referral-legs`, id the payment's replay key); without one the last 2000 in memory.
+  Operator only: `splitLegs` on `/__operator/referral.json` (counts and the latest 20) and
+  `/__operator/referral-legs.json?year=YYYY` (per recipient address: units and transfers in that
+  UTC year). A failed write is counted, never thrown (`scripts/test-referral-legs.js`).
 - **Referral gate, standing facts (measured 2026-11-14, stubs for the facilitator and the chain):**
   one paid `/ref` call makes 1 `/verify`, 1 `/settle`, 1 receipt read, 4 book writes, and writes and
   removes one answer file. The book is ONE document rewritten whole by each write, so a write costs

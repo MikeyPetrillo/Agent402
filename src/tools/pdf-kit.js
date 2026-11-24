@@ -5,6 +5,7 @@
 // chain them. The transforms are pure functions over Buffers (testable in
 // isolation); the handlers just fetch then delegate.
 import { safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { bad, parsePages } from "./pdf-ops.js";
 import { runPdfOp } from "./pdf-offthread.js";
 
@@ -20,6 +21,7 @@ function need(input, field) {
 }
 async function fetchBuf(url, label = "url") {
   if (typeof url !== "string" || !url) throw bad(`Missing or invalid "${label}"`);
+  await assertRobotsAllow(url);
   const { buffer } = await safeFetch(url, { binary: true, maxBytes: MAX_PDF_BYTES });
   return buffer;
 }

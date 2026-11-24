@@ -80,6 +80,31 @@ await throws(h("evm-rpc")({ method: "eth_getLogs" }), 400, "evm-rpc: rejects eth
 await throws(h("evm-rpc")({ method: "eth_subscribe" }), 400, "evm-rpc: rejects subscriptions");
 await throws(h("evm-rpc")({ method: "personal_sign" }), 400, "evm-rpc: rejects signing");
 await throws(h("evm-rpc")({ method: "eth_blockNumber", network: "fakechain" }), 400, "evm-rpc: bad network");
+// The raw relays read Base only: every other chain is a 400 that names Base,
+// before any egress.
+{
+  const { CHAIN_RPC_TOOLS } = await import("../src/tools/chain-rpc-kit.js");
+  const relay = { ...Object.fromEntries(["evm-rpc", "eth-call", "event-logs"].map((s) => [s, h(s)])), "chain-storage": CHAIN_RPC_TOOLS.find((t) => t.slug === "chain-storage").handler };
+  const realFetch = globalThis.fetch; let egress = 0;
+  globalThis.fetch = async () => { egress++; throw new Error("no egress expected"); };
+  try {
+    for (const network of ["ethereum", "polygon", "arbitrum", "optimism", "Optimism", "fakechain"]) {
+      for (const [slug, input] of [["evm-rpc", { method: "eth_blockNumber" }], ["eth-call", { method: "eth_blockNumber" }], ["event-logs", { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }], ["chain-storage", { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", slot: "0" }]]) {
+        let e = null; try { await relay[slug]({ ...input, network }); } catch (x) { e = x; }
+        ok(e?.statusCode === 400 && /reads Base only/.test(e.message) && /network "base"/.test(e.message), `${slug} on ${network}: 400 naming Base (${e?.message?.slice(0, 80)})`);
+      }
+    }
+    ok(egress === 0, "the Base-only refusal is made before any read");
+  } finally { globalThis.fetch = realFetch; }
+}
+// The removed public endpoints are in no lane of the chain reads.
+{
+  const { PUBLIC_RPCS, BASE_RELAY_RPCS, EVENT_LOGS_RPCS } = await import("../src/tools/chain-kit.js");
+  const all = [...Object.values(PUBLIC_RPCS).flat(), ...BASE_RELAY_RPCS, ...EVENT_LOGS_RPCS].join(" ");
+  ok(!/drpc\.org|cloudflare-eth|mainnet\.optimism\.io|monad\.xyz|chain\.robinhood\.com|api\.avax\.network/.test(all), "no removed public endpoint in a chain-kit lane");
+  ok(Object.keys(PUBLIC_RPCS).every((k) => PUBLIC_RPCS[k].length >= 1), "every chain the named reads serve keeps a public lane");
+  ok(BASE_RELAY_RPCS.length === 1 && BASE_RELAY_RPCS[0] === "https://mainnet.base.org", "the relays' lane is mainnet.base.org alone");
+}
 await throws(h("evm-rpc")({ method: "eth_blockNumber", params: "latest" }), 400, "evm-rpc: params must be an array");
 await throws(h("evm-rpc")({ method: "eth_blockNumber", params: Array(9).fill("0x0") }), 400, "evm-rpc: params capped at 8 entries");
 await throws(h("evm-rpc")({ method: "eth_blockNumber", params: ["0x" + "a".repeat(5000)] }), 400, "evm-rpc: params capped at 4KB serialized");
@@ -134,7 +159,7 @@ if (origKey) process.env.ALCHEMY_API_KEY = origKey;
   };
   try {
     process.env.ALCHEMY_API_KEY = "test-key-not-real";
-    for (const [slug, input] of [["evm-rpc", { method: "eth_blockNumber", network: "base" }], ["eth-call", { method: "eth_blockNumber", network: "base" }], ["block-number", { network: "base" }]]) {
+    for (const [slug, input] of [["block-number", { network: "base" }], ["block-number", { network: "optimism" }]]) {
       hosts = []; refuse = () => false;
       const r = await h(slug)(input);
       ok(r && hosts.length === 1 && !/alchemy/.test(hosts[0]), `${slug}: a public node answers first with the key set (asked ${hosts.join(", ")})`);
@@ -146,6 +171,44 @@ if (origKey) process.env.ALCHEMY_API_KEY = origKey;
     hosts = []; refuse = () => false;
     const r = await h("eth-call")({ method: "eth_blockNumber", network: "base" });
     ok(r?.result === "0x10" && hosts.every((x) => !/alchemy/.test(x)), `eth-call: answers with no key from a public node (${hosts.join(", ")})`);
+    // The raw relays read Base's own endpoint and nothing else: no other
+    // public node and no keyed lane, even with the key set and the endpoint
+    // refusing.
+    process.env.ALCHEMY_API_KEY = "test-key-not-real";
+    for (const [slug, input] of [["evm-rpc", { method: "eth_blockNumber" }], ["eth-call", { method: "eth_blockNumber", network: "base" }]]) {
+      hosts = []; refuse = () => false;
+      const r = await h(slug)(input);
+      ok(r?.result === "0x10" && r.network === "base" && hosts.length === 1 && hosts[0] === "mainnet.base.org", `${slug}: reads mainnet.base.org only (asked ${hosts.join(", ")})`);
+      hosts = []; refuse = () => true;
+      let e = null; try { await h(slug)(input); } catch (x) { e = x; }
+      ok(e && hosts.length >= 1 && hosts.every((x) => x === "mainnet.base.org"), `${slug}: a refusal is never retried on another lane (asked ${hosts.join(", ")})`);
+    }
+    hosts = []; refuse = () => false;
+    const { CHAIN_RPC_TOOLS } = await import("../src/tools/chain-rpc-kit.js");
+    const storage = CHAIN_RPC_TOOLS.find((t) => t.slug === "chain-storage").handler;
+    globalThis.fetch = async (url) => { hosts.push(new URL(String(url)).host); return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x01" }), { status: 200, headers: { "content-type": "application/json" } }); };
+    const st = await storage({ address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", slot: "0" });
+    ok(st?.network === "base" && st.asUint === "1" && hosts.length === 1 && hosts[0] === "mainnet.base.org", `chain-storage: reads mainnet.base.org only (asked ${hosts.join(", ")})`);
+    // event-logs: mainnet.base.org refuses every eth_getLogs; Base's public
+    // node behind it answers, and no other chain or keyed lane is asked.
+    hosts = [];
+    globalThis.fetch = async (url, init) => {
+      const host = new URL(String(url)).host; hosts.push(host);
+      const { method } = JSON.parse(init.body);
+      if (method === "eth_blockNumber") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x100" }), { status: 200 });
+      if (host === "mainnet.base.org") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32011, message: "request limit reached" } }), { status: 200 });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [{ blockNumber: "0xff", transactionHash: "0xab", logIndex: "0x0", topics: [], data: "0x" }] }), { status: 200 });
+    };
+    const ev = await h("event-logs")({ address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" });
+    ok(ev?.network === "base" && ev.count === 1 && hosts.every((x) => x === "mainnet.base.org" || x === "base-rpc.publicnode.com") && hosts.some((x) => x === "base-rpc.publicnode.com"), `event-logs: Base only, the public node behind mainnet.base.org answers (asked ${hosts.join(", ")})`);
+    // eth-call's eth_getLogs reads the same lanes as event-logs (mainnet.base.org
+    // refuses the method); its other methods keep the relays' one lane.
+    hosts = [];
+    const lg = await h("eth-call")({ method: "eth_getLogs", params: [{ fromBlock: "0xff", toBlock: "0x100", address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }] });
+    ok(lg?.network === "base" && Array.isArray(lg.result) && lg.result.length === 1 && hosts.every((x) => x === "mainnet.base.org" || x === "base-rpc.publicnode.com") && hosts.some((x) => x === "base-rpc.publicnode.com"), `eth-call: eth_getLogs answers from the public node behind mainnet.base.org (asked ${hosts.join(", ")})`);
+    hosts = [];
+    await h("eth-call")({ method: "eth_blockNumber", params: [] });
+    ok(hosts.length === 1 && hosts[0] === "mainnet.base.org", `eth-call: other methods read mainnet.base.org only (asked ${hosts.join(", ")})`);
   } finally {
     globalThis.fetch = realFetch;
     if (savedKey === undefined) delete process.env.ALCHEMY_API_KEY; else process.env.ALCHEMY_API_KEY = savedKey;

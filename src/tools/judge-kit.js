@@ -405,27 +405,62 @@ async function judgeUnderBudget(input, { fetchImpl = fetch, tier = "judge", stri
 
 // ---- POST /v1/decisions: OpenAI's Decisions wire --------------------------
 // The same judgment on OpenAI's own request and answer shape, so an OpenAI SDK
-// pointed at this server works unchanged and pays per call. Text input only
-// for now: an image's token count is not bounded by its size the way text is.
+// pointed at this server works unchanged and pays per call. Text and JSON
+// input: an input_json part is rendered as text upstream, so its token count
+// is bounded by its bytes the way text is. Images are refused: an image's
+// token count is not bounded by its size.
 const NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+// OpenAI's own bounds on one input_json part.
+export const JSON_PART_LIMITS = { depth: 32, values: 10_000 };
+
+/** A JSON part's data, checked: an object, or an array of objects, inside
+ *  the part's depth and value bounds. Answers its compact text. */
+function jsonPartText(data) {
+  const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  if (!isObj(data) && !(Array.isArray(data) && data.length && data.every(isObj))) throw bad('An input_json part\'s "data" is a JSON object or a non-empty array of objects.');
+  let values = 0;
+  const walk = (v, depth) => {
+    if (++values > JSON_PART_LIMITS.values) throw bad(`An input_json part holds more than ${JSON_PART_LIMITS.values} values.`);
+    if (v === null || typeof v !== "object") return;
+    if (depth > JSON_PART_LIMITS.depth) throw bad(`An input_json part nests deeper than ${JSON_PART_LIMITS.depth} levels.`);
+    for (const x of Array.isArray(v) ? v : Object.values(v)) walk(x, depth + 1);
+  };
+  walk(data, 1);
+  return JSON.stringify(data);
+}
 
 export function validateDecisionsRequest(input = {}) {
   const { model = LUNA, input: content, questions } = input;
   if (model !== LUNA) throw bad(`"model" must be ${LUNA}.`);
   let text;
+  // Set only when a part is input_json: the messages as sent upstream. A
+  // text-only request goes upstream as one joined string, as before.
+  let messages = null;
   if (typeof content === "string") text = content;
   else if (Array.isArray(content)) {
     const parts = [];
+    const msgs = [];
+    let hasJson = false;
     for (const m of content) {
       if (m?.role !== "user" || !Array.isArray(m?.content)) throw bad('"input" is a string or a list of user messages with "content" parts.');
+      const out = [];
       for (const c of m.content) {
-        if (c?.type === "input_image") throw bad('Images are not accepted on this endpoint yet; send the content as input_text.');
-        if (c?.type !== "input_text" || typeof c.text !== "string") throw bad('Each content part is {"type":"input_text","text":"..."}.');
+        if (c?.type === "input_image") throw bad('Images are not accepted on this endpoint; send the content as input_text or input_json.');
+        if (c?.type === "input_json") {
+          parts.push(jsonPartText(c.data));
+          out.push({ type: "input_json", data: c.data });
+          hasJson = true;
+          continue;
+        }
+        if (c?.type !== "input_text" || typeof c.text !== "string") throw bad('Each content part is {"type":"input_text","text":"..."} or {"type":"input_json","data":{...}}.');
         parts.push(c.text);
+        out.push({ type: "input_text", text: c.text });
       }
+      msgs.push({ role: "user", content: out });
     }
     text = parts.join("\n\n");
-  } else throw bad('"input" is required: a string, or a list of user messages with input_text parts.');
+    if (hasJson) messages = msgs;
+  } else throw bad('"input" is required: a string, or a list of user messages with input_text or input_json parts.');
   if (!text.trim()) throw bad('"input" is empty.');
   if (!Array.isArray(questions) || !questions.length) throw bad('"questions" is a non-empty array.');
   const names = new Set();
@@ -466,7 +501,7 @@ export function validateDecisionsRequest(input = {}) {
   }
   // The same bounds as /v1/judge, applied to the translated request.
   const body = validateJudgeRequest({ state: text, questions: judgeQuestions, model: LUNA });
-  const request = { model: LUNA, input: text, questions: questions.map((q) => {
+  const request = { model: LUNA, input: messages || text, questions: questions.map((q) => {
     const out = { type: q.type, name: q.name, instructions: String(q.instructions).trim() };
     if (q.type === "choice") out.choices = q.choices.map((c) => ({ value: c.value, description: String(c.description ?? "") }));
     if (q.type === "score") out.levels = q.levels.map((l) => ({ label: String(l?.label ?? ""), description: String(l?.description ?? "") }));
@@ -590,7 +625,7 @@ export const JUDGE_TOOLS = [{
   slug: "decisions",
   category: "ai",
   price: "$0.001",
-  description: "OpenAI's Decisions API on its own wire: point an OpenAI SDK's base URL here and client.decisions.create works unchanged, paid per call. Send input (text, or user messages with input_text parts) and questions; get back answers your code can branch on. predicate returns the probability a condition holds; choice returns one of your values with probabilities and confidence; score returns a probability-weighted position on your ordered levels. Up to 8 questions per call. Served by gpt-6-luna, with jev-latest, Microsoft Decision-1 and Gemini Decision-1 as fallbacks; the answer names the model that served, and fallback_from when the first was unavailable. Text input only. Model-backed, not deterministic.",
+  description: "OpenAI's Decisions API on its own wire: point an OpenAI SDK's base URL here and client.decisions.create works unchanged, paid per call. Send input (text, or user messages with input_text and input_json parts) and questions; get back answers your code can branch on. predicate returns the probability a condition holds; choice returns one of your values with probabilities and confidence; score returns a probability-weighted position on your ordered levels. Up to 8 questions per call. Served by gpt-6-luna, with jev-latest, Microsoft Decision-1 and Gemini Decision-1 as fallbacks; the answer names the model that served, and fallback_from when the first was unavailable. Text and JSON input; images are not accepted. Model-backed, not deterministic.",
   tags: ["ai", "classify", "judgment", "routing", "openai", "decisions"],
   discovery: {
     bodyType: "json",
@@ -602,7 +637,7 @@ export const JUDGE_TOOLS = [{
       required: ["input", "questions"],
       properties: {
         model: { type: "string", enum: [LUNA], description: `Defaults to ${LUNA}.` },
-        input: { type: ["string", "array"], maxLength: LIMITS.stateChars, description: `The content to evaluate: a string, or user messages with input_text parts. Up to ${LIMITS.stateChars} characters.` },
+        input: { type: ["string", "array"], maxLength: LIMITS.stateChars, description: `The content to evaluate: a string, or user messages with input_text parts ({type, text}) and input_json parts ({type, data}: an object or an array of objects). Up to ${LIMITS.stateChars} characters, a JSON part counted as its compact text.` },
         questions: { type: "array", description: "Each has type (predicate/choice/score), a unique name and instructions; choice adds choices [{value, description}], score adds levels [{label, description}] lowest first." },
       },
     },

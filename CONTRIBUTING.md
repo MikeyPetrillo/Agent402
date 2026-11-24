@@ -88,6 +88,10 @@ curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
   -d '{"text":"hello","algo":"sha256"}'
 ```
 
+Every setting the server reads is listed, with its purpose and default, in the generated
+[configuration reference](docs/configuration.md); [`.env.example`](.env.example) is a commented
+starting file for a paid instance.
+
 ## Add a tool
 
 A tool is a plain object in one of the kit arrays under
@@ -169,6 +173,20 @@ doesn't reconcile, and tools that are invisible to agents.
 
 ## Test your change
 
+Start with the fast offline checks (no server, no network, about half a minute):
+
+```bash
+npm test                                 # node scripts/contributor-checks.js; --list names each suite
+```
+
+Three files are generated, and a check fails until you regenerate them:
+
+```bash
+node scripts/published-slugs.js --write      # after adding a tool or a skill pack (records every published route)
+node scripts/gen-page-dates.js --write       # after editing a page module or a tool kit (sitemap lastmod)
+node scripts/gen-config-reference.js --write # after reading a new environment variable (add its purpose line to docs/configuration.json first)
+```
+
 The MCP sweep drives the whole catalog through `/mcp`, so boot the server with
 the connector's rate limit raised first:
 
@@ -206,6 +224,11 @@ Small, focused PRs merge fastest. Three things worth knowing before you open one
   Opening one creates no payment obligation on either side, and a PR must
   not be conditional on one. Proposals for paid work go to
   **help@agent402.tools**, not into a PR or an issue.
+- **Accepted patches may land in a batch.** `main` mostly moves through one
+  batch pull request at a time, so an accepted outside change may be merged
+  as part of the next batch rather than on its own. Either way your commits
+  keep your authorship and sign-off, and the batch description credits your
+  pull request.
 - **Money-path changes are reviewed as a set.** Anything touching payments,
   the router's buyer, or settlement is landed alongside our own next round
   of changes there rather than merged alone, however green the checks are.

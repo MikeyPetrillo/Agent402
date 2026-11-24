@@ -4,7 +4,7 @@
 // relies on is asserted here, so a change that quietly weakens an assertion
 // (a `populated` that accepts [], a 500 read as upstream) fails this file
 // before it can turn the corpus green.
-import { checkExpect, classify, getPath, paceWaitMs, targetHostOf } from "./test-corpus.js";
+import { checkExpect, classify, getPath, paceWaitMs, targetHostOf, unmeasuredMarks, expectationPath, runnerConfirmsUnmeasured } from "./test-corpus.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -35,18 +35,21 @@ ok(checkExpect({ status: 400, matches: { error: "currency" } }, 400, { error: "u
 ok(checkExpect({ status: 400 }, 200, { error: "x" }).length === 1, "a 200 where a 400 was expected fails");
 
 // classify
-const T = (o) => classify({ expectFails: [], ...o }).kind;
-ok(T({ status: 200, body: {}, tier: 1 }) === "ok", "clean is ok");
-ok(T({ status: 200, body: {}, tier: 1, expectFails: ["x"] }) === "fatal", "an expectation miss is fatal");
-ok(T({ status: 500, body: { error: "boom" }, tier: 1 }) === "fatal", "a 500 is fatal");
-ok(T({ status: 502, body: { error: "upstream" }, tier: 1 }) === "upstream" && T({ status: 429, body: {}, tier: 1 }) === "upstream", "502/429 on a networked tool is upstream");
-ok(T({ status: 503, body: { error: "x" }, tier: 0 }) === "fatal", "a 503 from a pure-CPU tool is fatal (nothing upstream to blame)");
-ok(T({ status: 503, body: { error: "search is not configured (BRAVE_API_KEY)" }, tier: 2 }) === "skipped", "a not-configured 503 is skipped");
-ok(T({ status: 0, body: null, netError: "ECONNRESET", tier: 1 }) === "upstream", "a network error is upstream");
-ok(T({ status: 400, body: { error: "\"x\" is required" }, tier: 1, expectFails: ["status 400, expected 200"] }) === "fatal", "our own 400 on a valid input is fatal");
-ok(T({ status: 422, body: { error: "Source URL timed out" }, tier: 1, expectFails: ["status 422, expected 200"] }) === "upstream", "fetch-guard's own relabelled upstream timeout (422 'Source URL timed out') is upstream on a networked tool");
-ok(T({ status: 400, body: { error: '"timeout" must be a number' }, tier: 1, expectFails: ["status 400, expected 200"] }) === "fatal", "our own 400 that merely contains the word timeout is fatal (review, 2026-09-06)");
-ok(T({ status: 404, body: { error: "Price feed upstream: not found (check ids)" }, tier: 1, expectFails: ["status 404, expected 200"] }) === "fatal", "our own 404 that contains the word upstream is fatal");
+// A runner read that confirms, so a fixture about which part a mark covers is
+// not decided by this machine's network; the read's own fixtures are below.
+const CONFIRMS = async () => ({ confirmed: true, evidence: "the runner's read fails too (fixture)" });
+const T = async (o) => (await classify({ expectFails: [], runnerRead: CONFIRMS, ...o })).kind;
+ok(await T({ status: 200, body: {}, tier: 1 }) === "ok", "clean is ok");
+ok(await T({ status: 200, body: {}, tier: 1, expectFails: ["x"] }) === "fatal", "an expectation miss is fatal");
+ok(await T({ status: 500, body: { error: "boom" }, tier: 1 }) === "fatal", "a 500 is fatal");
+ok(await T({ status: 502, body: { error: "upstream" }, tier: 1 }) === "upstream" && await T({ status: 429, body: {}, tier: 1 }) === "upstream", "502/429 on a networked tool is upstream");
+ok(await T({ status: 503, body: { error: "x" }, tier: 0 }) === "fatal", "a 503 from a pure-CPU tool is fatal (nothing upstream to blame)");
+ok(await T({ status: 503, body: { error: "search is not configured (BRAVE_API_KEY)" }, tier: 2 }) === "skipped", "a not-configured 503 is skipped");
+ok(await T({ status: 0, body: null, netError: "ECONNRESET", tier: 1 }) === "upstream", "a network error is upstream");
+ok(await T({ status: 400, body: { error: "\"x\" is required" }, tier: 1, expectFails: ["status 400, expected 200"] }) === "fatal", "our own 400 on a valid input is fatal");
+ok(await T({ status: 422, body: { error: "Source URL timed out" }, tier: 1, expectFails: ["status 422, expected 200"] }) === "upstream", "fetch-guard's own relabelled upstream timeout (422 'Source URL timed out') is upstream on a networked tool");
+ok(await T({ status: 400, body: { error: '"timeout" must be a number' }, tier: 1, expectFails: ["status 400, expected 200"] }) === "fatal", "our own 400 that merely contains the word timeout is fatal (review, 2026-09-06)");
+ok(await T({ status: 404, body: { error: "Price feed upstream: not found (check ids)" }, tier: 1, expectFails: ["status 404, expected 200"] }) === "fatal", "our own 404 that contains the word upstream is fatal");
 
 // Outside target hosts: a case whose input points the tool at another host
 // depends on that host for its expected value. Its 5xx or silence is upstream,
@@ -61,18 +64,18 @@ ok(T({ status: 404, body: { error: "Price feed upstream: not found (check ids)" 
   ok(targetHostOf(null) === null && targetHostOf("x") === null, "non-object inputs: no target");
   const probe503 = { up: true, status: 503, latencyMs: 96, finalUrl: "https://httpbin.org/status/404", headers: {} };
   const miss = ["status = 503, expected 404"];
-  const c = classify({ status: 200, body: probe503, tier: 1, expectFails: miss, targetHost: "httpbin.org" });
+  const c = await classify({ status: 200, body: probe503, tier: 1, expectFails: miss, targetHost: "httpbin.org" });
   ok(c.kind === "upstream" && /httpbin\.org/.test(c.note) && /503/.test(c.note), `http-check reading an outside host's 503 is upstream and names the host (${c.note})`);
-  ok(T({ status: 200, body: probe503, tier: 1, expectFails: miss }) === "fatal", "the same body with no target host is our hollow 200: fatal");
-  ok(T({ status: 200, body: probe503, tier: 0, expectFails: miss, targetHost: "httpbin.org" }) === "fatal", "a pure-CPU tool has no outside host to blame: fatal");
-  ok(T({ status: 200, body: { up: true, status: 404 }, tier: 1, expectFails: ["status = 404, expected 200"], targetHost: "example.com" }) === "fatal", "an outside host's 4xx is a reading, not an outage: the miss stays fatal");
-  ok(T({ status: 200, body: { up: false, error: "Timed out after 15s", latencyMs: 15001 }, tier: 1, expectFails: ["up = false, expected true"], targetHost: "example.com" }) === "upstream", "up:false with the target's error is the target's silence");
-  ok(T({ status: 200, body: { up: false, error: "Timed out after 15s" }, tier: 1, expectFails: ["up = false, expected true"] }) === "fatal", "up:false with no target host stays ours");
-  ok(T({ status: 200, body: { items: [], count: 0 }, tier: 1, expectFails: ["items not populated"], targetHost: "example.com" }) === "fatal", "a hollow 200 that reports no target failure is ours even with a target host");
-  ok(T({ status: 200, body: { error: "Source URL returned HTTP 502" }, tier: 1, expectFails: ["x"], targetHost: "example.com" }) === "upstream", "a 200 whose error text is the network vocabulary names the target");
-  const u = classify({ status: 504, body: { error: "Source URL did not respond within 15s" }, tier: 1, expectFails: ["status 504, expected 200"], targetHost: "example.com" });
+  ok(await T({ status: 200, body: probe503, tier: 1, expectFails: miss }) === "fatal", "the same body with no target host is our hollow 200: fatal");
+  ok(await T({ status: 200, body: probe503, tier: 0, expectFails: miss, targetHost: "httpbin.org" }) === "fatal", "a pure-CPU tool has no outside host to blame: fatal");
+  ok(await T({ status: 200, body: { up: true, status: 404 }, tier: 1, expectFails: ["status = 404, expected 200"], targetHost: "example.com" }) === "fatal", "an outside host's 4xx is a reading, not an outage: the miss stays fatal");
+  ok(await T({ status: 200, body: { up: false, error: "Timed out after 15s", latencyMs: 15001 }, tier: 1, expectFails: ["up = false, expected true"], targetHost: "example.com" }) === "upstream", "up:false with the target's error is the target's silence");
+  ok(await T({ status: 200, body: { up: false, error: "Timed out after 15s" }, tier: 1, expectFails: ["up = false, expected true"] }) === "fatal", "up:false with no target host stays ours");
+  ok(await T({ status: 200, body: { items: [], count: 0 }, tier: 1, expectFails: ["items not populated"], targetHost: "example.com" }) === "fatal", "a hollow 200 that reports no target failure is ours even with a target host");
+  ok(await T({ status: 200, body: { error: "Source URL returned HTTP 502" }, tier: 1, expectFails: ["x"], targetHost: "example.com" }) === "upstream", "a 200 whose error text is the network vocabulary names the target");
+  const u = await classify({ status: 504, body: { error: "Source URL did not respond within 15s" }, tier: 1, expectFails: ["status 504, expected 200"], targetHost: "example.com" });
   ok(u.kind === "upstream" && /outside host example\.com/.test(u.note), `a 5xx on a case with a target host names the host (${u.note})`);
-  ok(!/outside host/.test(classify({ status: 504, body: { error: "Price feed upstream timed out" }, tier: 1, expectFails: ["x"] }).note), "a tool on a fixed upstream carries its own message, no invented host");
+  ok(!/outside host/.test((await classify({ status: 504, body: { error: "Price feed upstream timed out" }, tier: 1, expectFails: ["x"] })).note), "a tool on a fixed upstream carries its own message, no invented host");
 }
 // An answer that marks its own missed part as not measured (a lookup that
 // timed out answered honestly: lookupError set, the leg listed in unmeasured,
@@ -87,19 +90,63 @@ ok(T({ status: 404, body: { error: "Price feed upstream: not found (check ids)" 
     ["hasRecord null", { dmarc: { hasRecord: null } }],
   ];
   for (const [label, body] of kinds) {
-    const c = classify({ status: 200, body, tier: 1, expectFails: miss });
-    ok(c.kind === "upstream" && c.note.includes(label.split(" ")[0]), `a 200 whose body marks ${label} is upstream and names it (${c.kind}: ${c.note})`);
+    const want = label === "ownerUnavailable" ? ["owner not populated (null)"] : miss;
+    const c = await classify({ status: 200, body, tier: 1, expectFails: want, runnerRead: CONFIRMS });
+    ok(c.kind === "upstream" && c.note.includes(label.split(" ")[0]), `a 200 whose body marks ${label} on the missed part is upstream and names it (${c.kind}: ${c.note})`);
   }
-  ok(T({ status: 200, body: { dmarc: { hasRecord: false } }, tier: 1, expectFails: miss }) === "fatal", "a body that says nothing about a missed lookup stays fatal (hasRecord false is a reading)");
-  ok(T({ status: 200, body: { owner: null }, tier: 1, expectFails: ["owner not populated"] }) === "fatal", "a null value with no mark stays fatal");
-  ok(T({ status: 200, body: { unmeasured: [] }, tier: 1, expectFails: miss }) === "fatal", "an empty unmeasured list marks nothing");
-  ok(T({ status: 200, body: { ownerUnavailable: true }, tier: 0, expectFails: ["x"] }) === "fatal", "a pure-CPU tool has no lookup to blame: fatal");
+  ok(await T({ status: 200, body: { dmarc: { hasRecord: false } }, tier: 1, expectFails: miss }) === "fatal", "a body that says nothing about a missed lookup stays fatal (hasRecord false is a reading)");
+  ok(await T({ status: 200, body: { owner: null }, tier: 1, expectFails: ["owner not populated"] }) === "fatal", "a null value with no mark stays fatal");
+  ok(await T({ status: 200, body: { unmeasured: [] }, tier: 1, expectFails: miss }) === "fatal", "an empty unmeasured list marks nothing");
+  ok(await T({ status: 200, body: { ownerUnavailable: true }, tier: 0, expectFails: ["x"] }) === "fatal", "a pure-CPU tool has no lookup to blame: fatal");
+}
+// A mark excuses only the part of the answer it covers: the missed
+// expectation's path must be the marked part or under it.
+{
+  ok(JSON.stringify(unmeasuredMarks({ spf: { lookupError: "x" }, unmeasured: ["dmarc"], ownerUnavailable: true, mx: { hasRecord: null } }).map((m) => m.covers)) === JSON.stringify([["spf"], ["dmarc"], ["owner"], ["mx"]]), "each mark names the part it covers");
+  ok(expectationPath("dmarc.hasRecord = null, expected true") === "dmarc.hasRecord" && expectationPath("records[0].ip not populated") === "records.0.ip" && expectationPath("status 504, expected 200") === null, "an expectation's path is read from its text");
+  const spfMarked = { spf: { hasRecord: null, lookupError: "queryTxt ETIMEOUT example.com" }, dmarc: { hasRecord: false } };
+  const c = await classify({ status: 200, body: spfMarked, tier: 1, expectFails: ["dmarc.hasRecord = false, expected true"], runnerRead: CONFIRMS });
+  ok(c.kind === "fatal" && /do not cover dmarc\.hasRecord/.test(c.note), `a mark on spf does not excuse a miss on dmarc (${c.kind}: ${c.note})`);
+  ok(await T({ status: 200, body: spfMarked, tier: 1, expectFails: ["spf.hasRecord = null, expected true", "dmarc.hasRecord = false, expected true"] }) === "fatal", "one uncovered miss beside a covered one stays fatal");
+  ok(await T({ status: 200, body: spfMarked, tier: 1, expectFails: ["spf.hasRecord = null, expected true"] }) === "upstream", "a miss on the marked part is excused (with the runner's read confirming)");
+  ok(await T({ status: 200, body: { asn: 1, owner: null, ownerUnavailable: true, prefix: null }, tier: 1, expectFails: ["prefix not populated (null)"] }) === "fatal", "ownerUnavailable covers owner, not prefix");
+  ok(await T({ status: 200, body: { score: 50, unmeasured: ["dmarc"] }, tier: 1, expectFails: ["score = 50, expected 75"] }) === "fatal", "an unmeasured leg does not excuse a miss on the score");
+  ok(await T({ status: 200, body: { lookupError: "queryA ETIMEOUT x.example" }, tier: 1, expectFails: ["records not populated ([])"] }) === "upstream", "a lookup error on the whole answer covers all of it");
+  ok(await T({ status: 200, body: { spf: { lookupError: "x" } }, tier: 1, expectFails: ["status 200, expected 400"] }) === "fatal", "a status miss is never covered by a mark");
+}
+// The runner's own read decides, as the outage rules do
+// (scripts/lib/upstream-outage.js): the excuse holds only when the read of
+// what the mark names fails for the runner too.
+{
+  const marked = { dmarc: { hasRecord: null, lookupError: "queryTxt ETIMEOUT _dmarc.example.com" } };
+  const miss = ["dmarc.hasRecord = null, expected true"];
+  const lookups = [];
+  const resolveFails = async (name, type) => { lookups.push(`${type} ${name}`); throw Object.assign(new Error("timeout"), { code: "ETIMEOUT" }); };
+  const resolveAnswers = async () => [["v=DMARC1; p=reject"]];
+  const resolveAbsent = async () => { throw Object.assign(new Error("none"), { code: "ENODATA" }); };
+  const run = (resolve) => classify({ status: 200, body: marked, tier: 1, expectFails: miss, slug: "email-auth", runnerRead: (a) => runnerConfirmsUnmeasured({ ...a, resolve, readFails: async () => { throw new Error("no host read for a named lookup"); } }) });
+  const a = await run(resolveFails);
+  ok(a.kind === "upstream" && JSON.stringify(lookups) === '["TXT _dmarc.example.com"]' && /lookup fails too/.test(a.note), `the runner's own TXT lookup of the named name fails too: upstream (${a.note})`);
+  const b = await run(resolveAnswers);
+  ok(b.kind === "fatal" && /lookup of _dmarc\.example\.com answers/.test(b.note), `the runner's lookup answers: the miss is ours (${b.note})`);
+  ok((await run(resolveAbsent)).kind === "fatal", "an absent record (ENODATA) is an answer: the miss is ours");
+  // No lookup named: the case's outside host, else the hosts the tool declares.
+  const reads = [];
+  const read = (fails) => async (url) => { reads.push(url); return fails; };
+  const owner = { asn: 15169, owner: null, ownerUnavailable: true };
+  const ownerMiss = ["owner not populated (null)"];
+  const viaHosts = (fails, extra = {}) => classify({ status: 200, body: owner, tier: 1, expectFails: ownerMiss, slug: "asn-info", runnerRead: (x) => runnerConfirmsUnmeasured({ ...x, readFails: read(fails), hostsOf: () => new Set(["whois.example.net"]) }), ...extra });
+  ok((await viaHosts(true)).kind === "upstream" && reads.at(-1) === "https://whois.example.net/", "no lookup named: the runner reads the host the tool declares, and its failure confirms");
+  ok((await viaHosts(false)).kind === "fatal", "the declared host answers the runner: the miss is ours");
+  ok((await viaHosts(true, { targetHost: "target.example.org" })).kind === "upstream" && reads.at(-1) === "https://target.example.org/", "a case's outside host is read before the declared ones");
+  const none = await classify({ status: 200, body: owner, tier: 1, expectFails: ownerMiss, slug: "asn-info", runnerRead: (x) => runnerConfirmsUnmeasured({ ...x, readFails: read(true), hostsOf: () => new Set() }) });
+  ok(none.kind === "fatal" && /no outside host or lookup/.test(none.note), `nothing the runner can read: the miss is ours (${none.note})`);
 }
 // A keyless boot: a pack whose every step says "not configured" answers 502,
 // and that is configuration, not an outside host (three packs read as upstream
 // 21 nights running after the equities feed went key-gated on 2026-09-20).
-ok(T({ status: 502, body: { error: 'No step in the "trend-analysis" pack succeeded, so there is nothing to return (not charged). stock-history: Market data is not configured on this server (DATABENTO_API_KEY unset).; stats-summary: "values" must be a non-empty array' }, tier: 1 }) === "skipped", "a pack 502 whose steps are not configured is skipped");
-ok(T({ status: 502, body: { error: 'No step in the "x" pack succeeded, so there is nothing to return (not charged). edgar-search: EDGAR upstream HTTP 500' }, tier: 1 }) === "upstream", "a pack 502 whose steps hit an upstream stays upstream");
+ok(await T({ status: 502, body: { error: 'No step in the "trend-analysis" pack succeeded, so there is nothing to return (not charged). stock-history: Market data is not configured on this server (DATABENTO_API_KEY unset).; stats-summary: "values" must be a non-empty array' }, tier: 1 }) === "skipped", "a pack 502 whose steps are not configured is skipped");
+ok(await T({ status: 502, body: { error: 'No step in the "x" pack succeeded, so there is nothing to return (not charged). edgar-search: EDGAR upstream HTTP 500' }, tier: 1 }) === "upstream", "a pack 502 whose steps hit an upstream stays upstream");
 
 // pace: cases sharing a paceKey share ONE clock across files. Three per-file
 // clocks at 3 s each started the CoinGecko cases 60/min against a 25/min

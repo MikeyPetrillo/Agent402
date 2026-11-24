@@ -141,10 +141,17 @@ t node scripts/test-late-settlements.js
 t node scripts/test-pending-settle.js
 # Our own Robinhood settler: our sales only, verify refusals, one nonce per relayer across replicas, a never-mined send stops the chain, listed facilitators first, gas check,
 t node scripts/test-own-relayer.js
+t node scripts/test-settle-compliance.js
 # Referral copies of paid routes (/ref/<slug>): the 402 shape, amount parity with the direct route, one run per authorization, handler-first settlement on a signed facilitator request, net booking (local stub facilitator, keys made in the test).
 t node scripts/test-referral-gate.js
+# /ref split legs per proven sale: stored shape, yearly totals per recipient, one row per payment (offline)
+t node scripts/test-referral-legs.js
 # The AWS Marketplace front door (/aws/<slug>): one aws:base offer, a signed quote that an altered price breaks, one sale per payment id, replayed or expired tokens refused unbooked, off answers as an unknown path, direct 402s byte-identical (stub payment-service keys, keys made in the test).
 t node scripts/test-aws-marketplace-gate.js
+# The AWS Marketplace listing's own surfaces: the 74 default tools served, /aws/start links nowhere past the listing and lists each tool at its catalog price, /aws/openapi.json lists exactly the served tools with examples that validate, no /aws description names a tool or path outside the served set, /terms names AWS purchases (keys made in the test).
+t node scripts/test-aws-start-page.js
+# Resale clearance: /ref and /aws sell only tools whose upstream terms are cleared (marked beside the handler) or that reach no upstream (offline)
+t node scripts/test-resale-clearance.js
 # The referral book's sweep: refused share and spread, dropped records read in turn and given up only on answered reads, charged reads inside the chain budget, one sweep at a time, a failed batch written again change by change (offline).
 t node scripts/test-referral-book-sweep.js
 # A run's ceiling: every tool marked endsAtCeiling ends its upstream work at it, starts none after it, and never answers from a cut read
@@ -201,6 +208,8 @@ t node scripts/test-mpp-index.js
 t node scripts/test-ledger-recent.js
 # The shared HTML escapers escape the single quote; leaderboard notes are escaped per note
 t node scripts/test-escape-quotes.js
+# Every browser script served from assets/ parses (a spliced line ran none of its page)
+t node scripts/test-browser-scripts-parse.js
 # The document CSP's form-action allows only this origin and mailto:, and every form in the tree submits inside it
 t node scripts/test-csp-form-action.js
 # The report page's image preview src comes only from an allowlisted image type and a plain base64 payload
@@ -220,6 +229,8 @@ t node scripts/test-bazaar-quality.js
 t node scripts/test-seller-field-types.js
 # A stored index of sellers with non-text fields boots and serves every seller page and API; entries are cleaned as the cache stores them
 t node scripts/test-seller-field-types-serve.js
+# A seller field that is an object (an x402 v2 resource object, an object name) never becomes "[object Object]" in a route or name; a malformed route is never stored or routed
+t node scripts/test-seller-object-fields.js
 # Seller price keys: every entry priced before the snake_case keys were read keeps its price; the keys only fill gaps (offline table)
 t node scripts/test-seller-price-keys-differential.js
 # A route's off-seller verdict is decided from its text and equals the parsed answer for every input
@@ -321,8 +332,12 @@ t node scripts/test-copy-truth.js
 t node scripts/test-public-index-copy.js
 t node scripts/test-wire-count-copy.js
 t node scripts/test-chain-list-copy.js
-# Package READMEs: no "no cap by default" against agent402-client's default ceiling, Amazon Bedrock naming, one OpenAI example model (offline)
+# Package READMEs: no "no cap by default" against agent402-client's default ceiling, Amazon Bedrock naming, one OpenAI example model, agent402-mcp's default per-call and daily caps on every surface (offline)
 t node scripts/test-package-readme-claims.js
+# Meta-tool adapters: default per-call ceiling, opt-in daily limit, both before the payment fetch; proof-of-work difficulty bound and yielding search (offline stub)
+t node scripts/test-meta-adapter-caps.js
+# Published packages ship TypeScript declarations: types conditions, strict nodenext consumers compile, runtime and declared exports agree, a misuse fails (offline, typescript)
+t node scripts/test-package-types.js
 t node scripts/test-pack-copy-retired.js
 # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
 t node scripts/test-tollbooth-cloud-retired.js

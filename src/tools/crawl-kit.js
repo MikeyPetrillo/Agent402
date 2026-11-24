@@ -32,14 +32,15 @@
 //
 // Deterministic end to end: no LLM anywhere. Pages are parsed and converted in
 // the HTML worker (src/tools/html-parse-ops.js pageContentFromHtml); robots.txt
-// parsing is kit.js's parseRobots/robotsAllows. Covered by scripts/test-crawl-kit.js.
+// parsing is kit.js's parseRobots/robotsAllowsForToken. Covered by scripts/test-crawl-kit.js.
 
 import { gunzipSync } from "node:zlib";
 import { isIP } from "node:net";
 import { runHtml } from "./html-pool.js";
 import { cleanText } from "./html-parse-ops.js";
 import { ssrfDispatcher, assertPublicUrl, isSsrfBlock, isPrivateIp, UNRESOLVED_OR_PRIVATE } from "./fetch-guard.js";
-import { parseRobots, robotsAllows } from "./kit.js";
+import { assertRobotsAllow } from "./robots-gate.js";
+import { parseRobots, robotsAllowsForToken } from "./kit.js";
 import { markUntrusted } from "./provenance.js";
 
 // Its own string and robots.txt product token (RFC 9309), from the one list
@@ -90,6 +91,18 @@ const CRAWL_LINKS_PER_PAGE_OUT = 100; // links listed per page in the response
 const CRAWL_LINKS_PER_PAGE_QUEUE = 300; // links considered for the queue per page
 const MAX_PATTERNS = 20;
 const MAX_PATTERN_LEN = 200;
+
+// A start URL its robots.txt disallows: 403 before any page is read, so the
+// call is not settled, with the rule that decided it (the refusal shape the
+// caller-URL readers answer: hint, robotsDisallowed, robotsRule, robotsUrl, fix).
+function robotsStartRefusal(robotsUrl, rule) {
+  const printable = String(rule ?? "").replace(/[^\x20-\x7e]/g, "?");
+  const r = printable.length > 200 ? `${printable.slice(0, 197)}...` : printable;
+  return Object.assign(
+    new Error(`This site's robots.txt (${robotsUrl}) does not allow ${ROBOTS_UA_PRODUCT} to read this URL (${r}), so it was not fetched`),
+    { statusCode: 403, hint: "robots-disallowed", robotsDisallowed: true, robotsRule: r, robotsUrl, fix: `The site asks ${ROBOTS_UA_PRODUCT} not to read this path. Send a start URL whose robots.txt allows ${ROBOTS_UA_PRODUCT}.` },
+  );
+}
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -416,6 +429,8 @@ async function siteMapHandler(input) {
   const start = new URL(startUrl);
   if (isPrivateLiteral(start.hostname)) throw bad("URL resolves to a private address");
   const hostPolicy = (h) => hostAllowed(h, start.hostname, includeSubdomains);
+  // The start page is read with this kit's own string, so its token decides.
+  await assertRobotsAllow(startUrl, { token: ROBOTS_UA_PRODUCT });
   const budget = new Budget({ totalMs: CONFIG.MAP_TOTAL_MS, fetchMs: CONFIG.MAP_FETCH_MS, totalBytes: CONFIG.MAP_TOTAL_BYTES, maxFetches: CONFIG.MAP_MAX_FETCHES });
   const fetchedAt = new Date().toISOString();
 
@@ -553,12 +568,18 @@ async function siteCrawlRun(input) {
   let robotsGroups = null;
   const robots = await budgetedFetch(`${start.origin}/robots.txt`, budget, { hostPolicy, maxBytes: 512 * 1024 });
   if (robots.ok) robotsGroups = parseRobots(robots.text);
-  const robotsAllowed = (u) => {
-    if (!robotsGroups) return true;
+  // Groups are matched on the exact product token (or the brand token), never
+  // a substring of it (kit.js robotsAllowsForToken).
+  const robotsVerdict = (u) => {
+    if (!robotsGroups) return { allowed: true, matchedRule: null };
     const p = new URL(u);
-    return robotsAllows(robotsGroups, ROBOTS_UA_PRODUCT, p.pathname + p.search).allowed;
+    return robotsAllowsForToken(robotsGroups, ROBOTS_UA_PRODUCT, p.pathname + p.search);
   };
-  if (!robotsAllowed(startUrl)) throw bad("robots.txt disallows the start URL for Agent402Bot", 422);
+  const robotsAllowed = (u) => robotsVerdict(u).allowed;
+  {
+    const v = robotsVerdict(startUrl);
+    if (!v.allowed) throw robotsStartRefusal(`${start.origin}/robots.txt`, v.matchedRule);
+  }
 
   const matchesPatterns = (u) => {
     const lower = u.toLowerCase();

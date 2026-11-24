@@ -22,8 +22,8 @@ const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll, cgNoteUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
-import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
-import { markResaleBarred, markResaleComputed, markRefAnswer, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
+import { attribute, creditAnswers, addCredit, COINGECKO_CREDIT, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
+import { markResaleBarred, markResaleComputed, markRefAnswer, MARKET_DATA_RESALE_REASON, markResaleCleared } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.js";
 import { hlSharedInfo } from "./hyperliquid-shared.js";
@@ -299,6 +299,14 @@ async function readReferenceMap() {
   clearTimeout(timer);
   return map;
 }
+/** `answer` crediting the second source (Hyperliquid's oracle prices, by name
+ *  and link; src/data-attribution.js) when `check` says its read was used,
+ *  after the price source's own credit (the callers are CoinGecko-backed). */
+export function checkCredited(answer, check) {
+  return check === CHECK_SOURCE ? addCredit(addCredit(answer, COINGECKO_CREDIT), HYPERLIQUID_ATTRIBUTION) : answer;
+}
+/** The credit of an answer whose check read the second source. */
+export const CHECKED_CREDIT = `${COINGECKO_CREDIT} ${HYPERLIQUID_ATTRIBUTION}`;
 /** Test seam: forget a failed check, so the next call reads again. */
 export function resetPriceCheck() { checkDownUntil = 0; }
 
@@ -409,6 +417,7 @@ export const CRYPTO_TOOLS = [
           currency: "usd",
           count: 2,
           check: "hyperliquid-oracle",
+          credit: CHECKED_CREDIT,
           coins: {
             bitcoin: { price: 67234.12, change24hPct: 1.42, volume24h: 28100000000, marketCap: 1320000000000, lastUpdated: "2026-06-20T00:30:00Z", stale: false, divergencePct: 0.03 },
             ethereum: { price: 3520.45, change24hPct: 2.18, volume24h: 14200000000, marketCap: 423000000000, lastUpdated: "2026-06-20T00:30:00Z", stale: false, divergencePct: -0.05 },
@@ -452,7 +461,7 @@ export const CRYPTO_TOOLS = [
       // and a USD price says how far it sits from the second source (null
       // where that source has no listed market for the coin, or no check ran).
       const check = await applyPriceCheck(Object.entries(out), currency);
-      return { currency, count: Object.keys(out).length, check, coins: out, ...(unknown.length ? { unknown } : {}) };
+      return checkCredited({ currency, count: Object.keys(out).length, check, coins: out, ...(unknown.length ? { unknown } : {}) }, check);
     },
   },
 
@@ -773,7 +782,7 @@ for (const t of CRYPTO_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO
 // a deviation and a band computed here.
 markResaleBarred(CRYPTO_TOOLS, ["crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global"], MARKET_DATA_RESALE_REASON);
 markResaleComputed(CRYPTO_TOOLS, ["stablecoin-peg"]);
-// On a /ref copy (src/referral-gate.js only) stablecoin-peg serves what it
+// On a /ref copy and on /aws (both resold through a third party) stablecoin-peg serves what it
 // computes and the credit, without the source's own figures per coin (price,
 // 24h high and low, market cap). The public route's answer is unchanged.
 export const STABLECOIN_PEG_REF_RAW_FIELDS = Object.freeze(["price", "high24h", "low24h", "marketCap"]);
@@ -792,3 +801,6 @@ markRefAnswer(CRYPTO_TOOLS, ["stablecoin-peg"], (answer) => {
 // A call that ends in an error counts its CoinGecko reads on the unsettled
 // share of the day (src/tools/coingecko-rate.js).
 underBudgetAll(cgScopeAll(CRYPTO_TOOLS), PAYMENT_WINDOW_BUDGET_MS);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(CRYPTO_TOOLS, ["stablecoin-peg"], "computed over market data whose terms allow products that incorporate it");

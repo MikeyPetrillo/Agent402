@@ -99,7 +99,7 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { DEFAULT_KEY_BUDGET_USD, DEFAULT_GLOBAL_BUDGET_USD } from "./hangup-forgiveness.js";
 import { SWEEP_CHAIN_BUDGET_MS, SWEEP_UNCONFIRMED_BUDGET_SHARE } from "./referral-book.js";
 import { cdnSyncLeftMs } from "./cdn-sync-window.js";
-import { resaleBarredReason, refAnswerOf } from "./resale-terms.js";
+import { resaleClearanceRefusal, refAnswerOf } from "./resale-terms.js";
 
 export const REFERRAL_NETWORK = "eip155:8453";
 export const REFERRAL_CHAIN_ID = 8453;
@@ -733,10 +733,11 @@ export function namesOwnHost(def, hosts = []) {
 export function referralIneligibility(def, { identityBound = false, lastingEffect = false, paysThirdParty = false, longRunning = false, compute = false, clamped = false, ownTimeoutMs = null, deadlineMs = REFERRAL_DEFAULTS.deadlineMs, priceForNetwork = (p) => p, ownHosts = [], cheaperDirect = null, parityGrandfathered = REFERRAL_PARITY_GRANDFATHERED, maxAnswerBytes = REFERRAL_DELIVERABLE_BYTES } = {}) {
   if (!def || typeof def !== "object") return "not in the catalog";
   if (typeof def.handler !== "function") return "in the catalog but has no handler";
-  // A raw pass-through of a source whose terms bar resale through a third
-  // party is never sold here (src/resale-terms.js).
-  const resaleBarred = resaleBarredReason(def);
-  if (resaleBarred) return resaleBarred;
+  // Sold through a third party only when its upstream terms are cleared for
+  // that (or it reaches none); a raw pass-through of a source that bars
+  // resale keeps its own reason (src/resale-terms.js).
+  const resaleRefused = resaleClearanceRefusal(def, { compute });
+  if (resaleRefused) return resaleRefused;
   if (identityBound) return "identity-bound route";
   if (lastingEffect) return "its effect outlives the answer";
   if (paysThirdParty) return "pays an outside seller";
@@ -998,7 +999,7 @@ export function createReferralGate({
   config, defs, settler, chain, book, replayGuard, baseUrl, priceUsdOf, priceForNetwork,
   preValidate, prePaymentRefusal, warmQuote, runAsCaller, sendToolError, recordSale, saleBooked, isSynthetic, salePathOf, requireShared, onRun = null,
   payerScreen, isolate, presentWindow, withCeiling, credentialLimiter, clientKey, draining, onSettledSale, payerHasPaid, oweRefund, amendSaleNet, answers, modelNetFloorBps = null,
-  notServed = [], sweepChainBudgetMs = SWEEP_CHAIN_BUDGET_MS,
+  notServed = [], sweepChainBudgetMs = SWEEP_CHAIN_BUDGET_MS, recordSplitLegs = null,
   log = console, now = Date.now,
 } = {}) {
   if (!config || !(defs instanceof Map) || !settler || !chain || !book || !replayGuard) throw new Error("referral gate: config, defs, settler, chain, book and replayGuard are required");
@@ -1247,7 +1248,7 @@ export function createReferralGate({
    *  transfer into the split contract is in the receipt). A reader without
    *  the detail reads as moved: the wider hold. */
   const proveWithDetail = async (tx, args, opts) => {
-    if (typeof chain.proveDetail === "function") { const d = await chain.proveDetail(tx, args, opts); return { verdict: d?.verdict || "unknown", moved: d?.moved === true, routedToUs: d?.routedToUs === true, net: d?.net ?? null, read: d?.read === true, why: d?.why || null, product: d?.product || null }; }
+    if (typeof chain.proveDetail === "function") { const d = await chain.proveDetail(tx, args, opts); return { verdict: d?.verdict || "unknown", moved: d?.moved === true, routedToUs: d?.routedToUs === true, net: d?.net ?? null, split: d?.verdict === "paid" ? d?.split ?? null : null, read: d?.read === true, why: d?.why || null, product: d?.product || null }; }
     return { verdict: await chain.proveTransaction(tx, args, opts), moved: true, routedToUs: false, net: null, read: false, why: null, product: null };
   };
   /**
@@ -2046,11 +2047,23 @@ export function createReferralGate({
     return t ? refusePayment(res, "settled_to_another_merchant", { status: 409, extra: { transaction: t } }) : refusePayment(res, "authorization_used_unpaid");
   };
 
+  const legsNoted = new Set();
+  function noteSplitLegs({ key, slug, payer, tx, split }) {
+    if (typeof recordSplitLegs !== "function" || !split || typeof split !== "object" || !key || legsNoted.has(key)) return;
+    if (legsNoted.size >= 5000) legsNoted.clear();
+    legsNoted.add(key);
+    try { Promise.resolve(recordSplitLegs({ key, slug, payer: lc(payer), tx: String(tx).toLowerCase(), split, at: now() })).catch(() => {}); } catch { /* the books never fail a sale */ }
+  }
+
   /** Book the sale for a settled authorization, once. Only ever called with
    *  the transaction that paid: the facilitator's own, or the one whose
    *  receipt proved the transfer. */
-  function bookSale({ key, slug, amount, payer, tx, sha = null, req = null, net = null }) {
+  function bookSale({ key, slug, amount, payer, tx, sha = null, req = null, net = null, split = null }) {
     if (!tx) return false;
+    // The routed event's split legs, from the receipt that proved this
+    // payment: recorded once per payment for the operator's books
+    // (src/referral-legs.js), whatever the ledger row below does.
+    noteSplitLegs({ key, slug, payer, tx, split });
     const entry = kept.get(key);
     // A sale already booked whose receipt is now in hand: the row is
     // corrected in place to the merchant amount the receipt shows (it was
@@ -2219,13 +2232,13 @@ export function createReferralGate({
   }
 
   /** The payment is proven: book it, keep the case until delivered, take back its lane note. */
-  async function markPaid(entry, tx, req, { sha = null, unconfirmed = false, net = null } = {}) {
+  async function markPaid(entry, tx, req, { sha = null, unconfirmed = false, net = null, split = null } = {}) {
     if (!unconfirmed) routeHealed();
     entry.charged = tx;
     entry.landed = true;
     entry.unpaid = false;
     entry.unconfirmed = unconfirmed;
-    bookSale({ key: entry.key, slug: entry.slug, amount: entry.amount, payer: entry.payer, tx, sha: sha || createHash("sha256").update(bodyText(entry), "utf8").digest("hex"), req, net });
+    bookSale({ key: entry.key, slug: entry.slug, amount: entry.amount, payer: entry.payer, tx, sha: sha || createHash("sha256").update(bodyText(entry), "utf8").digest("hex"), req, net, split });
     // A payment proven paid always has its entry: one that was closed (or
     // never written) is written again here, so the charge, the delivered
     // mark and a debt all have somewhere to stand.
@@ -2256,7 +2269,7 @@ export function createReferralGate({
     catch { c = { used: null, paid: null, transaction: null, complete: false }; }
     const verdict = chainVerdict(c, { validBeforeMs: entry.validBeforeMs, nowMs: now(), slackMs: 30_000 });
     if (verdict === "paid") {
-      await markPaid(entry, c.transaction, req, { net: c.net ?? null });
+      await markPaid(entry, c.transaction, req, { net: c.net ?? null, split: c.split ?? null });
       counters.landedAfterDoubt++;
       line("error", `SETTLE-IN-DOUBT resolved by the chain: the payment landed (${entry.slug} payer=${shortPayer(entry.payer)} tx=${c.transaction}; ${why})`);
       return "charged";
@@ -2367,8 +2380,8 @@ export function createReferralGate({
       //                its own: the slug stops, the buyer is owed back), or
       //                it is contradicted (unpaid), or it is a shape the rule
       //                does not accept (held in doubt for the operator).
-      let proof = "unknown", provenNet = null, moved = false, detail = { read: false, why: null, product: null, routedToUs: false };
-      try { const d = await proveWithDetail(s.transaction, { from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, minNet: minNetOf(entry.slug, entry.amount), productId: productOf(entry.slug) }, { waitMs: (() => { const left = answerLeftMs(req); return left === null ? config.receiptWaitMs : Math.max(0, Math.min(config.receiptWaitMs, left)); })() }); proof = d.verdict; provenNet = d.net; moved = d.moved === true; detail = d; }
+      let proof = "unknown", provenNet = null, provenSplit = null, moved = false, detail = { read: false, why: null, product: null, routedToUs: false };
+      try { const d = await proveWithDetail(s.transaction, { from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, minNet: minNetOf(entry.slug, entry.amount), productId: productOf(entry.slug) }, { waitMs: (() => { const left = answerLeftMs(req); return left === null ? config.receiptWaitMs : Math.max(0, Math.min(config.receiptWaitMs, left)); })() }); proof = d.verdict; provenNet = d.net; provenSplit = d.split ?? null; moved = d.moved === true; detail = d; }
       catch { proof = "unknown"; }
       if (proof === "unpaid") {
         // Contradicted: nothing delivered, nothing booked, and the entry is
@@ -2439,7 +2452,7 @@ export function createReferralGate({
           return "unknown";
         }
       }
-      await markPaid(entry, s.transaction, req, { unconfirmed: proof !== "paid", net: proof === "paid" ? provenNet : null });
+      await markPaid(entry, s.transaction, req, { unconfirmed: proof !== "paid", net: proof === "paid" ? provenNet : null, split: proof === "paid" ? provenSplit : null });
       counters.settled++;
       if (proof !== "paid") counters.unconfirmed++;
       line("log", `settled ${entry.slug} payer=${shortPayer(entry.payer)} tx=${s.transaction}${proof !== "paid" ? " (receipt not readable yet: delivered, the sweep confirms it)" : ""}`);
@@ -2660,7 +2673,7 @@ export function createReferralGate({
       try { c = await chain.state({ from: open.payer, nonce: open.nonce, payTo: config.payTo, amount: open.amount, fromBlock: open.fromBlock ?? null, minNet: minNetOf(open.slug, open.amount), productId: productOf(open.slug) }); } catch { c = null; }
       const fresh = book.get(key);
       if (fresh && fresh.delivered !== true && fresh.state === open.state && chainVerdict(c, { validBeforeMs: (Number(open.validBefore) || 0) * 1000, nowMs: now() }) === "paid") {
-        const booked = bookSale({ key, slug: open.slug, amount: open.amount, payer: open.payer, tx: c.transaction, net: c.net ?? null });
+        const booked = bookSale({ key, slug: open.slug, amount: open.amount, payer: open.payer, tx: c.transaction, net: c.net ?? null, split: c.split ?? null });
         await book.resolve(key, { state: "charged-undelivered", tx: c.transaction, saleBooked: booked === true, landedAt: now() }).catch(() => {});
       }
     }
@@ -3048,8 +3061,8 @@ export function createReferralGate({
   }
 
   /** The sweep's booking: a sale for an open book entry whose receipt proves the payment. */
-  const bookFromSweep = async (e, transaction, net = null) => {
-    const booked = bookSale({ key: e.key, slug: e.slug, amount: e.amount, payer: e.payer, tx: transaction, net });
+  const bookFromSweep = async (e, transaction, net = null, split = null) => {
+    const booked = bookSale({ key: e.key, slug: e.slug, amount: e.amount, payer: e.payer, tx: transaction, net, split });
     const entry = kept.get(e.key);
     if (entry && !entry.landed) { entry.charged = transaction; entry.landed = true; laneClear(entry.laneKeys || [], entry.key); laneOk(entry.laneKeys || []); }
     return booked;
@@ -3061,8 +3074,8 @@ export function createReferralGate({
   async function confirmUnconfirmed(snapshot) {
     const e = book.get(snapshot.key);
     if (!e || e.state !== "unconfirmed") return;
-    let proof = "unknown", provenNet = null, moved = false, detail = { read: false, why: null, product: null, routedToUs: false };
-    try { const d = await proveWithDetail(e.tx, { from: e.payer, nonce: e.nonce, payTo: config.payTo, amount: e.amount, minNet: minNetOf(e.slug, e.amount), productId: productOf(e.slug) }); proof = d.verdict; provenNet = d.net; moved = d.moved === true; detail = d; } catch { proof = "unknown"; }
+    let proof = "unknown", provenNet = null, provenSplit = null, moved = false, detail = { read: false, why: null, product: null, routedToUs: false };
+    try { const d = await proveWithDetail(e.tx, { from: e.payer, nonce: e.nonce, payTo: config.payTo, amount: e.amount, minNet: minNetOf(e.slug, e.amount), productId: productOf(e.slug) }); proof = d.verdict; provenNet = d.net; provenSplit = d.split ?? null; moved = d.moved === true; detail = d; } catch { proof = "unknown"; }
     const cur = book.get(e.key);
     if (!cur || cur.state !== "unconfirmed") return;
     const entry = kept.get(e.key);
@@ -3080,7 +3093,7 @@ export function createReferralGate({
       if (entry) entry.unconfirmed = false;
       routeHealed();
       // The sale was booked at the computed net: corrected now to what the receipt shows.
-      bookSale({ key: e.key, slug: e.slug, amount: e.amount, payer: e.payer, tx: e.tx, net: provenNet });
+      bookSale({ key: e.key, slug: e.slug, amount: e.amount, payer: e.payer, tx: e.tx, net: provenNet, split: provenSplit });
       // A send still going out keeps its entry (charged now, the mark kept): its own end closes it.
       const sendingNow = entry ? entry.sending === true : cur.delivered === true && Number(cur.sendingUntil) > now();
       if (sendingNow) await book.resolve(e.key, { state: "charged-undelivered", flagged: false }).catch(() => {});

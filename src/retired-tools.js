@@ -31,11 +31,48 @@ const KALSHI_ON = kalshiToolsEnabled();
  *  optional `note` (one sentence, plain text) is added to the 410's hint when
  *  a live tool answers a narrower question than the retired route did. */
 export const RETIRED_TOOLS = Object.freeze({
+  // 2026-11-23: code execution is no longer offered.
+  "code-run": { retiredAt: "2026-11-23", replacement: null, note: "Code execution is no longer offered." },
+  "code-run-pro": { retiredAt: "2026-11-23", replacement: null, note: "Code execution is no longer offered." },
   // A replacement is named only when it answers the SAME question as the
   // retired route (the same quantity for the same subject, possibly over a
   // stated narrower range). A tool that answers a neighboring question is not
   // one: that route retires with no pointer.
   //
+  // 2026-11-23: routes with no or near-no use whose source reads are not
+  // kept. The two day-walk SQL routes ran onchain-sql's own query over more
+  // days per call, so onchain-sql is named; fred-release-observations read
+  // every series of one release, and fred-series reads one of them by ID.
+  // Every other route here answers a question no live tool answers (raw
+  // Solana RPC, X post counts and trends, Farcaster,
+  // the crypto options book, Solana swap routing and token profiles, image
+  // judgment, FRED search, metadata and the release calendar, crypto
+  // headlines, avatar lookup), so it names none.
+  "solana-rpc": { retiredAt: "2026-11-23", replacement: null, note: "Nothing live serves raw Solana JSON-RPC; the sol-token tools read Solana token prices, pairs and safety." },
+  "onchain-sql-week": { retiredAt: "2026-11-23", replacement: "onchain-sql" },
+  "onchain-sql-range": { retiredAt: "2026-11-23", replacement: "onchain-sql" },
+  "x-post-counts": { retiredAt: "2026-11-23", replacement: null, note: "x-search-recent returns the matching posts from the last 7 days, not counts by period." },
+  "x-trends": { retiredAt: "2026-11-23", replacement: null },
+  ...Object.fromEntries([
+    "fc-cast-search", "fc-cast-metrics", "fc-channel-feed", "farcaster-profile", "fc-trending", "fc-user-casts",
+    "fc-cast", "fc-cast-replies", "fc-channel", "fc-user-search", "farcaster-by-address",
+  ].map((s) => [s, { retiredAt: "2026-11-23", replacement: null }])),
+  "options-summary": { retiredAt: "2026-11-23", replacement: null },
+  "crypto-options-chain": { retiredAt: "2026-11-23", replacement: null },
+  "options-ticker": { retiredAt: "2026-11-23", replacement: null },
+  "sol-swap-quote": { retiredAt: "2026-11-23", replacement: null },
+  "sol-token-lookup": { retiredAt: "2026-11-23", replacement: null, note: "sol-token-search resolves a mint, ticker or name to its Solana pairs; sol-price reads a mint's USD price." },
+  "judge-vision": { retiredAt: "2026-11-23", replacement: null, route: "/v1/judge/vision" },
+  "judge-locate": { retiredAt: "2026-11-23", replacement: null, route: "/v1/judge/locate" },
+  // judge is listed only while a judgment backend is configured, so the
+  // pointer to it rides in the note rather than as the replacement.
+  "judge-long": { retiredAt: "2026-11-23", replacement: null, route: "/v1/judge/long", note: "POST /v1/judge asks the same typed questions of a shorter document." },
+  "fred-release-calendar": { retiredAt: "2026-11-23", replacement: null },
+  "fred-search": { retiredAt: "2026-11-23", replacement: null, note: "fred-series reads a series' observations when you already hold its ID." },
+  "fred-series-info": { retiredAt: "2026-11-23", replacement: null, note: "fred-series reads a series' observations by ID; nothing live returns its metadata." },
+  "fred-release-observations": { retiredAt: "2026-11-23", replacement: "fred-series" },
+  "crypto-news": { retiredAt: "2026-11-23", replacement: null, note: "search-news answers a news search for any query." },
+  "gravatar-check": { retiredAt: "2026-11-23", replacement: null },
   // 2026-11-22: the market tick read (GET /api/market/tick, published under the
   // segment "market"). It had no source of its own: each coin figure was
   // crypto-price's answer, which reads up to 25 coins in one call.
@@ -94,7 +131,8 @@ export const RETIRED_TOOLS = Object.freeze({
   "token-holders": { retiredAt: "2026-09-22", replacement: null },
   "tx-inspect": { retiredAt: "2026-09-22", replacement: "tx-receipt" },
   // 2026-09-20: equities moved onto a licensed feed that serves none of these.
-  "options-chain": { retiredAt: "2026-09-20", replacement: "crypto-options-chain" },
+  // (Its pointer, the crypto options chain, retired on 2026-11-23.)
+  "options-chain": { retiredAt: "2026-09-20", replacement: null },
   // The replacement is named only while it is listed (an active stock
   // provider, src/tools/stock-provider.js).
   "premarket-quote": { retiredAt: "2026-09-20", replacement: STOCK_ON ? "stock-quote" : null },
@@ -142,6 +180,12 @@ export const RETIRED_TOOLS = Object.freeze({
   "xlsx-to-json": { retiredAt: "2026-06-12", replacement: null },
 });
 
+/** The retired tools served outside /api, by their whole path: an entry's
+ *  `route` is where its 410 answers instead of /api/<slug>. */
+export const RETIRED_ROUTE_SLUGS = Object.freeze(Object.fromEntries(
+  Object.entries(RETIRED_TOOLS).filter(([, e]) => e.route).map(([slug, e]) => [e.route.toLowerCase(), slug]),
+));
+
 /** Skill packs: /api/skill/<slug>. The catalog slug is `skill-<slug>`. */
 export const RETIRED_PACKS = Object.freeze({
   "market-open": { retiredAt: "2026-09-20", replacement: null },
@@ -184,10 +228,25 @@ export function retirementHeaders(retiredAt, successorUrl = null) {
   return headers;
 }
 
+/** `s` without its trailing slashes, read from the end in one pass (a
+ *  regex anchored at the end backtracks on a long run of interior slashes). */
+function trimTrailingSlashes(s) {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) end -= 1;
+  return s.slice(0, end);
+}
+
 /** The retired entry a request path names, or null. Reads the first path
  *  segment after /api/ (or /api/skill/), so a trailing segment or query does
  *  not turn a retired route back into a 404. */
 export function retiredEntryFor(path) {
+  // A retired route outside /api (the /v1 judge previews) is matched whole,
+  // a trailing slash and the case aside.
+  const whole = trimTrailingSlashes(String(path || "").split("?")[0]).toLowerCase();
+  if (Object.hasOwn(RETIRED_ROUTE_SLUGS, whole)) {
+    const slug = RETIRED_ROUTE_SLUGS[whole];
+    return { kind: "tool", slug, ...RETIRED_TOOLS[slug] };
+  }
   const m = /^\/api\/(skill\/)?([a-z0-9-]+)/i.exec(String(path || ""));
   if (!m) return null;
   const slug = m[2].toLowerCase();
@@ -204,7 +263,7 @@ export function retiredEntryForSlug(slug) {
   if (!/^[a-z0-9-]{1,80}$/.test(s)) return null;
   const pack = /^skill-(.+)$/.exec(s);
   if (pack && Object.hasOwn(RETIRED_PACKS, pack[1])) return { kind: "pack", slug: pack[1], route: `/api/skill/${pack[1]}`, ...RETIRED_PACKS[pack[1]] };
-  if (Object.hasOwn(RETIRED_TOOLS, s)) return { kind: "tool", slug: s, route: `/api/${s}`, ...RETIRED_TOOLS[s] };
+  if (Object.hasOwn(RETIRED_TOOLS, s)) return { kind: "tool", slug: s, route: RETIRED_TOOLS[s].route || `/api/${s}`, ...RETIRED_TOOLS[s] };
   return null;
 }
 

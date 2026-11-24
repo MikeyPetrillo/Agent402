@@ -15,7 +15,7 @@
 //
 // SCOPE FILTER (documented, deliberate):
 //   IN  — price > 0 AND documented OpenAPI example does not spend Brave /
-//         OpenAI / OpenRouter / E2B / FRED / Neynar /
+//         OpenAI / OpenRouter / FRED / Neynar /
 //         Alchemy-hard / CDP keys. Free-public APIs (data.gov DEMO_KEY,
 //         weather.gov, CoinGecko keyless, Nominatim, Open-Meteo, …) stay IN
 //         even when they live in WALLET_ONLY_SLUGS.
@@ -138,7 +138,19 @@ const COINGECKO_SLUGS = new Set([
 export const CG_KEYLESS_SAMPLE_SIZE = 2;
 export const CG_KEYED_SAMPLE_SIZE = 6;
 export const CG_RUN_READ_CAP = 40;
-export const CG_RUN_MAX_PER_MIN = 30;
+// The minute pacing holds a whole keyed run (with room for one retry in four)
+// and stays well under the per-minute limit of the key's plan: the lowest one
+// src/tools/coingecko-rate.js records is 100 calls a minute (the Demo plan; the
+// CI key's paid pro-tier plan allows more), and under the service's own
+// default bucket of 80, so a keyed 429 is still ours to explain.
+export const CG_RUN_MAX_PER_MIN = 40;
+export const CG_PLAN_MIN_PER_MIN = 100;
+// The BLS key (BLS_API_KEY, the BLS-backed macro tools) is capped per run the
+// same way: the sweep server's BLS_DAILY_MAX is this (a fresh server's day is
+// the run). The examples read a handful of series decades, each read once and
+// cached, so 12 covers a run with one retry in two and spends at most that
+// of the key's daily allowance.
+export const BLS_RUN_READ_CAP = 12;
 // The nightly corpus drives every CoinGecko case once with its own server.
 export const CG_NIGHTLY_READ_CAP = 200;
 export const CG_EXAMPLE_READS = Object.freeze({
@@ -664,7 +676,7 @@ async function boot() {
   // through. Keep DATA_GOV unset → DEMO_KEY (honest free-public path).
   const strip = [
     "BRAVE_API_KEY", "BRAVE_ANSWERS_API_KEY", "BRAVE_SUGGEST_API_KEY",
-    "OPENAI_API_KEY", "OPENROUTER_API_KEY", "E2B_API_KEY",
+    "OPENAI_API_KEY", "OPENROUTER_API_KEY",
     "FRED_API_KEY", "FRED_API_KEY_V2", "NEYNAR_API_KEY", "WARPCAST_API_KEY",
     "ALCHEMY_API_KEY", "CDP_API_KEY_ID", "CDP_API_KEY_SECRET",
     "X402_UPSTREAM_BUYER_KEY", "ALGORAND_UPSTREAM_BUYER_MNEMONIC",
@@ -793,6 +805,7 @@ function runControls() {
       "control: every read count names a family tool or a metered screen the lenient sweep drives");
     ok(CG_NIGHTLY_READ_CAP >= cgRunReadBound(COINGECKO_SLUGS.size).total, `control: the nightly corpus cap (${CG_NIGHTLY_READ_CAP}) covers every family example once (${cgRunReadBound(COINGECKO_SLUGS.size).total})`);
     ok(CG_RUN_MAX_PER_MIN >= 30 && CG_RUN_MAX_PER_MIN >= Math.ceil(cgRunReadBound().total * 1.25), `control: the minute pacing (${CG_RUN_MAX_PER_MIN}) holds a whole keyed run inside one minute, so the pacing never refuses the sweep`);
+    ok(CG_RUN_MAX_PER_MIN <= Math.floor(CG_PLAN_MIN_PER_MIN * 0.8) && readFileSync(new URL("../src/tools/coingecko-rate.js", import.meta.url), "utf8").includes(`${CG_PLAN_MIN_PER_MIN} calls/min`), `control: the minute pacing (${CG_RUN_MAX_PER_MIN}) stays under the lowest plan limit the rate module records (${CG_PLAN_MIN_PER_MIN}/min) with room for its retry path`);
     // The answers: our own cap refusal, the source's rate limit, anything else.
     const ownDay = { error: "This server's daily CoinGecko allowance is used up; it renews at 00:00 UTC. This is on our side, not your input. You were not charged." };
     const ownPace = { error: "This server paces its Market data requests and has no room this moment; retry in 1 s. This is on our side, not your input. You were not charged." };
@@ -891,8 +904,6 @@ function runControls() {
     "control: Brave search is excluded from this suite");
   ok(excludeReason("llm", "/api/llm") === "metered_upstream_key_or_buyer",
     "control: OpenAI llm is excluded");
-  ok(excludeReason("code-run", "/api/code-run") === "metered_upstream_key_or_buyer",
-    "control: E2B code-run is excluded");
   ok(WALLET_ONLY_SLUGS.has("gov-data"),
     "control: gov-data is WALLET_ONLY (wallet-gated live) yet still in THIS suite's scope");
   // A bundle product reads every upstream its legs read: it is never graded
@@ -1086,8 +1097,8 @@ async function main() {
     `in-scope count is substantial (${work.length} ≥ ${MIN_IN_SCOPE}) — filter is not vacuous`);
   ok(work.some((t) => t.slug === "gov-data"),
     "gov-data is in the strict sweep (the #730 class must be covered)");
-  ok(!work.some((t) => t.slug === "search" || t.slug === "llm" || t.slug === "code-run"),
-    "metered Brave/OpenAI/E2B slugs are absent from the work list");
+  ok(!work.some((t) => t.slug === "search" || t.slug === "llm"),
+    "metered Brave/OpenAI slugs are absent from the work list");
   ok(excluded.some((e) => e.slug === "search"),
     "Brave search was excluded by the filter (not merely absent from catalog)");
 

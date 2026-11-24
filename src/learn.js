@@ -4,12 +4,15 @@
 // from a local boot of this server (Base USDC entry kept, the payTo address
 // replaced with a placeholder); the live 402 lists one accepts entry per
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
+import { getWalletHtml } from "./get-a-wallet.js";
 import { siteOrgRef } from "./site-org.js";
 import { GUIDE_SITE, GUIDE_SITE_NAME, GUIDE_EXPLAINERS, guideLink } from "./ask402-links.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { connectorWires, connectorPayText, connectorLongCallText, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY } from "./connector-pay.js";
 import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
+import { articleDates } from "./page-dates.js";
+import { firstFit } from "./seo-meta.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
@@ -257,6 +260,7 @@ export const LEARN = [
   },
   {
     slug: "agent-payments",
+    metaDescription: "How an AI agent pays for a tool or an API on its own: read the price from a 402, pay from its own wallet, keep the receipt and stay inside spend limits.",
     term: "Agent payments",
     alt: ["agentic payments", "machine payments", "AI agent payments"],
     glossary: "agentic-payments",
@@ -310,6 +314,7 @@ export const LEARN = [
   },
   {
     slug: "mcp-payments",
+    metaDescription: "How paid tools work over the Model Context Protocol: a local MCP server that pays underneath, or a hosted connector that takes payment in the call.",
     term: "MCP payments",
     alt: ["paid MCP tools", "MCP tool payments"],
     glossary: "mcp",
@@ -319,7 +324,7 @@ export const LEARN = [
     sections: [
       ["Two places payment can happen", [
         P(`The Model Context Protocol lets an assistant discover and call tools. It does not itself say how a tool gets paid for, so there are two practical patterns, and this server supports both.`),
-        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.16.0")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment offer attached, and a client that speaks ${CONNECTOR.phrase || "x402 or MPP, where the instance takes one in the call,"} pays and repeats the call.</li></ol>`,
+        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.17.0")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment offer attached, and a client that speaks ${CONNECTOR.phrase || "x402 or MPP, where the instance takes one in the call,"} pays and repeats the call.</li></ol>`,
       ]],
       ["The local server", [
         P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (${creditsSalesEnabled() ? "a prepaid card-credits key" : "a prepaid card-credits key bought earlier"}, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
@@ -327,12 +332,12 @@ export const LEARN = [
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
     }
   }
 }` },
-        P(`<strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong>`),
+        P(`<strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong> ${getWalletHtml({ code: C })}`),
       ]],
       ["The hosted connector", [
         P(`On the hosted connector the pure-CPU tools run free (rate-limited). A wallet-only tool called without payment returns a readable tool result, so a host that pays neither wire still shows the user something useful.${CONNECTOR.names.length ? "" : ` ${connectorPayText({ code: C })}`}`),
@@ -424,13 +429,13 @@ ${sections}
     </div>
   </article>
   ${ledgerFooterCompact()}`;
-  return ledgerShell({ title: l.title, description: l.description, canonical, baseUrl, activePath: "/agentic-finance", extraCss: LEARN_CSS, jsonLd: [breadcrumbLd, termLd, articleLd], body });
+  return ledgerShell({ title: l.title, description: firstFit([l.metaDescription, l.description]) || l.description, canonical, baseUrl, activePath: "/agentic-finance", extraCss: LEARN_CSS, jsonLd: [breadcrumbLd, termLd, articleLd], body, article: articleDates(`/learn/${l.slug}`) });
 }
 
 export function learnIndex(baseUrl) {
   const canonical = `${baseUrl}/learn`;
   const title = "Learn: how AI agents pay for APIs over x402 and MPP";
-  const description = "Explainers for the protocols behind pay-per-request APIs for AI agents: x402, HTTP 402 Payment Required, MPP, agent payments, pay-per-call pricing and payments over MCP, each with the headers this server actually sends.";
+  const description = "Explainers for the protocols behind pay-per-request APIs for AI agents: x402, HTTP 402, MPP, agent payments, pay-per-call pricing and MCP payments.";
   const breadcrumbLd = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",

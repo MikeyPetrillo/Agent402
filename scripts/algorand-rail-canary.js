@@ -1,11 +1,11 @@
-// Algorand rail canary — buy EVERY tool in the catalog paying USDC on Algorand
+// Algorand rail canary - buy EVERY tool in the catalog paying USDC on Algorand
 // mainnet, and prove each one settles AND renders its payload.
 //
 // WHY THIS EXISTS (and how it differs from the two scripts next to it)
 //   • scripts/paid-canary.js has ONE Algorand leg (/api/hash). It proves
 //     the rail is alive; it cannot prove the rail works for the whole catalog.
 //   • scripts/challenge-sweep.js buys every tool on Algorand but SKIPS anything
-//     already in GoPlausible's catalog — it is a one-shot registration tool, so
+//     already in GoPlausible's catalog - it is a one-shot registration tool, so
 //     on a second run it buys almost nothing and verifies almost nothing.
 //   This canary is the recurring health check: no skip-set, every tool bought
 //   every run, and each buy asserted end-to-end (402 → sign → settle → 200 →
@@ -22,13 +22,13 @@
 //
 // SAFETY / CONTROL
 //   • Pays ONLY on Algorand, ONLY to the accept the live 402 quotes. No EVM.
-//   • Hard total-spend cap (CANARY_MAX_USD, default 15) — stops cleanly before
+//   • Hard total-spend cap (CANARY_MAX_USD, default 15) - stops cleanly before
 //     a buy that would exceed it. Per-tool cap (CANARY_TOOL_MAX_USD, default
 //     0.25) skips the expensive skill packs by default.
 //   • CANARY_DRY=1 / --dry reports what it WOULD buy, signs nothing.
 //   • Carries the POW_SECRET-signed X-Heartbeat-Token when available, which
 //     marks the traffic synthetic in our own analytics WITHOUT bypassing the
-//     paywall (src/server.js isSyntheticRequest) — the payments are real, they
+//     paywall (src/server.js isSyntheticRequest) - the payments are real, they
 //     just don't masquerade as external demand.
 //   • Signs a 1000-round validity window, never algokit's 10-round default:
 //     settlement happens AFTER the handler, so a slow tool outlives the default
@@ -94,7 +94,7 @@ import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.
 
 import { ALGORAND_INDEXERS } from "../src/payment-verify.js";
 
-import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses } from "./avm-canary-classify.js";
+import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses, isEdgeTimeout, isNoSellerMatched } from "./avm-canary-classify.js";
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "algorand-rail-canary");
 const AVM_CAIP2_PREFIX = "algorand:";
@@ -172,7 +172,7 @@ const heartbeatHeaders = () =>
     ? { "X-Heartbeat-Token": createHmac("sha256", secret).update(`heartbeat:${Math.floor(Date.now() / 60_000)}`).digest("base64url").slice(0, 32) }
     : {};
 
-// ── Algorand signer (skipped in dry mode — quoting needs no key) ──────────────
+// ── Algorand signer (skipped in dry mode - quoting needs no key) ──────────────
 let client, http, payerAddress = "(dry)";
 if (!DRY) {
   const mnemonic = (process.env.ALGORAND_BURNER_MNEMONIC || "").trim();
@@ -298,9 +298,9 @@ console.log(`catalog: ${tools.length} routes · dry=${DRY} · total cap $${MAX_U
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 // ok          settled on Algorand and returned a non-empty payload
 // railFail    we paid and still got a 402 AFTER a genuine (slow) settlement
-//             attempt — settlement was actually refused (RAIL DEFECT)
+//             attempt - settlement was actually refused (RAIL DEFECT)
 // rateLimited a 402 that came back too fast to have reached the chain, and
-//             survived one backoff-and-retry — the facilitator throttling
+//             survived one backoff-and-retry - the facilitator throttling
 //             this wallet, not a rail defect (see FAST_REJECT_MS above)
 // toolFail    the handler answered an error twice (a >=400 cancels settlement)
 // chargedEmpty a 200 (settled) whose body was empty or unreadable: charged,
@@ -321,6 +321,9 @@ const report = {
   chargedNoAnswer: [], chargeUnverified: [], noAnswer: [],
   // A 200 with an empty or unreadable body: counted in the spend, fails the run.
   chargedEmpty: [],
+  // A router tier found no outside seller doing its task on Algorand (a 4xx,
+  // nothing settled): the seller set, not the rail. Printed, does not fail.
+  noSeller: [],
   // Refused by OUR OWN breaker before the handler ran: nothing was measured
   // about these tools, so they are neither a pass nor a failure.
   blocked: [], aborted: null,
@@ -544,10 +547,13 @@ for (const t of tools) {
   // What became of the payment behind an unanswered request (the header rule).
   // Returns "retry" only for a first attempt whose payment is absent on chain;
   // every other verdict is recorded here and fails the run.
-  const settleNoAnswer = async (x, wasRetry) => {
+  // `edge`: the attempt was an edge timeout (isEdgeTimeout), an HTTP answer
+  // from the edge, not from us. Its payment is read the same way; absent on
+  // the last attempt it is left to the outage split (and the recheck below).
+  const settleNoAnswer = async (x, wasRetry, { edge = false } = {}) => {
     const chain = x.txid ? await chainReading(x.txid) : "unreadable";
     const verdict = noAnswerVerdict({ chain, retried: wasRetry });
-    const row = { key, slug: t.slug, usd, txid: x.txid, kind: x.kind, reason: `${x.body.slice(0, 140)}${wasRetry ? " (on the retry)" : ""}` };
+    const row = { key, slug: t.slug, usd, txid: x.txid, kind: edge ? `edge-${x.status}` : x.kind, reason: `${x.body.slice(0, 140)}${wasRetry ? " (on the retry)" : ""}` };
     if (verdict === "charged") {
       report.chargedNoAnswer.push(row);
       report.spentUsd += usd;
@@ -557,7 +563,7 @@ for (const t of tools) {
       console.log(`FAIL ${key.padEnd(46)} no answer, and the payment could not be ruled out on chain (${chain}); nothing signed again`);
     } else {
       absentPayments.push({ ...row, failedAt: Date.now(), retry: wasRetry });
-      if (verdict === "no-answer") {
+      if (verdict === "no-answer" && !edge) {
         report.noAnswer.push({ ...row, edge: x.kind === "connection" });
         console.log(`FAIL ${key.padEnd(46)} no HTTP answer on the last attempt (${x.kind === "connection" ? "connection-level, edge" : x.kind}); its payment is not on chain`);
       }
@@ -593,22 +599,32 @@ for (const t of tools) {
     // mid-sweep must not fail a weekly gate on first sight. Only a problem
     // that SURVIVES the retry is real. A 200 with an empty body is not in this
     // block: it was charged, so nothing is signed again (nextStep).
-    const step = nextStep(out);
+    // An edge timeout is an answer from the edge, not from us: the origin may
+    // still have settled, so the chain is read before anything is signed again.
+    const step = isEdgeTimeout(a.status) ? "read-chain" : nextStep(out);
+    // Set once a payment behind an edge timeout is recorded as charged or not
+    // ruled out: that row is the verdict for this tool.
+    let chargeRecorded = false;
     if (step === "retry" || step === "read-chain") {
       const why = out === "breaker" ? `HTTP 429 from OUR OWN settle breaker (not the seller, not a vendor)`
         : out === "fast-402" ? `HTTP 402 in ${a.elapsedMs}ms (too fast to be a settlement)`
         : out === "throttle" ? `HTTP ${a.status} (upstream throttle)`
           : out === "slow-402" ? `HTTP 402 after ${a.elapsedMs}ms`
               : out === "no-answer" ? `no HTTP answer (${a.kind}); the payment is looked up on chain before anything is signed again`
+              : isEdgeTimeout(a.status) ? `HTTP ${a.status} from the edge (our origin may still have settled); the payment is looked up on chain before anything is signed again`
               : `HTTP ${a.status}: ${a.body.slice(0, 100)}`;
       // The breaker's window is minutes, so it gets the pause IT asks for
       // rather than the burst pause. Bounded, because a long Retry-After on a
       // ~500-tool sweep would otherwise run for hours.
       const waitMs = out === "breaker" ? Math.min(a.retryAfterMs ?? BREAKER_MAX_WAIT_MS, BREAKER_MAX_WAIT_MS) : THROTTLE_BACKOFF_MS;
-      console.log(`WAIT ${key.padEnd(46)} ${why} - ${out === "no-answer" ? "reading the chain" : "retrying"} in ${waitMs}ms`);
+      console.log(`WAIT ${key.padEnd(46)} ${why} - ${step === "read-chain" ? "reading the chain" : "retrying"} in ${waitMs}ms`);
       await sleep(waitMs);
-      // No answer: the payment's fate decides whether anything is signed again.
-      const first = out === "no-answer" ? await settleNoAnswer(a, false) : "retry";
+      // No answer, or an edge timeout: the payment's fate decides whether
+      // anything is signed again.
+      const first = out === "no-answer" ? await settleNoAnswer(a, false)
+        : step === "read-chain" ? await settleNoAnswer(a, false, { edge: true })
+          : "retry";
+      if (first !== "retry") chargeRecorded = out !== "no-answer";
       if (first === "retry") {
         a = await attemptOnce();
         out = outcomeOf(a);
@@ -616,10 +632,14 @@ for (const t of tools) {
         if (out === "unfunded") { unfunded(); break; }
         // The retry got no answer: the same reading, and no third attempt.
         if (out === "no-answer") { await sleep(THROTTLE_BACKOFF_MS); await settleNoAnswer(a, true); }
+        else if (isEdgeTimeout(a.status)) {
+          await sleep(THROTTLE_BACKOFF_MS);
+          chargeRecorded = (await settleNoAnswer(a, true, { edge: true })) !== "no-answer";
+        }
       }
     }
 
-    if (out === "no-answer") {
+    if (out === "no-answer" || chargeRecorded) {
       // Recorded by settleNoAnswer: charged without an answer, a charge that
       // cannot be ruled out, or no answer on the last attempt. Each fails the run.
     } else if (out === "ok") {
@@ -649,6 +669,9 @@ for (const t of tools) {
       report.chargedEmpty.push({ key, slug: t.slug, usd, tx: a.tx || null, txid: a.txid || null, reason: `200 with ${a.unreadable ? "a body that could not be read" : "an empty body"}${retried ? " (on the retry)" : ""}` });
       report.spentUsd += usd;
       console.log(`FAIL ${key.padEnd(46)} CHARGED, empty answer: 200 with ${a.unreadable ? "an unreadable" : "an empty"} body · ${t.slug}${a.tx ? ` · tx ${a.tx}` : " · (no receipt header)"}; nothing signed again`);
+    } else if (isNoSellerMatched(a.status, a.body)) {
+      report.noSeller.push({ key, slug: t.slug, reason: `HTTP ${a.status}: ${a.body.slice(0, 160)}${retried ? " (twice)" : ""}` });
+      console.log(`NO SELLER ${key.padEnd(40)} HTTP ${a.status}: no outside seller does this task on Algorand (not charged; the seller set, not the rail)`);
     } else if (isUpstreamOutage(a.status, a.body)) {
       // Persistent third-party / edge failure: their outage, not our defect,
       // and a >=400 cancelled settlement so the buyer was never charged.
@@ -723,7 +746,7 @@ console.log(`\n=== Algorand rail canary ===`);
 const recovered = report.ok.filter((o) => o.throttledFirst).length;
 if (report.chargedNoAnswer.length + report.chargeUnverified.length + report.noAnswer.length) console.log(`no HTTP answer: ${report.chargedNoAnswer.length} charged · ${report.chargeUnverified.length} not ruled out · ${report.noAnswer.length} unanswered on the last attempt (each fails the run)`);
 if (report.chargedEmpty.length) console.log(`charged with an empty answer: ${report.chargedEmpty.length} (each fails the run)`);
-console.log(`settled+payload: ${report.ok.length} · rail failures: ${report.railFail.length} · rate-limited: ${report.rateLimited.length} · tool failures: ${report.toolFail.length} · upstream throttles: ${report.throttled.length} · third-party outages: ${report.upstreamFail.length}${recovered ? ` (${recovered} recovered on retry)` : ""}`);
+console.log(`settled+payload: ${report.ok.length} · rail failures: ${report.railFail.length} · rate-limited: ${report.rateLimited.length} · tool failures: ${report.toolFail.length} · upstream throttles: ${report.throttled.length} · third-party outages: ${report.upstreamFail.length} · no seller for the task: ${report.noSeller.length}${recovered ? ` (${recovered} recovered on retry)` : ""}`);
 if (report.blocked.length) console.log(`blocked by OUR OWN settle breaker (nothing measured, neither pass nor fail): ${report.blocked.length}`);
 if (report.aborted) console.log(`ABORTED: ${report.aborted.unmeasured} tools never tested (${report.aborted.why})`);
 if (report.unfunded.length) console.log(`SWEEP WALLET UNFUNDED at ${report.unfunded[0].key}: the wallet holds less USDC than the price (funding, not a rail verdict)`);
@@ -732,7 +755,7 @@ if (capped) console.log("[TOTAL CAP REACHED]");
 
 if (report.railFail.length) {
   console.log(`\nRAIL FAILURES (Algorand settlement refused after a genuine, slow attempt):`);
-  for (const f of report.railFail) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.railFail) console.log(`  ${f.key} - ${f.reason}`);
 }
 if (report.chargedNoAnswer.length) {
   console.log(`\nCHARGED WITH NO ANSWER (the request got no HTTP answer and its payment is on chain; counted in the spend):`);
@@ -761,24 +784,28 @@ if (report.blocked.length) {
 }
 if (report.rateLimited.length) {
   console.log(`\nRATE-LIMITED (fast 402s that survived a backoff - likely the facilitator throttling this wallet's volume, not a rail defect):`);
-  for (const f of report.rateLimited) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.rateLimited) console.log(`  ${f.key} - ${f.reason}`);
   console.log(`  NOTE: this sweep buys ~500 tools back to back, which no real buyer does.`);
   console.log(`  Raise CANARY_DELAY_MS or CANARY_THROTTLE_BACKOFF_MS if this recurs.`);
 }
 if (report.toolFail.length) {
   console.log(`\nTOOL FAILURES (settled path fine, handler did not deliver):`);
-  for (const f of report.toolFail.slice(0, 40)) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.toolFail.slice(0, 40)) console.log(`  ${f.key} - ${f.reason}`);
   if (report.toolFail.length > 40) console.log(`  … ${report.toolFail.length - 40} more (see the report artifact)`);
 }
 if (report.throttled.length) {
   console.log(`\nUPSTREAM THROTTLES (handler fine, vendor refused us even after a backoff):`);
-  for (const f of report.throttled) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.throttled) console.log(`  ${f.key} - ${f.reason}`);
   console.log(`  NOTE: this sweep buys every tool back to back, which no real buyer does.`);
   console.log(`  Raise CANARY_DELAY_MS or CANARY_THROTTLE_BACKOFF_MS if this recurs.`);
 }
 if (report.upstreamFail.length) {
   console.log(`\nTHIRD-PARTY / EDGE OUTAGES (an HTTP error answer that persisted through a fresh retry; a >=400 cancels settlement, so the buyer was NOT charged - their outage or an edge blip, not our rail/tool defect, so these do NOT fail the run):`);
-  for (const f of report.upstreamFail) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.upstreamFail) console.log(`  ${f.key} - ${f.reason}`);
+}
+if (report.noSeller.length) {
+  console.log(`\nNO OUTSIDE SELLER FOR THE TASK (a router tier's 4xx: nothing in the index does its task on Algorand; nothing was settled, and the seller set is not a rail defect, so these do NOT fail the run):`);
+  for (const f of report.noSeller) console.log(`  ${f.key} - ${f.reason}`);
 }
 if (unexpectedNoAvm.length) {
   console.log(`\nUNEXPECTED: these tools offer no algorand accept and are not identity-bound:`);
@@ -787,7 +814,7 @@ if (unexpectedNoAvm.length) {
 
 if (report.buyerNetwork.length) {
   console.log(`\nRUNNER NETWORK (the runner could not reach the chain to prepare a payment, twice; no paid request was sent and nothing was charged, so these do NOT fail the run):`);
-  for (const f of report.buyerNetwork) console.log(`  ${f.key} — ${f.reason}`);
+  for (const f of report.buyerNetwork) console.log(`  ${f.key} - ${f.reason}`);
 }
 // The classes that fail the run, by name, for the alert's text.
 report.failedClasses = failedClasses(report, unexpectedNoAvm);
@@ -796,7 +823,7 @@ if (OUT) { const { spentUsd: _spent, ...kept } = report; writeFileSync(OUT, JSON
 
 // Rail failures and tool failures are both real defects. Unexpected missing
 // accepts mean the rail silently stopped being offered, which is the exact
-// regression this canary exists to catch — all three fail the run.
+// regression this canary exists to catch - all three fail the run.
 //
 // Upstream throttles deliberately do NOT. This sweep buys ~500 tools back to
 // back and hits one vendor repeatedly; no real buyer produces that shape, so a

@@ -31,6 +31,7 @@ import { SKILL_PACKS, PACK_PRICES, STOCK_TRIMMED_PACK_SLUGS } from "../skills.js
 import { STOCK_SLUGS, stockDataEnabled } from "./stock-provider.js";
 import { packAttributions, withAttributions } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { capturePostHogPackStep } from "../posthog.js";
 import { callerInputError } from "../caller-input-errors.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
@@ -774,7 +775,7 @@ export const PACK_STEPS = {
   // question→first-citation URL).
   // ──────────────────────────────────────────────────────────────────────
 
-  // Canonical US macro dataset. Pure fanout — all 7 tools take {} args.
+  // Canonical US macro dataset. Pure fanout — all 6 tools take {} args.
   // No prompt args; the as-of date is implicit in each tool's response.
   "macro-economics": {
     mode: "fanout",
@@ -785,7 +786,6 @@ export const PACK_STEPS = {
       { slug: "unemployment-rate",     mapInput: () => ({ months: 12 }) },
       { slug: "fed-funds",             mapInput: () => ({ days: 30 }) },
       { slug: "sahm-rule",             mapInput: () => ({}) },
-      { slug: "fred-release-calendar", mapInput: () => ({ days: 14 }) },
     ],
   },
 
@@ -809,15 +809,14 @@ export const PACK_STEPS = {
     ],
   },
 
-  // The observed-demand basket (see PACK_PRICES note): 14 keyless reads, pure fanout,
+  // The observed-demand basket (see PACK_PRICES note): 13 keyless reads, pure fanout,
   // no step depends on another. NO metered-dollar upstream anywhere in this
-  // pack - nothing Brave/E2B/OpenAI-backed - so it introduces no CI-spend
+  // pack - nothing Brave- or OpenAI-backed - so it introduces no CI-spend
   // surface (test-brave-leak derives reachability from toolSlugs and will
   // fail the build if that ever changes).
   "macro-dashboard": {
     mode: "fanout",
     steps: [
-      { slug: "fred-release-calendar",  mapInput: () => ({ days: 14 }) },
       { slug: "fed-funds",              mapInput: () => ({ days: 30 }) },
       { slug: "cpi-yoy",                mapInput: () => ({}) },
       { slug: "unemployment-rate",      mapInput: () => ({ months: 12 }) },
@@ -864,7 +863,6 @@ export const PACK_STEPS = {
       { slug: "yield-curve-spread",    mapInput: () => ({}) },
       { slug: "sahm-rule",             mapInput: () => ({}) },
       { slug: "fx-dashboard",          mapInput: () => ({}) },
-      { slug: "fred-release-calendar", mapInput: () => ({ days: 14 }) },
     ],
   },
 
@@ -1983,6 +1981,7 @@ async function fetchPageHtml(url) {
   }
   if (!htmlInFlight.has(url)) {
     const p = (async () => {
+      await assertRobotsAllow(url);
       const { html } = await safeFetch(url, { maxBytes: MAX_HTML_BYTES });
       return typeof html === "string" ? html : "";
     })().finally(() => htmlInFlight.delete(url));
@@ -2023,6 +2022,7 @@ async function fetchAsBase64(url) {
   // The URL is caller-supplied, so this MUST route through safeFetch — it enforces
   // the SSRF guard (blocks private/link-local IPs, DNS-rebind, redirect-to-private)
   // and a byte cap. A raw fetch() here was an SSRF hole (internal/metadata exfil).
+  await assertRobotsAllow(url);
   const { buffer } = await safeFetch(url, { binary: true, maxBytes: MAX_FETCH_BASE64_BYTES });
   return buffer.toString("base64");
 }

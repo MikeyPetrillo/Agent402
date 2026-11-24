@@ -48,8 +48,6 @@ let dropped = [];
 const REQUIRED = [
   ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["fees", "rerankPerUnit"], ["meter", "markup"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"],
-  // X post counts and trends, USD per request (x-post-counts, x-trends).
-  ["vendor", "x", "countsRequest"], ["vendor", "x", "trendsRequest"],
   ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
   ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "gemini"], ["vendor", "decisions", "jev"],
   // The direct image models (USD per 1M tokens: prompt for text input,

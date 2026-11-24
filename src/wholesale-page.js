@@ -34,7 +34,7 @@ function table(head, rows) {
 export function wholesalePage(baseUrl, catalog = {}, powSlugs = new Set(), { tempoPush = true } = {}) {
   const canonical = `${baseUrl}/wholesale`;
   const title = "Wholesale tool data";
-  const description = "A stable, versioned JSON read per tool family for resellers: each tool's price (the public price, no hidden discount), the credit to keep with its answers, its seven-day success rate and latency, and stable error codes.";
+  const description = "A versioned JSON read per tool family for resellers: each tool's public price, the credit to keep with its answers, its seven-day success rate and latency.";
   const index = `${baseUrl}/api/wholesale/${WHOLESALE_VERSION}`;
   const toolCount = (f) => familyTools(f, { catalog, powSlugs }).length;
   const families = table(["Family", "Source", "Basis", "Tools", "JSON"], WHOLESALE_FAMILIES.map((f) => [

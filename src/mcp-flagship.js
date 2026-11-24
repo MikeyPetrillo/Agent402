@@ -121,9 +121,11 @@ export const FLAGSHIP_WRITERS = new Set(["memory-write", "decide-execute"]);
 
 /** initialize.serverInfo description (MCP Implementation.description), with
  *  the wires this server offers: `mpp` is the MPP switch (mppMethodsSummary),
- *  `receipts` is receiptsServed() (the signed-receipt clause). */
-export function mcpServerDescription({ mpp = true, receipts = true } = {}) {
-  return `${leadSentence({ mpp, receipts })} ${SUPPORT_LINE} Flagships: live web search and cited answers, news, browser render, market data, speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via ${mpp ? "x402 or MPP (Machine Payments Protocol) on the same 402" : "x402"}, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.`;
+ *  `receipts` is receiptsServed() (the signed-receipt clause), `stock` is the
+ *  stock switch (market.quote is listed only with a stock provider). The
+ *  published default names no quote flagship. */
+export function mcpServerDescription({ mpp = true, receipts = true, stock = false } = {}) {
+  return `${leadSentence({ mpp, receipts })} ${SUPPORT_LINE} Flagships: live web search and cited answers, news, browser render, ${stock ? "market data, " : ""}speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via ${mpp ? "x402 or MPP (Machine Payments Protocol) on the same 402" : "x402"}, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.`;
 }
 /** The short description (100 characters at most) the MCP Registry entry
  *  (mcp/server.json) and the server card carry. */
@@ -541,7 +543,7 @@ export function mcpJsonResult(obj, text = JSON.stringify(obj, null, 2)) {
  * Hosted URL is parameterized; npm / Claude Code / Cursor notes
  * match docs/ecosystem-listings.md + wiki/MCP-Connector.md.
  */
-export const AGENT402_MCP_VERSION = "0.16.0";
+export const AGENT402_MCP_VERSION = "0.17.0";
 
 /** A listed MCP tool description, at most `max` characters. Hosts truncate or
  *  skip long descriptions, so the listing keeps the first whole sentences; the
@@ -573,12 +575,12 @@ export function mcpInstallHints(baseUrl) {
       mcpServers: {
         agent402: {
           command: "npx",
-          args: ["-y", "agent402-mcp@0.16.0"],
+          args: ["-y", "agent402-mcp@0.17.0"],
           env: { AGENT_KEY: "0xYOUR_PRIVATE_KEY" },
         },
       },
     },
-    npm: "npx -y agent402-mcp@0.16.0",
+    npm: "npx -y agent402-mcp@0.17.0",
     maintainer: "Havok Holdings LLC",
   };
 }

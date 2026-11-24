@@ -82,6 +82,7 @@ export const REJECTION_REASONS = Object.freeze([
   { reason: "not-checked", means: "The payment never got a verdict: this server's verify request to the facilitator did not complete (a connection error or this server's own time limit), the facilitator answered with an HTTP error, or an on-chain signature check could not finish. Nothing was charged and nothing is known to be wrong with the payment. retry is same-payment: send the same payment again after Retry-After, with no new signature, while its authorization is still valid." },
   { reason: "facilitator-quota", means: "The payment verified and the call ran, then the facilitator for that network refused to settle it under a billing quota on this server's own account. Nothing was charged and nothing is wrong with your wallet. Ask the route for a fresh 402 without paying and pay on another network it lists." },
   { reason: "settlement-unconfirmed", means: "The payment's settlement is not confirmed, so the answer was withheld, and the transfer may still land. Two cases. A facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait: retry is watch-transaction, and if it lands the amount is booked as owed to the paying wallet and repaid after on-chain proof. Or a settle attempt ended on an answer that does not show whether a transfer was sent (a facilitator's HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction): retry is watch-transaction when `transactions` names one and check-wallet when none is named, the receipt's errorReason is settlement_unconfirmed, and the payment's own expiry is named when it carries one: `authorizationValidBefore` is the time after which the signed authorization can no longer move money (an EVM authorization's validBefore, or on Solana a time by which the transaction's recent blockhash has expired), `lastValidRound` an Algorand transaction's lastValid round and `expirationLedger` the ledger a Stellar authorization expires at; a new payment is safe once it has passed. `refundStatusUrl` is the free refund lookup for a named EVM transaction. In that second case the hint says whether the payment is recorded for the on-chain read (an EIP-3009 authorization on an EVM chain, or a transaction named on an EVM chain, Solana or Algorand); only then is a transfer that lands booked as owed. Either way, do not sign a new authorization for the same call before that point, or, when none is named, before the paying wallet shows whether the transfer landed: it is a second payment. The same payment sent again, in any encoding, is answered the same way without the call running." },
+  { reason: "settlement-compliance-refused", means: "The payment verified, then the settlement provider's compliance check refused to settle it (a sanctioned, blocked or flagged payer or payee, or a failed AML screen), or this server's own sanctions screening refused it before submitting it. No transfer was made and nothing was charged (`charged: false`), and the payment is not sent to another settlement provider. The receipt's errorReason is settle_compliance_refused." },
   { reason: "settled-refund-owed", means: "The transfer this payment authorized landed on chain after an earlier attempt with the same payment was answered unconfirmed, and it was booked as owed to the paying wallet before this settle answered. The call is not served for that transfer: the amount is repaid after on-chain proof, with nothing more for you to send. `transactions` names the transfer and `refundStatusUrl` shows where the repayment stands; the receipt's errorReason is settled_refund_owed. That authorization is spent, so retry is fresh-authorization: sign a new one to make the call." },
 ]);
 
@@ -213,6 +214,32 @@ export function settledRefundOwedRefusal(receipt, { origin = null } = {}) {
       + "The amount is repaid after on-chain proof, with nothing more for you to send"
       + (refundStatusUrl ? "; refundStatusUrl shows where the repayment stands. " : ". ")
       + "That authorization is spent: sign a new one to make the call.",
+  };
+}
+
+/** The errorReason of a settle ended by a compliance refusal
+ *  (src/settle-compliance.js SETTLE_COMPLIANCE_REFUSED, same value). */
+export const SETTLE_COMPLIANCE_REFUSED_REASON = "settle_compliance_refused";
+
+/**
+ * The 402 body fields for a settle_compliance_refused receipt (decoded
+ * PAYMENT-RESPONSE, or its base64 header): refused by the settlement
+ * provider's compliance check (or our own sanctions screen, in the receipt's
+ * own words), not charged, not sent elsewhere. Null for any other receipt.
+ */
+export function complianceSettleRefusal(receiptOrHeader) {
+  const receipt = typeof receiptOrHeader === "string" ? decodeB64Json(receiptOrHeader) : receiptOrHeader;
+  if (!receipt || typeof receipt !== "object" || receipt.success !== false || receipt.errorReason !== SETTLE_COMPLIANCE_REFUSED_REASON) return null;
+  const network = typeof receipt.network === "string" && /^[a-z0-9-]{1,32}:[A-Za-z0-9-]{1,64}$/.test(receipt.network) ? receipt.network : null;
+  const own = /sanctions screening/.test(String(receipt.errorMessage || ""));
+  return {
+    reason: "settlement-compliance-refused",
+    retry: "do-not-retry",
+    charged: false,
+    network,
+    detail: own
+      ? "This server's sanctions screening refused this payment before it was submitted. No transfer was made and nothing was charged, and the payment is not sent to another settlement provider."
+      : "The settlement provider's compliance check refused this payment. No transfer was made and nothing was charged, and the payment is not sent to another settlement provider.",
   };
 }
 
@@ -406,6 +433,18 @@ export function classifySettlementRefusal(paymentResponseHeader) {
     detail: `The ${name} facilitator refused to settle this payment under a billing quota on this server's account, not because of your wallet. Nothing was charged. Request this route again without payment for its current accepts and pay on another network listed there.` };
 }
 
+/** The scheme and network a decoded x402 payment names, as the paywall
+ *  matches it: a v2 payment's `accepted` block (the requirement the payer
+ *  signed against) when it carries one, else the top level (v1, or a v2
+ *  payload with no accepted block). A top-level field beside an accepted
+ *  block is never read. Pure. */
+export function x402PaymentOffer(payload) {
+  if (!payload || typeof payload !== "object") return { scheme: undefined, network: undefined };
+  const acc = payload.accepted;
+  const signed = Number(payload.x402Version) !== 1 && acc && typeof acc === "object" && !Array.isArray(acc) ? acc : null;
+  return signed ? { scheme: signed.scheme, network: signed.network } : { scheme: payload.scheme, network: payload.network };
+}
+
 export function advertisedAccepts(paymentRequiredHeader) {
   const env = decodeB64Json(paymentRequiredHeader);
   const accepts = env && Array.isArray(env.accepts) ? env.accepts : [];
@@ -433,8 +472,7 @@ export function classifyPaymentRejection({ paymentHeader, paymentRequiredHeader,
         detail: `This payment declares x402Version ${payload.x402Version}; this resource serves x402Version ${x402Version}. Upgrade the x402 client.` };
     }
 
-    const scheme = payload.scheme ?? payload.accepted?.scheme;
-    const network = payload.network ?? payload.accepted?.network;
+    const { scheme, network } = x402PaymentOffer(payload);
     if (!scheme || !network) {
       return { reason: "malformed-payload", retry: "rebuild-payment",
         detail: "The payment payload names no scheme/network. Copy them verbatim from one accepts entry in PAYMENT-REQUIRED." };

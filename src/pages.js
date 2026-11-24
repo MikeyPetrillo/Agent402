@@ -1,10 +1,13 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
+import { SERVER_VERSION } from "./server-version.js";
 import { siteOrgRef } from "./site-org.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { frontDoorOneLine } from "./front-door.js";
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
-import { receiptsServed } from "./receipt-signing.js";
+import { receiptsServed, RECEIPT_FETCH_PATH, RECEIPT_URL_HEADER, RECEIPT_HEADER } from "./receipt-signing.js";
+import { RECEIPT_FETCH_DAYS } from "./receipt-store.js";
+import { gatewayProductSentence } from "./gateway-product-copy.js";
 import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
@@ -17,6 +20,8 @@ import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
 import { captureNote } from "./tool-output-examples.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
+import { getWalletHtml } from "./get-a-wallet.js";
+import { firstFit } from "./seo-meta.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
@@ -77,7 +82,7 @@ export const CATEGORIES = {
   crypto: { label: "Crypto & onchain data", blurb: "Keyless reads across chains: token prices and metadata, order books, stablecoin peg health, wallet balances and transaction history, NFT holdings and metadata, gas snapshots." },
   chain: { label: "Sanctions & address screening", blurb: "Sanctions checks: screen any blockchain address against every digital currency address on the OFAC SDN list, or a person or company name against the list's entries, with the sanctioned entity named on a match." },
   wallet: { label: "Wallet operations", blurb: "Multi-chain balance reads, testnet funding, onramp links, and SQL over onchain data. Non-custodial: the agent signs with its own key." },
-  ai: { label: "AI & compute", blurb: "Inference, generation and sandboxed execution priced per call: chat tiers, image generation, text-to-speech, speech-to-text, and code execution in an isolated sandbox." },
+  ai: { label: "AI & compute", blurb: "Inference and generation priced per call: chat tiers, image generation, text-to-speech and speech-to-text." },
   "skill-pack": { label: "Skill packs", blurb: "Multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails. Cheaper to integrate than orchestrating the steps yourself." },
   "date-time": { label: "Calendar & date math", blurb: "ISO weeks, leap years, day-of-year, epoch conversion, and movable-feast dates - the calendar edge cases that are easy to get subtly wrong." },
   research: { label: "Market & demand research", blurb: "Analyzed reads over this catalog's own demand and the open x402 ecosystem: what agents ask for, what sells, and company research." },
@@ -291,6 +296,38 @@ export function powSnippetRequest(baseUrl, tool) {
   };
 }
 
+/** The page's Python sample, standard library only: on a proof-of-work tool
+ *  the free call (the same request as the JavaScript snippet), on any other
+ *  the 402 and the quote its PAYMENT-REQUIRED header carries. */
+export function pythonExample(baseUrl, tool, { computePayable = false } = {}) {
+  const req = powSnippetRequest(baseUrl, tool);
+  const send = (headers) => `req = urllib.request.Request(${JSON.stringify(req.url)}, method=${JSON.stringify(req.method)}${req.body != null ? `, data=${JSON.stringify(req.body)}.encode()` : ""}, headers={${[...headers, ...(req.body != null ? ['"Content-Type": "application/json"'] : [])].join(", ")}})`;
+  if (computePayable) return `import hashlib, json, urllib.request
+
+def zero_bits(digest):
+    n = 0
+    for b in digest:
+        if b:
+            return n + 8 - b.bit_length()
+        n += 8
+    return n
+
+c = json.load(urllib.request.urlopen(${JSON.stringify(`${baseUrl}/api/pow/challenge?slug=${tool.slug}`)}))
+n = 0
+while zero_bits(hashlib.sha256(f"{c['challenge']}:{n}".encode()).digest()) < c["difficulty"]:
+    n += 1
+${send(['"X-Pow-Solution": f"{c[\'token\']}:{n}"'])}
+print(json.load(urllib.request.urlopen(req)))`;
+  return `import base64, json, urllib.error, urllib.request
+
+${send([])}
+try:
+    urllib.request.urlopen(req)
+except urllib.error.HTTPError as e:
+    quote = json.loads(base64.b64decode(e.headers["PAYMENT-REQUIRED"]))
+    print(e.code, [(a["network"], a["amount"]) for a in quote["accepts"]])  # the price, per chain, in base units`;
+}
+
 function curlExample(baseUrl, tool) {
   const input = tool.discovery?.input ?? {};
   if (tool.method === "GET") {
@@ -313,6 +350,30 @@ export function objectFieldsSample(v, max = 80) {
   let shown = 1;
   while (shown < Math.min(keys.length, 6) && `${head}: ${keys.slice(0, shown + 1).join(", ")}${tail(shown + 1)}`.length <= max) shown += 1;
   return `${head}: ${keys.slice(0, shown).join(", ")}${tail(shown)}`;
+}
+
+/** What the input schema itself says about one field, as a sentence for the
+ *  parameters table: its allowed values, its default, its range or length,
+ *  and the value the published example sends. Each fact is read from the
+ *  schema, so a page states only what the route enforces or documents. */
+export function paramLimits(v, exampleValue) {
+  if (!v || typeof v !== "object") return "";
+  const e = ledgerEsc;
+  const out = [];
+  const lit = (x) => `<code>${e(typeof x === "string" ? x : JSON.stringify(x))}</code>`;
+  const en = Array.isArray(v.enum) ? v.enum : Array.isArray(v.items?.enum) ? v.items.enum : null;
+  if (en && en.length && en.length <= 12) out.push(`One of ${en.map(lit).join(", ")}.`);
+  else if (en && en.length > 12) out.push(`One of ${en.length} listed values.`);
+  if (v.default !== undefined && v.default !== null && JSON.stringify(v.default).length <= 40) out.push(`Default ${lit(v.default)}.`);
+  const lo = v.minimum ?? v.exclusiveMinimum, hi = v.maximum ?? v.exclusiveMaximum;
+  if (Number.isFinite(lo) && Number.isFinite(hi)) out.push(`From ${e(String(lo))} to ${e(String(hi))}.`);
+  else if (Number.isFinite(lo)) out.push(`At least ${e(String(lo))}.`);
+  else if (Number.isFinite(hi)) out.push(`At most ${e(String(hi))}.`);
+  if (Number.isFinite(v.maxLength)) out.push(`Up to ${e(String(v.maxLength))} characters.`);
+  if (Number.isFinite(v.maxItems)) out.push(`Up to ${e(String(v.maxItems))} items.`);
+  if (typeof v.format === "string") out.push(`Format ${lit(v.format)}.`);
+  if (exampleValue !== undefined && exampleValue !== null && typeof exampleValue !== "object" && String(exampleValue).length <= 48 && !en) out.push(`The example sends ${lit(exampleValue)}.`);
+  return out.join(" ");
 }
 
 export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null, otherMethodRouted = false, mpp = true } = {}) {
@@ -393,7 +454,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     const req = required.includes(k);
     const alts = aliasFor(k);
     const altNote = alts.length ? ` <span style="color:var(--faint);">Also accepted as ${alts.map((a) => `<code>${e(a)}</code>`).join(", ")}.</span>` : "";
-    return `<tr><td><code>${e(k)}</code></td><td>${e(schemaType(v))}</td><td>${req ? "yes" : "no"}</td><td>${e(v.description ?? "")}${altNote}</td></tr>`;
+    const limits = paramLimits(v, input[k]);
+    const limitNote = limits ? ` <span style="color:var(--faint);">${limits}</span>` : "";
+    return `<tr><td><code>${e(k)}</code></td><td>${e(schemaType(v))}</td><td>${req ? "yes" : "no"}</td><td>${e(v.description ?? "")}${altNote}${limitNote}</td></tr>`;
   }).join("\n");
 
   // --- Response fields from the documented example (same derivation as /openapi.json).
@@ -536,10 +599,25 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   <p class="tp-lead">${summary}</p>
   ${restShown ? `<p class="tp-sub">${e(restShown)}</p>` : ""}
   <div class="tp-meta"><span>Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a></span>${tagsLine ? `<span class="tp-tags"><span>Tags:</span> ${tagsLine}</span>` : ""}${aliases.length ? `<span class="tp-tags"><span>Also found as:</span> ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}</span>` : ""}${isPack ? `<span><a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a></span>` : ""}</div>
-  <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" style="display:inline-block;">Try in playground →</a></p>
+  <p style="margin:16px 0 0;"><a class="btn btn-secondary btn-sm ml-cta" href="/playground?slug=${e(tool.slug)}" rel="nofollow" style="display:inline-block;">Try in playground →</a></p>
 
   <h2 class="tp-h2">Parameters</h2>
   ${paramRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>${paramRows}</table></div>` : `<p class="tp-sub">${e(tool.name)} takes no parameters.</p>`}
+
+  ${
+    computePayable
+      ? `<h2 class="tp-h2">Free call, no wallet</h2>
+  <p class="tp-sub">This tool runs free with proof of work: fetch a challenge, solve the sha256 puzzle (${e(String(powDifficulty))} leading zero bits, a fraction of a second of CPU), and resend with the <code>X-Pow-Solution</code> header. JavaScript:</p>
+  ${codeBlock(`import { createHash } from "node:crypto";
+const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${tool.slug}")).json();
+let n = 0;
+while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
+await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`, { name: "the proof-of-work call" })}
+  <p class="tp-sub">Python, standard library only:</p>
+  ${codeBlock(pythonExample(baseUrl, tool, { computePayable }), { name: "the Python proof-of-work call" })}`
+      : ""
+  }
 
   <h2 class="tp-h2">Example request</h2>
   ${codeBlock(curlExample(baseUrl, tool), { name: "the request" })}
@@ -556,7 +634,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   <h2 class="tp-h2">From an MCP client</h2>
   ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.16.0</code>.</p>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.17.0</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
@@ -569,23 +647,15 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
 client.setSpendControls?.({ maxAmountPerPayment: "${spendCap}" }); // refuse any quote above this tool's price
-registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
 ${payExample(baseUrl, tool)}`, { name: "the paid call" })}
-
-  ${
-    computePayable
-      ? `<h2 class="tp-h2">No wallet? Pay with compute</h2>
-  <p class="tp-sub">Fetch a challenge, solve the sha256 puzzle (${e(String(powDifficulty))} leading zero bits, a fraction of a second of CPU), and resend with the <code>X-Pow-Solution</code> header:</p>
-  ${codeBlock(`import { createHash } from "node:crypto";
-const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
-const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${tool.slug}")).json();
-let n = 0;
-while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
-await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`, { name: "the proof-of-work call" })}`
-      : ""
-  }
+  <p class="tp-sub">${getWalletHtml()}</p>
+${computePayable ? "" : `
+  <h2 class="tp-h2">The quote (Python)</h2>
+  <p class="tp-sub">Standard library only: the 402 and the price its <code>PAYMENT-REQUIRED</code> header quotes on each chain. To pay from Python, sign it with any x402 client.</p>
+  ${codeBlock(pythonExample(baseUrl, tool), { name: "the Python quote" })}`}
 
   ${packsHtml}
 
@@ -632,7 +702,7 @@ export function categoryPage(baseUrl, catalog, catKey) {
   const canonical = `${baseUrl}/tools/category/${catKey}`;
   const nTools = `${tools.length} ${tools.length === 1 ? "tool" : "tools"}`;
   const title = `${cat.label} - ${nTools} | Agent402`;
-  const description = `${cat.blurb} ${nTools}, ${freeCount} free via proof-of-work.`;
+  const description = firstFit([`${cat.blurb} ${nTools}, ${freeCount} free via proof-of-work.`, `${cat.label}: ${nTools} Agent402 tools priced per call, ${freeCount} free via proof-of-work.`]);
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "ItemList",
@@ -648,7 +718,7 @@ export function categoryPage(baseUrl, catalog, catKey) {
   <h3 style="font-size:var(--fs-base);margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
   ${ledgerPriceLine(t)}
   <p style="color:var(--muted);font-size:var(--fs-sm);margin:0;line-height:1.5;flex:1;">${e(desc)}</p>
-  <a href="/playground?slug=${e(t.slug)}" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);text-decoration:none;font-weight:700;">try in playground →</a>
+  <a href="/playground?slug=${e(t.slug)}" rel="nofollow" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);text-decoration:none;font-weight:700;">try in playground →</a>
 </div>`;
   }).join("\n");
 
@@ -725,7 +795,7 @@ export function faqPage(baseUrl) {
   const canonical = `${baseUrl}/faq`;
   const title = "Agent402 FAQ - x402 + MPP + MCP server for AI agents";
   const description =
-    `Frequently asked questions about Agent402: pricing, proof-of-work, x402 and ${RAILS_SHORT}, the OpenAI-compatible /v1 gateway, self-serve listing, MCP, data handling, and self-hosting the open-source server.`;
+    "Answers about Agent402: pricing, proof-of-work, x402 and MPP payments, the /v1 model gateway, MCP, data handling and self-hosting the open-source server.";
   const FAQ_ITEMS = faqItems();
   const jsonLd = {
     "@context": "https://schema.org",
@@ -1108,6 +1178,23 @@ export function openapiSpec(baseUrl, catalog) {
       429: { description: "Too many lookups from this address; retry after Retry-After seconds." },
     },
   });
+  // A streamed paid answer's signed receipt, kept where its head said.
+  if (receiptsServed()) paths[`${RECEIPT_FETCH_PATH}/{key}`] = {
+    get: {
+      operationId: "getStreamedReceipt",
+      security: [],
+      summary: "The signed receipt of a streamed paid answer, by the token its head named",
+      description: `Free. A paid answer written in parts names ${RECEIPT_URL_HEADER} in its head; once it finished 200, this answers the same ${RECEIPT_HEADER} receipt a trailer carries (a compact JWS, checked against /.well-known/agent402-receipt-key.json or at POST /api/receipts/verify with the bytes received), for ${RECEIPT_FETCH_DAYS} days. The key is the random token the head named, never the call's settlement, so only the buyer can fetch it. A failed, free or trial call and a referral copy are never signed, so they have none. Rate limited per client address (429 with Retry-After).`,
+      tags: ["receipts"],
+      parameters: [{ name: "key", in: "path", required: true, description: "The settlement or token the answer's head named.", schema: { type: "string", pattern: "^[A-Za-z0-9_.:-]{16,200}$" } }],
+      responses: {
+        200: { description: "The receipt.", content: { "application/json": { schema: { type: "object", properties: { receipt: { type: "string" }, header: { type: "string" }, keys: { type: "string" }, verify: { type: "string" } }, required: ["receipt"] } } } },
+        400: { description: "key is not a settlement or token." },
+        404: { description: "No receipt is kept under that key." },
+        429: { description: "Too many reads from this address; retry after Retry-After seconds." },
+      },
+    },
+  };
   paths["/api/refunds"] = { get: refundLookupOp("getRefundStatus") };
   paths["/api/refunds/lookup"] = { get: refundLookupOp("lookupRefund") };
   // Document the skill-pack discovery surface so SDK generators and agent
@@ -1228,7 +1315,8 @@ export function openapiSpec(baseUrl, catalog) {
       // directory display as OUR NAME, so it is the plain product name; the
       // tagline (both wires, x402 + MPP) lives in the description below.
       title: "Agent402.tools",
-      version: "2.1.0",
+      // package.json's version (src/server-version.js), the release running.
+      version: SERVER_VERSION,
       description:
         // Template literal, not a plain string: this is the spec description
         // every crawler and directory reads, and as a quoted string it shipped
@@ -1284,7 +1372,7 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
     tags: [
-      ...Object.entries(CATEGORIES).map(([k, v]) => ({ name: k, description: v.label })),
+      ...Object.entries(CATEGORIES).map(([k, v]) => ({ name: k, description: k === "llm" ? `${v.label}. ${gatewayProductSentence({ receipts: receiptsServed() })}` : v.label })),
       { name: "workflows", description: "Curated multi-tool workflows (skill packs) - task-level templates that compose catalog tools." },
       { name: "transparency", description: "Figures about this service computed from its own ledgers." },
     ],

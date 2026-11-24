@@ -15,10 +15,28 @@ import { IMAGE_GEN_TOOLS } from "./tools/image-gen-kit.js";
 import { TTS_TOOLS } from "./tools/tts-kit.js";
 import { STT_TOOLS } from "./tools/stt-kit.js";
 import { JUDGE_TOOLS } from "./tools/judge-kit.js";
-import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
+import { RESEARCH_DEEP_TOOLS } from "./tools/research-deep-kit.js";
+import { DOSSIER_TOOLS } from "./tools/dossier-kit.js";
+import { FUND_TOOLS } from "./tools/fund-report-kit.js";
+import { DOMAIN_AUDIT_TOOLS } from "./tools/domain-audit-kit.js";
+import { TOKEN_RISK_TOOLS } from "./tools/token-risk-kit.js";
+import { RECALL_TOOLS } from "./tools/recall-report-kit.js";
+import { INSIDER_TOOLS } from "./tools/insider-flow-kit.js";
+import { TOKEN_BRIEF_TOOLS } from "./tools/token-brief-kit.js";
+import { TICKER_PACK_TOOLS } from "./tools/ticker-pack-kit.js";
+import { FILING_WATCH_TOOLS } from "./tools/filing-watch-kit.js";
+import { LINKEDIN_TOOLS } from "./tools/linkedin-article-kit.js";
+import { EXPENSIVE_COMPOSITE_SLUGS, OWN_GLOBAL_BOUND_SLUGS } from "./composite-spend-guard.js";
 
 /** Catalog routes with a real upstream cost, each with its own settle point. */
-export const SETTLE_FIRST_CATALOG_TOOLS = [...SEARCH_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...JUDGE_TOOLS, ...CODE_RUN_TOOLS];
+export const SETTLE_FIRST_CATALOG_TOOLS = [...SEARCH_TOOLS, ...IMAGE_GEN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...JUDGE_TOOLS];
+/** The report products (EXPENSIVE_COMPOSITE_SLUGS, less a route that bounds
+ *  its own spend): every paid model call they make goes through the chat
+ *  gateway's settle point (fetchOpenRouter), and an image they draw through the
+ *  image tiers' own, so an armed run settles before its first paid call and
+ *  after its own checks and free source reads. */
+export const SETTLE_FIRST_REPORT_TOOLS = [...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...TOKEN_RISK_TOOLS, ...RECALL_TOOLS, ...INSIDER_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LINKEDIN_TOOLS]
+  .filter((t) => EXPENSIVE_COMPOSITE_SLUGS.has(t.slug) && !OWN_GLOBAL_BOUND_SLUGS.has(t.slug));
 /** The image tiers that share the images handler (not the video route: its
  *  job is parked and resumed across calls), dub and redact-chat, behind the chat gateway's settle point. */
 export const SETTLE_FIRST_SHARED_TOOLS = [...IMAGES_FAST_TOOLS.filter((t) => t.slug !== "v1-videos"), ...DUB_TOOLS, ...REDACT_CHAT_TOOLS];
@@ -27,5 +45,5 @@ export const SETTLE_FIRST_GATEWAY_TOOLS = [...LLM_GATEWAY_TOOLS, ...LLM_MESSAGES
 
 /** The slugs that may settle first, given the /v1 wires this server serves. */
 export function settleFirstSlugs(gatewayToolsEnabled) {
-  return new Set([...gatewayToolsEnabled, ...SETTLE_FIRST_SHARED_TOOLS, ...SETTLE_FIRST_CATALOG_TOOLS].map((t) => t.slug));
+  return new Set([...gatewayToolsEnabled, ...SETTLE_FIRST_SHARED_TOOLS, ...SETTLE_FIRST_CATALOG_TOOLS, ...SETTLE_FIRST_REPORT_TOOLS].map((t) => t.slug));
 }

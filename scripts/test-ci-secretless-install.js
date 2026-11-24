@@ -242,7 +242,8 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
 
 // THE CI DATA KEYS. The production CoinGecko key is not an Actions secret (CI
 // must never spend it), so no step reads secrets.COINGECKO_API_KEY. CI holds
-// two keys of its own: OPEN_METEO_API_KEY and COINGECKO_CI_API_KEY. Each is
+// three keys of its own: OPEN_METEO_API_KEY, COINGECKO_CI_API_KEY and
+// BLS_API_KEY (the BLS-backed macro tools). Each is
 // handed ONLY to the step that boots the server the strict sweep drives (in
 // the sweep lane) and to the nightly corpus step, at step scope, never at job
 // or workflow scope; every other step, an install included, never sees them.
@@ -252,12 +253,13 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
 // lenient sweep fails the run when that cap is spent or a keyed read was
 // refused 429 (scripts/test-non-metered-examples.js --coingecko-run-check).
 {
-  const { CG_RUN_READ_CAP, CG_RUN_MAX_PER_MIN, CG_NIGHTLY_READ_CAP } = await import("./test-non-metered-examples.js");
-  const DATA_KEYS = ["OPEN_METEO_API_KEY", "COINGECKO_CI_API_KEY"];
-  const KEY_VARS = ["OPEN_METEO_API_KEY", "COINGECKO_API_KEY"];
+  const { CG_RUN_READ_CAP, CG_RUN_MAX_PER_MIN, CG_NIGHTLY_READ_CAP, BLS_RUN_READ_CAP } = await import("./test-non-metered-examples.js");
+  const DATA_KEYS = ["OPEN_METEO_API_KEY", "COINGECKO_CI_API_KEY", "BLS_CI_API_KEY"];
+  const KEY_VARS = ["OPEN_METEO_API_KEY", "COINGECKO_API_KEY", "BLS_API_KEY"];
   const wfText = (f) => readFileSync(new URL(`../.github/workflows/${f}`, import.meta.url), "utf8");
   for (const f of ["deploy.yml", "corpus-nightly.yml"]) {
     ok(!/secrets\.COINGECKO_API_KEY\b/.test(wfText(f)), `${f}: no step reads secrets.COINGECKO_API_KEY (the production key is not an Actions secret; CI uses COINGECKO_CI_API_KEY)`);
+    ok(!/secrets\.BLS_API_KEY\b/.test(wfText(f)), `${f}: no step reads secrets.BLS_API_KEY (CI uses BLS_CI_API_KEY, so a run never spends the production key's daily queries)`);
   }
   // Every place a data key is read, by workflow: [job, step name].
   const readsOf = (wf) => {
@@ -283,15 +285,17 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
     const run = String(keyed.run || "");
     ok(/^\$\{\{ secrets\.OPEN_METEO_API_KEY \}\}$/.test(String(env.OPEN_METEO_API_KEY)) && /^\$\{\{ secrets\.COINGECKO_CI_API_KEY \}\}$/.test(String(env.COINGECKO_API_KEY)),
       "the keyed step hands the server OPEN_METEO_API_KEY and the CI CoinGecko key as COINGECKO_API_KEY");
+    ok(/^\$\{\{ secrets\.BLS_CI_API_KEY \}\}$/.test(String(env.BLS_API_KEY)), "the keyed step hands the server the CI BLS key as BLS_API_KEY (the BLS-backed macro tools; the production key is never an Actions input)");
+    ok(String(env.BLS_DAILY_MAX) === String(BLS_RUN_READ_CAP), `the server's BLS read ceiling is the sweep's per-run cap (${env.BLS_DAILY_MAX} vs BLS_RUN_READ_CAP ${BLS_RUN_READ_CAP})`);
     ok(env.COINGECKO_API_TIER === "pro", `the keyed step sets COINGECKO_API_TIER=pro (got ${env.COINGECKO_API_TIER})`);
     ok(String(env.COINGECKO_DAILY_MAX) === String(CG_RUN_READ_CAP), `the server's CoinGecko read ceiling is the sweep's per-run cap (${env.COINGECKO_DAILY_MAX} vs CG_RUN_READ_CAP ${CG_RUN_READ_CAP})`);
     ok(String(env.COINGECKO_MAX_PER_MIN) === String(CG_RUN_MAX_PER_MIN), `the server's CoinGecko minute pacing is the sweep's (${env.COINGECKO_MAX_PER_MIN} vs ${CG_RUN_MAX_PER_MIN})`);
     ok(/src\/server\.js/.test(run), "the keyed step boots the server (the only process that reads the keys)");
     // A key variable is only ever tested for presence, never printed or exported.
     const uses = KEY_VARS.flatMap((v) => [...run.matchAll(new RegExp(`(.{0,6})\\$\\{?${v}\\}?`, "g"))].map((m) => m[1]));
-    ok(uses.length >= 2 && uses.every((pre) => /-[nz] "$/.test(pre)), `the keyed step reads each key variable only in a presence test (${uses.length} use(s))`);
+    ok(uses.length >= 3 && uses.every((pre) => /-[nz] "$/.test(pre)), `the keyed step reads each key variable only in a presence test (${uses.length} use(s))`);
     ok(!KEY_VARS.some((v) => new RegExp(`${v}=`).test(run.split("\n").filter((l) => /GITHUB_ENV|GITHUB_OUTPUT/.test(l)).join("\n"))), "the keyed step never writes a key to GITHUB_ENV or GITHUB_OUTPUT");
-    ok(/NON_METERED_CG_MODE=\$\w+.*GITHUB_ENV/.test(run) && /NON_METERED_OM_MODE=\$\w+.*GITHUB_ENV/.test(run), "the keyed step hands the later steps the words keyed or keyless for each source");
+    ok(/NON_METERED_CG_MODE=\$\w+.*GITHUB_ENV/.test(run) && /NON_METERED_OM_MODE=\$\w+.*GITHUB_ENV/.test(run) && !/NON_METERED_BLS_MODE/.test(run), "the keyed step hands the later steps the words keyed or keyless for each source a later step reads (BLS is capped by BLS_DAILY_MAX, no mode word)");
     ok(/add-mask/.test(run) && /AGENT402_OPERATOR_TOKEN=/.test(run), "the keyed step masks the run's own operator token before the server reads it");
   }
   // The check after the lenient sweep: the cap and a keyed 429 fail the run.
@@ -318,6 +322,16 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
   ok(/^\$\{\{ secrets\.COINGECKO_CI_API_KEY \}\}$/.test(String(cEnv.COINGECKO_API_KEY)) && cEnv.COINGECKO_API_TIER === "pro" && String(cEnv.COINGECKO_DAILY_MAX) === String(CG_NIGHTLY_READ_CAP),
     `corpus-nightly.yml: the corpus server gets the CI key as COINGECKO_API_KEY, the pro tier and the nightly read cap (${cEnv.COINGECKO_DAILY_MAX} vs ${CG_NIGHTLY_READ_CAP})`);
   ok(/keyed/.test(String(cStep?.run || "")) && !/echo[^\n]*\$\{?COINGECKO_API_KEY/.test(String(cStep?.run || "")), "corpus-nightly.yml: the corpus step logs keyed or keyless, never the key");
+}
+
+// npm releases authenticate by trusted publishing (OIDC, the publish job's
+// id-token): no workflow holds a long-lived npm token, so no install step,
+// lifecycle script or third-party CLI can read one.
+{
+  const { readdirSync } = await import("node:fs");
+  const dir = new URL("../.github/workflows/", import.meta.url);
+  const holders = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).filter((f) => readFileSync(new URL(f, dir), "utf8").split("\n").some((l) => !/^\s*#/.test(l) && /secrets\.NPM_TOKEN\b|NODE_AUTH_TOKEN\s*:/.test(l)));
+  ok(holders.length === 0, `no workflow reads secrets.NPM_TOKEN or sets NODE_AUTH_TOKEN (${holders.join(", ") || "none"})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -13,6 +13,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { marked } from "./tools/markdown-render.js"; // the one renderer configuration
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail, wrapCodeBlocks } from "./ledger-chrome.js";
+import { sentenceFit } from "./seo-meta.js";
+import { REPO_SLUG } from "./repo-link.js";
+import { getWalletHtml } from "./get-a-wallet.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIKI_DIR = join(__dirname, "..", "wiki");
@@ -293,10 +296,13 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-side-a.active { background:var(--card);color:var(--accent);border-left:2px solid var(--accent);padding-left:8px;font-weight:600; }
   .ml-docs-side-hidden { display:none !important; }
   .ml-docs-api-cat { font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--hairline);color:var(--ink); }
-  .ml-docs-api-row { display:grid;grid-template-columns:1.2fr 2fr .5fr;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:var(--fs-md); }
-  .ml-docs-api-row .slug { font-family:var(--font-mono);color:var(--ink); }
-  .ml-docs-api-row .desc { color:var(--muted); }
-  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:var(--fs-md);font-weight:700; }
+  /* Tool rows: slug, description, price. The text columns may shrink below their longest token (minmax(0,..)) and break inside it, so no slug or word widens the page; the price keeps its own width. At phone width the description takes its own line under the slug and price. */
+  .ml-docs-api-row { display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,2fr) max-content;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:var(--fs-md); }
+  .ml-docs-api-row > div { min-width:0; }
+  .ml-docs-api-row .slug { font-family:var(--font-mono);color:var(--ink);overflow-wrap:anywhere; }
+  .ml-docs-api-row .desc { color:var(--muted);overflow-wrap:anywhere; }
+  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:var(--fs-md);font-weight:700;white-space:nowrap; }
+  @media (max-width:700px){ .ml-docs-api-row { grid-template-columns:minmax(0,1fr) max-content;gap:4px 14px; } .ml-docs-api-row .desc { grid-column:1 / -1;grid-row:2; } }
   .ml-docs-pn { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:48px;padding-top:24px;border-top:1px solid var(--hairline); }
   .ml-docs-pn-a { display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);text-decoration:none; }
   .ml-docs-pn-a:hover { border-color:var(--accent);text-decoration:none; }
@@ -339,8 +345,11 @@ function shell(baseUrl, title, description, path, body, currentSlug) {
   });
 }
 
+// A bare repository URL in the wiki (autolinked) is shown as words on the
+// site: the page links the repository and never prints its path as text.
+const REPO_PATH_TEXT = new RegExp(`(<a [^>]*href="(https://github\\.com/${REPO_SLUG.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^"]*)"[^>]*>)\\2</a>`, "gi");
 function renderMarkdown(md) {
-  return wrapCodeBlocks(marked.parse(transformWikilinks(md)))
+  return wrapCodeBlocks(marked.parse(transformWikilinks(md)).replace(REPO_PATH_TEXT, "$1the repository</a>"))
     .replace(/<table>/g, '<div class="ml-docs-tw"><table>')
     .replace(/<\/table>/g, "</table></div>")
     // A row of related-page links wraps balanced, so it never ends on one stray link.
@@ -349,7 +358,16 @@ function renderMarkdown(md) {
 
 /** Meta description from a page's first real prose paragraph: skips headings,
  * blockquote banners, tables, lists, code and HTML, then strips markdown. */
-export function docDescription(md, title) {
+// A page whose opening paragraphs have no sentence that fits a snippet gets
+// one written for it here (the wiki text stays as it is on GitHub).
+const DOC_DESCRIPTIONS = {
+  Home: "Agent402 documentation: the payment and trust layer for agentic commerce, with x402 and MPP payments, a signed receipt per call and 500+ tools.",
+  "Agentic-Finance": "Agentic Finance is software agents transacting on their own: finding a service, reading its price, paying per request and keeping a receipt.",
+  Operations: "How Agent402 is deployed and watched in production: the deploy and heartbeat workflows, the production probes and the hosting setup.",
+};
+
+export function docDescription(md, title, slug = "") {
+  if (slug && Object.hasOwn(DOC_DESCRIPTIONS, slug)) return DOC_DESCRIPTIONS[slug];
   const paras = String(md).replace(/```[\s\S]*?```/g, "").split(/\n\s*\n/);
   for (const raw of paras) {
     const t = raw.trim();
@@ -359,22 +377,28 @@ export function docDescription(md, title) {
       .replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
     for (let prev = ""; prev !== text; ) { prev = text; text = text.replace(/<[^<>]*>/g, ""); }
     text = text.replace(/[<>*_`]+/g, "").replace(/\s+/g, " ").trim();
-    if (text.length >= 40) return text; // the shell trims to snippet length
+    // Whole sentences that fit a snippet; a paragraph whose first sentence
+    // runs past it gives way to the next one rather than being cut.
+    const fit = text.length >= 40 ? sentenceFit(text) : "";
+    if (fit.length >= 40) return fit;
   }
   return `Agent402 documentation: ${title}.`;
 }
 
+// A page that shows an AGENT_KEY placeholder ends with the shared get-a-wallet
+// step (src/get-a-wallet.js): the wiki text stays as GitHub shows it.
+const KEY_PLACEHOLDER = /AGENT_KEY(?:=|"?\s*:\s*")0x(?:[A-Z_]{3,}|\.\.\.|<[^>]*>)/;
 export function docsPage(baseUrl, slug) {
   const md = Object.hasOwn(WIKI, slug) ? WIKI[slug] : null;
   if (!md) return null;
   const title = slug === "API-Reference" ? "API Reference Guide" : slug.replace(/-/g, " ");
-  const description = docDescription(md, title);
+  const description = docDescription(md, title, slug);
   return shell(
     baseUrl,
     title,
     description,
     `/docs/${slug}`,
-    `${renderMarkdown(md)}${docPrevNextHtml(slug)}`,
+    `${renderMarkdown(md)}${KEY_PLACEHOLDER.test(md) ? `<p>${getWalletHtml()}</p>` : ""}${docPrevNextHtml(slug)}`,
     slug
   );
 }

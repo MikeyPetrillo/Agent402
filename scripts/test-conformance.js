@@ -212,10 +212,11 @@ try {
   await ok(/resetConformanceCache\(\)/.test(listen), "cache: the server drops it when it starts listening (gates mounted)");
 }
 {
-  // The stream delivery sentence names the two cases that carry a receipt.
+  // The stream delivery sentence names the two cases that carry a receipt in
+  // the stream, and the fetch address every streamed answer's head names.
   const src = readFileSync(new URL("../src/conformance.js", import.meta.url), "utf8");
   const line = src.split("\n").find((l) => l.startsWith("const STREAM_DELIVERY = ")) || "";
-  await ok(/An event-stream answer \(text\/event-stream\)/.test(line) && /request that sent TE: trailers/.test(line) && /neither carries no receipt/.test(line) && !/^const STREAM_DELIVERY = `A streamed answer gets/.test(line), "stream receipt wording is scoped to event streams and trailer requests");
+  await ok(/An event-stream answer \(text\/event-stream\)/.test(line) && /request that sent TE: trailers/.test(line) && /head names \$\{RECEIPT_URL_HEADER\}, and GET \$\{RECEIPT_FETCH_PATH\}\/<token>, the token that header names, answers the same receipt/.test(line) && /a stream that is neither still gets it/.test(line) && !/^const STREAM_DELIVERY = `A streamed answer gets/.test(line), "stream receipt wording names event streams, trailer requests and the fetch address for neither");
 }
 rmSync(SCREEN_DIR, { recursive: true, force: true });
 console.log(`\n${pass} checks passed`);

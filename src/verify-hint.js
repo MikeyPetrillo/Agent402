@@ -25,7 +25,7 @@
 import { exactRequiredOf } from "./settle-first.js";
 import { createHash } from "node:crypto";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
-import { classifyPaymentRejection, classifySettlementRefusal, settledRefundOwedRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint, notCheckedRefusal, RETRY_SAME_PAYMENT } from "./payment-reject.js";
+import { classifyPaymentRejection, classifySettlementRefusal, complianceSettleRefusal, settledRefundOwedRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint, notCheckedRefusal, RETRY_SAME_PAYMENT } from "./payment-reject.js";
 import { classifySvmFundingRefusal, fundingHint, fundingPayerOf, POW_SENTENCE } from "./svm-funding-refusal.js";
 import { classifySettlementPending, isGatewayBatchedPayment, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
 import { decodePaymentHeader } from "./payment-header.js";
@@ -467,6 +467,14 @@ export function verifyHintMiddleware({ origin = process.env.BASE_URL || null } =
         if (refused) {
           req.__paymentRejectReason = refused.reason; // for the paywall rollup
           return origJson({ ...body, error: body.error || "Payment rail temporarily unavailable", reason: refused.reason, ...(refused.network ? { network: refused.network } : {}), hint: refused.detail, retry: refused.retry });
+        }
+        // Refused on compliance grounds (src/settle-compliance.js): final,
+        // nothing charged, not sent to another settlement provider. No
+        // Retry-After: the same payment is answered the same way.
+        const compliance = settled ? complianceSettleRefusal(settled) : null;
+        if (compliance) {
+          req.__paymentRejectReason = compliance.reason;
+          return origJson({ ...body, error: "Payment refused by the settlement provider's compliance check", reason: compliance.reason, charged: false, ...(compliance.network ? { network: compliance.network } : {}), hint: compliance.detail, retry: compliance.retry });
         }
         // The settle's transfer was already booked owed by the
         // late-settlement book (src/settlement-claims.js): charged, owed

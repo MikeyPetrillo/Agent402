@@ -77,7 +77,7 @@ for (const d of readdirSync(join(ROOT, "adapters"))) if (existsSync(join(ROOT, "
 for (const d of ["client", "tollbooth"]) addPackage(d);
 ok(OURS.get("agent402-openai-tools")?.shape === "per-slug" && OURS.get("agent402-langchain")?.shape === "array" && OURS.get("agent402-ai-sdk")?.shape === "keyed",
   "control: the source reader classifies per-slug, array and keyed adapters");
-ok(OURS.get("agent402-openai-tools").options.join() === "baseUrl,slugs,freeOnly,fetch,maxPerCallUsd,dailyLimitUsd,maxPerHostUsd,x402Client" && OURS.get("agent402-langchain").options.join() === "baseUrl,fetch,fetchImpl",
+ok(OURS.get("agent402-openai-tools").options.join() === "baseUrl,slugs,freeOnly,fetch,maxPerCallUsd,dailyLimitUsd,maxPerHostUsd,x402Client" && OURS.get("agent402-langchain").options.join() === "baseUrl,fetch,fetchImpl,maxPerCallUsd,dailyLimitUsd",
   "control: the source reader extracts each adapter's real option names");
 ok(OURS.get("agent402-client").ctor?.includes("creditsKey") && !OURS.get("agent402-client").ctor.includes("agentKey"), "control: the Agent402 constructor options are read from source");
 

@@ -53,8 +53,6 @@ t node scripts/test-glossary.js
 t node scripts/test-x402-leaderboard.js
 # x402-kit tests (transfer-auth typed data + live Base RPC reads)
 t node scripts/test-x402-kit.js
-# farcaster-social kit (offline)
-t node scripts/test-farcaster-social-kit.js
 # Algorand marketplace page tests (offline, fixture snapshot)
 t node scripts/test-algorand-page.js
 # Homepage tests (offline, fixture snapshot)
@@ -315,8 +313,6 @@ t node scripts/test-payer.js
 t node scripts/test-payment-identity-rails.js
 # Egress proxy validate+pin (F04 — proxy refuses CONNECT to loopback/RFC1918/metadata/ULA; Chromium can't rebind to a private dest — offline)
 t node scripts/test-egress-proxy.js
-# E2B cost/output caps (F12 — aggregate UTF-8 output truncation + global sandbox concurrency ceiling — offline)
-t node scripts/test-code-run-caps.js
 # Safe-regex guard (rejects ReDoS patterns for caller-supplied regexes — DoS lock — offline)
 t node scripts/test-safe-regex.js
 # Regex tool budget covers the run, not the thread start: the published example answers under a slow worker start, a catastrophic pattern still ends as an uncharged 400, a worker that never starts answers 503 (offline)
@@ -387,6 +383,8 @@ t node scripts/test-third-party-notices.js
 # Metered settlement pricing rule (upto only, never above the ceiling, missing cost is not free - offline)
 t node scripts/test-gateway-meter.js
 t node scripts/test-metered-quote-binding.js
+# The metered quote counts each piece at no fewer tokens than one per 8 characters; prose, code and CJK quote unchanged (offline)
+t node scripts/test-quote-token-floor.js
 t node scripts/test-model-catalog.js
 # Metered settlement is wired and fails safe (sentinel never reaches a buyer - offline)
 t node scripts/test-gateway-meter-wiring.js
@@ -475,11 +473,11 @@ t node scripts/test-alchemy-data-kit.js
 t node scripts/test-llm-context-kit.js
 # search-lite (Brave web search sample: validation + output shaping, stubbed fetch, no live Brave call, offline)
 t node scripts/test-search-lite.js
-# Paid-upstream leak guard (Brave + E2B — every metered route/pack must be skipped — offline)
+# Paid-upstream leak guard (Brave — every metered route/pack must be skipped — offline)
 t node scripts/test-brave-leak.js
 # Derived CI-spend exposure: every paid key a TEST lane can reach must have its slugs bounded
 t node scripts/test-ci-key-exposure.js
-# Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, E2B, Neynar)
+# Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, Neynar)
 t node scripts/test-upstream-budgets.js
 # Per-caller call counts by UTC day for the on-chain data provider: labels, a deploy adds to the stored day, seven days of history
 t node scripts/test-upstream-call-days.js
@@ -494,6 +492,8 @@ t node scripts/test-redis-persistence.js
 t node scripts/test-sql-guard.js
 # Whois RDAP bootstrap parser (IANA dns.json → TLD map — offline)
 t node scripts/test-whois-bootstrap.js
+# whois computed answer, no record fields copied, shared per-registry limits (offline)
+t node scripts/test-whois-computed.js
 # domain-availability against a stub RDAP bootstrap and registries (offline)
 t node scripts/test-domain-availability.js
 # B20 decode unit tests (offline, synthetic logs in both indexed layouts)
@@ -522,7 +522,6 @@ t node scripts/test-judge-kit.js
 t node scripts/test-loop-gate.js
 # Judgment backends: order, the private-table bound on Luna, one answer shape per route, /v1/decisions wire (offline, stubbed)
 t node scripts/test-judge-luna.js
-t node scripts/test-judge-preview.js
 # Judge timing: p50 and p95 per backend read and per walk, outcomes and fallbacks, on the operator view and an hourly log line (offline)
 t node scripts/test-judge-timing.js
 # The returning-wallet price: settings, routes never discounted, price math, the payment signer decides (never the hint), settle check, bounded ledger read (offline)

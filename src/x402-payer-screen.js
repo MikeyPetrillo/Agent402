@@ -59,6 +59,15 @@
 // /api/gateway-status reports sanctionsScreen "missing" so the heartbeat
 // pages. A stale list keeps screening against the last good set.
 //
+// THE STRICT SCREEN (`noList: "refuse"`, the referral copies under /ref,
+// src/server.js). A sale through a third party's marketplace is not served
+// unscreened: with no list loaded the payment is refused 503 with
+// Retry-After before the handler, nothing charged, counted as
+// refusedUnscreened and logged once a minute (the same "missing" word pages).
+// It also refuses, 403 before the handler, a payer `blockedPayerOf(payload)`
+// names (WALLET_BLOCKLIST, src/payments.js blockedPayerFromPayload); the
+// direct routes apply that list at settlement instead.
+//
 // COST. Decoding the header the middleware already decoded once, and one Set
 // lookup per address. No network call.
 import { paymentHeaderOf } from "./payer.js";
@@ -98,6 +107,9 @@ export function x402ScreenedPaymentOf(req) {
   let payload;
   try { payload = decodePaymentHeader(header); } catch { return null; }
   if (!payload || typeof payload !== "object") return null;
+  return screenedOfPayload(payload);
+}
+function screenedOfPayload(payload) {
   const inner = payload.payload;
   const out = new Set();
   if (inner && typeof inner === "object") {
@@ -110,11 +122,14 @@ export function x402ScreenedPaymentOf(req) {
   const str = (v) => (typeof v === "string" ? v.toLowerCase() : "");
   const network = str(payload.accepted?.network) || str(payload.network);
   const scheme = str(payload.accepted?.scheme) || str(payload.scheme);
-  return { addresses: [...out], evm: network.startsWith("eip155:") || scheme === "batch-settlement" };
+  return { addresses: [...out], evm: network.startsWith("eip155:") || scheme === "batch-settlement", payload };
 }
 
 /** The buyer-facing refusal. Neutral: no list contents, no internals. */
 export const X402_PAYER_REFUSED_TEXT = "This server cannot accept a payment from this address (sanctions screening). Nothing was charged for this request.";
+/** The strict screen's refusals: no list loaded, and a blocked wallet. */
+export const X402_PAYER_UNSCREENED_TEXT = "The payment could not be checked right now. Nothing ran and nothing was charged. Retry shortly.";
+export const X402_PAYER_BLOCKED_TEXT = "This server does not accept payments from this wallet. Nothing ran and nothing was charged for this request.";
 
 /** Every EVM-format paying address in the x402 payment header this request
  *  will settle from, lowercased and de-duplicated. [] when there is no
@@ -124,9 +139,10 @@ export function x402ScreenedAddressesOf(req) {
   return x402ScreenedPaymentOf(req)?.addresses || [];
 }
 
-const counts = { screened: 0, refused: 0, servedUnscreened: 0, unreadablePayer: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
+const counts = { screened: 0, refused: 0, servedUnscreened: 0, unreadablePayer: 0, refusedUnscreened: 0, blocked: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
 let unscreenedLoggedAt = 0;
 let unreadableLoggedAt = 0;
+let strictLoggedAt = 0;
 
 /** Counts for the operator view of /api/gateway-status; never an address. */
 export function x402PayerScreenView() {
@@ -136,6 +152,10 @@ export function x402PayerScreenView() {
     servedUnscreened: counts.servedUnscreened,
     // Of those, EVM payments none of whose payer fields could be read.
     unreadablePayer: counts.unreadablePayer,
+    // The strict screen (/ref): payments refused with no list loaded, and
+    // payers refused for WALLET_BLOCKLIST.
+    refusedUnscreened: counts.refusedUnscreened,
+    blocked: counts.blocked,
     lastRefusedAt: counts.lastRefusedAt ? new Date(counts.lastRefusedAt).toISOString() : null,
     lastUnscreenedAt: counts.lastUnscreenedAt ? new Date(counts.lastUnscreenedAt).toISOString() : null,
   };
@@ -164,10 +184,27 @@ async function screenNonEvmPayer(req, addressesOf) {
   return screened ? { ok: true } : null;
 }
 
-/** The middleware. Mounted as the x402 middleware's `next` (see above). */
-export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = nonEvmScreenAddressesFromRequest } = {}) {
+/** The middleware. Mounted as the x402 middleware's `next` (see above).
+ *  `noList`: "serve" (the default, the direct routes) or "refuse" (the
+ *  strict screen). `blockedPayerOf(payload)`: the blocked address a decoded
+ *  payment names, or null (the strict screen only). */
+export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = nonEvmScreenAddressesFromRequest, noList = "serve", blockedPayerOf = null } = {}) {
+  const strict = noList === "refuse";
   const decide = (req, res, next, v) => {
     if (v.ok) { counts.screened++; return next(); }
+    if (v.reason !== "listed" && strict) {
+      // No list loaded: the strict screen refuses (fail closed), counted.
+      counts.refusedUnscreened++;
+      counts.lastUnscreenedAt = Date.now();
+      if (Date.now() - strictLoggedAt >= 60_000) {
+        strictLoggedAt = Date.now();
+        log(`[sanctions-screen] x402 payer screen: no list loaded, refusing payments on the strict screen (${req.method} ${req.path})`);
+      }
+      res.status(503);
+      res.setHeader("Retry-After", "60");
+      res.setHeader("Cache-Control", "no-store");
+      return res.json({ error: X402_PAYER_UNSCREENED_TEXT, reason: "payer-screen-unavailable", charged: false });
+    }
     if (v.reason !== "listed") {
       // No list loaded: served unscreened (fail open), surfaced as status missing.
       counts.servedUnscreened++;
@@ -188,6 +225,18 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
   };
   return function x402PayerScreen(req, res, next) {
     const payment = x402ScreenedPaymentOf(req);
+    if (strict && typeof blockedPayerOf === "function" && payment?.payload) {
+      let hit = null;
+      try { hit = blockedPayerOf(payment.payload); } catch { hit = "unreadable"; }
+      if (hit) {
+        counts.blocked++;
+        log(`[payments] blocked wallet ${hit === "unreadable" ? "(the list could not be read)" : maskAddress(String(hit))} refused before the handler (${req.method} ${req.path}); nothing settles`);
+        res.status(hit === "unreadable" ? 503 : 403);
+        if (hit === "unreadable") res.setHeader("Retry-After", "60");
+        res.setHeader("Cache-Control", "no-store");
+        return res.json(hit === "unreadable" ? { error: X402_PAYER_UNSCREENED_TEXT, reason: "payer-screen-unavailable", charged: false } : { error: X402_PAYER_BLOCKED_TEXT, reason: "wallet_blocked", charged: false });
+      }
+    }
     const addresses = payment?.addresses || [];
     if (addresses.length) return decide(req, res, next, screenAddresses(addresses));
     if (!paymentHeaderOf(req)) return next();
@@ -211,6 +260,6 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
 
 /** Test seam. */
 export function __resetX402PayerScreenForTests() {
-  counts.screened = 0; counts.refused = 0; counts.servedUnscreened = 0; counts.unreadablePayer = 0; counts.lastRefusedAt = 0; counts.lastUnscreenedAt = 0;
-  unscreenedLoggedAt = 0; unreadableLoggedAt = 0;
+  counts.screened = 0; counts.refused = 0; counts.servedUnscreened = 0; counts.unreadablePayer = 0; counts.refusedUnscreened = 0; counts.blocked = 0; counts.lastRefusedAt = 0; counts.lastUnscreenedAt = 0;
+  unscreenedLoggedAt = 0; unreadableLoggedAt = 0; strictLoggedAt = 0;
 }

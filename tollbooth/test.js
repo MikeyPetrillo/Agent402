@@ -35,6 +35,21 @@ try {
   if (r.status !== 200 || (await r.text()) !== "PREMIUM CONTENT") fail(`human should pass free, got ${r.status}`);
   console.log("1. human (browser UA) -> 200 free ✓");
 
+  // 1b. The current AI crawlers and fetchers are charged by default (their
+  // published user-agent strings); a browser is not.
+  for (const ua of [
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-SearchBot/1.0; +Claude-SearchBot@anthropic.com)",
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-User/1.0; +Claude-User@anthropic.com)",
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Perplexity-User/1.0; +https://perplexity.ai/perplexity-user)",
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; MistralAI-User/1.0; +https://docs.mistral.ai/robots)",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 (compatible; GoogleOther)",
+    "python-httpx/0.28.1",
+  ]) {
+    const b = await fetch(`${base}/article`, { headers: { "user-agent": ua } });
+    if (b.status !== 402) fail(`${ua.slice(0, 60)} should be charged, got ${b.status}`);
+  }
+  console.log("1b. Claude-SearchBot, Claude-User, Perplexity-User, MistralAI-User, GoogleOther, python-httpx -> 402 ✓");
+
   // 2. Bot charged 402 with both rails.
   r = await fetch(`${base}/article`, { headers: botUA });
   const quote = await r.json();

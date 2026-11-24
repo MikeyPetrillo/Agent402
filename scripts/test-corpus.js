@@ -49,6 +49,8 @@ import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/rugcheck-switch.js";
 import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
 import { STOCK_CORE_PACK_SLUGS } from "../src/skills.js";
 import { KALSHI_SLUGS, kalshiToolsEnabled } from "../src/kalshi-switch.js";
+import { upstreamHostsForSlug, directReadFails } from "./lib/upstream-outage.js";
+import { promises as dnsPromises } from "node:dns";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CORPUS_DIR = path.join(HERE, "corpus");
@@ -159,24 +161,74 @@ export function paceWaitMs(c, paceNext, now) {
  *  depth: a lookup error, a non-empty `unmeasured` list, `ownerUnavailable`,
  *  or a record read as null (not false). Returns the marks found, named by
  *  their path, or an empty list. */
-export function selfMarkedUnmeasured(body, depth = 0, at = "") {
+export function selfMarkedUnmeasured(body) {
+  return unmeasuredMarks(body).map((m) => m.text);
+}
+
+/** The same marks with the part of the answer each one covers: `covers` is a
+ *  list of dot paths (an expectation on that path or under it is covered; ""
+ *  is the whole answer) and `lookup` the outside read it names, when it names
+ *  one (a DNS error's query and name). A lookupError and a record read as null
+ *  cover the object they sit in; `xUnavailable` covers its sibling `x`; an
+ *  `unmeasured` list covers each part it names beside it. */
+export function unmeasuredMarks(body, depth = 0, at = "") {
   const out = [];
   if (!body || typeof body !== "object" || depth > 4) return out;
+  const join = (k) => (at ? `${at}.${k}` : String(k));
   for (const [k, v] of Object.entries(body).slice(0, 200)) {
-    const p = at ? `${at}.${k}` : k;
-    if (k === "lookupError" && v) out.push(`lookupError at ${p}`);
-    else if (k === "unmeasured" && Array.isArray(v) && v.length) out.push(`unmeasured ${v.slice(0, 5).join(",")}`);
-    else if (k === "ownerUnavailable" && v === true) out.push(`ownerUnavailable at ${p}`);
-    else if (k === "hasRecord" && v === null) out.push(`hasRecord null at ${p}`);
-    else if (v && typeof v === "object") out.push(...selfMarkedUnmeasured(v, depth + 1, p));
+    const p = join(k);
+    if (k === "lookupError" && v) out.push({ text: `lookupError at ${p}`, covers: [at], lookup: dnsLookupOf(v) });
+    else if (k === "unmeasured" && Array.isArray(v) && v.length) out.push({ text: `unmeasured ${v.slice(0, 5).join(",")}`, covers: v.slice(0, 50).map((n) => join(String(n))) });
+    else if (/^[a-z][A-Za-z0-9]*Unavailable$/.test(k) && v === true) out.push({ text: `${k} at ${p}`, covers: [join(k.slice(0, -"Unavailable".length))] });
+    else if (k === "hasRecord" && v === null) out.push({ text: `hasRecord null at ${p}`, covers: [at] });
+    else if (v && typeof v === "object") out.push(...unmeasuredMarks(v, depth + 1, p));
   }
   return out;
+}
+
+// A DNS failure in node's words: "queryTxt ETIMEOUT _dmarc.example.com".
+const DNS_ERROR_RE = /\bquery(A|Aaaa|Any|Caa|Cname|Mx|Naptr|Ns|Ptr|Soa|Srv|Txt) (E[A-Z]+) ([A-Za-z0-9_.-]{1,253})\b/;
+function dnsLookupOf(v) {
+  const m = DNS_ERROR_RE.exec(String(v));
+  return m ? { type: m[1].toUpperCase(), code: m[2], name: m[3] } : null;
+}
+
+/** The dot path a failed expectation is about (checkExpect's text starts with
+ *  it), or null for the status line and a refusal's missing error. */
+export function expectationPath(fail) {
+  const t = String(fail);
+  if (/^status \d|^refusal /.test(t)) return null;
+  const tok = t.split(" ")[0];
+  return tok ? tok.replace(/\[(\d+)\]/g, ".$1").replace(/^\./, "") : null;
+}
+const covered = (path, marks) => path !== null && marks.some((m) => m.covers.some((c) => c === "" || path === c || path.startsWith(`${c}.`)));
+
+// DNS answers that say the record is absent are answers: the resolver is up.
+const DNS_ANSWERED = new Set(["ENOTFOUND", "ENODATA", "ENONAME", "NXDOMAIN"]);
+/** The runner's own read of what the marks name, right now: the DNS query a
+ *  lookup error names (failing again unless it now answers, an absent record
+ *  included), else a direct read of the case's outside host or the hosts the
+ *  tool's definition declares (scripts/lib/upstream-outage.js: a failure is
+ *  no answer, a 5xx or a 429). Confirmed only when that read fails too. */
+export async function runnerConfirmsUnmeasured({ marks, slug, targetHost, resolve = (name, type) => dnsPromises.resolve(name, type), readFails = directReadFails, hostsOf = upstreamHostsForSlug }) {
+  const lookups = marks.map((m) => m.lookup).filter(Boolean);
+  if (lookups.length) {
+    for (const l of lookups) {
+      try { await resolve(l.name, l.type); return { confirmed: false, evidence: `the runner's ${l.type} lookup of ${l.name} answers` }; }
+      catch (e) { if (DNS_ANSWERED.has(e?.code)) return { confirmed: false, evidence: `the runner's ${l.type} lookup of ${l.name} answers (${e.code})` }; }
+    }
+    return { confirmed: true, evidence: `the runner's own lookup fails too (${lookups.map((l) => `${l.type} ${l.name}`).join(", ").slice(0, 120)})` };
+  }
+  const hosts = targetHost ? [targetHost] : [...(slug ? hostsOf(slug) : [])].slice(0, 4);
+  if (!hosts.length) return { confirmed: false, evidence: "no outside host or lookup the runner can read" };
+  for (const h of hosts) if (!(await readFails(`https://${h}/`))) return { confirmed: false, evidence: `the runner reads ${h}` };
+  return { confirmed: true, evidence: `the runner's direct read of ${hosts.join(", ").slice(0, 120)} fails too` };
 }
 
 /** What one outcome says about OUR code. `targetHost` is the outside host the
  *  case points the tool at (targetHostOf), or null for a tool on fixed or no
  *  upstreams. */
-export function classify({ status, body, netError, expectFails, tier, targetHost = null }) {
+export async function classify({ status, body, netError, expectFails, tier, targetHost = null, slug = null, runnerRead = runnerConfirmsUnmeasured }) {
   if (netError) return { kind: "upstream", note: `network: ${netError}` };
   const msg = String(body?.error ?? body?.message ?? "");
   // A keyless boot: a 503 that says so, or a pack's 502 whose steps all say so
@@ -194,11 +246,19 @@ export function classify({ status, body, netError, expectFails, tier, targetHost
       if (tf) return { kind: "upstream", note: `outside host ${targetHost} ${tf}` };
     }
     // A 200 that marks the missed part itself as not measured (a lookup
-    // that timed out, answered honestly) is that lookup's miss, named; a body
-    // that says nothing about it stays ours below.
+    // that timed out, answered honestly) is that lookup's miss, named, when
+    // the marks cover every missed expectation's part of the answer and the
+    // runner's own read of what they name fails too; a mark on another part,
+    // or a lookup the runner gets an answer from, leaves the miss ours.
     if (tier !== 0 && status < 400) {
-      const marks = selfMarkedUnmeasured(body);
-      if (marks.length) return { kind: "upstream", note: `the answer marks it unmeasured (${marks.slice(0, 3).join("; ")}): ${expectFails.join("; ").slice(0, 120)}` };
+      const marks = unmeasuredMarks(body);
+      if (marks.length) {
+        const uncovered = expectFails.filter((f) => !covered(expectationPath(f), marks));
+        if (uncovered.length) return { kind: "fatal", note: `${expectFails.join("; ").slice(0, 160)} (the answer's unmeasured marks (${marks.slice(0, 3).map((m) => m.text).join("; ")}) do not cover ${uncovered.map((f) => expectationPath(f) ?? f).join(", ").slice(0, 80)})` };
+        const read = await runnerRead({ marks, slug, targetHost });
+        if (read.confirmed) return { kind: "upstream", note: `the answer marks it unmeasured (${marks.slice(0, 3).map((m) => m.text).join("; ")}) and ${read.evidence}: ${expectFails.join("; ").slice(0, 120)}` };
+        return { kind: "fatal", note: `${expectFails.join("; ").slice(0, 160)} (marked unmeasured, but ${read.evidence})` };
+      }
     }
     // A 4xx from a T1 tool whose message blames the network is upstream.
     if (status >= 400 && tier !== 0 && UPSTREAM_TEXT.test(msg) && !NOT_CONFIGURED.test(msg)) return { kind: "upstream", note: `${status}${host} ${msg.slice(0, 120)}` };
@@ -342,7 +402,7 @@ async function main() {
         try { out = await drive(base, ep, c.input); }
         catch (err) { out = { status: 0, body: null, ms: 0, netError: err?.cause?.code || err?.name || String(err) }; }
         const fails = out.netError ? [] : checkExpect(c.expect, out.status, out.body);
-        const cls = classify({ status: out.status, body: out.body, netError: out.netError, expectFails: fails, tier, targetHost: targetHostOf(c.input) });
+        const cls = await classify({ status: out.status, body: out.body, netError: out.netError, expectFails: fails, tier, targetHost: targetHostOf(c.input), slug: c.slug });
         counts[cls.kind]++;
         const row = { slug: c.slug, name: c.name, file: c.file, tier, status: out.status, ms: out.ms, kind: cls.kind, note: cls.note };
         if (cls.kind === "fatal" || VERBOSE) row.body = JSON.stringify(out.body)?.slice(0, 600);

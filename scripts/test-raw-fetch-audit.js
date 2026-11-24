@@ -96,7 +96,6 @@ const CALLS = {
   "src/tools/llm-gateway-kit.js": [F("model gateway, fixed URL set"), F("direct upstream, operator-configured URL"), F("gateway credits read"), F("embeddings vendor"), F("rerank endpoint"), F("speech endpoint")],
   "src/tools/llm-images-fast-kit.js": [F("gateway model listing, model id in the path"), F("gateway GET, fixed base")],
   "src/tools/llm-kit.js": [F("chat vendor")],
-  "src/tools/macro-kit.js": [F("FRED API, fixed base, asserted")],
   "src/tools/memory.js": [F("embeddings provider from configuration")],
   "src/tools/moderate-kit.js": [F("moderation vendor")],
   "src/tools/network-kit2.js": [
@@ -170,7 +169,6 @@ const DEFAULTS = {
   "src/tools/filing-watch-kit.js": { n: 1, cls: "fixed" },
   "src/tools/judge-kit.js": { n: 5, cls: "fixed" },
   "src/tools/loop-gate-kit.js": { n: 1, cls: "fixed", note: "handed to the judge, fixed vendor host" },
-  "src/tools/judge-preview-kit.js": { n: 3, cls: "fixed" },
   "src/tools/llm-gateway-kit.js": { n: 1, cls: "fixed" },
   "src/gateway-direct-pricebook.js": { n: 1, cls: "fixed", note: "operator-configured listing plus the fixed model catalog host" },
   "src/tools/sanctions-kit.js": { n: 1, cls: "fixed" },

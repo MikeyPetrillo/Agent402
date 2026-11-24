@@ -5,7 +5,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ONCHAIN_IDENTITY_TOOLS, __test } from "../src/tools/onchain-identity-kit.js";
 
-const { takeAddress, pickEasNetwork, ENS_API, NEYNAR_API, EAS_INDEXERS } = __test;
+const { takeAddress, pickEasNetwork, ENS_API, EAS_INDEXERS } = __test;
 
 const h = (slug) => ONCHAIN_IDENTITY_TOOLS.find((t) => t.slug === slug).handler;
 let fail = 0, pass = 0;
@@ -14,9 +14,9 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-ok(ONCHAIN_IDENTITY_TOOLS.length === 4, `4 tools exported (got ${ONCHAIN_IDENTITY_TOOLS.length})`);
+ok(ONCHAIN_IDENTITY_TOOLS.length === 2, `2 tools exported (got ${ONCHAIN_IDENTITY_TOOLS.length})`);
 
-const expectedSlugs = ["ens-bulk-resolve", "farcaster-profile", "farcaster-by-address", "eas-attestations"];
+const expectedSlugs = ["ens-bulk-resolve", "eas-attestations"];
 for (const slug of expectedSlugs) {
   ok(!!ONCHAIN_IDENTITY_TOOLS.find((t) => t.slug === slug), `slug present: ${slug}`);
 }
@@ -57,7 +57,6 @@ catch (e) { if (e.statusCode === 400) { pass++; console.log("ok - pickEasNetwork
 
 // Endpoint URLs are well-known constants — confirm they didn't drift.
 ok(ENS_API === "https://api.ensideas.com/ens", "ENS_API constant unchanged");
-ok(NEYNAR_API === "https://api.neynar.com/v2/farcaster", "NEYNAR_API constant correct");
 ok(EAS_INDEXERS.base === "https://base.easscan.org/graphql", "EAS_INDEXERS.base unchanged");
 
 // ----------------------------------------------------------------------------
@@ -78,19 +77,26 @@ await throws(h("ens-bulk-resolve")({ addresses: ["not-an-address"] }), 400, "ens
 await throws(h("ens-bulk-resolve")({ addresses: ["0x" + "a".repeat(40), "bad"] }), 400, "ens-bulk-resolve: one bad in batch");
 await throws(h("ens-bulk-resolve")({ addresses: new Array(51).fill("0x" + "a".repeat(40)) }), 400, "ens-bulk-resolve: too many addresses");
 
-// farcaster-profile
-await throws(h("farcaster-profile")({}), 400, "farcaster-profile: missing fid+username");
-await throws(h("farcaster-profile")({ username: "" }), 400, "farcaster-profile: empty username + no fid");
-
-// farcaster-by-address
-await throws(h("farcaster-by-address")({}), 400, "farcaster-by-address: missing address");
-await throws(h("farcaster-by-address")({ address: "not-an-address" }), 400, "farcaster-by-address: bad address");
-
 // eas-attestations
 await throws(h("eas-attestations")({}), 400, "eas-attestations: missing address");
 await throws(h("eas-attestations")({ address: "not-an-address" }), 400, "eas-attestations: bad address");
 await throws(h("eas-attestations")({ address: "0x" + "a".repeat(40), network: "fantom" }), 400, "eas-attestations: bad network");
 await throws(h("eas-attestations")({ address: "0x" + "a".repeat(40), role: "spectator" }), 400, "eas-attestations: bad role");
+
+// eas-attestations credits the EAS indexer on every answer; its catalog text
+// is unchanged (stubbed fetch, no egress).
+{
+  const { EAS_ATTRIBUTION } = await import("../src/data-attribution.js");
+  const t = ONCHAIN_IDENTITY_TOOLS.find((x) => x.slug === "eas-attestations");
+  ok(t.attribution === undefined && !t.description.includes(EAS_ATTRIBUTION) && t.credit === EAS_ATTRIBUTION, "eas-attestations: answers carry the credit, the catalog text is unchanged");
+  ok(t.discovery.output.example.credit === EAS_ATTRIBUTION, "eas-attestations: published example carries the credit");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { attestations: [{ id: "0x1", attester: "0x2", recipient: "0x3", schemaId: "0x4", revocable: true, revoked: false, time: 1, decodedDataJson: null }] } }), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    const r = await h("eas-attestations")({ address: "0x" + "a".repeat(40), network: "base", role: "recipient" });
+    ok(r.count === 1 && r.source === "easscan" && r.credit === EAS_ATTRIBUTION, `eas-attestations: the answer keeps its fields and carries the credit (${r.credit})`);
+  } finally { globalThis.fetch = realFetch; }
+}
 
 // ----------------------------------------------------------------------------
 // Live tests (opt-in)
@@ -101,9 +107,6 @@ if (process.env.IDENTITY_LIVE_TEST === "1") {
     const ens = await h("ens-bulk-resolve")({ addresses: ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045"] });
     ok(ens.count === 1, `live ens-bulk-resolve: count=1`);
     ok(ens.results[0].name === "vitalik.eth", `live ens-bulk-resolve: vitalik.eth resolved (got ${ens.results[0].name})`);
-
-    const fc = await h("farcaster-profile")({ fid: 3 });
-    ok(typeof fc.fid === "number", `live farcaster-profile: fid 3 (${fc.fid} @${fc.username})`);
 
     const eas = await h("eas-attestations")({ address: "0xd8da6bf26964af9d7eed9e03e53415d37aa96045", network: "mainnet", limit: 3 });
     ok(typeof eas.count === "number", `live eas-attestations: count returned (${eas.count})`);

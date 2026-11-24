@@ -12,6 +12,23 @@ import { microUsd, livePrices, quotedPaths, planUpdates, rewrittenByImporter, ho
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
 
+// The index's outage pages after a streak of scheduled runs, not never.
+{
+  const { streakOf, markedUnavailable, UNAVAILABLE_TITLE } = await import("./index402-outage-streak.js");
+  const U = { unavailable: true }, C = { unavailable: false }, X = { unavailable: null };
+  ok(streakOf([]) === 0 && streakOf([C, U]) === 0 && streakOf([U, U, C, U]) === 2 && streakOf([U, U]) === 2, "the streak counts the newest unavailable runs back to the first clean one");
+  ok(streakOf([U, X, U]) === null && streakOf([X]) === null, "an unreadable run before a clean one leaves the streak unknown");
+  ok(markedUnavailable([{ title: UNAVAILABLE_TITLE }]) && !markedUnavailable([{ title: "other" }]) && !markedUnavailable(null), "a run is marked by the warning's title only");
+  const { readFileSync } = await import("node:fs");
+  const wf = readFileSync(new URL("../.github/workflows/index402-sync.yml", import.meta.url), "utf8");
+  ok(wf.includes(`::warning title=${UNAVAILABLE_TITLE}::`), "the sync step marks an unavailable run with the title the streak reads");
+  const page = wf.slice(wf.indexOf("Page on failure"));
+  const four = page.slice(page.indexOf('if [ "$CODE" = "4" ]'));
+  ok(/node scripts\/index402-outage-streak\.js/.test(four) && /INDEX402_UNAVAILABLE_PAGE_RUNS:-3/.test(four) && /gh issue create[^\n]*\$AVAIL_TITLE/.test(four.slice(0, four.indexOf("exit 0\n          fi"))), "exit 4 pages one issue once the streak reaches INDEX402_UNAVAILABLE_PAGE_RUNS (default 3)");
+  ok(/AVAIL_TITLE="Scheduled check needs review: index-availability"/.test(page) && /"\$CODE" = "0" \] \|\| \[ "\$CODE" = "3" \]; \} && \[ -n "\$AVAIL_OPEN" \]/.test(page), "the availability issue uses the neutral title and closes on a run that reached the index");
+  ok(/actions: read/.test(wf) && /checks: read/.test(wf), "the workflow may read its earlier runs and their annotations");
+}
+
 ok(microUsd("$0.08") === 80000 && microUsd(0.001) === 1000 && microUsd("0.010") === 10000, "prices parse to micro-dollars from $-strings and numbers");
 ok(microUsd(null) === null && microUsd("") === null && microUsd("abc") === null && microUsd(-1) === null, "absent, junk and negative prices read as no price");
 // The 2026-10-03 defect: base units listed as dollars.
@@ -104,6 +121,7 @@ async function stubIndex(opts = {}) {
         if (api.slowFirstPatchMs && seen.patches.length === 1) { setTimeout(() => { store.get(m[1]).price_usd = body.price_usd; json(200, { ok: true }); }, api.slowFirstPatchMs); return; }
         if (opts.redirectWriteTo) { res.writeHead(307, { location: opts.redirectWriteTo }); return res.end(); }
         if (opts.echoWriteAs) return json(opts.echoWriteAs, { error: "refused", pad: "p".repeat(opts.echoPad || 0), received: body });
+        if (opts.failWriteFor?.has(m[1])) return json(opts.failWriteFor.get(m[1]), { error: "l402_gateway_unavailable" });
         if (!opts.ignoreWriteFor?.has(m[1])) store.get(m[1]).price_usd = body.price_usd;
         json(200, { ok: true });
       });
@@ -155,11 +173,11 @@ function runSync(port, env = {}) {
   ok(s.seen.lists === 2 && s.seen.patches.length === 3, "it asked the list twice and then wrote");
   await s.close();
 }
-{ // No answer twice: the run fails and says which request.
+{ // No answer twice: the index is unavailable, recorded as its outage (exit 4), never our failure.
   const s = await stubIndex({ hangAllLists: true });
   const r = await runSync(s.port);
-  ok(r.code === 1 && s.seen.lists === 2 && s.seen.patches.length === 0, `no answer on both asks fails the run with nothing written (${r.code}, ${s.seen.lists} asks)`);
-  ok(/\/v1\/services\?q=agent402\.tools&limit=200&offset=0 -> no answer within 400 ms\s*$/.test(r.err), "the last line names the request");
+  ok(r.code === 4 && s.seen.lists === 2 && s.seen.patches.length === 0, `no answer on both asks is the index's outage: exit 4 with nothing written (${r.code}, ${s.seen.lists} asks)`);
+  ok(/INDEX UNAVAILABLE .*\/v1\/services\?q=agent402\.tools&limit=200&offset=0 -> no answer within 400 ms/.test(r.err), "the outage names the request");
   await s.close();
 }
 { // An answer that sends its headers and then stalls is no answer: named, asked once more.
@@ -191,8 +209,30 @@ function runSync(port, env = {}) {
 { // An answer that echoes the write back never puts the token in the log.
   const s = await stubIndex({ echoWriteAs: 500 });
   const r = await runSync(s.port);
-  ok(r.code === 1 && /FAILED .* -> 500 /.test(r.err) && /\[token\]/.test(r.err), `a refused write that echoes its body fails the run (${r.code})`);
+  ok(r.code === 4 && /INDEX UNAVAILABLE .* -> 500 /.test(r.err) && /\[token\]/.test(r.err), `a write the index answers 5xx to (twice) is its outage, recorded, exit 4 (${r.code})`);
   ok(!(r.out + r.err).includes("test-token-value"), "the echoed token is not printed");
+  await s.close();
+  const s2 = await stubIndex({ echoWriteAs: 422 });
+  const r2 = await runSync(s2.port);
+  ok(r2.code === 1 && /FAILED .* -> 422 /.test(r2.err) && !(r2.out + r2.err).includes("test-token-value"), `a write the index refuses (4xx) fails the run (${r2.code})`);
+  await s2.close();
+}
+{ // One write the index cannot take (503 twice) beside writes that hold: the rest are corrected, the outage is recorded.
+  const s = await stubIndex({ failWriteFor: new Map([["a1", 503]]) });
+  const r = await runSync(s.port);
+  ok(r.code === 4 && s.store.get("a3").price_usd === 0.02 && s.store.get("a2").price_usd !== 0.007, `a 503 on one write is recorded as the index's outage; the others are written (${r.code})`);
+  ok(/INDEX UNAVAILABLE .*a1 -> 503/.test(r.err) && /1 write\(s\) the index could not take/.test(r.err), "the outage names the write and the count");
+  await s.close();
+  // ...and beside a write of ours that does not hold, ours decides: exit 1.
+  const s2 = await stubIndex({ failWriteFor: new Map([["a1", 503]]), ignoreWriteFor: new Set(["a3"]) });
+  const r2 = await runSync(s2.port);
+  ok(r2.code === 1 && /NOT HELD .*hold-me/.test(r2.err) && /INDEX UNAVAILABLE/.test(r2.err), `an outage beside a failure of ours exits 1, both named (${r2.code})`);
+  await s2.close();
+}
+{ // Our own pricing read failing is ours: exit 1.
+  const s = await stubIndex();
+  const r = await runSync(s.port, { PRICING_URL: `http://127.0.0.1:${s.port}/api/pricing-missing` });
+  ok(r.code === 1 && s.seen.patches.length === 0, `our own pricing read failing fails the run (${r.code})`);
   await s.close();
 }
 { // The token is removed before the echoed body is cut: no cut leaves part of it in the log.
@@ -227,7 +267,7 @@ function runSync(port, env = {}) {
   await s4.close();
   const s5 = await stubIndex({ failList: 503 });
   const r5 = await runSync(s5.port);
-  ok(r5.code === 1 && s5.seen.lists === 2 && /-> 503/.test(r5.err), "a 503 is asked once more, then fails");
+  ok(r5.code === 4 && s5.seen.lists === 2 && /INDEX UNAVAILABLE .*-> 503/.test(r5.err), `a 503 is asked once more, then recorded as the index's outage (exit 4, ${r5.code})`);
   await s5.close();
 }
 { // The daily run: an imported fixed-price listing off the catalog price is corrected, named, and fails the run.
@@ -268,20 +308,28 @@ function runSync(port, env = {}) {
   for (let i = runAt + 1; i < lines.length && (lines[i].trim() === "" || lines[i].match(/^\s*/)[0].length >= indent); i++) body.push(lines[i].slice(indent));
   const script = body.join("\n");
   ok(at > 0 && script.includes("gh issue create") && script.length > 500, "the page step's script is read from the workflow");
-  const FAIL = "Scheduled check needs review: index-price-sync", BACK = "Scheduled check needs review: index-price-writeback";
+  const FAIL = "Scheduled check needs review: index-price-sync", BACK = "Scheduled check needs review: index-price-writeback", AVAIL = "Scheduled check needs review: index-availability";
   const dir = mkdtempSync(join(tmpdir(), "idx-page-"));
   // The stub answers list and view from STATE and appends every write to LOG.
   writeFileSync(join(dir, "gh"), `#!/usr/bin/env node
 const fs = require("fs"); const a = process.argv.slice(2); const st = JSON.parse(process.env.GH_STUB_STATE);
 if (a[0] === "issue" && a[1] === "list") { const q = a[a.indexOf("--search") + 1]; fs.appendFileSync(process.env.GH_STUB_LOG + ".q", q + "\\n"); process.stdout.write(JSON.stringify(st.open.filter((i) => q.includes(i.title)).map((i) => ({ author: { login: "app/github-actions" }, ...i })))); }
 else if (a[0] === "issue" && a[1] === "view") { process.stdout.write(JSON.stringify({ comments: (st.comments || []).map((c) => ({ author: { login: "github-actions" }, ...c })) })); }
+else if (a[0] === "api") {
+  const runs = st.runs; const p = a[1]; const num = (w) => Number(p.split(w)[1].split("/")[0]);
+  if (!Array.isArray(runs)) process.exit(1);
+  if (p.includes("/workflows/")) process.stdout.write(JSON.stringify({ workflow_runs: runs.map((_, i) => ({ id: 100 + i })) }));
+  else if (p.endsWith("/jobs")) process.stdout.write(JSON.stringify({ jobs: [{ name: "sync", check_run_url: "https://api.example/check-runs/" + num("/runs/") }] }));
+  else if (p.endsWith("/annotations")) { const u = runs[num("/check-runs/") - 100]; if (u === null) process.exit(1); process.stdout.write(JSON.stringify(u ? [{ title: "402 Index unavailable" }] : [])); }
+  else process.exit(1);
+}
 else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
 `);
   chmodSync(join(dir, "gh"), 0o755);
   const page = (code, state) => {
     const log = join(dir, `log-${Math.random().toString(36).slice(2)}`);
     writeFileSync(log, "");
-    const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_SERVER_URL: "https://git.example", GITHUB_RUN_ID: "1", RUN_URL: "https://run.example/1", GH_TOKEN: "x", ...(code === null ? {} : { CODE: String(code) }), GH_STUB_STATE: JSON.stringify(state), GH_STUB_LOG: log } });
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf8", cwd: fileURLToPath(new URL("..", import.meta.url)), env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_SERVER_URL: "https://git.example", GITHUB_RUN_ID: "1", RUN_URL: "https://run.example/1", GH_TOKEN: "x", ...(code === null ? {} : { CODE: String(code) }), GH_STUB_STATE: JSON.stringify(state), GH_STUB_LOG: log } });
     const calls = readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
     return { status: r.status, err: r.stderr, calls, did: (verb, title) => calls.some((c) => c[1] === verb && (title === undefined || c.includes(title))) };
   };
@@ -327,7 +375,25 @@ else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
   // The job's own limits.
   const limitMin = Number((wf.match(/timeout-minutes:\s*(\d+)/) || [])[1]);
   ok(DEFAULT_RUN_BUDGET_MS <= 13 * 60_000 && limitMin * 60_000 >= DEFAULT_RUN_BUDGET_MS + 6 * 60_000, `the job limit (${limitMin} min) leaves six minutes past the run budget (${DEFAULT_RUN_BUDGET_MS} ms) for a write already started`);
-  ok(/node scripts\/index402-sync\.js\n\s+code=\$\?\n\s+echo "code=\$code" >> "\$GITHUB_OUTPUT"\n[^\n]*\n\s+if \[ "\$code" = "3" \]; then exit 0; fi\n\s+exit "\$code"/.test(wf), "the sync step ends with the script's own exit code (3 reads as passed: its issue reports it), so a failed run reads failed");
+  ok(/node scripts\/index402-sync\.js\n\s+code=\$\?\n\s+echo "code=\$code" >> "\$GITHUB_OUTPUT"\n[^\n]*\n\s+if \[ "\$code" = "3" \]; then exit 0; fi\n\s+if \[ "\$code" = "4" \]; then echo "::warning title=402 Index unavailable::[^"\n]+"; exit 0; fi\n\s+exit "\$code"/.test(wf), "the sync step ends with the script's own exit code (3 reads as passed: its issue reports it; 4, the index's outage, is a warning), so a failed run reads failed");
+  p = page(4, { ...none, runs: [false, true] });
+  ok(p.status === 0 && p.calls.length === 0, `the index's outage (exit 4) on one run opens nothing (${p.status}) ${p.err.slice(0, 160)}`);
+  p = page(4, { ...none, runs: [true, false] });
+  ok(p.status === 0 && p.calls.length === 0, "...nor on a second run in a row");
+  p = page(4, { ...none, runs: [true, true, false] });
+  ok(p.status === 0 && p.calls.length === 1 && p.did("create", AVAIL), `...the third scheduled run in a row opens the availability issue (${JSON.stringify(p.calls)})`);
+  p = page(4, { open: [{ number: 5, title: AVAIL }], runs: [true, true, true] });
+  ok(p.calls.length === 0, "...once: an open availability issue gets nothing more");
+  p = page(4, { ...none, runs: [true, null, true] });
+  ok(p.calls.length === 0, "...and earlier runs that cannot be read open and close nothing");
+  p = page(4, { ...failOpen, runs: [true, true] });
+  ok(!p.did("close") && !p.did("create", FAIL), "...it never closes the sync issue: the sync was not proven");
+  p = page(4, { ...backOpen([{ body: "Still needs review at x. Run: y state: clean", createdAt: ago(24) }]), runs: [false] });
+  ok(p.calls.length === 0, "...nor counts toward the written-back issue");
+  p = page(0, { open: [{ number: 5, title: AVAIL }] });
+  ok(p.calls.some((c) => c[1] === "close" && c[2] === "5"), "a run that reaches the index closes the availability issue");
+  p = page(1, { open: [{ number: 5, title: AVAIL }] });
+  ok(!p.calls.some((c) => c[1] === "close" && c[2] === "5"), "a failed sync does not close it");
   ok(!/^concurrency:/m.test(wf) && /\n    concurrency:\n      group: index402-sync\n      cancel-in-progress: false/.test(wf), "the concurrency group is on the job, so a skipped run never replaces a waiting daily run");
   ok(/slugs set to the route's slug, stale_days=0, and max_price_usd and max_spend_usd/.test(script), "the remedy (in the run log) names the exact-match input and both caps");
   {

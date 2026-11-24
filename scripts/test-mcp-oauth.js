@@ -351,7 +351,9 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
     const early = await h.start("198.18.13.1", shared);
     for (let i = 1; i < L.pendingPerClient + 2; i++) await h.start(`198.18.13.${i + 1}`, shared);
     const held = Object.values(h.stores.reqs.body.reqs || {}).filter((r) => r.clientId === shared).length;
-    ok(held === L.pendingPerClient && (await h.page(early)).status === 200, `one app's pending sign-ins stay at its cap, and its first is kept (${held})`);
+    const newest = await h.start("198.18.13.250", shared);
+    const heldAfter = Object.values(h.stores.reqs.body.reqs || {}).filter((r) => r.clientId === shared).length;
+    ok(held === L.pendingPerClient && heldAfter === L.pendingPerClient && newest.status === 303 && newest.pageStatus === 200 && (await h.page(early)).status === 400, `one app's pending sign-ins stay at its cap: a newcomer is admitted and the oldest of the largest holders gives way (${held}, ${heldAfter})`);
   } finally { h.close(); }
 }
 // A stranger on the same address cannot expire another person's pending sign-in.
@@ -457,13 +459,61 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
     let last;
     for (let i = 0; i < L.badTokenMax + 5; i++) last = await mcpPost("a402m_" + randomBytes(32).toString("base64url"));
     ok(h.stores.grants.reads === before, `${L.badTokenMax + 5} made-up tokens read the store ${h.stores.grants.reads - before} times`);
-    ok(last.status === 429, `and past the bound they are answered 429 (${last.status})`);
+    ok(last.status === 401 && /error="invalid_token"/.test(last.headers.get("www-authenticate") || "") && last.headers.get("retry-after") === "60", `and past the bound they are still answered 401 invalid_token, slowed with Retry-After (${last.status}, ${last.headers.get("retry-after")})`);
     const minted = h.oa._mintAccessForTest();
     const r0 = h.stores.grants.reads;
     const m1 = await fetch(`${h.U}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${minted}`, "x-test-ip": "198.18.50.2" }, body: "{}" });
     await mcpPost(minted);
-    ok([401, 429].includes(m1.status) && h.stores.grants.reads - r0 === 1, `a well-formed token that is not on file is read once, then held as bad for a while (${h.stores.grants.reads - r0} reads)`);
+    ok(m1.status === 401 && h.stores.grants.reads - r0 === 1, `a well-formed token that is not on file is read once, then held as bad for a while (${h.stores.grants.reads - r0} reads)`);
   } finally { h.close(); }
+}
+
+// G3b: a revoked or unknown token is answered 401 invalid_token whatever the
+// bad-token count reads: at the table's minimum (every value 1, and a bound of
+// one with a long window), and at this run's random table. The count only adds
+// Retry-After past its bound; it never replaces the reason.
+{
+  const tables = [
+    ["the minimum table", Object.fromEntries(Object.keys(BASE_TABLE.mcpOAuth).map((k) => [k, 1]))],
+    ["a bound of one", { badTokenMax: 1, windowMs: 3_600_000 }],
+    ["this run's random table", {}],
+  ];
+  for (const [label, table] of tables) {
+    const h = await harness({ table });
+    try {
+      const L = { ...BASE_TABLE.mcpOAuth, ...table };
+      const mcpPost = (token) => fetch(`${h.U}/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: "{}" });
+      const invalid = (r) => r.status === 401 && /error="invalid_token"/.test(r.headers.get("www-authenticate") || "");
+      // A live grant with one access token, seeded as the token endpoint writes them.
+      const gid = randomBytes(16).toString("hex"), email = "owner@example.com";
+      const live = h.oa._mintAccessForTest();
+      const t0 = h.clock.t;
+      h.stores.grants.body = {
+        codes: {},
+        grants: { [gid]: { email, keyId: "abcdef123456", capUsd: 1, clientId: "c_" + "2".repeat(32), scope: "credits:spend", createdAt: new Date(t0).toISOString(), lastUsedAt: new Date(t0).toISOString() } },
+        tokens: { [createHash("sha256").update(live).digest("hex")]: { g: gid, k: "a", exp: t0 + 3_600_000 } },
+      };
+      const served = await mcpPost(live);
+      ok(served.status === 404 && (await served.json()).fellThrough === true, `${label}: setup, the live token passes the sign-in check (${served.status})`);
+      // Past the bound with tokens that are not ours.
+      const n = Math.min(L.badTokenMax + 3, 200);
+      const made = [];
+      for (let i = 0; i < n; i++) made.push(await mcpPost("a402m_" + randomBytes(32).toString("base64url")));
+      ok(made.every(invalid), `${label}: ${n} made-up tokens are each answered 401 invalid_token (${[...new Set(made.map((r) => r.status))].join(",")})`);
+      if (L.windowMs >= 60_000) ok(made.at(-1).headers.get("retry-after") === "60" && !made[0].headers.get("retry-after"), `${label}: only a lookup past the bound carries Retry-After`);
+      // The grant's owner disconnects it; its token is now revoked, and the count is past its bound.
+      ok(await h.oa.revokeForEmail(email, gid), `${label}: setup, the owner revokes the grant`);
+      const revoked = await mcpPost(live);
+      const body = await revoked.json();
+      ok(invalid(revoked) && /expired or revoked/.test(body.error?.message || ""), `${label}: the revoked token is answered 401 invalid_token, the reason named, not 429 (${revoked.status}, ${body.error?.message})`);
+      const again = await mcpPost(live);
+      ok(invalid(again), `${label}: and again while it is held as bad (${again.status})`);
+      const unknown = await mcpPost(h.oa._mintAccessForTest());
+      ok(invalid(unknown), `${label}: a well-formed token that is not on file is answered 401 invalid_token (${unknown.status})`);
+      const credits = await fetch(`${h.U}/mcp/credits`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${live}` }, body: "{}" });
+      ok(invalid(credits), `${label}: /mcp/credits answers the revoked token 401 invalid_token too (${credits.status})`);
+    } finally { h.close(); }
+  }
 }
 
 // Code sends: a service-wide hourly budget and a per-address daily total, refused with the same answer.
@@ -476,8 +526,17 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
     const b = await send("198.18.61.1", "One+again@example.com");
     ok(a.status === 200 && b.status === 429 && /Too many requests/.test(b.html) && h.sent.length === 1, `a second code from one requester to one mailbox in a day is refused, its "+tag" spelling too (${a.status}, ${b.status})`);
     await send("198.18.61.2", "one@example.com");
-    const c = await send("198.18.61.4", "three@example.com");
-    ok(c.status === 429 && /Too many requests/.test(c.html) && h.sent.length === 2, `past the service-wide hourly budget a send is refused with the same answer (${c.status}, ${h.sent.length} sent)`);
+    const c = await send("198.18.61.1", "three@example.com");
+    ok(c.status === 429 && /Too many requests/.test(c.html) && h.sent.length === 2, `past the service-wide hourly budget a network that already sent today is refused with the same answer (${c.status}, ${h.sent.length} sent)`);
+    const d = await send("198.18.62.4", "four@example.com");
+    ok(d.status === 200 && h.sent.length === 3, `a drained service-wide budget still sends a network with no send today one code (${d.status}, ${h.sent.length} sent)`);
+    // That first-send allowance is counted per wider network: an IPv4 /24, an IPv6 /48.
+    const e1 = await send("198.18.61.9", "five@example.com");
+    ok(e1.status === 429 && h.sent.length === 3, `past the budget, another address in a /24 that sent today gets no first send (${e1.status})`);
+    let rotated = 0;
+    for (let n = 1; n <= 6; n++) { const before = h.sent.length; await send(`2001:db8:5:${n}::1`, `rot${n}@example.com`); if (h.sent.length > before) rotated++; }
+    ok(rotated === 1, `past the budget, rotating /64s inside one /48 gets one first send in all (${rotated})`);
+    ok((await send("2001:db8:6:1::1", "other48@example.com")).status === 200, "another /48 has its own first send");
   } finally { h.close(); }
 }
 // Strangers asking for codes to someone's address, from networks of their
@@ -507,6 +566,68 @@ async function inParallel(jobs, pool = 48) { await Promise.all(Array.from({ leng
     const r = await h.post(own, { action: "email", email: victim });
     ok(r.status === 200 && h.sent.length === before + 1 && h.sent.at(-1).to === victim.trim().toLowerCase(), `the owner's own sign-in still receives a code, at the address as typed (${r.status})`);
   } finally { h.close(); }
+}
+// G4: the shared code-mail and pending pools meter each requester, at the
+// minimum table (every value 1) and at this run's random table.
+for (const [label, over] of [["the minimum table", Object.fromEntries(Object.keys(BASE_TABLE.mcpOAuth).map((k) => [k, 1]))], ["this run's random table", {}]]) {
+  const T = { ...BASE_TABLE.mcpOAuth, ...over };
+  // Room for the flows themselves: authorize, register, tries and pending map.
+  const room = { authorizePerIp: 100_000, registerPerIp: 100_000, emailCodeTries: Math.max(T.emailCodeTries, 3), windowMs: 3_600_000, lockoutMs: 3_600_000, pendingMax: 100_000, pendingPerNetwork: 100_000, documentMaxBytes: 64 * 1024 * 1024, unusedClientIdleMs: 3_600_000 };
+  // (2) The service-wide hourly budget: one network takes at most its share,
+  // and once it is drained a network with no send today still gets a code.
+  {
+    const G = label === "the minimum table" ? 1 : 40;
+    const h = await harness({ table: { ...over, ...room, sendsGlobalPerHour: G, sendsPerIp: 100_000, sendsPerEmail: 100_000, sendsPerEmailDay: 100_000, pendingPerAddress: 100_000, pendingPerClient: 100_000 } });
+    try {
+      const client = await h.client("198.18.80.1");
+      const send = async (ip, email) => { const s = await h.start(ip, client); const before = h.sent.length; const r = await h.post(s, { action: "email", email }); await r.text(); return h.sent.length > before; };
+      const share = Math.max(1, Math.ceil(G * 0.05));
+      let drainer = 0;
+      for (let i = 0; i < share + 3; i++) if (await send("2001:db8:80:1::1", `spray${i}@example.com`)) drainer++;
+      ok(drainer === share, `${label}: one network takes at most its share of the service-wide budget (${drainer} of ${G})`);
+      let sent = drainer;
+      for (let n = 2; sent < G + 2 && n < 200; n++) if (await send(`2001:db8:80:${n}::1`, `fill${n}@example.com`)) sent++;
+      const fresh = await send("2001:db8:81:1::1", "owner@example.com");
+      ok(fresh, `${label}: with the budget spent, a network with no send today still gets one code`);
+      ok(!(await send("2001:db8:81:1::1", "owner2@example.com")), `${label}: and its next one waits for the budget`);
+    } finally { h.close(); }
+  }
+  // (3) The mailbox's day ceiling holds first sends too: past it, first sends
+  // come from a fixed per-mailbox allowance, however many networks ask.
+  {
+    const D = label === "the minimum table" ? 1 : Math.min(T.sendsPerEmailDay, 6);
+    const h = await harness({ table: { ...over, ...room, sendsPerEmailDay: D, sendsPerEmail: 100_000, sendsPerIp: 100_000, sendsGlobalPerHour: 100_000, pendingPerAddress: 100_000, pendingPerClient: 100_000 } });
+    try {
+      const client = await h.client("198.18.82.1");
+      let got = 0;
+      for (let n = 1; n <= 4 * D + 10; n++) {
+        const s = await h.start(`2001:db8:82:${n}::1`, client);
+        const before = h.sent.length;
+        await (await h.post(s, { action: "email", email: n % 2 ? "target@example.com" : "Target+x@example.com" })).text();
+        if (h.sent.length > before) got++;
+      }
+      ok(got === 2 * D, `${label}: ${4 * D + 10} networks put ${got} codes in one mailbox in a day (its ceiling ${D} plus a first-send allowance of ${D})`);
+    } finally { h.close(); }
+  }
+  // (4) An app's pending sign-ins: one requester network holds at most its
+  // share, and a full app sheds the largest holder's oldest, never refusing a newcomer.
+  {
+    const share = Math.max(1, Math.min(T.pendingPerAddress, T.pendingPerClient));
+    const cap = T.pendingPerClient;
+    const h = await harness({ table: { ...over, ...room, pendingPerAddress: share, pendingPerClient: cap } });
+    try {
+      const app = await h.client("198.18.84.1");
+      // One network starts many sign-ins from fresh browsers.
+      for (let i = 0; i < share + cap + 3; i++) await h.start("2001:db8:84:1::1", app);
+      const mineHeld = () => Object.values(h.stores.reqs.body.reqs || {}).filter((r) => r.clientId === app);
+      ok(mineHeld().length <= Math.min(share, cap), `${label}: one network holds at most its share of an app's sign-ins (${mineHeld().length} of share ${share}, app cap ${cap})`);
+      const others = [];
+      for (let n = 2; n < cap + 4; n++) others.push(await h.start(`2001:db8:84:${n}::1`, app));
+      ok(others.every((s) => s.status === 303 && s.pageStatus === 200), `${label}: every other user of the app is admitted (${others.map((s) => s.status).join(",")})`);
+      ok(mineHeld().length <= cap, `${label}: the app stays at its cap (${mineHeld().length} of ${cap})`);
+      ok((await h.page(others.at(-1))).status === 200, `${label}: the newest sign-in is kept`);
+    } finally { h.close(); }
+  }
 }
 useGuardsTable(BASE_TABLE);
 delete process.env.CREDITS_SALES; delete process.env.MCP_OAUTH;
@@ -827,6 +948,22 @@ try {
   ok(c.json?.result?.isError && /only on Agent402's own services/.test(c.json.result.content[0].text), "a route that buys from an outside seller is refused under a grant");
   c = await call(T.access_token, "base64", { text: "hello" });
   ok(c.status === 200 && !c.json?.result?.isError, "a free tool stays free under a grant");
+  // A tool whose run outlasts the connector's wait is refused before it runs,
+  // in words for a person who holds no credits key.
+  {
+    let longText = "";
+    for (const slug of ["dossier", "research", "image-gen-premium", "v1-videos"]) {
+      const lc = await call(T.access_token, slug, { ticker: "AAPL", query: "x", prompt: "x" });
+      const tx = lc.json?.result?.content?.[0]?.text || "";
+      if (lc.json?.result?.isError && /cannot run here/.test(tx)) { longText = tx; break; }
+    }
+    ok(longText && /Nothing was charged/.test(longText) && !/credits key/.test(longText) && /Prefer: respond-async/.test(longText), `a long run under a grant is refused without offering a key the person lacks ("${longText.slice(0, 120)}")`);
+  }
+  // A notice is mailed once an app is connected, with where to undo it.
+  {
+    const notes = mails.filter((m) => m.to === "buyer@example.com" && /An app was connected to your Agent402 credits/.test(m.subject || ""));
+    ok(notes.length >= 1 && /Claude evil/.test(notes[0].text || "") && /\/credits\/account/.test(notes[0].text || "") && /a day/.test(notes[0].text || ""), `a connect notice is mailed with the app, its cap and the balance page (${notes.length})`);
+  }
   c = await mcp(B, rpc(5, "tools/list", {}), { token: T.access_token, path: "/mcp/credits" });
   ok(c.status === 200 && Array.isArray(c.json?.result?.tools) && c.json.result.tools.length > 3, "/mcp/credits serves the connector with a token");
 
@@ -846,6 +983,7 @@ try {
   const mine = apps.apps?.find((x) => x.capUsd === 0.01 && x.spentTodayUsd > 0);
   ok(Array.isArray(apps.apps) && mine && mine.app === "Claude evil" && mine.keyId === G.keyId && mine.createdAt && mine.spentTodayUsd === 0.008 && "lastUsedAt" in mine && "lastNetwork" in mine, `connected apps list the app, key, cap, spend today, created and last use (${mine?.spentTodayUsd})`);
   ok(!JSON.stringify(apps).match(/a402[mr]_/), "the list carries no token");
+  ok(/\/mcp\/credits$/.test(apps.connectorUrl || ""), `the connected apps answer names the connector address (${apps.connectorUrl})`);
   ok((await fetch(`${B}/credits/account/connected.json`)).status === 401, "the list needs the balance page's sign-in");
   const acctPost = (p, body, h = same) => fetch(`${B}/credits/account/connected/${p}`, { method: "POST", headers: { "content-type": "application/json", cookie: acct, ...h }, body: JSON.stringify(body) });
   ok((await acctPost("cap", { id: mine.id, capUsd: 1 }, { "sec-fetch-site": "cross-site" })).status === 403, "a cross-site change is refused");
@@ -899,7 +1037,7 @@ try {
     ok(typeof Tb.access_token === "string", "setup: a fresh access token for the bad-token check");
     let last = null;
     for (let i = 0; i < OL.badTokenMax + 60; i++) last = await mcp(B, rpc(1, "tools/list", {}), { token: "a402m_" + randomBytes(32).toString("base64url") });
-    ok(last.status === 429, `past the bound, failed token lookups from one client are answered 429 (${last.status})`);
+    ok(last.status === 401 && /error="invalid_token"/.test(last.headers.get("www-authenticate") || "") && last.headers.get("retry-after") === "60", `past the bound, failed token lookups from one client are answered 401 invalid_token with Retry-After (${last.status}, ${last.headers.get("retry-after")})`);
     const good = await mcp(B, rpc(1, "tools/list", {}), { token: Tb.access_token });
     ok(good.status === 200 && Array.isArray(good.json?.result?.tools), `a valid token from the same client is still served after ${OL.badTokenMax + 60} bad ones`);
   }

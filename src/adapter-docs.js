@@ -39,7 +39,7 @@ export const ADAPTERS = BASE.map((a) => {
 export function adapterDocsIndex(baseUrl) {
   const canonical = `${baseUrl}/docs/adapters`;
   const title = "Framework Adapters - Agent402 Docs";
-  const description = "Adapter documentation for every supported agent framework: OpenAI, Anthropic, Vercel AI SDK, LangChain, LlamaIndex, Google ADK, OpenAI Agents SDK, and Strands Agents.";
+  const description = "Adapter documentation for every supported agent framework: OpenAI, Anthropic, Vercel AI SDK, LangChain, LlamaIndex, Google ADK, OpenAI Agents and Strands.";
 
   const cards = ADAPTERS.map((a) => `
     <a class="ml-ad-card" href="${esc(a.href)}">

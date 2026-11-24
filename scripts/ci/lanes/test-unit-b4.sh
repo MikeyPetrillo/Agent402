@@ -11,7 +11,7 @@ t node scripts/test-router-sybil.js
 t node scripts/test-data-kit.js
 # Holidays kit: public-holidays v4 contract, cache bounds, business-day math on published calendars, rails, exchanges (offline)
 t node scripts/test-holidays-kit.js
-# id-validate, build-log-triage, json-repair vectors and bounds; solana-rpc allowlist, failover, size caps and the keyed provider's ceiling (offline)
+# id-validate, build-log-triage, json-repair vectors and bounds (offline)
 t node scripts/test-validate-more-kit.js
 # The sweeps' server answers examples naming its own /samples/ and /fixtures/ files from itself, never production (offline)
 t node scripts/test-own-examples-preload.js
@@ -287,6 +287,12 @@ t node scripts/test-mpp-shim-mppx-registry.js
 t node scripts/test-report-margins.js
 # Untrusted-content provenance (R-14 — external page/search content carries untrustedContent; extract/render/search marked — offline)
 t node scripts/test-provenance.js
+# search-suggest's Wikipedia opensearch read: request, User-Agent, answer shape, credit, serial reads and per-minute ceiling (offline)
+t node scripts/test-search-suggest-source.js
+# /v1 gateway described as this service's product on every surface that describes it (offline)
+t node scripts/test-gateway-product-copy.js
+# /terms passes the model providers' terms on (Model outputs section, gateway bullet) (offline)
+t node scripts/test-terms-model-outputs.js
 # x402-trending momentum tool (organic score, sorts, WoW activation, history persistence — offline)
 t node scripts/test-x402-trending.js
 # ticker pack kit (offline)
@@ -314,7 +320,7 @@ t node scripts/test-stt-language.js
 t node scripts/test-rwa-asset-own-row.js
 # filing-watch form filter reads the full recent list and older filing files, bounded reads (offline)
 t node scripts/test-filing-watch-older-files.js
-# cpi-yoy lists unpublished months; world-bank default end year is last year; release calendar uses the Chicago date (offline)
+# cpi-yoy lists unpublished months; world-bank default end year is last year (offline)
 t node scripts/test-macro-dates.js
 # flight-search refuses a date as past only before today's date in UTC-12 (offline)
 t node scripts/test-flights-local-date.js
@@ -340,6 +346,8 @@ t node scripts/test-13g-cover-fallback.js
 t node scripts/test-backup-s3-wire.js
 # load-shed boot warm-up default is 60 s (offline)
 t node scripts/test-load-shed-warmup.js
+# the discovery documents answer their last good copy while the load gate sheds, not a 503 (boots a FREE_MODE server)
+t node scripts/test-discovery-snapshots.js
 # deploy job redeploys the render/media worker when a push changes its import closure or image inputs (offline)
 t node scripts/test-worker-deploy-step.js
 t node scripts/test-decide-deploy-step.js

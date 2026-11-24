@@ -15,6 +15,7 @@
 import { siteOrgLd, mppOffered } from "./site-org.js";
 import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
+import { firstFit } from "./seo-meta.js";
 import { RAILS_SHORT } from "./rails.js";
 import { isComputePayable } from "./pow.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -35,8 +36,8 @@ export const PACK_PRICE_TABLE = {
   "market-brief": 0.005, // 3 tools, parts $0.005
   "financial-analysis": 0.019, // 3 tools, parts $0.021
   "financial-research": 0.018, // 6 tools, parts $0.02
-  "macro-economics": 0.028, // 7 tools, parts $0.031
-  "macro-dashboard": 0.046, // 14 tools, parts $0.051
+  "macro-economics": 0.024, // 6 tools, parts $0.026
+  "macro-dashboard": 0.042, // 13 tools, parts $0.046
   "dns-network-ops": 0.006, // 6 tools, parts $0.006
   "crypto-research": 0.031, // 7 tools, parts $0.034
   "content-extraction": 0.017, // 6 tools, parts $0.018
@@ -52,7 +53,7 @@ export const PACK_PRICE_TABLE = {
   "location-intel": 0.009, // 5 tools, parts $0.009
   "user-onboarding": 0.008, // 7 tools, parts $0.008
   "trip-planner": 0.007, // 6 tools, parts $0.007
-  "macro-context": 0.033, // 8 tools, parts $0.036
+  "macro-context": 0.028, // 7 tools, parts $0.031
   "regulatory-watch": 0.021, // 5 tools, parts $0.023
   "search-and-cite": 0.093, // 5 tools, parts $0.103
   "media-pipeline": 0.028, // 6 tools, parts $0.031
@@ -187,7 +188,7 @@ const SKILL_PACKS_ALL = [
     slug: "fixed-income-desk",
     title: "Fixed-income desk",
     tagline:
-      "Read the rate environment and price a bond in one workflow: the live Treasury curve, the 2s10s and 3M-10Y spreads, inflation context, then price and yield a specific coupon bond at current rates.",
+      "Read the rate environment and price a bond in one workflow: the live Treasury curve, the 2s10s and 3M-10Y spreads, the year-over-year CPI inflation from the U.S. Bureau of Labor Statistics for context, then price and yield a specific coupon bond at current rates.",
     useCase:
       "Evaluating a bond or building a rates view - you want the current curve, the 2s10s spread as a cycle signal, real-yield context from inflation, and the price/yield math on a specific coupon bond, all grounded in live Treasury data.",
     promptArgs: [
@@ -362,9 +363,9 @@ const SKILL_PACKS_ALL = [
     slug: "macro-economics",
     title: "Macro economics",
     tagline:
-      "Pull the canonical US macro dataset - yield curve, CPI, unemployment, fed funds, Sahm rule - without an API key.",
+      "Pull the canonical US macro dataset - the Treasury yield curve and its spreads, CPI, unemployment, fed funds, Sahm rule - no API key, each figure dated.",
     useCase:
-      "Producing a weekly macro note, charting a macro indicator dashboard, or feeding a model with the latest FRED/Treasury data.",
+      "Producing a weekly macro note, charting a macro indicator dashboard, or feeding a model with the latest BLS, New York Fed and Treasury data.",
     promptArgs: [],
     toolSlugs: [
       "treasury-yield-curve",
@@ -373,7 +374,6 @@ const SKILL_PACKS_ALL = [
       "unemployment-rate",
       "fed-funds",
       "sahm-rule",
-      "fred-release-calendar",
     ],
     workflow: [
       "Pull the live Treasury yield curve (all maturities from 1M to 30Y) - the base data for every spread/inversion chart.",
@@ -382,22 +382,20 @@ const SKILL_PACKS_ALL = [
       "Pull the headline unemployment rate (unemployment-rate) - the U-3 series.",
       "Get the effective fed funds rate (fed-funds) for the current policy stance.",
       "Compute the Sahm rule (sahm-rule) - a real-time recession indicator that triggers when the 3-month unemployment average rises >0.5pp above its 12-month low.",
-      "Pull the upcoming FRED release calendar (fred-release-calendar) so the brief can flag what's hitting this week.",
     ],
     claudePrompt:
-      "Build today's macro dashboard. Use Agent402 to pull the Treasury yield curve, 10Y–2Y and 10Y–3M spreads, latest CPI YoY, unemployment rate, fed funds rate, and the Sahm rule reading. Highlight any indicator that is at a multi-year extreme, and list FRED releases scheduled for this week.",
+      "Build today's macro dashboard. Use Agent402 to pull the Treasury yield curve, 10Y–2Y and 10Y–3M spreads, latest CPI YoY, unemployment rate, fed funds rate, and the Sahm rule reading. Highlight any indicator that is at a multi-year extreme.",
   },
   {
     slug: "macro-dashboard",
     title: "Macro dashboard refresh",
     tagline:
-      "The full macro + crypto dashboard in one call: 5 FRED series, 5 Treasury reads, yield-curve spread, crypto market/trending/global, and live gas - a 14-tool macro + crypto basket, bundled below its a la carte price.",
+      "The full US macro and crypto dashboard in one call, below a la carte prices. 4 BLS and New York Fed indicators, 5 Treasury reads, yield-curve spread, crypto market/trending/global and live gas: a 13-tool macro + crypto basket.",
     useCase:
       // The price is read from PACK_PRICES (generated from the catalog), never typed.
       `An agent keeping a live macro dashboard warm needs the same basket of reads every refresh cycle. Buying the tools one at a time costs more per cycle than the bundle; this pack is $${fmtPackUsd(PACK_PRICES["macro-dashboard"])} for one call, one payment, every series in one JSON envelope.`,
     promptArgs: [],
     toolSlugs: [
-      "fred-release-calendar",
       "fed-funds",
       "cpi-yoy",
       "unemployment-rate",
@@ -413,13 +411,13 @@ const SKILL_PACKS_ALL = [
       "gas-estimate",
     ],
     workflow: [
-      "Pull the five FRED macro series: upcoming release calendar (14 days), fed funds rate (30 days), CPI year-over-year, unemployment rate (12 months), and the Sahm Rule recession indicator (FRED series SAHMREALTIME).",
+      "Pull the four macro indicators: fed funds rate (30 days, New York Fed EFFR), CPI year-over-year and unemployment rate (12 months), both from BLS, and the Sahm Rule recession indicator computed from the BLS unemployment rate.",
       "Read the Treasury complex: full yield curve, 90 days of yield history, the 10y-2y spread, total public debt, and average interest rates on the debt.",
       "Snapshot crypto: top coins by market cap, trending coins, and global market stats (total cap, BTC dominance, volume).",
       "Read live Base gas via gas-estimate so onchain execution cost rides the same refresh.",
     ],
     claudePrompt:
-      "Refresh my macro dashboard using Agent402's macro-dashboard skill pack: FRED releases, fed funds, CPI, unemployment, Sahm rule, the full Treasury yield curve and spread, crypto market overview, and current gas. Summarize what changed since the last refresh in one paragraph.",
+      "Refresh my macro dashboard using Agent402's macro-dashboard skill pack: fed funds, CPI, unemployment, Sahm rule, the full Treasury yield curve and spread, crypto market overview, and current gas. Summarize what changed since the last refresh in one paragraph.",
   },
   {
     slug: "dns-network-ops",
@@ -443,7 +441,7 @@ const SKILL_PACKS_ALL = [
       "Resolve A/AAAA/MX/TXT/NS/CAA records on the apex with dns-lookup to baseline what the authoritative answer should be.",
       "Run dns-propagation, which asks Cloudflare, Google, Quad9 and OpenDNS for the same record - divergent answers mean a stale cache somewhere or a botched TTL during a migration.",
       "Look up the ASN and prefix that the apex resolves into with asn-info (a public DNS-based IP-to-ASN lookup - no auth needed). Useful for spotting an unexpected hosting move.",
-      "Pull whois for ownership, expiry, and registrar - catches the 'we forgot to renew' class of outage.",
+      "Pull whois for registration age, days to expiry, DNSSEC and transfer lock - catches the 'we forgot to renew' class of outage.",
       "Run http-check for status code, response time, and final URL after redirects - the fastest 'is it actually up' read.",
       "Spot-check robots.txt with robots-check to make sure a redeploy didn't accidentally Disallow: / the whole site.",
     ],
@@ -632,13 +630,13 @@ const SKILL_PACKS_ALL = [
     slug: "trend-analysis",
     title: "Trend analysis",
     tagline:
-      "Take any numeric time series - a stock's daily close, a FRED macro indicator, a treasury yield history - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+      "Take any numeric time series - a stock's daily close, a US economic indicator, a treasury yield history - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase:
       "You have a question like \"is AAPL trending up over the last year - and what does the next quarter look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
     promptArgs: [
       {
         name: "series",
-        description: "What to analyze - a ticker (AAPL), a FRED series id (UNRATE), or a treasury maturity (10Y)",
+        description: "What to analyze - a ticker (AAPL), a FRED series id fred-series serves (UNRATE), or a Treasury yield id it serves (DGS10)",
         required: true,
         substitute: "AAPL",
       },
@@ -650,7 +648,7 @@ const SKILL_PACKS_ALL = [
       },
       {
         name: "benchmark",
-        description: "Optional second series to correlate against - a ticker (SPY) or a FRED series id. Without it the correlation step is skipped.",
+        description: "Optional second series to correlate against - a ticker (SPY) or a FRED series id fred-series serves. Without it the correlation step is skipped.",
         required: false,
         substitute: "SPY",
       },
@@ -696,7 +694,7 @@ const SKILL_PACKS_ALL = [
     promptArgs: [
       {
         name: "series",
-        description: "What to forecast - a ticker (AAPL) or a FRED series id (UNRATE, CPIAUCSL)",
+        description: "What to forecast - a ticker (AAPL) or a FRED series id fred-series serves (UNRATE, CPIAUCSL)",
         required: true,
         substitute: "AAPL",
       },
@@ -837,7 +835,7 @@ const SKILL_PACKS_ALL = [
       "extract",
     ],
     workflow: [
-      "Start with whois - domain age is the single best fraud predictor. Established brands have domains registered years ago; impersonators are usually using domains < 90 days old. Also surfaces the registrar (some - like privacy-shrouded resellers operating out of jurisdictions with slow abuse response - are over-represented in fraud) and registrant info (privacy-protected WHOIS is normal for personal sites, suspicious for a business claiming to be Fortune-500 established).",
+      "Start with whois - domain age is the single best fraud predictor. Established brands have domains registered years ago; impersonators are usually using domains < 90 days old. Also reads days to expiry (a domain registered for one year only is common in throwaway fraud), DNSSEC and transfer lock (an established business usually locks its domain against transfer).",
       "Pull the cert-transparency log. CT logs every TLS cert ever issued for the domain. A legitimate long-running site shows years of cert renewals from major CAs. A classic phishing pattern is a brand-new domain with exactly one Let's Encrypt cert issued in the last few days - there's no history because there's no history. Burst issuance across many subdomains in a short window can indicate a phishing kit operator.",
       "Inspect the live cert with tls-cert. Self-signed = major red flag, period. Wildcard certs across a sprawling subdomain set on a brand-new domain can indicate a phishing kit operator running many landing pages off one cert. Cert validity window matters too - Let's Encrypt's 90-day cert on a domain claiming to be an established bank is anomalous (real banks use OV/EV certs with longer validity and the green-bar / org-name treatment).",
       "Run asn-info on the resolved IP. Cloudflare / AWS / GCP / Azure are neutral - most of the internet runs there. Known abuse-friendly hosters (specific ASNs in Russia, China, and certain Eastern European countries) over-index on fraud. Geographic mismatch matters: a US-targeted brand impersonator hosted in a country with no business presence there is a meaningful signal. Cross-reference the ASN against public abuse databases if the user wants depth.",
@@ -846,7 +844,7 @@ const SKILL_PACKS_ALL = [
       "Pull the page content with extract and scan for fraud-pattern keywords. Phishing kits use predictable language: urgency ('act now', 'limited time'), unsolicited payment requests, crypto-only payment ('USDT only'), dubious testimonials, broken English on a site claiming to be US-headquartered, gift-card payment instructions. Combine all 7 signal sources into a single rollup: low / medium / high fraud likelihood with each piece of cited evidence - let the user see exactly which signals fired, not just a black-box score.",
     ],
     claudePrompt:
-      "Run a fraud-signal check on agent402.tools using Agent402. (1) whois - record the domain creation date and the registrar. If age < 90 days, flag as a strong fraud signal. (2) cert-transparency - pull the cert log. Count entries; first issuance date should match (or predate) the whois creation date by at most a few days. (3) tls-cert - inspect the live cert: issuer (Let's Encrypt is fine, self-signed is a hard red flag), validity window, wildcard scope. (4) asn-info - resolve the A record, pull the ASN: is it a mainstream cloud (Cloudflare/AWS/GCP) or a known abuse-friendly hoster? Surface country. (5) dns-lookup - MX records (a 'business' with no MX is suspicious), CNAMEs (shared-hosting CNAMEs on a brand-impersonator site are a red flag). (6) tech-stack - fingerprint the running stack; flag mismatches with the claimed brand (e.g., a 'bank' on a WordPress restaurant theme). (7) extract - pull the home-page text, scan for urgency language, crypto-only payment requests, gift-card mentions, broken English. Return: {domain, age_days, certHistoryCount, hostingProvider, hostingCountry, hasMX, techStack, redFlags: [{signal, evidence}], fraudLikelihood: \"low\"|\"medium\"|\"high\", oneLineRecommendation}. All seven tools are wallet-only (egress) - budget ≤ $0.05 per domain check.",
+      "Run a fraud-signal check on agent402.tools using Agent402. (1) whois - record the domain age (ageDays) and days to expiry. If age < 90 days, flag as a strong fraud signal. (2) cert-transparency - pull the cert log. Count entries; the first issuance should fall no more than a few days after the registration that ageDays dates. (3) tls-cert - inspect the live cert: issuer (Let's Encrypt is fine, self-signed is a hard red flag), validity window, wildcard scope. (4) asn-info - resolve the A record, pull the ASN: is it a mainstream cloud (Cloudflare/AWS/GCP) or a known abuse-friendly hoster? Surface country. (5) dns-lookup - MX records (a 'business' with no MX is suspicious), CNAMEs (shared-hosting CNAMEs on a brand-impersonator site are a red flag). (6) tech-stack - fingerprint the running stack; flag mismatches with the claimed brand (e.g., a 'bank' on a WordPress restaurant theme). (7) extract - pull the home-page text, scan for urgency language, crypto-only payment requests, gift-card mentions, broken English. Return: {domain, age_days, certHistoryCount, hostingProvider, hostingCountry, hasMX, techStack, redFlags: [{signal, evidence}], fraudLikelihood: \"low\"|\"medium\"|\"high\", oneLineRecommendation}. All seven tools are wallet-only (egress) - budget ≤ $0.05 per domain check.",
   },
   {
     slug: "api-investigation",
@@ -1034,9 +1032,9 @@ const SKILL_PACKS_ALL = [
     slug: "macro-context",
     title: "Macro backdrop snapshot",
     tagline:
-      "Macro backdrop snapshot: the 'is the economic backdrop you're modeling against still current?' pack. Pull the core US macro readings - CPI year-over-year, unemployment, fed funds, the Treasury yield curve, a G10 FX dashboard, the Sahm Rule recession indicator, and the next scheduled economic releases - in one composed workflow. Eight egress tools, one composite snapshot, each figure with its as-of date and source, that the agent can cite in a forecast or an investment decision memo.",
+      "Macro backdrop snapshot: the 'is the economic backdrop you're modeling against still current?' pack. Pull the core US macro readings - CPI year-over-year, unemployment, fed funds, the Treasury yield curve, a G10 FX dashboard, and the Sahm Rule recession indicator - in one composed workflow. Seven egress tools, one composite snapshot, each figure with its as-of date and source, that the agent can cite in a forecast or an investment decision memo.",
     useCase:
-      "Every finance/forecast pack in Agent402 assumes the macro backdrop is known. This pack makes that assumption explicit and dated. Before you NPV a 10-year cashflow or forecast a revenue series, pull this snapshot, cite the as-of dates, and pin the assumptions. The Sahm Rule and the yield-curve spreads are two published series read on the business cycle (FRED and Treasury data); CPI + fed funds gives the real-rate environment; the FX dashboard shows how far USD has moved against the other G10 currencies this year. It is the dated input a forecast, a cashflow model or an investment decision memo cites; the pack reports published series and makes no forecast. Pairs with loan-comparison and forecasting-bake-off - neither pack reads macro data itself.",
+      "Every finance/forecast pack in Agent402 assumes the macro backdrop is known. This pack makes that assumption explicit and dated. Before you NPV a 10-year cashflow or forecast a revenue series, pull this snapshot, cite the as-of dates, and pin the assumptions. The Sahm Rule and the yield-curve spreads are two published series read on the business cycle (BLS and Treasury data); CPI + fed funds gives the real-rate environment; the FX dashboard shows how far USD has moved against the other G10 currencies this year. It is the dated input a forecast, a cashflow model or an investment decision memo cites; the pack reports published series and makes no forecast. Pairs with loan-comparison and forecasting-bake-off - neither pack reads macro data itself.",
     toolSlugs: [
       "cpi-yoy",
       "unemployment-rate",
@@ -1045,20 +1043,18 @@ const SKILL_PACKS_ALL = [
       "yield-curve-spread",
       "sahm-rule",
       "fx-dashboard",
-      "fred-release-calendar",
     ],
     workflow: [
-      "Pull current US CPI year-over-year with cpi-yoy. FRED series CPIAUCSL converted to YoY % change. This is the headline inflation number every cashflow assumption is implicitly indexed to - if you're discounting at a nominal rate, you need to know real-vs-nominal spread. Returns the latest observation date and value; flag if the latest observation is more than 45 days stale (BLS publishes monthly with ~2-week lag - anything older signals a FRED outage or a holiday).",
-      "Pull current US unemployment rate with unemployment-rate. FRED series UNRATE. Report both the latest level AND the 6-month delta: the Sahm Rule in step 6 is computed from this same series (its 3-month average against its 12-month low). A forecast that assumes a steady labor market can then state the delta it was made against.",
-      "Pull effective federal funds rate with fed-funds. FRED series FEDFUNDS. This is the risk-free rate every NPV/IRR calc should be discounting against (or close to it - treasury yields are the more precise instrument but fed funds is the policy anchor). Report the latest level and the YoY delta. A rising-rate environment systematically biases NPV calculations toward 'reject the project' - make sure the loan-comparison pack is using a current rate, not a stale one.",
+      "Pull current US CPI year-over-year with cpi-yoy: the BLS CPI-U index (seasonally adjusted) converted to YoY % change. This is the headline inflation number every cashflow assumption is implicitly indexed to - if you're discounting at a nominal rate, you need to know real-vs-nominal spread. Returns the latest observation date and value; flag if the latest observation is more than 45 days stale (BLS publishes monthly with ~2-week lag - anything older signals a delayed release or a source outage).",
+      "Pull current US unemployment rate with unemployment-rate: the BLS unemployment rate (the series known as UNRATE). Report both the latest level AND the 6-month delta: the Sahm Rule in step 6 is computed from this same series (its 3-month average against its 12-month low). A forecast that assumes a steady labor market can then state the delta it was made against.",
+      "Pull effective federal funds rate with fed-funds: the New York Fed's daily EFFR. This is the risk-free rate every NPV/IRR calc should be discounting against (or close to it - treasury yields are the more precise instrument but fed funds is the policy anchor). Report the latest level and the YoY delta. A rising-rate environment systematically biases NPV calculations toward 'reject the project' - make sure the loan-comparison pack is using a current rate, not a stale one.",
       "Pull the current Treasury yield curve with treasury-yield-curve. Returns the daily snapshot of yields at 1M, 3M, 6M, 1Y, 2Y, 5Y, 10Y, 30Y maturities. This is the Treasury curve that fixed-income pricing references. Report the shape as data: upward-sloping (long yields above short), flat, or inverted (short yields above long). The next step measures it.",
       "Compute yield-curve spreads with yield-curve-spread. Returns the two standard spreads in basis points: 10Y-2Y and 10Y-3M (the spread studied by Estrella & Mishkin for the New York Fed). A negative spread means the curve is inverted at that pair. The tool returns both spreads plus a boolean inverted flag per spread. State any inversion with its as-of date, so a downstream forecast can cite it.",
-      "Compute the Sahm Rule with sahm-rule. Defined as: current 3-month moving average of UNRATE minus its 12-month minimum. Triggers when ≥ 0.5 percentage points. FRED publishes it as the Real-time Sahm Rule Recession Indicator (series SAHMREALTIME). Returns the current value and the triggered boolean. Report it beside the spreads from step 5, each with its as-of date: the pack reports the published series and makes no forecast.",
+      "Compute the Sahm Rule with sahm-rule. Defined as: current 3-month moving average of the BLS unemployment rate minus the lowest 3-month average of the prior 12 months. Triggers when ≥ 0.5 percentage points. Computed from the series as published today. Returns the current value and the triggered boolean. Report it beside the spreads from step 5, each with its as-of date: the pack reports the published series and makes no forecast.",
       "Pull G10 FX dashboard with fx-dashboard. Returns USD vs EUR, JPY, GBP, CHF, AUD, CAD, NZD, SEK, NOK - the standard developed-market basket. Critical for any cashflow denominated in non-USD: a 10% USD strengthening turns a 12% EUR-denominated return into 2%. The dashboard returns the current cross plus the YTD change per pair. Surface any pair with >10% YTD change as a 'denomination matters here' callout.",
-      "Pull the next 14 days of economic releases with fred-release-calendar. Returns the schedule of upcoming releases (next CPI, next NFP, next FOMC, etc.) with their release dates. This tells the agent which numbers in the snapshot are about to be refreshed - if CPI prints in 3 days, the agent notes 'CPI is next published on date X' beside every figure that depends on it. Closes the snapshot with a forward-looking 'what will be stale soon' list.",
     ],
     claudePrompt:
-      "Pull the current macro backdrop using Agent402 before doing any finance/forecast math.\n\nAs-of: 2026-06-22 (use today's date). USD-denominated assumptions.\n\n(1) cpi-yoy - return {asOfDate, yoyPct}. Flag if asOfDate > 45 days stale. (2) unemployment-rate - return {asOfDate, level, sixMonthDelta}. (3) fed-funds - return {asOfDate, level, yoyDelta}. (4) treasury-yield-curve - return {asOfDate, points: [{maturity, yield}, ...]} for the standard 1M/3M/6M/1Y/2Y/5Y/10Y/30Y set. (5) yield-curve-spread - return {asOfDate, tenTwo: {spread, isInverted}, tenThreeM: {spread, isInverted}}. (6) sahm-rule - return {asOfDate, value, triggered}. Report it beside the yield-curve spreads from step 5 in the writeup, each with its as-of date. (7) fx-dashboard - return {asOfDate, crosses: [{pair, level, ytdPct}, ...]}. Flag any pair with |ytdPct| > 10 with a 'denomination matters here' note. (8) fred-release-calendar with daysAhead=14 - return {nextReleases: [{date, seriesName}, ...]}. Final return: {asOf: '2026-06-22', cpiYoy, unemployment, fedFunds, yieldCurve, spreads, sahm, fx, nextReleases, backdropSummary: '<one paragraph stating CPI direction, fed-funds direction, curve shape and the Sahm Rule value, each with its as-of date>', oneLineSummary: 'CPI 2.4% YoY (Apr 26), UE 4.1% (May 26, +0.4 over 6m), fed funds 4.25%, curve disinverted 10Y-2Y at +12bps, Sahm not triggered (0.33), USD broadly flat YTD, next CPI prints 2026-07-10.'}. All eight tools are egress (FRED + Treasury + ECB FX). Budget ~$0.10 paid. Cache this snapshot per session - do not re-call within the same agent task.",
+      "Pull the current macro backdrop using Agent402 before doing any finance/forecast math.\n\nAs-of: 2026-06-22 (use today's date). USD-denominated assumptions.\n\n(1) cpi-yoy - return {asOfDate, yoyPct}. Flag if asOfDate > 45 days stale. (2) unemployment-rate - return {asOfDate, level, sixMonthDelta}. (3) fed-funds - return {asOfDate, level, yoyDelta}. (4) treasury-yield-curve - return {asOfDate, points: [{maturity, yield}, ...]} for the standard 1M/3M/6M/1Y/2Y/5Y/10Y/30Y set. (5) yield-curve-spread - return {asOfDate, tenTwo: {spread, isInverted}, tenThreeM: {spread, isInverted}}. (6) sahm-rule - return {asOfDate, value, triggered}. Report it beside the yield-curve spreads from step 5 in the writeup, each with its as-of date. (7) fx-dashboard - return {asOfDate, crosses: [{pair, level, ytdPct}, ...]}. Flag any pair with |ytdPct| > 10 with a 'denomination matters here' note. Final return: {asOf: '2026-06-22', cpiYoy, unemployment, fedFunds, yieldCurve, spreads, sahm, fx, backdropSummary: '<one paragraph stating CPI direction, fed-funds direction, curve shape and the Sahm Rule value, each with its as-of date>', oneLineSummary: 'CPI 2.4% YoY (Apr 26), UE 4.1% (May 26, +0.4 over 6m), fed funds 4.25%, curve disinverted 10Y-2Y at +12bps, Sahm not triggered (0.33), USD broadly flat YTD.'}. All seven tools are egress (BLS, New York Fed, Treasury, ECB FX). Budget ~$0.10 paid. Cache this snapshot per session - do not re-call within the same agent task.",
     promptArgs: [
       {
         name: "asOfDate",
@@ -1413,7 +1409,7 @@ const SKILL_PACKS_ALL = [
       "onramp-link",
     ],
     workflow: [
-      "Call wallet-balances with {address, network: \"base\"} - returns every indexed ERC-20 + native balance. Find the USDC row (contract 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913) and read its amount: this is the wallet's x402 spending power on Base.",
+      "Call wallet-balances with {address, network: \"base\"} - returns every ERC-20 + native balance the wallet holds. Find the USDC row (contract 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913) and read its amount: this is the wallet's x402 spending power on Base.",
       "If the agent also pays on Solana, call wallet-balances again with {address: <the Solana address>, network: \"solana\"} - same envelope, SPL balances, USDC mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v. (x402 settlement is gasless via EIP-3009 / sponsored transactions, so USDC is the only balance that matters - no ETH or SOL required.)",
       "Call gas-snapshot with {network: \"base\"} for slow/standard/fast gas. The agent never pays gas on x402 buys, but gas context tells you whether any NON-x402 onchain action you're planning (a manual transfer, a contract call) is cheap right now.",
       "If the USDC balance is below your working budget, call onramp-link with {address, network: \"base\", amount: \"<usd>\"} - it mints a single-use hosted onramp URL a human can open to fund the wallet with a card or Apple Pay. Include the URL in your report; it expires unvisited, so minting it costs nothing but the call.",
@@ -1582,7 +1578,7 @@ const SKILL_PACKS_ALL = [
       "robots-check",
     ],
     workflow: [
-      "Pull WHOIS records - registrar, creation date, expiry, registrant (often privacy-shielded but the age alone is a signal).",
+      "Pull WHOIS registration facts - age in days, days to expiry, DNSSEC and transfer lock (the age alone is a strong signal).",
       "Resolve DNS A records to identify the hosting provider and detect CDN fronting.",
       "Inspect the live TLS certificate - issuer, expiry, SANs, and chain validity.",
       "Fetch HTTP response headers - security posture (HSTS, CSP, XFO), caching, and server fingerprint.",
@@ -1590,7 +1586,7 @@ const SKILL_PACKS_ALL = [
       "Check robots.txt for crawl directives - reveals hidden paths and bot policies.",
     ],
     claudePrompt:
-      "Run a full domain intelligence report on agent402.tools using Agent402's domain-intel skill pack: (1) WHOIS - age, registrar, expiry. (2) DNS A records - hosting/CDN. (3) TLS cert - issuer, expiry, SANs. (4) HTTP headers - security headers score. (5) Tech stack - frameworks, CDN, analytics. (6) robots.txt - hidden paths. Output a structured report with a risk summary.",
+      "Run a full domain intelligence report on agent402.tools using Agent402's domain-intel skill pack: (1) WHOIS - age, days to expiry, transfer lock. (2) DNS A records - hosting/CDN. (3) TLS cert - issuer, expiry, SANs. (4) HTTP headers - security headers score. (5) Tech stack - frameworks, CDN, analytics. (6) robots.txt - hidden paths. Output a structured report with a risk summary.",
   },
 
   {
@@ -1923,13 +1919,13 @@ const SKILL_PACKS_ALL = [
       "http-headers",
     ],
     workflow: [
-      "Pull WHOIS for domain age, registrar, and registrant - very young domains are suspect.",
+      "Pull WHOIS for domain age and days to expiry - very young domains are suspect.",
       "Resolve DNS A records to identify hosting and detect parking pages.",
       "Search for scam/phishing reports mentioning this domain.",
       "Fetch HTTP headers for security posture and server fingerprint.",
     ],
     claudePrompt:
-      "Check the brand footprint of agent402.tools using Agent402's brand-protection skill pack. Get (1) WHOIS - age and registrar, (2) DNS A records, (3) search for scam/phishing reports, (4) HTTP headers. Rate the domain's trustworthiness.",
+      "Check the brand footprint of agent402.tools using Agent402's brand-protection skill pack. Get (1) WHOIS - age and expiry, (2) DNS A records, (3) search for scam/phishing reports, (4) HTTP headers. Rate the domain's trustworthiness.",
   },
 
   {
@@ -1951,7 +1947,7 @@ const SKILL_PACKS_ALL = [
     workflow: [
       "Fingerprint the tech stack - CMS, framework, CDN, analytics, third-party scripts.",
       "Fetch HTTP headers for server info, caching strategy, and security posture.",
-      "Pull WHOIS for domain age, registrar, and hosting provider.",
+      "Pull WHOIS for domain age and days to expiry.",
       "Get page metadata - title, description, OG tags for their positioning.",
     ],
     claudePrompt:
@@ -2125,13 +2121,13 @@ const SKILL_PACKS_ALL = [
     tagline:
       "Economic snapshot skill: one parallel call returns the fed funds rate, the unemployment rate and the consumer price index series together.",
     useCase:
-      "An agent providing economic context needs the three most-watched Fed indicators: where rates are (FEDFUNDS), how tight the labor market is (UNRATE), and where inflation stands (CPIAUCSL). Three FRED series calls bundled into one payment.",
+      "An agent providing economic context needs the three most-watched Fed indicators: where rates are (FEDFUNDS), how tight the labor market is (UNRATE), and where inflation stands (CPIAUCSL). Three fred-series calls (series read from the New York Fed and the Bureau of Labor Statistics) bundled into one payment.",
     promptArgs: [],
     toolSlugs: ["fred-series", "fred-series", "fred-series"],
     workflow: [
-      "Call fred-series with series='FEDFUNDS' to get the effective federal funds rate.",
-      "Call fred-series with series='UNRATE' to get the unemployment rate.",
-      "Call fred-series with series='CPIAUCSL' to get the Consumer Price Index for All Urban Consumers.",
+      "Call fred-series with seriesId='FEDFUNDS' to get the effective federal funds rate.",
+      "Call fred-series with seriesId='UNRATE' to get the unemployment rate.",
+      "Call fred-series with seriesId='CPIAUCSL' to get the Consumer Price Index for All Urban Consumers.",
     ],
     claudePrompt:
       "Get a Fed economic snapshot using Agent402's fred-snapshot skill pack: (1) FEDFUNDS - current rate, (2) UNRATE - unemployment, (3) CPIAUCSL - CPI. Summarize the macro picture: is the Fed tightening or easing, and what does the jobs/inflation combo suggest?",
@@ -2169,12 +2165,12 @@ const SKILL_PACKS_ALL = [
     ],
     toolSlugs: ["whois", "dns-lookup", "tls-cert"],
     workflow: [
-      "Call whois to get registration date, registrar, expiry, and age - domains less than 6 months old are higher risk.",
+      "Call whois to get the domain's age in days, days to expiry, DNSSEC and transfer lock - domains less than 6 months old are higher risk.",
       "Call dns-lookup with host=domain and type='A' to verify the domain resolves to a real IP address.",
       "Call tls-cert with host=domain to check the certificate issuer, validity period, and chain trust.",
     ],
     claudePrompt:
-      "Check the age and legitimacy of google.com using Agent402's domain-age skill pack: (1) whois for registration age and registrar, (2) dns-lookup for A record resolution, (3) tls-cert for certificate validity. Report a trust assessment based on age, DNS health, and cert status.",
+      "Check the age and legitimacy of google.com using Agent402's domain-age skill pack: (1) whois for registration age and expiry, (2) dns-lookup for A record resolution, (3) tls-cert for certificate validity. Report a trust assessment based on age, DNS health, and cert status.",
   },
 
 
@@ -2220,7 +2216,7 @@ const SKILL_PACKS_ALL = [
         // calldata-decode / selector-lookup both failed on every call. A real
         // Base transaction, immutable and public, with real calldata.
         substitute: "0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59" },
-      { name: "network", description: "EVM network (ethereum / base / polygon / arbitrum / optimism, default base)", required: false, substitute: "base" },
+      { name: "network", description: "EVM network, default base. The raw-transaction step (evm-rpc) reads Base only, so on another chain that step answers 400 and the pack returns the steps that ran.", required: false, substitute: "base" },
     ],
     toolSlugs: ["tx-status", "evm-rpc", "calldata-decode", "selector-lookup", "address-label"],
     workflow: [
@@ -2251,7 +2247,7 @@ const SKILL_PACKS_ALL = [
       "Resolve the name to a Wikidata entity with wikidata-entity - the encyclopedic identity: what it is, founding date, headquarters, official website.",
       "Look up the Legal Entity Identifier record with lei-lookup (GLEIF) - the verified legal name, jurisdiction, and registered address.",
       "Find the SEC EDGAR filer with edgar-company-lookup - CIK number and filing history existence (public companies only).",
-      "Pull domain registration with whois - creation date, registrar, and expiry; a week-old domain claiming a decades-old brand is a red flag.",
+      "Pull domain registration with whois - age in days and days to expiry; a week-old domain claiming a decades-old brand is a red flag.",
       "Fingerprint the site's tech-stack - CMS, framework, CDN - the operational footprint.",
       "Grab the favicon with favicon-grab as the brand asset for the dossier card.",
     ],
@@ -2691,7 +2687,7 @@ const WITHOUT_STOCK_COPY = {
     claudePrompt: "Check insider activity for AAPL using Agent402's insider-alert skill pack. Get (1) 30-day insider trades, (2) last 3 SEC filings. Flag any cluster buying or selling and correlate with recent filings.",
   },
   "trend-analysis": {
-    tagline: "Take any numeric time series - a FRED macro indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+    tagline: "Take any numeric time series - a US economic indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase: "You have a question like \"is unemployment trending up - and what does the next year look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data read (macro) is paid.",
     workflow: [
       "Fetch the series: call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
@@ -2960,7 +2956,7 @@ export function skillsIndex(baseUrl) {
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CLAUDE</div>
       <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One tool call, payment handled</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Through MCP a pack is a single tool the model can pick. Ask for the job in words - the connector chooses the pack, settles the payment, and returns the ledger.</p>
-      ${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.16.0
+      ${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0
 
 <span style="color:var(--on-panel-faint);">"run a security audit on example.com"</span>`, { name: "the install command", html: true, wrap: true, size: "xs", style: "margin:0" })}
     </div>
@@ -3150,7 +3146,7 @@ ${packTool ? `
 ${codeBlock(`${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}`, { name: "the client code", html: true, style: "margin-top:12px" })}` : ""}
 
 <h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
-${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.16.0`, { name: "the install command", html: true, style: "margin-top:12px" })}
+${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0`, { name: "the install command", html: true, style: "margin-top:12px" })}
 <p style="color:var(--muted);font-size:var(--fs-base);margin-top:12px;">Then paste this prompt into Claude:</p>
 ${codeBlock(pack.claudePrompt, { name: "the prompt", wrap: true, style: "margin:14px 0" })}
 
@@ -3159,9 +3155,16 @@ ${codeBlock(pack.claudePrompt, { name: "the prompt", wrap: true, style: "margin:
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({
-    title: `${pack.title} -- Agent402 skill pack`,
-    // Leads with the pack name so it differs from the /tools/skill-<pack> copy.
-    description: `${pack.title} skill pack, ${pack.toolSlugs.length} tools in one call: ${pack.tagline}`,
+    title: `${pack.title} | Agent402 skill pack`,
+    // Leads with the pack name so it differs from the /tools/skill-<pack> copy,
+    // and is whole sentences: the tagline when its opening sentence fits,
+    // else what one call of the pack is.
+    description: firstFit([
+      `${pack.title} skill pack: ${pack.tagline}`,
+      packTool
+        ? `${pack.title} skill pack: ${pack.toolSlugs.length} tools run in one call, paid once, with each step's result in one response.`
+        : `${pack.title} skill pack: one workflow over ${pack.toolSlugs.length} Agent402 tools.`,
+    ]),
     canonical: `${baseUrl}/skills/${pack.slug}`,
     baseUrl,
     activePath: "/skills",

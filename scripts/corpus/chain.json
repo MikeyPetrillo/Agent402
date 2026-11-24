@@ -383,15 +383,15 @@
   },
   {
    "slug": "eth-call",
-   "name": "chain id on optimism",
+   "name": "chain id on base",
    "input": {
     "method": "eth_chainId",
     "params": [],
-    "network": "optimism"
+    "network": "base"
    },
    "expect": {
     "equals": {
-     "result": "0xa"
+     "result": "0x2105"
     }
    }
   },
@@ -404,6 +404,18 @@
      "0x00"
     ],
     "network": "base"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "eth-call",
+   "name": "a chain other than base is a 400",
+   "input": {
+    "method": "eth_chainId",
+    "params": [],
+    "network": "optimism"
    },
    "expect": {
     "status": 400
@@ -810,25 +822,6 @@
      "found": false
     }
    }
-  },
-  {
-   "slug": "farcaster-profile",
-   "name": "lookup by username",
-   "input": {
-    "username": "dwr"
-   },
-   "expect": {
-    "equals": {
-     "username": "dwr"
-    },
-    "gt": {
-     "followerCount": 1000
-    },
-    "populated": [
-     "displayName"
-    ]
-   },
-   "requires": "NEYNAR_API_KEY"
   },
   {
    "slug": "wallet-balances",

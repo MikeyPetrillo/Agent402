@@ -1,6 +1,4 @@
 // Crypto signals kit - keyless, deterministic crypto intelligence:
-//   crypto-news          aggregated headlines from the public RSS/Atom feeds
-//                        of major crypto outlets (parsed in-process, no key)
 //   crypto-indicators    RSI / MACD / EMA / SMA / Bollinger / ATR / VWAP
 //                        computed from Hyperliquid perp candles
 //   crypto-market-pulse  one-call market breadth snapshot from Hyperliquid's
@@ -12,15 +10,10 @@
 // sizes, end a stalled read at its deadline (503 naming the step), map upstream 5xx -> 502 and 429 -> 503, and never
 // relay an upstream error body. Every response carries `source` + `fetchedAt`.
 //
-// Feed fetches are cached in-process for 5 minutes per source so call volume
-// never hammers a publisher; one failing feed is reported in `errors[]`, and
-// the call only fails (502) when every requested feed fails.
-//
-// All three tools egress, so they belong in WALLET_ONLY_SLUGS. Offline
+// Both tools egress, so they belong in WALLET_ONLY_SLUGS. Offline
 // coverage: scripts/test-crypto-signals-kit.js (stubbed fetch, fixtures with
 // hand-computed indicator values).
 
-import { markUntrusted } from "./provenance.js";
 import { readBytesCapped, decodeUtf8 } from "../capped-body.js";
 // Read a body under a byte cap: `res.text()` has no cap of its own, so a
 // broken or hostile upstream could push an unbounded buffer into memory once
@@ -40,38 +33,17 @@ const HL_INFO = "https://api.hyperliquid.xyz/info";
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { hlSharedInfo, labelHlStaleness, __hlShared } from "./hyperliquid-shared.js";
+import { creditAnswers, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
 // handler budget; a read that outlives it is a 503 naming the upstream and the
 // step, never a 504. The Hyperliquid reads answered in 0.3 to 0.5 s when
-// measured (2026-10-14); the feeds keep their shorter cap and report per row.
+// measured (2026-10-14).
 const HL_TIMEOUT_MS = 10_000;
-const FEED_TIMEOUT_MS = 6_000;
-export const FEED_TTL_MS = 5 * 60_000;
-const FEED_FAIL_TTL_MS = 60_000;
-// A cached failure older than this is fetched again when it would otherwise
-// make the whole answer a 502: without it, one blip failed every retry for a
-// minute. Still bounded, so an outage costs one fetch per feed per window.
-const FEED_FAIL_RETRY_MS = 10_000;
-const FEED_MAX_BYTES = 2_000_000;
+const BODY_MAX_BYTES = 2_000_000;
 export const META_TTL_MS = 5 * 60_000;
 const MAX_CANDLES = 500;
 const MAX_POINTS = 100;
-const SUMMARY_CHARS = 300;
 const HOURS_PER_YEAR = 24 * 365;
-
-// Public RSS/Atom feeds, each verified live (valid XML, current items) on
-// 2026-08-22. Ids are the buyer-facing `sources` values.
-export const NEWS_SOURCES = {
-  coindesk: { name: "CoinDesk", url: "https://www.coindesk.com/arc/outboundfeeds/rss/", home: "https://www.coindesk.com" },
-  cointelegraph: { name: "Cointelegraph", url: "https://cointelegraph.com/rss", home: "https://cointelegraph.com" },
-  decrypt: { name: "Decrypt", url: "https://decrypt.co/feed", home: "https://decrypt.co" },
-  theblock: { name: "The Block", url: "https://www.theblock.co/rss.xml", home: "https://www.theblock.co" },
-  bitcoinmagazine: { name: "Bitcoin Magazine", url: "https://bitcoinmagazine.com/feed", home: "https://bitcoinmagazine.com" },
-  thedefiant: { name: "The Defiant", url: "https://thedefiant.io/feed", home: "https://thedefiant.io" },
-  blockworks: { name: "Blockworks", url: "https://blockworks.co/feed", home: "https://blockworks.co" },
-  cryptoslate: { name: "CryptoSlate", url: "https://cryptoslate.com/feed/", home: "https://cryptoslate.com" },
-};
-const SOURCE_IDS = Object.keys(NEWS_SOURCES);
 
 // Hyperliquid candle intervals -> milliseconds (their documented set).
 const INTERVALS = {
@@ -134,7 +106,7 @@ async function rawFetch(url, { method = "GET", body, label, timeoutMs, accept, s
     body,
   }, ctx);
   let text = "";
-  try { text = await bodyUnderDeadline(readBodyWithinCap(res, FEED_MAX_BYTES, label), ctx); } catch (err) { if (err?.statusCode) throw err; text = ""; }
+  try { text = await bodyUnderDeadline(readBodyWithinCap(res, BODY_MAX_BYTES, label), ctx); } catch (err) { if (err?.statusCode) throw err; text = ""; }
   if (res.status === 429) throw Object.assign(bad(`${label} rate limit reached upstream - retry shortly`, 503), { rateLimited: true, retryAfter: 5 });
   return { status: res.status, text };
 }
@@ -205,181 +177,6 @@ async function perpMarkets() {
     });
   }
   return rows;
-}
-
-// --- RSS / Atom parsing (dependency-free, linear-time) ----------------------
-const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", rsquo: "\u2019", lsquo: "\u2018", rdquo: "\u201d", ldquo: "\u201c", hellip: "\u2026", mdash: "\u2014", ndash: "\u2013" };
-function decodeEntities(s) {
-  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (m, e) => {
-    if (e[0] === "#") {
-      const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : m;
-    }
-    return Object.hasOwn(ENTITIES, e) ? ENTITIES[e] : m;
-  });
-}
-function unwrapCdata(s) {
-  return s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1");
-}
-function cleanText(raw) {
-  if (!raw) return "";
-  // CDATA first, then entities (a CDATA body may itself carry escaped HTML,
-  // as Cointelegraph/Bitcoin Magazine descriptions do), then strip tags.
-  let s = unwrapCdata(raw);
-  s = decodeEntities(s);
-  s = s.replace(/<[^>]*>/g, " ");
-  s = decodeEntities(s); // entities that were inside the stripped markup's text
-  return s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "").replace(/\s+/g, " ").trim();
-}
-// First <tag>...</tag> child text (namespace-prefixed tags allowed via the
-// `names` list, e.g. "dc:date"). Self-closing tags yield "".
-function childText(block, ...names) {
-  for (const name of names) {
-    const re = new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}\\s*>`, "i");
-    const m = re.exec(block);
-    if (m) return m[1];
-  }
-  return null;
-}
-function attrOf(tag, attr) {
-  const m = new RegExp(`\\s${attr}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i").exec(tag);
-  return m ? decodeEntities(m[2] ?? m[3] ?? "") : null;
-}
-function atomLink(block) {
-  const tags = block.match(/<link\b[^>]*?\/?>/gi) || [];
-  let first = null;
-  for (const t of tags) {
-    const href = attrOf(t, "href");
-    if (!href) continue;
-    const rel = attrOf(t, "rel");
-    if (!rel || rel === "alternate") return href;
-    if (!first) first = href;
-  }
-  return first;
-}
-function toIso(raw) {
-  const s = cleanText(raw);
-  if (!s) return null;
-  const t = Date.parse(s);
-  return Number.isFinite(t) ? new Date(t).toISOString() : null;
-}
-function summarize(text) {
-  if (!text) return "";
-  if (text.length <= SUMMARY_CHARS) return text;
-  const cut = text.slice(0, SUMMARY_CHARS);
-  const sp = cut.lastIndexOf(" ");
-  return (sp > SUMMARY_CHARS * 0.6 ? cut.slice(0, sp) : cut).trim();
-}
-// Canonical article URL: trailing utm_* / tracking params removed, fragment
-// dropped, so the same story seen via two feeds dedupes.
-function canonicalUrl(raw) {
-  const s = cleanText(raw || "");
-  if (!/^https?:\/\//i.test(s)) return null;
-  try {
-    const u = new URL(s);
-    for (const k of [...u.searchParams.keys()]) if (/^(utm_|mc_|ref$|source$)/i.test(k)) u.searchParams.delete(k);
-    u.hash = "";
-    let out = u.toString();
-    if (out.endsWith("?")) out = out.slice(0, -1);
-    return out;
-  } catch { return null; }
-}
-
-// Parses an RSS 2.0 / RSS 1.0 / Atom document into normalized items. Throws
-// (plain Error) when the body is not a feed at all; a feed with zero items is
-// a valid (empty) feed.
-// Some outlets prepend "<Outlet> <Title>" to the description; a summary that
-// repeats the headline is noise, so that prefix is dropped when present.
-function stripTitlePrefix(summary, title, outletName) {
-  let s = summary;
-  for (const prefix of [outletName ? `${outletName} ${title}` : null, title]) {
-    if (prefix && s.startsWith(prefix)) { s = s.slice(prefix.length).trim(); break; }
-  }
-  return s;
-}
-
-export function parseFeed(text, outletName = null) {
-  const body = String(text || "").replace(/^\uFEFF/, "");
-  // Strip to a FIXED POINT: a single pass leaves a nested "<!--<!-- -->" behind,
-  // which would let a hostile body hide the real root element from this sniff.
-  let head = body.slice(0, 4096).replace(/<\?xml[\s\S]*?\?>/i, "").replace(/<!DOCTYPE[^>]*>/i, "");
-  for (let i = 0; i < 8; i++) {
-    const next = head.replace(/<!--[\s\S]*?-->/g, "");
-    if (next === head) break;
-    head = next;
-  }
-  head = head.trimStart();
-  const isAtom = /^<feed[\s>]/i.test(head);
-  const isRss = /^<rss[\s>]/i.test(head) || /^<rdf:RDF[\s>]/i.test(head);
-  if (!isAtom && !isRss) throw new Error("not a valid RSS/Atom feed");
-  const blocks = body.match(isAtom ? /<entry[\s>][\s\S]*?<\/entry\s*>/gi : /<item[\s>][\s\S]*?<\/item\s*>/gi) || [];
-  const items = [];
-  for (const b of blocks) {
-    const title = cleanText(childText(b, "title"));
-    const url = isAtom
-      ? canonicalUrl(atomLink(b))
-      : canonicalUrl(childText(b, "link") ?? atomLink(b) ?? "");
-    const publishedAt = isAtom
-      ? toIso(childText(b, "published", "updated"))
-      : toIso(childText(b, "pubDate", "dc:date", "date"));
-    const summaryRaw = isAtom
-      ? childText(b, "summary", "content")
-      : childText(b, "description", "content:encoded");
-    if (!title || !url) continue;
-    items.push({ title, url, publishedAt, summary: summarize(stripTitlePrefix(cleanText(summaryRaw), title, outletName)) });
-  }
-  return items;
-}
-
-// --- feed cache + fetch ------------------------------------------------------
-const feedCache = new Map(); // id -> { at, items, error }
-// In-flight map so a burst arriving on a cold or just-expired cache makes ONE
-// request per publisher, not one per caller: without it, N concurrent callers
-// fan out N times across every feed, which is how an egress IP gets blocked.
-const feedInFlight = new Map();
-
-async function loadFeed(id, { retryFailure = false } = {}) {
-  const hit = feedCache.get(id);
-  const now = Date.now();
-  const ttl = hit?.error ? (retryFailure ? FEED_FAIL_RETRY_MS : FEED_FAIL_TTL_MS) : FEED_TTL_MS;
-  if (hit && now - hit.at < ttl) return { ...hit, cached: true };
-  const pending = feedInFlight.get(id);
-  if (pending) return pending.then((e) => ({ ...e, cached: true }));
-  const p = fetchFeed(id).finally(() => feedInFlight.delete(id));
-  feedInFlight.set(id, p);
-  return p.then((e) => ({ ...e, cached: false }));
-}
-
-async function fetchFeed(id) {
-  const now = Date.now();
-  const src = NEWS_SOURCES[id];
-  let entry;
-  try {
-    const { status, text } = await rawFetch(src.url, {
-      label: src.name, timeoutMs: FEED_TIMEOUT_MS, step: "feed",
-      accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
-    });
-    if (status >= 400) throw bad(`HTTP ${status}`, status >= 500 ? 502 : 422);
-    if (text.length > FEED_MAX_BYTES) throw bad("feed larger than the 2MB cap", 422);
-    const items = parseFeed(text, src.name).map((it) => ({ ...it, source: id }));
-    entry = { at: now, items, error: null };
-  } catch (err) {
-    const reason = err?.statusCode ? err.message : "not a valid RSS/Atom feed";
-    console.warn(`[crypto-signals] feed ${id} failed: ${reason}`);
-    entry = { at: now, items: [], error: reason };
-  }
-  feedCache.set(id, entry);
-  return entry;
-}
-
-function queryTerms(raw) {
-  if (raw == null || raw === "") return [];
-  if (typeof raw !== "string") throw bad('"query" must be a string of keywords');
-  const s = raw.trim();
-  if (s.length > 200) throw bad('"query" must be at most 200 characters');
-  const terms = s.toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length > 10) throw bad('"query" must be at most 10 keywords');
-  return terms;
 }
 
 // --- indicator math (pure; exported for the offline test) ------------------
@@ -496,102 +293,6 @@ const tail = (arr, n) => arr.slice(Math.max(0, arr.length - n));
 
 // --- Tools ----------------------------------------------------------------
 const CRYPTO_SIGNALS_TOOLS_RAW = [
-  // ===========================================================================
-  // crypto-news - aggregated headlines from public outlet feeds.
-  // ===========================================================================
-  {
-    route: "POST /api/crypto-news",
-    name: "Crypto news headlines",
-    slug: "crypto-news",
-    category: "crypto",
-    price: "$0.001",
-    description:
-      `Latest crypto headlines aggregated from the public RSS/Atom feeds of ${SOURCE_IDS.length} major outlets (${SOURCE_IDS.join(", ")}), normalized to title, url, source, publishedAt and a plain-text summary, deduplicated by URL and sorted newest first. Optional keyword filter on title + summary (all keywords must match, or match=any), source subset, time window (hours, max 168) and limit (max 50). Feeds are cached 5 minutes; a feed that fails is listed in errors[] and never blocks the rest. No key, no LLM.`,
-    tags: ["crypto", "news", "headlines", "rss", "bitcoin", "ethereum", "defi", "signals"],
-    discovery: {
-      bodyType: "json",
-      input: { query: "bitcoin", limit: 10 },
-      inputSchema: {
-        properties: {
-          query: { type: "string", maxLength: 200, description: "Optional keywords (space-separated, max 10); matched case-insensitively against title + summary." },
-          match: { type: "string", description: "all (default): every keyword must appear; any: at least one." },
-          sources: { type: "array", items: { type: "string" }, description: `Optional subset of source ids: ${SOURCE_IDS.join(", ")}.` },
-          hours: { type: "number", description: "Only items published within the last N hours (default 48, max 168)." },
-          limit: { type: "number", description: "Items to return (default 20, max 50)." },
-        },
-        required: [],
-      },
-      output: {
-        example: {
-          source: "rss",
-          query: "bitcoin",
-          match: "all",
-          hours: 48,
-          count: 2,
-          items: [
-            { title: "Bitcoin holds above a key level as ETF inflows resume", url: "https://www.coindesk.com/markets/2026/08/22/example", source: "coindesk", sourceName: "CoinDesk", publishedAt: "2026-08-22T12:00:00.000Z", summary: "Spot ETF inflows returned for a third day while funding stayed neutral." },
-            { title: "Miners add hashrate ahead of the next difficulty adjustment", url: "https://decrypt.co/123456/example", source: "decrypt", sourceName: "Decrypt", publishedAt: "2026-08-22T10:30:00.000Z", summary: "Network hashrate set a new high this week." },
-          ],
-          sources: [{ id: "coindesk", name: "CoinDesk", items: 25, matched: 1, cached: false }],
-          errors: [],
-          fetchedAt: "2026-08-22T12:05:00.000Z",
-        },
-      },
-    },
-    handler: async (i = {}) => {
-      const terms = queryTerms(i.query);
-      const match = i.match == null || i.match === "" ? "all" : String(i.match).toLowerCase();
-      if (match !== "all" && match !== "any") throw bad('"match" must be "all" or "any"');
-      const ids = takeList(i.sources, "sources", SOURCE_IDS, SOURCE_IDS.length) || SOURCE_IDS;
-      const hours = takeInt(i.hours, "hours", 48, 1, 168);
-      const limit = takeInt(i.limit, "limit", 20, 1, 50);
-
-      let loaded = await Promise.all(ids.map((id) => loadFeed(id).then((r) => ({ id, ...r }))));
-      if (loaded.every((l) => l.error) && loaded.some((l) => l.cached)) {
-        loaded = await Promise.all(loaded.map((l) => (l.cached ? loadFeed(l.id, { retryFailure: true }).then((r) => ({ id: l.id, ...r })) : l)));
-      }
-      const errors = loaded.filter((l) => l.error).map((l) => ({ source: l.id, error: l.error }));
-      if (errors.length === loaded.length) throw bad("Every requested news feed failed - try again shortly", 502);
-
-      const since = Date.now() - hours * 3_600_000;
-      const seen = new Set();
-      const all = [];
-      const perSource = [];
-      for (const l of loaded) {
-        let matched = 0;
-        for (const it of l.items) {
-          if (!it.publishedAt || Date.parse(it.publishedAt) < since) continue;
-          if (terms.length) {
-            const hay = `${it.title} ${it.summary}`.toLowerCase();
-            const hit = match === "all" ? terms.every((t) => hay.includes(t)) : terms.some((t) => hay.includes(t));
-            if (!hit) continue;
-          }
-          if (seen.has(it.url)) continue;
-          seen.add(it.url);
-          matched++;
-          all.push({ ...it, sourceName: NEWS_SOURCES[l.id].name });
-        }
-        perSource.push({ id: l.id, name: NEWS_SOURCES[l.id].name, items: l.items.length, matched, cached: !!l.cached, ...(l.error ? { error: l.error } : {}) });
-      }
-      all.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || a.url.localeCompare(b.url));
-      const items = all.slice(0, limit).map((it) => ({
-        title: it.title, url: it.url, source: it.source, sourceName: it.sourceName, publishedAt: it.publishedAt, summary: it.summary,
-      }));
-      return {
-        source: "rss",
-        query: terms.length ? terms.join(" ") : null,
-        match,
-        hours,
-        count: items.length,
-        totalMatched: all.length,
-        items,
-        sources: perSource,
-        errors,
-        fetchedAt: nowIso(),
-      };
-    },
-  },
-
   // ===========================================================================
   // crypto-indicators - RSI/MACD/EMA/SMA/Bollinger/ATR/VWAP from perp candles.
   // ===========================================================================
@@ -722,6 +423,9 @@ const CRYPTO_SIGNALS_TOOLS_RAW = [
 ];
 // An answer built from a stale shared read says so in fields.
 export const CRYPTO_SIGNALS_TOOLS = labelHlStaleness(CRYPTO_SIGNALS_TOOLS_RAW);
+// crypto-indicators and crypto-market-pulse read Hyperliquid's public info
+// API alone, credited by name and link on every answer (src/data-attribution.js).
+for (const t of CRYPTO_SIGNALS_TOOLS) if (t.slug === "crypto-indicators" || t.slug === "crypto-market-pulse") creditAnswers(t, HYPERLIQUID_ATTRIBUTION);
 
 // --- pure assembly (exported for the offline test) -------------------------
 export function computeIndicators(candles, want, points) {
@@ -882,22 +586,8 @@ export function marketPulse(rows, { limit, minVolumeUsd }) {
 export const __test = {
   HL_INFO,
   INTERVALS,
-  resetCaches: () => { metaCache = { at: 0, names: null }; feedCache.clear(); __hlShared.clear(); },
-  feedCacheSize: () => feedCache.size,
-  cleanText,
-  canonicalUrl,
+  resetCaches: () => { metaCache = { at: 0, names: null }; __hlShared.clear(); },
 };
-
-// Free text in these results is written by third parties (headlines, posts,
-// casts, token names and descriptions, page titles). Anyone can mint a token or
-// publish a post, so this is the cheapest prompt-injection delivery vehicle in
-// the catalog: flag it as data, never instructions, the way site-crawl does.
-const UNTRUSTED_TEXT_SLUGS = new Set(["crypto-news"]);
-for (const t of CRYPTO_SIGNALS_TOOLS) {
-  if (!UNTRUSTED_TEXT_SLUGS.has(t.slug)) continue;
-  const inner = t.handler;
-  t.handler = async (...args) => markUntrusted(await inner(...args));
-}
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(CRYPTO_SIGNALS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

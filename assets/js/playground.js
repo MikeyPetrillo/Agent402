@@ -3,6 +3,7 @@
   var BASE=wrapEl?(wrapEl.getAttribute('data-base')||''):'';
   var tools=[];
   var toolMap={};
+  var full={};
   var selEl=document.getElementById('pgSelect');
   var searchEl=document.getElementById('pgSearch');
   var formEl=document.getElementById('pgForm');
@@ -12,12 +13,15 @@
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  /* --- load catalog (embedded at render time via the pg-tools-data JSON
-     island; see playgroundPage) --- */
+  /* --- load the picker's index and the opening tool (embedded at render
+     time via the pg-tools-data JSON island; see playgroundPage). Any other
+     tool's form data is fetched from the page's toolPath when it is picked. --- */
+  var toolPath='';
   (function loadCatalog(){
     var dataEl=document.getElementById('pg-tools-data');
-    var data=dataEl?JSON.parse(dataEl.textContent):[];
-    tools=(data||[]).slice().sort(function(a,b){
+    var data=dataEl?JSON.parse(dataEl.textContent):{};
+    toolPath=(data&&data.toolPath)||'';
+    tools=((data&&data.index)||[]).slice().sort(function(a,b){
       if(a.category<b.category)return -1;
       if(a.category>b.category)return 1;
       var an=(a.name||a.slug||'');
@@ -27,16 +31,32 @@
     tools.forEach(function(t){toolMap[t.slug]=t});
     /* The picker lists the free-tier tools only: those are the ones this page
        can run. A deep link to a paid tool still shows its form and price. */
-    tools=tools.filter(function(t){return t.computePayable});
+    var open=data&&data.tool;
+    if(open&&open.slug){toolMap[open.slug]=open;full[open.slug]=true}
     renderSelect(tools);
-    var want=null;
-    try{
-      var params=new URLSearchParams(window.location.search);
-      want=params.get('slug');
-    }catch(e){}
-    var def=(want&&toolMap[want])||toolMap['hash']||tools[0];
-    if(def){selEl.value=def.slug;showTool(def.slug,true)}
+    if(open&&open.slug){selEl.value=open.slug;showTool(open.slug,true)}
   })();
+
+  /* A tool's full entry (route, price, schema), fetched once and kept. */
+  function withTool(slug,done){
+    if(full[slug]){done(toolMap[slug]);return}
+    while(formEl.firstChild)formEl.removeChild(formEl.firstChild);
+    var wait=document.createElement('div');
+    wait.className='pg-status';
+    wait.textContent='Loading the tool...';
+    formEl.appendChild(wait);
+    fetch(BASE+toolPath+'/'+encodeURIComponent(slug)).then(function(r){
+      if(!r.ok)throw new Error('Could not load the tool ('+r.status+')');
+      return r.json();
+    }).then(function(t){
+      toolMap[slug]=t;full[slug]=true;
+      if(selEl.value===slug)done(t);
+    }).catch(function(e){
+      if(selEl.value!==slug)return;
+      wait.className='pg-status err';
+      wait.textContent=e.message||String(e);
+    });
+  }
 
   function renderSelect(list){
     var cats={};
@@ -79,8 +99,9 @@
 
   /* --- show tool form --- */
   function showTool(slug, skipUrl){
+    if(!toolMap[slug]){while(formEl.firstChild)formEl.removeChild(formEl.firstChild);return}
+    if(!full[slug]){withTool(slug,function(){showTool(slug,skipUrl)});return}
     var t=toolMap[slug];
-    if(!t){while(formEl.firstChild)formEl.removeChild(formEl.firstChild);return}
 
     if(!skipUrl){
       try{

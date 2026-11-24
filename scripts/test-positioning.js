@@ -9,7 +9,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LEAD_SENTENCE, CATEGORY_LINE, SUPPORT_LINE, leadSentence } from "../src/positioning.js";
+import { LEAD_SENTENCE, CATEGORY_LINE, SUPPORT_LINE, leadSentence, categoryLine } from "../src/positioning.js";
 import { receiptsServed } from "../src/receipt-signing.js";
 import { ledgerHomePage } from "../src/ledger-home.js";
 import { llmsTxt } from "../src/seo.js";
@@ -26,25 +26,35 @@ const read = (p) => readFileSync(join(ROOT, p), "utf8");
 const mdText = (s) => String(s).replace(/\[([^\]\n]*)\]\([^)\s]*\)/g, "$1").replace(/\*\*/g, "").replace(/\s+/g, " ");
 
 // --- the sentence itself ---------------------------------------------------------
-// The owner's line, word for word, restored once every paid path is signed
-// (src/receipt-signing.js): the payment and trust layer leads, and the
-// catalog's size is the supporting line, never the lead.
-const APPROVED = "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one.";
+// The owner's line, its receipt clause scoped to what is signed
+// (src/receipt-signing.js; a /ref/ copy, a plain stream and a failed call are not):
+// the payment and trust layer leads, and the catalog's size is the
+// supporting line, never the lead.
+const APPROVED = "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls.";
 ok(LEAD_SENTENCE === APPROVED, "the published lead sentence is the approved line, word for word");
+// The receipt clause claims only what is signed (src/receipt-signing.js): a
+// settled 200 (so not a failed or charged-failed call, a free or trial answer)
+// on a direct route (not a /ref/ copy); a stream that cannot carry its receipt
+// gets it fetchable at GET /api/receipt/<token>. No "every" over calls.
+ok(/\bsigned receipts on successful direct calls\.$/.test(LEAD_SENTENCE) && !/\bevery\b|\beach one\b/.test(LEAD_SENTENCE), "the receipt clause is scoped to successful direct calls");
 ok(!/\d/.test(LEAD_SENTENCE.replace(/x402|Agent402/g, "")) && !/tools|catalog/i.test(LEAD_SENTENCE), "the lead sentence carries no catalog size and no tool count");
 ok(SUPPORT_LINE === "500+ ready tools on the same rails.", "the catalog is the supporting line, evergreen 500+");
 ok(!/—/.test(LEAD_SENTENCE + CATEGORY_LINE + SUPPORT_LINE), "no em dash in the lead, the category line or the supporting line");
-ok(leadSentence({ mpp: false }).includes("every paid call to Agent402, across x402, with a signed receipt for each one.") && !/MPP/.test(leadSentence({ mpp: false })), "with MPP off the sentence offers x402 alone");
+ok(leadSentence({ mpp: false }).includes("paid calls to Agent402, across x402, with signed receipts on successful direct calls.") && !/MPP/.test(leadSentence({ mpp: false })), "with MPP off the sentence offers x402 alone");
 ok(leadSentence({ receipts: false }) === "Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402 across x402 and MPP." && !/every paid call/.test(leadSentence({ receipts: false })), "with no signing key the sentence drops the signed-receipt clause and claims no receipt for every call");
 ok(!/signed receipt/.test(leadSentence({ mpp: false, receipts: false })) && /across x402\.$/.test(leadSentence({ mpp: false, receipts: false })), "MPP off and receipts off: x402 alone, no receipt clause");
 ok(receiptsServed() === false, "control: this offline process loads no signing key, so the served surfaces below render the key-off line");
 ok(/^[A-Z][^.]*\.$/.test(CATEGORY_LINE) && !/Agentic Finance|AIFI/.test(CATEGORY_LINE), "the category line is one plain sentence, not the category acronym");
+ok(/\bx402 and MPP\b/.test(CATEGORY_LINE) && categoryLine({ mpp: false }) === "Payments and trust for AI agents, over x402." , "the category line names the wires (x402, and MPP only while it is offered)");
 
 // --- home page: h1 is the category line, the lede is the sentence ----------------
 {
   const html = ledgerHomePage("https://agent402.tools", {}, {}, {}, []);
   const h1 = (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || "";
   ok(pageText(h1).trim() === CATEGORY_LINE, `home h1 is the category line (got "${pageText(h1).trim()}")`);
+  const noMpp = ledgerHomePage("https://agent402.tools", {}, {}, {}, [], { mpp: false });
+  const h1NoMpp = pageText((noMpp.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || "").trim();
+  ok(h1NoMpp === categoryLine({ mpp: false }) && !/MPP/.test(h1NoMpp), `with MPP off the home h1 offers x402 alone ("${h1NoMpp}")`);
   const lede = (html.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "";
   ok(pageText(stripInlineTags(lede)).trim() === leadSentence({ receipts: false }), "home hero lede is the lead sentence, word for word (no signing key: no receipt clause)");
   const signed = ledgerHomePage("https://agent402.tools", {}, {}, {}, [], { receipts: true });
@@ -88,7 +98,7 @@ for (const mpp of [true, false]) {
 ok(mcpServerDescription() === HOSTED_DESC && HOSTED_DESC === STDIO_DESC, "the default description is the published one, identical to the stdio package's");
 {
   const src = read("src/mcp-http.js");
-  ok(/description: mcpServerDescription\(\{ mpp: payWires \? Boolean\(payWires\.mpp\) : mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\) \}\)/.test(src), "the hosted connector's description reads the mount's pay wires (the MPP switch without them) and the receipt switch");
+  ok(/description: mcpServerDescription\(\{ mpp: payWires \? Boolean\(payWires\.mpp\) : mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\), stock: stockDataEnabled\(\) \}\)/.test(src), "the hosted connector's description reads the mount's pay wires (the MPP switch without them) and the receipt switch");
   // The initialize lead names MPP from the mount's own pay wires (the boot's
   // account, src/connector-pay.js), and from the MPP switch on a mount given none.
   ok(/mppOffered: payWires \? Boolean\(payWires\.mpp\) : mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\) \}/.test(src), "the hosted connector's initialize lead reads the mount's pay wires (the MPP switch without them) and the receipt switch");
@@ -122,6 +132,26 @@ for (const file of ["CHANGELOG.md", "src/changelog.js"]) {
 {
   const reg = JSON.parse(read("mcp/server.json")).description;
   ok(/^Payment and trust layer for agentic commerce/.test(reg) && reg.length <= 100 && !/\d+\+? (agent |ready )?tools/.test(reg), `mcp/server.json description leads with the layer, no tool count, 100 characters at most (${reg.length})`);
+}
+
+// /company names the product it operates in its title and h1, and the wires in its description.
+{
+  const { companyPage } = await import("../src/company.js");
+  const html = companyPage("https://agent402.tools");
+  const title = (html.match(/<title>([^<]*)<\/title>/) || [])[1] || "";
+  const h1 = pageText((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || "").trim();
+  const desc = (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  ok(/Havok Holdings LLC/.test(title) && /Agent402/.test(title) && /Havok Holdings LLC/.test(h1) && /Agent402/.test(h1), `/company title and h1 name the company and Agent402 ("${title}" / "${h1}")`);
+  ok(/payment and trust layer for agentic commerce/.test(desc), "/company description states the layer");
+  // The wires follow the MPP switch, as the home h1 does.
+  const keep = process.env.MPP_SECRET_KEY;
+  const descOf = () => (companyPage("https://agent402.tools").match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  process.env.MPP_SECRET_KEY = "test-mpp-secret";
+  const on = descOf();
+  delete process.env.MPP_SECRET_KEY;
+  const off = descOf();
+  if (keep === undefined) delete process.env.MPP_SECRET_KEY; else process.env.MPP_SECRET_KEY = keep;
+  ok(/over x402 and MPP,/.test(on) && /over x402,/.test(off) && !/MPP/.test(off), `/company names MPP only while MPP is offered ("${off.slice(0, 120)}")`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

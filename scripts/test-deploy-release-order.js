@@ -139,6 +139,41 @@ ok(clawAt > registryAt && npmAt.every((i) => i < clawAt), "ClawHub runs after ev
   ok(steps.filter((s) => s["continue-on-error"]).length === 1, "the ClawHub step is the only publish step that continues on error");
 }
 
+// npm trusted publishing (OIDC): every package goes out from the publish job
+// on a short-lived credential npm exchanges for the job's GitHub OIDC token,
+// with provenance. No job reads a long-lived npm token, the publish job holds
+// id-token: write and nothing broader, runs in the environment the trusted
+// publisher on npmjs.com names, upgrades npm to an exact version that can
+// make the exchange, and probes every package it publishes.
+{
+  const { readdirSync, existsSync } = await import("node:fs");
+  const job = wf.jobs?.publish || {};
+  const steps = job.steps || [];
+  const raw = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const live = raw.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  ok(!/secrets\.NPM_TOKEN|NODE_AUTH_TOKEN\s*:/.test(live), "no job reads a long-lived npm token (secrets.NPM_TOKEN) or sets NODE_AUTH_TOKEN");
+  ok(JSON.stringify(job.permissions) === JSON.stringify({ contents: "read", "id-token": "write" }), `the publish job holds id-token: write and contents: read only (${JSON.stringify(job.permissions)})`);
+  ok(Object.entries(wf.jobs || {}).every(([n, j]) => n === "publish" || !JSON.stringify(j.permissions || {}).includes("id-token")), "no other job in the workflow holds id-token");
+  ok(job.environment === "agent402 / production", "the publish job runs in the environment its trusted publishers name");
+  const upgrade = steps.find((st) => /npm install -g npm@/.test(String(st.run || "")));
+  const pinned = /npm install -g npm@(\d+)\.(\d+)\.(\d+) --ignore-scripts/.exec(String(upgrade?.run || ""));
+  const atLeast = pinned && (Number(pinned[1]) > 11 || (Number(pinned[1]) === 11 && (Number(pinned[2]) > 5 || (Number(pinned[2]) === 5 && Number(pinned[3]) >= 1))));
+  ok(!!atLeast, `npm is upgraded to an exact version that makes the OIDC exchange (>= 11.5.1, scripts off): ${pinned ? pinned.slice(1).join(".") : "none"}`);
+  ok(steps.some((st) => /sed -i\.bak '\/_authToken\/d'/.test(String(st.run || ""))), "the preflight strips an empty token line, so npm reaches the exchange");
+  // The packages: every publishable package.json, each with a provenance publish step and in the probe.
+  const root = new URL("../", import.meta.url);
+  const dirs = ["mcp", "tollbooth", "client", "openclaw", ...readdirSync(new URL("adapters/", root)).map((d) => `adapters/${d}`)]
+    .filter((d) => existsSync(new URL(`${d}/package.json`, root)))
+    .filter((d) => !JSON.parse(readFileSync(new URL(`${d}/package.json`, root), "utf8")).private);
+  const publishDirs = steps.filter((st) => /\bnpm publish\b/.test(String(st.run || ""))).map((st) => (/^\s*cd (\S+)/m.exec(String(st.run || "")) || [])[1]).filter(Boolean);
+  ok(dirs.length >= 10 && dirs.every((d) => publishDirs.includes(d)), `every publishable package has a publish step (${dirs.length} packages; missing ${dirs.filter((d) => !publishDirs.includes(d)).join(",") || "none"})`);
+  ok(steps.filter((st) => /\bnpm publish\b/.test(String(st.run || ""))).every((st) => String(st.run).split("\n").filter((l) => /\bnpm publish\b/.test(l) && !/^\s*#/.test(l)).every((l) => /npm publish --provenance\b/.test(l))), "every npm publish carries --provenance");
+  const probe = /for DIR in ([^;]+); do/.exec(steps.map((st) => String(st.run || "")).join("\n"));
+  const probeDirs = probe ? probe[1].trim().split(/\s+/) : [];
+  const probes = (d) => probeDirs.includes(d) || (d.startsWith("adapters/") && probeDirs.includes("adapters/*/"));
+  ok(publishDirs.length > 0 && publishDirs.every(probes), `the trusted-publisher probe reads every directory a publish step enters (${probeDirs.join(" ")}; missing ${publishDirs.filter((d) => !probes(d)).join(",") || "none"})`);
+}
+
 // The consumer-install audit reads the npm registry and its advisory feed, so
 // it runs in the publish gate only (a release), never in a lane the deploy
 // waits on: a new upstream advisory or an unreadable registry never holds a

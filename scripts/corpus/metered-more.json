@@ -61,23 +61,6 @@
       }
     },
     {
-      "slug": "code-run",
-      "name": "python arithmetic on the base tier",
-      "input": {
-        "code": "print(6*7)",
-        "language": "python"
-      },
-      "requires": "E2B_API_KEY",
-      "expect": {
-        "matches": {
-          "stdout": "42"
-        },
-        "falsy": [
-          "error"
-        ]
-      }
-    },
-    {
       "slug": "embed-large",
       "name": "a second text",
       "input": {
@@ -249,19 +232,6 @@
       }
     },
     {
-      "slug": "farcaster-by-address",
-      "name": "an address with no farcaster account is found:false",
-      "input": {
-        "address": "0x000000000000000000000000000000000000dEaD"
-      },
-      "requires": "NEYNAR_API_KEY",
-      "expect": {
-        "equals": {
-          "found": false
-        }
-      }
-    },
-    {
       "slug": "nft-holdings",
       "name": "a wallet with nfts on ethereum",
       "input": {
@@ -351,25 +321,6 @@
       }
     },
     {
-      "slug": "fred-release-observations",
-      "name": "a different release",
-      "input": {
-        "releaseId": 10,
-        "startDate": "2026-01-01",
-        "endDate": "2026-03-01"
-      },
-      "requires": "FRED_API_KEY",
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "releaseName",
-          "series[0]"
-        ]
-      }
-    },
-    {
       "slug": "fred-series",
       "name": "monthly unrate, one year",
       "input": {
@@ -377,7 +328,6 @@
         "startDate": "2025-01-01",
         "endDate": "2025-12-31"
       },
-      "requires": "FRED_API_KEY",
       "expect": {
         "gte": {
           "count": 11
@@ -396,7 +346,6 @@
       "input": {
         "seriesId": "ZZQXNOPE"
       },
-      "requires": "FRED_API_KEY",
       "expect": {
         "status": 404
       }
@@ -405,7 +354,6 @@
       "slug": "sahm-rule",
       "name": "value and threshold populated",
       "input": {},
-      "requires": "FRED_API_KEY",
       "expect": {
         "populated": [
           "date",
@@ -1350,7 +1298,6 @@
         "q": "stablec",
         "count": 3
       },
-      "requires": "BRAVE_SUGGEST_API_KEY",
       "expect": {
         "minCount": {
           "suggestions": 1

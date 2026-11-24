@@ -1,9 +1,10 @@
 // Web-content kit — link-level web utilities for agents: Wayback Machine
-// snapshot lookup (archive-snapshot), RSS/Atom feed parsing (feed-parse), and
+// snapshot links (archive-snapshot), RSS/Atom feed parsing (feed-parse), and
 // redirect-chain resolution (unshorten-url).
 //
-// Every upstream is KEYLESS — no new env vars. All three tools reach the
-// network and live in WALLET_ONLY_SLUGS.
+// Every upstream is KEYLESS — no new env vars. feed-parse and unshorten-url
+// reach the network; archive-snapshot computes its link and reaches none. All
+// three are in WALLET_ONLY_SLUGS.
 //
 // SSRF: feed-parse fetches a caller URL and rides safeFetch/assertPublicUrl
 // end-to-end. unshorten-url follows a caller URL's redirect chain manually —
@@ -11,11 +12,8 @@
 // and every connect (including any transparent hop) goes through
 // ssrfDispatcher's guardedLookup, so a public URL that redirects into a
 // private address is blocked at the hop, not just at the front door.
-// archive-snapshot only ever connects to fixed public archive hosts —
-// archive.org, or its Memento-aggregator fallback memgator.cs.odu.edu (the
-// caller URL rides as a query parameter / path segment, it is never fetched)
-// — but still parses/validates it and rides the guarded dispatcher by
-// convention.
+// archive-snapshot connects to nothing: it validates the caller URL and
+// answers the Wayback Machine link for it.
 //
 // Parsing is pure and deterministic (jsdom DOMParser, the same XML path
 // xml-to-json uses in kit.js) — no LLM anywhere.
@@ -24,8 +22,9 @@
 // checks opt-in via WEB_LIVE_TEST=1).
 
 import { runHtml } from "./html-pool.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { ssrfDispatcher, safeFetch, assertPublicUrl, isSsrfBlock, retryTransient } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 
 // A tool fetching for its caller says so (src/user-agents.js).
 import { FETCH_UA as USER_AGENT } from "../user-agents.js";
@@ -53,51 +52,15 @@ function takeUrl(raw) {
 }
 
 // ============================================================================
-// archive-snapshot — Wayback Machine availability API (keyless), with ODU's
-// MemGator Memento aggregator as a diverse fallback.
+// archive-snapshot — the Wayback Machine link for a URL, computed here: the
+// archive is not asked whether it holds a capture (no egress), so the answer
+// says so (available null, checked false). Opening the link, the Wayback
+// Machine serves the capture closest to the timestamp in it, or the most
+// recent one for "2" (any capture from the year 2000 on is closer than none).
 // ============================================================================
-// DEADLINES (src/upstream-deadline.js): each archive read under its own cap
-// (Wayback 12 s, Memento 20 s, as before) and the route's payment-window
-// budget, since Wayback answered in 9.2 s cold and 0.3 s warm when measured
-// (2026-10-14); a read that outlives its cap is a 503 naming the upstream and
-// the step, never a 504.
-const WAYBACK_TIMEOUT_MS = 12_000;
-const MEMENTO_TIMEOUT_MS = 20_000;
-
-async function waybackAvailable(url, timestamp) {
-  const api = new URL("https://archive.org/wayback/available");
-  api.searchParams.set("url", url);
-  if (timestamp) api.searchParams.set("timestamp", timestamp);
-  const ctx = { label: "Wayback Machine", step: "availability", timeoutMs: WAYBACK_TIMEOUT_MS, tag: "[archive-snapshot]" };
-  noteHostRequest(String(api), "fetch");
-  const res = await upstreamFetch(api, { headers: { Accept: "application/json", "User-Agent": USER_AGENT }, dispatcher: ssrfDispatcher }, ctx);
-  if (res.status === 429) throw bad("Wayback Machine rate limit reached - retry shortly", 503);
-  if (!res.ok) throw bad(`Wayback Machine error (HTTP ${res.status})`, 502);
-  try { return await bodyUnderDeadline(res.json(), ctx); } catch (err) { if (err?.statusCode) throw err; throw bad("Wayback Machine returned non-JSON", 502); }
-}
-
-// Fallback: MemGator at memgator.cs.odu.edu — a public Memento aggregator
-// (same API family as the retired timetravel.mementoweb.org, which is NXDOMAIN
-// as of 2026-07 — verified live) fanning out to ~13 web archives
-// (archive.today, arquivo.pt, Perma.cc, several national libraries, and
-// archive.org itself). Diverse infrastructure: even with archive.org fully
-// down it answers from the other archives. Quirks, all verified live
-// 2026-07-21: its front-end merges consecutive slashes so a scheme-carrying
-// URI-R 404s — the scheme must be stripped; a datetime path segment is
-// REQUIRED (current UTC time = "closest to now" = most recent) and must be an
-// even-length YYYY[MM[DD[hh[mm[ss]]]]] prefix; response datetimes are ISO
-// 8601; the archived HTTP status is not exposed (→ snapshot.status null). A
-// MemGator 404 means "no archive holds a memento", not an outage → null.
-async function mementoClosest(url, timestamp) {
-  const ts = timestamp || new Date().toISOString().replace(/\D/g, "").slice(0, 14);
-  const dt = ts.slice(0, ts.length - (ts.length % 2));
-  const bare = url.replace(/^https?:\/\//i, "");
-  const ctx = { label: "Memento aggregator", step: "closest memento", timeoutMs: MEMENTO_TIMEOUT_MS, tag: "[archive-snapshot]" };
-  noteHostRequest("https://memgator.cs.odu.edu/", "fetch");
-  const res = await upstreamFetch(`https://memgator.cs.odu.edu/memento/json/${dt}/${bare}`, { headers: { Accept: "application/json", "User-Agent": USER_AGENT }, dispatcher: ssrfDispatcher }, ctx);
-  if (res.status === 404) return null;
-  if (!res.ok) throw bad(`Memento aggregator error (HTTP ${res.status})`, 502);
-  try { return await bodyUnderDeadline(res.json(), ctx); } catch (err) { if (err?.statusCode) throw err; throw bad("Memento aggregator returned non-JSON", 502); }
+export const ARCHIVE_LINK_NOTE = "A link, not a lookup: the archive was not asked whether it holds a capture.";
+export function waybackLink(url, timestamp) {
+  return `https://web.archive.org/web/${timestamp || "2"}/${url}`;
 }
 
 // ============================================================================
@@ -146,15 +109,15 @@ export const WEB_TOOLS = [
     category: "web",
     price: "$0.003",
     description:
-      "Look up a URL in the Internet Archive's Wayback Machine: returns the archived snapshot closest to an optional timestamp (default: most recent), with the snapshot URL, capture time, and archived HTTP status. Useful for citations, dead-link recovery, and checking what a page said at a point in time. URLs never archived return {available:false}.",
+      "Build the Internet Archive Wayback Machine link for a URL: snapshot.url opens the capture closest to an optional timestamp (default: the most recent). The link is computed here without querying the archive, so available is null and checked is false; opened, the Wayback Machine picks the capture or says the URL was never archived. For citations and dead-link recovery.",
     tags: ["web", "archive", "wayback", "snapshot", "history", "citation", "research"],
     discovery: {
       bodyType: "json",
       input: { url: "https://example.com" },
       inputSchema: {
         properties: {
-          url: { type: "string", maxLength: 2048, description: "The URL to look up in the Wayback Machine" },
-          timestamp: { type: "string", description: "Optional target time, 4-14 digits (YYYY, YYYYMM, YYYYMMDD, … up to YYYYMMDDhhmmss) - returns the snapshot closest to it" },
+          url: { type: "string", maxLength: 2048, description: "The URL to build the Wayback Machine link for" },
+          timestamp: { type: "string", description: "Optional target time, 4-14 digits (YYYY, YYYYMM, YYYYMMDD, … up to YYYYMMDDhhmmss) - the link opens the capture closest to it" },
         },
         required: ["url"],
       },
@@ -162,9 +125,11 @@ export const WEB_TOOLS = [
         example: {
           url: "https://example.com",
           requestedTimestamp: null,
-          available: true,
-          snapshot: { url: "http://web.archive.org/web/20260101000000/https://example.com/", timestamp: "20260101000000", status: "200" },
+          available: null,
+          checked: false,
+          snapshot: { url: "https://web.archive.org/web/2/https://example.com", timestamp: null, status: null },
           source: "web.archive.org",
+          note: ARCHIVE_LINK_NOTE,
         },
       },
     },
@@ -175,82 +140,16 @@ export const WEB_TOOLS = [
         timestamp = String(i.timestamp).trim();
         if (!/^\d{4,14}$/.test(timestamp)) throw bad('"timestamp" must be 4-14 digits (e.g. 2020, 202001, 20200115)');
       }
-      let data;
-      try {
-        data = await waybackAvailable(url, timestamp);
-      } catch (err) {
-        console.warn(`[archive-snapshot] archive.org failed (${err.message}) - falling back to memgator.cs.odu.edu`);
-        let m;
-        try {
-          m = await mementoClosest(url, timestamp);
-        } catch (err2) {
-          // Both archives down: keep the Wayback error's status and its
-          // class fields (attribution, kind, upstreamFailure) and carry both
-          // causes in the message.
-          throw Object.assign(bad(`${err.message}; Memento fallback also failed: ${err2.message}`, err.statusCode || 502),
-            ...(err.attribution ? [{ attribution: err.attribution }] : []), ...(typeof err.hint === "string" ? [{ hint: err.hint }] : []), ...(err.upstreamFailure ? [{ upstreamFailure: err.upstreamFailure }] : []));
-        }
-        const mClosest = m?.mementos?.closest;
-        const mAvailable = typeof mClosest?.uri === "string" && mClosest.uri.length > 0;
-        return {
-          url,
-          requestedTimestamp: timestamp,
-          available: mAvailable,
-          snapshot: mAvailable
-            ? {
-                url: mClosest.uri,
-                // ISO 8601 → Wayback's 14-digit form, matching the primary path.
-                timestamp: mClosest.datetime ? mClosest.datetime.replace(/\D/g, "").slice(0, 14) : null,
-                status: null,
-              }
-            : null,
-          source: "memgator.cs.odu.edu",
-        };
-      }
-      const closest = data?.archived_snapshots?.closest;
-      const available = closest?.available === true && typeof closest?.url === "string";
-      if (!available) {
-        // An EMPTY Wayback answer is not "never archived": the availability
-        // API returns `archived_snapshots: {}` under load and answered exactly
-        // that for wikipedia.org@2015 on the 2026-09-07 nightly (5.1 s, a 200),
-        // while the same query answers a 2015-12-31 capture on retry. So an
-        // empty answer asks the Memento aggregator before it is believed; a
-        // memento found there is the answer, and only two archives agreeing
-        // on "nothing" reads as not archived - named as such in `source`.
-        let m = null, mementoAsked = false;
-        try { m = await mementoClosest(url, timestamp); mementoAsked = true; }
-        catch (err) { console.warn(`[archive-snapshot] archive.org answered empty and memgator failed (${err.message}) - answering empty`); }
-        const mClosest = m?.mementos?.closest;
-        if (typeof mClosest?.uri === "string" && mClosest.uri.length > 0) {
-          return {
-            url,
-            requestedTimestamp: timestamp,
-            available: true,
-            snapshot: {
-              url: mClosest.uri,
-              timestamp: mClosest.datetime ? mClosest.datetime.replace(/\D/g, "").slice(0, 14) : null,
-              status: null,
-            },
-            source: "memgator.cs.odu.edu",
-          };
-        }
-        return {
-          url,
-          requestedTimestamp: timestamp,
-          available: false,
-          snapshot: null,
-          source: mementoAsked ? "web.archive.org+memgator.cs.odu.edu" : "web.archive.org",
-          note: mementoAsked
-            ? "neither web.archive.org nor the Memento aggregator (13 archives) holds a capture"
-            : "web.archive.org holds no capture and the Memento aggregator could not be reached",
-        };
-      }
+      // The same keys as the lookup this replaced; what only a lookup knows
+      // (whether a capture exists, its time and archived status) reads null.
       return {
         url,
         requestedTimestamp: timestamp,
-        available,
-        snapshot: { url: closest.url, timestamp: closest.timestamp ?? null, status: closest.status ?? null },
+        available: null,
+        checked: false,
+        snapshot: { url: waybackLink(url, timestamp), timestamp: null, status: null },
         source: "web.archive.org",
+        note: ARCHIVE_LINK_NOTE,
       };
     },
   },
@@ -293,6 +192,7 @@ export const WEB_TOOLS = [
     handler: async (i) => {
       const url = takeUrl(i.url);
       const limit = Math.min(Math.max(parseInt(i.limit, 10) || FEED_DEFAULT_ITEMS, 1), FEED_MAX_ITEMS);
+      await assertRobotsAllow(url);
       // One retry on a transient 502/503/504 - added 2026-08-12 after
       // feed-parse hit exactly this shape live in CI (a plain 15s timeout on
       // a caller-supplied feed URL, zero retries previously). Safe for a

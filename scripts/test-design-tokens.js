@@ -241,7 +241,7 @@ function checkControlsAndFocus() {
   ok(/\.on-panel :focus-visible[^{]*\.ml-code :focus-visible[^{]*\{ outline-color: var\(--accent-lit\) !important; \}/.test(css), "on a panel or a code block the ring is --accent-lit");
   ok(/\.btn-secondary \{[^}]*border-color:var\(--control\)/.test(css) && /\.mfb-sel,\.mfb-search\{[^}]*border:1px solid var\(--control\)/.test(css), "the outlined button and the shared filter fields are bounded by --control");
   ok(/:where\(input:not\([^)]*\), select, textarea\) \{ border-color: var\(--control\); \}/.test(css), "a field with no page rule is bounded by --control");
-  ok(/<body[^>]*><!--email_off-->\n<a class="ml-skip" href="#main">Skip to content<\/a>\n\$\{nav\(activePath\)\}\n<main id="main" tabindex="-1">/.test(css), "the shell's first focusable element is the skip link to <main id=main>");
+  ok(/<body[^>]*><!--email_off-->\n<a class="ml-skip" href="#main">Skip to content<\/a>\n\$\{minimal \? minimalHeader\(\) : nav\(activePath\)\}\n<main id="main" tabindex="-1">/.test(css), "the shell's first focusable element is the skip link to <main id=main>");
   ok(/\.ml-skip:focus \{ top: 12px; \}/.test(css), "the skip link shows when it has focus");
   ok(/\.ml-nav-link \{ display: inline-block; min-height: 24px;/.test(css) && /\.ml-foot-links > a \{[^}]*min-height: 24px; min-width: 24px;/.test(css), "nav and footer links are at least 24px targets");
   // Code blocks: the shared component, and no hand-made <pre> in the modules that moved to it.

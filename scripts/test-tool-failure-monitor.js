@@ -764,6 +764,35 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       m.noteFacilitatorRefusal({ network: NET, facilitator: "x", reason: "Out of mainnet settlement funds" });
       assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "refused");
     });
+    await check("gas: low clears only at the floor plus the clear margin, so a runway that moves with the gas price does not flap the word", async () => {
+      const d = gasCheckSettings({});
+      assert.equal(d.clearMargin, 0.2, "default clear margin is a fifth of the floor");
+      assert.equal(gasCheckSettings({ FACILITATOR_GAS_CLEAR_MARGIN: "0.5" }).clearMargin, 0.5);
+      assert.equal(gasCheckSettings({ FACILITATOR_GAS_CLEAR_MARGIN: "nope" }).clearMargin, 0.2, "a malformed value keeps the default");
+      const c = clock();
+      const s2 = { ...settings, clearMargin: 0.2 };
+      const own = "0x" + "ef".repeat(20);
+      const g = createRelayerGasCheck({ urls: [FAC], network: NET, rpcUrl: RPC, settings: s2, now: c.now, ownSigners: [{ label: "own relayer", signer: own }] });
+      const word = async () => (await g.check()).map((r) => r.status);
+      chain.gasPrice = 20_000_000n; chain.down = false;
+      chain.balance = PER * 550n;
+      assert.deepEqual(await word(), ["ok", "ok"], "above the floor from the start reads ok");
+      chain.balance = PER * 499n;
+      assert.deepEqual(await word(), ["low", "low"], "under the floor reads low");
+      chain.balance = PER * 500n;
+      assert.deepEqual(await word(), ["low", "low"], "back at the floor stays low");
+      chain.balance = PER * 599n;
+      assert.deepEqual(await word(), ["low", "low"], "under the floor plus the margin stays low");
+      // The gas price moves the runway: a price fall alone does not clear it
+      // until the runway passes the margin.
+      chain.balance = PER * 499n; chain.gasPrice = 16_000_000n; // runway 623
+      assert.deepEqual(await word(), ["ok", "ok"], "at the floor plus the margin it reads ok again");
+      chain.gasPrice = 20_000_000n; chain.balance = PER * 520n;
+      assert.deepEqual(await word(), ["ok", "ok"], "once ok, a runway over the floor stays ok");
+      chain.balance = PER * 499n;
+      assert.deepEqual(await word(), ["low", "low"], "and under the floor reads low again");
+      chain.gasPrice = 20_000_000n;
+    });
     await check("gas: one failed read keeps the last reading; repeated failures read unread (unknown), never low and never a silent ok", async () => {
       const c = clock();
       const m = createToolFailureMonitor({ now: c.now, env: {} });
@@ -842,6 +871,14 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       }
       m.noteRelayerGas([theirs({ status: "unread", runway: null }), ours()]);
       assert.equal(await word(), "ok", "their unreadable signer is covered too");
+      // Our relayer settles only sales at or over its minimum: when that is
+      // over the lowest price sold on the chain, the cheapest sales still need
+      // the facilitator, so its empty wallet is not covered and pages low.
+      m.noteRelayerGas([theirs(), ours({ coversLowestPrice: false })]);
+      assert.equal(await word(), "low", "a relayer minimum over the lowest price sold: not covered");
+      assert.equal(m.evaluate().relayerGas.find((r) => r.facilitator === "f.example")?.coveredByOwnRelayer, undefined, "the row is not marked covered");
+      m.noteRelayerGas([theirs(), ours({ coversLowestPrice: true })]);
+      assert.equal(await word(), "ok", "a relayer minimum at or under the lowest price sold: covered");
       m.noteRelayerGas([theirs(), ours({ status: "low", runway: 40 })]);
       assert.equal(await word(), "low", "ours low: not covered");
       assert.equal((await m.status({ fresh: true, full: true })).facilitatorFunds.relayersCovered, 0, "ours low: their wallet is not counted as covered");
@@ -933,6 +970,27 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       await f.check(20_000_000n);
       assert.equal(logs.length, 2, "no line while the state holds");
     });
+    await check("floor gas: near the floor clears only once the gas is the clear margin under the alarm share", async () => {
+      const c = clock();
+      let eth = 3500;
+      const f = createFloorGasCheck({ network: NET, floorUsd: () => 0.006, readEthUsd: async () => eth, settings: { ...floorSettings, clearMargin: 0.2 }, now: c.now, log: () => {} });
+      assert.equal(floorGasSettings({}).clearMargin, 0.2, "the floor alarm shares the clear margin's default");
+      assert.equal((await f.check(20_000_000n)).status, "low");
+      eth = 2500; // 71% of the floor: under the 80% share, over 80% / 1.2
+      let r = await f.check(20_000_000n);
+      assert.equal(r.status, "low", `just under the share stays low (${r.sharePct}%)`);
+      assert.equal(r.reason, "gasNearFloor");
+      eth = 2200; // 62.6%
+      assert.equal((await f.check(20_000_000n)).status, "ok", "under the share by the margin reads ok");
+      eth = 2500;
+      assert.equal((await f.check(20_000_000n)).status, "ok", "once ok, under the share stays ok");
+      // One unknown reading between two lows does not reset the band.
+      eth = 3500;
+      assert.equal((await f.check(20_000_000n)).status, "low");
+      assert.equal((await f.check(null)).status, "unknown", "a gas price that could not be read is unknown");
+      eth = 2500;
+      assert.equal((await f.check(20_000_000n)).status, "low", "after one unknown reading a low still clears only past the margin");
+    });
     await check("floor gas: a failed ETH price read keeps the last good price, then reads unknown (never a page by itself)", async () => {
       const c = clock();
       const m = createToolFailureMonitor({ now: c.now, env: {} });
@@ -963,8 +1021,16 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       const bare = await (await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], schedule: false, readEthUsd: async () => 5000 }))();
       assert.equal(bare.find((x) => x.facilitator === "price floor"), undefined, JSON.stringify(bare));
       toolFailureMonitor()._reset();
-      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], ownSigners: [{ label: "own relayer", signer: "0x" + "cd".repeat(20) }], schedule: false, readEthUsd: async () => 5000 });
+      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], ownSigners: [{ label: "own relayer", signer: "0x" + "cd".repeat(20), coversLowestPrice: () => false }], schedule: false, readEthUsd: async () => 5000 });
       const r = await tick();
+      assert.equal(r.find((x) => x.own)?.coversLowestPrice, false, "the relayer's reading carries whether it covers the lowest price sold");
+      {
+        const { ownRelayerCoversLowestPrice } = await import("../src/payments.js");
+        const cat = { "GET /api/a": { slug: "a", price: "$0.001" }, "GET /api/b": { slug: "b", price: "$0.05" }, "POST /v1/x": { slug: "x", price: "dynamic", quote: () => 0.01 } };
+        assert.equal(ownRelayerCoversLowestPrice(cat, NET, { relayerMinUsd: 0.004, env: {} }), false, "a $0.001 sale under a $0.004 minimum");
+        assert.equal(ownRelayerCoversLowestPrice(cat, NET, { relayerMinUsd: 0.004, env: { ROBINHOOD_MIN_PRICE_USD: "0.004" } }), true, "the chain's floor lifts the lowest sale to the minimum");
+        assert.equal(ownRelayerCoversLowestPrice(cat, NET, { relayerMinUsd: 0, env: {} }), true, "a zero minimum covers every price");
+      }
       const floorRow = r.find((x) => x.facilitator === "price floor");
       assert.ok(floorRow && floorRow.status === "low" && floorRow.reason === "gasNearFloor" && floorRow.floorUsd === 0.004, JSON.stringify(r));
       assert.equal((await toolFailureMonitor().status({ fresh: true })).facilitatorFunds.status, "low");

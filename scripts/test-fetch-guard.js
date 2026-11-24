@@ -151,6 +151,11 @@ console.log("\nfetch-guard: all attribution assertions passed");
 console.log("\nmedia-kit fail-fast on non-media Content-Type:");
 
 const { MEDIA_TOOLS } = await import("../src/tools/media-kit.js");
+// The robots gate reads robots.txt through its own seam here (an empty file,
+// so nothing is disallowed): the mocked fetch below answers one response
+// object, which a robots.txt read would use up before the media read.
+const robotsGate = await import("../src/tools/robots-gate.js");
+robotsGate.__test.setFetchRobots(async () => "");
 const mediaInfo = MEDIA_TOOLS.find((t) => t.slug === "media-info");
 if (!mediaInfo) fail("media-info tool not found in MEDIA_TOOLS");
 
@@ -192,6 +197,8 @@ await withMockedFetch(fakeResponse({ status: 200, contentType: "application/octe
 ok("media-info does NOT pre-reject application/octet-stream (lets ffprobe decide)");
 
 console.log("\nmedia-kit fail-fast: all assertions passed");
+robotsGate.__test.setFetchRobots(null);
+robotsGate.__test.clear();
 
 // ---------------------------------------------------------------------------
 // SSRF guard invariants (security audit D1): every private / loopback /

@@ -28,10 +28,8 @@ import { subcentAcceptVerdict } from "./avm-canary-classify.js";
 import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
-import { examplePngBase64 } from "../src/tools/judge-preview-kit.js";
 // The Jev version the paid judge is pinned to (src/tools/judge-kit.js JEV_PINNED).
 const JEV_PINNED_VERSION = (process.env.JEV_MODEL || "jev-1.14.0").trim();
-const EXAMPLE_PNG = examplePngBase64();
 
 // A failed leg names the network cause too: undici reports a bare "fetch
 // failed" and keeps the code and host in e.cause.
@@ -488,32 +486,6 @@ export const TOOLS = [
       `expected a scored answer from jev or gpt-6-luna, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
-    // Jev preview routes (2026-10-15): an image question on the pinned
-    // version, and locate on the preview release, against the published
-    // example image (a red square on white).
-    kit: "judge-vision",
-    path: "/v1/judge/vision",
-    method: "POST",
-    body: { images: { picture: { format: "png", data_base64: EXAMPLE_PNG } }, questions: { has_red: { type: "noul", instructions: "Does `picture` contain a red shape?" } } },
-    priceUsd: 0.003,
-    check: (r) =>
-      (r.preview === true && r.model === JEV_PINNED_VERSION && r.answers?.has_red?.noul > 0.5) ||
-      `expected a preview noul above 0.5 from ${JEV_PINNED_VERSION}, got ${JSON.stringify(r).slice(0, 160)}`,
-  },
-  {
-    kit: "judge-locate",
-    path: "/v1/judge/locate",
-    method: "POST",
-    body: { image: { format: "png", data_base64: EXAMPLE_PNG }, targets: ["the red square"] },
-    priceUsd: 0.002,
-    // The square spans 0.6-0.9 across and 0.57-0.83 down; the box must land on it.
-    check: (r) => {
-      const t = r.results?.[0], b = t?.box;
-      return (r.preview === true && t?.found === true && b && b.left > 0.5 && b.right < 0.97 && b.top > 0.45 && b.bottom < 0.92) ||
-        `expected the red square found inside its true edges, got ${JSON.stringify(r).slice(0, 200)}`;
-    },
-  },
-  {
     // OpenAI's Decisions wire (2026-10-08): gpt-6-luna first, Jev as the
     // fallback, answers in the Decisions shape.
     kit: "decisions",
@@ -820,7 +792,7 @@ async function baseUsdcBalanceUsd(address) {
  *  Stellar and Algorand legs use separate wallets/signers and are out of
  *  scope here. Token addresses + RPC chains mirror src/revenue-live.js. */
 export const CHAIN_FUNDING = [
-  { key: "polygon", label: "Polygon", token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", rpcs: ["https://polygon.drpc.org"] },
+  { key: "polygon", label: "Polygon", token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", rpcs: ["https://polygon-bor-rpc.publicnode.com"] },
   { key: "arbitrum", label: "Arbitrum", token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", rpcs: ["https://arb1.arbitrum.io/rpc"] },
   { key: "monad", label: "Monad", token: "0x754704bc059f8c67012fed69bc8a327a5aafb603", rpcs: ["https://rpc.monad.xyz", "https://rpc2.monad.xyz"] },
   { key: "celo", label: "Celo", token: "0xceba9300f2b948710d2653dd7b07f33a8b32118c", rpcs: ["https://forno.celo.org"] },

@@ -392,7 +392,7 @@ async function one(base, label, opts) {
   const p = await newPayment(base, opts);
   const before = settles; logCalls = 0; rpcCalls = 0;
   const r = await send(base, p);
-  ok(settles === before + 1, `${label}: settled exactly once (${settles - before})`);
+  ok(settles === before + 1, `${label}: settled exactly once (${settles - before}; answered ${r.status}${r.replayed ? " replayed" : ""}: ${r.body.slice(0, 160)})`);
   return { ...r, p };
 }
 
@@ -457,9 +457,15 @@ try {
     const before = settles;
     const [x, y] = await Promise.all([send(baseX, p), send(baseY, p)]);
     settleDelayMs = 0;
-    const wins = [x, y].filter((q) => q.status === 200);
-    ok(wins.length === 1, `${label}: exactly one 200 (statuses ${x.status}, ${y.status})`);
-    ok(wins.every((q) => q.receipt?.transaction === p.tx), `${label}: the answer names the payment's own tx`);
+    // "Concurrent" is a wish under load: the second request can arrive after
+    // the first has answered, and is then answered from that first answer by
+    // the shared idempotency store (marked, byte-identical), which settles
+    // nothing. That is the same allowance the plain resend below has. So one
+    // answer settles and wins; any other 200 must be that replay of it.
+    const wins = [x, y].filter((q) => q.status === 200 && !q.replayed);
+    const replays = [x, y].filter((q) => q.status === 200 && q.replayed);
+    ok(wins.length === 1 && replays.every((q) => q.body === wins[0].body), `${label}: exactly one 200 that is not a replay of it (statuses ${x.status}${x.replayed ? " replayed" : ""}, ${y.status}${y.replayed ? " replayed" : ""})`);
+    ok([...wins, ...replays].every((q) => q.receipt?.transaction === p.tx), `${label}: the answer names the payment's own tx`);
     ok(settles - before <= 2, `${label}: settle calls ${settles - before}`);
   }
   await concurrent("two concurrent replays", A, A, "on-chain");

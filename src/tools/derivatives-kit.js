@@ -1,7 +1,6 @@
-// Derivatives kit - crypto perpetuals and options market data from public,
-// keyless APIs. Perp data (funding, open interest, mark/oracle, candles,
-// order book, predicted funding) comes from the Hyperliquid info API; options
-// data (index, DVOL, book summaries, tickers) from Deribit's public API.
+// Derivatives kit - crypto perpetuals market data from a public, keyless API.
+// Perp data (funding, open interest, mark/oracle, candles, order book,
+// predicted funding) comes from the Hyperliquid info API.
 //
 // Every handler validates its inputs (400), bounds list sizes (limit <= 500),
 // ends a read at its deadline as a 503 naming the upstream and the step
@@ -14,10 +13,11 @@
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { hlSharedInfo, labelHlStaleness, HL_HISTORY_TTL_MS, __hlShared } from "./hyperliquid-shared.js";
+import { creditAnswers, HYPERLIQUID_ATTRIBUTION } from "../data-attribution.js";
+import { markResaleCleared } from "../resale-terms.js";
 // The reads answered in 0.1 to 1 s when measured (2026-10-14).
 const TIMEOUT_MS = 10_000;
 const HL_INFO = "https://api.hyperliquid.xyz/info";
-const DERIBIT = "https://www.deribit.com/api/v2/public";
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 
 const MAX_LIMIT = 500;
@@ -58,36 +58,9 @@ function takeCoinInput(raw) {
   return s;
 }
 
-function takeCurrency(raw, dflt = "BTC") {
-  if (raw == null || raw === "") return dflt;
-  if (typeof raw !== "string") throw bad('"currency" must be a string (e.g. "BTC", "ETH")');
-  const s = raw.trim().toUpperCase();
-  if (!/^[A-Z]{2,8}$/.test(s)) throw bad('"currency" must be a 2-8 letter code such as "BTC" or "ETH"');
-  return s;
-}
-
-const EXPIRY_RE = /^\d{1,2}[A-Z]{3}\d{2}$/;
-function takeExpiry(raw) {
-  if (raw == null || raw === "") return null;
-  if (typeof raw !== "string") throw bad('"expiry" must be a string like "26DEC26"');
-  const s = raw.trim().toUpperCase();
-  if (!EXPIRY_RE.test(s)) throw bad('"expiry" must look like "26DEC26" (DDMMMYY, as Deribit names it)');
-  return s;
-}
-
-function takeInstrument(raw) {
-  if (typeof raw !== "string" || !raw.trim()) throw bad('"instrument" is required (e.g. "BTC-PERPETUAL" or "BTC-26DEC26-100000-C")');
-  const s = raw.trim().toUpperCase();
-  if (s.length > 40 || !/^[A-Z0-9_]{2,12}(-[A-Z0-9_.]{1,14}){1,4}$/.test(s)) {
-    throw bad('"instrument" must be a Deribit instrument name such as "BTC-PERPETUAL" or "ETH-27MAR26-3000-P"');
-  }
-  return s;
-}
-
 // --- egress -----------------------------------------------------------------
-// One transport wrapper for all three upstreams. Returns { status, text } so
-// the per-source helpers can interpret non-2xx bodies (Deribit puts its error
-// in a 400 JSON envelope, Hyperliquid answers 500 "null" for unknown coins).
+// One transport wrapper. Returns { status, text } so the helpers can read
+// non-2xx bodies (Hyperliquid answers 500 "null" for unknown coins).
 async function rawFetch(url, { method = "GET", body, label, step = "data" }) {
   const ctx = { label, step, timeoutMs: TIMEOUT_MS, tag: "[derivatives]" };
   const res = await upstreamFetch(url, {
@@ -130,28 +103,6 @@ async function hlInfoDirect(payload) {
   const json = parseJson(trimmed, "Hyperliquid");
   if (json == null) throw bad("Hyperliquid has no market for that coin", 422);
   return json;
-}
-
-// Deribit public JSON-RPC over GET. Their 400 envelope carries
-// {error:{code, data:{reason, param}}}; we map invalid params to 422 with a
-// short allowlisted reason, never the raw body.
-async function deribit(method, params = {}) {
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v != null) qs.set(k, String(v));
-  const url = `${DERIBIT}/${method}${qs.toString() ? `?${qs}` : ""}`;
-  const { status, text } = await rawFetch(url, { label: "Deribit", step: "public method" });
-  if (status >= 500) throw bad(`Deribit upstream HTTP ${status} - try again later`, 502);
-  const json = parseJson(text, "Deribit");
-  if (json && json.error) {
-    const reason = String(json.error?.data?.reason || "");
-    const param = String(json.error?.data?.param || "");
-    const safeReason = /^[a-z ]{1,40}$/.test(reason) ? reason : "invalid params";
-    const safeParam = /^[a-z_]{1,30}$/.test(param) ? ` (${param})` : "";
-    throw bad(`Deribit rejected the request: ${safeReason}${safeParam}`, 422);
-  }
-  if (status >= 400) throw bad("Deribit rejected the request", 422);
-  if (json == null || !("result" in json)) throw bad("Deribit returned an unexpected response shape", 502);
-  return json.result;
 }
 
 // --- Hyperliquid helpers ----------------------------------------------------
@@ -332,113 +283,6 @@ const fundingView = (hourly) => ({
   per8h: hourly == null ? null : round(hourly * 8, 8),
   aprPct: hourly == null ? null : round(hourly * HOURS_PER_YEAR * 100, 4),
 });
-
-// --- Deribit helpers ----------------------------------------------------------
-const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
-function expiryToTs(exp) {
-  const m = /^(\d{1,2})([A-Z]{3})(\d{2})$/.exec(exp || "");
-  if (!m || !(m[2] in MONTHS)) return null;
-  // Deribit options expire 08:00 UTC on the named day.
-  return Date.UTC(2000 + Number(m[3]), MONTHS[m[2]], Number(m[1]), 8, 0, 0);
-}
-const OPTION_NAME_RE = /^([A-Z0-9_]+)-(\d{1,2}[A-Z]{3}\d{2})-(\d+(?:d\d+)?)-([CP])$/;
-function parseOptionName(name) {
-  const m = OPTION_NAME_RE.exec(String(name || ""));
-  if (!m) return null;
-  return { underlying: m[1], expiry: m[2], strike: Number(m[3].replace("d", ".")), type: m[4] === "C" ? "call" : "put" };
-}
-
-function optionRow(s) {
-  const parsed = parseOptionName(s.instrument_name) || {};
-  return {
-    instrument: s.instrument_name,
-    expiry: parsed.expiry ?? null,
-    strike: parsed.strike ?? null,
-    type: parsed.type ?? null,
-    bid: num(s.bid_price),
-    ask: num(s.ask_price),
-    mark: num(s.mark_price),
-    markIv: num(s.mark_iv),
-    openInterest: num(s.open_interest),
-    volume24h: num(s.volume),
-    volume24hUsd: num(s.volume_usd),
-    underlyingPrice: num(s.underlying_price),
-  };
-}
-
-function summarizeOptions(list) {
-  let callOi = 0, putOi = 0, oiUsd = 0, volUsd = 0, volBase = 0, count = 0;
-  const expiries = new Map();
-  for (const s of list) {
-    const p = parseOptionName(s.instrument_name);
-    if (!p) continue;
-    count++;
-    const oi = num(s.open_interest) || 0;
-    const und = num(s.underlying_price) || num(s.estimated_delivery_price) || 0;
-    if (p.type === "call") callOi += oi; else putOi += oi;
-    oiUsd += oi * und;
-    volUsd += num(s.volume_usd) || 0;
-    volBase += num(s.volume) || 0;
-    const e = expiries.get(p.expiry) || { expiry: p.expiry, ts: expiryToTs(p.expiry), openInterest: 0, volume24hUsd: 0, instruments: 0 };
-    e.openInterest += oi;
-    e.volume24hUsd += num(s.volume_usd) || 0;
-    e.instruments++;
-    expiries.set(p.expiry, e);
-  }
-  const byExpiry = [...expiries.values()].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0)).map((e) => ({
-    expiry: e.expiry,
-    expiresAt: e.ts ? new Date(e.ts).toISOString() : null,
-    openInterest: round(e.openInterest, 4),
-    volume24hUsd: round(e.volume24hUsd, 2),
-    instruments: e.instruments,
-  }));
-  return {
-    instruments: count,
-    callOpenInterest: round(callOi, 4),
-    putOpenInterest: round(putOi, 4),
-    totalOpenInterest: round(callOi + putOi, 4),
-    putCallOiRatio: callOi > 0 ? round(putOi / callOi, 4) : null,
-    openInterestUsd: round(oiUsd, 2),
-    volume24hBase: round(volBase, 4),
-    volume24hUsd: round(volUsd, 2),
-    expiries: byExpiry,
-  };
-}
-
-function tickerView(t) {
-  const stats = t?.stats || {};
-  return {
-    instrument: t.instrument_name,
-    state: t.state ?? null,
-    markPrice: num(t.mark_price),
-    lastPrice: num(t.last_price),
-    bestBid: num(t.best_bid_price),
-    bestAsk: num(t.best_ask_price),
-    bestBidAmount: num(t.best_bid_amount),
-    bestAskAmount: num(t.best_ask_amount),
-    indexPrice: num(t.index_price),
-    underlyingPrice: num(t.underlying_price),
-    underlyingIndex: t.underlying_index ?? null,
-    openInterest: num(t.open_interest),
-    markIv: num(t.mark_iv),
-    bidIv: num(t.bid_iv),
-    askIv: num(t.ask_iv),
-    greeks: t.greeks && typeof t.greeks === "object"
-      ? { delta: num(t.greeks.delta), gamma: num(t.greeks.gamma), vega: num(t.greeks.vega), theta: num(t.greeks.theta), rho: num(t.greeks.rho) }
-      : null,
-    currentFunding: num(t.current_funding),
-    funding8h: num(t.funding_8h),
-    settlementPrice: num(t.settlement_price),
-    stats: {
-      high24h: num(stats.high),
-      low24h: num(stats.low),
-      priceChange24hPct: num(stats.price_change),
-      volume24h: num(stats.volume),
-      volume24hUsd: num(stats.volume_usd),
-    },
-    timestamp: t.timestamp ? new Date(t.timestamp).toISOString() : null,
-  };
-}
 
 // --- Tools ----------------------------------------------------------------
 const DERIVATIVES_TOOLS_RAW = [
@@ -1079,235 +923,12 @@ const DERIVATIVES_TOOLS_RAW = [
       };
     },
   },
-
-  // ===========================================================================
-  // options-summary - Deribit: index, DVOL, options OI/volume, perpetual.
-  // ===========================================================================
-  {
-    route: "POST /api/options-summary",
-    name: "Options market summary",
-    slug: "options-summary",
-    category: "crypto",
-    price: "$0.005",
-    description:
-      "One-call options market summary for a currency on Deribit: index price, the DVOL implied-volatility index, call and put open interest with put/call ratio, total open interest in coins and USD, 24h volume, per-expiry open interest and volume, the top instruments by open interest, and the perpetual's mark, funding and open interest. BTC and ETH carry the deep books; other currencies return whatever Deribit lists. Keyless public data.",
-    tags: ["crypto", "derivatives", "options", "implied-volatility", "dvol", "open-interest", "deribit"],
-    discovery: {
-      bodyType: "json",
-      input: { currency: "BTC" },
-      inputSchema: {
-        properties: {
-          currency: { type: "string", maxLength: 8, description: "BTC (default), ETH, or another Deribit currency code." },
-        },
-        required: [],
-      },
-      output: {
-        example: {
-          source: "deribit",
-          currency: "BTC",
-          indexPrice: 77232.62,
-          dvol: { value: 41.74, time: "2026-08-22T11:00:00.000Z" },
-          options: {
-            instruments: 900, callOpenInterest: 150000, putOpenInterest: 110000, putCallOiRatio: 0.733, totalOpenInterest: 260000,
-            openInterestUsd: 20000000000, volume24hBase: 12000, volume24hUsd: 900000000,
-            expiries: [{ expiry: "26AUG26", expiresAt: "2026-08-26T08:00:00.000Z", openInterest: 12000, volume24hUsd: 5000000, instruments: 60 }],
-            topByOpenInterest: [{ instrument: "BTC-25SEP26-120000-P", expiry: "25SEP26", strike: 120000, type: "put", openInterest: 174.5, markIv: 62.03, volume24hUsd: 0 }],
-          },
-          perpetual: { instrument: "BTC-PERPETUAL", markPrice: 77263.43, funding8h: 0.000195, currentFunding: 0.000149, openInterest: 903679080, volume24hUsd: 664803850 },
-          fetchedAt: "2026-08-22T12:00:00.000Z",
-        },
-      },
-    },
-    handler: async (i = {}) => {
-      const currency = takeCurrency(i.currency);
-      const now = Date.now();
-      const [indexRes, bookRes, dvolRes, perpRes] = await Promise.allSettled([
-        deribit("get_index_price", { index_name: `${currency.toLowerCase()}_usd` }),
-        deribit("get_book_summary_by_currency", { currency, kind: "option" }),
-        deribit("get_volatility_index_data", { currency, start_timestamp: now - 3 * 3_600_000, end_timestamp: now, resolution: 3600 }),
-        deribit("ticker", { instrument_name: `${currency}-PERPETUAL` }),
-      ]);
-      // The option book is the load-bearing call; the other three degrade to null.
-      if (bookRes.status === "rejected") throw bookRes.reason;
-      const book = Array.isArray(bookRes.value) ? bookRes.value : [];
-      const summary = summarizeOptions(book);
-      const top = book
-        .filter((s) => parseOptionName(s.instrument_name))
-        .sort((a, b) => (num(b.open_interest) || 0) - (num(a.open_interest) || 0))
-        .slice(0, 10)
-        .map((s) => { const r = optionRow(s); return { instrument: r.instrument, expiry: r.expiry, strike: r.strike, type: r.type, openInterest: r.openInterest, markIv: r.markIv, volume24hUsd: r.volume24hUsd }; });
-      let dvol = null;
-      if (dvolRes.status === "fulfilled" && Array.isArray(dvolRes.value?.data) && dvolRes.value.data.length) {
-        const last = dvolRes.value.data[dvolRes.value.data.length - 1];
-        dvol = { value: num(last?.[4]), time: last?.[0] ? new Date(Number(last[0])).toISOString() : null };
-      }
-      let perpetual = null;
-      if (perpRes.status === "fulfilled" && perpRes.value) {
-        const t = perpRes.value;
-        perpetual = {
-          instrument: t.instrument_name,
-          markPrice: num(t.mark_price),
-          funding8h: num(t.funding_8h),
-          currentFunding: num(t.current_funding),
-          openInterest: num(t.open_interest),
-          volume24hUsd: num(t.stats?.volume_usd),
-        };
-      }
-      return {
-        source: "deribit",
-        currency,
-        indexPrice: indexRes.status === "fulfilled" ? num(indexRes.value?.index_price) : null,
-        dvol,
-        options: { ...summary, topByOpenInterest: top },
-        perpetual,
-        fetchedAt: nowIso(),
-      };
-    },
-  },
-
-  // ===========================================================================
-  // options-chain - strikes for one expiry (nearest by default).
-  // ===========================================================================
-  {
-    route: "POST /api/crypto-options-chain",
-    name: "Options chain by expiry",
-    slug: "crypto-options-chain",
-    category: "crypto",
-    price: "$0.004",
-    description:
-      "Options chain for a currency and expiry on Deribit, sorted by strike: instrument, strike, call/put, bid, ask, mark, mark IV, open interest, 24h volume and underlying price for each listed option, plus the list of available expiries. Omit expiry to get the nearest one; pass type call or put to filter one side. limit caps rows (default 100, max 500). Keyless public data.",
-    tags: ["crypto", "crypto-options", "derivatives", "options", "options-chain", "strikes", "implied-volatility", "bitcoin", "ethereum", "deribit"],
-    discovery: {
-      bodyType: "json",
-      input: { currency: "BTC", limit: 20 },
-      inputSchema: {
-        properties: {
-          currency: { type: "string", maxLength: 8, description: "BTC (default) or ETH." },
-          expiry: { type: "string", description: "Deribit expiry label like 26DEC26; omit for the nearest expiry." },
-          type: { type: "string", description: "Optional: call or put." },
-          limit: { type: "number", description: "Rows to return (default 100, max 500)." },
-        },
-        required: [],
-      },
-      output: {
-        example: {
-          source: "deribit",
-          currency: "BTC",
-          expiry: "26AUG26",
-          expiresAt: "2026-08-26T08:00:00.000Z",
-          underlyingPrice: 77317.9,
-          expiries: ["26AUG26", "27AUG26", "25SEP26"],
-          count: 2,
-          options: [{ instrument: "BTC-26AUG26-80000-C", expiry: "26AUG26", strike: 80000, type: "call", bid: 0.0065, ask: 0.008, mark: 0.0073, markIv: 48.03, openInterest: 12.5, volume24h: 3.1, volume24hUsd: 1800, underlyingPrice: 77317.9 }],
-          fetchedAt: "2026-08-22T12:00:00.000Z",
-        },
-      },
-    },
-    handler: async (i = {}) => {
-      const currency = takeCurrency(i.currency);
-      const wantExpiry = takeExpiry(i.expiry);
-      const limit = takeLimit(i.limit, 100);
-      let type = null;
-      if (i.type != null && i.type !== "") {
-        const t = String(i.type).toLowerCase();
-        if (t !== "call" && t !== "put") throw bad('"type" must be "call" or "put"');
-        type = t;
-      }
-      const book = await deribit("get_book_summary_by_currency", { currency, kind: "option" });
-      const rows = (Array.isArray(book) ? book : []).map(optionRow).filter((r) => r.expiry);
-      const expiries = [...new Set(rows.map((r) => r.expiry))].sort((a, b) => (expiryToTs(a) ?? 0) - (expiryToTs(b) ?? 0));
-      if (expiries.length === 0) throw bad(`Deribit lists no options for "${currency}"`, 422);
-      const expiry = wantExpiry ?? expiries[0];
-      if (!expiries.includes(expiry)) throw bad(`No ${currency} options expire ${expiry} - available: ${expiries.slice(0, 12).join(", ")}`, 422);
-      let chain = rows.filter((r) => r.expiry === expiry);
-      if (type) chain = chain.filter((r) => r.type === type);
-      chain.sort((a, b) => (a.strike ?? 0) - (b.strike ?? 0) || a.type.localeCompare(b.type));
-      const ts = expiryToTs(expiry);
-      return {
-        source: "deribit",
-        currency,
-        expiry,
-        expiresAt: ts ? new Date(ts).toISOString() : null,
-        underlyingPrice: chain.find((r) => r.underlyingPrice != null)?.underlyingPrice ?? null,
-        expiries,
-        count: Math.min(chain.length, limit),
-        options: chain.slice(0, limit),
-        fetchedAt: nowIso(),
-      };
-    },
-  },
-
-  // ===========================================================================
-  // options-ticker - one Deribit instrument (option, future, or perpetual).
-  // ===========================================================================
-  {
-    route: "POST /api/options-ticker",
-    name: "Options instrument ticker",
-    slug: "options-ticker",
-    category: "crypto",
-    price: "$0.002",
-    description:
-      "Live ticker for one Deribit instrument: mark, last, best bid/ask with sizes, index and underlying price, open interest, mark/bid/ask IV and greeks (delta, gamma, vega, theta, rho) for options, funding for perpetuals, and 24h stats. Pass instrument (e.g. BTC-26DEC26-100000-C or BTC-PERPETUAL), or pass currency (+ optional type call/put) to get the at-the-money option of the nearest expiry. Keyless public data.",
-    tags: ["crypto", "derivatives", "options", "ticker", "greeks", "implied-volatility", "deribit"],
-    discovery: {
-      bodyType: "json",
-      input: { currency: "BTC" },
-      inputSchema: {
-        properties: {
-          instrument: { type: "string", description: "Deribit instrument name, e.g. BTC-PERPETUAL or ETH-27MAR26-3000-P." },
-          currency: { type: "string", maxLength: 8, description: "Alternative to instrument: BTC or ETH picks the nearest-expiry at-the-money option." },
-          type: { type: "string", description: "With currency: call (default) or put." },
-        },
-        required: [],
-      },
-      output: {
-        example: {
-          source: "deribit",
-          resolvedFrom: "nearest-expiry-atm",
-          ticker: {
-            instrument: "BTC-26AUG26-77000-C", state: "open", markPrice: 0.0121, lastPrice: 0.012, bestBid: 0.0115, bestAsk: 0.0125,
-            indexPrice: 77242.3, underlyingPrice: 77317.9, underlyingIndex: "BTC-26AUG26", openInterest: 85.2,
-            markIv: 47.5, bidIv: 46.1, askIv: 48.9,
-            greeks: { delta: 0.52, gamma: 0.00012, vega: 30.1, theta: -190.2, rho: 2.1 },
-            stats: { high24h: 0.013, low24h: 0.011, priceChange24hPct: -4.2, volume24h: 120.5, volume24hUsd: 112000 },
-            timestamp: "2026-08-22T12:00:00.000Z",
-          },
-          fetchedAt: "2026-08-22T12:00:00.000Z",
-        },
-      },
-    },
-    handler: async (i = {}) => {
-      let instrument, resolvedFrom = "instrument";
-      if (i.instrument != null && i.instrument !== "") {
-        instrument = takeInstrument(i.instrument);
-      } else if (i.currency != null && i.currency !== "") {
-        const currency = takeCurrency(i.currency);
-        let type = "call";
-        if (i.type != null && i.type !== "") {
-          type = String(i.type).toLowerCase();
-          if (type !== "call" && type !== "put") throw bad('"type" must be "call" or "put"');
-        }
-        const book = await deribit("get_book_summary_by_currency", { currency, kind: "option" });
-        const rows = (Array.isArray(book) ? book : []).map(optionRow).filter((r) => r.expiry && r.type === type);
-        if (!rows.length) throw bad(`Deribit lists no ${type} options for "${currency}"`, 422);
-        const expiries = [...new Set(rows.map((r) => r.expiry))].sort((a, b) => (expiryToTs(a) ?? 0) - (expiryToTs(b) ?? 0));
-        const chain = rows.filter((r) => r.expiry === expiries[0]);
-        const und = chain.find((r) => r.underlyingPrice != null)?.underlyingPrice ?? 0;
-        chain.sort((a, b) => Math.abs((a.strike ?? 0) - und) - Math.abs((b.strike ?? 0) - und));
-        instrument = chain[0].instrument;
-        resolvedFrom = "nearest-expiry-atm";
-      } else {
-        throw bad('Pass "instrument" (e.g. BTC-PERPETUAL) or "currency" (e.g. BTC)');
-      }
-      const t = await deribit("ticker", { instrument_name: instrument });
-      if (!t || typeof t !== "object") throw bad("Deribit returned an unexpected response shape", 502);
-      return { source: "deribit", resolvedFrom, ticker: tickerView(t), fetchedAt: nowIso() };
-    },
-  },
-
 ];
 // An answer built from a stale shared read says so in fields.
 export const DERIVATIVES_TOOLS = labelHlStaleness(DERIVATIVES_TOOLS_RAW);
+// The perpetuals tools read Hyperliquid's public info API alone, credited by
+// name and link on every answer (src/data-attribution.js).
+for (const t of DERIVATIVES_TOOLS) if (t.slug.startsWith("perp-")) creditAnswers(t, HYPERLIQUID_ATTRIBUTION);
 
 export const __test = {
   resetMetaCache: () => { metaCache = { at: 0, names: null }; __hlShared.clear(); },
@@ -1315,13 +936,12 @@ export const __test = {
   shapeDeployAuction,
   pairsToRows,
   takeDex,
-  parseOptionName,
-  expiryToTs,
-  summarizeOptions,
   INTERVALS,
   HL_INFO,
-  DERIBIT,
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(DERIVATIVES_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(DERIVATIVES_TOOLS, ["perp-basis", "perp-dex-limits", "perp-dex-markets", "perp-dexs", "perp-funding", "perp-funding-screener", "perp-klines", "perp-markets", "perp-open-interest", "perp-orderbook"], "Hyperliquid public info API, application use");

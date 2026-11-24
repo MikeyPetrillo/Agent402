@@ -10,7 +10,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { CRYPTO_TOOLS, clearCryptoCache, resetPriceCheck, CHECK_READ_MS, CHECK_SOURCE, STALE_AFTER_SECONDS, SCREEN_UNIVERSE, referencePriceOf } from "../src/tools/crypto-kit.js";
 import { resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
 import { __hlShared } from "../src/tools/hyperliquid-shared.js";
-import { COINGECKO_CREDIT } from "../src/data-attribution.js";
+import { COINGECKO_CREDIT, HYPERLIQUID_ATTRIBUTION } from "../src/data-attribution.js";
 
 const h = (slug) => CRYPTO_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
@@ -79,6 +79,7 @@ for (const [slug, args, label] of [
     fresh(); cg = priceRows; hl = hlOk;
     const r = await price({ coins: "BTC,ETH,SOL,PEPE,USDT", currency: "usd" });
     ok(r.check === CHECK_SOURCE && r.check === "hyperliquid-oracle", `crypto-price: check names the second source (${r.check})`);
+    ok(r.credit === `${COINGECKO_CREDIT} ${HYPERLIQUID_ATTRIBUTION}`, `crypto-price: a checked answer credits CoinGecko, then Hyperliquid (${r.credit})`);
     ok(r.coins.bitcoin.divergencePct === 0.05 && r.coins.ethereum.divergencePct === -0.5, `crypto-price: divergencePct is the gap to the oracle price, in percent (${r.coins.bitcoin.divergencePct}, ${r.coins.ethereum.divergencePct})`);
     ok(r.coins.pepe.divergencePct === 2.5, `crypto-price: a k-prefixed perp is quoted per 1,000 units (${r.coins.pepe.divergencePct})`);
     ok(r.coins.solana.divergencePct === null && r.coins.tether.divergencePct === null, "crypto-price: a delisted perp, or none, gives null, never a number");
@@ -93,6 +94,7 @@ for (const [slug, args, label] of [
     fresh(); cg = priceRows; hl = hlOk;
     const eur = await price({ coins: "BTC", currency: "eur" });
     ok(eur.check === "usd-only" && eur.coins.bitcoin.divergencePct === null && eur.coins.bitcoin.stale === false && hlCalls() === 0, "crypto-price: a non-USD answer says usd-only and reads no reference");
+    ok(eur.credit === COINGECKO_CREDIT, "crypto-price: an answer with no check read credits CoinGecko alone");
     // 4. No coin the symbol map knows: no read.
     fresh(); cg = priceRows; hl = hlOk;
     const nr = await price({ coins: "jupiter-exchange-solana" });
@@ -102,6 +104,7 @@ for (const [slug, args, label] of [
     fresh(); cg = priceRows; hl = () => res(500, "boom");
     const un = await price({ coins: "BTC" });
     ok(un.check === "unavailable" && un.coins.bitcoin.price === 60030 && un.coins.bitcoin.divergencePct === null, "crypto-price: an upstream failure of the check answers the price with check unavailable");
+    ok(un.credit === COINGECKO_CREDIT, "crypto-price: a check that did not answer is not credited");
     clearCryptoCache(); calls.length = 0;
     await price({ coins: "BTC" });
     ok(hlCalls() === 0, "crypto-price: inside the back-off the check is not tried again");
@@ -199,8 +202,9 @@ for (const [slug, args, label] of [
 async function live(slug, args, check, label) {
   try {
     const r = await h(slug)(args);
-    // Every CoinGecko answer carries the source credit with its link.
-    const credited = r?.credit === COINGECKO_CREDIT;
+    // Every CoinGecko answer carries the source credit with its link; a price
+    // answer whose check read Hyperliquid credits it after.
+    const credited = r?.credit === (r?.check === "hyperliquid-oracle" ? `${COINGECKO_CREDIT} ${HYPERLIQUID_ATTRIBUTION}` : COINGECKO_CREDIT);
     if (!credited) { assertFail++; console.error(`ASSERT FAIL - ${label}: credit ${JSON.stringify(r?.credit)}`); }
     if (check(r)) { liveOk++; console.log(`ok - ${label}: ${JSON.stringify(r).slice(0, 140)}`); }
     else { assertFail++; console.error(`ASSERT FAIL - ${label}: unexpected shape ${JSON.stringify(r).slice(0, 240)}`); }

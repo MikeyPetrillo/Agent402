@@ -18,6 +18,7 @@
 // vendor flags reads as a measurement we did not make (the same reasoning as
 // the feedback kit's two verdicts, and why seller-dossier ends in sentences).
 import { probeGoPlus } from "./token-risk-kit.js";
+import { creditAnswers, GOPLUS_ATTRIBUTION } from "../data-attribution.js";
 
 const CHAINS = ["base", "ethereum", "polygon", "arbitrum", "optimism", "bsc", "gnosis", "celo"];
 const bad = (m, statusCode = 422) => Object.assign(new Error(m), { statusCode });
@@ -157,3 +158,7 @@ export const TOKEN_SAFETY_TOOLS = [
     },
   },
 ];
+
+// Every answer is GoPlus's token-security record, credited with its link on
+// the answer (src/data-attribution.js; terms cited in token-risk-kit.js).
+for (const t of TOKEN_SAFETY_TOOLS) creditAnswers(t, GOPLUS_ATTRIBUTION);

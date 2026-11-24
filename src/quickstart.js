@@ -1,3 +1,4 @@
+import { getWalletHtml } from "./get-a-wallet.js";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { connectorWires } from "./connector-pay.js";
@@ -80,6 +81,7 @@ export function quickstartPage(baseUrl) {
 <span class="qs-label">3. Wallet (optional)</span>
 <p class="qs-oneliner"><strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong></p>
 <div class="ml-code" style="margin:0 0 20px"><pre><code>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_NEW_FUNDED_KEY -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre></div>
+<p class="qs-oneliner">${getWalletHtml()}</p>
 
 <span class="qs-label">Then ask Claude</span>
 <div class="ml-code" style="margin:0 0 20px"><pre><code># free:        "sha256 this string: hello world"

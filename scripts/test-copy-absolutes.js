@@ -32,6 +32,7 @@ import { RAILS } from "../src/rails.js";
 import { failedCallFootnote } from "../src/settlement-footnote.js";
 import { execFileSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
+import { notChargedClaims } from "./lib/not-charged-claims.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -1088,7 +1089,9 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     if (!text) continue;
     for (const m of text.matchAll(CLAIM)) {
       const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
-      if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
+      // A comment line is skipped in a module only: a markdown paragraph that
+      // opens in bold (`**Heading.**`) is copy.
+      if (rel.endsWith(".js") && /^\s*(?:\/\/|\/?\*)/.test(line)) continue;
       claims++;
       const after = text.slice(m.index, m.index + m[0].length + 1300).replace(/\\?\n\s*/g, " ");
       if (!carries(after)) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
@@ -1116,7 +1119,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 // not this claim.
 {
   const fam = await import("../src/settle-first-copy.js");
-  const GENERAL = /\bfailed x402 (?:call|run|request)s? (?:is|are) not charged|\b(?:response|answer)s? of 400 or above (?:is|are) not (?:settled|charged)|\bfailed run is not charged|\berror status cancels\b|\b4xx\b[^.;|]{0,20}\b5xx\b[^.;|]{0,120}\b(?:cancels settlement|not charged|never settled)|\bonly (?:for a response )?under 400 \| not charged|\bany status of 400 or above is not charged|\ba 4xx or 5xx\b[^.;]{0,200}?\b(?:cancels settlement|is not charged|is never charged)|\ban? (?:error|failed) (?:answer|call|response)s? (?:is|are) not (?:charged|settled)|\b(?:calls?|requests?) (?:that|which) fails? (?:is|are) not charged|\bsettles? only after\b[^.;]{0,80}\bsuccess|\bnot settled and you are not charged|\bnever pays? for a failed\b|\bfailed calls? (?:is|are) (?:never|not) charged|\berrors? (?:is|are) (?:never|not) charged|\b(?:fail\w*|errors?|upstream|outage|5\d\d|timed[- ]out|cut off)\b[^.\n]{0,300}?\bnot charged on x402\b|\bfailed (?:call|run)s?\b[^.;]{0,200}?\b(?:is|are) not charged|\ba call the tool fails is not charged|\bfailure case costs nothing|\ban? error cancels settlement|\bnot charged for a failure|\b(?:answer|response)s? with an error status (?:is|are) not (?:settled|charged)|\bnot charged: the (?:error|same settlement path|credential)|\bsettles only (?:on a delivered result|when the result is ready)|\bsettles\b(?: (?:the|an?) (?:x402 )?payment)? only (?:on|if|when|after|for) (?:the |a |an )?(?:success\w*|delivered|answer|result)|\bpayment (?:still )?settles only (?:if|when|on)\b|\bon x402 (?:that|the|a|an|this|each) (?:failure|error|failed \w+|call|run)s? (?:is|are) not (?:charged|settled)|\bnot charged on x402 or MPP evm\b/gi;
+  const GENERAL = notChargedClaims();
   // Served copy outside COPY_SURFACES' names: the /tools ledger, the discovery
   // manifest, the 202 job message, the MCP task notices and /what-is-mpp.
   const EXTRA = new Set(["src/settlement-footnote.js", "src/refund-terms.js", "src/refund-terms-doc.js", "src/conformance.js", "src/mcp-http.js", "mcp/index.js", "src/agentcore-page.js",
@@ -1139,10 +1142,13 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     if (!text) continue;
     for (const m of text.matchAll(GENERAL)) {
       const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
-      if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
+      // A comment line is skipped in a module only: a markdown paragraph that
+      // opens in bold (`**Heading.**`) is copy.
+      if (rel.endsWith(".js") && /^\s*(?:\/\/|\/?\*)/.test(line)) continue;
       if (/\b[Rr]efusals? (?:are|is) free\b/.test(text.slice(Math.max(0, m.index - 120), m.index))) continue;
-      // A home card (16 words at most, test-static-pages) links to its /docs#why
-      // point, which carries the sentence (checked below).
+      // A home card (16 words at most, test-static-pages) prints the sentence as
+      // its note (checked below, and on the served page by
+      // scripts/test-not-charged-rendered.js).
       if (rel === "src/why.js" && /link: \["\/docs#why-never-charged"/.test(text.slice(m.index, text.indexOf("\n", m.index)))) { homeCard = true; continue; }
       claims++;
       // A claim in a table row is carried by the sentence right under that
@@ -1182,11 +1188,11 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   // carries the sentence too.
   {
     const sft = await import("../src/settle-first-tools.js");
-    const tools = [...sft.SETTLE_FIRST_GATEWAY_TOOLS, ...sft.SETTLE_FIRST_SHARED_TOOLS, ...sft.SETTLE_FIRST_CATALOG_TOOLS];
+    const tools = [...sft.SETTLE_FIRST_GATEWAY_TOOLS, ...sft.SETTLE_FIRST_SHARED_TOOLS, ...sft.SETTLE_FIRST_CATALOG_TOOLS, ...sft.SETTLE_FIRST_REPORT_TOOLS];
     const srv = readFileSync(join(root, "src/server.js"), "utf8");
     ok(/const SETTLE_FIRST_SLUGS = settleFirstSlugs\(GATEWAY_TOOLS_ENABLED\);/.test(srv) && /new Set\(SETTLE_FIRST_CATALOG_TOOLS\.map/.test(srv)
-      && ["v1-images-edit", "dub"].every((slug) => tools.some((t) => t.slug === slug)),
-      "the description check reads the lists server.js arms settle-first from (images edit and dub included)");
+      && ["v1-images-edit", "dub", "research", "dossier", "linkedin-article"].every((slug) => tools.some((t) => t.slug === slug)) && !tools.some((t) => t.slug === "decide-execute"),
+      "the description check reads the lists server.js arms settle-first from (images edit, dub and the report products included)");
     const claimers = tools.filter((t) => /\b(?:fail\w*|errors?)\b[^.]{0,160}\bnot charged\b/i.test(String(t.description || "")));
     const bareTools = claimers.filter((t) => !String(t.description).includes(fam.SETTLE_FIRST_MARK)).map((t) => t.slug);
     ok(tools.length >= 6 && claimers.length >= 2 && bareTools.length === 0, `every settle-first tool description that says a failure is not charged carries the settle-first sentence (${claimers.length} of ${tools.length}${bareTools.length ? `; bare: ${bareTools.join(", ")}` : ""})`);
@@ -1214,9 +1220,10 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       "server.js marks every settle-first definition, from the slugs it arms, before the run-time note is written");
   }
   {
-    const { WHY_POINTS } = await import("../src/why.js");
-    ok(homeCard && String(WHY_POINTS.find((w) => w.id === "never-charged")?.p || "").includes(fam.SETTLE_FIRST_TEXT),
-      "the never-charged home card links to its /docs#why point, which carries the settle-first sentence");
+    const { WHY_POINTS, whyHomeClaims } = await import("../src/why.js");
+    ok(homeCard && whyHomeClaims().find((c) => c.id === "never-charged")?.note === fam.SETTLE_FIRST_TEXT
+      && String(WHY_POINTS.find((w) => w.id === "never-charged")?.p || "").includes(fam.SETTLE_FIRST_TEXT),
+      "the never-charged home card prints the settle-first sentence as its note, and its /docs#why point carries it");
   }
   ok(claims >= 40, `the failed-call not-charged claim is found where it is made (${claims} places)`);
   ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);

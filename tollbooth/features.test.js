@@ -554,6 +554,78 @@ ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes 
   }
 }
 
+// --- an empty User-Agent: no browser sends none, so it pays in every mode
+// (the strict-mode rule: a request that is not a real-browser request pays) ---
+{
+  const bots = createTollbooth({ powDifficulty: 12 });
+  ok(run(bots, mockReq({})).status === 402, "bots: a request with no User-Agent is charged");
+  ok(run(bots, mockReq({ "user-agent": "" })).status === 402, "bots: an empty User-Agent is charged");
+  ok(run(bots, mockReq({ "user-agent": "   " })).status === 402, "bots: a blank User-Agent is charged");
+  ok(run(bots, mockReq({ "user-agent": humanUA })).nexted === true, "bots: a browser UA still passes free");
+  ok(run(bots, mockReq({ "user-agent": "curl/8.0" })).nexted === true, "bots: an unlisted non-empty UA still passes in bots mode (unchanged)");
+  ok(run(createTollbooth({ mode: "strict", powDifficulty: 12 }), mockReq({ accept: "text/html" })).status === 402, "strict: no User-Agent is charged");
+  // A health check (HAProxy httpchk, a raw HTTP/1.0 probe) sends no User-Agent:
+  // the health paths are exempt from the empty-User-Agent charge.
+  ok(run(bots, mockReq({}, "/healthz")).nexted === true && run(bots, mockReq({}, "/health")).nexted === true, "bots: an empty-UA GET /healthz or /health passes free");
+  ok(run(bots, { ...mockReq({}, "/healthz"), method: "HEAD" }).nexted === true, "bots: an empty-UA HEAD /healthz passes free");
+  ok(run(bots, mockReq({}, "/healthz?x=1")).nexted === true, "bots: a query string does not change the health path");
+  ok(run(bots, { ...mockReq({}, "/healthz"), method: "POST" }).status === 402, "bots: a POST to /healthz with no UA is still charged");
+  ok(run(bots, mockReq({}, "/healthz/x")).status === 402 && run(bots, mockReq({}, "/x/healthz")).status === 402, "bots: only the exact health paths are exempt");
+  ok(run(bots, mockReq({ "user-agent": "GPTBot/1.0" }, "/healthz")).status === 402, "bots: a listed crawler on /healthz still pays");
+  // The exemption reads the raw request path (the one a router matches), so a
+  // dot segment or a percent escape that normalizes to a health path is charged.
+  for (const p of ["/articles/secret/%2e%2e/%2e%2e/healthz", "/articles/secret/../../healthz", "/a/%2E%2E/healthz", "/./healthz", "/%68ealthz", "/healthz%2f", "//healthz", "/healthz/"]) {
+    ok(run(bots, mockReq({}, p)).status === 402, `bots: an empty-UA ${p} is charged (raw path, exact match)`);
+  }
+  ok(run(bots, { ...mockReq({}, "/articles/secret/../../healthz"), url: "/healthz" }).status === 402, "bots: the original URL is read, not a rewritten req.url");
+  ok(run(bots, { ...mockReq({}, "/healthz"), originalUrl: undefined }).nexted === true, "bots: req.url is read when originalUrl is absent");
+  ok(run(bots, mockReq({}, "/healthz?next=/../x")).nexted === true, "bots: the query string is not part of the health path");
+  ok(run(createTollbooth({ mode: "strict", powDifficulty: 12 }), mockReq({}, "/healthz")).nexted === true, "strict: an empty-UA /healthz passes free");
+  const own = createTollbooth({ powDifficulty: 12, healthPaths: ["/status/live"] });
+  ok(run(own, mockReq({}, "/status/live")).nexted === true && run(own, mockReq({}, "/healthz")).status === 402, "healthPaths replaces the default list");
+  ok(run(createTollbooth({ powDifficulty: 12, healthPaths: [] }), mockReq({}, "/healthz")).status === 402, "healthPaths: [] exempts nothing");
+  ok(run(createTollbooth({ mode: "all", powDifficulty: 12 }), mockReq({}, "/healthz")).status === 402, "all: every client pays, a health path included (free() exempts one)");
+}
+
+// --- payTo with nothing to settle it warns at start (library) ---
+{
+  const warned = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => { warned.push(a.join(" ")); };
+  try {
+    createTollbooth({ powDifficulty: 12, payTo: "0x000000000000000000000000000000000000dEaD" });
+    const w1 = warned.filter((w) => /payTo/.test(w) && /settle/.test(w));
+    ok(w1.length === 1, `payTo with no x402 middleware and no verifyX402 warns once at start (${w1.length})`);
+    warned.length = 0;
+    createTollbooth({ powDifficulty: 12, payTo: "0x000000000000000000000000000000000000dEaD", x402: (_q, _s, n) => n() });
+    createTollbooth({ powDifficulty: 12, payTo: "0x000000000000000000000000000000000000dEaD", verifyX402: async () => false });
+    createTollbooth({ powDifficulty: 12 });
+    ok(warned.filter((w) => /payTo/.test(w) && /settle/.test(w)).length === 0, "control: with a settling middleware, a verifier, or no payTo there is no warning");
+  } finally { console.warn = realWarn; }
+}
+
+// --- the CLI: --help and --version answer without starting a gate ---
+{
+  const { spawnSync } = await import("node:child_process");
+  const { readFileSync: rf } = await import("node:fs");
+  const here = (await import("node:url")).fileURLToPath(new URL(".", import.meta.url));
+  const pkg = JSON.parse(rf(new URL("./package.json", import.meta.url), "utf8"));
+  const env = { PATH: process.env.PATH, TOLLBOOTH_SECRET: "x".repeat(40) };
+  for (const flag of ["--help", "-h"]) {
+    const r = spawnSync(process.execPath, ["index.js", flag], { cwd: here, env, encoding: "utf8", timeout: 15000 });
+    ok(r.status === 0 && /Usage/.test(r.stdout) && /TOLLBOOTH_UPSTREAM/.test(r.stdout) && /TOLLBOOTH_FACILITATOR_URL/.test(r.stdout) && !/listening/.test(r.stdout + r.stderr), `${flag} prints the usage and starts nothing (exit ${r.status})`);
+  }
+  for (const flag of ["--version", "-v"]) {
+    const r = spawnSync(process.execPath, ["index.js", flag], { cwd: here, env, encoding: "utf8", timeout: 15000 });
+    ok(r.status === 0 && r.stdout.trim() === pkg.version, `${flag} prints the package version (${r.stdout.trim()})`);
+  }
+  // The deploy templates the README points at ship in the package.
+  const packed = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: here, encoding: "utf8", timeout: 60000 });
+  let files = [];
+  try { files = JSON.parse(packed.stdout)[0].files.map((f) => f.path); } catch { files = []; }
+  ok(pkg.files.some((f) => /^deploy\/?$/.test(f)) && files.some((f) => f.startsWith("deploy/docker/")) && files.some((f) => f.startsWith("deploy/cloudflare/")), `the package includes deploy/ (${files.filter((f) => f.startsWith("deploy/")).length} files)`);
+}
+
 console.log(`\n${pass} passed`);
 
 // In-memory SQLite for the shared-store assertions. Prefers the built-in

@@ -1,6 +1,5 @@
 // Onchain identity kit — resolve an Ethereum address to a human across the
-// three most reliable onchain identity surfaces: ENS, Farcaster, and EAS
-// (Ethereum Attestation Service).
+// onchain identity surfaces: ENS and EAS (Ethereum Attestation Service).
 //
 // Why this kit: agents that read blockchain data need to know *who* an
 // address belongs to. The chain-kit family answers "what is this address
@@ -8,21 +7,20 @@
 // pay-per-call envelope.
 //
 // Honest scoping: read-only metadata. We don't mint ENS subnames and don't
-// sign EAS attestations. All four tools surface public profile data that
+// sign EAS attestations. Both tools surface public profile data that
 // the underlying protocol publishes.
 //
 // Upstreams:
 //   • ensideas.com    — community-maintained ENS reverse + avatar API
 //                       (used by Rainbow, Coinbase Wallet, etc.) [keyless]
-//   • api.neynar.com  — Neynar Farcaster API (requires API key —
-//                       set NEYNAR_API_KEY or WARPCAST_API_KEY to enable)
 //   • easscan.org     — EAS-funded GraphQL indexer for mainnet/Base/Optimism [keyless]
 //
-// All 4 tools are wallet-only — every handler reaches external HTTP and
+// Both tools are wallet-only — every handler reaches external HTTP and
 // shares a per-IP rate limit with the public pool.
 //
 // Covered by scripts/test-onchain-identity-kit.js (offline + opt-in live).
 
+import { creditAnswers, EAS_ATTRIBUTION } from "../data-attribution.js";
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget, isUpstreamFailure, budgetSpentError } from "../upstream-deadline.js";
@@ -33,12 +31,10 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET
 // never a 504. The ENS and EAS reads answered in 0.04 to 0.64 s when measured
 // (2026-10-14).
 const ENS_READ_MS = 12_000;
-const NEYNAR_READ_MS = 12_000;
 const EAS_READ_MS = 12_000;
 
 // Endpoints. Keep them at the top so a swap is a one-line change.
 const ENS_API = "https://api.ensideas.com/ens";
-const NEYNAR_API = "https://api.neynar.com/v2/farcaster";
 const EAS_INDEXERS = {
   mainnet:  "https://easscan.org/graphql",
   base:     "https://base.easscan.org/graphql",
@@ -60,7 +56,7 @@ function takeAddress(raw, field = "address") {
   return raw.trim().toLowerCase();
 }
 
-async function fetchJson(url, label, init, step = "data", timeoutMs = NEYNAR_READ_MS) {
+async function fetchJson(url, label, init, step = "data", timeoutMs = ENS_READ_MS) {
   const ctx = { label, step, timeoutMs, tag: "[identity]" };
   const res = await upstreamFetch(url, {
     ...init,
@@ -69,7 +65,7 @@ async function fetchJson(url, label, init, step = "data", timeoutMs = NEYNAR_REA
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     // Redact the FULL body before slicing (a secret straddling the 240-char cut
-    // would leave an unredactable prefix): Neynar requests carry NEYNAR_API_KEY.
+    // would leave an unredactable prefix).
     const raw = ct.includes("json")
       ? JSON.stringify(await res.json().catch(() => null))
       : await res.text().catch(() => "");
@@ -188,83 +184,8 @@ async function ensBulkResolve({ addresses } = {}) {
   };
 }
 
-// Neynar API auth — Farcaster lookups go through Neynar (api.neynar.com).
-// Accepts NEYNAR_API_KEY or legacy WARPCAST_API_KEY env var.
-function neynarInit() {
-  const key = process.env.NEYNAR_API_KEY || process.env.WARPCAST_API_KEY;
-  if (!key) throw bad("Farcaster lookups require NEYNAR_API_KEY (Neynar Farcaster API key)", 503);
-  return { headers: { "x-api-key": key } };
-}
-
 // ----------------------------------------------------------------------------
-// 2. farcaster-profile — lookup by FID or username via Neynar API
-// ----------------------------------------------------------------------------
-async function farcasterProfile({ fid, username } = {}) {
-  const f = Number.parseInt(fid, 10);
-  const u = typeof username === "string" ? username.trim().replace(/^@/, "") : "";
-  if (!Number.isFinite(f) && !u) {
-    throw bad('"fid" (integer) or "username" (string) is required');
-  }
-  const init = neynarInit();
-  let user;
-  if (Number.isFinite(f)) {
-    const json = await fetchJson(`${NEYNAR_API}/user/bulk?fids=${f}`, "Neynar", init);
-    user = json.users?.[0];
-  } else {
-    const json = await fetchJson(`${NEYNAR_API}/user/by_username?username=${encodeURIComponent(u)}`, "Neynar", init);
-    user = json.user;
-  }
-  if (!user) {
-    throw bad(`Farcaster user not found for ${Number.isFinite(f) ? `fid=${f}` : `username=${u}`}`, 404);
-  }
-  return {
-    fid: user.fid,
-    username: user.username,
-    displayName: user.display_name ?? null,
-    pfpUrl: user.pfp_url ?? null,
-    bio: user.profile?.bio?.text ?? null,
-    followerCount: user.follower_count ?? null,
-    followingCount: user.following_count ?? null,
-    activeOnFcNetwork: user.active_status === "active",
-    powerBadge: !!user.power_badge,
-    venueUrl: user.username ? `https://warpcast.com/${user.username}` : null,
-    source: "neynar",
-  };
-}
-
-// ----------------------------------------------------------------------------
-// 3. farcaster-by-address — given an Ethereum address, find their Farcaster
-// ----------------------------------------------------------------------------
-async function farcasterByAddress({ address } = {}) {
-  const addr = takeAddress(address);
-  // Neynar's bulk-by-address returns { "0x…": [user, …] } keyed by address.
-  // An address with no Farcaster verification comes back as an empty array or
-  // missing key — we surface that as { found: false }.
-  const json = await fetchJson(
-    `${NEYNAR_API}/user/bulk-by-address?addresses=${addr}`,
-    "Neynar",
-    neynarInit(),
-  );
-  const users = json[addr] || json[addr.toLowerCase()] || [];
-  const user = users[0];
-  if (!user) return { found: false, address: addr, source: "neynar" };
-  return {
-    found: true,
-    address: addr,
-    fid: user.fid,
-    username: user.username,
-    displayName: user.display_name ?? null,
-    pfpUrl: user.pfp_url ?? null,
-    bio: user.profile?.bio?.text ?? null,
-    followerCount: user.follower_count ?? null,
-    followingCount: user.following_count ?? null,
-    venueUrl: user.username ? `https://warpcast.com/${user.username}` : null,
-    source: "neynar",
-  };
-}
-
-// ----------------------------------------------------------------------------
-// 4. eas-attestations — list EAS attestations (recipient or attester) on chain
+// 2. eas-attestations — list EAS attestations (recipient or attester) on chain
 // ----------------------------------------------------------------------------
 async function easAttestations({ address, network, role, limit } = {}) {
   const addr = takeAddress(address);
@@ -369,82 +290,6 @@ export const ONCHAIN_IDENTITY_TOOLS = [
     handler: ensBulkResolve,
   },
   {
-    route: "POST /api/farcaster-profile",
-    name: "Farcaster profile",
-    slug: "farcaster-profile",
-    category: "crypto",
-    price: "$0.002",
-    description:
-      "Lookup a Farcaster profile by username or FID. Returns FID, username, display name, bio, profile picture URL, follower/following counts, and the canonical Warpcast URL. Use to label cast authors, validate a Farcaster handle, or fetch a profile for display.",
-    tags: ["farcaster", "warpcast", "identity", "profile", "social"],
-    discovery: {
-      bodyType: "json",
-      // FID, not username: FIDs are permanent, usernames rename out from under
-      // an example (dwr.eth became dwr and Neynar started 404ing the old handle).
-      input: { fid: 3 },
-      inputSchema: {
-        type: "object",
-        properties: {
-          fid: { type: "number", description: "Farcaster ID (integer; one of fid/username required)." },
-          username: { type: "string", description: "Farcaster handle, with or without leading @ (one of fid/username required)." },
-        },
-      },
-      output: {
-        example: {
-          fid: 3,
-          username: "dwr",
-          displayName: "Dan Romero",
-          pfpUrl: "https://...",
-          bio: "Working on Farcaster.",
-          followerCount: 500000,
-          followingCount: 1000,
-          activeOnFcNetwork: true,
-          powerBadge: true,
-          venueUrl: "https://warpcast.com/dwr",
-          source: "neynar",
-        },
-      },
-    },
-    handler: farcasterProfile,
-  },
-  {
-    route: "POST /api/farcaster-by-address",
-    name: "Farcaster by Ethereum address",
-    slug: "farcaster-by-address",
-    category: "crypto",
-    price: "$0.002",
-    description:
-      "Reverse-lookup an Ethereum address to its Farcaster account (via verified address). Returns FID, username, display name, bio, follower/following counts, and Warpcast URL, or found=false if the address has not verified on Farcaster. Use to label wallet activity with the owner's Farcaster identity when ENS is missing.",
-    tags: ["farcaster", "warpcast", "identity", "reverse-lookup", "verification"],
-    discovery: {
-      bodyType: "json",
-      input: { address: "0xd7029bdea1c17493893aafe29aad69ef892b8ff2" },
-      inputSchema: {
-        type: "object",
-        required: ["address"],
-        properties: {
-          address: { type: "string", description: "Ethereum address (0x-prefixed 40-hex)." },
-        },
-      },
-      output: {
-        example: {
-          found: true,
-          address: "0xd7029bdea1c17493893aafe29aad69ef892b8ff2",
-          fid: 3,
-          username: "dwr",
-          displayName: "Dan Romero",
-          pfpUrl: "https://...",
-          bio: "Working on Farcaster.",
-          followerCount: 500000,
-          followingCount: 1000,
-          venueUrl: "https://warpcast.com/dwr",
-          source: "neynar",
-        },
-      },
-    },
-    handler: farcasterByAddress,
-  },
-  {
     route: "POST /api/eas-attestations",
     name: "EAS attestations",
     slug: "eas-attestations",
@@ -495,9 +340,12 @@ export const __test = {
   takeAddress,
   pickEasNetwork,
   ENS_API,
-  NEYNAR_API,
   EAS_INDEXERS,
 };
+
+// The attestations are read from the EAS indexer (easscan.org), credited by
+// name and link on every answer (src/data-attribution.js).
+for (const t of ONCHAIN_IDENTITY_TOOLS) if (t.slug === "eas-attestations") creditAnswers(t, EAS_ATTRIBUTION);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(ONCHAIN_IDENTITY_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

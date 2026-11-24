@@ -5,6 +5,10 @@
   var emptyQ = document.getElementById('cat-empty-q');
   var resultsBox = document.getElementById('cat-results');
   var resultsShown = 0;
+  // The search's own answer under the box, announced to a screen reader:
+  // "no tool matches" when /api/find returns nothing (the box stays hidden).
+  var status = document.getElementById('cat-find-status');
+  function say(text) { if (status) { status.textContent = text; status.style.display = text ? 'block' : 'none'; } }
 
   function applyFilter() {
     var q = (search.value || '').toLowerCase().trim();
@@ -43,7 +47,8 @@
     var weak = !!(data && data.weakMatches === true);
     var sellers = weak && data.routeAcross;
     resultsShown = tools.length + packs.length + (sellers ? 1 : 0);
-    if (resultsShown === 0) { resultsBox.style.display = 'none'; applyFilter(); return; }
+    if (resultsShown === 0) { resultsBox.style.display = 'none'; say('No tool matches "' + q + '". Try other words, or ask for it with POST /api/wish: requests are grouped by need and the frequent ones get built.'); applyFilter(); return; }
+    say('');
     var head = el('div', 'font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:10px 16px;border-bottom:1px solid var(--hairline);', (weak ? 'closest matches for "' : 'tools matching "') + q + '" · GET /api/find');
     resultsBox.appendChild(head);
     tools.slice(0, 8).forEach(function(t) {
@@ -83,6 +88,7 @@
     if (!resultsBox || q.length < 2) {
       resultsShown = 0;
       if (resultsBox) { resultsBox.style.display = 'none'; resultsBox.textContent = ''; }
+      say('');
       applyFilter();
       return;
     }

@@ -11,7 +11,10 @@
 // price. Runway is the number of settlements the balance still pays for at a
 // fixed gas allowance per settlement.
 //
-// A reading is "low" under the minimum runway, and "unread" after enough
+// A reading is "low" under the minimum runway, and once low reads "ok" again
+// only at the minimum plus FACILITATOR_GAS_CLEAR_MARGIN (default 0.2 of it):
+// the runway moves with the gas price, so one threshold flapped the pager
+// while a balance sat at the floor. It reads "unread" after enough
 // consecutive failed reads that the balance cannot be vouched for; a single
 // failed read keeps the last good reading. A failed read is our RPC read
 // failing, not evidence of a short balance: "unread" makes the
@@ -36,7 +39,27 @@ export function gasCheckSettings(env = process.env) {
     gasPerSettlement: num(env.FACILITATOR_GAS_PER_SETTLEMENT, 100_000),
     failAfter: num(env.FACILITATOR_GAS_FAIL_AFTER, 3),
     intervalMs: num(env.FACILITATOR_GAS_CHECK_MS, 10 * 60_000),
+    clearMargin: clearMarginOf(env),
   };
+}
+
+/** The share past a threshold a low reading must reach before it reads ok
+ *  again (FACILITATOR_GAS_CLEAR_MARGIN, 0 to 1, default 0.2). */
+function clearMarginOf(env = process.env) {
+  const raw = env.FACILITATOR_GAS_CLEAR_MARGIN;
+  const m = Number(raw);
+  return raw !== undefined && String(raw).trim() !== "" && Number.isFinite(m) && m >= 0 && m <= 1 ? m : 0.2;
+}
+
+/**
+ * A runway's word with hysteresis: "low" under `min`; a reading that was low
+ * reads "ok" again only at `min x (1 + margin)` or more. No runway figure (no
+ * gas price) reads ok, as before.
+ */
+export function runwayStatus(runway, min, prevStatus, margin = 0.2) {
+  if (runway === null || runway === undefined) return "ok";
+  if (runway < min) return "low";
+  return prevStatus === "low" && runway < min * (1 + (Number(margin) || 0)) ? "low" : "ok";
 }
 
 /** The settlement signers a /supported body names for `network`: its own key
@@ -76,6 +99,7 @@ export function floorGasSettings(env = process.env) {
     gasUnits: num(env.FLOOR_GAS_UNITS, 85_400),
     priceTtlMs: num(env.FLOOR_GAS_PRICE_TTL_MS, 60 * 60_000),
     priceMaxAgeMs: num(env.FLOOR_GAS_PRICE_MAX_AGE_MS, num(env.FLOOR_GAS_PRICE_TTL_MS, 60 * 60_000) + 60 * 60_000),
+    clearMargin: clearMarginOf(env),
   };
 }
 
@@ -95,6 +119,7 @@ export function floorGasSettings(env = process.env) {
 export function createFloorGasCheck({ network, floorUsd, readEthUsd, settings = floorGasSettings(), now = Date.now, log = console.warn } = {}) {
   let lastPrice = null; // { usd, at }
   let lastState = null;
+  let lastKnownNear = false;
   const row = (fields) => ({ network, facilitator: "price floor", signer: null, balanceEth: null, runway: null, ...fields });
   async function check(gasPriceWei) {
     const at = now();
@@ -117,13 +142,20 @@ export function createFloorGasCheck({ network, floorUsd, readEthUsd, settings = 
       reading = row({ status: "unknown", reason: "gasPriceUnread", floorUsd: floor, ethUsd: lastPrice.usd, at });
     } else {
       const gasUsd = (Number(BigInt(gasPriceWei) * BigInt(Math.round(settings.gasUnits))) / 1e18) * lastPrice.usd;
-      const near = gasUsd > floor * settings.share;
+      // Near once past the share; a near reading clears only once the gas is
+      // under the share by the clear margin (the price of ETH and of gas both
+      // move it, so one threshold flapped).
+      // The last KNOWN reading holds the band: an unknown one in between
+      // (an unread price or gas) does not reset it.
+      const wasNear = lastKnownNear;
+      const near = gasUsd > floor * settings.share || (wasNear && gasUsd > (floor * settings.share) / (1 + (Number(settings.clearMargin ?? 0.2) || 0)));
       reading = row({
         status: near ? "low" : "ok", ...(near ? { reason: "gasNearFloor" } : {}),
         gasUsd: Math.round(gasUsd * 1e6) / 1e6, floorUsd: floor, sharePct: Math.round((gasUsd / floor) * 1000) / 10,
         ethUsd: lastPrice.usd, ...(error ? { error: `last good ETH price kept: ${error}` } : {}), at,
       });
     }
+    if (reading.status !== "unknown") lastKnownNear = reading.status === "low" && reading.reason === "gasNearFloor";
     const state = `${reading.status}:${reading.reason || ""}`;
     if (state !== lastState) {
       lastState = state;
@@ -181,6 +213,10 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
     for (const url of [...urls, ...own.map((o) => ({ own: o }))]) {
       if (url && typeof url === "object" && url.own) {
         const { label, signer } = url.own;
+        // Whether our relayer's minimum sale price is at or under the lowest
+        // price sold on this chain (src/payments.js ownRelayerCoversLowestPrice).
+        let covers = {};
+        if (typeof url.own.coversLowestPrice === "function") { try { covers = { coversLowestPrice: url.own.coversLowestPrice() === true }; } catch { covers = { coversLowestPrice: false }; } }
         const key = `own:${label}|${signer}`;
         const s = state.get(key) || { failures: 0, last: null };
         let error = gasError, reading = null;
@@ -188,14 +224,14 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
           try {
             const balance = await rpc("eth_getBalance", [signer, "latest"]);
             const runway = runwayOf(balance, gasPrice, settings.gasPerSettlement);
-            reading = { network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: Number(balance) / 1e18, runway, status: runway !== null && runway < settings.minRunway ? "low" : "ok", at };
+            reading = { network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: Number(balance) / 1e18, runway, status: runwayStatus(runway, settings.minRunway, s.last?.status, settings.clearMargin), ...covers, at };
           } catch (e) { error = String(e?.message || e).slice(0, 120); }
         }
         if (reading) { s.failures = 0; s.last = reading; state.set(key, s); readings.push(reading); continue; }
         s.failures++;
         state.set(key, s);
-        if (s.failures >= settings.failAfter) readings.push({ network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: s.last?.balanceEth ?? null, runway: s.last?.runway ?? null, status: "unread", failures: s.failures, error, at });
-        else if (s.last) readings.push({ ...s.last, failures: s.failures, error });
+        if (s.failures >= settings.failAfter) readings.push({ network, facilitator: String(label || "own relayer"), signer, own: true, balanceEth: s.last?.balanceEth ?? null, runway: s.last?.runway ?? null, status: "unread", failures: s.failures, error, ...covers, at });
+        else if (s.last) readings.push({ ...s.last, ...covers, failures: s.failures, error });
         continue;
       }
       const facilitator = hostOf(url);
@@ -232,7 +268,7 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
               network, facilitator, signer,
               balanceEth: Number(balance) / 1e18,
               runway,
-              status: runway !== null && runway < settings.minRunway ? "low" : "ok",
+              status: runwayStatus(runway, settings.minRunway, s.last?.status, settings.clearMargin),
               at,
             };
           } catch (e) { error = String(e?.message || e).slice(0, 120); }

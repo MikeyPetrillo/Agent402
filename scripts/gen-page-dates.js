@@ -36,7 +36,7 @@ import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from 
 import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { pageSourceFiles } from "../src/page-dates.js";
+import { pageSourceFiles, articleSourceFiles } from "../src/page-dates.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "src", "generated", "page-dates.json");
@@ -161,6 +161,80 @@ export function scanToolSources(files = kitFiles(), packFile = PACK_FILE, catalo
   return { toolSources: out, packSources, toolPatterns, ambiguous };
 }
 
+// --- per-entry dates -----------------------------------------------------------
+// A family module (every guide in src/guides.js, every pack in src/skills.js)
+// used to date all of its pages by the module's newest commit, so one edit to
+// one guide re-dated all of them. Each entry is now dated by its own text: the
+// span from its `  {\n    slug: "<slug>",` line to the next entry or the end of
+// the array. `modified` is the date of the newest commit that changed that span
+// (today when the working tree differs from HEAD), `published` the date of the
+// oldest commit that has it. A span read from history that does not match is a
+// change, so a reformat dates every entry it touched, never fewer.
+export const ENTRY_FAMILIES = [
+  { prefix: "/blog/", file: "src/blog.js" },
+  { prefix: "/guides/", file: "src/guides.js" },
+  { prefix: "/learn/", file: "src/learn.js" },
+  { prefix: "/integrations/", file: "src/integration-pages.js" },
+  { prefix: "/skills/", file: "src/skills.js" },
+];
+const ENTRY_HEAD = '\n  {\n    slug: "';
+/** slug -> its entry's source text, for every entry in a family module. */
+export function entrySpans(text) {
+  const out = new Map();
+  const t = String(text || "");
+  let at = t.indexOf(ENTRY_HEAD);
+  while (at >= 0) {
+    const slugStart = at + ENTRY_HEAD.length;
+    const slugEnd = t.indexOf('"', slugStart);
+    if (slugEnd < 0) break;
+    const slug = t.slice(slugStart, slugEnd);
+    const next = t.indexOf(ENTRY_HEAD, slugEnd);
+    const arrEnd = t.indexOf("\n];", slugEnd);
+    const end = [next, arrEnd].filter((i) => i >= 0).reduce((a, b) => Math.min(a, b), t.length);
+    if (/^[a-z0-9][a-z0-9-]*$/.test(slug) && !out.has(slug)) out.set(slug, t.slice(at, end));
+    at = next;
+  }
+  return out;
+}
+/** { "<prefix><slug>": { published, modified } } for every entry of every
+ *  family, read from the file's history (newest commit first). */
+export function scanEntryDates(families = ENTRY_FAMILIES, dirty = dirtyFiles()) {
+  const out = {};
+  for (const { prefix, file } of families) {
+    if (!existsSync(join(ROOT, file))) continue;
+    const current = entrySpans(readFileSync(join(ROOT, file), "utf8"));
+    let log = "";
+    try { log = git("log", "--no-merges", "--format=%H %cs", "--", file); } catch { log = ""; }
+    const commits = log.split("\n").filter(Boolean).map((l) => { const [hash, day] = l.split(" "); return { hash, day }; });
+    const versions = commits.map((c) => { try { return entrySpans(git("show", `${c.hash}:${file}`)); } catch { return new Map(); } });
+    for (const [slug, span] of current) {
+      let modified = null, published = null;
+      // Newest first: the run of commits whose span equals today's text ends at
+      // the commit that wrote it.
+      if (dirty.has(file) && versions[0]?.get(slug) !== span) modified = today();
+      else {
+        for (let i = 0; i < commits.length && versions[i].get(slug) === span; i++) modified = commits[i].day;
+      }
+      for (let i = commits.length - 1; i >= 0; i--) if (versions[i].has(slug)) { published = commits[i].day; break; }
+      if (!modified) modified = today();
+      if (!published || published > modified) published = modified;
+      out[`${prefix}${slug}`] = { published, modified };
+    }
+  }
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
+}
+/** file -> the date of the oldest commit that has it (an article's published
+ *  date for a page one module renders). */
+function firstDates(files) {
+  const out = {};
+  for (const file of files) {
+    let d = "";
+    try { d = git("log", "--no-merges", "--follow", "--diff-filter=A", "--format=%cs", "--", file).split("\n").filter(Boolean).pop() || ""; } catch { d = ""; }
+    out[file] = d || today();
+  }
+  return out;
+}
+
 export function buildTable() {
   const files = {};
   const dirty = dirtyFiles();
@@ -174,7 +248,9 @@ export function buildTable() {
     files[file] = date || today();
   }
   const { toolSources, packSources, toolPatterns, ambiguous } = scanToolSources();
-  return { table: { files, toolSources, toolPatterns, packSources }, missing, ambiguous };
+  const entries = scanEntryDates(ENTRY_FAMILIES, dirty);
+  const filesFirst = firstDates(articleSourceFiles().filter((f) => existsSync(join(ROOT, f))));
+  return { table: { files, filesFirst, entries, toolSources, toolPatterns, packSources }, missing, ambiguous };
 }
 
 export function readTable() {
@@ -202,6 +278,18 @@ export function diffTables(stored, fresh) {
   const sp = (stored && stored.packSources) || {}, fp = fresh.packSources || {};
   for (const [slug, file] of Object.entries(fp)) if (sp[slug] !== file) out.push(`packSources: ${slug} -> ${file} (stored ${sp[slug] || "nothing"})`);
   for (const slug of Object.keys(sp)) if (!(slug in fp)) out.push(`packSources: ${slug} no longer defined by a literal slug in the pack module`);
+  const near = (a, b) => a && b && Math.abs(dayNum(a) - dayNum(b)) <= 1;
+  const se = (stored && stored.entries) || {}, fe = fresh.entries || {};
+  for (const [path, d] of Object.entries(fe)) {
+    const have = se[path];
+    if (!have) { out.push(`entries: ${path} missing (now ${d.modified})`); continue; }
+    if (!near(have.modified, d.modified)) out.push(`entries: ${path} modified ${have.modified}, history says ${d.modified}`);
+    if (!near(have.published, d.published)) out.push(`entries: ${path} published ${have.published}, history says ${d.published}`);
+  }
+  for (const path of Object.keys(se)) if (!(path in fe)) out.push(`entries: ${path} no longer an entry`);
+  const sff = (stored && stored.filesFirst) || {}, fff = fresh.filesFirst || {};
+  for (const [file, d] of Object.entries(fff)) if (!near(sff[file], d)) out.push(`filesFirst: ${file} is ${sff[file] || "missing"}, history says ${d}`);
+  for (const file of Object.keys(sff)) if (!(file in fff)) out.push(`filesFirst: ${file} no longer an article source`);
   return out;
 }
 
@@ -209,6 +297,8 @@ function serialize(table) {
   return JSON.stringify({
     note: "Generated by scripts/gen-page-dates.js; src/page-dates.js reads it for sitemap lastmod. Regenerate with --write after editing a page module or a tool kit.",
     files: table.files,
+    filesFirst: table.filesFirst,
+    entries: table.entries,
     toolSources: table.toolSources,
     toolPatterns: table.toolPatterns,
     packSources: table.packSources,

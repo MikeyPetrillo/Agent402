@@ -11,6 +11,7 @@
 // Egress on a caller URL, so wallet-only (src/pow.js WALLET_ONLY_SLUGS) and
 // never in src/free-tier.js. Covered by scripts/test-page-change-kit.js.
 import { safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { runHtml } from "./html-pool.js";
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
@@ -85,6 +86,7 @@ export async function pageChange(input = {}) {
   if (input.includeText !== undefined && typeof input.includeText !== "boolean") throw bad('"includeText" must be a boolean');
   const includeText = input.includeText === true;
 
+  await assertRobotsAllow(url);
   const fetchedAt = new Date().toISOString();
   const { finalUrl, buffer, contentType, validators } = await safeFetch(url, { binary: true, maxBytes: MAX_BYTES, timeoutMs: FETCH_TIMEOUT_MS });
   const type = String(contentType || "");

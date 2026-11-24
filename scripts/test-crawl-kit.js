@@ -159,7 +159,17 @@ fetched = [];
 const map = await h("site-map")({ url: SITE });
 ok(map.url === "https://example.com/" && map.host === "example.com", "site-map: url + host echoed");
 ok(map.fetches === 5 && map.fetches <= 6, `site-map: home + robots + index + 2 children = 5 fetches (got ${map.fetches})`);
-ok(fetchedPaths()[0] === "/" && fetchedPaths()[1] === "/robots.txt", "site-map: start page first, robots second");
+// The robots gate (src/tools/robots-gate.js) reads robots.txt for the start
+// URL first, outside the map's own budget; then the start page, then robots.txt
+// again for its sitemaps.
+ok(fetchedPaths()[0] === "/robots.txt" && fetchedPaths()[1] === "/" && fetchedPaths()[2] === "/robots.txt", "site-map: the robots gate's read, then the start page, then robots for the sitemaps");
+fetched = [];
+{
+  let refused = null;
+  try { await h("site-map")({ url: SITE + "/bot-only/x" }); } catch (e) { refused = e; }
+  ok(refused?.statusCode === 403 && refused?.robotsRule === "Disallow: /bot-only/", `site-map: a start URL robots.txt disallows for Agent402Bot answers 403 with the rule (${refused?.statusCode} ${refused?.robotsRule})`);
+  ok(!fetchedPaths().includes("/bot-only/x"), "site-map: the disallowed start page is never fetched");
+}
 ok(map.sitemapsRead === 3, `site-map: index + gz child + plain child read (got ${map.sitemapsRead})`);
 ok(map.urls.some((u) => u === "https://example.com/blog/2") && map.urls.some((u) => u === "https://example.com/docs"), "site-map: gzipped child sitemap URLs present");
 ok(map.urls.some((u) => u === "https://example.com/about") && !map.urls.some((u) => u === "https://example.com/target"), "site-map: link + sitemap URLs merged (redirect target not fetched here)");
@@ -231,6 +241,36 @@ ok(crawl.pages.every((p) => p.contentChars === p.content.length), "site-crawl: c
 ok(crawl.crawled === crawl.pages.length && crawl.truncated === false && crawl.skipped.limit === 0, `site-crawl: crawled=${crawl.crawled}, not truncated`);
 ok(crawl.robotsTxt === "honoured" && typeof crawl.fetchedAt === "string" && typeof crawl.source === "string", "site-crawl: robotsTxt + source + fetchedAt");
 
+// robots.txt groups are matched on the exact product token (or the brand
+// token Agent402), never a substring of Agent402Bot; a disallowed start URL is
+// a 403 in the caller-URL refusal shape before any page is read (not charged).
+{
+  const { robotsAllowsForToken, parseRobots } = await import("../src/tools/kit.js");
+  const { toolErrorFields } = await import("../src/tool-error-fields.js");
+  const verdict = (txt, path = "/") => robotsAllowsForToken(parseRobots(txt), "Agent402Bot", path);
+  ok(verdict("User-agent: Bot\nDisallow: /\n\nUser-agent: *\nAllow: /\n").allowed, "robots: a group for `Bot` (a part of our token) is not ours");
+  ok(verdict("User-agent: agent\nDisallow: /\n").allowed && verdict("User-agent: Agent402Bot-Extra\nDisallow: /\n").allowed, "robots: `agent` and `Agent402Bot-Extra` are other products");
+  ok(!verdict("User-agent: Agent402Bot/1.0\nDisallow: /\n").allowed && !verdict("User-agent: AGENT402BOT\nDisallow: /x\n", "/x/y").allowed, "robots: our exact token, with a version or in another case, is ours");
+  ok(!verdict("User-agent: Agent402\nDisallow: /\n\nUser-agent: *\nAllow: /\n").allowed, "robots: the brand token names every one of our agents");
+  ok(verdict("User-agent: Agent402Bot\nAllow: /\n\nUser-agent: *\nDisallow: /\n").allowed && !verdict("User-agent: Other\nAllow: /\n\nUser-agent: *\nDisallow: /\n").allowed, "robots: a group naming us replaces `*`; with none, `*` applies");
+  const saved = ROUTES.get("/robots.txt");
+  ROUTES.set("/robots.txt", { type: "text/plain", body: "User-agent: Bot\nDisallow: /\n\nUser-agent: *\nDisallow: /private/\n" });
+  const loose = await h("site-crawl")({ url: SITE, maxDepth: 0 }).catch((e) => ({ refused: e.statusCode }));
+  ok(loose.pages?.length === 1 && loose.robotsTxt === "honoured", `site-crawl: a \`Bot\` group does not refuse the crawl (the substring read refused it here; ${loose.refused || "served"})`);
+  for (const [label, body] of [["our token", "User-agent: Agent402Bot\nDisallow: /\n"], ["the brand token", "User-agent: Agent402\nDisallow: /\n"]]) {
+    ROUTES.set("/robots.txt", { type: "text/plain", body });
+    fetched = [];
+    let err = null;
+    try { await h("site-crawl")({ url: SITE }); } catch (e) { err = e; }
+    ok(err?.statusCode === 403 && err.robotsDisallowed === true && err.hint === "robots-disallowed" && err.robotsRule === "Disallow: /" && err.robotsUrl === "https://example.com/robots.txt", `site-crawl: ${label} disallowing the start URL -> 403 robots refusal (${err?.statusCode}, ${err?.robotsRule})`);
+    ok(/does not allow Agent402Bot to read this URL \(Disallow: \/\), so it was not fetched$/.test(err?.message || ""), `site-crawl: ${label}: the refusal names the token and the rule`);
+    ok(JSON.stringify(fetchedPaths()) === '["/robots.txt"]', `site-crawl: ${label}: nothing but robots.txt was read (${JSON.stringify(fetchedPaths())})`);
+    const fields = toolErrorFields(err);
+    ok(fields.hint === "robots-disallowed" && typeof fields.fix === "string" && /Agent402Bot/.test(fields.fix), "site-crawl: the answer carries the refusal's hint and fix");
+  }
+  ROUTES.set("/robots.txt", saved);
+}
+
 // limit + truncated + skipped.limit
 const small = await h("site-crawl")({ url: SITE, limit: 2, maxDepth: 2 });
 ok(small.pages.length === 2 && small.truncated === true && small.skipped.limit >= 1 && small.queued >= 1, `site-crawl: limit 2 -> 2 pages, truncated, ${small.skipped.limit} left in queue`);
@@ -267,7 +307,7 @@ ok(md.pages[0].contentChars <= 8000 && md.pages[0].contentTruncated === undefine
 await throws(h("site-crawl")({ url: SITE + "/missing" }), 422, "site-crawl: start URL 404");
 await throws(h("site-crawl")({ url: SITE + "/broken" }), 502, "site-crawl: start URL 500");
 await throws(h("site-crawl")({ url: SITE + "/file.pdf" }), 422, "site-crawl: start URL is binary");
-await throws(h("site-crawl")({ url: SITE + "/private/secret" }), 422, "site-crawl: start URL disallowed by robots.txt");
+await throws(h("site-crawl")({ url: SITE + "/private/secret" }), 403, "site-crawl: start URL disallowed by robots.txt (the robots refusal, not charged)");
 await throws(h("site-crawl")({ url: SITE + "/redirect-private" }), 400, "site-crawl: start URL redirecting into loopback refused");
 try { await h("site-crawl")({ url: SITE + "/broken" }); } catch (e) { ok(!/secret upstream detail/.test(e.message), "site-crawl: upstream error body never relayed"); }
 globalThis.fetch = async () => { throw new Error("ECONNREFUSED stub"); };

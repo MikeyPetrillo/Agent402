@@ -1,6 +1,6 @@
 # agent402-mcp
 
-MCP server for [Agent402](https://agent402.tools), the applied layer of Agentic Finance. Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Paid calls settle in USDC over x402 or MPP (Machine Payments Protocol). Pure-CPU tools are free: each call solves a small proof-of-work puzzle on your own machine. Other tools are paid per call in USDC over the [x402 protocol](https://www.x402.org) from a wallet you control. Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
+MCP server for [Agent402](https://agent402.tools), the applied layer of Agentic Finance. Agent402 is the payment and trust layer for agentic commerce: agents find, pay for and verify paid calls to Agent402, across x402 and MPP, with signed receipts on successful direct calls. 500+ ready tools on the same rails. Paid calls settle in USDC over x402 or MPP (Machine Payments Protocol). Pure-CPU tools are free: each call solves a small proof-of-work puzzle on your own machine. Other tools are paid per call in USDC over the [x402 protocol](https://www.x402.org) from a wallet you control. Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
 
 ![A paid call on Agent402: the request, the 402 with its price, the signature, the settlement, the answer and the signed receipt](https://raw.githubusercontent.com/MikeyPetrillo/Agent402/main/docs/media/agent402-call.gif)
 
@@ -11,16 +11,24 @@ Pick one setup. Both run locally through `npx`.
 **1. Free, no wallet.** Pure-CPU tools (no outbound calls, keys or models) run free. Each call solves a proof-of-work puzzle with your CPU, typically well under a second on a laptop. Tools that reach the network or a model ask for a wallet.
 
 ```
-claude mcp add agent402 -s user -- npx -y agent402-mcp@0.16.0
+claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0
 ```
 
 **2. Paid, with a wallet.** Paid tools are settled in USDC on each call. Run setup once:
 
 ```
-npx -y agent402-mcp@0.16.0 setup
+npx -y agent402-mcp@0.17.0 setup
 ```
 
-It asks for the wallet's private key (the input is hidden), stores it in your OS keychain (the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux through `secret-tool`; elsewhere a file readable only by your user, with a warning), and prints the config for Claude Code, Claude Desktop and Cursor. That config needs no `AGENT_KEY`: the server reads the stored key whenever `AGENT_KEY` is not set. Fund the wallet with USDC on Base. A Base payment needs no ETH: you sign an authorization and the facilitator pays the network fee.
+It asks for the wallet's private key (the input is hidden), stores it in your OS keychain (the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux through `secret-tool`; elsewhere a file readable only by your user, with a warning), and prints the config for Claude Code, Claude Desktop and Cursor. That config needs no `AGENT_KEY`: the server reads the stored key whenever `AGENT_KEY` is not set. It sets no daily cap: no daily budget is written or applied by default, and setup prints one line showing how to add `AGENT402_MAX_USD_PER_DAY` if you want one. Fund the wallet with USDC on Base. A Base payment needs no ETH: you sign an authorization and the facilitator pays the network fee.
+
+No wallet yet? Make one on this computer:
+
+```
+npx -y agent402-mcp@0.17.0 wallet new
+```
+
+It makes a new wallet key, stores it the same way (the key is never shown), and prints the wallet's address and the same config. Send a few dollars of USDC on Base to that address, no ETH needed. It never replaces a key already stored.
 
 Or put the key in the config instead (with or without the `0x` prefix):
 
@@ -29,7 +37,7 @@ Or put the key in the config instead (with or without the `0x` prefix):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0xYOUR_PRIVATE_KEY" }
     }
   }
@@ -38,9 +46,9 @@ Or put the key in the config instead (with or without the `0x` prefix):
 
 > Use a new wallet holding only a few dollars of USDC. Never use your main wallet.
 
-Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`, and no daily or monthly cap unless you set `AGENT402_MAX_USD_PER_DAY` or `AGENT402_MAX_USD_PER_MONTH` (these two hold across restarts).
+Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`, and no daily or monthly cap unless your config sets `AGENT402_MAX_USD_PER_DAY` or `AGENT402_MAX_USD_PER_MONTH` (these two hold across restarts). No daily budget is written or applied by default, for a new setup or an existing one: the config `setup` and `wallet new` print has no cap, they print one line showing how to set `AGENT402_MAX_USD_PER_DAY`, and a server with no daily cap says so in one line when it starts.
 
-Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.16.0`
+Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.17.0`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
 
 Advanced setup (chains, MPP, error codes, the hosted connector) is in [Advanced](#advanced).
@@ -59,7 +67,7 @@ Every variable the server reads (all optional):
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | `5` | Refuse any single call priced above this many USD (e.g. `0.05`); `0` or `off` disables it. A call it refuses names the price, the cap and the setting to raise. Applies to the wallet and the credits path. |
 | `AGENT402_BUDGET` | _(unset, no cap)_ | Optional hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. A call it refuses names the setting to raise. Applies to the wallet and the credits path. |
-| `AGENT402_MAX_USD_PER_DAY` | _(unset, no cap)_ | Optional cap on USD spent per UTC day, kept across restarts (and shared by every copy of this server for the same user) in `spend.json` (mode 0600) in the config folder. A call it refuses says what is left and when the day resets. `off` means no cap; a value that is not a USD amount refuses paid calls until fixed. |
+| `AGENT402_MAX_USD_PER_DAY` | _(unset, no cap; never written by `setup` or `wallet new`)_ | Optional cap on USD spent per UTC day, kept across restarts (and shared by every copy of this server for the same user) in `spend.json` (mode 0600) in the config folder. A call it refuses says what is left and when the day resets. `off` means no cap; a value that is not a USD amount refuses paid calls until fixed. |
 | `AGENT402_MAX_USD_PER_MONTH` | _(unset, no cap)_ | The same per UTC calendar month. |
 | `AGENT402_CONFIG_DIR` | per-user config folder | Where `spend.json` (and, without a keychain, the key file) live: `~/Library/Application Support/agent402` on macOS, `%APPDATA%\agent402` on Windows, `~/.config/agent402` elsewhere. The key file is kept only in a folder no other user can write to. |
 | `AGENT402_OUTPUT_DIR` | `~/Downloads/agent402` | Where media answers are written (the OS temp folder when `~/Downloads` is absent or cannot be written). |
@@ -164,6 +172,7 @@ to the keychain on stdin, never on a command line.
   | ≤ $0.04 | $0.05 | `POST /api/route/execute-plus` |
   | ≤ $0.10 | $0.12 | `POST /api/route/execute-mid` |
   | ≤ $0.50 | $0.55 | `POST /api/route/execute-max` |
+  | ≤ $3.00 | $3.30 | `POST /api/route/execute-pro` |
 
   A tool priced above the tier's ceiling returns a self-correcting 409 naming its direct route.
 - **Report products** are catalog slugs like any other, so `catalog.call` runs them with a wallet or a credits key: `research` ($0.60), `research-pro` ($0.85), `research-max` ($1.10), `market-brief` ($0.85), `dossier` ($0.85), `dossier-max` ($1.10), `fund-report` ($0.60), `fund-report-max` ($0.85), `domain-audit` ($0.60), `domain-audit-pro` ($0.85), `token-risk` ($0.60), `token-risk-pro` ($0.85), `token-brief` ($0.60), `recall-report` ($0.60), `insider-report` ($0.60), `filing-report` ($0.85), `ticker-pack` ($2.00); the live figures are always at https://agent402.tools/api/pricing. The same reports are sold to people by card at https://agent402.tools/reports for $2 to $5 depending on depth: the card price includes payment processing, and an agent paying per call pays the lower tool price for the same report. The recurring monitors (domain, SEC filing, token, fund, recall, insider, IPO, research - $5/month) are at https://agent402.tools/monitors.

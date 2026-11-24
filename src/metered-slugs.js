@@ -9,14 +9,18 @@ export const METERED_SLUGS = new Set([
   "attest",  // attest-kit.js: spends Base gas from the spending wallet, unset in CI
   // Databento equities: a query is billed by the bytes it returns and CI
   // holds no key on purpose, so an unkeyed sweep would 503 here and a keyed
-  // one would spend on every push. Same rule as Brave, E2B and CoinGecko.
+  // one would spend on every push. Same rule as Brave and CoinGecko.
   "stock-quote", "stock-history",
   // CoinGecko's on-chain pool endpoints answer only to a key (401 keyless),
   // and CI holds none: these 503 on an unkeyed sweep. Offline coverage is
   // scripts/test-crypto-screens-kit.js.
   "dex-volume-board", "dex-pool-health",
   // Brave Search subscription
-  "search", "search-lite", "search-news", "search-images", "search-videos", "search-suggest", "answer", "multi-search",
+  "search", "search-lite", "search-news", "search-images", "search-videos", "answer", "multi-search",
+  // Wikipedia opensearch: keyless, but a shared source read under a
+  // per-minute ceiling (src/tools/wikipedia-suggest.js) that sweeps must not
+  // spend; offline coverage is scripts/test-search-suggest-source.js.
+  "search-suggest",
   "llm-context",      // Brave /llm/context - same subscription, billed per call
   // OpenAI
   "llm", "llm-pro", "llm-premium",
@@ -49,8 +53,6 @@ export const METERED_SLUGS = new Set([
   "ticker-pack",
   // token-risk composites - keyless probes + Opus synthesis over OpenRouter.
   "token-risk", "token-risk-pro",
-  // E2B
-  "code-run", "code-run-pro",
   // Route-and-execute can buy external sellers
   "route-execute", "seller-payability", "route-execute-max", "route-execute-mid", "route-execute-plus", "route-execute-pro",
   // Flights buy from outside sellers (flights-kit.js).
@@ -66,17 +68,9 @@ export const METERED_SLUGS = new Set([
   "decisions",       // the same judgment on the OpenAI Decisions wire
   "decide",          // decision service + model calls; CI runs no decide service
   "decide-execute",  // runs plans and pays sellers; CI runs no decide service
-  // FRED keyed (503 without FRED_API_KEY / FRED_API_KEY_V2)
-  "fred-series", "fred-search", "fred-series-info", "fred-release-calendar",
-  "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",
-  "fred-release-observations",
-  // Neynar / Farcaster
-  "farcaster-profile", "farcaster-by-address",
-  "fc-cast-search", "fc-channel-feed", "fc-trending", "fc-user-casts", "fc-cast",
-  "fc-cast-replies", "fc-channel", "fc-user-search", "fc-cast-metrics",
   // X API v2 app-only bearer (per-post read billing) and the enrichment
   // providers - each lists only with its own key, and 503s without it.
-  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup", "x-post-counts", "x-trends",
+  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
   "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company",
   "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
   // OpenRouter Image + Video APIs (flat per-image / per-second upstream price).
@@ -89,8 +83,11 @@ export const METERED_SLUGS = new Set([
   "dex-pair", "dex-pool", "dex-quote",
   "nft-collection", "nft-floor",
   "l2-gas-comparison",
-  // CDP (Coinbase Developer Platform keys)
-  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema", "onchain-sql-range", "onchain-sql-week",
+  // wallet-balances: the keyed EVM lane and the configured Solana RPC.
+  "wallet-balances",
+  // CDP (Coinbase Developer Platform keys). onchain-sql-schema is served from
+  // a schema kept here and needs no key, so the sweeps drive it.
+  "testnet-fund", "onramp-link", "onchain-sql",
 ]);
 
 /** Pack slugs (the name after "skill-") whose advertised toolSlugs reach a

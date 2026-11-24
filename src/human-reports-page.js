@@ -45,7 +45,7 @@ export const REPORTS_CSS = `
   .eyebrow-tags{display:flex;flex-wrap:wrap;row-gap:4px}.eyebrow-tags>span{white-space:nowrap}.eyebrow-tags>span+span::before{content:"·";padding:0 10px}
   .samples-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:8px 28px;font-size:var(--fs-md);line-height:1.45}
   .samples-list a{color:var(--ink);text-decoration:none;overflow-wrap:anywhere}.samples-list a:hover{color:var(--accent)}.samples-list b{font-weight:600}
-  .hero{padding:64px 0 20px}.hero h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:clamp(var(--fs-3xl),5vw,var(--fs-4xl));line-height:1.02;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
+  .hero{padding:64px 0 20px}.hero h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:14px 0 0;color:var(--ink);text-wrap:balance}.hero h1 em{font-style:normal;color:var(--faint)}
   .lede{font-size:var(--fs-lg);line-height:1.5;color:var(--muted);max-width:76ch;margin:16px 0 0;font-weight:300}.lede b{color:var(--ink);font-weight:500}
   .products{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px;margin-top:8px}
   /* Cards are a flex column so the buy button sits on one baseline across a
@@ -289,7 +289,7 @@ ${ledgerFooterCompact()}
 <script src="/js/reports.js"></script>`;
   return ledgerShell({
     title: "Agent402 Reports: research, 13F, insider flow, audits",
-    description: `Cited reports, $${cardLo} to $${cardHi} by card and $${agentLo} to $${agentHi} for an agent paying per call: deep research, company dossier, fund 13F, insider flow, market brief, SEC filings, domain security, ${R["token-brief"] ? "Solana token risk evidence, " : ""}FDA recalls.`,
+    description: `Cited reports, $${cardLo} to $${cardHi} by card or $${agentLo} to $${agentHi} per call for an agent: deep research, company dossiers, fund 13F, insider flow and more.`,
     canonical: `${baseUrl}/reports`, baseUrl, activePath: "/reports", extraCss: REPORTS_CSS, body,
     jsonLd: { "@context": "https://schema.org", "@type": "ItemList", "@id": `${baseUrl}/reports#products`, name: "Agent402 reports", itemListElement: Object.entries(R).map(([key, p], i) => ({ "@type": "ListItem", position: i + 1, item: { "@type": "Product", name: p.label, image: `${baseUrl}/tools/${p.slug}/card.png`, url: `${baseUrl}/reports`, brand: { "@type": "Brand", name: "Agent402" }, offers: { "@type": "Offer", price: (p.price / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", url: `${baseUrl}/reports`, seller: { "@type": "Organization", name: "Havok Holdings LLC" } } } })) },
   });

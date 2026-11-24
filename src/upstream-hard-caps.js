@@ -22,12 +22,20 @@
 // name did not resolve, the connection was refused or never opened, or the
 // caller's signal was already aborted when the call was made:
 // neverReachedUpstream), or when the upstream refused it before doing any work
-// (a 4xx answer: bad request, our key refused, rate limited; for E2B also its
-// busy refusal, which the SDK documents as changing nothing:
+// (a 4xx answer: bad request, our key refused, rate limited; also an SDK's
+// named busy refusal that is documented as changing nothing:
 // upstreamRefusedBeforeWork). Everything else keeps its unit: a 2xx or 3xx
 // answer, a 5xx, a timeout or a reset after the request was written may all
 // have been served and metered there. Giving a unit back only ever lowers the
 // day's count, so this never refuses a call the old count would have let by.
+//
+// THE 4xx GIVE-BACKS ARE BOUNDED (releaseHardCapRefused): a caller (the
+// dispatch's caller key, src/dispatch-caller.js) gives back at most
+// HARDCAP_REFUSED_RELEASES_PER_CALLER_HOUR units an hour per upstream, and an
+// upstream at most HARDCAP_REFUSED_RELEASES_PER_HOUR across callers; past
+// either, the refused call keeps its unit. So inputs an upstream refuses
+// cannot make calls the ceiling never counts. A call that never left this
+// process is given back whatever the bounds.
 //
 // A ceiling of `0` refuses every call; `off` disables one. A malformed value
 // falls back to the default, never to disabled.
@@ -36,12 +44,11 @@ import { createSharedDailySpend } from "./shared-limits.js";
 import { useHeldUnit } from "./settle-first.js";
 
 // `match` is a host suffix the fetch hook checks; null means the kit counts
-// its own units (E2B: one unit per sandbox started, whatever hosts it uses).
+// its own units (one unit per network a multichain read asks for).
 export const HARD_CAPS = [
   { name: "alchemy", match: "alchemy.com", env: "HARDCAP_ALCHEMY_CALLS", dflt: 300000 },
   { name: "brave", match: "api.search.brave.com", env: "HARDCAP_BRAVE_CALLS", dflt: 6000 },
   { name: "openai", match: "api.openai.com", env: "HARDCAP_OPENAI_CALLS", dflt: 6000 },
-  { name: "e2b", match: null, env: "HARDCAP_E2B_SANDBOXES", dflt: 1500 },
   // Network reads by the Alchemy multichain transfers read (alchemy-data-kit.js
   // wallet-transfers-multichain): one unit per network a call asks for.
   { name: "alchemy-multichain", match: null, env: "HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS", dflt: 30000 },
@@ -84,8 +91,8 @@ const state = new Map(); // name -> { day, local, unflushed, shared, refused, re
 function rowOf(c, now = Date.now()) {
   let s = state.get(c.name);
   const d = utcDay(now);
-  if (!s) { s = { day: d, local: 0, unflushed: 0, shared: null, refused: 0, released: 0, store: createSharedDailySpend(`hardcap-${c.name}`, "upstream-hard-caps", { scale: 1 }) }; state.set(c.name, s); }
-  if (s.day !== d) { s.day = d; s.local = 0; s.unflushed = 0; s.shared = null; s.refused = 0; s.released = 0; }
+  if (!s) { s = { day: d, local: 0, unflushed: 0, shared: null, refused: 0, released: 0, refusedKept: 0, store: createSharedDailySpend(`hardcap-${c.name}`, "upstream-hard-caps", { scale: 1 }) }; state.set(c.name, s); }
+  if (s.day !== d) { s.day = d; s.local = 0; s.unflushed = 0; s.shared = null; s.refused = 0; s.released = 0; s.refusedKept = 0; }
   return s;
 }
 
@@ -216,7 +223,7 @@ export function neverReachedUpstream(err, { abortedAtCall = false } = {}) {
 /**
  * True only when `x` (a fetch Response, or a thrown error and up to four
  * causes) shows the upstream refused the call before doing any work: an HTTP
- * status from 400 to 499, or E2B's AuthenticationError (401), RateLimitError
+ * status from 400 to 499, or an SDK's AuthenticationError (401), RateLimitError
  * (429) or ServiceBusyError (503, "nothing was changed by the refused call").
  * A 5xx in general, a 2xx or a 3xx is not: the call may have been served.
  */
@@ -244,6 +251,40 @@ export function releaseHardCap(name, takenAt = Date.now(), now = Date.now()) {
   // unflushed may pass below zero when the unit was already flushed: the next
   // sync books the difference to the shared counter.
   s.local--; s.unflushed--; s.released++;
+  return true;
+}
+
+// The hourly bounds on 4xx give-backs. A caller with no key shares one.
+const REFUSED_PER_CALLER_HOUR_DEFAULT = 30;
+const REFUSED_PER_HOUR_DEFAULT = 600;
+const REFUSED_CALLERS_MAX = 5000;
+const boundOf = (name, dflt, env = process.env) => {
+  const n = Number(String(env[name] ?? "").trim() || NaN);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : dflt;
+};
+const refusedReleases = new Map(); // cap name -> { hour, total, byCaller: Map }
+/**
+ * Give back the unit of a call the upstream refused before any work (a 4xx),
+ * within the hourly bounds above; past them the unit is kept and counted
+ * (refusedReleasesKept). `caller` is the dispatch's caller key (null: the
+ * shared unkeyed caller). A caller that would be new while the hour's table
+ * already holds REFUSED_CALLERS_MAX callers keeps its unit.
+ */
+export function releaseHardCapRefused(name, takenAt = Date.now(), { caller = null, now = Date.now() } = {}) {
+  const c = byName.get(name);
+  if (!c || hardCapOf(c) === null) return false;
+  const hour = Math.floor(now / 3_600_000);
+  let r = refusedReleases.get(name);
+  if (!r || r.hour !== hour) { r = { hour, total: 0, byCaller: new Map() }; refusedReleases.set(name, r); }
+  const who = typeof caller === "string" && caller ? caller.slice(0, 200) : "unkeyed";
+  const mine = r.byCaller.get(who) || 0;
+  const keep = () => { rowOf(c, now).refusedKept++; return false; };
+  if (r.total >= boundOf("HARDCAP_REFUSED_RELEASES_PER_HOUR", REFUSED_PER_HOUR_DEFAULT)) return keep();
+  if (mine >= boundOf("HARDCAP_REFUSED_RELEASES_PER_CALLER_HOUR", REFUSED_PER_CALLER_HOUR_DEFAULT)) return keep();
+  if (!r.byCaller.has(who) && r.byCaller.size >= REFUSED_CALLERS_MAX) return keep();
+  if (!releaseHardCap(name, takenAt, now)) return false;
+  r.total++;
+  r.byCaller.set(who, mine + 1);
   return true;
 }
 
@@ -304,10 +345,10 @@ export function hardCapStatus(now = Date.now()) {
     // made the word (and the heartbeat issue) flip on every read.
     const status = cap === null ? "disabled" : (seenToday(s) >= cap ? "capped" : "ok");
     if (status === "capped") worst = "capped";
-    rows[c.name] = { usedToday: seenToday(s), ceiling: cap, refusedToday: s.refused, releasedToday: s.released, status, shared: s.store.enabled };
+    rows[c.name] = { usedToday: seenToday(s), ceiling: cap, refusedToday: s.refused, releasedToday: s.released, refusedReleasesKept: s.refusedKept, status, shared: s.store.enabled };
   }
   return { day: utcDay(now), status: worst, upstreams: rows };
 }
 
 /** Test seam. */
-export function _resetHardCaps() { state.clear(); hostCache.clear(); }
+export function _resetHardCaps() { state.clear(); hostCache.clear(); refusedReleases.clear(); }

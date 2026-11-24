@@ -213,6 +213,7 @@ try {
   }
   const costTable = !!(process.env.UPSTREAM_COSTS_JSON || process.env.UPSTREAM_COSTS_FILE);
   if (!costTable && !process.env.CI) console.log("skip - the metered card control needs the private cost table (UPSTREAM_COSTS_FILE or UPSTREAM_COSTS_JSON) to price a quote past the card minimum");
+  else if (!costTable) ok(false, "the metered card control needs the private cost table (UPSTREAM_COSTS_FILE or UPSTREAM_COSTS_JSON) to price a quote past the card minimum; it is not set under CI");
   else {
     const big = { model: "anthropic/claude-opus-5", max_tokens: 8192, messages: [{ role: "user", content: "Summarize the history of payment protocols. ".repeat(400) }] };
     const r = await post("/v1/metered/chat/completions", big);

@@ -1,4 +1,4 @@
-// monitor-scheduler - the fulfilment half of the recurring engine. Turns an ACTIVE
+// monitor-scheduler - the fulfillment half of the recurring engine. Turns an ACTIVE
 // monitoring subscription (src/stripe-subscriptions.js) into delivered reports:
 // a welcome report on first sight, a cheap free re-check on a cadence, a paid
 // full re-run only when the cadence says so or something actually CHANGED, and
@@ -25,7 +25,7 @@
 // (owner + timestamp, stale after LOCK_STALE_MS); a second replica's tick sees
 // the lock and skips - it is not an error.
 // Nothing here charges the subscriber: billing is Stripe's recurring invoice;
-// this is fulfilment only. Rollout: mounts only when subscriptions are enabled;
+// this is fulfillment only. Rollout: mounts only when subscriptions are enabled;
 // MONITOR_SCHEDULER=off disables the timer (manual runs still work).
 import { existsSync } from "node:fs";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
@@ -296,7 +296,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
 
   // Before spending on a paid run, ask Stripe whether this subscription is
   // STILL active (a cancellation or failed renewal the webhook has not
-  // delivered must stop fulfilment). Unreadable -> proceed on the stored status.
+  // delivered must stop fulfillment). Unreadable -> proceed on the stored status.
   async function stillActive(rec) {
     if (typeof refreshStatus !== "function") return true;
     const st = await refreshStatus(rec.subId);

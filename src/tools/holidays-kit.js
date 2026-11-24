@@ -14,7 +14,7 @@
 // tools answer one question per call and serve no browsable listing.
 import { markEndsAtCeiling } from "../run-ceiling.js";
 import { attribute } from "../data-attribution.js";
-import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON } from "../resale-terms.js";
+import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON, markResaleCleared } from "../resale-terms.js";
 import {
   bad, parseCountry, parseYear, parseSubdivision, parseTypes, parseIsoDate, parseWeekend,
   holidaysForYear, nextHolidays, appliesIn, hasAnyType, regionCalendar, yearsFor, HOLIDAY_HOSTS,
@@ -448,3 +448,6 @@ for (const t of HOLIDAY_TOOLS) if (t.slug !== "market-calendar") attribute(t, "n
 // Resale terms (src/resale-terms.js): a whole year's list is not resold through a third party.
 markResaleBarred(HOLIDAY_TOOLS, ["bank-holidays", "school-holidays"], HOLIDAY_PORTAL_RESALE_REASON);
 markEndsAtCeiling(HOLIDAY_TOOLS, ["bank-holidays", "school-holidays", "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar", "market-calendar"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(HOLIDAY_TOOLS, ["next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar"], "Nager.Date commercial sponsorship");

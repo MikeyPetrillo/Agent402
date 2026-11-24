@@ -1,5 +1,5 @@
 {
-  "about": "Paid-upstream tools (tier 2): OpenRouter/OpenAI wires, Brave, E2B, FRED, the browser worker. Skipped on a keyless boot; run weekly with the audit key (--tier 2). Cheap links only.",
+  "about": "Paid-upstream tools (tier 2): OpenRouter/OpenAI wires, Brave, FRED, the browser worker. Skipped on a keyless boot; run weekly with the audit key (--tier 2). Cheap links only.",
   "cases": [
     {
       "slug": "search",
@@ -344,38 +344,6 @@
       }
     },
     {
-      "slug": "code-run-pro",
-      "name": "javascript with stdout and a result",
-      "input": {
-        "code": "console.log('out'); [1,2,3].reduce((a,b)=>a+b,0)",
-        "language": "javascript"
-      },
-      "requires": "E2B_API_KEY",
-      "expect": {
-        "matches": {
-          "stdout": "out"
-        },
-        "falsy": [
-          "error"
-        ]
-      }
-    },
-    {
-      "slug": "code-run-pro",
-      "name": "a runtime error is reported, not a 500",
-      "input": {
-        "code": "raise ValueError('boom')",
-        "language": "python"
-      },
-      "requires": "E2B_API_KEY",
-      "expect": {
-        "matches": {
-          "error.message": "boom",
-          "error.name": "ValueError"
-        }
-      }
-    },
-    {
       "slug": "onchain-sql",
       "name": "a second read-only query",
       "input": {
@@ -515,77 +483,11 @@
       }
     },
     {
-      "slug": "fred-series-info",
-      "name": "a second series",
-      "input": {
-        "seriesId": "GDP"
-      },
-      "requires": "FRED_API_KEY",
-      "expect": {
-        "equals": {
-          "id": "GDP"
-        },
-        "matches": {
-          "frequency": "quarter"
-        },
-        "populated": [
-          "units",
-          "observationEnd"
-        ]
-      }
-    },
-    {
-      "slug": "fred-series-info",
-      "name": "unknown series is a 404",
-      "input": {
-        "seriesId": "ZZQXNOTASERIES"
-      },
-      "requires": "FRED_API_KEY",
-      "expect": {
-        "status": 404
-      }
-    },
-    {
-      "slug": "fred-search",
-      "name": "search returns ids",
-      "input": {
-        "q": "housing starts",
-        "limit": 3
-      },
-      "requires": "FRED_API_KEY",
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "results[0].id",
-          "results[0].title"
-        ]
-      }
-    },
-    {
-      "slug": "fred-release-calendar",
-      "name": "a week of releases",
-      "input": {
-        "days": 7
-      },
-      "requires": "FRED_API_KEY",
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "releases[0]"
-        ]
-      }
-    },
-    {
       "slug": "fed-funds",
       "name": "90 days of history",
       "input": {
         "days": 90
       },
-      "requires": "FRED_API_KEY",
       "expect": {
         "gt": {
           "current": 0
@@ -601,7 +503,6 @@
       "input": {
         "months": 24
       },
-      "requires": "FRED_API_KEY",
       "expect": {
         "gt": {
           "current": 1
@@ -621,7 +522,6 @@
       "slug": "cpi-yoy",
       "name": "inflation is a plausible number",
       "input": {},
-      "requires": "FRED_API_KEY",
       "expect": {
         "gt": {
           "inflationYoYPct": -5

@@ -25,7 +25,7 @@ ok(MANAGE_RESPONSE_HEADERS["Cache-Control"] === "no-store" && MANAGE_RESPONSE_HE
 // ---- the routes use it -----------------------------------------------------
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  const block = src.slice(src.indexOf("const mppManageTokenOf = "), src.indexOf("// Monitor scheduler: the recurring fulfilment engine."));
+  const block = src.slice(src.indexOf("const mppManageTokenOf = "), src.indexOf("// Monitor scheduler: the recurring fulfillment engine."));
   ok(/const mppManageTokenOf = manageTokenFrom;/.test(block), "the routes read the token through manageTokenFrom");
   ok(/manageTokenOk\(subId, mppManageTokenOf\(req\)\)/.test(block) && /_mppSubs\.cancel\(String\(req\.params\.subId \|\| ""\), mppManageTokenOf\(req\)\)/.test(block), "both status and cancel check that token");
   ok(/app\.get\("\/api\/mpp\/monitors\/:subId", mppMonitorStatus\)/.test(block) && /app\.post\("\/api\/mpp\/monitors\/:subId", mppMonitorStatus\)/.test(block), "status answers GET and POST");

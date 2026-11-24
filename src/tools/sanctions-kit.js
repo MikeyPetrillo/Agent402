@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { createJsonDocument } from "../json-document.js";
 import { trackStoreReady } from "../state-db.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 const REFRESH_MS = Math.max(3600_000, Number(process.env.SANCTIONS_REFRESH_MS) || 12 * 3600_000);
 // A parse the payment-party screen fetched within this window is taken as is
@@ -431,3 +432,6 @@ export function startSanctionsRefresh({ log = console.log } = {}) {
   refreshTimer = setTimeout(tick, 15_000);
   refreshTimer.unref?.();
 }
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(SANCTIONS_TOOLS, ["sanctions-name", "sanctions-wallet"], "OFAC SDN list, US government data");

@@ -196,6 +196,9 @@ const interactions = [
     path: "/playground",
     async run(page) {
       await page.waitForTimeout(300);
+      // Picking a tool fetches its form data (the page carries only the one it opens on).
+      await page.selectOption("#pgSelect", "uuid").catch(() => {});
+      await page.waitForSelector("#pgRun", { timeout: 10000 }).catch(() => {});
       await page.click("#pgRun");
       await page.waitForFunction(() => /Done|Error/.test(document.getElementById("pgStatus")?.textContent || ""), { timeout: 15000 }).catch(() => {});
     },

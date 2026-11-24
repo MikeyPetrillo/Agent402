@@ -9,7 +9,7 @@ import { REPO_URL } from "./repo-link.js";
 export function webhooksPage(baseUrl) {
   const canonical = `${baseUrl}/docs/webhooks`;
   const title = "Webhooks & Callbacks - Agent402 Docs";
-  const description = "How to handle async workflows with Agent402: async jobs with a job link to poll, idempotent retries, chaining, and planned callback delivery for long-running tool chains.";
+  const description = "How to handle async workflows with Agent402: async jobs with a job link to poll, idempotent retries, chaining and planned callback delivery.";
 
   const extraCss = `
   @media (max-width: 900px) {

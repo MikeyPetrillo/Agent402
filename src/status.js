@@ -99,6 +99,31 @@ export const RAIL_COMPONENTS = [
   },
 ];
 
+// A rail the latest paid canary run did not reach. One run proves every rail
+// within minutes of each other, so a rail whose newest reading is more than
+// this far behind the newest rail reading was left out of that run (a leg
+// that runs once a day on a run marked for it, a skipped leg). It reads
+// unknown on its own card, with its age and its peers' age, rather than
+// operational on a result its peers have since been proven past. A gap in
+// measurement inside the daily bound does not move the headline; past
+// DAILY the rail reads unknown for no recent observation, which does.
+export const RAIL_PEER_LAG_MS = 6 * 3600_000;
+export const BEHIND_PEERS = "behind its peers";
+
+/** Rails whose reading lags the newest rail reading past RAIL_PEER_LAG_MS read
+ *  unknown (reason BEHIND_PEERS), keeping the word they had as lastState. */
+export function markRailsBehindPeers(rails, lagMs = RAIL_PEER_LAG_MS) {
+  const aged = rails.filter((c) => c.current && c.current.state !== "unknown" && Number.isFinite(c.current.ageMs));
+  if (aged.length < 2) return rails;
+  const peerAgeMs = Math.min(...aged.map((c) => c.current.ageMs));
+  for (const c of aged) {
+    if (c.current.ageMs - peerAgeMs > lagMs) {
+      c.current = { state: "unknown", reason: BEHIND_PEERS, ageMs: c.current.ageMs, peerAgeMs, lastState: c.current.state, detail: c.current.detail ?? null };
+    }
+  }
+  return rails;
+}
+
 export const COMPONENTS = [
   { key: "api", label: "Tool serving", blurb: "The paid API answering requests: /health reachable and the catalog mounted.", staleAfterMs: QUARTER_HOURLY },
   { key: "catalog", label: "Catalog", blurb: "Every tool route mounted and advertised on /api/pricing.", staleAfterMs: QUARTER_HOURLY },
@@ -152,7 +177,13 @@ export function overallState(components, railComponents = []) {
     (!railVoting.length || railVoting.every((c) => c.current?.state === "unknown"));
   if (allUnknown) return "unknown";
   const bad = (c) => ["outage", "degraded", "unknown"].includes(c.current?.state);
-  if (voting.some(bad) || railVoting.some(bad)) return "degraded";
+  // A rail behind its peers is a gap in measurement inside its daily bound,
+  // shown on its own card; it does not move the headline. Stale never
+  // upgrades it: a rail whose last reading was an outage or degraded still
+  // votes degraded while it lags.
+  const lastBad = (c) => ["outage", "degraded"].includes(c.current?.lastState);
+  const railBad = (c) => bad(c) && (c.current?.reason !== BEHIND_PEERS || lastBad(c));
+  if (voting.some(bad) || railVoting.some(railBad)) return "degraded";
   return "operational";
 }
 
@@ -218,7 +249,7 @@ export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays =
   // overall to "outage" (same doctrine as the existing aggregate "rails"
   // component and CORE_STATUS_KEYS below). They DO still feed overallState()
   // so a real per-chain outage is visible as "degraded", not silently absorbed.
-  const railComponents = RAIL_COMPONENTS.map(toComponent);
+  const railComponents = markRailsBehindPeers(RAIL_COMPONENTS.map(toComponent));
 
   // Incidents come from the availability component: the one with full history.
   const incidents = incidentsFrom(rowsByKey.get("api") ?? store.probeRows("api", since)).slice(0, 25);
@@ -316,6 +347,9 @@ export function observerLines(c) {
  *  line already says it there). */
 export function staleLine(c) {
   const cur = c.current || {};
+  if (cur.state === "unknown" && cur.reason === BEHIND_PEERS && Number.isFinite(cur.ageMs) && Number.isFinite(cur.peerAgeMs)) {
+    return `<p class="comp-b">${esc(`Not in the latest paid canary run: last observed ${ageStr(cur.ageMs)}, other rails ${ageStr(cur.peerAgeMs)}.`)}</p>`;
+  }
   if (cur.state !== "unknown" || cur.reason !== "no recent observation" || !Number.isFinite(cur.ageMs)) return "";
   if (observerLines(c)) return "";
   return `<p class="comp-b">${esc(`The last observation is stale: recorded ${ageStr(cur.ageMs)}.`)}</p>`;
@@ -554,7 +588,7 @@ ${windowList}
 
 <section>
 <h2 id="components">Components</h2>
-<p class="lead">Each bar is one UTC day; hover for that day's probe count. Grey means no observation was made that day, shown as absence rather than counted as uptime.</p>
+<p class="lead">Each bar is one UTC day; hover over or tap a bar for that day's probe count. Grey means no observation was made that day, shown as absence rather than counted as uptime.</p>
 <p class="bar-legend"><i class="b up"></i> every probe passed <i class="b partial"></i> some probes failed <i class="b down"></i> every probe failed <i class="b nodata"></i> no observation</p>
 ${snap.components.map(componentRow).join("\n")}
 
@@ -594,7 +628,7 @@ ${ledgerFooterCompact()}`;
   return ledgerShell({
     title: "Status - Agent402 x402 + MCP server uptime",
     description:
-      "Availability for Agent402.Tools, measured every few minutes by two independent observers outside production: per-component uptime history, incidents derived from real probes, and daily real-money payment checks.",
+      "Availability for Agent402.Tools, measured every few minutes by two independent observers outside production, with uptime history and incidents.",
     canonical: `${baseUrl}/status`,
     baseUrl,
     activePath: "/status",

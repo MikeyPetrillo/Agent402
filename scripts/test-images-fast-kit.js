@@ -475,7 +475,7 @@ for (const [label, opts] of [["a non-transient poll status", { pollHttp: [401] }
 // ---- image edit (/v1/images/edits) ----
 {
   installFetch();
-  const { examplePngBase64 } = await import("../src/tools/judge-preview-kit.js");
+  const { examplePngBase64 } = await import("../src/tools/image-size.js");
   const PNG = Buffer.from(examplePngBase64(), "base64"); // 300x300
   // A JPEG whose SOF0 frame names its size (the reader stops there).
   const jpegOf = (w, h) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03]), Buffer.alloc(32, 1)]);

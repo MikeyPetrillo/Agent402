@@ -28,9 +28,28 @@ export const ROUTER_UA = compatible(ROUTER_TOKEN);
  *  caller, not a crawl). */
 export const FETCH_TOKEN = "Agent402-Fetch";
 export const FETCH_UA = compatible(FETCH_TOKEN);
+/** The same caller fetch made by a headless browser (render, screenshot,
+ *  page-speed, html-frames): the desktop or mobile browser string a page
+ *  expects, so it renders as it does for a visitor, with the fetch token and
+ *  the /crawler link appended, so the site can recognize it and its
+ *  robots.txt rules for the token apply. */
+const browserWithToken = (browser) => `${browser} ${FETCH_TOKEN}/1.0 (+${INFO_URL})`;
+export const BROWSER_FETCH_UA = browserWithToken(
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+);
+export const BROWSER_FETCH_MOBILE_UA = browserWithToken(
+  "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36",
+);
 /** The multi-page site-crawl tool, which honors robots.txt for this token. */
 export const SITE_CRAWL_TOKEN = "Agent402Bot";
 export const SITE_CRAWL_UA = `${SITE_CRAWL_TOKEN}/1.0 (+${INFO_URL})`;
+
+/** A read of a fixed data API whose terms ask the caller to name itself with
+ *  a contact address (Open Food Facts: "AppName/Version (ContactEmail)"):
+ *  the data token, the contact and the /crawler link. */
+export const DATA_TOKEN = "Agent402-Data";
+export const DATA_CONTACT = "help@agent402.tools";
+export const DATA_UA = `${DATA_TOKEN}/1.0 (${DATA_CONTACT}; +${INFO_URL})`;
 
 /** The string we retired; no component sends it bare. */
 export const RETIRED_BARE_UA = "Agent402/1.0";

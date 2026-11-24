@@ -3,7 +3,7 @@
  * Plugin Name:       Agent402 Tollbooth
  * Plugin URI:        https://agent402.tools/tollbooth
  * Description:       Open-source pay-per-crawl gate for WordPress. Charge AI crawlers per request (USDC via x402, or a free CPU proof-of-work) while humans browse free. Mirrors the agent402-tollbooth npm package for non-Node sites.
- * Version:           0.1.1
+ * Version:           0.1.2
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Havok Holdings LLC
@@ -35,7 +35,7 @@ class Agent402_Tollbooth {
 
     const OPT_KEY        = 'agent402_tollbooth_options';
     const STATS_KEY      = 'agent402_tollbooth_stats';
-    const VERSION        = '0.1.1';
+    const VERSION        = '0.1.2';
     const MIN_SECRET_LEN = 32;
     const VERIFY_DOMAIN  = 'agent402-tollbooth-verify.v1';
     const NONCE_ACTION   = 'agent402_tollbooth_save';
@@ -51,6 +51,10 @@ class Agent402_Tollbooth {
         'Applebot-Extended', 'Diffbot', 'Omgilibot', 'ImagesiftBot',
         'YouBot', 'Timpibot', 'DuckAssistBot', 'PetalBot',
         'FriendlyCrawler', 'AI2Bot', 'Scrapy', 'python-requests',
+        'Claude-SearchBot', 'MistralAI-User', 'GoogleOther', 'Google-CloudVertexBot',
+        'GoogleAgent-Mariner', 'cohere-training-data-crawler', 'FirecrawlAgent',
+        'PhindBot', 'PanguBot', 'img2dataset', 'Webzio-Extended', 'YandexAdditional',
+        'bedrockbot', 'iaskspider', 'Andibot', 'Kangaroo Bot', 'python-httpx',
     ];
 
     public static function defaults() {

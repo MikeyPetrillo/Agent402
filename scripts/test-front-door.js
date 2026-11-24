@@ -542,7 +542,11 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
   const PROD_ORIGIN = "https://agent402.tools";
   const hostGrowth = (llms.split(BASE_URL).length - 1) * (PROD_ORIGIN.length - BASE_URL.length);
   const total = Buffer.byteLength(llms) + hostGrowth + gateway + channels;
-  ok(total < 16_384, `prod: /llms.txt with every rail on stays under 16,384 bytes (${Buffer.byteLength(llms)} served here, ${total} on production's origin with the batched option and channels)`);
+  // This measures the tree under test with production's switches; production's
+  // own served file is read by the deploy workflow's surface check. The bound
+  // keeps a margin, so one more line does not reach the cap unseen.
+  const MARGIN = 256;
+  ok(total <= 16_384 - MARGIN, `prod: /llms.txt with every rail on stays ${MARGIN} bytes under 16,384 (${Buffer.byteLength(llms)} served here, ${total} on production's origin with the batched option and channels)`);
 }
 
 console.log(`\n${pass} passed, ${failed} failed`);

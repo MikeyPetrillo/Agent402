@@ -70,5 +70,23 @@ for (const [label, g] of [
      "the verdict carries no number: a score invites a ranking, and a ranking over vendor flags reads as a measurement we did not make");
 }
 
+// --- GoPlus credited on every answer; the catalog text is unchanged --------
+{
+  const { TOKEN_SAFETY_TOOLS } = await import("../src/tools/token-safety-kit.js");
+  const { TOKEN_RISK_TOOLS } = await import("../src/tools/token-risk-kit.js");
+  const { GOPLUS_ATTRIBUTION } = await import("../src/data-attribution.js");
+  for (const t of [...TOKEN_SAFETY_TOOLS, ...TOKEN_RISK_TOOLS]) {
+    ok(t.credit === GOPLUS_ATTRIBUTION && !t.description.includes(GOPLUS_ATTRIBUTION) && /^Powered by GoPlus Security \(https:\/\/gopluslabs\.io\)\.$/.test(GOPLUS_ATTRIBUTION), `${t.slug}: answers carry "Powered by GoPlus" with its link`);
+    ok(t.discovery.output.example.credit === GOPLUS_ATTRIBUTION, `${t.slug}: published example carries the credit`);
+  }
+  const realFetch = globalThis.fetch;
+  const addr = "0x940181a94A35A4569E4529A3CDfB74e38FD98631";
+  globalThis.fetch = async () => new Response(JSON.stringify({ code: 1, result: { [addr.toLowerCase()]: { is_honeypot: "0", is_open_source: "1", is_mintable: "0", buy_tax: "0", sell_tax: "0" } } }), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    const r = await TOKEN_SAFETY_TOOLS.find((t) => t.slug === "token-safety").handler({ address: addr, chain: "base" });
+    ok(r.verdict && r.source === "GoPlus token_security" && r.credit === GOPLUS_ATTRIBUTION, `token-safety: the answer keeps its fields and carries the credit (${r.credit})`);
+  } finally { globalThis.fetch = realFetch; }
+}
+
 console.log(`test-token-safety: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

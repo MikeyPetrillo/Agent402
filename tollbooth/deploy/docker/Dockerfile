@@ -4,14 +4,14 @@
 # and TOLLBOOTH_FACILITATOR_URL to actually SETTLE (x402 + MPP) - the x402
 # packages are installed here so settlement mode works out of the box.
 # Base pinned by the multi-arch index digest (amd64 and arm64 both listed) to
-# Node 22.23.5, the patch every other image in this repository runs
+# Node 24.22.3, the patch every other image in this repository runs
 # (scripts/test-dockerfile-node-patch.js keeps them on one patch).
-FROM node:22.23.5-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a
+FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
 WORKDIR /app
 # Exact versions: the tollbooth release this tree builds and the x402 packages
 # the repository's lockfile tests it against (test-supply-chain-guards keeps
 # them equal), so a rebuild never picks up a release nobody here ran.
-RUN npm init -y >/dev/null 2>&1 && npm install agent402-tollbooth@0.12.1 @x402/express@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0
+RUN npm init -y >/dev/null 2>&1 && npm install agent402-tollbooth@0.13.0 @x402/express@2.32.0 @x402/core@2.32.0 @x402/evm@2.32.0
 ENV PORT=4021
 EXPOSE 4021
 # The packages are installed by root and only read at run time, so the proxy

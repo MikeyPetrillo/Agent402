@@ -39,7 +39,6 @@ const METERED = [
   "api.openai.com",
   "openrouter.ai",
   "e2b.dev",
-  "api.neynar.com",
   "alchemy.com",
   "hist.databento.com",
 ];
@@ -75,11 +74,20 @@ const ALLOWED = {
 // false negative here would let a real caller in under the noRequest flag.
 const REQUEST_VERBS = /\b(fetch|safeFetch|fetchJson|getJson|axios|request|https?\.(get|request))\s*\(/;
 
+// A page's link a reader follows (an HTML href attribute) is not a request
+// this server makes, so it is set aside before the host is looked for; a URL
+// in any other form (a fetch argument, a constant) is still read.
+const withoutLinks = (src) => src.replace(/\bhref="https?:\/\/[^"\s]*"/g, 'href=""');
+ok(!METERED.some((h) => withoutLinks('<a href="https://openrouter.ai/docs" rel="noopener">terms</a>').includes(h))
+  && METERED.some((h) => withoutLinks('await fetch("https://openrouter.ai/api/v1/models");').includes(h))
+  && METERED.some((h) => withoutLinks('const u = `href="${x}"`; fetch("https://openrouter.ai/x")').includes(h)),
+  "a page link to a metered host is not a call; a fetch of one still is");
+
 const dir = new URL("../src/", import.meta.url);
 const files = readdirSync(dir).filter((f) => f.endsWith(".js"));
 const offenders = [];
 for (const f of files) {
-  const src = readFileSync(new URL(f, dir), "utf8");
+  const src = withoutLinks(readFileSync(new URL(f, dir), "utf8"));
   const hit = METERED.find((h) => src.includes(h));
   if (!hit) continue;
   const rule = ALLOWED[f];

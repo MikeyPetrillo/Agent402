@@ -13,7 +13,7 @@
 // serve, is byte-stable for the index, and says when it was generated.
 import { siteOrgRef } from "./site-org.js";
 import { readdirSync, readFileSync } from "node:fs";
-import { trimWords, SERP_TITLE_MAX } from "./seo-meta.js";
+import { trimWords, SERP_TITLE_MAX, firstFit } from "./seo-meta.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HUMAN_PRODUCTS, reportHeadline } from "./human-checkout.js";
@@ -22,6 +22,46 @@ import { REPORT_MODEL_NOTE, reportIsModelWritten, kitDisclaimer } from "./report
 import { shownGroundingNote } from "./report-grounding.js";
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "assets", "samples");
+
+// The citation check of the fixtures (assets/samples/_citations.json): the
+// date each fixture's cited URLs were last fetched, and each source that no
+// longer answers at its address. The fixture stays as it was run; the page
+// shows an archived copy where one exists, else says the source is no longer
+// available and leaves its old address as plain text (never a dead link).
+export const CITATIONS = (() => {
+  try { return JSON.parse(readFileSync(join(DIR, "_citations.json"), "utf8")); } catch { return { checked: {}, sources: {} }; }
+})();
+
+const escRe = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const bareAddress = (u) => String(u).replace(/^https?:\/\//, "");
+
+/** A fixture's report text and sources with its citation-check entries applied. */
+export function applyCitationCheck(report, sources, entries, checked) {
+  let text = String(report || "");
+  let list = Array.isArray(sources) ? sources.map((x) => ({ ...x })) : [];
+  for (const e of Array.isArray(entries) ? entries : []) {
+    if (!e || typeof e.url !== "string" || !e.url) continue;
+    const when = checked ? `checked ${checked}` : "checked";
+    if (e.status === "archived" && typeof e.archived === "string" && /^https:\/\/web\.archive\.org\//.test(e.archived)) {
+      // A source line ("[n] Title - <url>" or "n. [Title](<url>)", the address
+      // last on its line) says which
+      // copy it links; an inline [label](<url>) link just takes the archived address.
+      const original = new RegExp(`(?<!web\\.archive\\.org/web/\\d+/)${escRe(e.url)}`, "g");
+      text = text.replace(original, e.archived);
+      text = text.replace(new RegExp(`(^(?:\\[\\d+\\]|\\d+\\.) [^\\n]*?${escRe(e.archived)}\\)?)[ \\t]*$`, "gm"), `$1 (archived copy: the original address no longer answers, ${when})`);
+      list = list.map((x) => (x.url === e.url ? { ...x, url: e.archived, originalUrl: e.url, archived: true, checked: checked || null } : x));
+    } else if (e.status === "gone") {
+      const marker = `source no longer available (${when}; it was at ${bareAddress(e.url)})`;
+      text = text.replace(new RegExp(`\\[([^\\]\\n]+)\\]\\(${escRe(e.url)}\\)`, "g"), `$1 (${marker})`);
+      text = text.split(e.url).join(marker);
+      list = list.map((x) => (x.url === e.url ? { ...x, url: null, originalUrl: e.url, available: false, checked: checked || null } : x));
+    } else if (typeof e.note === "string" && e.note) {
+      text = text.replace(new RegExp(`(^(?:\\[\\d+\\]|\\d+\\.) [^\\n]*?${escRe(e.url)}\\)?)[ \\t]*$`, "gm"), `$1 (${e.note}, ${when})`);
+      list = list.map((x) => (x.url === e.url ? { ...x, note: e.note, checked: checked || null } : x));
+    }
+  }
+  return { report: text, sources: list };
+}
 
 /** product key -> fixture (validated). Loaded once at import. */
 export const SAMPLES = (() => {
@@ -33,8 +73,10 @@ export const SAMPLES = (() => {
     const p = HUMAN_PRODUCTS[product];
     if (!p) continue; // a fixture for a product that no longer sells is not served
     try {
-      const j = JSON.parse(readFileSync(join(DIR, f), "utf8"));
-      if (!j || typeof j.report !== "string" || j.report.trim().length < 400) continue;
+      const raw = JSON.parse(readFileSync(join(DIR, f), "utf8"));
+      if (!raw || typeof raw.report !== "string" || raw.report.trim().length < 400) continue;
+      const checked = CITATIONS.checked?.[product] || null;
+      const j = { ...raw, ...applyCitationCheck(raw.report, raw.sources, CITATIONS.sources?.[product], checked) };
       out[product] = {
         status: "done",
         sample: true,
@@ -46,6 +88,7 @@ export const SAMPLES = (() => {
         title: reportHeadline({ report: j.report, title: j.title, input: j.input }, p.label),
         report: houseStyleBundle(j.report, 0, "report"),
         sources: Array.isArray(j.sources) ? j.sources : [],
+        ...(checked ? { citationsChecked: checked } : {}),
         tables: Array.isArray(j.tables) ? j.tables : [],
         at: j.at || j.generatedAt || null,
         priceUsd: p.price / 100,
@@ -97,7 +140,11 @@ export function sampleMeta(product, baseUrl) {
   if (s.sources.length) parts.push(`${s.sources.length} cited sources`);
   if (s.tables.length) parts.push(`${s.tables.length} data table${s.tables.length === 1 ? "" : "s"} with CSV downloads`);
   parts.push("a PDF download");
-  const description = `A real ${midSentence(s.label)} generated by Agent402 for "${s.input}": ${parts.join(", ")}. Read it free, then get one for your own ${inputNoun(s.kind)} for $${s.priceUsd.toFixed(0)}.`;
+  const description = firstFit([
+    `A real ${midSentence(s.label)} generated by Agent402 for "${s.input}": ${parts.join(", ")}. Read it free, then get one for your own ${inputNoun(s.kind)} for $${s.priceUsd.toFixed(0)}.`,
+    `A real ${midSentence(s.label)} generated by Agent402, with ${parts.join(", ")}. Read it free, then get one for your own ${inputNoun(s.kind)} for $${s.priceUsd.toFixed(0)}.`,
+    `A real ${midSentence(s.label)} generated by Agent402, free to read.`,
+  ]);
   const jsonLd = [
     { "@type": "BreadcrumbList", itemListElement: [
       { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },

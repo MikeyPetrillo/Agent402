@@ -5,7 +5,7 @@ name: Docker build check
 # to the node user and execs `node start.js`), then requires /health to answer
 # 200. Dispatch-only. It exists because a native-module bump can install fine
 # on a developer machine (a macOS prebuilt) and still fail `npm ci --omit=dev`
-# inside node:22-slim, which has no compiler: the July 2026 better-sqlite3 13.0.1
+# inside node:24-slim (as node:22-slim before it), which has no compiler: the July 2026 better-sqlite3 13.0.1
 # attempt did exactly that and the deploy fail-safed. Nothing on the machines
 # that prepare these bumps runs Docker, so this workflow is the build proof.
 # Dispatch it on the branch that carries the bump BEFORE trusting the bump.
@@ -64,7 +64,7 @@ jobs:
               echo "/health answered 200 after ~$((i*2)) s"
               head -c 600 /tmp/health.json; echo
               # The entrypoint must have dropped root: PID 1 (the server) runs as
-              # the node user. node:22-slim ships no `ps`, so read /proc directly
+              # the node user. node:24-slim ships no `ps`, so read /proc directly
               # and compare uids (docker exec itself runs as root here, which is
               # why `id -un` inside the container would prove nothing).
               uid1="$(docker exec a402 sh -c "awk '/^Uid:/{print \$2}' /proc/1/status")"

@@ -49,7 +49,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const NEW_TOOLS = [
   ...["contract-source", "contract-abi", "solidity-scan", "calldata-decode", "selector-lookup", "tx-simulate", "address-label"].map((s) => [s, CONTRACT_TOOLS, "contract-kit"]),
   ...["stablecoin-peg"].map((s) => [s, CRYPTO_TOOLS, "crypto-kit"]),
-  ...["lei-lookup", "wikidata-entity", "gravatar-check", "github-repo", "favicon-grab"].map((s) => [s, ENRICH_TOOLS, "enrich-kit"]),
+  ...["lei-lookup", "wikidata-entity", "github-repo", "favicon-grab"].map((s) => [s, ENRICH_TOOLS, "enrich-kit"]),
   ...["search-videos"].map((s) => [s, SEARCH_TOOLS, "search-kit"]),
   ...["archive-snapshot", "feed-parse", "unshorten-url"].map((s) => [s, WEB_TOOLS, "web-kit"]),
   ...["image-exif", "image-dominant-color", "image-crop"].map((s) => [s, IMAGE_TOOLS, "image-kit"]),

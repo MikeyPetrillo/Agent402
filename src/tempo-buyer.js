@@ -586,8 +586,8 @@ export async function payTempo(url, {
         if (struck) noteSellerDeliveryFailure(deliveryMemoSeller(url, sellerKey), "tempo", { status: paid.status, ms: Date.now() - sentAt, input: deliveryInput, payer, url, method });
         console.warn(`[tempo-buyer] ${where} answered HTTP ${paid.status} to the paid request and the chain shows the credential expired unused - not charged${struck ? ", noted as failing to deliver on tempo" : ""}`);
         const e = bad(paid.status === 402 || paid.status === 401
-          ? `Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`
-          : `Seller refused the request before taking payment (HTTP ${paid.status}); the credential expired unused, nothing charged`, 502);
+          ? `Seller refused the payment (HTTP ${paid.status}); the credential expired unused, so the seller was paid nothing`
+          : `Seller refused the request before taking payment (HTTP ${paid.status}); the credential expired unused, so the seller was paid nothing`, 502);
         e.refused = true;
         throw e;
       }

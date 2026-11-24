@@ -381,18 +381,23 @@ export function createWebBotAuth({ fetchDirectory = defaultFetchDirectory, now =
   const pending = new Set();
   const nonces = new Map(); // `${identity}|${nonce}` -> expiry ms
   let fetchWindow = { start: 0, n: 0 };
-  const tapKeys = new Map(); // keyid -> { entry: {key, agentId, directory}|null, exp, at }
+  // keyid -> { entry: {key, agentId, directory}|null, exp, at, verified }.
+  // `verified`: a signature has verified under this key here. Only such a key
+  // counts as known: a key id the registry does not list (a miss) and a listed
+  // key no signature has verified under are what a caller can make up.
+  const tapKeys = new Map();
   const tapPending = new Set();
   let tapWindow = { start: 0, n: 0, unknown: 0 };
 
-  // Keys never seen verified take at most half the minute's reads, so a
-  // flood of made-up key ids cannot starve the refresh of a key that verified.
+  // Keys never seen verified (made-up key ids, and listed keys no signature
+  // has verified under) take at most half the minute's reads, so a flood of
+  // them cannot starve the refresh of a key that verified.
   function scheduleTap(keyid) {
     if (tapPending.has(keyid) || tapPending.size >= TAP_FETCH_INFLIGHT) return;
     const t = now();
     if (t - tapWindow.start >= 60_000) tapWindow = { start: t, n: 0, unknown: 0 };
     if (tapWindow.n >= TAP_FETCH_PER_MIN) return;
-    const known = Boolean(tapKeys.get(keyid)?.entry);
+    const known = tapKeys.get(keyid)?.verified === true;
     if (!known && (tapWindow.unknown || 0) >= Math.floor(TAP_FETCH_PER_MIN / 2)) return;
     tapWindow.n++;
     if (!known) tapWindow.unknown = (tapWindow.unknown || 0) + 1;
@@ -406,10 +411,18 @@ export function createWebBotAuth({ fetchDirectory = defaultFetchDirectory, now =
       storeTap(keyid, entry, ttl);
     }, () => storeTap(keyid, null, TAP_MISS_TTL_MS)).finally(() => tapPending.delete(keyid));
   }
+  // A full cache gives up its oldest entry that never verified a signature,
+  // and a verified key only when every entry is one. A key read again keeps
+  // its verified mark while the registry still lists it.
   function storeTap(keyid, entry, ttl) {
-    if (tapKeys.size >= TAP_KEYS_MAX && !tapKeys.has(keyid)) tapKeys.delete(tapKeys.keys().next().value);
+    const was = tapKeys.get(keyid);
+    if (tapKeys.size >= TAP_KEYS_MAX && !was) {
+      let drop = null;
+      for (const [k, e] of tapKeys) { if (e?.verified !== true) { drop = k; break; } }
+      tapKeys.delete(drop ?? tapKeys.keys().next().value);
+    }
     tapKeys.delete(keyid);
-    tapKeys.set(keyid, { entry, exp: now() + ttl, at: now() });
+    tapKeys.set(keyid, { entry, exp: now() + ttl, at: now(), verified: !!entry && was?.verified === true });
   }
 
   /** The synchronous half of a TAP check: everything but the body's digest and
@@ -455,11 +468,11 @@ export function createWebBotAuth({ fetchDirectory = defaultFetchDirectory, now =
     if (base == null) return fail("unsupported-component");
     let good = false;
     try { good = sigItem.v.length === 64 && cryptoVerify(null, Buffer.from(base, "utf8"), cached.entry.key, sigItem.v); } catch { good = false; }
-    if (!good) {
-      // A key the registry has since replaced is read again (the fetch budget bounds this).
-      if (now() - cached.at >= 5_000) tapKeys.delete(keyid);
-      return fail("bad-signature");
-    }
+    // A bad signature changes nothing cached: the key id is the key's own
+    // thumbprint, so the registry cannot hold another key under it, and a
+    // forged signature must never evict a real agent's key or spend a read.
+    if (!good) return fail("bad-signature");
+    cached.verified = true;
     return { ctx: { tag, keyid, nonce: typeof nonce === "string" ? nonce : null, expires, entry: cached.entry, digestHeader: names.includes("content-digest") ? req.headers["content-digest"] : null } };
   }
   /** The asynchronous half: the body's digest, then the nonce claim. */

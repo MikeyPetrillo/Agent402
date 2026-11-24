@@ -297,6 +297,14 @@ try {
   }
 }
 
+// --- A renamed guide answers 301 to its new slug (the chain count is not in a slug) ---
+{
+  const res = await fetch(`${BASE}/guides/why-twelve-chains?ref=x`, { redirect: "manual" });
+  ok(res.status === 301 && res.headers.get("location") === "/guides/why-many-chains?ref=x", `/guides/why-twelve-chains -> 301 /guides/why-many-chains (got ${res.status} ${res.headers.get("location")})`);
+  const now = await fetch(`${BASE}/guides/why-many-chains`);
+  ok(now.status === 200 && /<link rel="canonical" href="[^"]*\/guides\/why-many-chains"/.test(await now.text()), "/guides/why-many-chains serves the guide under its own canonical");
+}
+
 // --- "Why pay here": three short claims on the home page (#why), the seven
 // full rows and the side-by-side table on /docs#why; /why redirects there ---
 {
@@ -382,8 +390,12 @@ try {
   ok(/research monitor sends no alerts/.test(strip(await (await fetch(`${BASE}/monitors`)).text())), "/monitors says the research monitor waits past the cap");
   // /playground: the picker lists free tools; a paid tool's setup link is
   // never inside a disabled button.
+  // The picker's index is served with the page (free tools only); a tool's
+  // form data is fetched when it is picked.
   const pg = await (await fetch(`${BASE}/js/playground.js`)).text();
-  ok(/tools=tools\.filter\(function\(t\)\{return t\.computePayable\}\)/.test(pg) && !/dbtn\.disabled=true/.test(pg), "/playground lists free tools and puts the setup link outside any disabled button");
+  const pgPage = await (await fetch(`${BASE}/playground`)).text();
+  const pgIndex = (JSON.parse((pgPage.match(/<script type="application\/json" id="pg-tools-data">([\s\S]*?)<\/script>/) || [])[1] || "{}").index) || [];
+  ok(pgIndex.length > 0 && pgIndex.every((t) => bySlug.get(t.slug)?.computePayable === true) && !/dbtn\.disabled=true/.test(pg), `/playground lists free tools and puts the setup link outside any disabled button (${pgIndex.length})`);
 }
 
 // --- home: no stats strip under the two doors --------------------------------
@@ -399,6 +411,15 @@ try {
   const hero = (home.match(/<header[\s\S]*?<\/header>/) || [""])[0];
   ok(hero.includes('href="/start"') && /btn-primary" href="\/start">Add to your agent</.test(hero), "hero primary is Add to your agent, to /start");
   ok(/btn-secondary" href="\/tools">Browse tools</.test(hero), "hero secondary is Browse tools");
+  // "Add to your agent" lands on /docs#add, which leads with the no-terminal
+  // path (a custom connector in the Claude app), then the terminal lines.
+  {
+    const docsHtml = await (await fetch(`${BASE}/docs`)).text();
+    const add = docsHtml.slice(docsHtml.indexOf('id="add"'));
+    const addText = stripTags(stripScripts(add)).replace(/\s+/g, " ");
+    const custom = addText.indexOf("Add custom connector"), term = addText.indexOf("claude mcp add");
+    ok(custom > 0 && term > custom && /claude\.ai/.test(addText.slice(0, term)) && addText.slice(custom, term).includes("/mcp"), `/docs#add leads with the custom connector in the Claude app, then the terminal (${custom}, ${term})`);
+  }
   ok(!/Buy a report|by card|agentic finance/i.test(hero.replace(/<div class="hm-obsidian[\s\S]*$/, "")), "hero copy carries no report, card or agentic-finance line");
 }
 
@@ -431,17 +452,19 @@ try {
 }
 
 // --- the footer's "more" row is gone; its pages moved or retired -----------
-// /faq stays (linked from the home FAQ, listed in the sitemap); /compare,
-// /use-cases and /badges became sections of /docs; /community, /shop and the
-// weekly digest page redirect. The agent row still links SKILL.md and webhooks.
-const MOVED = { "/compare": "/docs#why-compare", "/use-cases": "/docs#examples", "/badges": "/docs#badges", "/community": "/integrations", "/shop": "/tools", "/digest": "/docs" };
+// /faq stays (linked from the home FAQ, listed in the sitemap); /use-cases
+// and /badges became sections of /docs; /community, /shop and the weekly
+// digest page redirect. /compare is a page of its own again (it answers 200,
+// checked in scripts/test-crawl-signals.js) and still stays off the footer.
+// The agent row still links SKILL.md and webhooks.
+const MOVED = { "/use-cases": "/docs#examples", "/badges": "/docs#badges", "/community": "/integrations", "/shop": "/tools", "/digest": "/docs" };
 {
   for (const p of ["/", "/pricing", "/docs"]) {
     const html = await (await fetch(`${BASE}${p}`)).text();
     const foot = (html.match(/<footer[\s\S]*?<\/footer>/) || [""])[0];
     ok(foot.length > 500, `${p} renders the footer`);
     ok(!/>more<\/span>/.test(foot), `${p} footer has no "more" row`);
-    for (const old of [...Object.keys(MOVED), "/faq"]) ok(!foot.includes(`href="${old}"`), `${p} footer does not link ${old}`);
+    for (const old of [...Object.keys(MOVED), "/faq", "/compare"]) ok(!foot.includes(`href="${old}"`), `${p} footer does not link ${old}`);
     for (const keep of ["/SKILL.md", "/docs/webhooks"]) ok(foot.includes(`href="${keep}"`), `${p} footer still links ${keep}`);
   }
   for (const [from, to] of Object.entries(MOVED)) {

@@ -21,6 +21,16 @@
   }
   // The site's widow and code-seam binding (site-chrome.js), run on text this script draws.
   function bind(el) { try { if (window.a402BindWidows) window.a402BindWidows(el || root); } catch (e) {} }
+  // A balance's name: the day it was bought (UTC), as src/credits-account-page.js
+  // balanceName draws it; two from one day keep the key id's last four apart.
+  var allBalances = [];
+  function dayOf(x) { var d = new Date((x && x.createdAt) || ""); return isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }); }
+  function balanceName(b) {
+    var mine = dayOf(b), id = String((b && b.keyId) || "");
+    if (!mine) return "Balance " + id.slice(-4);
+    var twin = allBalances.some(function (o) { return o && o.keyId !== b.keyId && dayOf(o) === mine; });
+    return "Balance bought " + mine + (twin ? " (" + id.slice(-4) + ")" : "");
+  }
   function usd(n) { return "$" + Number(n || 0).toFixed(2); }
   function usdFine(n) { var v = Number(n || 0); return "$" + (v !== 0 && Math.abs(v) < 0.01 ? v.toFixed(4) : v.toFixed(2)); }
   function post(path, body) {
@@ -102,10 +112,10 @@
     var st = stateOf(b);
     var open = !b.disabled && !b.refund;
     var card = h("div", { class: "acct-card", "data-key": b.keyId });
-    card.appendChild(h("div", { class: "acct-head" }, [h("span", { class: "acct-id", text: "Key id " + b.keyId }), h("span", { class: "acct-state " + st[1], text: st[0] })]));
+    card.appendChild(h("div", { class: "acct-head" }, [h("h2", { class: "acct-name", text: balanceName(b) }), h("span", { class: "acct-state " + st[1], text: st[0] })]));
     card.appendChild(h("div", { class: "acct-amt", text: usdFine(b.balanceUsd) }));
     card.appendChild(h("div", { class: "acct-meta" }, [
-      h("span", { text: "Loaded " + usd(b.loadedUsd) }), h("span", { text: "Spent " + usdFine(b.spentUsd) }),
+      h("span", { text: "Key id " + b.keyId }), h("span", { text: "Loaded " + usd(b.loadedUsd) }), h("span", { text: "Spent " + usdFine(b.spentUsd) }),
       b.heldUsd > 0 ? h("span", { text: "Held " + usdFine(b.heldUsd) }) : null, h("span", { text: (b.calls || 0) + " calls" }),
     ]));
     var actions = h("div", { class: "acct-row" });
@@ -184,7 +194,7 @@
     var card = h("div", { class: "acct-card" });
     var sel = h("select", { id: "buy-pack", disabled: packs.length ? null : true }, packs.length ? packs.map(function (p) { return h("option", { value: p.id, selected: p.id === want ? true : null, text: usd(p.usd) }); }) : [h("option", { text: "Not on sale" })]);
     card.appendChild(h("div", { class: "acct-section", style: "margin-top:0" }, [
-      h("h3", { text: "Buy credits" }),
+      h("h2", { text: "Buy credits" }),
       h("p", { text: "A purchase issues a new key holding the pack, shown once after you pay and emailed to you. Your bank may ask you to confirm the payment." }),
       h("div", { class: "acct-row" }, [
         h("label", { for: "buy-pack" }, ["Pack", sel]),
@@ -207,8 +217,9 @@
       if (!c) return;
       wrap.textContent = "";
       var sec = h("div", { class: "acct-section" }, [
-        h("h3", { text: "Connected apps" }),
-        h("p", { text: "Apps you connected with your email code pay for tool calls from one balance, up to a daily cap (UTC day). Change a cap or disconnect an app here; a disconnected app stops paying at once." }),
+        h("h2", { text: "Connected apps" }),
+        h("p", { text: "Apps you connected with your email code pay for tool calls from one balance, up to a daily cap (UTC day). Change a cap or disconnect an app here; a disconnected app stops paying at once. A call is refused once it would pass either the app's cap or the balance's own daily limit." }),
+        c.connectorUrl ? h("p", null, ["To connect Claude, Cursor or another MCP app, give it this connector address: ", h("code", { text: c.connectorUrl }), ". It asks for your email code, then a balance and a daily cap."]) : null,
       ]);
       wrap.appendChild(sec);
       if (!c.apps || !c.apps.length) { sec.appendChild(h("p", { text: "No apps are connected." })); bind(wrap); return; }
@@ -216,7 +227,7 @@
         var card = h("div", { class: "acct-card", "data-app": a.id });
         card.appendChild(h("div", { class: "acct-head" }, [h("span", { class: "acct-id", text: a.app }), h("span", { class: "acct-state ok", text: "Connected" })]));
         card.appendChild(h("div", { class: "acct-meta" }, [
-          h("span", { text: "Balance " + a.keyId }), h("span", { text: "Spent today " + usdFine(a.spentTodayUsd) + " of " + usd(a.capUsd) }),
+          h("span", { text: balanceName(allBalances.filter(function (x) { return x.keyId === a.keyId; })[0] || { keyId: a.keyId }) }), h("span", { text: "Spent today " + usdFine(a.spentTodayUsd) + " of " + usd(a.capUsd) }),
           h("span", { text: "Connected " + when(a.createdAt) }), h("span", { text: "Last used " + when(a.lastUsedAt) }),
           a.lastNetwork ? h("span", { text: "From " + a.lastNetwork }) : null,
         ]));
@@ -255,15 +266,18 @@
         note.textContent = c.status === "over_balance_cap" ? "The top-up did not fit under the cap and was refunded in full." : c.status === "topup_refused" ? "This balance could not take the top-up, so it was refunded in full." : c.status === "over_limit" ? "The daily purchase limit was reached, so the top-up was refunded in full." : c.status === "not_completed" ? (c.error || "This purchase can't be completed right now.") + " The top-up was refunded in full." : "The top-up has not been confirmed yet. Reload in a moment.";
       }).catch(function () {});
     }
+    allBalances = s.balances || [];
+    // Connected apps sit above the balances, so an app user sees first what
+    // pays for their app (the section is absent while the connector is off).
+    var apps = h("div");
+    root.appendChild(apps);
+    connectedApps(apps);
     root.appendChild(buyBlock(s.packs || []));
     var list = h("div", { class: "acct-bal" });
     root.appendChild(list);
     if (!s.balances.length) list.appendChild(h("p", { class: "lede", text: "No balance is on this email yet." }));
     s.balances.forEach(function (b) { list.appendChild(balanceCard(b, s.packs || [], s.lowNoticeUsd)); });
     root.appendChild(h("p", { class: "note", text: "Each balance holds at most " + usd(s.capUsd) + ". Credits never expire and carry no fees." }));
-    var apps = h("div");
-    root.appendChild(apps);
-    connectedApps(apps);
     bind(root);
   }
   function load() {

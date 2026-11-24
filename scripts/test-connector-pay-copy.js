@@ -213,6 +213,16 @@ for (const boot of BOOTS) {
     const hasMpp = Array.isArray(ask._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges);
     ok(hasOffer === boot.x402 && hasMpp === boot.mpp, `${boot.label}: a paid tool's first ask carries ${want} (x402 offer ${hasOffer}, MPP challenges ${hasMpp})`);
     if (boot.x402) ok(offer?.resource?.url === `${ORIGIN}/mcp`, `${boot.label}: a flagship called by name quotes the resource /mcp, as the wiki says`);
+    // The npm-server setup reads as sentences: the command with its variables,
+    // then the wallet warning on its own (never "agent402-mcp with Use a new wallet").
+    {
+      const piText = JSON.stringify(pi.structuredContent || pi.content || "");
+      const WARN = "Use a new wallet holding only a few dollars of USDC, never your main wallet.";
+      for (const [where, t] of [["payment.info", piText], ["a paid tool's ask", askText]]) {
+        ok(!/agent402-mcp`? with (?:env )?Use a new wallet/.test(t) && t.includes(WARN) && /agent402-mcp`? with (?:env )?AGENT_KEY=0x<private key>/.test(t),
+          `${boot.label}: ${where} names the command with AGENT_KEY, then the wallet warning as its own sentence`);
+      }
+    }
   } catch (e) {
     ok(false, `${boot.label}: ${e?.stack || String(e)}`);
   } finally {

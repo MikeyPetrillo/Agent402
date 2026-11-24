@@ -288,7 +288,7 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
     ["$0.55 (`route-execute-max`)", "route-execute-pro is $3.30, so the routing tiers do not top out there"],
     ["200+ pure-CPU", "the proof-of-work tier is the eligible list at /api/pow (166 tools on 2026-09-26); do not type a count"],
     ["Over\n200 of the 500+ tools", "the proof-of-work tier is the eligible list at /api/pow; do not type a count"],
-    ["100 skill packs", "the pack count is live on /skills; the public copy says 70+"],
+    ["100 skill packs", "the pack count is live on /skills; the public copy says 80+"],
     ["Base + 4 more chains", "the payment rails are the networks in /api/pricing, not a typed count"],
     ["$0.003 to $0.119", `a retired pack range; the packs run ${PACK_PRICE_RANGE.text} (PACK_PRICE_RANGE)`],
     ["200+ deterministic pure-CPU", "the proof-of-work tier is the eligible list at /api/pow; do not type a count"],

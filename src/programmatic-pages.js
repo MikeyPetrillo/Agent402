@@ -31,6 +31,7 @@
 // cap: the largest index complexes publish tables in the tens of megabytes, and
 // a free page must be able to decline that read.
 import { siteOrgRef } from "./site-org.js";
+import { createJsonDocument } from "./json-document.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd, breadcrumbLd as sharedBreadcrumbLd } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
@@ -41,7 +42,7 @@ import { probeInsiderFilings, parseForm4 } from "./tools/insider-flow-kit.js";
 import { resolveCompany, resolveManager, edgarGetJson, fetchXmlText, findInformationTable, parse13fInformationTable, latest13fFiling } from "./tools/edgar-kit.js";
 import { SEED_TICKERS, SEED_MANAGERS, seededManager, isSeededTicker } from "./programmatic-seeds.js";
 import { alertFormHtml } from "./free-alerts.js";
-import { fitTitle } from "./seo-meta.js";
+import { fitTitle, firstFit } from "./seo-meta.js";
 import { keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative, fmtMoney, formName, documentLabel, stateName, isOfferingNoise } from "./edgar-summary.js";
 
 // --- validation -------------------------------------------------------------
@@ -104,6 +105,8 @@ export function createTeaserCache({ ttlMs = TTL_MS, negTtlMs = NEG_TTL_MS, max =
 }
 
 const cache = createTeaserCache();
+// Tests empty the process cache to rebuild a page (scripts/test-crawl-signals.js).
+export const __clearTeaserCache = () => cache.clear();
 
 // --- sitemap lastmod for a seeded entity page --------------------------------
 // The newest filing date a page shows: the newest Form 4 on an insider page,
@@ -124,7 +127,68 @@ export function teaserLastmod(kind, data) {
 // served; it starts empty, and a page not built since boot carries no lastmod.
 const entityDates = new Map();
 export const entityLastmod = (path) => entityDates.get(path) || null;
+// Paths whose last render was the degraded page (EDGAR unread): kept out of
+// the sitemap until a complete build replaces it, the same signal the page
+// itself sends (meta robots and X-Robots-Tag noindex). Bounded by the seed
+// list, since only a seeded entity degrades.
+const degradedEntities = new Set();
+// Paths whose last complete build was thin (entityThin below). Unlike a
+// degraded render, a thin decision is about the data, so it is kept across
+// restarts (one JSON document: the state database row, else the file
+// PROGRAMMATIC_THIN_FILE) and read at boot, and the sitemap leaves the page out
+// from the first request after a deploy, not only once this process has built
+// it again. Bounded by the seed list; the sitemap routes wait for the read
+// (programmaticThinReady, at most THIN_READ_WAIT_MS).
+const thinEntities = new Set();
+export const PROGRAMMATIC_THIN_DOC = "programmatic-thin";
+export const THIN_READ_WAIT_MS = 2_000;
+const SEEDED_PATH = /^\/reports\/(?:insider|fund|dossier)\/[A-Za-z0-9.-]{1,64}$/;
+let thinDoc = null;
+const thinStore = () => (thinDoc ||= createJsonDocument({ name: PROGRAMMATIC_THIN_DOC, file: process.env.PROGRAMMATIC_THIN_FILE || "/data/programmatic-thin.json", log: () => {} }));
+let thinRead = null;
+/** Resolves once the kept thin decisions are read (or the read gave up). */
+export function programmaticThinReady() {
+  thinRead ||= (async () => {
+    try {
+      const r = await thinStore().read({ quiet: true });
+      const paths = r && r.ok && r.body && Array.isArray(r.body.paths) ? r.body.paths : [];
+      // A decision this process made before the read finished stands.
+      for (const p of paths) if (typeof p === "string" && SEEDED_PATH.test(p) && !thinDecided.has(p)) thinEntities.add(p);
+    } catch { /* unreadable: the pages are judged again when built */ }
+  })();
+  return Promise.race([thinRead, new Promise((r) => setTimeout(r, THIN_READ_WAIT_MS).unref?.())]);
+}
+const thinDecided = new Set();
+function keepThin(path, thin) {
+  thinDecided.add(path);
+  const had = thinEntities.has(path);
+  if (thin) thinEntities.add(path); else thinEntities.delete(path);
+  if (had === thin) return;
+  void thinStore().update((b) => {
+    const set = new Set(b && Array.isArray(b.paths) ? b.paths.filter((x) => typeof x === "string" && SEEDED_PATH.test(x)) : []);
+    if (thin) set.add(path); else set.delete(path);
+    return { paths: [...set].sort() };
+  }, { fallback: { paths: [] } }).catch(() => {});
+}
+export const entityDegraded = (path) => degradedEntities.has(path) || thinEntities.has(path);
+export function markEntityDegraded(kind, slug) { degradedEntities.add(`/reports/${kind}/${slug}`); }
+
+/** A page whose free data stays too thin to stand on its own: an insider page
+ *  with fewer than THIN_INSIDER_ROWS transactions (or detail EDGAR could not
+ *  read), a fund page with no holdings table, a company page with no annual
+ *  results and no filing activity. Such a page is still served, but noindex
+ *  and out of the sitemap, until a build with the data replaces it. */
+export const THIN_INSIDER_ROWS = 3;
+export function entityThin(kind, data) {
+  if (!data) return true;
+  if (kind === "insider") return Boolean(data.partial) || (data.rows || []).length < THIN_INSIDER_ROWS;
+  if (kind === "fund") return !data.holdingsAvailable || !(data.holdings || []).length;
+  if (kind === "dossier") return !(data.financials?.rows || []).length && !Number(data.activity?.total);
+  return false;
+}
 function recordEntityDate(kind, slug, data) {
+  degradedEntities.delete(`/reports/${kind}/${slug}`);
+  keepThin(`/reports/${kind}/${slug}`, entityThin(kind, data));
   const d = data && !data.partial ? teaserLastmod(kind, data) : null;
   if (d) entityDates.set(`/reports/${kind}/${slug}`, d);
 }
@@ -417,7 +481,7 @@ export async function loadTeaser(kind, slug, { seeded = false, builders = {}, te
   } catch (e) {
     // A SEEDED entity is known to exist - we curated it - so no read failure
     // may ever turn its page into a 404. It degrades instead.
-    if (seeded) return { status: "degraded" };
+    if (seeded) { if (teaserCache === cache) markEntityDegraded(kind, slug); return { status: "degraded" }; }
     if (isUnresolvable(e)) { teaserCache.setMiss(key); return { status: "missing" }; }
     // Could not READ an off-list slug: refuse it, but only briefly, so a real
     // long-tail page comes back on its own once EDGAR answers again.
@@ -450,6 +514,7 @@ export const FAMILIES = {
 export const PROGRAMMATIC_CSS = `
 .pg-glance{margin:18px 0 22px;}
 .pg-glance h2{font-size:var(--fs-lg);margin:0 0 8px;}
+.pg-h2{font-size:var(--fs-lg);font-weight:700;margin:22px 0 8px;}
 .pg-glance p{margin:0 0 10px;line-height:1.6;}
 .pg-chg{color:var(--muted);font-size:var(--fs-xs);}
 
@@ -543,13 +608,26 @@ function metaTags(items) {
   return `<div class="pg-meta pg-meta-tags">${items.filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div>`;
 }
 
-function shell({ title, description, canonical, baseUrl, body, jsonLd }) {
+function shell({ title, description, canonical, baseUrl, body, jsonLd, degraded = false }) {
   return ledgerShell({
     title, description, canonical, baseUrl, activePath: "/reports",
+    // A degraded page states no numbers: its meta tag says noindex, matching
+    // the X-Robots-Tag header the route sends with it.
+    ...(degraded ? { robots: "noindex, follow" } : {}),
     extraCss: REPORTS_CSS + PROGRAMMATIC_CSS,
     body: `<div class="wrap">${breadcrumbNavFromLd(baseUrl, jsonLd)}${body}</div>${ledgerFooterCompact()}<script src="/js/report-buy.js"></script><script src="/js/alert-signup.js"></script>`,
     jsonLd,
   });
+}
+
+/** Per insider: the lines filed, and the open-market value sold and bought,
+ *  from the rows on the page (insiderSummary). Nothing when one insider filed. */
+function byInsiderTable(rows) {
+  const people = insiderSummary(rows).people || [];
+  if (people.length < 2) return "";
+  return `<h2 class="pg-h2">By insider</h2><div class="pg-table-wrap"><table class="pg-table">
+<thead><tr><th>Insider and role</th><th>Lines filed</th><th>Sold on the market</th><th>Bought on the market</th></tr></thead>
+<tbody>${people.map((p) => `<tr><td class="who"><span class="pg-who-name">${esc(p.insider)}</span>${p.role ? `<span class="pg-who-role">${esc(p.role)}</span>` : ""}</td><td class="num">${esc(String(p.lines))}</td><td class="num">${p.sold ? esc(fmtMoney(p.sold)) : ""}</td><td class="num">${p.bought ? esc(fmtMoney(p.bought)) : ""}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 // --- insider page -----------------------------------------------------------
@@ -560,9 +638,16 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
   const title = `${ticker} insider buying and selling: latest Form 4 filings`;
   const buys = (data?.rows || []).filter((r) => r.code === "P").length;
   const sells = (data?.rows || []).filter((r) => r.code === "S").length;
-  const description = data
-    ? `Who is buying and selling ${name} (${ticker}) stock: the latest SEC Form 4 filings with insider name, role, transaction code, shares and price. ${data.filingsInWindow} filings in the last ${data.windowDays} days.`
-    : `Who is buying and selling ${ticker} stock: the latest SEC Form 4 insider filings, filer name, role, transaction code, shares and price, straight from EDGAR.`;
+  // Whole sentences within a snippet (firstFit): the long form when the name
+  // is short enough, else a shorter one, never a sentence cut in the middle.
+  const description = firstFit(data ? [
+    `Who is buying and selling ${name} (${ticker}) stock: the latest SEC Form 4 filings with insider name, role, transaction code, shares and price. ${data.filingsInWindow} filings in the last ${data.windowDays} days.`,
+    `Who is buying and selling ${name} (${ticker}) stock: the latest SEC Form 4 filings, free from EDGAR. ${data.filingsInWindow} filings in the last ${data.windowDays} days.`,
+    `${ticker} insider buying and selling: the latest SEC Form 4 filings, free from EDGAR.`,
+  ] : [
+    `Who is buying and selling ${ticker} stock: the latest SEC Form 4 insider filings, filer name, role, transaction code, shares and price, straight from EDGAR.`,
+    `${ticker} insider buying and selling: the latest SEC Form 4 filings, free from EDGAR.`,
+  ]);
   const rows = data?.rows || [];
   const table = rows.length
     ? `<div class="pg-table-wrap"><table class="pg-table">
@@ -579,6 +664,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
 <section>
   ${table}
   ${(() => { const paras = insiderNarrative(name, ticker, data, insiderSummary(rows), { maxFilings: INSIDER_TIERS["insider-report"].maxFilings }); return paras.length ? `<div class="pg-glance"><h2>What the filings show</h2>${paras.map((p) => `<p>${esc(p)}</p>`).join("")}</div>` : ""; })()}
+  ${byInsiderTable(rows)}
   ${rows.length ? `<div class="pg-meta">Transaction codes: P is an open-market purchase, S an open-market sale, A a grant or award, M an option exercise, F shares surrendered for tax. ${buys} open-market buy${buys === 1 ? "" : "s"} and ${sells} open-market sale${sells === 1 ? "" : "s"} in the rows above.</div>` : ""}
   ${buySection({ family, alertKind: "insider", input: ticker, headline: `The Form 4 flow against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads the newest Form 4 filings of the last ${INSIDER_DEFAULT_DAYS} days (up to ${INSIDER_TIERS["insider-report"].maxFilings}), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
   ${crossLinks([
@@ -591,7 +677,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
   <p class="pg-note">${esc(DISCLAIMER)}</p>
 </section>`;
   return shell({
-    title, description, canonical, baseUrl, body,
+    title, description, canonical, baseUrl, body, degraded: degraded || !data || entityThin("insider", data),
     jsonLd: [
       datasetLd(baseUrl, { name: `${ticker} Form 4 insider transactions`, description, canonical, modified: teaserLastmod("insider", data) }),
       breadcrumbLd(baseUrl, [{ name: "Reports", path: "/reports" }, { name: "Insider filings", path: "/reports/insider" }, { name: ticker, path: `/reports/insider/${ticker}` }]),
@@ -607,9 +693,14 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
   const name = data?.name || seed?.name || slugToName(slug);
   const canonical = `${baseUrl}/reports/fund/${slug}`;
   const title = fitTitle([`${name} 13F holdings: latest portfolio from SEC filings`, `${name} 13F holdings: latest SEC portfolio`, `${name} 13F holdings`]);
-  const description = data
-    ? `What ${name} holds: the latest SEC Form 13F-HR, period ending ${data.reportDate}, filed ${data.filedDate}${data.holdingsAvailable ? `, ${fmtInt(data.totalHoldings)} positions worth ${fmtUsd(data.totalValueUsd)}` : ""}. Top holdings shown free.`
-    : `What ${name} holds: the latest SEC Form 13F-HR portfolio, position count and top holdings by reported value, straight from EDGAR.`;
+  const description = firstFit(data ? [
+    `What ${name} holds: the latest SEC Form 13F-HR, period ending ${data.reportDate}, filed ${data.filedDate}${data.holdingsAvailable ? `, ${fmtInt(data.totalHoldings)} positions worth ${fmtUsd(data.totalValueUsd)}` : ""}. Top holdings shown free.`,
+    `What ${name} holds: the latest SEC Form 13F-HR, filed ${data.filedDate}. Top holdings shown free.`,
+    `The latest 13F-HR holdings of ${name} from SEC EDGAR, top holdings shown free.`,
+  ] : [
+    `What ${name} holds: the latest SEC Form 13F-HR portfolio, position count and top holdings by reported value, straight from EDGAR.`,
+    `The latest 13F-HR holdings of ${name} from SEC EDGAR, top holdings shown free.`,
+  ]);
   const facts = data ? `<div class="pg-facts">
   <div class="pg-fact"><div class="l">Period</div><div class="v">${esc(data.reportDate || "")}</div></div>
   <div class="pg-fact"><div class="l">Filed</div><div class="v">${esc(data.filedDate || "")}</div></div>
@@ -644,7 +735,7 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
   <p class="pg-note">${esc(DISCLAIMER)}</p>
 </section>`;
   return shell({
-    title, description, canonical, baseUrl, body,
+    title, description, canonical, baseUrl, body, degraded: degraded || !data || entityThin("fund", data),
     jsonLd: [
       datasetLd(baseUrl, { name: `${name} Form 13F-HR holdings`, description, canonical, modified: teaserLastmod("fund", data) }),
       breadcrumbLd(baseUrl, [{ name: "Reports", path: "/reports" }, { name: "Fund 13F holdings", path: "/reports/fund" }, { name, path: `/reports/fund/${slug}` }]),
@@ -681,9 +772,15 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
   const canonical = `${baseUrl}/reports/dossier/${ticker}`;
   const title = fitTitle([`${ticker} due diligence: SEC filing profile for ${name}`, `${ticker} due diligence: ${name} SEC profile`, `${ticker} due diligence: SEC filing profile`]);
   const fin0 = data?.financials?.rows?.[0] || null;
-  const description = data
-    ? `${name} (${ticker}) from its SEC filings: ${fin0 && Number.isFinite(fin0.revenue) ? `revenue ${fmtMoney(fin0.revenue)} for the fiscal year ended ${fin0.end}, ` : ""}${data.industry ? `${data.industry}, ` : ""}CIK ${data.cik}${data.activity?.total ? `, ${data.activity.total} filings in the last 12 months` : ""}${data.latest10K?.filingDate ? `, latest 10-K filed ${data.latest10K.filingDate}` : ""}. Free, from SEC EDGAR.`
-    : `Due-diligence starting point for ${ticker}: company identity, industry classification and the latest 10-K and 10-Q dates from SEC EDGAR.`;
+  const revenueClause = fin0 && Number.isFinite(fin0.revenue) ? `revenue ${fmtMoney(fin0.revenue)} for the fiscal year ended ${fin0.end}` : "";
+  const description = firstFit(data ? [
+    `${name} (${ticker}) from its SEC filings: ${revenueClause ? `${revenueClause}, ` : ""}${data.industry ? `${data.industry}, ` : ""}CIK ${data.cik}${data.activity?.total ? `, ${data.activity.total} filings in the last 12 months` : ""}${data.latest10K?.filingDate ? `, latest 10-K filed ${data.latest10K.filingDate}` : ""}. Free, from SEC EDGAR.`,
+    `${name} (${ticker}) from its SEC filings: ${revenueClause ? `${revenueClause}, ` : ""}CIK ${data.cik}. Free, from SEC EDGAR.`,
+    `${ticker} due diligence from its SEC filings: identity, annual results and a year of filing activity. Free, from SEC EDGAR.`,
+  ] : [
+    `Due-diligence starting point for ${ticker}: company identity, industry classification and the latest 10-K and 10-Q dates from SEC EDGAR.`,
+    `${ticker} due diligence from SEC EDGAR: company identity and the latest 10-K and 10-Q dates.`,
+  ]);
   const fact = (l, v) => (v ? `<div class="pg-fact"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>` : "");
   const facts = data ? `<div class="pg-facts">
   ${fact("CIK", data.cik)}
@@ -722,7 +819,7 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
   <p class="pg-note">${esc(DISCLAIMER)}</p>
 </section>`;
   return shell({
-    title, description, canonical, baseUrl, body,
+    title, description, canonical, baseUrl, body, degraded: degraded || !data || entityThin("dossier", data),
     jsonLd: [
       datasetLd(baseUrl, { name: `${name} SEC filing profile`, description, canonical, modified: teaserLastmod("dossier", data) }),
       breadcrumbLd(baseUrl, [{ name: "Reports", path: "/reports" }, { name: "Company profiles", path: "/reports/dossier" }, { name: ticker, path: `/reports/dossier/${ticker}` }]),

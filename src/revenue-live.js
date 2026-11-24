@@ -116,7 +116,7 @@ export const EVM = {
     token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://mainnet.base.org", "https://base.drpc.org",
+      "https://mainnet.base.org", "https://base-rpc.publicnode.com",
     ],
     explorer: (a) => `https://basescan.org/address/${a}#tokentxns`,
     tx: (h) => `https://basescan.org/tx/${h}`,
@@ -127,7 +127,7 @@ export const EVM = {
     // Alchemy first (reliable getLogs); free RPCs fail on historical queries.
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://polygon-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://polygon.drpc.org",
+      "https://polygon-bor-rpc.publicnode.com",
     ],
     explorer: (a) => `https://polygonscan.com/address/${a}#tokentxns`,
     tx: (h) => `https://polygonscan.com/tx/${h}`,
@@ -137,7 +137,7 @@ export const EVM = {
     token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://arb1.arbitrum.io/rpc", "https://arbitrum.drpc.org",
+      "https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com",
     ],
     explorer: (a) => `https://arbiscan.io/address/${a}#tokentxns`,
     tx: (h) => `https://arbiscan.io/tx/${h}`,
@@ -2509,7 +2509,7 @@ export function revenuePage(baseUrl, snap) {
   const canonical = baseUrl + "/revenue";
   const title = "Transactions - x402 and MPP settlements on-chain | Agent402";
   const description =
-    `External payments and revenue on the Agent402 rails across both wires (x402 and MPP) and ${RAILS_AMP}, plus Tempo, with every settlement through our rails counted beside them. Each figure links to its on-chain proof.`;
+    "External payments and revenue on the Agent402 rails over x402 and MPP, with every settlement through our rails counted. Each figure links to its proof.";
   const chainKeyByLabel = { ...Object.fromEntries(Object.entries(EVM).map(([k, c]) => [c.label, k])), Solana: "solana", Stellar: "stellar", Algorand: "algorand" };
   const at = snap.allTime || {};
   const perChainOf = (r) => at.perChain?.[chainKeyByLabel[r.rail]];

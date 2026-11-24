@@ -283,6 +283,16 @@ try {
   const pcard = html.slice(html.indexOf('class="pcard"'), html.indexOf("</section>"));
   ok(!/\bkeys?\b/i.test(pcard.replace(/<[^>]+>/g, " ")), "choose step: the person is told nothing about a key");
   ok(/cannot read or move the balance/.test(html), "choose step: the promise the 402 keeps (the balance is never told to the app)");
+  // A balance is named by the day it was bought, never by its hex id.
+  const radio = (html.match(/<input type="radio" name="keyId" value="([0-9a-f]{12})"[^>]*>([^<]*)<\/label>/) || []);
+  ok(radio[1] && /Balance bought [A-Z][a-z]{2} \d{1,2}, \d{4}/.test(radio[2]) && !radio[2].includes(radio[1]), `choose step: the balance is named by its purchase day, not its id ("${(radio[2] || "").trim()}")`);
+  // The sign-in is a popup the person must finish: no site nav, menu or
+  // footer full of links to lead away, only the legal links.
+  for (const [label, page] of [["choose step", html], ["error page", null]]) {
+    const h = page ?? await (await fetch(`${B}/oauth/consent?rid=${"0".repeat(32)}`)).text();
+    const links = elements(h).filter((e) => e.tag === "a").map((e) => e.attrs.href);
+    ok(!/<nav aria-label="Main"/.test(h) && !elements(h).some((e) => /\b(ml-nav-cta|ml-burger)\b/.test(e.attrs.class || "")) && links.every((x) => ["#main", "/credits/account", "/privacy", "/terms", "mailto:help@agent402.tools"].includes(x)), `${label}: a minimal shell with no site nav (links: ${links.join(" ")})`);
+  }
   const keyId = (/name="keyId" value="([0-9a-f]{12})"/.exec(html) || [])[1];
   r = await post(S, { action: "approve", keyId, capUsd: "0" }, html);
   ok(r.status === 400, "choose step: a bad cap is refused");

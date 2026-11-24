@@ -1,5 +1,7 @@
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
-import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_COMMENT } from "./receipt-signing.js";
+import { gatewayProductSentence } from "./gateway-product-copy.js";
+import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_COMMENT, RECEIPT_URL_HEADER, RECEIPT_FETCH_PATH } from "./receipt-signing.js";
+import { RECEIPT_FETCH_DAYS } from "./receipt-store.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { GUIDE_SITE, GUIDE_SITE_NAME } from "./ask402-links.js";
 import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
@@ -32,7 +34,8 @@ import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
 import { seededProgrammaticPaths } from "./programmatic-seeds.js";
-import { entityLastmod } from "./programmatic-pages.js";
+import { entityLastmod, entityDegraded } from "./programmatic-pages.js";
+import { docsSlugs, DOCS_SITE_ROUTES } from "./docs.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { samplePaths, SAMPLES } from "./sample-reports.js";
@@ -48,6 +51,7 @@ import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION, UNCONFIRMED_R
 import { connectorPayShort, connectorWires } from "./connector-pay.js";
 import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 import { BASE_NO_GAS_SHORT } from "./base-no-gas.js";
+import { stockDataEnabled } from "./tools/stock-provider.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
 const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${fromPriceLabel(t)}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
@@ -112,7 +116,12 @@ const publicReportUrls = (baseUrl) => { try { return listPublicReports().map((r)
 const programmaticUrls = (baseUrl) => [
   ...samplePaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: "0.8", lastmod: dayOf(SAMPLES[p.split("/").pop()]?.at) })),
   ...publicReportUrls(baseUrl),
-  ...seededProgrammaticPaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: p.split("/").length === 3 ? "0.8" : "0.6", lastmod: entityLastmod(p) })),
+  // A hub is dated by the modules that render it; an entity page by its
+  // newest filing once built. A page whose last render was degraded (EDGAR
+  // unread, noindex) is left out until a complete build brings it back.
+  ...seededProgrammaticPaths().filter((p) => !entityDegraded(p)).map((p) => (p.split("/").length === 3
+    ? { loc: `${baseUrl}${p}`, priority: "0.8" }
+    : { loc: `${baseUrl}${p}`, priority: "0.6", lastmod: entityLastmod(p) })),
 ];
 
 export function robotsTxt(baseUrl) {
@@ -121,8 +130,8 @@ export function robotsTxt(baseUrl) {
   // the token-gated operator dashboard (already 404 without the token - this
   // just keeps well-behaved crawlers from probing the path at all).
   const agents = [
-    "GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-Web", "anthropic-ai",
-    "PerplexityBot", "Google-Extended", "Googlebot", "Bingbot", "Applebot", "Applebot-Extended",
+    "GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-SearchBot", "Claude-User", "Claude-Web", "anthropic-ai",
+    "PerplexityBot", "Perplexity-User", "Google-Extended", "Googlebot", "Bingbot", "Applebot", "Applebot-Extended",
     "CCBot", "Bytespider", "Amazonbot", "cohere-ai", "Meta-ExternalAgent", "DuckDuckBot",
     // Smithery registry scanner (User-Agent SmitheryBot/1.0) - needs to read
     // homepage + /llms.txt for the listing backlink check; never Disallow it.
@@ -175,9 +184,15 @@ export function robotsTxt(baseUrl) {
     "Disallow: /api/credits/",
     "Disallow: /api/convert/",
     "Disallow: /api/monitors/",
-    "Disallow: /api/pow/",
     "Disallow: /api/buy",
   ];
+  // The proof-of-work challenge is the first step of the free path that
+  // /agents.md, /llms.txt and every free tool page tell an agent to take
+  // (GET /api/pow/challenge?slug=<tool>), so the AI agents named above may
+  // fetch it. It answers JSON, not a page, so the search engines, the
+  // data-only crawlers (TRAINING_CRAWLERS below) and the unnamed crawler are
+  // kept off it.
+  const powSearch = ["Disallow: /api/pow/"];
   // PRICED ROUTES ARE NOT PAGES. Every /api/<tool> answers an unpaid crawler
   // 402, which a search console files as a crawl error ("other 4xx") against
   // a healthy site, and a search crawler that walks the catalog spends its
@@ -219,15 +234,31 @@ export function robotsTxt(baseUrl) {
     "Disallow: /api/index?seller=",
     "Disallow: /api/index?*seller=",
   ];
+  // CRAWL TRAPS: one URL per tool that renders the same page. The playground
+  // with a preselected tool (/playground?slug=<tool>) is the whole playground,
+  // catalog included, once per tool: hundreds of copies of one large page
+  // whose canonical is /playground. The bare /playground stays open.
+  const traps = ["Disallow: /playground?"];
   const priced = ["Disallow: /api/"];
   // Only the search engines and the unnamed crawler get the /api close: a
   // search index has no use for a 402 body, and that is where the crawl
   // errors are filed. The AI agents named above keep reading per-route
   // quotes as before; a paying client never consults this file.
   const SEARCH_ENGINES = new Set(["Googlebot", "Bingbot", "Applebot", "DuckDuckBot"]);
-  const rules = [...catalog, ...priv, ...costly, ...sellerScoped].join("\n");
-  const searchRules = [...catalog, ...priv, ...costly, ...sellerScoped, ...priced].join("\n");
-  const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${SEARCH_ENGINES.has(a) ? searchRules : rules}`).join("\n\n");
+  // The crawlers that only gather data: no agent acting for a user fetches
+  // under these names. They keep every page and quote, but not the
+  // proof-of-work challenge, which is a step an agent takes to call a tool.
+  // The other AI names keep the challenge though some also gather training
+  // data: GPTBot and ClaudeBot are names /agents.md's readers may fetch under
+  // (scripts/test-robots-policy.js holds every /api/pow/ path it names open to
+  // them), and Google-Extended, Applebot-Extended and anthropic-ai are
+  // training-use tokens that make no fetch of their own, so a Disallow there
+  // would refuse nothing.
+  const TRAINING_CRAWLERS = new Set(["CCBot", "Bytespider", "cohere-ai", "Meta-ExternalAgent"]);
+  const rules = [...catalog, ...priv, ...costly, ...sellerScoped, ...traps].join("\n");
+  const trainingRules = [...catalog, ...priv, ...powSearch, ...costly, ...sellerScoped, ...traps].join("\n");
+  const searchRules = [...catalog, ...priv, ...powSearch, ...costly, ...sellerScoped, ...traps, ...priced].join("\n");
+  const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${SEARCH_ENGINES.has(a) ? searchRules : TRAINING_CRAWLERS.has(a) ? trainingRules : rules}`).join("\n\n");
   return `${blocks}
 
 User-agent: *
@@ -241,85 +272,11 @@ Sitemap: ${baseUrl}/sitemapindex.xml
 `;
 }
 
+// ONE list of pages feeds both /sitemap.xml and sitemap-pages.xml (they were
+// two hand lists that drifted: /proof and the machine-readable documents sat
+// in one only). The machine documents are listed in both, from one list.
 export function sitemapXml(baseUrl, catalog) {
-  const staticUrls = [
-    { loc: `${baseUrl}/`, priority: "1.0" },
-    { loc: `${baseUrl}/tools`, priority: "0.9" },
-    { loc: `${baseUrl}/reports`, priority: "0.9" },
-    { loc: `${baseUrl}/monitors`, priority: "0.8" },
-    // A closed product takes no crawl slot: listed only while packs are on sale.
-    ...(creditsSalesEnabled() ? [{ loc: `${baseUrl}/credits`, priority: "0.8" }] : []),
-    // Every x402 marketplace page (one per CHAIN_PAGES entry) - new chain
-    // page = new sitemap entry, zero edits here.
-    ...Object.keys(CHAIN_PAGES).map((key) => ({ loc: `${baseUrl}/${key}`, priority: "0.8" })),
-    { loc: `${baseUrl}/faq`, priority: "0.8" },
-    { loc: `${baseUrl}/docs`, priority: "0.8" },
-    { loc: `${baseUrl}/transparency`, priority: "0.4" },
-    { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
-    { loc: `${baseUrl}${AGENTS_MD_PATH}`, priority: "0.8" },
-    { loc: `${baseUrl}/SKILL.md`, priority: "0.8" },
-    { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
-    { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
-    // A worked query, not the bare endpoint: without ?q= it answers an empty list.
-    { loc: `${baseUrl}/api/find?q=search+the+web`, priority: "0.7" },
-    { loc: `${baseUrl}/.well-known/x402`, priority: "0.7" },
-    { loc: `${baseUrl}/api/reliability`, priority: "0.6" },
-    { loc: `${baseUrl}/api/stats`, priority: "0.6" },
-    // Unified marketplace surface (the old /index and /marketplaces 301 here -
-    // a sitemap must never list URLs that redirect).
-    { loc: `${baseUrl}/marketplace`, priority: "0.9" },
-    { loc: `${baseUrl}/mpp-marketplace`, priority: "0.9" },
-    // Third-party tool index. Listed at a lower priority than our own catalog
-    // on purpose: it is other people's endpoints reproduced with their own
-    // descriptions, so it should never outrank the tools we actually operate.
-    { loc: `${baseUrl}/marketplace/tools`, priority: "0.6" },
-    { loc: `${baseUrl}/api/index`, priority: "0.6" },
-    { loc: `${baseUrl}/sell`, priority: "0.8" },
-    { loc: `${baseUrl}/api/route?q=ocr+image`, priority: "0.7" },
-    { loc: `${baseUrl}/leaderboard`, priority: "0.8" },
-    { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
-    { loc: `${baseUrl}/api/cacheable`, priority: "0.6" },
-    { loc: `${baseUrl}/api/cache-stats`, priority: "0.5" },
-    { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
-    { loc: `${baseUrl}/integrations`, priority: "0.8" },
-    { loc: `${baseUrl}/pricing`, priority: "0.8" },
-    { loc: `${baseUrl}/changelog`, priority: "0.7" },
-    { loc: `${baseUrl}/start`, priority: "0.9" },
-    { loc: `${baseUrl}/quickstart`, priority: "0.9" },
-    { loc: `${baseUrl}/what-is-x402`, priority: "0.9" },
-    { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
-    { loc: `${baseUrl}/how-to-pay`, priority: "0.9" },
-    { loc: `${baseUrl}/speech`, priority: "0.8" },
-    { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
-    { loc: `${baseUrl}/x402-test`, priority: "0.7" },
-    { loc: `${baseUrl}/markets`, priority: "0.8" },
-    ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
-    { loc: `${baseUrl}/security`, priority: "0.7" },
-    { loc: `${baseUrl}/wholesale`, priority: "0.6" },
-    { loc: `${baseUrl}/trust`, priority: "0.6" },
-    { loc: `${baseUrl}/crawler`, priority: "0.5" },
-    { loc: `${baseUrl}/company`, priority: "0.7" },
-    { loc: `${baseUrl}/press`, priority: "0.5" },
-    { loc: `${baseUrl}/proof`, priority: "0.7" },
-    { loc: `${baseUrl}/scorecard`, priority: "0.7" },
-    { loc: `${baseUrl}/terms`, priority: "0.3" },
-    { loc: `${baseUrl}/privacy`, priority: "0.3" },
-    { loc: `${baseUrl}/glossary`, priority: "0.8" },
-    { loc: `${baseUrl}/101`, priority: "0.9" },
-    { loc: `${baseUrl}/revenue`, priority: "0.6" },
-    { loc: `${baseUrl}/blog`, priority: "0.8" },
-    { loc: `${baseUrl}/contribute`, priority: "0.7" },
-    { loc: `${baseUrl}/workflows`, priority: "0.8" },
-    { loc: `${baseUrl}/status`, priority: "0.7" },
-    { loc: `${baseUrl}/sdk-playground`, priority: "0.7" },
-    { loc: `${baseUrl}/docs/api/explorer`, priority: "0.8" },
-    { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
-    { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
-    { loc: `${baseUrl}/playground`, priority: "0.8" },
-    ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
-    ...learnIntegrationUrls(baseUrl),
-  ];
-  const entries = [...staticUrls, ...programmaticUrls(baseUrl), ...guideUrls(baseUrl), ...skillUrls(baseUrl), ...categoryUrls(baseUrl, catalog), ...toolUrls(baseUrl, catalog)]
+  const entries = [...pageUrls(baseUrl, catalog), ...learnIntegrationUrls(baseUrl), ...programmaticUrls(baseUrl), ...guideUrls(baseUrl), ...skillUrls(baseUrl), ...categoryUrls(baseUrl, catalog), ...toolUrls(baseUrl, catalog)]
     .map((u) => urlTag(dated(baseUrl, u)))
     .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -420,9 +377,45 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
     { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
     ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
+    { loc: `${baseUrl}/proof`, priority: "0.7" },
+    ...machineUrls(baseUrl),
+    { loc: `${baseUrl}/pay-per-call-api`, priority: "0.9" },
+    { loc: `${baseUrl}/paid-mcp-tools`, priority: "0.9" },
+    { loc: `${baseUrl}/compare`, priority: "0.8" },
+    ...docsUrls(baseUrl),
     { loc: `${baseUrl}/privacy`, priority: "0.4" },
     { loc: `${baseUrl}/terms`, priority: "0.4" },
     { loc: `${baseUrl}/transparency`, priority: "0.4" },
+  ];
+}
+/** The machine-readable documents an agent or indexer reads first. */
+function machineUrls(baseUrl) {
+  return [
+    { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
+    { loc: `${baseUrl}${AGENTS_MD_PATH}`, priority: "0.8" },
+    { loc: `${baseUrl}/SKILL.md`, priority: "0.8" },
+    { loc: `${baseUrl}/tools.md`, priority: "0.7" },
+    { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
+    { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
+    // A worked query, not the bare endpoint: without ?q= it answers an empty list.
+    { loc: `${baseUrl}/api/find?q=search+the+web`, priority: "0.7" },
+    { loc: `${baseUrl}/.well-known/x402`, priority: "0.7" },
+    { loc: `${baseUrl}/api/reliability`, priority: "0.6" },
+    { loc: `${baseUrl}/api/stats`, priority: "0.6" },
+    { loc: `${baseUrl}/api/index`, priority: "0.6" },
+    { loc: `${baseUrl}/api/route?q=ocr+image`, priority: "0.7" },
+    { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
+    { loc: `${baseUrl}/api/cacheable`, priority: "0.6" },
+    { loc: `${baseUrl}/api/cache-stats`, priority: "0.5" },
+  ];
+}
+/** Every /docs/<Page> rendered from the wiki that is its own canonical (the
+ *  home page is /docs and a page with a site route redirects there), plus
+ *  the generated API reference. */
+function docsUrls(baseUrl) {
+  return [
+    ...docsSlugs().filter((slug) => slug !== "Home" && !Object.hasOwn(DOCS_SITE_ROUTES, slug)).sort().map((slug) => ({ loc: `${baseUrl}/docs/${slug}`, priority: "0.7" })),
+    { loc: `${baseUrl}/docs/api`, priority: "0.7" },
   ];
 }
 export function sitemapPages(baseUrl, catalog) {
@@ -626,7 +619,7 @@ Base URL: ${baseUrl}
 
 ${reportsParagraph(baseUrl, tools)}
 
-**Crypto derivatives, DeFi and Solana intel.** Live perpetuals and options, no exchange account: \`POST /api/perp-markets\` (${priceOfSlug("perp-markets")}) snapshots every listed perp, \`POST /api/perp-funding\` (${priceOfSlug("perp-funding")}) and \`POST /api/perp-funding-screener\` (${priceOfSlug("perp-funding-screener")}) read funding rates now and across the book, and \`POST /api/perp-basis\` (${priceOfSlug("perp-basis")}), \`POST /api/perp-open-interest\` (${priceOfSlug("perp-open-interest")}), \`POST /api/perp-klines\` (${priceOfSlug("perp-klines")}) and \`POST /api/perp-orderbook\` (${priceOfSlug("perp-orderbook")}) cover premium, OI, candles and depth; the options book is \`POST /api/options-summary\` (${priceOfSlug("options-summary")}), \`POST /api/crypto-options-chain\` (${priceOfSlug("crypto-options-chain")}) and \`POST /api/options-ticker\` (${priceOfSlug("options-ticker")}). Computed market answers: \`GET /api/funding-screener\` (${priceOfSlug("funding-screener")}) compares one coin's funding across every listed venue, \`GET /api/stablecoin-depeg-watch\` (${priceOfSlug("stablecoin-depeg-watch")}) flags USD stablecoins off their peg now, over 24 hours and over 7 days, and \`GET /api/exchange-spread\` (${priceOfSlug("exchange-spread")}) measures one coin's price on each venue against the median. DeFi: \`GET /api/lending-rates\` (${priceOfSlug("lending-rates")}) reads Aave v3 and Compound v3 supply and borrow rates from the contracts, \`GET /api/defi-screener\` (${priceOfSlug("defi-screener")}) screens DeFi tokens by turnover, momentum and drawdown, \`GET /api/dex-volume-board\` (${priceOfSlug("dex-volume-board")}) ranks a network's DEXes by volume share, \`GET /api/dex-pool-health\` (${priceOfSlug("dex-pool-health")}) measures one pool's liquidity, churn and wallet mix, and \`GET /api/chain-board\` (${priceOfSlug("chain-board")}) ranks chains by native asset. Solana: ${hasSlug("sol-token-safety") ? `\`POST /api/sol-token-safety\` (${priceOfSlug("sol-token-safety")}) reads a mint's risk evidence (authorities, liquidity, holder concentration), \`POST /api/sol-token-report\` (${priceOfSlug("sol-token-report")}) is the full risk write-up, and \`POST /api/sol-token-holders\` (${priceOfSlug("sol-token-holders")}), ` : ""}\`POST /api/sol-token-pairs\` (${priceOfSlug("sol-token-pairs")}), \`POST /api/sol-trending\` (${priceOfSlug("sol-trending")}), \`POST /api/sol-price\` (${priceOfSlug("sol-price")}), \`POST /api/sol-swap-quote\` (${priceOfSlug("sol-swap-quote")}) and \`POST /api/sol-token-lookup\` (${priceOfSlug("sol-token-lookup")}) cover ${hasSlug("sol-token-holders") ? "concentration, " : ""}pairs, trending, prices and routing. Market context: \`POST /api/crypto-news\` (${priceOfSlug("crypto-news")}), \`POST /api/crypto-indicators\` (${priceOfSlug("crypto-indicators")}), \`POST /api/crypto-market-pulse\` (${priceOfSlug("crypto-market-pulse")}), \`GET /api/coin-profile\` (${priceOfSlug("coin-profile")}), \`GET /api/coin-price-by-contract\` (${priceOfSlug("coin-price-by-contract")}) and \`GET /api/coin-ohlc\` (${priceOfSlug("coin-ohlc")}). Raw chain reads: \`POST /api/asset-transfers\` (${priceOfSlug("asset-transfers")}), \`POST /api/token-balances\` (${priceOfSlug("token-balances")}), \`POST /api/tx-receipt\` (${priceOfSlug("tx-receipt")}) and \`POST /api/token-price-history\` (${priceOfSlug("token-price-history")}). Whole-site structure on demand: \`POST /api/site-map\` (${priceOfSlug("site-map")}) and \`POST /api/site-crawl\` (${priceOfSlug("site-crawl")}).
+**Crypto derivatives, DeFi and Solana intel.** Live perpetuals, no exchange account: \`POST /api/perp-markets\` (${priceOfSlug("perp-markets")}) snapshots every listed perp, \`POST /api/perp-funding\` (${priceOfSlug("perp-funding")}) and \`POST /api/perp-funding-screener\` (${priceOfSlug("perp-funding-screener")}) read funding rates now and across the book, and \`POST /api/perp-basis\` (${priceOfSlug("perp-basis")}), \`POST /api/perp-open-interest\` (${priceOfSlug("perp-open-interest")}), \`POST /api/perp-klines\` (${priceOfSlug("perp-klines")}) and \`POST /api/perp-orderbook\` (${priceOfSlug("perp-orderbook")}) cover premium, OI, candles and depth. Computed market answers: \`GET /api/funding-screener\` (${priceOfSlug("funding-screener")}) compares one coin's funding across every listed venue, \`GET /api/stablecoin-depeg-watch\` (${priceOfSlug("stablecoin-depeg-watch")}) flags USD stablecoins off their peg now, over 24 hours and over 7 days, and \`GET /api/exchange-spread\` (${priceOfSlug("exchange-spread")}) measures one coin's price on each venue against the median. DeFi: \`GET /api/lending-rates\` (${priceOfSlug("lending-rates")}) reads Aave v3 and Compound v3 supply and borrow rates from the contracts, \`GET /api/defi-screener\` (${priceOfSlug("defi-screener")}) screens DeFi tokens by turnover, momentum and drawdown, \`GET /api/dex-volume-board\` (${priceOfSlug("dex-volume-board")}) ranks a network's DEXes by volume share, \`GET /api/dex-pool-health\` (${priceOfSlug("dex-pool-health")}) measures one pool's liquidity, churn and wallet mix, and \`GET /api/chain-board\` (${priceOfSlug("chain-board")}) ranks chains by native asset. Solana: ${hasSlug("sol-token-safety") ? `\`POST /api/sol-token-safety\` (${priceOfSlug("sol-token-safety")}) reads a mint's risk evidence (authorities, liquidity, holder concentration), \`POST /api/sol-token-report\` (${priceOfSlug("sol-token-report")}) is the full risk write-up, and \`POST /api/sol-token-holders\` (${priceOfSlug("sol-token-holders")}), ` : ""}\`POST /api/sol-token-pairs\` (${priceOfSlug("sol-token-pairs")}), \`POST /api/sol-trending\` (${priceOfSlug("sol-trending")}) and \`POST /api/sol-price\` (${priceOfSlug("sol-price")}) cover ${hasSlug("sol-token-holders") ? "concentration, " : ""}pairs, trending and prices. Market context: \`POST /api/crypto-indicators\` (${priceOfSlug("crypto-indicators")}), \`POST /api/crypto-market-pulse\` (${priceOfSlug("crypto-market-pulse")}), \`GET /api/coin-profile\` (${priceOfSlug("coin-profile")}), \`GET /api/coin-price-by-contract\` (${priceOfSlug("coin-price-by-contract")}) and \`GET /api/coin-ohlc\` (${priceOfSlug("coin-ohlc")}). Raw chain reads: \`POST /api/asset-transfers\` (${priceOfSlug("asset-transfers")}), \`POST /api/token-balances\` (${priceOfSlug("token-balances")}), \`POST /api/tx-receipt\` (${priceOfSlug("tx-receipt")}) and \`POST /api/token-price-history\` (${priceOfSlug("token-price-history")}). Whole-site structure on demand: \`POST /api/site-map\` (${priceOfSlug("site-map")}) and \`POST /api/site-crawl\` (${priceOfSlug("site-crawl")}).
 
 **Images and video, flat per call.** Text-to-image and text-to-video on the OpenAI wire, priced per picture or per clip rather than per token: \`POST /v1/images/fast\` (${priceOfSlug("v1-images-fast")}, budget), \`POST /v1/images/pro\` (${priceOfSlug("v1-images-pro")}, higher fidelity), \`POST /v1/images/generations\` (${priceOfSlug("v1-images")}, flagship), \`POST /v1/images/edits\` (${priceOfSlug("v1-images-edit")}, edit up to four reference images with a prompt) and \`POST /v1/videos/generations\` (${priceOfSlug("v1-videos")}, one silent 4-second 720p clip, MP4 inline base64). Point any OpenAI SDK at base_url ${baseUrl}/v1 and call the path you want. A failed or timed-out generation answers 400 or above, which is not settled on x402; a wallet payer whose video request timed out can send the same request again unchanged within the window the 504 names to collect the same clip.
 
@@ -650,7 +643,7 @@ The settlement rule: on x402 a response of 400 or above is not settled, and each
 **How to read our 402 if you only speak one dialect.** The same response carries BOTH headers${mppMethodsSummary().enabled && mppOfferGateClause() ? ` (except that ${mppOfferGateClause()})` : ", always"} - \`WWW-Authenticate: Payment\` is additive, never a replacement for the real x402 \`PAYMENT-REQUIRED\` header (full \`accepts\` array, \`exact\` scheme, EIP-3009). A client that hard-fails on an unrecognized \`WWW-Authenticate\` scheme instead of also checking for \`PAYMENT-REQUIRED\` will bail with something like "no supported rail" on a 402 it could have paid. If your parser only understands one of the two dialects, check for the header it understands FIRST rather than trusting whichever header happens to be read first; do not treat an unrecognized \`WWW-Authenticate\` scheme as "this server has no payment option for me." The JSON body of every paywall 402 also carries the same PaymentRequired object as the \`PAYMENT-REQUIRED\` header (\`x402Version\`, \`accepts\`, \`resource\`, \`extensions\`), beside our own fields; the header is authoritative. ${smallHeaderLimitText()}
 
 ## Call a model (metered, the default)
-The model gateway's default route is metered: ${meteredRoutesInline()} (OpenAI chat, Anthropic Messages and OpenAI Responses wires), no key and no account, from ${meteredFromPrice()} a call. Model-backed: third-party models answer. ${meteredQuoteSentence()}
+The model gateway's default route is metered: ${meteredRoutesInline()} (OpenAI chat, Anthropic Messages and OpenAI Responses wires), no key and no account, from ${meteredFromPrice()} a call. Model-backed: third-party models answer. ${gatewayProductSentence({ receipts: receiptsServed() })} ${meteredQuoteSentence()}
 
 \`\`\`bash
 ${meteredCurl(baseUrl)}
@@ -682,19 +675,19 @@ ${flatTiersLine()}
 - [/api/scorecard](${baseUrl}/api/scorecard): buyer scorecard per UTC month from our sales ledger: outside paying wallets, returning and multi-day wallets, settled paid calls and USD by network; our own wallets and test traffic left out, counts of 1 or 2 read "<3" (page: [/scorecard](${baseUrl}/scorecard))
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
 - [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments, keyed by its own on-chain payment transaction (\`?tx=\`, 0x plus 64 hex on EVM chains, a signature on Solana, a transaction id on Stellar or Algorand): \`found\`, \`status\` (owed, sending, paid, void or none), \`priceUsd\`, \`network\`, explorer links, our \`refundTx\` once sent, and \`refunds\` (every refund recorded for that transaction, where more than one payment settled in it). It answers that one transaction only, never a wallet's list, and an unknown transaction answers \`none\` in the same shape (also at /api/refunds/lookup)
-- [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool
+- [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool (\`?category=\` or \`?tag=\` for a part; markdown by category: /tools.md)
 - [/api/wishes](${baseUrl}/api/wishes): the demand board, aggregated; request a tool we do not have yet with \`POST /api/wish\` (clustered by demand; repeated asks get built)
 - [/terms](${baseUrl}/terms): terms of service + acceptable-use policy - using the service (including programmatically) constitutes acceptance
 - [/health](${baseUrl}/health): health check
 
 ## Connect via MCP
 - [Start here](${baseUrl}/start): connect Claude, Claude Code or Cursor
-- [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/data/transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
+- [Hosted MCP connector](${baseUrl}/mcp): flagship-first remote MCP (search/answer/render/${stockDataEnabled() ? "quote/" : ""}transcribe/memory + catalog.find / catalog.call for the 500+ long tail). Install one-liners:
   - Claude Code: \`claude mcp add --transport http -s user agent402 ${baseUrl}/mcp\`
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - ${connectorPayShort()}
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
-- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.16.0\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.16.0\`
+- [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.17.0\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0\`
 ${PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
 
 ## Framework adapters (zero-dependency npm)
@@ -706,6 +699,9 @@ ${PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.sl
 - [agent402-google-adk](https://www.npmjs.com/package/agent402-google-adk): Google ADK (Gemini agents)
 - [agent402-strands](https://www.npmjs.com/package/agent402-strands): AWS Strands agent runtime
 - [agent402-agentkit](https://www.npmjs.com/package/agent402-agentkit): Coinbase AgentKit action provider (CDP, Privy, ZeroDev, viem wallets)
+- [agent402-openai-agents](https://www.npmjs.com/package/agent402-openai-agents): OpenAI Agents SDK tools (find, route, call, about)
+- [elizaos-plugin-agent402](https://www.npmjs.com/package/elizaos-plugin-agent402): elizaOS plugin: find and call tools, paid over x402 from an EVM wallet or with a credits key
+- [agent402-openclaw](https://www.npmjs.com/package/agent402-openclaw): OpenClaw model provider: the auto-routed tier and explicit models through a local proxy, paid over x402 or with a credits key
 
 ## Skill packs (a whole job, one payment)
 ${packItems}
@@ -784,7 +780,26 @@ export function surfaceClause(text) {
 export function llmsTxt(baseUrl, catalog) {
   const full = llmsFullBody(baseUrl, catalog).split("\n");
   const title = full[0];
-  const summary = full.find((l) => l.startsWith("> "));
+  // The short index says each fact once: the explainer link and /api/pricing
+  // are in the paragraph under the summary, access (no account or key, the
+  // quote in the 402, what proof-of-work skips) in the front door's lines, the
+  // card method in the MPP methods, and the per-request quote and the metered
+  // routes in the metered section below. /llms-full.txt keeps the summary whole.
+  const summary = full.find((l) => l.startsWith("> "))
+    .replace(" (explainer: /agentic-finance)", "")
+    .replace(/; for example `POST \/v1\/metered\/chat\/completions`, `POST \/v1\/metered\/messages`\)/, ")")
+    .replace(/, or by \*\*card\*\* on premium tools >= \$[\d.]+ \(a card payment token over MPP's `stripe` charge method - no wallet, no stablecoin\)/, "")
+    .replace(" (CPU) and skip the wallet entirely.", ".")
+    .replace(" No human, no signup, no API key: the payment is the identity.", "")
+    .replace(" (the metered gateway quotes each request from its body)", "")
+    .replace("; every price is in /api/pricing and quoted in the 402.", ".");
+  // Settlement chains: the fields /api/pricing lists for the chain prices
+  // are named in /llms-full.txt; an adapter keeps the clause before its first
+  // colon (each package page says the rest); the host guide link keeps its
+  // list and shortlinks in the guide.
+  const shortChains = (text) => text.replace(/(\nPrices by chain: [^\n]*?\.) \/api\/pricing lists [^\n]*\./, "$1");
+  const shortAdapters = (text) => text.split("\n").map((l) => l.replace(/^(- \[[^\]]+\]\([^)\s]+\)): ([^:]+): .+$/, "$1: $2")).join("\n");
+  const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
   const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
   // Key machine surfaces: the short index names each surface in one clause
@@ -826,8 +841,12 @@ export function llmsTxt(baseUrl, catalog) {
     if (start < 0) return "";
     let end = start + 1;
     while (end < full.length && !full[end].startsWith("## ")) end += 1;
+    if (name === "Call a model (metered, the default)") return full.slice(start, end).join("\n").replace(" (OpenAI chat, Anthropic Messages and OpenAI Responses wires)", "").trimEnd();
+    if (name === "Settlement chains") return shortChains(full.slice(start, end).join("\n").trimEnd());
+    if (name === "Framework adapters (zero-dependency npm)") return shortAdapters(full.slice(start, end).join("\n").trimEnd());
+    if (name === "Connect via MCP") return shortHosts(full.slice(start, end).join("\n").trimEnd());
     if (name !== "Key machine surfaces") return full.slice(start, end).join("\n").trimEnd();
-    return [full[start], `Each in one clause; in full, with parameters and limits: ${baseUrl}/llms-full.txt`, ...full.slice(start + 1, end).map(surfaceBrief)].join("\n").trimEnd();
+    return [full[start], `Each in one clause; in full: ${baseUrl}/llms-full.txt`, ...full.slice(start + 1, end).map(surfaceBrief)].join("\n").trimEnd();
   }).filter(Boolean);
   const identity = `## Identity and receiving wallet
 - Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.
@@ -845,14 +864,16 @@ ${summary}
 
 Base URL: ${baseUrl}
 
-The full text, with every skill pack and every tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP in plain language, for people: ${GUIDE_SITE}.
+The full text, every skill pack and tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP in plain language, for people: ${GUIDE_SITE}.
 
 ${[
-    frontDoorMarkdown(catalog, baseUrl),
+    // The Tempo currencies are named in the MPP methods line just below.
+    frontDoorMarkdown(catalog, baseUrl).replace(" (Tempo settles in its own stablecoins)", ""),
     mppMethodsProse(),
     mppMethodsSummary().enabled ? mppOfferGateSentence() : "",
     visaCliMppSentence(),
-    mppFlagshipLlmsBlock(catalog, { compact: true }),
+    // Each price beside its route says where it comes from.
+    mppFlagshipLlmsBlock(catalog, { compact: true }).replace(" Prices are the catalog's; what each answers", " What each answers"),
     gatewayNanopaymentsLine(),
     paymentChannelsLine(),
     ...sections,
@@ -882,7 +903,7 @@ export function llmsFullTxt(baseUrl, catalog) {
 - Receipt: a settled x402 answer carries \`PAYMENT-RESPONSE\`, base64 JSON with \`success\`, \`transaction\`, \`network\` and \`payer\`; an MPP answer carries \`Payment-Receipt\`, whose \`reference\` names the payment.
 - Settlement: look \`transaction\` up on \`network\`: a stablecoin transfer from \`payer\` to the \`payTo\` the 402 named (also listed in ${baseUrl}/.well-known/x402). A batched payment names its batch transfer instead.
 - Delivery: sha256 the exact bytes received. \`POST /api/attest\` with the transaction, paid from the same EVM wallet, records that digest beside the payment in an attestation on Base; \`POST /api/receipts\` returns the paying wallet's settled calls with each transaction and response digest.
-- Rail rules: ${baseUrl}${CONFORMANCE_PATH}, the row whose \`id\` names the rail and network paid on: \`receipt\`, \`settleAfterAnswer\`, \`idempotencyKey\`, \`replayGuard\` and \`refundOnChargedFailure\`. ${receiptsServed() ? `Where \`signedReceipt\` reads true, the answer also carries \`${RECEIPT_HEADER}\`, a compact JWS (EdDSA) this server signs over the route, the request digest, the answer's sha256, the price, the rail, the payer and the settlement, after settlement; a streamed answer ends with a \`: ${RECEIPT_SSE_COMMENT} <receipt>\` server-sent comment line (event-stream parsers skip it) over every byte streamed before it (an \`${RECEIPT_HEADER}\` trailer too with \`TE: trailers\`), a credits call's receipt names the key's id and its debit, a card-bought report's receipt is on its page and in its email, a monitor subscription gets one per paid period (the first and every renewal) with its period statement on its confirmation page or status link and in its monitor emails, and a paid MCP result carries it in \`_meta["tools.agent402/receipt"]\`; keys at ${baseUrl}${RECEIPT_KEYS_PATH}, free check at \`POST ${RECEIPT_VERIFY_PATH}\`.` : "\`signedReceipt\` reads false on every paid rail: the receipt is the settlement's own record."}
+- Rail rules: ${baseUrl}${CONFORMANCE_PATH}, the row whose \`id\` names the rail and network paid on: \`receipt\`, \`settleAfterAnswer\`, \`idempotencyKey\`, \`replayGuard\` and \`refundOnChargedFailure\`. ${receiptsServed() ? `Where \`signedReceipt\` reads true, the answer also carries \`${RECEIPT_HEADER}\`, a compact JWS (EdDSA) this server signs over the route, the request digest, the answer's sha256, the price, the rail, the payer and the settlement, after settlement; a streamed answer ends with a \`: ${RECEIPT_SSE_COMMENT} <receipt>\` server-sent comment line (event-stream parsers skip it) over every byte streamed before it (an \`${RECEIPT_HEADER}\` trailer too with \`TE: trailers\`); every streamed paid answer's head names \`${RECEIPT_URL_HEADER}\`, and \`GET ${RECEIPT_FETCH_PATH}/<token>\` with the token that header names (free, for ${RECEIPT_FETCH_DAYS} days) answers the same receipt once the answer finished, so a client that reads neither still gets it; a credits call's receipt names the key's id and its debit, a card-bought report's receipt is on its page and in its email, a monitor subscription gets one per paid period (the first and every renewal) with its period statement on its confirmation page or status link and in its monitor emails, and a paid MCP result carries it in \`_meta["tools.agent402/receipt"]\` (a streamed one names its address in \`_meta["tools.agent402/receipt-url"]\`); keys at ${baseUrl}${RECEIPT_KEYS_PATH}, free check at \`POST ${RECEIPT_VERIFY_PATH}\`.` : "\`signedReceipt\` reads false on every paid rail: the receipt is the settlement's own record."}
 - Audit report: \`POST /api/audit-report\`, paid from the wallet it covers, returns that wallet's paid calls over a window of up to a year (time, tool, route, amount, rail, network, settlement, request and response digests${receiptsServed() ? ", and each call's signed receipt" : ""}) with totals by tool and by day, as JSON or CSV${receiptsServed() ? `, plus a summary receipt over the report that \`POST ${RECEIPT_VERIFY_PATH}\` checks` : ""}.
 - Outside sellers: ${baseUrl}/api/index?seller=<host> gives a seller's crawl history, the live probe of its paywall and the router's verdict on paying it.
 - Seller reputation: ${baseUrl}/api/reputation?seller=<host> gives one outside seller's reputation as this server measured it over 30 days: manifest and 402 uptime, responsiveness, the live 402 price against the listed price, delivery (measured from purchases Agent402's router made for buyers), and age; each metric with its method, sample size and last measurement, scored only past its minimum sample (else \`not-enough-data\`). It counts no payments or buyers. A day on which our own crawl cycle failed broadly on our side is left out of the crawl and paywall metrics and named under \`measurementIssue\` ("measurement issue on our side"). A seller asks for a fresh measurement with \`POST /api/reputation/recheck?seller=<host>\` (free; one accepted request per seller every 6 hours, a repeat answers the one scheduled; 202 with \`crawlBy\` and \`recordBy\`); the record shows \`lastRecheckedAt\`. Corrections: help@agent402.tools.

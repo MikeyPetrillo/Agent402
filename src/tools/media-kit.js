@@ -17,6 +17,7 @@ import { AUDIO_ANSWER_MAX_BYTES, answerTooLarge, capText, readFileWithin, projec
 import { tmpdir, availableParallelism } from "node:os";
 import { join } from "node:path";
 import { safeFetch } from "./fetch-guard.js";
+import { assertRobotsAllow } from "./robots-gate.js";
 import { currentDispatchCallerKeys, IN_PROCESS_CALLER } from "../dispatch-caller.js";
 import { createCallerPlaces } from "../caller-places.js";
 
@@ -689,6 +690,7 @@ export function looksLikeMedia(buffer) {
   return false;
 }
 const fetchMedia = async (url) => {
+  await assertRobotsAllow(url);
   const { buffer, contentType } = await safeFetch(url, { binary: true, maxBytes: MAX_MEDIA_BYTES });
   if (contentType && NON_MEDIA_CT.test(contentType)) {
     throw bad(

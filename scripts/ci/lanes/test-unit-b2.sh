@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (28 scripts, one process each)
+# @step 1: Offline suites (30 scripts, one process each)
 # Production image carries every script the server needs at runtime (derived from source, not listed)
 t node scripts/test-image-runtime-scripts.js
 # /api/pow/challenge envelope (free-tier gate — full shape + slug scoping + 404s)
@@ -25,6 +25,10 @@ t node scripts/test-quiet-gate.js
 t node scripts/test-selfcheck.js
 # /robots.txt policy (every LLM bot explicitly allowed, /api/ closed except the documented surfaces, sitemap URLs all allowed)
 t node scripts/test-robots-policy.js
+# Crawl signals agree page by page: no crawl trap or open URL space indexable, Base node and article dates scoped, one sitemap list, no 404 canonical
+t node scripts/test-crawl-signals.js
+# Machine catalogs in parts: /openapi.json?category= and ?tag= subsets, /tools/<category>.md within its size budget
+t node scripts/test-agent-catalogs.js
 # /api/find envelope + top-1 ranking lock (per-row shape + known queries → known top slugs)
 t node scripts/test-find-envelope.js
 # Settlement-aware idempotency (FR4-01 — a non-200/unsettled response is NOT cached; @x402/express settles AFTER the handler)

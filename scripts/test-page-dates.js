@@ -11,7 +11,8 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { buildTable, readTable, diffTables, isShallow, scanToolSources } from "./gen-page-dates.js";
-import { pageLastmod, toolLastmod, legalLastmod, filesLastmod, dayOf, pageSourceFiles, PAGE_SOURCES, _setPageDatesTable } from "../src/page-dates.js";
+import { pageLastmod, toolLastmod, legalLastmod, filesLastmod, dayOf, pageSourceFiles, PAGE_SOURCES, _setPageDatesTable, entryDates, articleDates } from "../src/page-dates.js";
+import { entrySpans } from "./gen-page-dates.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -54,7 +55,7 @@ if (!isShallow() && stored) {
   const shared = Object.keys(packSources || {}).filter((s) => s in toolSources);
   ok(shared.includes("market-brief") && shared.every((s) => toolSources[s] !== packSources[s]), `every name a tool and a pack share keeps both sources (${shared.join(", ")})`);
   ok(ISO.test(pageLastmod("/tools/market-brief") || "") && pageLastmod("/tools/market-brief") === filesLastmod(["src/tools/research-deep-kit.js"]), `/tools/market-brief is dated by its kit (${pageLastmod("/tools/market-brief")})`);
-  ok(ISO.test(pageLastmod("/skills/market-brief") || "") && pageLastmod("/skills/market-brief") === filesLastmod(["src/skills.js"]), `/skills/market-brief is dated by the pack module (${pageLastmod("/skills/market-brief")})`);
+  ok(ISO.test(pageLastmod("/skills/market-brief") || "") && pageLastmod("/skills/market-brief") === entryDates("/skills/market-brief")?.modified, `/skills/market-brief is dated by its own entry in the pack module (${pageLastmod("/skills/market-brief")})`);
   // The lookup reads the two maps apart: one name, two dates.
   _setPageDatesTable({
     files: { "src/tools/k.js": "2026-02-01", "src/packs.js": "2026-05-01", "src/skills.js": "2026-06-01" },
@@ -65,6 +66,24 @@ if (!isShallow() && stored) {
   ok(pageLastmod("/skills/unlisted") === "2026-06-01", "seam: a pack page the table does not list is dated by the module that renders every pack page");
   ok(pageLastmod("/tools/unlisted") === null, "seam: a pack's name alone never dates a tool page");
   _setPageDatesTable(null);
+}
+
+// --- a family entry is dated by its own text -------------------------------------
+// Every guide, pack, post, explainer and integration page used to share its
+// module's newest commit date: one edit re-dated all of them.
+{
+  const text = 'const X = [\n  {\n    slug: "a",\n    title: "A",\n  },\n  {\n    slug: "b",\n    body: `  {\n    nested`,\n  },\n];\n';
+  const spans = entrySpans(text);
+  ok(spans.size === 2 && spans.get("a").includes('title: "A"') && !spans.get("a").includes('"b"') && spans.get("b").includes("nested"), "entrySpans cuts one span per entry, from its slug line to the next entry");
+  _setPageDatesTable({ files: { "src/guides.js": "2026-06-01" }, entries: { "/guides/a": { published: "2026-01-01", modified: "2026-02-01" } }, filesFirst: { "src/what-is-x402.js": "2025-12-01" } });
+  ok(pageLastmod("/guides/a") === "2026-02-01" && pageLastmod("/guides/b") === "2026-06-01", "seam: an entry's own date wins; an entry the table lacks falls back to its module");
+  ok(articleDates("/guides/a").datePublished === "2026-01-01" && articleDates("/guides/a").dateModified === "2026-02-01", "seam: an article states the entry's published and modified dates");
+  ok(articleDates("/blog/x", { published: "2026-03-01" }).datePublished === "2026-03-01", "seam: a printed publication date wins");
+  _setPageDatesTable(null);
+  const stored = readTable();
+  const fams = {};
+  for (const [p, d] of Object.entries(stored?.entries || {})) (fams[p.split("/")[1]] ||= new Set()).add(d.modified);
+  ok(["skills", "guides", "integrations"].every((f) => fams[f] && fams[f].size >= 3), `the committed table dates each family's entries apart (${Object.entries(fams).map(([f, s]) => `${f} ${s.size}`).join(", ")})`);
 }
 
 // --- every way a tool is defined dates its page ----------------------------------

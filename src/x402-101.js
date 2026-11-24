@@ -200,7 +200,7 @@ export function x402101Page(baseUrl, { demoTool = null } = {}) {
   const recapFigure = demoTool ? `<div class="s101-fig">${paidCallFigure({ method: String(demoTool.route).split(" ")[0], path: String(demoTool.route).split(" ")[1], price: priceWords(demoTool).short })}</div>` : "";
   const canonical = `${baseUrl}/101`;
   const title = "x402 & MPP 101 - how software pays for things, in ten minutes";
-  const description = "A plain-language walkthrough of how an AI agent pays for what it uses over the x402 and MPP protocols: the 402 quote, the payment, the receipt, with a live demo against a real server. Presenter mode with speaker notes.";
+  const description = "A plain-language walkthrough of how an AI agent pays over x402 and MPP: the 402 quote, the payment and the receipt, with a live demo against a real server.";
   const slides = SLIDES.map((s, i) => `
 <section class="s101-slide" id="${esc(s.id)}" data-index="${i}">
   <div class="s101-in">

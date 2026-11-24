@@ -35,7 +35,7 @@ export const WHY_POINTS = [
     t: "A failed x402 call is not charged.",
     h: "A failed x402 call is not charged, and the response shows it.",
     s: "Settlement runs after the answer and an error cancels it; a keyed retry replays the paid answer instead of paying twice.",
-    p: `Settlement runs after the handler answers and an error status cancels it, so a failed call is answered with no payment receipt, or with a receipt marked success:false, and is not charged. ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION}${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE} A call paid before it ran answers \`charged: true\`.` : ""} A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. A settled receipt on an error response is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently. A Tempo push payment is sent before the call runs, so a call that then fails or is not served is recorded as a refund owed the same way. Anyone holding the settlement transaction can check it for free at /api/refunds/lookup and see our refund transaction once it is sent.`,
+    p: `Settlement runs after the handler answers and an error status cancels it, so a failed call is answered with no payment receipt, or with a receipt marked success:false, and is not charged.${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE} A call paid before it ran answers \`charged: true\`.` : ""} ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION} A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. A settled receipt on an error response is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently. A Tempo push payment is sent before the call runs, so a call that then fails or is not served is recorded as a refund owed the same way. Anyone holding the settlement transaction can check it for free at /api/refunds/lookup and see our refund transaction once it is sent.`,
     links: [["/x402-test", "check a payment"], ["/guides/x402-and-mpp", "how it settles"]],
     more: [],
   },
@@ -91,8 +91,8 @@ export const WHY_POINTS = [
   },
 ];
 
-/** The other ways to give an agent tools, side by side (the old /compare
- * page, folded in here; /compare answers a 301 to /docs#why-compare). Category labels
+/** The other ways to give an agent tools, side by side: rendered in
+ * /docs#why-compare and on /compare (src/search-landings.js). Category labels
  * only: no product or vendor is named. */
 export const WHY_COMPARE = {
   cols: ["Here", "Building it yourself", "Calling each provider directly"],
@@ -136,7 +136,7 @@ export const WHY_SECTION_CSS = `
   .why-pt .why-row > * { white-space:nowrap; }
   .why-pt .why-row > details { white-space:normal; }
   .why-pt .why-row > details[open] { flex-basis:100%; }
-  .why-pt a.why-proof { font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash); }
+  .why-pt a.why-proof { display:inline-flex;align-items:flex-end;min-height:24px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash); }
   .why-pt details summary { cursor:pointer;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);list-style:none; }
   .why-pt details summary::-webkit-details-marker { display:none; }
   .why-pt details[open] summary { margin-bottom:8px; }
@@ -194,10 +194,12 @@ export function whyDocsSectionHtml() {
 }
 
 /** The home page's three claims: a short heading and one sentence each, read
- * from the same sources as the full rows, each linking its proof. */
+ * from the same sources as the full rows, each linking its proof. `note` is a
+ * shared sentence the card prints under its line (the settle-first exception
+ * beside the failed-call claim; empty when settle-first is off). */
 export function whyHomeClaims() {
   return [
-    { id: "never-charged", t: WHY_POINTS.find((w) => w.id === "never-charged").t, s: "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.", link: ["/docs#why-never-charged", "how it settles"] },
+    { id: "never-charged", t: WHY_POINTS.find((w) => w.id === "never-charged").t, s: "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.", note: SETTLE_FIRST_SENTENCE, link: ["/docs#why-never-charged", "how it settles"] },
     { id: "one-key", t: "One wallet pays for all of it.", s: "500+ tools, model tiers, media and reports, each paid per call from the same wallet.", link: ["/docs#why-one-key", "what it covers"] },
     { id: "chains", t: `Pay on ${RAILS.length} chains or over MPP.`, s: "Every settled x402 call returns a receipt naming its chain transaction, or its batch transfer id.", link: ["/proof", "receipts"] },
   ];

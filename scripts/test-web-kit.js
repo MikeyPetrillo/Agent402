@@ -31,7 +31,8 @@ for (const t of WEB_TOOLS) {
   ok(typeof t.handler === "function", `${t.slug}: has handler`);
   const d = t.discovery;
   ok(d && d.bodyType === "json" && d.input && d.inputSchema && d.output?.example, `${t.slug}: full discovery envelope`);
-  // All three reach the network — must be wallet-only (PoW can't farm egress).
+  // Wallet-only, all three (archive-snapshot reaches no network now, and stays
+  // a paid tool: the free tier is an allowlist).
   ok(WALLET_ONLY_SLUGS.has(t.slug), `${t.slug}: in WALLET_ONLY_SLUGS`);
 }
 
@@ -84,14 +85,6 @@ async function live(label, fn, check) {
 }
 
 if (process.env.WEB_LIVE_TEST === "1") {
-  await live("archive-snapshot example.com",
-    () => h("archive-snapshot")({ url: "https://example.com" }),
-    (r) => r.available === true && typeof r.snapshot?.url === "string" && /web\.archive\.org/.test(r.snapshot.url));
-
-  await live("archive-snapshot example.com @2020",
-    () => h("archive-snapshot")({ url: "https://example.com", timestamp: "20200101" }),
-    (r) => r.requestedTimestamp === "20200101" && r.available === true && String(r.snapshot?.timestamp).startsWith("20"));
-
   await live("feed-parse hnrss.org/frontpage (RSS 2.0)",
     () => h("feed-parse")({ url: "https://hnrss.org/frontpage", limit: 5 }),
     (r) => r.format === "rss2" && typeof r.title === "string" && Array.isArray(r.items) && r.items.length > 0 && r.items.length <= 5 &&
@@ -113,45 +106,23 @@ if (process.env.WEB_LIVE_TEST === "1") {
   console.log("(skipping live upstream calls — set WEB_LIVE_TEST=1 to enable)");
 }
 
-// archive-snapshot: an EMPTY Wayback answer is not "never archived". The
-// availability API returned `archived_snapshots: {}` for wikipedia.org@2015
-// on the 2026-09-07 nightly (a 200, 5.1 s) and the handler sold that as
-// available:false without asking the Memento aggregator. Stubbed fetch:
-// (a) empty Wayback + a memento -> available:true from memgator; (b) empty +
-// memgator 404 -> available:false naming BOTH archives; (c) a real Wayback
-// hit never consults memgator.
+// archive-snapshot computes the Wayback link and reaches no network: every
+// fetch is refused while it runs, and the answer keeps the earlier keys with
+// what only a lookup knows read null.
 {
   const realFetch = globalThis.fetch;
-  // Route by HOSTNAME equality, never a substring of the URL (CodeQL
-  // js/incomplete-url-substring-sanitization flagged the first draft).
-  const hostOf = (input) => { try { return new URL(String(input)).hostname; } catch { return ""; } };
-  const script = (wayback, memgator) => async (input) => {
-    const u = String(input);
-    if (hostOf(input) === "archive.org") return new Response(JSON.stringify(wayback), { status: 200, headers: { "content-type": "application/json" } });
-    if (hostOf(input) === "memgator.cs.odu.edu") {
-      if (memgator === 404) return new Response("", { status: 404 });
-      return new Response(JSON.stringify(memgator), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    throw new Error(`unexpected fetch ${u}`);
-  };
-  const empty = { url: "https://www.wikipedia.org", archived_snapshots: {}, timestamp: "2015" };
-  const memento = { mementos: { closest: { datetime: "2015-01-01T00:00:58Z", uri: "https://web.archive.org/web/20150101000058/http://wikipedia.org/" } } };
+  let fetched = 0;
   try {
-    globalThis.fetch = script(empty, memento);
+    globalThis.fetch = async (input) => { fetched++; throw new Error(`unexpected fetch ${String(input)}`); };
     const a = await h("archive-snapshot")({ url: "https://www.wikipedia.org", timestamp: "2015" });
-    ok(a.available === true && a.source === "memgator.cs.odu.edu" && a.snapshot?.timestamp === "20150101000058",
-      "archive-snapshot: an empty Wayback answer is checked against the Memento aggregator and its memento is served");
-
-    globalThis.fetch = script(empty, 404);
-    const b = await h("archive-snapshot")({ url: "https://www.wikipedia.org", timestamp: "2015" });
-    ok(b.available === false && b.snapshot === null && b.source === "web.archive.org+memgator.cs.odu.edu" && /neither/.test(b.note || ""),
-      "archive-snapshot: only two archives agreeing on nothing reads as not archived, and says so");
-
-    let memgatorAsked = false;
-    const hit = { url: "https://www.wikipedia.org", archived_snapshots: { closest: { status: "200", available: true, url: "http://web.archive.org/web/20151231235819/https://www.wikipedia.org/", timestamp: "20151231235819" } } };
-    globalThis.fetch = async (input) => { if (hostOf(input) === "memgator.cs.odu.edu") memgatorAsked = true; return script(hit, 404)(input); };
-    const c = await h("archive-snapshot")({ url: "https://www.wikipedia.org", timestamp: "2015" });
-    ok(c.available === true && c.source === "web.archive.org" && !memgatorAsked, "archive-snapshot: a real Wayback hit never consults memgator");
+    ok(a.snapshot?.url === "https://web.archive.org/web/2015/https://www.wikipedia.org" && a.requestedTimestamp === "2015", `archive-snapshot: the link carries the timestamp and the URL as sent (${a.snapshot?.url})`);
+    ok(a.available === null && a.checked === false && a.snapshot.timestamp === null && a.snapshot.status === null && a.source === "web.archive.org" && /not asked/.test(a.note), "archive-snapshot: available null, checked false, capture fields null, and the note says the archive was not asked");
+    const b = await h("archive-snapshot")({ url: "https://example.com/a?b=1" });
+    ok(b.snapshot.url === "https://web.archive.org/web/2/https://example.com/a?b=1" && b.requestedTimestamp === null, `archive-snapshot: no timestamp links the most recent capture (${b.snapshot.url})`);
+    ok(fetched === 0, "archive-snapshot: no fetch was made");
+    const ex = WEB_TOOLS.find((t) => t.slug === "archive-snapshot").discovery.output.example;
+    for (const k of ["url", "requestedTimestamp", "available", "snapshot", "source"]) ok(k in ex && k in a, `archive-snapshot: the answer and example keep "${k}"`);
+    ok(!/memgator|Memento/i.test(String(h("archive-snapshot"))), "archive-snapshot: the Memento aggregator leg is gone");
   } finally {
     globalThis.fetch = realFetch;
   }

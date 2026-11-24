@@ -714,6 +714,40 @@ export function mintTempoChallenge({ priceUsd, description, realm, secretKey, ti
   return challenges.map((c) => Challenge.serialize(c)).join(", ");
 }
 
+// secp256k1's group order n, and n/2: a signature with s above n/2 is the
+// malleated twin of the low-s one that every standard signer emits.
+const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+const SECP256K1_HALF_N = SECP256K1_N >> 1n;
+export const TEMPO_HIGH_S_REASON = "transaction signature s is in the upper half of the secp256k1 curve order (not the canonical low-s form)";
+
+/** True when a pull credential's serialized Tempo transaction carries a
+ *  secp256k1 signature (the sender's own, an access key's inside a keychain
+ *  envelope, a multisig owner approval, an inline key authorization or a
+ *  fee-payer signature) whose s exceeds n/2. A p256 or webAuthn signature is
+ *  not read (another curve). Anything that does not decode is left to the
+ *  checks that follow, which refuse it. Pure; never throws. Exported for tests. */
+export function tempoHighSSignature(rawTransaction) {
+  if (typeof rawTransaction !== "string" || !/^0x7[68](?:[0-9a-fA-F]{2})+$/.test(rawTransaction)) return false;
+  let tx;
+  try { tx = TxEnvelopeTempo.deserialize(rawTransaction); } catch { return false; }
+  const highS = (sig) => typeof sig?.s === "bigint" && sig.s > SECP256K1_HALF_N;
+  // Bounded walk: envelopes nest a few levels (keychain -> inner, multisig ->
+  // approvals, a key authorization -> its envelope), never more.
+  const walk = (node, depth) => {
+    if (!node || typeof node !== "object" || depth > 8) return false;
+    if (Array.isArray(node)) return node.some((x) => walk(x, depth + 1));
+    if (node.type === "p256" || node.type === "webAuthn") return false;
+    if (node.type === "secp256k1") return highS(node.signature) || highS(node);
+    if (typeof node.r === "bigint" && typeof node.s === "bigint") return highS(node);
+    for (const [k, v] of Object.entries(node)) {
+      if (k === "calls") continue;
+      if (v && typeof v === "object" && walk(v, depth + 1)) return true;
+    }
+    return false;
+  };
+  try { return walk({ signature: tx.signature, feePayerSignature: tx.feePayerSignature, keyAuthorization: tx.keyAuthorization }, 0); } catch { return false; }
+}
+
 /** Stable replay identity for a tempo credential — the challenge id it's
  *  bound to (HMAC-verified, single-purpose per 402). Mirrors
  *  replay-guard.js's paymentReplayKey() role for the x402 side. Returns
@@ -845,6 +879,13 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   // costs the caller nothing.
   const payloadType = credential?.payload?.type;
   if (payloadType !== "transaction" && payloadType !== "hash") return bad(`credential payload type ${JSON.stringify(payloadType ?? null)} does not pay this challenge`);
+  // A pull transaction carrying a secp256k1 signature whose s is in the upper
+  // half of the curve order is refused before any claim or relay call. Its
+  // low-s twin (s' = n - s, the parity flipped) verifies for the same sender
+  // over the same transaction, yet hashes differently, so the high-s form
+  // would read as a second, different credential to every check keyed on the
+  // transaction hash. Every standard signer emits low-s.
+  if (payloadType === "transaction" && tempoHighSSignature(credential?.payload?.signature)) return bad(TEMPO_HIGH_S_REASON);
   // CLASSIFICATION-GRADE payer only (sales ledger / telemetry / internal-vs-
   // external), never identity and never a per-buyer key: `source` is
   // client-supplied (did:pkh) and is not checked against the signer. Spoofing
@@ -1291,6 +1332,7 @@ export function bindingRefusal(reason) {
   if (/amount .* below/.test(r)) return { cls: "amount-too-low", kind: "payment-insufficient", detail: `Challenge is invalid: ${r}.`, hint: `A challenge is priced for the route it was issued on; pay the challenge from this route's own 402. ${fresh}` };
   if (/not an integer/.test(r)) return { cls: "malformed-amount", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: fresh };
   if (/identity bound|runs longer/.test(r)) return { cls: "method-unsupported", kind: "method-unsupported", detail: `Challenge is invalid: ${r}.`, hint: undefined };
+  if (/upper half of the secp256k1/.test(r)) return { cls: "high-s-signature", kind: "malformed-credential", detail: `Credential is malformed: ${r}.`, hint: "Sign the transaction again with a standard signer, which emits the low-s form (s at most half the curve order). Nothing was claimed or charged." };
   if (/payload type/.test(r)) return { cls: "malformed", kind: "malformed-credential", detail: `Credential is malformed: ${r}.`, hint: "Pay the tempo challenge with a signed transaction or the hash of the transfer you sent." };
   if (/no price/.test(r)) return { cls: "no-price", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: "This route is free; call it without a payment." };
   return { cls: "invalid-challenge", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}. Request the resource again for a fresh challenge.`, hint: undefined };

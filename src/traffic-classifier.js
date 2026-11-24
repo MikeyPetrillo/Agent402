@@ -72,7 +72,7 @@ export const KNOWN_INDEXERS = Object.freeze([
   { name: "mcp-registry", re: /modelcontextprotocol|mcp[-_ ]?registry|glama|smithery|pulsemcp|mcpqueen/i, wanted: true },
   { name: "uptime-trust", re: /uptime|payability|observatory|trust[-_ ]?(monitor|index)|stelar|nsgoods|ioi-indexer/i, wanted: true },
   { name: "search-bot", re: /Googlebot|Bingbot|DuckDuckBot|Applebot|YandexBot|Baiduspider/i, wanted: true },
-  { name: "ai-crawler", re: /GPTBot|ClaudeBot|CCBot|PerplexityBot|Bytespider|Google-Extended|anthropic-ai|OAI-SearchBot|ChatGPT-User|Amazonbot|meta-externalagent/i, wanted: true },
+  { name: "ai-crawler", re: /GPTBot|ClaudeBot|Claude-SearchBot|Claude-User|CCBot|PerplexityBot|Perplexity-User|Bytespider|Google-Extended|anthropic-ai|OAI-SearchBot|ChatGPT-User|Amazonbot|meta-externalagent/i, wanted: true },
 ]);
 
 // The surfaces an indexer pulls. A client that fetches two of these and no

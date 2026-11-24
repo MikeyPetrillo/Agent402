@@ -154,6 +154,62 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
 }
 
 // ---------------------------------------------------------------------------
+// 1c. The strict screen the /ref copies use (src/server.js): a payer on
+//     WALLET_BLOCKLIST is refused before the handler, and with no list loaded
+//     a payment is refused (fail closed, counted) instead of served. The
+//     default screen (the direct routes) still serves with no list.
+{
+  const SS = await import("../src/sanctions-screen.js");
+  const { createX402PayerScreen, __resetX402PayerScreenForTests, x402PayerScreenView, X402_PAYER_UNSCREENED_TEXT } = await import("../src/x402-payer-screen.js");
+  const { blockedPayerFromPayload } = await import("../src/payments.js");
+  const dir = mkdtempSync(join(tmpdir(), "x402-screen-strict-"));
+  const run = (mw, headers) => new Promise((resolve) => {
+    const out = { next: false, code: null, body: null, headers: {} };
+    const req = { method: "POST", path: "/ref/hash", header: (k) => headers[String(k).toLowerCase()] ?? null, headers };
+    const res = { setHeader(k, v) { out.headers[String(k).toLowerCase()] = v; }, status(c) { out.code = c; return res; }, json(b) { out.body = b; resolve(out); return res; } };
+    mw(req, res, () => { out.next = true; resolve(out); });
+  });
+  const pay = (from) => ({ "payment-signature": b64({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: { signature: "0x", authorization: { from, nonce: "0x01" } } }) });
+  const BLOCKED = "0x" + "b0".repeat(20);
+  const strict = createX402PayerScreen({ log: () => {}, noList: "refuse", blockedPayerOf: blockedPayerFromPayload });
+  const lenient = createX402PayerScreen({ log: () => {} });
+  try {
+    process.env.WALLET_BLOCKLIST = `${CLEAN_2},${BLOCKED.toUpperCase().replace("0X", "0x")}`;
+    // No list loaded.
+    SS.__resetSanctionsScreenForTests();
+    __resetX402PayerScreenForTests();
+    const shut = await run(strict, pay(CLEAN));
+    ok(!shut.next && shut.code === 503 && shut.body?.reason === "payer-screen-unavailable" && shut.body?.charged === false && shut.body?.error === X402_PAYER_UNSCREENED_TEXT && Number(shut.headers["retry-after"]) > 0, `strict, no list loaded: refused 503 with Retry-After, nothing charged (${shut.code} ${shut.body?.reason})`);
+    ok(x402PayerScreenView().refusedUnscreened === 1 && x402PayerScreenView().servedUnscreened === 0, `...and counted as refused unscreened, never as served (${JSON.stringify(x402PayerScreenView())})`);
+    const open = await run(lenient, pay(CLEAN));
+    ok(open.next && x402PayerScreenView().servedUnscreened === 1, "CONTROL: the default screen (the direct routes) still serves with no list, and counts it");
+    const blockedNoList = await run(strict, pay(BLOCKED));
+    ok(!blockedNoList.next && blockedNoList.code === 403 && blockedNoList.body?.reason === "wallet_blocked" && blockedNoList.body?.charged === false, `strict: a blocklisted payer is refused 403 even with no list loaded (${blockedNoList.code} ${blockedNoList.body?.reason})`);
+    // A list loaded.
+    process.env.SANCTIONS_SCREEN_FILE = join(dir, "screen.json");
+    writeFileSync(process.env.SANCTIONS_SCREEN_FILE, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [LISTED] }));
+    SS.__resetSanctionsScreenForTests();
+    ok(await SS.loadStoredSanctionsScreen(), "setup: the list loads");
+    const served = await run(strict, pay(CLEAN));
+    const blocked = await run(strict, pay(BLOCKED));
+    const blocked2 = await run(strict, pay(CLEAN_2));
+    const listed = await run(strict, pay(LISTED));
+    ok(served.next, "CONTROL: strict, a clean payer with the list loaded passes");
+    ok(!blocked.next && blocked.code === 403 && blocked.body?.reason === "wallet_blocked" && !blocked2.next && blocked2.body?.reason === "wallet_blocked", `strict: a payer on WALLET_BLOCKLIST (any case) is refused 403 before the handler (${blocked.code}, ${blocked2.code})`);
+    ok(!JSON.stringify(blocked.body).includes(BLOCKED.slice(2, 12)) && !/https?:\/\//.test(JSON.stringify(blocked.body)), "the blocklist refusal echoes no address and points nowhere");
+    ok(!listed.next && listed.code === 403 && listed.body?.reason === "payer-not-accepted", "strict: a listed payer is still refused by the sanctions screen");
+    const lenientBlocked = await run(lenient, pay(BLOCKED));
+    ok(lenientBlocked.next, "CONTROL: the default screen leaves the blocklist to the direct routes' own settle check");
+  } finally {
+    delete process.env.WALLET_BLOCKLIST;
+    delete process.env.SANCTIONS_SCREEN_FILE;
+    SS.__resetSanctionsScreenForTests();
+    __resetX402PayerScreenForTests();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 2. The real paid server.
 const TMP = mkdtempSync(join(tmpdir(), "x402-payer-screen-"));
 let proc = null;

@@ -15,7 +15,19 @@
 // src/data-attribution.js) declares one of the two (scripts/test-referral-gate.js),
 // so a new tool on that source cannot reach /ref undecided.
 //
-// Dependency-free: the tool kits and the referral gate import it.
+// CLEARANCE. A tool is sold through a third party's marketplace (the /ref
+// copies and the AWS Marketplace front door, src/aws-marketplace-gate.js)
+// only when its upstream terms were read and cleared for that, declared
+// beside its handler:
+//   markResaleCleared(tools, slugs, "the source")   resaleCleared: true and
+//                       resaleClearedBy, the source it was cleared for.
+// A tool that reaches no upstream (the server's compute reading) has nothing
+// to clear. Every other tool is refused at boot with RESALE_NOT_CLEARED_REASON
+// (resaleClearanceRefusal), so a new tool, or one whose source is not cleared,
+// cannot be listed by a setting alone (scripts/test-resale-clearance.js).
+//
+// Imports only src/test-seams.js: the tool kits and the referral gate import it.
+import { testSeam } from "./test-seams.js";
 
 export const RESALE_BARRED = "barred";
 export const RESALE_COMPUTED = "computed";
@@ -44,6 +56,34 @@ export function markResaleBarred(tools, slugs, reason) {
   return mark(tools, slugs, { resale: RESALE_BARRED, resaleReason: why });
 }
 
+/** Why a tool is not sold through a third party when it declares no clearance. */
+export const RESALE_NOT_CLEARED_REASON = "its upstream terms are not cleared for resale through a third party";
+
+/** Mark `slugs` of `tools` as cleared for resale through a third party, with
+ *  the source they were cleared for (a few words). A tool marked barred is
+ *  never cleared. */
+export function markResaleCleared(tools, slugs, source) {
+  const by = String(source || "").trim();
+  if (by.length < 3) throw new Error("resale terms: a clearance names its source");
+  for (const t of tools || []) if (slugs.includes(t?.slug) && t.resale === RESALE_BARRED) throw new Error(`resale terms: "${t.slug}" is barred and cannot be cleared`);
+  return mark(tools, slugs, { resaleCleared: true, resaleClearedBy: by.slice(0, 120) });
+}
+
+/** Why `def` may not be sold through a third party, or null: a barred
+ *  pass-through's own reason; else null when it is cleared or reaches no
+ *  upstream (`compute`, the server's reading); else RESALE_NOT_CLEARED_REASON.
+ *  RESALE_CLEARED_FOR_TEST (a comma list, never read in production) clears
+ *  named slugs for a suite's boot. */
+export function resaleClearanceRefusal(def, { compute = false, env = process.env } = {}) {
+  const barred = resaleBarredReason(def);
+  if (barred) return barred;
+  if (!def || typeof def !== "object") return RESALE_NOT_CLEARED_REASON;
+  if (def.resaleCleared === true || compute === true) return null;
+  const seam = testSeam("RESALE_CLEARED_FOR_TEST", env);
+  if (seam && seam.split(",").map((x) => x.trim()).includes(def.slug)) return null;
+  return RESALE_NOT_CLEARED_REASON;
+}
+
 /** Mark `slugs` of `tools` as computing their answer from such a source. */
 export function markResaleComputed(tools, slugs) {
   return mark(tools, slugs, { resale: RESALE_COMPUTED });
@@ -56,7 +96,8 @@ export function resaleBarredReason(def) {
   return why.slice(0, 200);
 }
 
-/** Declare, beside a tool's handler, what its answer becomes on a /ref copy:
+/** Declare, beside a tool's handler, what its answer becomes on a /ref copy
+ *  and on /aws (both resell through a third party):
  *  `transform(answer)` returns the answer the referral gate serves (a new
  *  value; it never changes the one it is given). The public route serves the
  *  handler's own answer, untouched. */
@@ -65,8 +106,9 @@ export function markRefAnswer(tools, slugs, transform) {
   return mark(tools, slugs, { refAnswer: transform });
 }
 
-/** The answer a /ref copy serves for `def`: its declared transform applied
- *  (src/referral-gate.js is the one caller), or the answer as it came. */
+/** The answer a /ref copy (src/referral-gate.js) and an /aws sale
+ *  (src/aws-marketplace-gate.js) serve for `def`: its declared transform
+ *  applied, or the answer as it came. */
 export function refAnswerOf(def, answer) {
   return def && typeof def.refAnswer === "function" ? def.refAnswer(answer) : answer;
 }

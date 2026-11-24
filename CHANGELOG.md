@@ -4,6 +4,179 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.15.0 - 2026-11-24
+
+### 2026-11-24 (chain reads, source credits, caller URLs, receipts by token)
+Tools:
+- evm-rpc, eth-call, chain-storage and event-logs read Base, and other chains
+  answer 400; the x402 toolkit's chain reads answer 400 on Monad.
+  wallet-balances reads this server's own RPC lanes, onchain-sql-schema is
+  served from the schema kept here, and the signature lookups read Sourcify's
+  signature database.
+- whois answers registration facts computed from the registry record,
+  domain-availability returns no record fields and holds a daily cap per
+  registry, archive-snapshot answers a computed Wayback Machine link without
+  asking the archive, and cert-transparency makes its second search only with
+  its key. search-suggest reads Wikipedia's opensearch.
+- Answers carry their source's credit where the source asks for one (crt.sh,
+  Team Cymru, Hyperliquid, RugCheck, EAS, GoPlus and Wikipedia), and contract
+  source answers carry each file's license; the catalog text and the 402
+  samples are unchanged.
+- A tool that reads a URL the caller names sends the Agent402-Fetch token in
+  its User-Agent and honors robots.txt for that token; site-crawl matches
+  robots groups on the exact token.
+Payments:
+- The report products settle first under the same plan as the /v1 routes. A
+  streamed answer's signed receipt is kept and fetched at /api/receipt/<token>,
+  by the random token its response head names, never by its settlement.
+- An x402 payment that a settlement provider's compliance check, or this
+  server's own sanctions screening, refuses is final: it is not sent to
+  another settlement provider, it is not charged, and its 402 says so (reason
+  settlement-compliance-refused); /terms states it.
+Site:
+- /terms adds a model outputs section and a clause on caller-named URLs, and
+  /crawler describes those reads. The lead sentence scopes signed receipts to
+  successful direct calls. /start shows the wallet new command for a first
+  wallet.
+MCP:
+- The connector sign-in answers every token it cannot accept with 401
+  invalid_token.
+
+### 2026-11-24 (open data credits, resale clearance, status, pages)
+Tools:
+- sahm-rule, cpi-yoy, unemployment-rate and fed-funds read the Bureau of
+  Labor Statistics and the Federal Reserve Bank of New York directly, and each
+  answer's `credit` names its publisher; their descriptions and the macro skill
+  packs name both publishers.
+- world-bank-indicator reads each indicator's license from the World Bank's
+  metadata, serves only CC BY 4.0 and CC0 indicators with the World Bank's
+  credit and license in the answer, and answers 422 for any other;
+  world-bank-search carries the same credit. barcode-lookup answers credit
+  Open Food Facts with its licenses and a link to the product, and
+  country-info answers carry the ODbL notice and a link to the database this
+  server serves at /data/countries.json.
+- fema-disasters names OpenFEMA as its source.
+- A metered route's quote counts each piece of the input as at least one token
+  per eight characters.
+Payments:
+- A tool is sold through a referral link only when its sources are cleared
+  for resale through a third party, or it reaches none; a referral payment
+  from a blocked wallet is refused, as is every one while the screening list
+  cannot be read, and three crypto screens bought that way leave out the
+  source's own figures.
+- A card dispute closed for review keeps its key frozen until it is resolved,
+  and /terms states where a fraud-warning refund goes.
+Site:
+- /status reads a rail left out of the latest canary as unknown, with its age.
+  The settlement gas word clears only past the floor plus a margin.
+- While the server sheds load, the x402 manifest, /openapi.json, /llms.txt,
+  /llms-full.txt and /api/pricing answer their last good copy.
+- robots.txt lets the named AI agents fetch the proof-of-work challenge.
+  Public report pages are served with the report drawn, the home page heading
+  names x402 and MPP, the playground loads a picked tool's form on demand, and
+  insider pages show per-insider totals; a page with too little to show is
+  not indexed. The credits and sign-in pages share the site shell.
+Packages:
+- agent402-tollbooth 0.13.0 answers `--help` and `--version`, ships its
+  `deploy/` files, and charges a request with an empty User-Agent, except an
+  empty-User-Agent GET or HEAD of a health path (`healthPaths`, default
+  `/healthz` and `/health`; `TOLLBOOTH_HEALTH_PATHS` for the CLI, matched
+  exactly on the raw request path), so a load balancer's health check keeps
+  passing. A minor release: an empty
+  User-Agent elsewhere now pays.
+- agent402-mcp 0.17.0: `wallet new --help` prints the usage and makes no key.
+- The meta-tool adapters pass the server's error body through to the caller.
+- The other adapters (agent402-eliza 0.3.2 among them) and agent402-openclaw
+  add the server's error text to a failed catalog or discovery read.
+
+### 2026-11-24 (agent402-mcp 0.17.0)
+Packages:
+- agent402-mcp 0.17.0: `npx agent402-mcp wallet new` makes a fresh wallet key
+  on this computer, stores it where `npx agent402-mcp setup` would, and prints
+  the wallet's address, how to fund it and the client config; the key is never
+  printed, and a key already stored is never replaced.
+- agent402-client 0.12.1, agent402-tollbooth 0.13.0 and agent402-openclaw
+  0.6.2 publish their READMEs with the lead sentence that scopes signed
+  receipts to successful direct calls.
+- agent402-mcp 0.17.0: no daily budget is written or applied by default, for
+  a new setup or an existing one; `setup` and `wallet new` print one line
+  showing how to set `AGENT402_MAX_USD_PER_DAY`, and a server with no daily
+  cap says so in one line at start. The $5 per-call cap is unchanged.
+- agent402-langchain 0.2.13, agent402-ai-sdk 0.2.14, agent402-openai-agents
+  0.1.14 and agent402-google-adk 0.1.14 refuse a paid call listed above $5 by
+  default (`maxPerCallUsd`; `0` or `off` turns it off), take an opt-in
+  `dailyLimitUsd`, and refuse a proof-of-work challenge above 28 bits;
+  agent402-langchain for Python 0.1.7 does the same through
+  `max_per_call_usd` and `daily_limit_usd`, its own option names.
+- agent402-openclaw 0.6.2, agent402-agentkit 0.2.1, agent402-anthropic-tools,
+  agent402-openai-tools, agent402-llamaindex and agent402-strands 0.2.2 ship
+  TypeScript declarations, as do the four adapters above.
+- agent402-tollbooth 0.13.0 charges Claude-SearchBot, MistralAI-User,
+  GoogleOther and other current AI crawlers by default, refuses to start in
+  one line when its facilitator does not settle the configured network, and
+  names the path when its SQLite replay store cannot be opened.
+Site:
+- Every install line on the site and in the docs pins agent402-mcp 0.17.0.
+
+### 2026-11-24 (thirty retired tools)
+Tools:
+- onchain-sql-week, onchain-sql-range and fred-release-observations are
+  retired and answer 410 naming onchain-sql, onchain-sql and fred-series. A
+  partial onchain-sql walk no longer lists longer routes.
+- solana-rpc, x-post-counts, x-trends, fc-cast-search, fc-cast-metrics,
+  fc-channel-feed, fc-trending, fc-user-casts, fc-cast, fc-cast-replies,
+  fc-channel, fc-user-search, farcaster-profile, farcaster-by-address,
+  options-summary, crypto-options-chain, options-ticker, sol-swap-quote,
+  sol-token-lookup, judge-vision, judge-locate, judge-long, fred-search,
+  fred-series-info, fred-release-calendar, crypto-news and gravatar-check are
+  retired and answer 410 and name none. The three judge previews answered at
+  POST /v1/judge/vision, /v1/judge/locate and /v1/judge/long, and the 410 for
+  the last points to /v1/judge; options-chain names none now that its pointer
+  is retired.
+- sol-price reads each mint's price, 24-hour change and liquidity from the
+  deepest DEX pair that trades it, and its decimals with the slot they were
+  read at from the mint account on chain. Its route and answer fields stay,
+  and a new `priceFrom` field says whether a price came from a pair holding
+  the mint as its base or its quote token.
+Skill packs:
+- macro-economics, macro-dashboard and macro-context read the same series
+  without the release calendar step, and their prices follow.
+Site:
+- /markets lists perpetuals, market signals and DeFi, without an options
+  group.
+
+### 2026-11-24 (fred-series from its publishers; code execution retired)
+Tools:
+- code-run and code-run-pro are retired and answer 410 and name none: code
+  execution is no longer offered.
+- fred-series now reads each series from the agency that publishes it and
+  serves a published list of FRED series IDs (90) instead of any FRED ID:
+  labor and price series (UNRATE, UNRATENSA, U6RATE, CIVPART, EMRATIO,
+  UNEMPLOY, CLF16OV, CE16OV, PAYEMS, USPRIV, MANEMP, CES0500000003, AHETPI,
+  AWHAETP, AWHNONAG, JTSJOL, JTSJOR, JTSHIR, JTSQUR, CPIAUCSL, CPIAUCNS,
+  CPILFESL, CPIUFDSL, CPIENGSL, CUSR0000SAH1, PPIACO, PPIFIS) from the Bureau
+  of Labor Statistics; GDP and GDPC1, and monthly personal income and outlays
+  (PCEPI, PCEPILFE, PCE, PCEC96, PI, DSPI, PSAVERT) from the Bureau of
+  Economic Analysis; the Treasury constant maturities (DGS1MO through DGS30),
+  the T10Y2Y and T10Y3M spreads, the real yields DFII5 through DFII30 and the
+  T5YIE and T10YIE breakeven rates from the Treasury's daily par yield curves;
+  M1SL, M2SL, M1NS and M2NS (H.6), the exchange rates DEXUSEU, DEXUSUK,
+  DEXUSAL, DEXJPUS, DEXCHUS, DEXCAUS, DEXMXUS, DEXSZUS, DEXKOUS, DEXINUS,
+  DEXBZUS and the dollar indexes DTWEXBGS, DTWEXAFEGS, DTWEXEMEGS (H.10), and
+  MPRIME, TB3MS, TB6MS, TB1YR and GS1 through GS30 monthly (H.15) from the
+  Federal Reserve Board; DFF, EFFR, FEDFUNDS, SOFR and OBFR from the Federal
+  Reserve Bank of New York; and GFDEBTN from Treasury Fiscal Data. Each answer
+  carries its publisher's credit and terms link. Other IDs, including licensed
+  series such as SP500 and Freddie Mac's mortgage rates, answer 404 with the
+  supported list. What changed for a caller: FRED's frequency codes other than
+  d, w (or wef), m, q, sa and a now answer 400; with no startDate a BLS series
+  answers its last 10 years and a daily Treasury or H.10 series its last 2
+  calendar years; a Treasury window may touch at most 10 calendar years and an
+  H.10 window starts at most 10 years back; and a publisher file this server
+  does not hold yet can answer 503 with Retry-After. The route, the other
+  inputs, the answer shape and the price are unchanged; units, frequency, the
+  spreads and the breakeven rates are computed here and marked derived.
+
 ## v2.14.0 - 2026-11-23
 
 ### 2026-11-23 (redact, then chat)
@@ -2915,6 +3088,8 @@ Operations:
   kept.
 - The EVM wallet alarm also opens when an enabled chain's balance cannot be
   read for an hour, and the status probe pages on it.
+
+## v2.8.2 - 2026-11-06
 
 ### 2026-11-06 (Stellar settle confirmation)
 Payments:

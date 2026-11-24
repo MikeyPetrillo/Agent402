@@ -65,15 +65,6 @@ const T0 = Date.parse("2026-10-19T12:00:00Z");
   delete process.env.HARDCAP_OPENAI_CALLS;
 }
 
-// --- a kit-counted ceiling (E2B sandboxes) ------------------------------------
-{
-  _resetHardCaps();
-  process.env.HARDCAP_E2B_SANDBOXES = "2";
-  ok(takeHardCap("e2b", T0) && takeHardCap("e2b", T0), "sandboxes under the ceiling start");
-  ok(takeHardCap("e2b", T0) === false, "the next sandbox is refused");
-  delete process.env.HARDCAP_E2B_SANDBOXES;
-}
-
 // --- the fetch hook refuses before any network call ---------------------------
 // The meter wraps whatever globalThis.fetch is when it installs, once per
 // process, so every later block swaps `inner`, never globalThis.fetch.
@@ -196,6 +187,40 @@ installEgressMeter();
     ok(await settled(0) === 0, `an upstream refusal of ${status} served nothing and is not counted (used ${used()})`);
   }
   ok(hardCapStatus().upstreams.brave.releasedToday === releasedBefore + 9, "each refusal's unit shows as given back on the operator view");
+  // The 4xx give-backs are bounded, per caller and per cap, each per hour: a
+  // caller who sends inputs the upstream refuses cannot make calls the
+  // ceiling never counts. Past a bound the unit is kept.
+  {
+    const { runAsCallerOf } = await import("../src/dispatch-caller.js");
+    const asCaller = (ip, fn) => runAsCallerOf({ ip, headers: {} }, fn);
+    _resetHardCaps();
+    process.env.HARDCAP_REFUSED_RELEASES_PER_CALLER_HOUR = "3";
+    process.env.HARDCAP_REFUSED_RELEASES_PER_HOUR = "5";
+    inner = async () => new Response("{}", { status: 400 });
+    for (let i = 0; i < 5; i++) await asCaller("198.51.100.1", () => call());
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    ok(used() === 2, `one caller's refused calls give back at most its hourly share; the rest are counted (used ${used()} of 5)`);
+    for (let i = 0; i < 3; i++) await asCaller("198.51.100.2", () => call());
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    ok(used() === 3, `the cap's own hourly bound holds across callers (used ${used()}: 2 + 1 of 3)`);
+    inner = async () => { throw fetchFailed("ECONNREFUSED"); };
+    for (let i = 0; i < 4; i++) await asCaller("198.51.100.1", () => call());
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    ok(used() === 3, `a call that never left this process is still given back past the bound (used ${used()})`);
+    ok(hardCapStatus().upstreams.brave.refusedReleasesKept === 3, `the units kept past the bound are counted on the operator view (${hardCapStatus().upstreams.brave.refusedReleasesKept})`);
+    // The direct reading, across the hour.
+    const { releaseHardCapRefused } = await import("../src/upstream-hard-caps.js");
+    _resetHardCaps();
+    const H0 = Date.UTC(2026, 10, 23, 10, 5);
+    for (let i = 0; i < 4; i++) takeHardCap("brave", H0);
+    const got = [0, 1, 2, 3].map(() => releaseHardCapRefused("brave", H0, { caller: "payer:a", now: H0 }));
+    ok(got.join() === "true,true,true,false" && hardCapStatus(H0).upstreams.brave.usedToday === 1, `a caller gives back three in the hour, the fourth keeps its unit (${got.join()})`);
+    takeHardCap("brave", H0 + 3_600_000);
+    ok(releaseHardCapRefused("brave", H0 + 3_600_000, { caller: "payer:a", now: H0 + 3_600_000 }) === true, "the next hour, the same caller gives back again");
+    delete process.env.HARDCAP_REFUSED_RELEASES_PER_CALLER_HOUR;
+    delete process.env.HARDCAP_REFUSED_RELEASES_PER_HOUR;
+    _resetHardCaps();
+  }
   // Everything below MAY have been served: each keeps its unit.
   let want = 0;
   for (const status of [200, 201, 204, 302, 500, 502, 503]) {
@@ -281,58 +306,6 @@ installEgressMeter();
 }
 inner = async () => new Response("{}");
 
-// --- the kit gate: no sandbox is created past the ceiling ----------------------
-{
-  const { CODE_RUN_TOOLS, __test: codeRunTest } = await import("../src/tools/code-run-kit.js");
-  process.env.E2B_API_KEY = "test-key";
-  let created = 0;
-  codeRunTest.setSandbox({ create: async () => { created++; return { runCode: async () => ({ logs: { stdout: ["ok"], stderr: [] }, text: null }), kill: async () => {} }; } });
-  const run = CODE_RUN_TOOLS.find((t) => t.slug === "code-run");
-  _resetHardCaps();
-  process.env.HARDCAP_E2B_SANDBOXES = "0";
-  let err = null;
-  try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
-  ok(created === 0 && err?.statusCode === 503 && err?.hardCap === true, `code-run: a ceiling of 0 refuses with the ceiling's 503 and creates no sandbox (created ${created})`);
-  // Control: under the ceiling the same stub is created and runs.
-  _resetHardCaps();
-  process.env.HARDCAP_E2B_SANDBOXES = "5";
-  err = null;
-  try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
-  ok(created === 1 && !err, `code-run: under the ceiling the sandbox is created (created ${created}${err ? `, ${err.message}` : ""})`);
-  // A create that never reached the sandbox service gives its unit back; one
-  // that failed any other way keeps it (a sandbox may have started).
-  const e2bUsed = () => hardCapStatus().upstreams.e2b.usedToday;
-  const before = e2bUsed();
-  codeRunTest.setSandbox({ create: async () => { throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) }); } });
-  err = null;
-  try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
-  ok(err?.statusCode === 503 && e2bUsed() === before, `code-run: a sandbox service that could not be reached does not count a sandbox (used ${e2bUsed()} of ${before})`);
-  // The sandbox service's own refusals (the SDK's error classes): nothing
-  // started, the unit goes back.
-  const e2bErr = (name, message, statusCode) => Object.assign(new Error(message), { name, ...(statusCode ? { statusCode } : {}) });
-  for (const [label, e] of [
-    ["AuthenticationError (401)", e2bErr("AuthenticationError", "Unauthorized, please check your credentials.")],
-    ["RateLimitError (429)", e2bErr("RateLimitError", "Rate limit exceeded, please try again later", 429)],
-    ["ServiceBusyError (503)", e2bErr("ServiceBusyError", "Service temporarily unavailable, please retry", 503)],
-    ["SandboxError 400", e2bErr("SandboxError", "400: template not found", 400)],
-  ]) {
-    codeRunTest.setSandbox({ create: async () => { throw e; } });
-    err = null;
-    try { await run.handler({ code: "print(1)", language: "python" }); } catch (x) { err = x; }
-    ok(err?.statusCode === 503 && e2bUsed() === before, `code-run: a create the service refused with ${label} does not count a sandbox (used ${e2bUsed()} of ${before})`);
-  }
-  codeRunTest.setSandbox({ create: async () => { throw new Error("502 from the sandbox service"); } });
-  err = null;
-  try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
-  ok(err?.statusCode === 503 && e2bUsed() === before + 1, `code-run: a create that failed after reaching the service keeps its unit (used ${e2bUsed()} of ${before + 1})`);
-  codeRunTest.setSandbox({ create: async () => { throw e2bErr("SandboxError", "500: internal", 500); } });
-  err = null;
-  try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
-  ok(err?.statusCode === 503 && e2bUsed() === before + 2, `code-run: a 500 from the sandbox service keeps its unit (used ${e2bUsed()} of ${before + 2})`);
-  codeRunTest.setSandbox(undefined);
-  delete process.env.HARDCAP_E2B_SANDBOXES;
-  delete process.env.E2B_API_KEY;
-}
 globalThis.fetch = realFetch;
 
 // --- the settle point TAKES its unit, never only reads the ceiling -------------

@@ -70,10 +70,18 @@ const facilitator = createServer((req, res) => {
 await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
 const stub = `http://127.0.0.1:${facilitator.address().port}`;
 
+// The metered route quotes from the upstream cost table and, without one,
+// refuses to quote (every request then reads the floor). CI passes the private
+// table; a run with no table in its environment boots on the placeholder table
+// (docs/example-upstream-costs.json), so the metered checks below measure a
+// quote, not the table's absence.
+const COST_TABLE_ENV = (process.env.UPSTREAM_COSTS_JSON || process.env.UPSTREAM_COSTS_FILE)
+  ? {}
+  : { UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: join(ROOT, "docs", "example-upstream-costs.json"), UPSTREAM_COSTS_OPTIONAL: "" };
 const children = [];
 async function boot(label, extra, cwd = ROOT) {
   const env = {
-    ...process.env, ...ownStoreEnv(`payment-guide-${label}`),
+    ...process.env, ...ownStoreEnv(`payment-guide-${label}`), ...COST_TABLE_ENV,
     PORT: "0", FREE_MODE: "", NODE_ENV: "test", BASE_URL: ORIGIN, TARGET_URL: "",
     NETWORK: "base", PAYMENT_NETWORKS: "base,optimism",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
@@ -202,7 +210,7 @@ try {
     // price, the amount its accept asks, never the route's list price.
     const big = got.meteredLarge.a.json?.payment || {};
     const bigBase = acceptOn(got.meteredLarge.a.json, BASE_NET);
-    ok(Number(bigBase?.amount) > microOf(row?.price), `metered, a large request: control, its Base accept asks more than the list price (${bigBase?.amount} vs ${row?.price})`);
+    ok(Number(bigBase?.amount) > microOf(row?.price), `metered, a large request: control, its Base accept asks more than the list price (${bigBase?.amount} vs ${row?.price}; the floor here means the boot read no cost table)`);
     ok(microOf(big.price) === Number(bigBase?.amount) && big.price !== row?.price && big.quote?.maxOutputTokens === 8000, `metered, a large request: payment.price ${big.price} is the amount in the same 402's accept (${bigBase?.amount}), not the list price ${row?.price}`);
     const e = got.meteredEmpty.a.json?.payment || {};
     ok(microOf(e.price) === microOf(row?.price) && !("model" in (e.quote || {})), `metered, a body that names nothing: the floor /api/pricing lists (${e.price} vs ${row?.price}) and no model`);

@@ -1,6 +1,7 @@
 // Server-rendered technical guides — the prose layer for organic search.
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
+import { getWalletMarkdown } from "./get-a-wallet.js";
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgRef } from "./site-org.js";
@@ -13,7 +14,7 @@ import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { marked, headingId } from "./tools/markdown-render.js";
 export { headingId };
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail, wrapCodeBlocks } from "./ledger-chrome.js";
-import { fitTitle } from "./seo-meta.js";
+import { fitTitle, firstFit } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
 import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens, chainDisplayName } from "./rails.js";
 import { routerPayChains } from "./tools/route-execute.js";
@@ -37,7 +38,6 @@ import { LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-do
 import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { connectorWires } from "./connector-pay.js";
 import { OCR_LARGE_PIXELS } from "./tools/ocr-kit.js";
-import { CODE_RUN_PER_PAYER_MAX, CODE_RUN_PER_IP_MAX } from "./tools/code-run-kit.js";
 import { asyncProfileOf } from "./slow-routes.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { COMPOSITE_GUARD_LIMITS, isLongRunningSlug } from "./composite-spend-guard.js";
@@ -68,8 +68,12 @@ const LARGE_BODY_UNPAID_PER_HOUR = LARGE_BODY_UNPAID.PER_HOUR;
 // The content-pipeline guide reads the speech and transcription caps from their kits.
 import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS as TTS_LITE_FORMATS } from "./tools/tts-kit.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, sttLongEnabled } from "./tools/stt-kit.js";
+import { articleDates } from "./page-dates.js";
 /** Where the buying-at-volume guide lives (the metered quote limiter's 429 links it). */
 export const BUYING_AT_VOLUME_PATH = "/guides/buying-at-volume";
+
+/** Guides published under an earlier slug: old slug -> current slug (served as a 301). */
+export const MOVED_GUIDES = Object.freeze({ "why-twelve-chains": "why-many-chains" });
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -171,6 +175,7 @@ const FLAT_TIER_TABLE = "| tier | baseUrl path | per call | max output tokens |\
 const GUIDES = [
   {
     slug: "x402-in-5-minutes",
+    metaDescription: "A working x402 example: your agent calls an API, gets an HTTP 402 quote, pays in USDC from its own wallet and gets the result, with no signup or API key.",
     title: "Make your AI agent pay for what it needs: x402 in 5 minutes",
     description:
       `A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays ${RAILS_COUNT} from its own wallet, and gets the result - no signup, no API key.`,
@@ -306,7 +311,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp@0.16.0\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.17.0\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -320,6 +325,7 @@ at a [public wallet](https://agent402.tools/api/stats).
   },
   {
     slug: "buying-at-volume",
+    metaDescription: "How to run hundreds or thousands of paid calls in a burst: rate limits and Retry-After, retries that never pay twice, spend caps and job links.",
     title: "Buying at volume: limits, retries and spend caps for AI agents",
     seoTitle: "Buying at volume from an AI agent",
     description:
@@ -367,7 +373,7 @@ before any payment is taken, and the last column says how long to wait.
 | Payments that verified and then failed to settle for a reason about the payment itself (its balance, its signature, or an authorization already used or expired), per wallet and per network | refused on that network at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes (${SETTLE_BREAKER_UNKNOWN_MAX} for failures whose cause the settlement did not name, refused in words that blame no one) while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming the network and when it lifts (\`refusedNetwork\`, \`retryAfterSeconds\`, \`retry: "other-network"\`); the same wallet can pay on another network the route offers at once |
 | Report and media runs that failed to settle or failed after the run, per buyer | blocked for ${Math.round(COMPOSITE_GUARD.BLOCK_MS / 60_000)} minutes at ${COMPOSITE_GUARD.MAX_FAILS} in ${Math.round(COMPOSITE_GUARD.WINDOW_MS / 60_000)} minutes while they are more than ${failShareWords(COMPOSITE_GUARD.MIN_FAIL_SHARE)} of the buyer's outcomes there, or at ${COMPOSITE_GUARD.HARD_MAX_FAILS} whatever it settled | 429 without \`Retry-After\`; the block lifts on its own |
 | Unpaid requests with a body over ${Math.round(UNPAID_BODY_MAX_BYTES / 1024)} KB to a route that reads its price from the body | ${LARGE_BODY_UNPAID_PER_MIN} a minute and ${LARGE_BODY_UNPAID_PER_HOUR.toLocaleString("en-US")} an hour per client address, the same once that address has paid | 429, \`Retry-After: 60\` |
-| A wallet's paid calls in flight, on every paid route that is not free through proof-of-work, other than the report and media routes | the wallet's balance of the paying token covers every call it has in flight plus the new one, however many: the coverage check sets no other limit on calls at once, and a route's own limit still applies (the code-run tools: ${CODE_RUN_PER_PAYER_MAX} runs at once per EVM payer, credits key or Tempo sender; any other paid call counts only itself, and a call with no payment ${CODE_RUN_PER_IP_MAX} per client address). The balance is read inside about a second, and a call refused while another call from the wallet is settling answers within about a second (either takes up to about ${COVER_SETTLED_READ_SECONDS} seconds when a settlement lands during the read). While it cannot be read, the call is started if the last balance this server read for that wallet in the past ${COVER_GOOD_READ_MINUTES} minutes, less what the wallet's payments have taken and its calls in progress hold since, covers it; otherwise, and for a wallet with no read that recent, the wallet runs up to ${COVER_UNREAD_MAX} calls at once (${COVER_UNREAD_PAID_MAX} with a payment on record) | 429: \`Retry-After: 30\` when the balance read does not cover the call (the seconds left until the wallet is read again, at most ${COVER_READ_GAP_SECONDS}, when it was judged on an earlier call's read); \`Retry-After: 5\` when another call from the wallet is still settling and cover cannot be confirmed yet, and when the balance cannot be read and the kept read or the calls-at-once figure does not admit the call |
+| A wallet's paid calls in flight, on every paid route that is not free through proof-of-work, other than the report and media routes | the wallet's balance of the paying token covers every call it has in flight plus the new one, however many: the coverage check sets no other limit on calls at once, and a route's own limit still applies. The balance is read inside about a second, and a call refused while another call from the wallet is settling answers within about a second (either takes up to about ${COVER_SETTLED_READ_SECONDS} seconds when a settlement lands during the read). While it cannot be read, the call is started if the last balance this server read for that wallet in the past ${COVER_GOOD_READ_MINUTES} minutes, less what the wallet's payments have taken and its calls in progress hold since, covers it; otherwise, and for a wallet with no read that recent, the wallet runs up to ${COVER_UNREAD_MAX} calls at once (${COVER_UNREAD_PAID_MAX} with a payment on record) | 429: \`Retry-After: 30\` when the balance read does not cover the call (the seconds left until the wallet is read again, at most ${COVER_READ_GAP_SECONDS}, when it was judged on an earlier call's read); \`Retry-After: 5\` when another call from the wallet is still settling and cover cannot be confirmed yet, and when the balance cannot be read and the kept read or the calls-at-once figure does not admit the call |
 | A wallet's paid calls in flight on the report and media routes | the wallet's balance covers every call in flight plus the new one, with the balance read given a few seconds; while it cannot be read, ${COVER_UNREAD_MAX} calls at once per wallet | 429, \`Retry-After: 30\` |
 | Calls paid with a Tempo pull credential in a multisig envelope, before a payment from that account under the same multisig config has settled here (after one has, the account's balance is the only limit, as for any wallet) | ${COVER_UNREAD_MAX} at once per client address, whichever account each names | 429, \`Retry-After: 5\` (\`Retry-After: 30\` on the report and media routes) |
 | Jobs per client address | ${ASYNC_JOBS_PER_CLIENT} running at once | 429, \`Retry-After: 30\` |
@@ -502,6 +508,8 @@ export AGENT402_BUDGET=20             # USD for the whole session
 export AGENT402_NETWORKS=solana       # pay only on these chains, in this order
 npx -y agent402-mcp@${AGENT402_MCP_VERSION}
 \`\`\`
+
+${getWalletMarkdown()}
 
 **agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
 \`AGENT402_MAX_PER_CALL_USD\`, defaults to $5; \`0\` or \`off\` turns it off.
@@ -638,6 +646,7 @@ chain of paid stages, from research to subtitles, is in
   },
   {
     slug: "content-pipeline",
+    metaDescription: "A recipe for podcast, short-video and voiceover pipelines where every stage, from research and script to speech and subtitles, is one paid call.",
     title: "Content pipelines: research, script, voice, images and subtitles from one wallet",
     seoTitle: "A content pipeline for AI agents, paid per call",
     description:
@@ -985,6 +994,7 @@ itself is in [x402 and MPP](/guides/x402-and-mpp).
   },
   {
     slug: "durable-memory-for-agents",
+    metaDescription: "How agents keep state across sessions and share it across owners with wallet-keyed memory: writes, cross-wallet grants, audit logs and recall.",
     title: "Durable memory for AI agents - no accounts, the wallet is the identity",
     seoTitle: "Durable memory for AI agents, keyed to the wallet",
     description:
@@ -1057,6 +1067,7 @@ for the full API.
   },
   {
     slug: "sell-your-api-over-x402",
+    metaDescription: "Put a per-call USDC paywall in front of any HTTP endpoint with x402: quote over HTTP 402, settle through a facilitator and get found by agents.",
     title: "Sell your API to AI agents over x402 - no billing system required",
     seoTitle: "Sell your API to AI agents over x402",
     description:
@@ -1138,6 +1149,7 @@ on-chain customer detector - is in
   },
   {
     slug: "x402-payments-toolkit",
+    metaDescription: "Read a 402 quote, check balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on chain.",
     title: "Let your agent pay anyone: the non-custodial x402 payments toolkit",
     seoTitle: "The non-custodial x402 payments toolkit",
     description:
@@ -1229,6 +1241,7 @@ USDC; these tools are wallet-only (no proof-of-work tier).
   },
   {
     slug: "usdg-payments-robinhood-chain",
+    metaDescription: "How AI agents pay in USDG on Robinhood Chain over x402, and how a seller accepts it: chain parameters, gasless settlement and buyer code.",
     title: "Accept USDG payments on Robinhood Chain over x402",
     description:
       "How AI agents pay in USDG (Global Dollar) on Robinhood Chain via the x402 protocol - and how to accept it as a seller: chain parameters, gasless EIP-3009 settlement, buyer code, and how to verify a settlement on-chain.",
@@ -1326,6 +1339,7 @@ agent can verify its own settlement for a fraction of a cent without an RPC key.
   },
   {
     slug: "create-agent-wallet",
+    metaDescription: "Create and fund a wallet for an AI agent safely: generate the key locally, rehearse the x402 payment loop with test USDC, then fund it for real calls.",
     title: "Give your agent a wallet - non-custodial, from zero to first x402 payment",
     seoTitle: "Give your agent a non-custodial wallet",
     description:
@@ -1427,6 +1441,7 @@ addresses out.
   },
   {
     slug: "smart-order-router",
+    metaDescription: "Describe a task and pay once: the router picks the best tool from this catalog or a proven outside x402 seller, buys the result and returns it.",
     title: "One payment, any proven seller: the x402 Smart Order Router",
     description:
       "Describe a task, pay once, and the router resolves the best tool - from Agent402's own 500+ catalog or from an external x402 seller in the open economy, proven sellers first - buys the result from that seller on the chain you paid on and sells it to you with an on-chain receipt.",
@@ -1639,7 +1654,7 @@ work today.
 `,
   },
   {
-    slug: "why-twelve-chains",
+    slug: "why-many-chains",
     title: "Why Agent402 settles on {{railCount}} chains instead of just Base",
     description:
       "Base is where x402 volume actually is today. Agent402 also settles on {{usdcRailsButBase}}, and Robinhood Chain (USDG) anyway - here's the actual reason, chain by chain.",
@@ -1943,6 +1958,7 @@ its normal schedule.
   },
   {
     slug: "agent-hosts",
+    metaDescription: "Connect the agent host you already run to Agent402: models through an OpenAI-compatible base URL and tools over MCP, paid per call from a wallet.",
     title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter, AgentCore and any OpenAI SDK",
     seoTitle: "Use Agent402 from Claude Code, Cursor and more",
     description:
@@ -2038,10 +2054,12 @@ claude mcp add --transport http -s user agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.16.0
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.17.0
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
+
+${getWalletMarkdown()}
 
 Or in \`.mcp.json\` at the project root:
 
@@ -2050,7 +2068,7 @@ Or in \`.mcp.json\` at the project root:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
@@ -2073,7 +2091,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2302,7 +2320,7 @@ prompted input (VS Code stores it, the file never carries it):
     "agent402": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
@@ -2328,7 +2346,7 @@ interpolation is Windsurf's own):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
@@ -2355,7 +2373,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
@@ -2393,7 +2411,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
@@ -2417,7 +2435,7 @@ Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio serve
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
-args = ["-y", "agent402-mcp@0.16.0"]
+args = ["-y", "agent402-mcp@0.17.0"]
 env = { AGENT_KEY = "0x..." }
 \`\`\`
 
@@ -2461,7 +2479,7 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.16.0"],
+      "args": ["-y", "agent402-mcp@0.17.0"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2482,6 +2500,7 @@ result, proven sellers first. Why pay here, with the proof links:
   },
   {
     slug: "openclaw-model-provider",
+    metaDescription: "Point OpenClaw at Agent402's OpenAI-compatible gateway and pay per call in USDC from a wallet over x402, with a plugin that sets up the provider.",
     title: CREDITS_ON ? "Use Agent402 as your OpenClaw model provider - pay by card, no wallet" : "Use Agent402 as your OpenClaw model provider - pay per call",
     seoTitle: "Agent402 as your OpenClaw model provider",
     description:
@@ -2628,7 +2647,7 @@ receipt shape:
   transcription, and a grounded tier that cites the web on every answer.
 - **500+ tools** over MCP or HTTP: web search, news, cited
   answers, browser render, market quotes, SEC filings, crypto and DeFi data,
-  PDFs, OCR, DNS and TLS checks, a code sandbox, wallet-keyed memory.
+  PDFs, OCR, DNS and TLS checks, wallet-keyed memory.
 - **Finished reports and monitors**: dossiers, insider flow, 13F holdings,
   domain audits, token risk, deep research, market briefs, a LinkedIn article
   package; monitors that re-run a report only when the facts change.
@@ -2747,7 +2766,7 @@ export function guidePage(baseUrl, slug, catalog = null) {
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description: g.description, canonical, baseUrl, activePath: "__none__", jsonLd: [jsonLd, crumbs.ld], extraCss: GUIDE_PAGE_CSS, body });
+  return ledgerShell({ title, description: firstFit([g.metaDescription, g.description]) || g.description, canonical, baseUrl, activePath: "__none__", jsonLd: [jsonLd, crumbs.ld], extraCss: GUIDE_PAGE_CSS, body, article: articleDates(`/guides/${g.slug}`) });
 }
 
 export const guideSlugs = () => GUIDES.map((g) => g.slug);

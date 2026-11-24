@@ -184,6 +184,9 @@ try {
     const w = await fetch(`${B}/api/stock-quote?symbol=AAPL`);
     const wb = w.status === 402 ? await w.json().catch(() => ({})) : {};
     ok(!wb.altPayment, `wallet-only tool's 402 does not advertise PoW (got ${w.status})`);
+  } else if (process.env.CI) {
+    // Under CI a skipped check is not coverage: the paywall must answer 402.
+    ok(false, `402 for a PoW-eligible tool advertises the free proof-of-work path (paywall returned ${r.status}, no 402 body to inspect)`);
   } else {
     // Facilitator host unreachable in this sandbox → the paywall 5xxes before
     // building a challenge; the hint can't be exercised here. Skip honestly.

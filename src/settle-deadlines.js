@@ -70,6 +70,7 @@ import { blockMs } from "./chain-block-time.js";
 import { evmRpcFor } from "./evm-rpcs.js";
 import { positiveNum as num } from "./env-num.js";
 import { settleClaimStateOf } from "./settlement-claims.js";
+import { isComplianceSettleRefusal } from "./settle-compliance.js";
 
 /** The networks the table covers, by name (CAIP-2). Every one settles USDC
  *  (6 decimals) with EIP-3009 and has an RPC the late book reads. */
@@ -346,9 +347,13 @@ export function withSettleDeadline(client, {
           try {
             const r = await alt.client.settle(payload, requirements, ...rest);
             if (r?.success === true) return r;
+            // A compliance refusal is final: neither the next fallback nor
+            // the primary is asked (src/settle-compliance.js).
+            if (isComplianceSettleRefusal(r)) return r;
             if (isPreBroadcast(asError(r))) continue;
             return r;
           } catch (err) {
+            if (isComplianceSettleRefusal(err)) throw err;
             if (isPreBroadcast(err)) continue;
             throw tagStop(err, "fallback", alt.name);
           }

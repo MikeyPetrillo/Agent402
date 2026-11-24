@@ -64,7 +64,7 @@ export function defaultNameLookups({ timeoutMs = 5000, clients = null } = {}) {
   // `clients` ({ eth, base }: anything with viem's getEnsName, getEnsAddress
   // and readContract) is for tests; production builds its own on first use.
   let eth = clients?.eth || null, baseClient = clients?.base || null;
-  const ethC = () => eth || (eth = clientFor(mainnet, rpcList("eth-mainnet", ["https://ethereum-rpc.publicnode.com", "https://eth.drpc.org"]), timeoutMs));
+  const ethC = () => eth || (eth = clientFor(mainnet, rpcList("eth-mainnet", ["https://ethereum-rpc.publicnode.com"]), timeoutMs));
   const baseC = () => baseClient || (baseClient = clientFor(base, rpcList("base-mainnet", ["https://mainnet.base.org", "https://base-rpc.publicnode.com"]), timeoutMs));
   return {
     async ens(address) {

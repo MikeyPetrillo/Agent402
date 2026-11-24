@@ -653,7 +653,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         if (verdict === "paid") {
           // The receipt proves the transfer: the only reading that books a sale.
           let booked = e.saleBooked === true;
-          if (!booked) { try { booked = (await bookSale(e, s.transaction, s.net ?? null)) === true; } catch { booked = false; } }
+          if (!booked) { try { booked = (await bookSale(e, s.transaction, s.net ?? null, s.split ?? null)) === true; } catch { booked = false; } }
           out.landed++;
           say("error", `CHARGED-BUT-NOT-SERVED: a settlement left open landed on chain (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${s.transaction})${booked ? ", sale booked" : ", sale NOT booked"}`);
           await this.resolve(e.key, { state: "charged-undelivered", tx: s.transaction, saleBooked: booked, landedAt: t });
@@ -770,7 +770,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
           const verdict = chainVerdict(st, { validBeforeMs: (Number(g.validBefore) || 0) * 1000, nowMs: t, slackMs: EXPIRY_SLACK_MS });
           if (verdict === "paid") {
             let booked = false;
-            try { booked = (await bookSale(g, st.transaction, st.net ?? null)) === true; } catch { booked = false; }
+            try { booked = (await bookSale(g, st.transaction, st.net ?? null, st.split ?? null)) === true; } catch { booked = false; }
             back.push({ g, tx: st.transaction, booked });
             out.landed++;
             say("error", `CHARGED-BUT-NOT-SERVED: a refused settle whose entry was dropped at capacity landed on chain (${g.slug} payer=${String(g.payer).slice(0, 6)} tx=${st.transaction})${booked ? ", sale booked" : ", sale NOT booked"}`);

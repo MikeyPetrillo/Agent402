@@ -44,7 +44,7 @@ export { SLOW_ADVISE_SECONDS };
 const TYPICAL_REPORT_SECONDS = 90;
 const TYPICAL_SECONDS = Object.freeze({ "v1-videos": 40, "image-gen-premium": 40 });
 // Composites whose typical run is not covered by the report measurement.
-const NO_TYPICAL = new Set(["decide-execute", "onchain-sql-range"]);
+const NO_TYPICAL = new Set(["decide-execute"]);
 
 // Async-capable, not advertised as slow. maxSeconds is the handler's own
 // deadline where it has one.

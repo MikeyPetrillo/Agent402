@@ -1472,8 +1472,9 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // any dispute on it is open and thaws only when none is; each close settles
   // its own payment only. A close that arrives before its create is applied
   // when it arrives (early) and the create, when it comes, freezes nothing. A
-  // close whose status is neither won nor lost lifts the hold and is listed
-  // for a person (review) until resolved; refunds wait on it meanwhile.
+  // close whose status is neither won nor lost keeps the key frozen (an early
+  // one freezes it) and is listed for a person (review) until resolved;
+  // refunds wait on it meanwhile.
   // An older record's single slot (disputedPaymentIntent, disputeAt,
   // disputeClosedAt, disputeOutcome) is read as one entry and moved into the
   // map on the record's next dispute write.
@@ -1526,13 +1527,14 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     r.balanceMicro = Math.max(0, (Number(r.balanceMicro) || 0) - lost * 10_000);
     if (off > 0) note(r, { k: "dispute-lost", m: off });
   }
-  // After one dispute closes: while another is open nothing thaws. Otherwise a
+  // After one dispute closes: while another is open, or one closed with an
+  // outcome a person has not yet resolved (review), nothing thaws. Otherwise a
   // fraud review the disputes held is owed again (or settled when nothing is
   // left), and a key the disputes alone froze is enabled again while any
   // payment on it is left, or kept frozen under a fraud warning it carries.
   // Answers true when the key's state changed.
   function afterDisputeClose(r) {
-    if (disputeOpen(r)) return false;
+    if (disputeOpen(r) || disputeInReview(r)) return false;
     const has = (Number(r.balanceMicro) || 0) + (Number(r.heldMicro) || 0) > 0;
     if (r.fraudReview?.state === "disputed") r.fraudReview = { ...r.fraudReview, state: "owed" };
     if (r.fraudReview?.state === "owed" && !has) r.fraudReview = { ...r.fraudReview, state: "nothing", decidedAt: now() };
@@ -1589,8 +1591,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   }
   /** The charge.dispute.closed hook. Won (or an inquiry closed, or a dispute
    *  prevented) lifts what the dispute alone held; lost takes the disputed
-   *  payment off the balance; any other status lifts the hold and lists the
-   *  dispute for a person (disputesToReview). A close that arrives before its
+   *  payment off the balance; any other status keeps the key frozen and lists
+   *  the dispute for a person (disputesToReview) until resolveDispute. A close that arrives before its
    *  create is applied now and recorded, so the create freezes nothing. */
   function disputeClosed(paymentIntent, { won = false, status = null, amountCents = null, disputeId = null } = {}) {
     if (!paymentIntent) return answer(null);
@@ -1606,16 +1608,29 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
         return { rec: r, result: resolveOn(r, paymentIntent, kind, amountCents) };
       }
       if (d) return { result: null }; // delivered again
-      // The close came first: apply it and remember it for the create.
+      // The close came first: apply it and remember it for the create. An
+      // outcome a person has to review freezes the key now, until resolved.
       const ds = disputeMap(r);
       if (kind === "lost") takeLost(r, paymentIntent, amountCents);
       ds[paymentIntent] = { id: disputeId ? String(disputeId).slice(0, 64) : null, at: null, closedAt: isoNow(), outcome: kind === "review" ? String(status || "unknown").slice(0, 40) : kind, early: true, ...(kind === "review" ? { review: true } : {}) };
-      log(`[credits] key ${r.keyId}: dispute ${kind === "review" ? "closed with an outcome to review" : kind} before its create (${paymentIntent}); its create freezes nothing`);
-      return { rec: r, result: kind === "lost" ? r.keyId : null };
+      const froze = kind === "review" ? freezeForDispute(r) : false;
+      log(`[credits] key ${r.keyId}: dispute ${kind === "review" ? "closed with an outcome to review" : kind} before its create (${paymentIntent}); ${froze ? "the key is frozen until a person resolves it" : "its create freezes nothing"}`);
+      return { rec: r, result: kind === "lost" || froze ? r.keyId : null };
     });
   }
+  // Freeze a key for a dispute, unless a stronger cause already holds it.
+  // Answers true when the key's state changed.
+  function freezeForDispute(r) {
+    if (r.disabled === true && !CAUSE_RANK[r.disabledReason]) r.disabledReason = "operator";
+    const held = r.disabled === true ? CAUSE_RANK[r.disabledReason] : 0;
+    const was = `${r.disabled === true}|${r.disabledReason}`;
+    r.disabled = true;
+    if ((CAUSE_RANK.disputed || 0) >= held) r.disabledReason = "disputed";
+    return `${r.disabled === true}|${r.disabledReason}` !== was;
+  }
   // A dispute waiting on a person, resolved: lost takes its payment, won takes
-  // nothing. Either way it leaves the review list.
+  // nothing. Either way it leaves the review list, and the key thaws once no
+  // other dispute on it is open or waiting.
   function resolveOn(r, paymentIntent, kind, amountCents = null) {
     const ds = disputeMap(r);
     const d = ds[paymentIntent];

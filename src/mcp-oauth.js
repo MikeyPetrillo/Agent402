@@ -54,7 +54,7 @@ import { shared, createMemoryLimits } from "./shared-limits.js";
 import { envPositive } from "./env-num.js";
 import { escapeHtml, headerText } from "./email-text.js";
 import { creditsSalesEnabled, creditsSalesSwitch, creditsBalanceMaxCents, mcpOAuthSwitch, mcpOAuthGuards, CONNECTED_APP_KEEP_DAYS, CREDITS_CONNECTOR_PATH } from "./credits-sales.js";
-import { limiterKey } from "./rate-limit.js";
+import { limiterKey, wideNetworkKey } from "./rate-limit.js";
 import { sellablePacks } from "./credits.js";
 import { normEmail, validEmail, sameOriginWrite, readCookie, ACCOUNT_PATH, ACCOUNT_COOKIE } from "./credits-account.js";
 import { consentPage, consentErrorPage, OAUTH_CONSENT_PATH } from "./mcp-oauth-page.js";
@@ -62,6 +62,8 @@ import { consentPage, consentErrorPage, OAUTH_CONSENT_PATH } from "./mcp-oauth-p
 export const ACCESS_PREFIX = "a402m_";
 export const REFRESH_PREFIX = "a402r_";
 export const SCOPE = "credits:spend";
+/** The most of the service-wide hourly code-mail budget one network may take. */
+export const GLOBAL_SHARE = 0.05;
 export const AUTH_MCP_PATH = CREDITS_CONNECTOR_PATH;
 // The sign-in browser cookie holds an opaque random value only (32 random
 // bytes); the server keeps its SHA-256 digest with the pending request, never
@@ -185,6 +187,20 @@ export function buildCodeEmail({ code, appName }) {
   return { subject, html, text };
 }
 
+/** The notice sent once an app is connected: a record of what was allowed
+ *  and where to undo it. */
+export function buildConnectedEmail({ appName, capUsd, manageUrl }) {
+  const subject = "An app was connected to your Agent402 credits";
+  const lead = `${appName} can now pay for Agent402 tool calls from the credits balance on this email, up to $${Number(capUsd).toFixed(2)} a day, only when a call succeeds.`;
+  const manage = `Change its daily cap or disconnect it at any time on your balance page: ${manageUrl}`;
+  const why = "You are getting this because this email's sign-in code was used to connect the app. If that was not you, disconnect it on the balance page; a disconnected app stops paying at once.";
+  // design-tokens: literal-start (email HTML)
+  const html = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:560px;margin:0 auto;color:#111315"><h2 style="font-weight:700">${escapeHtml(subject)}</h2><p style="color:#3A3F45;line-height:1.55">${escapeHtml(lead)}</p><p style="color:#3A3F45;line-height:1.55">Change its daily cap or disconnect it at any time on <a href="${escapeHtml(manageUrl)}" style="color:#0F5E43">your balance page</a>.</p><p style="color:#626970;font-size:12px;margin-top:26px">${escapeHtml(why)}</p></div>`;
+  // design-tokens: literal-end
+  const text = `${subject}\n\n${lead}\n\n${manage}\n\n${why}\n\nAgent402`;
+  return { subject, html, text };
+}
+
 /**
  * @param {object} d
  * @param {object} d.credits   createCredits() (balancesForEmail, createCheckout, claim, sessionOwner, grantSpentToday)
@@ -215,6 +231,13 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     return Number(r.value) || 0;
   }
   const over = async (name, key, limit, windowMs = cfg.windowMs()) => (await add(name, key, 1, windowMs)) > limit;
+  /** A counter's value now, without charging it. */
+  async function read(name, key) {
+    const k = digest(`${name}|${key}`).slice(0, 40);
+    let r = await limits.counterGet(`mcpo-${name}`, k).catch(() => ({ ok: false }));
+    if (!r?.ok) r = await local.counterGet(`mcpo-${name}`, k);
+    return Number(r.value) || 0;
+  }
   // A code attempt is counted BEFORE the code is compared, on two shared
   // counters: the requester's address (every sign-in it holds together) and
   // the emailed code (the pending sign-in it was mailed to). Parallel attempts
@@ -349,13 +372,16 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
   async function resolveBearer(req) {
     const tok = bearerShape(req.headers?.authorization);
     if (tok === null) return null;
-    // A failed lookup is counted per client address, and past the bound it
-    // is answered 429. A token that fails the tag check, or that was found
-    // bad a moment ago, is refused here without a store read; a valid token
-    // passes both and is never refused by this count.
+    // A failed lookup is counted per client address. Every failed lookup is
+    // answered 401 invalid_token, the reason it failed (expired, revoked or
+    // unknown), and past the bound the 401 also carries Retry-After: the
+    // count slows a client that keeps presenting bad tokens and never
+    // replaces the reason. A token that fails the tag check, or that was
+    // found bad a moment ago, is refused here without a store read; a valid
+    // token passes both and is never refused by this count.
     const bad = async () => {
       const over = await add("bearer-bad", `bad|${netKey(req.ip)}`, 1, cfg.windowMs()) > cfg.badTokenMax();
-      return over ? { invalid: true, busy: true } : { invalid: true };
+      return over ? { invalid: true, slowed: true } : { invalid: true };
     };
     if (!tok || !minted(tok)) return bad();
     const key = digest(tok);
@@ -421,21 +447,46 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     // "limited" (refused by a limit; no code made), "gone" (no such sign-in)
     // or whether the mail was sent. The service-wide budget is read last, so
     // a send another limit refused does not spend it.
-    // The per-recipient budgets are charged to the mailbox (its "+tag" and
-    // dotted spellings count as one, src/mailbox-key.js) together with the
-    // requester's network, so a stranger spends only its own allowance for an
-    // address it names. The mailbox's day ceiling across requesters holds back
-    // a requester that has sent there before, never one's first send of the
-    // day: the owner's own sign-in always gets a code, whatever others asked.
+    // Each budget meters the requester (its network, an IPv6 /64) and the
+    // shared totals are ceilings read before anything is charged, so a refused
+    // ask raises no counter another requester is judged by:
+    //   - per (mailbox, network): the requester's own share for an address it
+    //     names (the mailbox folds "+tag" and dotted spellings, src/mailbox-key.js);
+    //   - the mailbox's day ceiling across requesters, first sends included;
+    //     past it a network's first send of the day comes from a fixed
+    //     per-mailbox allowance (the same size as the ceiling), so the mail a
+    //     mailbox gets is bounded however many networks ask;
+    //   - the service-wide hourly budget: one network takes at most
+    //     GLOBAL_SHARE of it, and once it is spent a network with no send
+    //     today still gets one code, so draining it stops no one else. That
+    //     first send is counted per wider network too (an IPv6 /48, an IPv4
+    //     /24: wideNetworkKey), so rotating addresses inside one allocation
+    //     gets one in all.
     if (await locked(ip) || await over("send-ip", netKey(ip), cfg.sendsPerIp())) return "limited";
     const mailbox = mailboxKey(email);
-    const mine = `${mailbox}|${netKey(ip)}`;
+    const net = netKey(ip);
+    const mine = `${mailbox}|${net}`;
     if (await over("send-email", mine, cfg.sendsPerEmail())) return "limited";
-    const mineToday = await add("send-email-day", mine, 1, DAY_MS);
-    if (mineToday > cfg.sendsPerEmailDay()) return "limited";
-    const mailboxToday = await add("send-mailbox-day", mailbox, 1, DAY_MS);
-    if (mineToday > 1 && mailboxToday > cfg.sendsPerEmailDay()) return "limited";
-    if (await over("send-global", "all", cfg.sendsGlobalPerHour(), HOUR_MS)) return "limited";
+    const perDay = cfg.sendsPerEmailDay();
+    const mineToday = await read("send-email-day", mine);
+    if (mineToday >= perDay) return "limited";
+    let cold = false;
+    if (await read("send-mailbox-day", mailbox) >= perDay) {
+      if (mineToday > 0 || await read("send-mailbox-cold-day", mailbox) >= perDay) return "limited";
+      cold = true;
+    }
+    const globalMax = cfg.sendsGlobalPerHour();
+    if (await read("send-net-hour", net) >= Math.max(1, Math.ceil(globalMax * GLOBAL_SHARE))) return "limited";
+    const wideNet = wideNetworkKey(String(ip || "?"));
+    if (await read("send-global", "all") >= globalMax && (await read("send-net-day", net) > 0 || await read("send-wide-day", wideNet) > 0)) return "limited";
+    // The send is admitted: charge every budget it draws on.
+    await add("send-email-day", mine, 1, DAY_MS);
+    await add("send-mailbox-day", mailbox, 1, DAY_MS);
+    if (cold) await add("send-mailbox-cold-day", mailbox, 1, DAY_MS);
+    await add("send-net-hour", net, 1, HOUR_MS);
+    await add("send-net-day", net, 1, DAY_MS);
+    await add("send-wide-day", wideNet, 1, DAY_MS);
+    await add("send-global", "all", 1, HOUR_MS);
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const t = now();
     const set = await requests.change((b) => {
@@ -470,8 +521,9 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
     const busy = (res) => { noStore(res).set("Retry-After", "60"); return res.status(429).json({ error: "invalid_request", error_description: "Too many requests. Try again later." }); };
     const resourceMeta = (resource) => ({ resource, authorization_servers: [baseUrl], scopes_supported: [SCOPE], bearer_methods_supported: ["header"], resource_name: "Agent402 MCP connector", resource_documentation: `${baseUrl}/llms.txt` });
     const challenge = (path, invalid) => `Bearer realm="agent402", resource_metadata="${baseUrl}/.well-known/oauth-protected-resource${path}", scope="${SCOPE}"${invalid ? ', error="invalid_token"' : ""}`;
-    const unauthorized = (res, path, invalid) => {
-      noStore(res).set("WWW-Authenticate", challenge(path, invalid)).set("Access-Control-Allow-Origin", "*").set("Access-Control-Expose-Headers", "WWW-Authenticate");
+    const unauthorized = (res, path, invalid, slowed = false) => {
+      noStore(res).set("WWW-Authenticate", challenge(path, invalid)).set("Access-Control-Allow-Origin", "*").set("Access-Control-Expose-Headers", slowed ? "WWW-Authenticate, Retry-After" : "WWW-Authenticate");
+      if (slowed) res.set("Retry-After", "60");
       return res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: invalid ? "The access token is expired or revoked. Sign in again." : "Sign in to pay for tool calls from your Agent402 credits." }, id: null });
     };
     // The consent answers: never framed, forms only to this site, the card
@@ -603,15 +655,31 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
           // The browser's own cap: its oldest goes.
           const own = oldestFirst((r) => ownerOf(r) === owner);
           while (own.length >= cfg.pendingPerAddress()) delete b.reqs[own.shift()[0]];
-          // The shared caps (the address, its wider network, the app): a
-          // requester over one lets go of its own oldest there, or its new
-          // request is refused; another requester's is never let go.
-          for (const [pick, cap] of [[(r) => r.net === net, cfg.pendingPerAddress()], [(r) => r.wide === wide, cfg.pendingPerNetwork()], [(r) => r.clientId === clientId, cfg.pendingPerClient()]]) {
+          // The shared caps on the requester's own network (the address, its
+          // wider network): a requester over one lets go of its own oldest
+          // there, or its new request is refused; another requester's is
+          // never let go.
+          for (const [pick, cap] of [[(r) => r.net === net, cfg.pendingPerAddress()], [(r) => r.wide === wide, cfg.pendingPerNetwork()]]) {
             const group = oldestFirst(pick);
             const mine = mineIn(group);
             let n = group.length;
             while (n >= cap && mine.length) { delete b.reqs[mine.shift()[0]]; n--; }
             if (n >= cap) { refused = true; return SKIP_UPDATE; }
+          }
+          // The app: each requester network holds at most its own share of the
+          // app's sign-ins (its oldest gives way), and when the app is full the
+          // network holding the most gives up its oldest, so a newcomer is
+          // never refused because of rows others hold.
+          const inApp = (r) => r.clientId === clientId;
+          const appShare = Math.max(1, Math.min(cfg.pendingPerAddress(), cfg.pendingPerClient()));
+          const ownInApp = oldestFirst((r) => inApp(r) && r.net === net);
+          while (ownInApp.length >= appShare) delete b.reqs[ownInApp.shift()[0]];
+          for (let rows = oldestFirst(inApp); rows.length >= cfg.pendingPerClient(); rows = oldestFirst(inApp)) {
+            const byNet = new Map();
+            for (const row of rows) { const k = String(row[1].net); if (!byNet.has(k)) byNet.set(k, []); byNet.get(k).push(row); }
+            let largest = null;
+            for (const list of byNet.values()) if (!largest || list.length > largest.length || (list.length === largest.length && (Number(list[0][1].at) || 0) < (Number(largest[0][1].at) || 0))) largest = list;
+            delete b.reqs[largest[0][0]];
           }
           // A full map makes room only from requests that have expired or
           // that this requester holds; another requester's live sign-in is
@@ -813,6 +881,12 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
         await touchClient(rr.clientId, { done: true });
         res.setHeader("Set-Cookie", cookieOut("", 0));
         log(`[mcp-oauth] a connector grant was made for key ${keyId}`);
+        // A record for the person, sent after the grant is made; a send that
+        // fails never holds up or undoes the sign-in.
+        try {
+          const m = buildConnectedEmail({ appName: headerText(String(rr.clientName || "An app")).slice(0, 80), capUsd: cap, manageUrl: `${baseUrl}${ACCOUNT_PATH}` });
+          Promise.resolve(sendEmail({ to: r.email, subject: headerText(m.subject), html: m.html, text: m.text })).catch(() => {});
+        } catch { /* a notice never breaks a sign-in */ }
         return redirectWith(res, r.redirectUri, { code, state: r.state, iss: baseUrl });
       }
       return render(res, rid, p, { status: 400 });
@@ -897,8 +971,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       const r = await resolveBearer(req);
       if (!r) return next();
       if (r.unavailable) return noStore(res).status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "Sign-in is unavailable right now; retry shortly. Nothing was charged." }, id: req.body?.id ?? null });
-      if (r.busy) { noStore(res).set("Retry-After", "60"); return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests. Try again later." }, id: req.body?.id ?? null }); }
-      if (r.invalid) return unauthorized(res, "/mcp", true);
+      if (r.invalid) return unauthorized(res, "/mcp", true, Boolean(r.slowed));
       req.mcpCreditsGrant = r.grant;
       next();
     });
@@ -907,8 +980,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       const rest = req.url.slice(AUTH_MCP_PATH.length);
       if (req.method !== "OPTIONS") {
         const r = await resolveBearer(req);
-        if (r?.busy) { noStore(res).set("Retry-After", "60"); return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests. Try again later." }, id: req.body?.id ?? null }); }
-        if (!r || r.invalid) return unauthorized(res, AUTH_MCP_PATH, Boolean(r?.invalid));
+        if (!r || r.invalid) return unauthorized(res, AUTH_MCP_PATH, Boolean(r?.invalid), Boolean(r?.slowed));
         if (r.unavailable) return noStore(res).status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "Sign-in is unavailable right now; retry shortly. Nothing was charged." }, id: req.body?.id ?? null });
         req.mcpCreditsGrant = r.grant;
       }
@@ -931,7 +1003,7 @@ export function createMcpOAuth({ credits, account = null, store, clientStore = n
       if (!enabled()) return next();
       const email = await who(req, res);
       if (!email) return;
-      try { noStore(res).json({ apps: await grantsForEmail(email), capMaxUsd: creditsBalanceMaxCents() / 100 }); }
+      try { noStore(res).json({ apps: await grantsForEmail(email), capMaxUsd: creditsBalanceMaxCents() / 100, connectorUrl: `${baseUrl}${CREDITS_CONNECTOR_PATH}` }); }
       catch { noStore(res).status(503).json({ error: "Could not read connected apps right now." }); }
     });
     app.post(`${ACCOUNT_PATH}/connected/revoke`, json, async (req, res, next) => {

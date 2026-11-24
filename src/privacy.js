@@ -10,7 +10,7 @@ import { backupKeepDays } from "./backup.js";
 import { KEEP_DAYS as DISCOVERY_REFUSALS_KEEP_DAYS } from "./discovery-refusals.js";
 import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
-import { RECEIPT_STORE_DAYS } from "./receipt-store.js";
+import { RECEIPT_STORE_DAYS, RECEIPT_FETCH_DAYS } from "./receipt-store.js";
 import { SUBSCRIPTION_RECEIPTS_KEPT } from "./receipt-signing.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { creditsSalesEnabled, withCreditsSalesDate, mcpOAuthSwitch, CONNECTED_APP_KEEP_DAYS } from "./credits-sales.js";
@@ -125,7 +125,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-23.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-24.</p>
 </section>
 
 <section>
@@ -206,6 +206,10 @@ so every claim below is verifiable in code.</p>
     SHA-256 hashes of the request and the response, never their content) so the paying wallet can
     export it in its <code>/api/audit-report</code>; only a payment from that wallet opens the report.
     Each kept receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued;</li>
+    <li>when a paid answer is streamed, we keep its signed receipt (the same fields) under a random
+    token that only that answer's response head names, never under its settlement (a transaction is
+    public), so it can be fetched at <code>/api/receipt/</code> only with that token; it is deleted
+    ${RECEIPT_FETCH_DAYS} days after it was issued;</li>
     <li>to count how many separate operators pay us, we look up public records about a paying wallet:
     its primary name on Ethereum or Base when the name's own address record is that wallet, or the
     seller whose own payment offer names it as the receiving address. The result is held in memory for
@@ -358,7 +362,10 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   closed or resolved by hand is kept after that (the most recent few hundred). A mark that a payment's sale was
   recorded (the paying wallet, the tool and the transaction) is kept for one hour. We keep the signed payment
   together with the tool's answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes, so that a re-sent payment gets its answer without
-  running or charging twice, and then delete them. A sale, and a refund we owe, are recorded as for any other payment.</li>
+  running or charging twice, and then delete them. For each proven referral payment we also keep, with our sales
+  records, what its settlement transaction shows: the amount, how the network's contract split it, and the wallet
+  address each share was paid to, the reviewer's included; all of it is public on chain. A sale, and a refund we owe,
+  are recorded as for any other payment.</li>
 ` : ""}  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
   code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
@@ -435,10 +442,10 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   public resolver: 8.8.8.8 (Google Public DNS) first, then 9.9.9.9 (Quad9) and then 1.1.1.1
   (Cloudflare), each only if the one before it does not answer. A resolver that is asked sees the
   query and our server's address, not yours.</li>
-  <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
+  <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results;
+  <code>/api/search-suggest</code> sends the partial query to Wikipedia's search suggestions instead.
   The <code>/api/x-*</code> tools send the handle, post id or query to the X API.
   Report products and <code>/v1</code> calls that search the web send their search queries to Exa, through OpenRouter's web search.</li>
-  <li>The <code>/api/code-run</code> tools run the code you send in a sandbox operated by E2B.</li>
   <li><code>/api/route</code>, <code>/api/route/execute</code> and <code>/api/decide</code> may send the
   task text you give them to a judgment model operated by TypeSafe to choose among candidate tools;
   <code>/api/decide</code> also sends it to AI models via OpenRouter and to an OpenAI embedding model to
@@ -486,7 +493,7 @@ as soon as the last follow-up is sent, when you stop them or buy again, or after
 in a row, and in any case ${DAYS(ADDRESS_MAX_AGE_MS)} days after the purchase; the rest of the record (the
 product and the subject you asked about) is deleted ${DAYS(RECORD_KEEP_MS)} days after the purchase. Memory audit-log
 entries are deleted ${auditRetentionDays()} days after they are written, and demand-board request text
-${wishRetentionDays()} days after it was sent. A kept signed receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
+${wishRetentionDays()} days after it was sent. A kept signed receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued. A streamed answer's kept receipt is deleted ${RECEIPT_FETCH_DAYS} days after it was issued. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
 is deleted ${jobs.keptFor} after the job was created, and a wallet's funding-screen result after ${oneHop.ttlDays} days. An MPP
 monitor subscription's signing key is deleted when the subscription is canceled or ends, and its reduced
 record ${mppSub.keepDays} days after it ends. You can ask

@@ -13,12 +13,12 @@ mounted only with `STRIPE_SECRET_KEY`), and all x402 / MPP facilitators and rela
 are optional and no-op when their env vars are unset. `mcp/`, `tollbooth/`, and `client/` are separate npm packages
 (clients/SDKs), not backing services.
 
-- **Node version.** The repo requires `node >=22.22.2` (`jsdom` and others enforce
-  it via EBADENGINE warnings). A fresh login shell resolves to `v22.22.2` via nvm
-  automatically (`bash -lc 'node -v'`), which is what tmux sessions and the update
-  script use. If a command instead picks up the `/exec-daemon/node` shim (`v22.14.0`)
-  and you hit engine/jsdom errors, run it under a login shell or prepend the nvm bin:
-  `export PATH="$HOME/.nvm/versions/node/v22.22.2/bin:$PATH"`.
+- **Node version.** The repo requires `node >=24.15.0` on the Node 24 LTS line
+  (`jsdom` and others enforce it via EBADENGINE warnings; `.nvmrc` names 24, and CI
+  and every Docker image run Node 24). If a command picks up an older Node (an
+  `/exec-daemon/node` shim, or a login shell's default) and you hit engine/jsdom
+  errors, install Node 24 with nvm (`nvm install 24`) and prepend its bin:
+  `export PATH="$HOME/.nvm/versions/node/<v24.x>/bin:$PATH"`.
 
 - **Run the server (dev).** Always use `FREE_MODE=true`, which disables the paywall
   so no wallet or facilitator config is needed:
@@ -39,9 +39,8 @@ are optional and no-op when their env vars are unset. `mcp/`, `tollbooth/`, and 
   `TARGET_URL=http://localhost:3000 node scripts/test-all.js` (every tool answers its
   own example), `node scripts/test-mcp-http.js`, and `node scripts/test-mcp-all.js`.
   Offline unit tests need no server: `npm test` (kit2/convert/memory) plus the other
-  `scripts/test-*.js`. `test-all.js` skips Brave (20) and E2B (2) routes unless
-  `BRAVE_LIVE_TEST=1` / `E2B_LIVE_TEST=1` is set, keys or not; those are covered by
-  the paid canary/dedicated CI steps.
+  `scripts/test-*.js`. `test-all.js` skips the Brave routes unless
+  `BRAVE_LIVE_TEST=1` is set, keys or not; those are covered by the paid canary.
 
 - **No linter.** The project has no ESLint/Prettier config or `lint` script; its
   quality gate is the `scripts/test-*.js` suite above.

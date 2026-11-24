@@ -11,21 +11,22 @@
 //      • ECB reference rates via Frankfurter v2 (api.frankfurter.dev/v2, providers=ecb), ECB cited as the source
 //      • World Bank Indicators API (api.worldbank.org) — open data
 //
-//   2. Keyed FRED JSON API (requires FRED_API_KEY env var, free to obtain at
-//      fred.stlouisfed.org). Without the key the handlers return 503
-//      "not configured" — same pattern as the BRAVE_API_KEY-backed search
-//      tool. The key unlocks ~800k series with date windowing, units
-//      transformation, and full-text catalog search.
+//   2. The agencies that publish the US labor, price and rate series
+//      (src/tools/us-macro-series.js: the BLS Public Data API, the New York
+//      Fed's Markets Data API, Treasury Fiscal Data) for fred-series and the
+//      computed tools (sahm-rule, cpi-yoy, unemployment-rate, fed-funds).
+//      No FRED data is served.
 //
 // Covers the cluster of macro/financial routes that show up across the x402
 // ecosystem (yield curves, FX time series, GDP/inflation indicators, CPI YoY,
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
-import { safeFetch, assertPublicUrl, retryTransient } from "./fetch-guard.js";
-import { markEndsAtCeiling, capByCeiling, assertBeforeCeiling, ceilingLeftMs } from "../run-ceiling.js";
-import { redactSecrets } from "./redact.js";
-import { partialFields } from "../partial-answer.js";
-import { FRED_TERMS, FRED_TERMS_URL, termsAnswers } from "../data-attribution.js";
+import { safeFetch, retryTransient } from "./fetch-guard.js";
+import { markEndsAtCeiling, ceilingLeftMs } from "../run-ceiling.js";
+import { attribute, US_AGENCIES_ATTRIBUTION, BLS_ATTRIBUTION, NYFED_ATTRIBUTION, WORLD_BANK_LICENSE, WORLD_BANK_LICENSE_URL, worldBankCredit } from "../data-attribution.js";
+import { notChargedOn } from "../not-charged.js";
+import { useHeldTreasuryYields, usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
+import { markResaleCleared } from "../resale-terms.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
 // weather-kit.js too, not just here) — re-exported so this file's own
@@ -46,13 +47,8 @@ function bad(message, statusCode = 400) {
 // extra attempt so worst-case latency stays within a tool's time budget
 // (2 × the 15s fetch timeout).
 
-// Serve-stale-on-error for slow-moving datasets. FRED's /releases/dates
-// endpoint runs 15-60s under load and sometimes blows FRED's own 60s gateway
-// limit (2026-07-15/16: our then-15s fetch ceiling turned that slowness into
-// an 8-hour manufactured outage of fred-release-calendar — every 30-min poll
-// a buyer-facing 504). A release calendar barely moves intra-day, so even
-// with the fetch budget fixed, the last successful payload is a strictly
-// better answer than an error: on a TRANSIENT upstream failure (502/503/504 —
+// Serve-stale-on-error for slow-moving datasets: the last successful payload
+// is a strictly better answer than an error: on a TRANSIENT upstream failure (502/503/504 —
 // the same set retryTransient covers) serve the last-good response for the
 // same key, marked `stale: true` + `staleAsOf`, for up to maxStaleMs. A
 // deterministic 4xx still throws — a caller mistake must never be masked by a
@@ -70,20 +66,16 @@ export async function withStaleFallback(lastGood, key, fn, { maxStaleMs, now = D
         ...prev.payload,
         stale: true,
         staleAsOf: new Date(prev.at).toISOString(),
-        staleReason: `FRED upstream failed (${sc}) - serving the last successful snapshot`,
+        staleReason: `The upstream failed (${sc}) - serving the last successful snapshot`,
       };
     }
     throw e;
   }
 }
 
-// 24h of staleness is acceptable for both wrapped datasets — release dates
-// are scheduled weeks ahead and Treasury average rates are monthly; past a
-// day, an error is more honest than a snapshot.
+// 24h of staleness is acceptable for the wrapped dataset: Treasury average
+// rates are monthly; past a day, an error is more honest than a snapshot.
 const MACRO_STALE_MAX_MS = 24 * 3600 * 1000;
-// Last-good release-calendar payloads, keyed by the `days` window (1-90, so
-// the map is bounded).
-const releaseCalLastGood = new Map();
 // Last-good Treasury average-rates payload (no params — one fixed key).
 // fiscaldata.treasury.gov still flakes ~1/day past the 3-attempt FISCAL_FETCH
 // retry profile; monthly data deserves a snapshot, not a 504.
@@ -214,6 +206,8 @@ export const TREASURY_YIELD_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
 const treasuryYieldYears = new Map(); // year -> { at, rows, failedAt }
 const treasuryYieldReads = new Map(); // year -> in-flight read (single flight)
 const treasuryYieldTimer = { interval: null, boot: null };
+// fred-series' Treasury constant maturities read the years held here.
+useHeldTreasuryYields((year) => treasuryYieldYears.get(year) || null);
 export function _resetTreasuryYieldCacheForTest() { stopTreasuryYieldRefresh(); treasuryYieldYears.clear(); treasuryYieldReads.clear(); }
 // Moves every held year's read and failure times `ms` into the past.
 export function _ageTreasuryYieldCacheForTest(ms) {
@@ -663,7 +657,7 @@ export const MACRO_TOOLS = [
       },
       output: { example: { country: "US", indicator: "NY.GDP.MKTP.CD", indicatorName: "GDP (current US$)", count: 5, series: [{ year: 2022, value: 25462700000000 }] } },
     },
-    handler: async (i) => {
+    handler: async (i, req) => {
       const country = String(i.country ?? "").trim().toUpperCase();
       const indicator = String(i.indicator ?? "").trim().toUpperCase();
       if (!/^[A-Z]{2,3}$/.test(country)) throw bad('"country" must be a 2- or 3-letter ISO country code');
@@ -674,7 +668,10 @@ export const MACRO_TOOLS = [
       // The World Bank API routinely takes 15-25 s on a cold indicator: the
       // nightly corpus 504'd this at the 15 s default on two of three nights
       // (2026-09-08/10) and the world-data pack lost both of its steps with it.
-      const j = await getJson(url, { timeoutMs: 25_000 });
+      // The indicator's license is read beside the data (both slow on a cold
+      // indicator); an indicator not licensed CC BY 4.0 or CC0 is refused
+      // with no data in the answer.
+      const [j, lic] = await Promise.all([getJson(url, { timeoutMs: 25_000 }), worldBankLicense(indicator).catch((e) => e)]);
       // World Bank's idiosyncratic response: a 2-element array [meta, rows].
       if (!Array.isArray(j) || j.length < 2 || !Array.isArray(j[1])) {
         const msg = Array.isArray(j) && j[0]?.message?.[0]?.value ? j[0].message[0].value : "World Bank returned no series";
@@ -688,6 +685,12 @@ export const MACRO_TOOLS = [
         .filter((r) => r && r.value != null)
         .map((r) => ({ year: parseInt(r.date, 10), value: Number(r.value) }))
         .sort((a, b) => a.year - b.year);
+      if (lic instanceof Error) throw lic;
+      if (!lic.servable) {
+        throw Object.assign(bad(lic.licenseType
+          ? `World Bank indicator ${indicator} is published under "${lic.licenseType}", not CC BY 4.0, so it is not served here.${notChargedOn(req)}`
+          : `World Bank indicator ${indicator} states no license in its metadata, so it is not served here.${notChargedOn(req)}`, 422), { license: lic.licenseType || null });
+      }
       if (!series.length) throw bad("World Bank returned no values for this country/indicator/window", 502);
       return {
         country, indicator,
@@ -695,6 +698,9 @@ export const MACRO_TOOLS = [
         countryName: rows[0]?.country?.value ?? null,
         count: series.length, series,
         source: "World Bank Open Data API",
+        credit: worldBankCredit(lic.dataset, lic.source),
+        license: lic.license,
+        licenseUrl: lic.licenseUrl,
       };
     },
   },
@@ -738,19 +744,62 @@ export const MACRO_TOOLS = [
           code: ind.id, name: ind.name,
           sourceNote: (ind.sourceNote ?? "").replace(/\s+/g, " ").slice(0, 240),
         }));
-      return { query: q, count: matches.length, indicators: matches, source: "World Bank Open Data API" };
+      return { query: q, count: matches.length, indicators: matches, source: "World Bank Open Data API", credit: worldBankCredit("World Development Indicators"), license: WORLD_BANK_LICENSE, licenseUrl: WORLD_BANK_LICENSE_URL };
     },
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Keyed FRED tools (require FRED_API_KEY env var).
-// Without the key, each handler returns 503 "not configured" — same shape as
-// the BRAVE_API_KEY-backed /api/search tool, so the universal "answers its own
-// example" CI check tolerates the unconfigured deployment path.
-// ---------------------------------------------------------------------------
-
-const FRED_BASE = "https://api.stlouisfed.org/fred";
+// ---- World Bank series licenses ---------------------------------------------
+// Each indicator's license, from the World Bank's own series metadata: the
+// indicator's source (/v2/indicator/<id>), then that source's metadata for it
+// (/v2/sources/<source>/series/<id>/metadata: License_Type, License_URL and
+// Source). Kept a day per indicator.
+const WB_LICENSE_TTL_MS = 24 * 60 * 60 * 1000;
+const WB_LICENSE_MAX = 500;
+const wbLicenses = new Map(); // indicator -> { at, value }
+const wbLicenseReads = new Map(); // indicator -> in-flight read
+/** Test seam: forget every license read. */
+export function _resetWorldBankForTest() { wbLicenses.clear(); wbLicenseReads.clear(); }
+/** CC BY 4.0 in the forms the metadata writes it, or CC0. */
+export function worldBankLicenseServable(type) {
+  const t = String(type || "").replace(/\s+/g, " ").trim();
+  if (/^CC BY[- ]?4(\.0)?$/i.test(t)) return WORLD_BANK_LICENSE;
+  if (/^CC0( 1\.0)?$/i.test(t)) return "CC0";
+  return null;
+}
+async function worldBankLicense(indicator) {
+  const hit = wbLicenses.get(indicator);
+  if (hit && Date.now() - hit.at < WB_LICENSE_TTL_MS) return hit.value;
+  if (wbLicenseReads.has(indicator)) return wbLicenseReads.get(indicator);
+  const read = (async () => {
+    const ind = await getJson(`https://api.worldbank.org/v2/indicator/${encodeURIComponent(indicator)}?format=json`, { timeoutMs: 25_000 });
+    const sourceId = Array.isArray(ind) && Array.isArray(ind[1]) ? String(ind[1][0]?.source?.id ?? "") : "";
+    if (!/^\d{1,4}$/.test(sourceId)) {
+      const msg = Array.isArray(ind) && ind[0]?.message?.[0]?.value ? ind[0].message[0].value : "";
+      if (/not valid|invalid/i.test(msg)) throw bad(`${msg} (check the indicator and country codes)`, 400);
+      throw bad("The World Bank did not say which dataset this indicator is in; retry shortly.", 502);
+    }
+    const meta = await getJson(`https://api.worldbank.org/v2/sources/${sourceId}/series/${encodeURIComponent(indicator)}/metadata?format=json`, { timeoutMs: 25_000 });
+    const src = Array.isArray(meta?.source) ? meta.source[0] : null;
+    const variable = src?.concept?.[0]?.variable?.find?.((v) => String(v?.id).toUpperCase() === indicator) || src?.concept?.[0]?.variable?.[0];
+    if (!variable || !Array.isArray(variable.metatype)) throw bad("The World Bank's metadata for this indicator could not be read; retry shortly.", 502);
+    const field = (id) => variable.metatype.find((m) => m?.id === id)?.value ?? null;
+    const licenseType = field("License_Type");
+    const license = worldBankLicenseServable(licenseType);
+    const licenseUrl = String(field("License_URL") || "");
+    const value = {
+      servable: !!license, licenseType, license,
+      licenseUrl: /^https:\/\/[^\s]+$/.test(licenseUrl) ? licenseUrl : WORLD_BANK_LICENSE_URL,
+      dataset: src?.name || ind[1][0]?.source?.value || null,
+      source: field("Source"),
+    };
+    if (wbLicenses.size >= WB_LICENSE_MAX) wbLicenses.delete(wbLicenses.keys().next().value);
+    wbLicenses.set(indicator, { at: Date.now(), value });
+    return value;
+  })().finally(() => wbLicenseReads.delete(indicator));
+  wbLicenseReads.set(indicator, read);
+  return read;
+}
 
 /** World Bank annual data lags a year; the default window ends at the
  *  previous calendar year. One value feeds the handler and the description. */
@@ -758,166 +807,16 @@ export function worldBankDefaultEndYear(now = new Date()) {
   return now.getUTCFullYear() - 1;
 }
 
-/** The calendar window FRED reads: dates in America/Chicago, where FRED
- *  publishes, from today there through `days` later. */
-export function fredCalendarWindow(days, now = Date.now()) {
-  const fmt = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
-  const start = fmt(now);
-  const end = new Date(Date.parse(`${start}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
-  return { start, end };
-}
-
-function requireFredKey() {
-  // GitHub Secrets sometimes pick up a trailing newline when pasted; URLSearchParams
-  // would percent-encode that into the request, and FRED would reject the resulting
-  // key as unregistered. Trim once at read time so every callsite is safe.
-  const key = (process.env.FRED_API_KEY || "").trim();
-  if (!key) throw bad("FRED is not configured on this deployment (set FRED_API_KEY)", 503);
-  return key;
-}
-
-// FRED API v2 (launched Nov 4, 2025) issues a separate API key from v1 — they
-// share the same account but are independent credentials. v2 calls must use
-// FRED_API_KEY_V2; never substitute the v1 key (v2 will reject it).
-function requireFredV2Key() {
-  const key = (process.env.FRED_API_KEY_V2 || "").trim();
-  if (!key) throw bad("FRED v2 is not configured on this deployment (set FRED_API_KEY_V2 - distinct from v1 key)", 503);
-  return key;
-}
-
-// FRED's JSON API puts diagnostics in the 4xx response body
-// (v1: `{"error_code":400,"error_message":"Variable api_key is not registered."}`,
-//  v2: `{"code":401,"message":"Missing or invalid credentials."}`).
-// safeFetch discards 4xx bodies on principle (right for HTML scrapers, wrong here),
-// so we use a dedicated helper that still calls assertPublicUrl for SSRF protection
-// but surfaces FRED's error message verbatim.
-//
-// `extraHeaders` lets v2 callsites pass `Authorization: Bearer <key>` — v2 dropped
-// query-param auth in favor of headers.
-// One retry on transient upstream failures: FRED's own gateway 504s in short
-// bursts (four on 2026-07-15 alone, per tool_error telemetry) and the raw
-// fetch previously had no second chance — and no timeout, so a hung FRED
-// connection held the caller's request open indefinitely.
-// `timeoutMs`/`retries` exist because FRED endpoints have wildly different
-// latency profiles: /series/observations answers in well under a second, but
-// /releases/dates runs 15-60s under load. The blanket 15s ceiling added in the
-// 2026-07-15 resilience pass MANUFACTURED a full outage of
-// fred-release-calendar the morning it deployed (every >15s response became a
-// guaranteed 504 at 2×15s, while the old un-timed-out fetch had been quietly
-// succeeding at 30-60s). Per FRED's error docs the API fails fast with real
-// codes (400/404/423/429/500) — a slow response is a response in progress,
-// not an outage, so slow endpoints get a budget that matches, not a retry.
-async function fredGetJson(url, extraHeaders = {}, { timeoutMs, retries } = {}) {
-  return retryTransient(() => fredGetJsonOnce(url, extraHeaders, timeoutMs), retries !== undefined ? { retries } : {});
-}
-
-async function fredGetJsonOnce(url, extraHeaders = {}, timeoutMs = 15_000) {
-  const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
-  let res;
-  try {
-    // Its own timeout, or a run's ceiling when that comes first (src/run-ceiling.js; none on a direct
-    // route, where the two are one figure). The text names the limit the read ran under.
-    assertBeforeCeiling();
-    timeoutMs = capByCeiling(timeoutMs);
-    res = await fetch(safeUrl, { headers: { Accept: "application/json", ...extraHeaders }, signal: AbortSignal.timeout(timeoutMs) });
-  } catch (e) {
-    if (e?.ceilingCut) throw e;
-    throw bad(`FRED unreachable: ${e.name === "TimeoutError" ? `no response within ${Math.max(1, Math.round(timeoutMs / 1000))}s` : e.message}`, 504);
-  }
-  const text = await res.text();
-  let body = null;
-  try { body = JSON.parse(text); } catch {}
-  if (!res.ok) {
-    // Redact the full body/message before slicing — FRED_API_KEY(_V2) rides the
-    // query string (v1) and could be reflected in an upstream diagnostic.
-    const msg = redactSecrets(body?.error_message || body?.message || text || `HTTP ${res.status}`).slice(0, 200);
-    // "The series does not exist" is FRED refusing the buyer's id, not an
-    // outage: a 404 naming it (corpus, 2026-09-06).
-    if (res.status === 400 && /does not exist/i.test(msg)) throw bad(`FRED has no such series (${msg.trim()})`, 404);
-    // FRED refusing THIS SERVER'S key (malformed, unregistered, expired, or v2
-    // credentials) is our configuration, and no input the caller sends can fix
-    // it: a 503 that says so, never a 422 with a schema hint pointing the buyer
-    // at their own request. Every refusal is uncharged either way.
-    if (res.status === 401 || res.status === 403 || /api_key|credential/i.test(msg)) {
-      throw Object.assign(bad("FRED is not configured on this deployment. This is our configuration, not your input; you were not charged.", 503), { noRetry: true });
-    }
-    // Throttling or a locked key is not the buyer's input: retryable, uncharged.
-    if (res.status === 429 || res.status === 423) throw Object.assign(bad("FRED is temporarily unavailable (rate limited) - retry shortly. You were not charged.", 503), { noRetry: true });
-    throw bad(`FRED upstream HTTP ${res.status}: ${msg}`, res.status >= 500 ? 502 : 422);
-  }
-  if (!body && isFredMaintenancePage(text)) throw fredMaintenanceError();
-  if (!body) throw bad("FRED returned non-JSON response", 502);
-  return body;
-}
-
 // FRED accepts only a controlled set of `units` transformations; reject other
 // values up front so the caller gets a clear error instead of an opaque 400
 // from the upstream.
 const FRED_UNITS = new Set(["lin", "chg", "ch1", "pch", "pc1", "pca", "cca", "log"]);
-// Likewise for frequency aggregation (daily series rolled up to weekly,
-// monthly, quarterly, etc.).
-export const FRED_FREQ = new Set(["d", "w", "bw", "m", "q", "sa", "a", "wef", "weth", "wew", "wetu", "wem", "wesu", "wesa", "bwew", "bwem"]);
-
-async function fredObservations({ seriesId, startDate, endDate, limit, units, frequency, latest = false }) {
-  const key = requireFredKey();
-  const qs = new URLSearchParams({ series_id: seriesId, api_key: key, file_type: "json" });
-  if (startDate) qs.set("observation_start", startDate);
-  if (endDate) qs.set("observation_end", endDate);
-  if (limit) qs.set("limit", String(limit));
-  if (units) qs.set("units", units);
-  if (frequency) qs.set("frequency", frequency);
-  // Default to ascending (caller wants a chronological window). For "trailing N
-  // most-recent" callers (cpi-yoy, fed-funds, etc.), `latest: true` flips to
-  // descending so the limit slices the *newest* N, then we reverse client-side
-  // to restore chronological order for the consumer.
-  qs.set("sort_order", latest ? "desc" : "asc");
-  const j = await fredGetJson(`${FRED_BASE}/series/observations?${qs}`);
-  if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
-  const raw = j?.observations ?? [];
-  let obs = raw
-    .filter((o) => o.value !== ".")
-    .map((o) => ({ date: o.date, value: Number(o.value) }));
-  if (latest) obs = obs.reverse();
-  // FRED marks a period with no published value as "." (e.g. a release
-  // cancelled by a government shutdown). Dropping it silently turned a
-  // 12-month ask into 11 rows with nothing saying why; the dates ride along
-  // (non-enumerable, so every existing caller sees the same array) for the
-  // tools that report them.
-  Object.defineProperty(obs, "missing", { value: raw.filter((o) => o.value === ".").map((o) => o.date).sort(), enumerable: false });
-  return obs;
-}
-
 // --- series with a copyright notice ---------------------------------------------
 // FRED's Terms of Use: a series whose notes carry a copyright notice needs
 // the copyright owner's permission for use beyond personal use.
-// fred-series and fred-release-observations therefore read a series' notes
-// before they serve its observations and refuse one that carries such a
-// notice. What is known here is the notice, read from the notes by a text
-// rule: the refusal says the series carries a notice and quotes the name the
-// notice gives, and never states who owns the series. Series published by U.S.
-// government agencies and the Federal Reserve carry none. A verdict is kept
-// in this process (a series' notes change rarely), so a series is screened
-// with one metadata read and then none for FRED_SCREEN_TTL_MS.
-export const FRED_SCREEN_TTL_MS = 24 * 60 * 60_000;
-export const FRED_SCREEN_MAX_ENTRIES = 5_000;
-// One fred-release-observations call screens at most this many series it has
-// no verdict for; the rest are held back and named, and the next call goes on
-// from the verdicts kept.
-export const FRED_SCREEN_READS_PER_CALL = 40;
-// and for at most this long: a read that has not started by then is left for
-// the next call, so slow metadata reads cannot hold a release answer.
-export const FRED_SCREEN_BUDGET_MS = 8_000;
-let fredScreenBudgetMs = FRED_SCREEN_BUDGET_MS;
-/** Test seam: the screening time of one call (no argument restores the default). */
-export function _setFredScreenBudgetForTest(ms = FRED_SCREEN_BUDGET_MS) { fredScreenBudgetMs = ms; }
-// Why a series is in `withheld`: the notice in its notes, or the copyright
-// mark FRED's release answer carries for it.
-export const FRED_WITHHELD_NOTICE = "carries a copyright notice in its FRED notes";
-export const FRED_WITHHELD_MARKED = "carries FRED's copyright mark";
-const FRED_SCREEN_CONCURRENCY = 8;
-const fredScreen = new Map(); // seriesId -> { at, owner: string|null, copyrighted: boolean }
-/** Test seam: forget every screening verdict. */
-export function _resetFredScreenForTest() { fredScreen.clear(); }
+// No tool here reads FRED: fred-series and the computed tools read the
+// publishing agencies. fredCopyrightOf is the rule a tool that serves a
+// caller-chosen FRED series applies to the series' notes first.
 
 /** null when `notes` carry no copyright notice; else { owner } with the owner
  *  the notice names (null when it names none that can be read). Linear in the
@@ -944,431 +843,251 @@ export function fredCopyrightOf(notes) {
   return { owner: owner.length >= 2 && owner.length <= 100 && /[A-Za-z]/.test(owner) ? owner : null };
 }
 
-function fredScreenKeep(seriesId, verdict) {
-  if (fredScreen.size >= FRED_SCREEN_MAX_ENTRIES) fredScreen.delete(fredScreen.keys().next().value);
-  fredScreen.set(seriesId, { at: Date.now(), ...verdict });
-  return verdict;
-}
-function fredScreenKept(seriesId) {
-  const hit = fredScreen.get(seriesId);
-  if (!hit) return null;
-  if (Date.now() - hit.at >= FRED_SCREEN_TTL_MS) { fredScreen.delete(seriesId); return null; }
-  return hit;
-}
-const verdictOfNotes = (notes) => { const c = fredCopyrightOf(notes); return c ? { copyrighted: true, owner: c.owner } : { copyrighted: false, owner: null }; };
-
-/** The screening verdict for one series: kept, or one metadata read. A read
- *  that fails throws (the series is not served unscreened); a series FRED
- *  does not know throws its 404. */
-async function fredScreenSeries(seriesId) {
-  const kept = fredScreenKept(seriesId);
-  if (kept) return kept;
-  const qs = new URLSearchParams({ series_id: seriesId, api_key: requireFredKey(), file_type: "json" });
-  const j = await fredGetJson(`${FRED_BASE}/series?${qs}`);
-  if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
-  const s = j?.seriess?.[0];
-  if (!s) throw bad(`FRED has no series with ID "${seriesId}"`, 404);
-  return fredScreenKeep(seriesId, verdictOfNotes(s.notes));
-}
-
-const FRED_NOTICE_REASON = "FRED's Terms of Use require the copyright owner's permission to use such a series here";
-/** The 400 for a series whose notes carry a copyright notice: the name the
- *  notice gives and the reason. A 4xx is never charged. */
-function fredOwnedError(seriesId, owner) {
-  return Object.assign(
-    bad(`FRED series ${seriesId} carries a copyright notice${owner ? ` (${owner})` : ""} in its FRED notes and is not served here: ${FRED_NOTICE_REASON}. Series published by U.S. government agencies and the Federal Reserve (for example GDPC1, CPIAUCSL, UNRATE, FEDFUNDS) are served. Terms: ${FRED_TERMS_URL}`),
-    { thirdPartySeries: true, owner: owner || null, termsOfUse: FRED_TERMS_URL },
-  );
-}
-
 MACRO_TOOLS.push(
   {
-    route: "GET /api/fred-series", name: "FRED time series", slug: "fred-series", category: "data", attribution: "fred", price: "$0.001",
+    // Served from the agencies that publish each series (src/tools/us-macro-series.js),
+    // never from FRED: the route keeps FRED's series IDs, inputs and answer shape.
+    route: "GET /api/fred-series", name: "US economic time series by FRED series ID", slug: "fred-series", category: "data", attribution: "us-agencies", price: "$0.001",
+    upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     description:
-      "Fetch a FRED economic time series by series ID - GDP (GDPC1), CPI (CPIAUCSL), unemployment (UNRATE), fed funds (DFF), and so on, from FRED's ~800,000. Supports date windowing and the standard FRED units transformations (lin, chg, ch1, pch, pc1, pca, cca, log). ?seriesId=GDPC1&startDate=2018-01-01&endDate=2023-12-31&units=pc1. A series that carries a copyright notice in its FRED notes is refused with a 400 that quotes the name the notice gives; series from U.S. government agencies and the Federal Reserve are served. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
-    tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed", "macro", "economic-data", "st-louis-fed"],
+      `US economic series by FRED ID, from the agency that publishes each: GDP and PCE (GDPC1, PCEPI), jobs and prices (UNRATE, CPIAUCSL), Treasury yields (DGS10, T10YIE), money (M2SL), FX (DEXUSEU), rates (FEDFUNDS). Units and frequencies; other IDs answer 404 listing those served. ${US_AGENCIES_ATTRIBUTION}`,
+    tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "treasury-yields", "money-supply", "bls", "bea", "macro", "economic-data", "treasury"],
     discovery: {
-      input: { seriesId: "GDPC1", startDate: "2018-01-01", endDate: "2022-12-31" },
+      input: { seriesId: "GDPC1", startDate: "2024-01-01", endDate: "2024-12-31" },
       inputSchema: {
         properties: {
-          seriesId: { type: "string", maxLength: 40, description: "FRED series ID, e.g. GDPC1, CPIAUCSL, UNRATE, DFF" },
-          startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional" },
+          seriesId: { type: "string", maxLength: 40, description: `FRED series ID, one of: ${US_MACRO_SUPPORTED_IDS.join(", ")}` },
+          startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional; without one a Bureau of Labor Statistics series answers its last 10 years, a daily Treasury or exchange-rate series its last 2 calendar years" },
           endDate: { type: "string", description: "ISO end date (YYYY-MM-DD), optional" },
           limit: { type: "number", description: "Max observations, 1-100000 (default 1000)" },
           units: { type: "string", enum: [...FRED_UNITS], description: "Transformation: lin, chg, ch1, pch, pc1 (YoY %), pca, cca, log" },
-          frequency: { type: "string", enum: [...FRED_FREQ], description: "Aggregate to a lower frequency: d, w, bw, m, q, sa, a, or a FRED week-ending code such as wef (optional)" },
+          frequency: { type: "string", enum: [...US_MACRO_SUPPORTED_FREQ, "wef"], description: "Average to a lower frequency: d, w (weeks ending Friday, also wef), m, q, sa, a (optional)" },
         },
         required: ["seriesId"],
       },
-      output: { example: { seriesId: "GDPC1", count: 20, observations: [{ date: "2018-01-01", value: 18733.0 }], source: "FRED (St. Louis Fed)" } },
+      output: { example: { seriesId: "GDPC1", count: 4, observations: [{ date: "2024-01-01", value: 23115.975 }], source: "U.S. Bureau of Economic Analysis", sourceSeries: "NIPA A191RX (Table 1.1.6, line 1)", terms: US_MACRO_TERMS.bea } },
     },
     handler: async (i) => {
       const seriesId = String(i.seriesId ?? "").trim().toUpperCase();
-      if (!/^[A-Z0-9_]{1,40}$/.test(seriesId)) throw bad('"seriesId" must look like a FRED series ID (e.g. GDPC1, CPIAUCSL)');
+      if (!/^[A-Z0-9_]{1,40}$/.test(seriesId)) throw bad('"seriesId" must look like a FRED series ID (e.g. UNRATE, CPIAUCSL)');
       const startDate = i.startDate ? String(i.startDate).trim() : undefined;
       const endDate = i.endDate ? String(i.endDate).trim() : undefined;
       if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw bad('"startDate" must be ISO YYYY-MM-DD');
       if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw bad('"endDate" must be ISO YYYY-MM-DD');
       const limit = Math.min(Math.max(parseInt(i.limit, 10) || 1000, 1), 100000);
-      const units = i.units ? String(i.units).trim().toLowerCase() : undefined;
-      if (units && !FRED_UNITS.has(units)) throw bad(`"units" must be one of: ${[...FRED_UNITS].join(", ")}`);
+      const units = i.units ? String(i.units).trim().toLowerCase() : "lin";
+      if (!FRED_UNITS.has(units)) throw bad(`"units" must be one of: ${[...FRED_UNITS].join(", ")}`);
       const frequency = i.frequency ? String(i.frequency).trim().toLowerCase() : undefined;
-      if (frequency && !FRED_FREQ.has(frequency)) throw bad(`"frequency" must be one of: ${[...FRED_FREQ].join(", ")}`);
-      // The series' notes are read first (kept verdicts cost no read): a
-      // series whose notes carry a copyright notice is refused before its observations are read.
-      const verdict = await fredScreenSeries(seriesId);
-      if (verdict.copyrighted) throw fredOwnedError(seriesId, verdict.owner);
-      const observations = await fredObservations({ seriesId, startDate, endDate, limit, units, frequency });
-      return { seriesId, units: units ?? "lin", count: observations.length, observations, source: "FRED (St. Louis Fed)" };
+      const freqs = [...US_MACRO_SUPPORTED_FREQ, "wef"];
+      if (frequency && !freqs.includes(frequency)) throw bad(`"frequency" must be one of: ${freqs.join(", ")} (w and wef are weeks ending Friday)`);
+      const out = await usMacroSeries({ seriesId, startDate, endDate, limit, units, frequency });
+      if (!out) throw unsupportedSeriesError(seriesId);
+      return out;
     },
   },
   {
-    route: "GET /api/fred-search", name: "FRED catalog search", slug: "fred-search", category: "data", attribution: "fred", price: "$0.005",
+    // The four computed tools below read the agencies that publish their
+    // inputs through src/tools/us-macro-series.js (BLS and the New York Fed),
+    // never FRED; each answer carries the publisher's credit, the retrieval
+    // date and the publisher's terms.
+    route: "GET /api/sahm-rule", name: "Sahm Rule recession indicator", slug: "sahm-rule", category: "data", attribution: "bls", price: "$0.005",
+    upstreamHosts: ["api.bls.gov"],
     description:
-      "Full-text search across FRED's ~800,000 economic time series. Returns series IDs (use with /api/fred-series), titles, frequency, units, and a popularity score. ?q=unemployment+rate&limit=10. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
-    tags: ["fred", "search", "catalog", "economic-data", "st-louis-fed", "macro", "time-series"],
-    discovery: {
-      input: { q: "consumer price index", limit: 5 },
-      inputSchema: {
-        properties: {
-          q: { type: "string", description: "Search text" },
-          limit: { type: "number", description: "Results to return, 1-100 (default 10)" },
-        },
-        required: ["q"],
-      },
-      output: { example: { query: "consumer price index", count: 5, results: [{ id: "CPIAUCSL", title: "Consumer Price Index for All Urban Consumers: All Items", frequency: "Monthly", units: "Index 1982-1984=100", popularity: 95 }] } },
-    },
-    handler: async (i) => {
-      const q = String(i.q ?? "").trim();
-      if (!q) throw bad('"q" is required');
-      const limit = Math.min(Math.max(parseInt(i.limit, 10) || 10, 1), 100);
-      const key = requireFredKey();
-      const qs = new URLSearchParams({ search_text: q, api_key: key, file_type: "json", limit: String(limit), order_by: "popularity", sort_order: "desc" });
-      const j = await fredGetJson(`${FRED_BASE}/series/search?${qs}`);
-      if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
-      const results = (j?.seriess ?? []).map((s) => ({
-        id: s.id, title: s.title,
-        frequency: s.frequency ?? null, units: s.units ?? null,
-        seasonalAdjustment: s.seasonal_adjustment_short ?? null,
-        observationStart: s.observation_start ?? null,
-        observationEnd: s.observation_end ?? null,
-        popularity: typeof s.popularity === "number" ? s.popularity : null,
-      }));
-      return { query: q, count: results.length, results, source: "FRED (St. Louis Fed)" };
-    },
-  },
-  {
-    route: "GET /api/fred-series-info", name: "FRED series metadata", slug: "fred-series-info", category: "data", attribution: "fred", price: "$0.005",
-    description:
-      "Metadata for a FRED series: title, frequency, units, seasonal adjustment, observation date range, and popularity. Use before /api/fred-series to confirm the series fits your needs. ?seriesId=UNRATE. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
-    tags: ["fred", "series", "metadata", "economic-data", "st-louis-fed", "macro"],
-    discovery: {
-      input: { seriesId: "UNRATE" },
-      inputSchema: {
-        properties: { seriesId: { type: "string", maxLength: 40, description: "FRED series ID, e.g. UNRATE" } },
-        required: ["seriesId"],
-      },
-      output: { example: { id: "UNRATE", title: "Unemployment Rate", frequency: "Monthly", units: "Percent", observationStart: "1948-01-01", observationEnd: "2026-05-01", popularity: 94 } },
-    },
-    handler: async (i) => {
-      const seriesId = String(i.seriesId ?? "").trim().toUpperCase();
-      if (!/^[A-Z0-9_]{1,40}$/.test(seriesId)) throw bad('"seriesId" must look like a FRED series ID');
-      const key = requireFredKey();
-      const qs = new URLSearchParams({ series_id: seriesId, api_key: key, file_type: "json" });
-      const j = await fredGetJson(`${FRED_BASE}/series?${qs}`);
-      if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
-      const s = j?.seriess?.[0];
-      if (!s) throw bad(`FRED has no series with ID "${seriesId}"`, 404);
-      return {
-        id: s.id, title: s.title,
-        frequency: s.frequency ?? null, units: s.units ?? null,
-        seasonalAdjustment: s.seasonal_adjustment_short ?? null,
-        observationStart: s.observation_start ?? null,
-        observationEnd: s.observation_end ?? null,
-        lastUpdated: s.last_updated ?? null,
-        popularity: typeof s.popularity === "number" ? s.popularity : null,
-        notes: (s.notes ?? "").replace(/\s+/g, " ").slice(0, 480),
-        source: "FRED (St. Louis Fed)",
-      };
-    },
-  },
-  {
-    route: "GET /api/fred-release-calendar", name: "FRED economic release calendar", slug: "fred-release-calendar", category: "data", attribution: "fred", price: "$0.005",
-    description:
-      "Upcoming and very-recent US economic data release dates - CPI, employment, GDP, FOMC minutes, Treasury auctions, etc. Useful for scheduling agents around event-driven moves. The window starts at today's date in US Central time (America/Chicago, FRED's zone). ?days=14 (default 14, range 1-90). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
-    tags: ["fred", "calendar", "releases", "cpi", "jobs", "gdp", "fomc", "macro", "economic-data"],
-    discovery: {
-      input: { days: 14 },
-      inputSchema: {
-        properties: { days: { type: "number", description: "Window in days from today, today being the date in US Central time (America/Chicago, FRED's zone) (1-90, default 14)" } },
-      },
-      output: { example: { days: 14, count: 12, releases: [{ releaseId: 10, releaseName: "Consumer Price Index", date: "2026-06-12" }] } },
-    },
-    handler: async (i) => {
-      const days = Math.min(Math.max(parseInt(i.days, 10) || 14, 1), 90);
-      // Key check stays OUTSIDE the stale wrapper: an unconfigured deployment
-      // must keep 503ing, never serve a snapshot it couldn't have fetched.
-      const key = requireFredKey();
-      return withStaleFallback(releaseCalLastGood, days, async () => {
-        const { start: startDay, end: endDay } = fredCalendarWindow(days);
-        // include_release_dates_with_no_data=true is essential — without it FRED
-        // hides scheduled-but-not-yet-published releases, which is exactly the
-        // forward-looking calendar callers want.
-        const qs = new URLSearchParams({
-          api_key: key, file_type: "json",
-          realtime_start: startDay, realtime_end: endDay,
-          include_release_dates_with_no_data: "true",
-          order_by: "release_date", sort_order: "asc",
-          limit: "1000",
-        });
-        // /releases/dates is FRED's slowest query — 15-60s under load (observed
-        // 2026-07-15/16). One attempt with a budget that fits: slow is a state,
-        // not a blip, so a retry only doubles the wait for the same answer —
-        // the stale fallback covers a miss instead.
-        const j = await fredGetJson(`${FRED_BASE}/releases/dates?${qs}`, {}, { timeoutMs: 45_000, retries: 0 });
-        if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
-        const releases = (j?.release_dates ?? []).map((r) => ({
-          releaseId: r.release_id,
-          releaseName: r.release_name,
-          date: r.date,
-        }));
-        return { days, count: releases.length, releases, source: "FRED (St. Louis Fed)" };
-      }, { maxStaleMs: MACRO_STALE_MAX_MS });
-    },
-  },
-  {
-    route: "GET /api/sahm-rule", name: "Sahm Rule recession indicator", slug: "sahm-rule", category: "data", attribution: "fred", price: "$0.005",
-    description:
-      "Real-time Sahm Rule recession indicator from FRED (SAHMREALTIME series). The Sahm Rule triggers when the 3-month moving average of US unemployment rises ≥0.50 percentage points above its prior-12-month low. No params. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
-    tags: ["sahm-rule", "recession", "unemployment", "macro", "fred", "indicator", "signal"],
+      "Sahm Rule recession indicator, computed from the U.S. Bureau of Labor Statistics unemployment rate (series LNS14000000): it triggers when the 3-month moving average of US unemployment rises ≥0.50 percentage points above the lowest 3-month average of the prior 12 months. No params. Each answer carries the BLS retrieval date and the BLS statement on derived data.",
+    tags: ["sahm-rule", "recession", "unemployment", "macro", "bls", "indicator", "signal"],
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { date: "2026-05-01", value: 0.43, triggered: false, threshold: 0.5, source: "FRED SAHMREALTIME" } },
+      output: { example: { date: "2026-05-01", value: 0.43, triggered: false, threshold: 0.5, source: "Computed by Agent402 from U.S. Bureau of Labor Statistics data (LNS14000000)", terms: US_MACRO_TERMS.bls } },
     },
     handler: async () => {
-      const obs = await fredObservations({ seriesId: "SAHMREALTIME", limit: 1, latest: true });
-      if (!obs.length) throw bad("FRED SAHMREALTIME returned no observations", 502);
-      const last = obs[obs.length - 1];
+      const got = await usMacroSeries({ seriesId: "UNRATE", startDate: monthsBack(30), limit: 100000 });
+      const out = sahmFromMonthly(got.observations);
+      if (!out) throw bad("The U.S. Bureau of Labor Statistics unemployment series has too few recent months to compute the Sahm Rule right now; retry later. Nothing was charged.", 503);
       return {
-        date: last.date, value: last.value,
-        triggered: last.value >= 0.5,
+        date: out.date, value: out.value,
+        triggered: out.value >= 0.5,
         threshold: 0.5,
-        source: "FRED SAHMREALTIME (real-time Sahm Rule, St. Louis Fed)",
+        source: "Computed by Agent402 from U.S. Bureau of Labor Statistics data (LNS14000000)",
+        sourceSeries: got.sourceSeries,
+        derived: true,
+        method: "The 3-month average of the monthly unemployment rate minus the lowest 3-month average of the 12 months before it, on the series as published today (not the real-time vintages).",
+        ...(out.missing.length ? { missingDates: out.missing, note: `No value was published for ${out.missing.join(", ")}; a 3-month average that includes it is taken over the months that have one.` } : {}),
+        retrievedAt: got.retrievedAt,
+        credit: `${BLS_ATTRIBUTION} ${got.credit}`,
+        terms: got.terms,
       };
     },
   },
   {
-    route: "GET /api/cpi-yoy", name: "US CPI year-over-year inflation", slug: "cpi-yoy", aliases: ["us-cpi-year-over-year-inflation", "cpi-inflation", "inflation-rate"], category: "data", attribution: "fred", price: "$0.005",
+    route: "GET /api/cpi-yoy", name: "US CPI year-over-year inflation", slug: "cpi-yoy", aliases: ["us-cpi-year-over-year-inflation", "cpi-inflation", "inflation-rate"], category: "data", attribution: "bls", price: "$0.005",
+    upstreamHosts: ["api.bls.gov"],
     description:
-      "Latest US Consumer Price Index year-over-year inflation rate (headline CPI-U) plus the trailing 12 months of YoY readings - the headline inflation number. A month with no published value is listed in missingDates rather than dropped silently. Source: FRED CPIAUCSL with pc1 transformation. No params. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
-    tags: ["cpi", "inflation", "yoy", "consumer-price-index", "macro", "fred", "bls", "headline-inflation"],
+      "Latest US Consumer Price Index year-over-year inflation rate (headline CPI-U, seasonally adjusted) plus the trailing 12 months of YoY readings - the headline inflation number. A month with no published value is listed in missingDates rather than dropped silently. Computed from the U.S. Bureau of Labor Statistics CPI-U index (series CUSR0000SA0). No params. Each answer carries the BLS retrieval date and the BLS statement on derived data.",
+    tags: ["cpi", "inflation", "yoy", "consumer-price-index", "macro", "bls", "headline-inflation"],
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { date: "2026-05-01", inflationYoYPct: 3.4, trailing12mo: [{ date: "2025-06-01", value: 3.0 }], source: "FRED CPIAUCSL (BLS)", missingDates: [] } },
+      output: { example: { date: "2026-05-01", inflationYoYPct: 3.4, trailing12mo: [{ date: "2025-06-01", value: 3.0 }], source: "Computed by Agent402 from U.S. Bureau of Labor Statistics data (CUSR0000SA0)", missingDates: [], terms: US_MACRO_TERMS.bls } },
     },
     handler: async () => {
-      const obs = await fredObservations({ seriesId: "CPIAUCSL", units: "pc1", limit: 13, latest: true });
-      if (!obs.length) throw bad("FRED CPIAUCSL returned no observations", 502);
+      const got = await usMacroSeries({ seriesId: "CPIAUCSL", units: "pc1", startDate: monthsBack(26), limit: 100000 });
+      const obs = got.observations;
+      if (!obs.length) throw bad("The U.S. Bureau of Labor Statistics CPI series returned no recent months; retry later. Nothing was charged.", 503);
       const last = obs[obs.length - 1];
-      const trailing = obs.slice(-12);
-      // A month FRED marks as unpublished is reported, never dropped silently.
-      const missing = obs.missing.filter((d) => !trailing.length || d >= trailing[0].date);
+      // The 12 calendar months ending at the latest; a month with no
+      // published value is reported, never dropped silently.
+      const window = monthRange(addMonthsIso(last.date, -11), last.date);
+      const trailing = obs.filter((o) => o.date >= window[0]);
+      const have = new Set(trailing.map((o) => o.date));
+      const missing = window.filter((d) => !have.has(d));
       return {
         date: last.date,
         inflationYoYPct: Number(last.value.toFixed(2)),
         trailing12mo: trailing.map((o) => ({ date: o.date, value: Number(o.value.toFixed(2)) })),
-        source: "FRED CPIAUCSL with year-over-year transform (Bureau of Labor Statistics)",
+        source: "Computed by Agent402 from U.S. Bureau of Labor Statistics data (CUSR0000SA0)",
+        sourceSeries: got.sourceSeries,
+        derived: true,
         missingDates: missing,
         ...(missing.length ? { note: `No value was published for ${missing.join(", ")}, so trailing12mo has ${trailing.length} readings.` } : {}),
+        retrievedAt: got.retrievedAt,
+        credit: `${BLS_ATTRIBUTION} ${got.credit}`,
+        terms: got.terms,
       };
     },
   },
   {
-    route: "GET /api/unemployment-rate", name: "US unemployment rate (UNRATE)", slug: "unemployment-rate", category: "data", attribution: "fred", price: "$0.005",
+    route: "GET /api/unemployment-rate", name: "US unemployment rate (UNRATE)", slug: "unemployment-rate", category: "data", attribution: "bls", price: "$0.005",
+    upstreamHosts: ["api.bls.gov"],
     description:
-      "Latest US unemployment rate (current, as of date) plus a trailing N-month history of {date, value} for trend, seasonally adjusted, in percent. Source: FRED UNRATE (Bureau of Labor Statistics). A month with no published value is listed in missingDates rather than dropped silently. ?months=12 (1-120, default 12). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
-    tags: ["unemployment", "unrate", "labor", "jobs", "bls", "fred", "macro"],
+      "Latest US unemployment rate (current, as of date) plus a trailing N-month history of {date, value} for trend, seasonally adjusted, in percent. Source: U.S. Bureau of Labor Statistics (series LNS14000000, the series known as UNRATE). A month with no published value is listed in missingDates rather than dropped silently. ?months=12 (1-120, default 12). Each answer carries the BLS retrieval date and statement.",
+    tags: ["unemployment", "unrate", "labor", "jobs", "bls", "macro"],
     discovery: {
       input: { months: 12 },
       inputSchema: {
         properties: { months: { type: "number", description: "Trailing months to return (1-120, default 12)" } },
       },
-      output: { example: { date: "2026-05-01", current: 4.1, months: 12, history: [{ date: "2025-06-01", value: 4.0 }], source: "FRED UNRATE (BLS)" } },
+      output: { example: { date: "2026-05-01", current: 4.1, months: 12, history: [{ date: "2025-06-01", value: 4.0 }], source: "U.S. Bureau of Labor Statistics", terms: US_MACRO_TERMS.bls } },
     },
     handler: async (i) => {
       const months = Math.min(Math.max(parseInt(i.months, 10) || 12, 1), 120);
-      const obs = await fredObservations({ seriesId: "UNRATE", limit: months, latest: true });
-      if (!obs.length) throw bad("FRED UNRATE returned no observations", 502);
-      const last = obs[obs.length - 1];
+      const got = await usMacroSeries({ seriesId: "UNRATE", startDate: monthsBack(months + 3), limit: 100000 });
+      const all = got.observations;
+      if (!all.length) throw bad("The U.S. Bureau of Labor Statistics unemployment series returned no recent months; retry later. Nothing was charged.", 503);
+      const last = all[all.length - 1];
+      const window = monthRange(addMonthsIso(last.date, -(months - 1)), last.date);
+      const obs = all.filter((o) => o.date >= window[0]);
+      const have = new Set(obs.map((o) => o.date));
+      const missing = window.filter((d) => !have.has(d));
       return {
         date: last.date, current: last.value,
         months: obs.length,
         history: obs,
-        source: "FRED UNRATE (Bureau of Labor Statistics)",
-        ...(obs.missing?.length ? { missingDates: obs.missing, note: `No value was published for ${obs.missing.join(", ")}, so the series has ${obs.length} of the ${months} months asked for.` } : {}),
+        source: got.source,
+        sourceSeries: got.sourceSeries,
+        ...(missing.length ? { missingDates: missing, note: `No value was published for ${missing.join(", ")}, so the series has ${obs.length} of the ${months} months asked for.` } : {}),
+        retrievedAt: got.retrievedAt,
+        credit: `${BLS_ATTRIBUTION} ${got.credit}`,
+        terms: got.terms,
       };
     },
   },
   {
-    route: "GET /api/fed-funds", name: "Effective federal funds rate", slug: "fed-funds", aliases: ["effective-federal-funds-rate", "federal-funds-rate", "fed-funds-rate"], category: "data", attribution: "fred", price: "$0.005",
+    route: "GET /api/fed-funds", name: "Effective federal funds rate", slug: "fed-funds", aliases: ["effective-federal-funds-rate", "federal-funds-rate", "fed-funds-rate"], category: "data", attribution: "nyfed", price: "$0.005",
+    upstreamHosts: ["markets.newyorkfed.org"],
     description:
-      "Current effective federal funds rate (current, as of date, in percent) plus a trailing N-day history of {date, value}. Source: FRED DFF (Board of Governors), a daily series that includes weekends. ?days=30 (1-365, default 30). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
-    tags: ["fed-funds", "interest-rates", "monetary-policy", "fomc", "fed", "macro", "fred"],
+      "Current effective federal funds rate (current, as of date, in percent) plus a trailing N-day history of {date, value} over calendar days, a weekend or holiday carrying the rate of the business day before it. Source: the Federal Reserve Bank of New York's Effective Federal Funds Rate (EFFR), with its notice. ?days=30 (1-365, default 30). Each answer carries the New York Fed notice and the retrieval date.",
+    tags: ["fed-funds", "interest-rates", "monetary-policy", "fomc", "fed", "macro", "effr"],
     discovery: {
       input: { days: 30 },
       inputSchema: {
         properties: { days: { type: "number", description: "Trailing days to return (1-365, default 30)" } },
       },
-      output: { example: { date: "2026-06-17", current: 5.33, days: 30, history: [{ date: "2026-05-19", value: 5.33 }], source: "FRED DFF" } },
+      output: { example: { date: "2026-06-17", current: 5.33, days: 30, history: [{ date: "2026-05-19", value: 5.33 }], source: "Federal Reserve Bank of New York", terms: US_MACRO_TERMS.nyfed } },
     },
     handler: async (i) => {
       const days = Math.min(Math.max(parseInt(i.days, 10) || 30, 1), 365);
-      const obs = await fredObservations({ seriesId: "DFF", limit: days, latest: true });
-      if (!obs.length) throw bad("FRED DFF returned no observations", 502);
-      const last = obs[obs.length - 1];
+      const got = await usMacroSeries({ seriesId: "EFFR", startDate: daysBack(days + 21), limit: 100000 });
+      const daily = got.observations;
+      if (!daily.length) throw bad("The New York Fed's EFFR returned no recent business days; retry later. Nothing was charged.", 503);
+      const last = daily[daily.length - 1];
+      const history = carryCalendarDays(daily, days);
       return {
         date: last.date, current: last.value,
-        days: obs.length, history: obs,
-        source: "FRED DFF (Board of Governors of the Federal Reserve System)",
-      };
-    },
-  },
-  {
-    // FRED API v2 (launched Nov 4, 2025) introduced bulk release/observations:
-    // one call returns observations for EVERY series in a given release. Saves
-    // an agent from making N round-trips (e.g. one call gets every series in
-    // the Employment Situation report; one call gets every CPI subseries).
-    // Uses cursor pagination instead of offset/limit — caller passes the
-    // {lastSeriesId, lastObservationDate} from a previous response back in to
-    // get the next page.
-    //
-    // Common release IDs:
-    //   10  = Consumer Price Index           18  = H.15 Selected Interest Rates
-    //   50  = Employment Situation           53  = Gross Domestic Product
-    //   91  = G.17 Industrial Production     151 = JOLTS
-    // Full release list: https://fred.stlouisfed.org/releases
-    route: "GET /api/fred-release-observations", name: "FRED bulk release observations (v2)", slug: "fred-release-observations", category: "data", attribution: "fred", price: "$0.005",
-    description:
-      "Bulk-fetch observations for every series in a FRED release in one call. Use it to grab an entire economic report (jobs report, CPI report, GDP release) without enumerating constituent series IDs first. Returns paginated; pass lastSeriesId + lastObservationDate back to fetch the next page. ?releaseId=18 for H.15 (Selected Interest Rates), 10 for CPI, 50 for Employment Situation, 53 for GDP. Series that carry a copyright notice in their FRED notes are held back and named in withheld with the name the notice gives, and matched, returned, complete and truncated say when a page is not whole. Source: FRED API v2 /release/observations endpoint. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
-    tags: ["fred", "release", "bulk", "observations", "v2", "cpi", "jobs", "gdp", "h15", "interest-rates", "employment", "macro", "economic-data"],
-    discovery: {
-      input: { releaseId: 18, startDate: "2026-05-01", endDate: "2026-06-01" },
-      inputSchema: {
-        properties: {
-          releaseId: { type: "number", description: "FRED release ID (e.g. 18 for H.15, 10 for CPI, 50 for jobs, 53 for GDP)" },
-          startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional" },
-          endDate: { type: "string", description: "ISO end date (YYYY-MM-DD), optional" },
-          lastSeriesId: { type: "string", description: "Pagination cursor: lastSeriesId from previous response (optional)" },
-          lastObservationDate: { type: "string", description: "Pagination cursor: lastObservationDate from previous response (optional)" },
-        },
-        required: ["releaseId"],
-      },
-      output: { example: { releaseId: 18, releaseName: "H.15 Selected Interest Rates", count: 16, series: [{ seriesId: "DGS10", title: "10-Year Treasury Constant Maturity Rate", units: "Percent", observations: [{ date: "2026-06-17", value: 4.49 }] }], cursor: { hasMore: false }, source: "FRED API v2" } },
-    },
-    handler: async (i) => {
-      const releaseId = parseInt(i.releaseId, 10);
-      if (!Number.isFinite(releaseId) || releaseId < 1 || releaseId > 100000) throw bad('"releaseId" must be a positive integer (see https://fred.stlouisfed.org/releases)');
-      const startDate = i.startDate ? String(i.startDate).trim() : undefined;
-      const endDate = i.endDate ? String(i.endDate).trim() : undefined;
-      if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw bad('"startDate" must be ISO YYYY-MM-DD');
-      if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw bad('"endDate" must be ISO YYYY-MM-DD');
-      const key = requireFredV2Key();
-      // FRED API v2 dropped query-param api_key auth — credentials must be passed
-      // as `Authorization: Bearer <key>` instead (modern OAuth-style).
-      const qs = new URLSearchParams({ release_id: String(releaseId), file_type: "json" });
-      if (startDate) qs.set("observation_start", startDate);
-      if (endDate) qs.set("observation_end", endDate);
-      if (i.lastSeriesId) qs.set("last_series_id", String(i.lastSeriesId));
-      if (i.lastObservationDate) qs.set("last_observation_date", String(i.lastObservationDate));
-      const j = await fredGetJson(`${FRED_BASE}/v2/release/observations?${qs}`, { Authorization: `Bearer ${key}` });
-      if (j?.error_code) throw bad(`FRED v2 upstream error: ${j.error_message || j.message || "unknown"}`, 502);
-      // FRED v2 response shape (per docs): { release: {release_id, name, ...}, series: [{series_id, title, units, observations: [...]}], cursor or pagination fields }.
-      // We pass through verbatim with minimal normalization so callers see what FRED returned.
-      // Each series is screened before it is served: by the notes the release
-      // answer carries for it when it carries any, else by the kept verdict,
-      // else by one metadata read, at most FRED_SCREEN_READS_PER_CALL of those
-      // a call, inside FRED_SCREEN_BUDGET_MS. A series that carries a copyright
-      // notice is held back and named with the name the notice gives; one this
-      // call could not screen is held back and counted (`unscreened`).
-      const all = Array.isArray(j?.series) ? j.series : [];
-      const verdicts = new Map();
-      const toRead = [];
-      for (const s of all) {
-        const id = String(s?.series_id ?? "");
-        if (!id || verdicts.has(id)) continue;
-        if (typeof s.notes === "string") verdicts.set(id, fredScreenKeep(id, verdictOfNotes(s.notes)));
-        else if (s.copyright_id != null) verdicts.set(id, fredScreenKeep(id, { copyrighted: true, owner: null, marked: true }));
-        else { const kept = fredScreenKept(id); if (kept) verdicts.set(id, kept); else toRead.push(id); }
-      }
-      const reading = toRead.slice(0, FRED_SCREEN_READS_PER_CALL);
-      let next = 0;
-      // No read starts once the screening has used its time: what is left is
-      // not screened this call, counted in `unscreened`, and read on the next.
-      const screenUntil = Date.now() + fredScreenBudgetMs;
-      await Promise.all(Array.from({ length: Math.min(FRED_SCREEN_CONCURRENCY, reading.length) }, async () => {
-        while (next < reading.length && Date.now() < screenUntil) {
-          const id = reading[next++];
-          try { verdicts.set(id, await fredScreenSeries(id)); } catch { /* not screened: held back below */ }
-        }
-      }));
-      const withheld = [];
-      let unscreened = 0;
-      const served = all.filter((s) => {
-        const v = verdicts.get(String(s?.series_id ?? ""));
-        if (!v) { unscreened++; return false; }
-        if (v.copyrighted) { withheld.push({ seriesId: s.series_id, owner: v.owner, reason: v.marked ? FRED_WITHHELD_MARKED : FRED_WITHHELD_NOTICE }); return false; }
-        return true;
-      });
-      if (all.length && !served.length) {
-        if (!unscreened) {
-          const owners = [...new Set(withheld.map((w) => w.owner).filter(Boolean))].slice(0, 5);
-          throw Object.assign(
-            bad(`Every series on this page of FRED release ${releaseId} carries a copyright notice${owners.length ? ` (${owners.join("; ")})` : ""} in its FRED notes${withheld.some((w) => w.reason === FRED_WITHHELD_MARKED) ? " or FRED's copyright mark" : ""} and is not served here: ${FRED_NOTICE_REASON}. Terms: ${FRED_TERMS_URL}`),
-            { thirdPartySeries: true, termsOfUse: FRED_TERMS_URL },
-          );
-        }
-        throw Object.assign(bad("FRED series details could not be read to screen this release right now. Retry shortly; you were not charged.", 503), { retryAfter: 30, attribution: "upstream" });
-      }
-      const series = served.map((s) => ({
-        seriesId: s.series_id,
-        title: s.title,
-        frequency: s.frequency,
-        units: s.units,
-        seasonalAdjustment: s.seasonal_adjustment,
-        lastUpdated: s.last_updated,
-        observations: (s.observations ?? [])
-          .filter((o) => o.value !== ".")
-          .map((o) => ({ date: o.date, value: Number(o.value) })),
-      }));
-      return {
-        releaseId: j?.release?.release_id ?? releaseId,
-        releaseName: j?.release?.name ?? null,
-        count: series.length,
-        series,
-        cursor: {
-          hasMore: Boolean(j?.has_more ?? j?.cursor?.has_more ?? false),
-          lastSeriesId: j?.last_series_id ?? j?.cursor?.last_series_id ?? null,
-          lastObservationDate: j?.last_observation_date ?? j?.cursor?.last_observation_date ?? null,
-        },
-        // Held back, in fields: series that carry a copyright notice, and series this
-        // call did not screen (send the same request again to go on).
-        ...(withheld.length ? { withheld } : {}),
-        ...(unscreened ? { unscreened, unscreenedNote: "This many series on the page were not screened inside this call and are held back; send the same request again to go on." } : {}),
-        ...(withheld.length || unscreened ? partialFields(all.length, series.length) : {}),
-        source: "FRED API v2 /release/observations (St. Louis Fed, launched Nov 2025)",
+        days: history.length, history,
+        source: got.source,
+        sourceSeries: got.sourceSeries,
+        note: "The New York Fed publishes the rate on business days; a weekend or holiday here carries the rate of the business day before it.",
+        retrievedAt: got.retrievedAt,
+        credit: `${NYFED_ATTRIBUTION} ${got.credit}`,
+        terms: got.terms,
       };
     },
   },
 );
 
-// Every answer that carries FRED data says its users are bound by FRED's
-// Terms of Use, with the link (src/data-attribution.js).
-for (const t of MACRO_TOOLS) if (t.attribution === "fred") termsAnswers(t, FRED_TERMS);
+// The computed tools' descriptions end with their publisher's sentence
+// (src/data-attribution.js): BLS for the labor and price series, the New York
+// Fed for the funds rate.
+for (const t of MACRO_TOOLS) if (t.attribution === "bls" || t.attribution === "nyfed") attribute(t, t.attribution);
 
-// These handlers' every upstream wait is a safeFetch or the FRED read above,
+// ---- month and day helpers for the computed tools ----------------------------
+const isoMonth = (y, m) => new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+/** The first of the month `n` months from `iso` (a YYYY-MM-01 date). */
+export function addMonthsIso(iso, n) {
+  return isoMonth(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1 + n);
+}
+/** Every month from `from` to `to` (YYYY-MM-01, inclusive), oldest first. */
+export function monthRange(from, to) {
+  const out = [];
+  for (let m = from; m <= to && out.length < 2000; m = addMonthsIso(m, 1)) out.push(m);
+  return out;
+}
+const monthsBack = (n, now = new Date()) => isoMonth(now.getUTCFullYear(), now.getUTCMonth() - n);
+const daysBack = (n, now = new Date()) => new Date(now.getTime() - n * 86_400_000).toISOString().slice(0, 10);
+
+/** The Sahm Rule from monthly unemployment rates (oldest first): the
+ *  3-month average of the latest month minus the lowest 3-month average of
+ *  the 12 months before it, at two decimals. A 3-month average is taken over
+ *  the months in it that have a value (two at least). null when the series
+ *  is too short. */
+export function sahmFromMonthly(rows) {
+  if (!rows.length) return null;
+  const byDate = new Map(rows.map((r) => [r.date, r.value]));
+  const last = rows[rows.length - 1].date;
+  const span = monthRange(addMonthsIso(last, -14), last);
+  const missing = span.filter((d) => !byDate.has(d));
+  const ma3 = (end) => {
+    const vals = [addMonthsIso(end, -2), addMonthsIso(end, -1), end].map((d) => byDate.get(d)).filter((v) => typeof v === "number");
+    return vals.length >= 2 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+  const cur = ma3(last);
+  const prior = monthRange(addMonthsIso(last, -12), addMonthsIso(last, -1)).map(ma3).filter((v) => v !== null);
+  if (cur === null || prior.length < 10) return null;
+  return { date: last, value: Math.round((cur - Math.min(...prior)) * 100) / 100, missing };
+}
+
+/** The last `days` calendar days through the latest business day of
+ *  `daily` (oldest first), each at the latest rate published on or before it. */
+export function carryCalendarDays(daily, days) {
+  const out = [];
+  if (!daily.length) return out;
+  const lastDate = daily[daily.length - 1].date;
+  const start = new Date(new Date(`${lastDate}T00:00:00Z`).getTime() - (days - 1) * 86_400_000);
+  let i = 0, cur = null;
+  for (let d = new Date(start); d.toISOString().slice(0, 10) <= lastDate; d = new Date(d.getTime() + 86_400_000)) {
+    const ds = d.toISOString().slice(0, 10);
+    while (i < daily.length && daily[i].date <= ds) cur = daily[i++].value;
+    if (cur !== null) out.push({ date: ds, value: cur });
+  }
+  return out;
+}
+
+// These handlers' every upstream wait is a safeFetch,
 // each under its own timeout and its retry helper, all of which end at a
 // run's ceiling when one is set (src/run-ceiling.js): a caller that stops
 // waiting at a deadline of its own can serve them.
 markEndsAtCeiling(MACRO_TOOLS, ["treasury-avg-rates", "treasury-debt", "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread"]);
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(MACRO_TOOLS, ["treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "treasury-debt", "treasury-avg-rates"], "US Treasury public data");

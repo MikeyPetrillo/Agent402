@@ -14,7 +14,7 @@ import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
-import { attributionTailOf, ATTRIBUTIONS, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION, withoutLicenseFields } from "./data-attribution.js";
+import { attributionTailOf, ATTRIBUTIONS, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION, withoutLicenseFields, withoutAnswerOnlyFields } from "./data-attribution.js";
 import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema, binaryListingsEnabled, withBinaryOutputType, JSON_MIME } from "./tool-media-type.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
@@ -58,6 +58,8 @@ import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf, noteSettleAsked } from "./settle-demotion.js";
+import { screenStellarBeforeSettle } from "./own-settler-screen.js";
+import { isComplianceSettleRefusal, isOwnScreenRefusal, noteComplianceRefusal, complianceRefusedResult } from "./settle-compliance.js";
 import { withSettleDeadline, noteSettleContext, settleDeadlineStopOf, noteCappedRequest } from "./settle-deadlines.js";
 import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
@@ -896,9 +898,10 @@ export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES
 // the price. Every route carries the same payment offers and MPP challenge, so
 // the part that varies by route (the discovery extension plus the listing
 // description) has a byte budget. A route over it gives up the input side
-// first: property descriptions, then any detail past each property's name and
-// type (required stays), then long strings in the input example (an inline
-// image, say). Only then, if still over, its description shortens and its
+// first: property descriptions cut short (INPUT_DESCRIPTION_SHORT), then
+// dropped, then any detail past each property's name, type and bounds (enum,
+// lengths, range, format), then the bounds (required stays), then long
+// strings in the input example (an inline image, say). Only then, if still over, its description shortens and its
 // sample output becomes a pointer: those are what a buyer reads to decide, so
 // they go last. /openapi.json keeps every full version. A route under the budget keeps
 // everything, and /openapi.json always carries the full versions.
@@ -939,10 +942,50 @@ function shortExampleStrings(v) {
   if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shortExampleStrings(x)]));
   return v;
 }
-function typesOnly(schema) {
+// The bounds a property keeps past its description: what a value must be to
+// be taken (its length, its allowed values, its range, its format).
+const INPUT_CONSTRAINT_KEYS = ["enum", "const", "maxLength", "minLength", "maximum", "minimum", "maxItems", "minItems", "format"];
+function typesOnly(schema, { constraints = false } = {}) {
   if (!schema || typeof schema !== "object" || !schema.properties) return schema;
-  const props = Object.fromEntries(Object.entries(schema.properties).map(([name, p]) => [name, p && typeof p === "object" && p.type ? { type: p.type } : {}]));
-  return { type: schema.type || "object", properties: props, ...(Array.isArray(schema.required) && schema.required.length ? { required: schema.required } : {}) };
+  const props = Object.fromEntries(Object.entries(schema.properties).map(([name, p]) => {
+    if (!p || typeof p !== "object") return [name, {}];
+    const kept = p.type ? { type: p.type } : {};
+    if (constraints) for (const k of INPUT_CONSTRAINT_KEYS) if (p[k] !== undefined) kept[k] = p[k];
+    return [name, kept];
+  }));
+  return { ...(schema.type ? { type: schema.type } : {}), properties: props, ...(Array.isArray(schema.required) && schema.required.length ? { required: schema.required } : {}) };
+}
+// A property description cut to its first INPUT_DESCRIPTION_SHORT characters,
+// at a clause or word end: the field keeps a description at a fraction of the bytes.
+export const INPUT_DESCRIPTION_SHORT = 64;
+/** A property description cut short for the 402 listing (exported for tests). */
+export function shortInputDescription(text) {
+  const t = String(text);
+  if (t.length <= INPUT_DESCRIPTION_SHORT) return t;
+  const head = t.slice(0, INPUT_DESCRIPTION_SHORT + 1);
+  const clause = Math.max(head.lastIndexOf(". "), head.lastIndexOf("; "), head.lastIndexOf(" ("), head.lastIndexOf(" - "), head.lastIndexOf(": "), head.lastIndexOf(", "));
+  const word = head.lastIndexOf(" ");
+  let cut = (clause >= 24 ? head.slice(0, clause) : word >= 24 ? head.slice(0, word) : head.slice(0, INPUT_DESCRIPTION_SHORT)).replace(/[\s,;:(-]+$/, "").trim();
+  // An aside the cut left open is dropped whole.
+  const open = cut.lastIndexOf("(");
+  if (open > cut.lastIndexOf(")")) cut = cut.slice(0, open).replace(/[\s,;:-]+$/, "").trim();
+  return cut || t.slice(0, INPUT_DESCRIPTION_SHORT);
+}
+function withShortPropertyDescriptions(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(withShortPropertyDescriptions);
+  const out = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === "properties" && v && typeof v === "object") {
+      out.properties = Object.fromEntries(Object.entries(v).map(([name, p]) => {
+        if (!p || typeof p !== "object") return [name, p];
+        const next = withShortPropertyDescriptions(p);
+        if (typeof p.description === "string") next.description = shortInputDescription(p.description);
+        return [name, next];
+      }));
+    } else out[k] = withShortPropertyDescriptions(v);
+  }
+  return out;
 }
 function withoutPropertyDescriptions(schema) {
   if (!schema || typeof schema !== "object") return schema;
@@ -979,9 +1022,17 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
       trimmed.push("output-example");
     }
   };
+  if (b?.inputSchema && size(b, d) > max) {
+    const short = withShortPropertyDescriptions(b.inputSchema);
+    if (JSON.stringify(short) !== JSON.stringify(b.inputSchema)) { b = { ...b, inputSchema: short }; trimmed.push("input-descriptions-short"); }
+  }
   if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: withoutPropertyDescriptions(b.inputSchema) }; trimmed.push("input-descriptions"); }
   if (descriptionFirst && !keepListing) toPointer();
-  if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: typesOnly(b.inputSchema) }; trimmed.push("input-types-only"); }
+  if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: typesOnly(b.inputSchema, { constraints: true }) }; trimmed.push("input-types-only"); }
+  if (b?.inputSchema && size(b, d) > max) {
+    const bare = typesOnly(b.inputSchema);
+    if (JSON.stringify(bare) !== JSON.stringify(b.inputSchema)) { b = { ...b, inputSchema: bare }; trimmed.push("input-types-bare"); }
+  }
   if (b?.input !== undefined && size(b, d) > max) {
     const input = shortExampleStrings(b.input);
     if (JSON.stringify(input) !== JSON.stringify(b.input)) { b = { ...b, input }; trimmed.push("input-example-strings"); }
@@ -1330,9 +1381,6 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "perp-klines": "OHLCV candles for one perpetual at any interval from 1 minute to 1 month, up to the venue's history, with a window summary of open, close, change, high, low and volume. Use it when an agent needs price history for a chart, a backtest or an indicator without an exchange account or API key.",
   "perp-orderbook": "The live level-2 order book for one perpetual: best bid and ask, mid, spread in basis points, up to 20 levels a side with cumulative depth and bid/ask imbalance. Use it when an agent is sizing an order, checking liquidity before a trade or measuring book pressure at a point in time.",
   "perp-basis": "Basis for one perpetual: mark versus oracle premium in percent and basis points, impact premium, current funding and the predicted next funding per venue. Use it when an agent is evaluating a cash-and-carry, comparing funding across venues or deciding whether a perp is trading rich or cheap to spot.",
-  "options-summary": "A one-call options market summary for a currency: index price, DVOL, call and put open interest with the put/call ratio, total open interest, 24h volume, a per-expiry breakdown, the most active instruments and the perp's mark, funding and open interest. Use it when an agent needs the state of BTC or ETH options before drilling into a chain.",
-  "crypto-options-chain": "The options chain for a currency and expiry sorted by strike: bid, ask, mark, mark implied volatility, open interest, 24h volume and the underlying, plus the list of available expiries. Use it when an agent is pricing a strategy, finding liquid strikes or reading the volatility smile for a specific expiry.",
-  "options-ticker": "One options instrument live: mark, last, bid and ask with sizes, index price, open interest, mark, bid and ask implied volatility and the full greeks (delta, gamma, vega, theta, rho). Use it when an agent holds or is quoting a specific contract and needs its current risk numbers.",
   "crypto-indicators": "RSI, MACD, EMA 20/50/200, SMA 20/50, Bollinger bands, ATR and VWAP computed deterministically from live candles for one coin and interval, with the latest series points and a plain-language summary. Use it when an agent needs standard technical indicators without fetching candles and computing them itself.",
   "crypto-market-pulse": "The whole crypto perp market in one call: advancers versus decliners, mean, median and volume-weighted 24h change, total open interest and volume, top contracts by volume, the day's gainers and losers, funding extremes and BTC and ETH at a glance. Use it when an agent needs a market snapshot before deciding what to look at next.",
   // 2026-11-16: the computed market answers. Each leads with what is worked
@@ -1366,10 +1414,9 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "judge": "Ask typed questions about any content and get answers your code can branch on, not prose. Send state (a string or object) and up to 8 questions keyed by your own ids: choice returns the pick, probabilities and confidence, score a fractional level index with probabilities, noul the probability of yes. Use it for routing, triage, classification and gating. Served by jev-latest with fallbacks; name one first with model. Model-backed, not deterministic.",
   "loop-gate": "Should an agent loop run another iteration? Send the goal, the last output and its iteration, plus optional maxIterations, budget, history and constraints; get back decision (continue, stop or escalate), reason, confidence (0 to 1), the checks behind it and a next step. Budget and iteration limits are checked in code first, with no model call; otherwise a judgment model answers. Use it between iterations.",
   // Under the 402 budget's description cut: the word cut of the catalog text
-  // would leave a fragment before the FRED notice.
-  "sahm-rule": "Real-time Sahm Rule recession indicator (SAHMREALTIME): it triggers when 3-month average US unemployment rises 0.50 points above its prior 12-month low. Use it to check the signal. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+  // would leave a fragment.
+  "sahm-rule": "Sahm Rule recession indicator, computed from the U.S. Bureau of Labor Statistics unemployment rate: it triggers when the 3-month average of US unemployment rises 0.50 points above the lowest 3-month average of the prior 12 months. Use it to check the signal; each answer is dated as retrieved. Source: U.S. Bureau of Labor Statistics.",
   // Under the 402 budget's description cut, so the FRED notice stays.
-  "fred-release-observations": "Every series in one FRED release in a single call: a whole jobs, CPI or GDP report without listing series IDs first, paged by cursor. Use it to load an economic report at once. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
   "memory-write": "Persistent key-value memory scoped to the paying wallet: the x402 payment is the authentication, the wallet owns the namespace. Write any JSON value (up to 64KB) under a key, with an optional TTL, or delete it; read it back on any later session with the matching read route. Use it when an agent needs state that survives the session or crosses runs without an account or API key.",
   // 2026-08-22 additions: the new families' flagships. Bazaar is the one surface
   // where a buyer-side agent browses by DESCRIPTION rather than by name, so each
@@ -1377,7 +1424,6 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "perp-funding": "Current and historical funding rate for one perpetual futures market, from a live derivatives venue: hourly rate, the 8-hour and annualized equivalents, the mark-vs-oracle premium, and a window of past prints with average, minimum, maximum and the share that were positive. Use it when an agent needs to know what holding a leveraged position costs right now, or wants to detect a funding regime flip before sizing a trade.",
   "perp-markets": "Every listed perpetual futures market in one call: mark, oracle and mid price, 24-hour change, funding (hourly, 8-hour, annualized), open interest in coins and dollars, 24-hour notional volume and max leverage, sortable by volume, open interest, funding or change. Use it as the one-shot market map before drilling into a single symbol.",
   "sol-token-safety": `Risk summary for one Solana token mint: a graded risk score with the concrete reasons behind it, mint and freeze authority state, how much of the liquidity pool is locked, top-holder concentration, holder count and whether the token is verified. Use it to read the published risk evidence on an unfamiliar token, and to screen a list of mints in seconds. Evidence, not a 'safe' or 'scam' verdict. ${JUPITER_ATTRIBUTION}`,
-  "crypto-news": "Recent crypto headlines aggregated from the public feeds of major outlets, deduplicated and newest first, each with title, source, publish time, canonical URL and a short summary, filterable by keyword, source and time window. Use it when an agent needs what happened in the last hours rather than what a model was trained on.",
   "v1-images-fast": "Generate an image from a text prompt at a flat price per picture, no token math and no subscription: the OpenAI images request shape in, base64 PNG, JPEG or WebP out, with an automatic fallback model so a provider outage does not become your error. Use it when an agent needs a picture cheaply and predictably.",
   "v1-videos": "Generate a short video clip from a text prompt at a flat price per clip: a four-second 720p clip returned inline as base64 MP4, with the duration and resolution locked so the price never moves. Use it when an agent needs motion rather than a still, and needs to know the cost before it calls.",
   "site-crawl": "Crawl a website from a starting URL and return each page as clean markdown: breadth-first over internal links, bounded by page count and depth, honouring robots.txt, with per-page title, status, depth and outbound links. Use it when an agent needs a whole section of a site rather than one known page.",
@@ -1755,7 +1801,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       startFacilitatorGasCheck({
         network: ROBINHOOD_CAIP2,
         urls: () => gasCheckUrls(robinhoodPrimaryUrl, robinhoodFallbacks),
-        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address }] : [],
+        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, ROBINHOOD_CAIP2) }] : [],
         onReadings: robinhoodOrder ? (readings) => robinhoodOrder.update(readings) : null,
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
@@ -2049,6 +2095,16 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // be confirmed by the same transaction.
       const holder = `stellar-settle:${randomUUID()}`;
       const claimTx = async (tx) => !(await txServedElsewhere(network, tx, holder));
+      // The payer screen before any submission (src/own-settler-screen.js):
+      // the primary may be our own facilitator. A listed payer is refused
+      // with nothing sent, final (src/settle-compliance.js).
+      return screenStellarBeforeSettle({
+        paymentPayload, requirements: { ...paymentRequirements, payTo }, network,
+        submit: () => this.#settleScreened(paymentPayload, paymentRequirements, { payTo, network, startedAt, claimTx }),
+      });
+    }
+
+    async #settleScreened(paymentPayload, paymentRequirements, { payTo, network, startedAt, claimTx }) {
       const res = await settleWithStellarFallback({
         primary: () => super.settle(paymentPayload, paymentRequirements),
         fallback: stellarFallbackClient ? () => stellarFallbackClient.settle(paymentPayload, paymentRequirements) : null,
@@ -2906,7 +2962,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // (src/data-attribution.js) are the same on every answer and stay in
       // /openapi.json's example; the 402 sample is read without them, so they
       // never take room from the listing's description or its sample.
-      const example = withoutLicenseFields(slim.output.example);
+      // So are the answer-only source credits and the source license note
+      // (withoutAnswerOnlyFields).
+      const example = withoutAnswerOnlyFields(withoutLicenseFields(slim.output.example));
       const oversized = example !== undefined && JSON.stringify(example).length > 2048;
       const schema = oversized ? null : boundedResponseSchemaFor(path, example, BAZAAR_SCHEMA_MAX_BYTES, slim.output.optional);
       slim.output = {
@@ -4259,6 +4317,29 @@ function startRobinhoodOrderRefresh(order, { intervalMs = Number(process.env.ROB
   return run;
 }
 
+/**
+ * Whether our own relayer's minimum sale price (ROBINHOOD_RELAYER_MIN_PRICE_USD)
+ * is at or under the lowest price sold on `network`: the catalog's least fixed
+ * list price, raised to that chain's price floor. Only then can the relayer
+ * stand in for a listed facilitator on every sale, so only then is a dry
+ * facilitator row covered (src/tool-failure-monitor.js). A catalog with no
+ * fixed price reads covered.
+ */
+export function ownRelayerCoversLowestPrice(catalog, network, { relayerMinUsd = robinhoodRelayerMinPriceUsd(), env = process.env } = {}) {
+  let lowest = Infinity;
+  for (const def of Object.values(catalog || {})) {
+    if (!def || typeof def !== "object" || typeof def.quote === "function") continue;
+    const m = /^\$?\s*(\d+(?:\.\d+)?)$/.exec(String(def.price ?? "").trim());
+    if (!m || !String(def.price).trim().startsWith("$")) continue;
+    const usd = Number(m[1]);
+    if (Number.isFinite(usd) && usd > 0 && usd < lowest) lowest = usd;
+  }
+  if (lowest === Infinity) return true;
+  const floorMicro = networkPriceFloors(env).get(network) || 0;
+  const sold = Math.max(lowest, floorMicro / 1e6);
+  return Number(relayerMinUsd) <= sold + 1e-9;
+}
+
 export async function startFacilitatorGasCheck({ network, urls, ownSigners = [], schedule = true, readEthUsd = ethUsdFromCryptoPrice, onReadings = null } = {}) {
   const { leased } = await import("./state-db.js");
   const { createRelayerGasCheck, gasCheckSettings, createFloorGasCheck, evmGasLogLines } = await import("./facilitator-gas.js");
@@ -4451,6 +4532,12 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // (server.js) and the log line below.
     const via = settleFacilitatorOf(ctx);
     noteSettleFacilitator(ctx, via);
+    // A refusal on compliance grounds (a sanctioned, blocked or flagged payer
+    // or payee, a failed AML screen; or our own settler's sanctions screen) is
+    // final: no fallback, no outage read, no relayer, no requote that steers
+    // the next attempt to another facilitator, nothing booked
+    // (src/settle-compliance.js). The 402 says so and charges nothing.
+    { const o = complianceStop(ctx, ctx?.error, ctx?.error?.__a402Facilitator || via); if (o) return o; }
     // A Solana settle refused before broadcast (no transaction named): the
     // next quote for this request avoids that facilitator (the split).
     await noteSvmStaleBlockhash(ctx);
@@ -4593,6 +4680,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // lets the chain continue; any other failed result ends the chain and
         // the primary's refusal stands (never "recovered" with a failure).
         if (result?.success !== true) {
+          { const o = complianceStop(ctx, result, name); if (o) return o; }
           if (isFundsRefusal(result)) { try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: name, reason: String(result?.errorReason || result?.errorMessage || "") }); } catch { /* bookkeeping only */ } }
           console.warn(
             `[payments] ${name} settle fallback REJECTED on ${ctx?.requirements?.network}: ` +
@@ -4640,6 +4728,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         );
         return { recovered: true, result };
       } catch (err) {
+        { const o = complianceStop(ctx, err, name); if (o) return o; }
         if (isFundsRefusal(`${err?.errorReason || ""} ${summarizeFacilitatorError(err)}`)) { try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: name, reason: summarizeFacilitatorError(err) }); } catch { /* bookkeeping only */ } }
         console.warn(
           `[payments] ${name} settle fallback ALSO failed on ${ctx?.requirements?.network}: ` +
@@ -4675,6 +4764,22 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     if (passedOn && passedOn.err !== ctx?.error) await markUnconfirmedStop(ctx, passedOn.err, passedOn.via);
     return undefined;
   });
+}
+
+/**
+ * The end of a settle whose refusal is on compliance grounds
+ * (isComplianceSettleRefusal): counted (our own settler counts its own
+ * screen), and answered a failed result that names no transaction, so the
+ * buyer's 402 says the settlement provider's compliance check refused it and
+ * nothing was charged. Undefined for any other refusal.
+ */
+function complianceStop(ctx, refusal, via) {
+  if (!isComplianceSettleRefusal(refusal)) return undefined;
+  const own = isOwnScreenRefusal(refusal);
+  const network = ctx?.requirements?.network;
+  if (!own) noteComplianceRefusal({ network, via });
+  const payer = typeof refusal?.payer === "string" ? refusal.payer : ctx?.paymentPayload?.payload?.authorization?.from;
+  return { recovered: true, result: complianceRefusedResult({ network, payer, own }) };
 }
 
 /**
@@ -5178,6 +5283,50 @@ export function isRevertedAuthorizationTransfer(err) {
   return /\btransferWithAuthorization\b"?\s+reverted/i.test(text);
 }
 
+/**
+ * A settler's node refused the transaction before it was sent, and the answer
+ * names no transaction. An ALLOWLIST: the answer must name at least one
+ * recognized pre-broadcast refusal for the settler's own transaction, and
+ * every other word in it must be a known wrapper (a reason code, "failed to
+ * estimate gas", "Error"). The refusals are the settler's own gas ("gas
+ * required exceeds allowance", "insufficient funds for gas * price + value"),
+ * its fee ("max fee per gas less than block base fee", "fee cap less than
+ * block base fee", "transaction underpriced") and its signer's nonce ("nonce
+ * too high"), each with the node's own address and number detail. Nothing
+ * reached the chain, so the authorization is unused, like a reverted transfer.
+ * Anything the list does not recognize goes to the chain read: a revert in
+ * any spelling (AuthorizationUsed(), AuthorizationCanceled, "out of gas",
+ * revert data), a used or canceled authorization, a bare "failed to estimate
+ * gas", "replacement transaction underpriced" (a pending send may be this
+ * payment) and "nonce too low" (it can follow the settler's own landed send;
+ * our own relayer reads authorizationState under its lock instead,
+ * src/robinhood-relayer.js). Timeouts, transport errors and any answer naming
+ * a transaction are never this.
+ */
+const NOTHING_SENT_REFUSALS = [
+  /\bgas required exceeds allowance(?:\s*\(\d+\))?/g,
+  /\binsufficient funds for gas \* price \+ value(?::? address 0x[0-9a-f]{1,40},? have \d+ want \d+)?/g,
+  /\bmax fee per gas less than block base fee(?::? address 0x[0-9a-f]{1,40},? maxfeepergas: \d+,? basefee: \d+)?/g,
+  /\bfee cap less than block base fee(?::? address 0x[0-9a-f]{1,40},? gasfeecap: \d+,? basefee: \d+)?/g,
+  /(?<!replacement )\btransaction underpriced\b/g,
+  /\bnonce too high(?::? address 0x[0-9a-f]{1,40},? tx: \d+,? state: \d+)?/g,
+];
+const NOTHING_SENT_WRAPPERS = /\b(?:(?:failed|unable|cannot|could not) (?:to )?estimate gas|gas estimation (?:failed|error)|estimategas (?:failed|error)|unexpected_settle_error|invalid_exact_evm_transaction_failed|settlement failed|error)\b/g;
+export function isNothingSentNodeRefusal(err) {
+  if (!err || typeof err !== "object") return false;
+  if (typeof err.transaction === "string" && err.transaction.trim()) return false;
+  if (err.name === "AbortError" || err.name === "TimeoutError" || err.code || err.cause) return false;
+  if (isUnreadableSettleAnswer(err)) return false;
+  const reason = String(err.errorReason || "").trim();
+  if (isUsedAuthorizationReason(reason) || isUsedAuthorizationReason(String(err.errorMessage || ""))) return false;
+  let rest = `${reason} ${err.errorMessage || ""} ${err.message || ""}`.toLowerCase();
+  let named = false;
+  for (const re of NOTHING_SENT_REFUSALS) rest = rest.replace(re, () => { named = true; return " "; });
+  if (!named) return false;
+  // Every word left must be a known wrapper; anything else reads the chain.
+  return /^[\s:;,.()-]*$/.test(rest.replace(NOTHING_SENT_WRAPPERS, " "));
+}
+
 // Networks settled through an operator-listed facilitator list, where the
 // reverted-transfer answer and a graceful refusal with no verdict pass to the
 // next listed facilitator. Their facilitators settle by EIP-3009 only and each
@@ -5221,8 +5370,10 @@ export function gracefulRefusalOf(payload) {
 
 /** May this settle refusal go to the next facilitator on `network`? */
 export function isRetryableSettleRefusal(err, network) {
+  // A compliance refusal goes to no other settler (src/settle-compliance.js).
+  if (isComplianceSettleRefusal(err)) return false;
   if (isPreBroadcastSettleRejection(err)) return true;
-  return REVERT_RETRY_NETWORKS.has(String(network || "")) && isRevertedAuthorizationTransfer(err);
+  return REVERT_RETRY_NETWORKS.has(String(network || "")) && (isRevertedAuthorizationTransfer(err) || isNothingSentNodeRefusal(err));
 }
 
 /**
@@ -5245,6 +5396,7 @@ export function isListedPassOnRefusal(err, network) {
   if (err.name === "AbortError" || err.name === "TimeoutError" || err.code || err.cause) return false;
   const reason = String(err.errorReason || "").trim();
   if (!reason) return false;
+  if (isComplianceSettleRefusal(err)) return false;
   if (isRetryableSettleRefusal(err, network)) return false;
   // A used or canceled authorization goes to no other settler, whatever its
   // spelling; the outage read finds the transfer on chain.

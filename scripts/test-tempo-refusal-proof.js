@@ -208,13 +208,13 @@ const origin = base;
   let reported = 0, takenBack = 0;
   const e = await buy("/bad", { onSigned: () => { reported++; return () => { takenBack++; }; } });
   ok(reported === 1 && takenBack === 1, `a proven-unused credential's own-purchase report is taken back, once (${reported} reported, ${takenBack} taken back)`);
-  ok(e && /refused the request before taking payment \(HTTP 400\); the credential expired unused, nothing charged/.test(e.message) && !/after payment/.test(e.message), `a proven-unused 400 says the seller refused before payment (got "${e?.message}")`);
+  ok(e && /refused the request before taking payment \(HTTP 400\); the credential expired unused, so the seller was paid nothing/.test(e.message) && !/after payment/.test(e.message), `a proven-unused 400 says the seller refused before payment (got "${e?.message}")`);
   ok(e.committed === false && e.signedUsd === undefined && e.refused === true, "...and carries no committed stamp and no signed amount");
   ok(outbound().length === before, "...and records no outbound payment");
   ok(sellerDeliveryMemoEntries().length === 0, "...and no delivery strike (a 4xx with no receipt is the seller answering the request)");
   mode = { status: 402, receipt: false };
   const e2 = await buy("/bad402");
-  ok(e2 && e2.committed === false && /^Seller refused the payment \(HTTP 402\); the credential expired unused, nothing charged/.test(e2.message), "a proven-unused 402 reads as the payment refused, nothing charged");
+  ok(e2 && e2.committed === false && /^Seller refused the payment \(HTTP 402\); the credential expired unused, so the seller was paid nothing/.test(e2.message), "a proven-unused 402 reads as the payment refused, the seller paid nothing");
   ok(sellerDeliveryMemoEntries().length === 0 && outbound().length === before, "...with no delivery strike and no outbound row");
   // A 5xx is the seller's backend failing on the router's purchase whether or
   // not a payment was taken: a delivery strike (so the router stops choosing

@@ -6,7 +6,7 @@
 // upstream vendor 5xx was booked as a broken tool on first sight.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
-import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses } from "./avm-canary-classify.js";
+import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses, isEdgeTimeout, isNoSellerMatched } from "./avm-canary-classify.js";
 import { classesText } from "./algorand-canary-classes.js";
 
 let pass = 0, fail = 0;
@@ -230,15 +230,22 @@ ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", 
   ok(/return \{ send, txid: avmPaymentTxid\(payload\) \};/.test(src), "the id is read from the payload that was signed");
   ok(/const send = \(\) => fetch\(url, \{\s*\.\.\.reqInit,\s*signal: AbortSignal\.timeout\(/.test(src) && !/const reqInit = \{[^}]*signal:/.test(src),
      "each attempt gets its own deadline: a signal built once left the retry already aborted");
-  ok(/const first = out === "no-answer" \? await settleNoAnswer\(a, false\) : "retry";\s*if \(first === "retry"\) \{\s*a = await attemptOnce\(\);/.test(src),
+  ok(/const first = out === "no-answer" \? await settleNoAnswer\(a, false\)\s*: step === "read-chain" \? await settleNoAnswer\(a, false, \{ edge: true \}\)\s*: "retry";\s*if \(first !== "retry"\) chargeRecorded = out !== "no-answer";\s*if \(first === "retry"\) \{\s*a = await attemptOnce\(\);/.test(src),
      "a no-answer is settled on chain BEFORE the retry signs, and only `retry` signs again");
   // An empty 200 is a charge: the retry block is entered on the classifier's
   // word alone, and there is no other attempt anywhere in the sweep.
-  ok(/const step = nextStep\(out\);\s*if \(step === "retry" \|\| step === "read-chain"\) \{/.test(src), "the retry block is entered only on nextStep's retry or read-chain");
+  {
+    // Read line by line (no backtracking regex): the step line, then only
+    // comment or blank lines, then the charge flag and the gated block.
+    const marker = 'const step = isEdgeTimeout(a.status) ? "read-chain" : nextStep(out);';
+    const at = src.indexOf(marker);
+    const rest = at < 0 ? [] : src.slice(at + marker.length).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("//"));
+    ok(at >= 0 && rest[0] === "let chargeRecorded = false;" && rest[1] === 'if (step === "retry" || step === "read-chain") {', "the retry block is entered only on nextStep's retry or read-chain");
+  }
   ok((src.match(/await attemptOnce\(\)/g) || []).length === 2 && (src.match(/await attempt\(\)/g) || []).length === 2 && !/if \(out !== "ok"\) \{/.test(src) && !/nextStep\([^)]*\) (!==|===) "(done|charged-empty)"/.test(src),
      "...and the sweep holds exactly two attempts: the first, and the one inside that block");
   {
-    const block = /const step = nextStep\(out\);[\s\S]*?\n    \}\n/.exec(src)?.[0] || "";
+    const block = /const step = isEdgeTimeout\(a\.status\) \? "read-chain" : nextStep\(out\);[\s\S]*?\n    \}\n/.exec(src)?.[0] || "";
     ok(block.includes("a = await attemptOnce();") && src.replace(block, "").match(/await attemptOnce\(\)/g)?.length === 1, "the second attempt sits inside the gated block");
   }
   ok(/\} else if \(out === "empty"\) \{[^}]*\s*report\.chargedEmpty\.push\(\{ key, slug: t\.slug, usd, tx: a\.tx \|\| null,[^\n]*\n\s*report\.spentUsd \+= usd;/.test(src),
@@ -393,6 +400,27 @@ ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", 
   const reserve = Number(/CANARY_SUBCENT_RESERVE \?\? "(\d+)"/.exec(src)?.[1]);
   ok(max > 0 && max <= 50 && reserve >= 500, `sweep defaults: at most 50 sub-cent buys a run, at least 500 kept for buyers (got ${max}/${reserve})`);
   ok(5 * max + 31 <= 1000 - reserve, "five weekly sweeps plus a daily leg fit inside what the reserve leaves for testing");
+}
+// ---- an edge timeout: the chain decides; a router tier with no seller: the seller set ----
+{
+  const CF504 = '{"type":"https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/","title":"Gateway time-out","status":504}';
+  ok(isEdgeTimeout(504) && isEdgeTimeout(524), "a 504 or 524 is the edge giving up on our origin: the origin may still settle");
+  ok(!isEdgeTimeout(502) && !isEdgeTimeout(503) && !isEdgeTimeout(500) && !isEdgeTimeout(404) && !isEdgeTimeout(200) && !isEdgeTimeout(0), "no other status reads as an edge timeout");
+  ok(outcomeOf(R(504, CF504)) === "other", "the outcome name is unchanged (still handed to the upstream-vs-tool split on its last attempt)");
+  const NO_SELLER = JSON.stringify({ error: "No external x402 seller matched that task on algorand. Explore /api/route?q=<task>&include=external.", tool: "route-execute-mid", errorCode: "not_found" });
+  ok(isNoSellerMatched(404, NO_SELLER), "a router tier's 404 'no external seller matched' is the seller set, not our rail or handler");
+  ok(isNoSellerMatched(404, "No external x402 seller matched that task on algorand. Explore /api/route?q=<task>&include=external."), "...read from a plain-text body too");
+  ok(isNoSellerMatched(404, JSON.stringify({ error: "3 outside seller(s) matched those words on algorand, and none of them does that task (matched too few of the task's words to buy). Nothing was spent." })), "...and so is the match-floor refusal (judged no match: no seller does the task)");
+  ok(!isNoSellerMatched(500, NO_SELLER) && !isNoSellerMatched(200, NO_SELLER) && !isNoSellerMatched(402, NO_SELLER), "only a refusal status (4xx, never a 402) reads as no seller");
+  ok(!isNoSellerMatched(404, '{"error":"Not found"}') && !isNoSellerMatched(404, "") && !isNoSellerMatched(404, '{"error":"No seller is eligible"}'), "any other 404 stays a tool failure");
+  const canary = readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
+  ok(/isEdgeTimeout\(a\.status\) \? "read-chain" : nextStep\(out\)/.test(canary), "the sweep reads the chain for an edge timeout before it signs again");
+  ok(/settleNoAnswer\(a, true, \{ edge: true \}\)/.test(canary), "...and for an edge timeout on the retry, so a charge behind either attempt is reported");
+  ok(/isNoSellerMatched\(a\.status, a\.body\)\) \{\s*report\.noSeller\.push/.test(canary) && /noSeller: \[\]/.test(canary), "a router tier with no seller for its task is recorded under its own reason");
+  const r = { railFail: [], toolFail: [], chargedNoAnswer: [], chargeUnverified: [], noAnswer: [], chargedEmpty: [], noSeller: [{ key: "POST /api/route/execute-mid" }], aborted: null };
+  eq(failedClasses(r, []), [], "no seller for the task fails no class: it is an ecosystem condition");
+  const bad = /const bad = ([^;]+);/.exec(canary)?.[1] || "";
+  ok(bad && !/noSeller/.test(bad) && /noAnswerBad/.test(bad), "...and does not count toward the run's failure total");
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

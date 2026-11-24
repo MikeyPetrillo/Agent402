@@ -127,8 +127,10 @@ export function ledgerPricingPage(baseUrl, catalog) {
       </div>
       <!-- USDC -->
       <div style="padding:30px;background:var(--panel);position:relative;">
-        <div style="position:absolute;top:14px;right:18px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;color:var(--accent-lit);border:1.5px solid var(--accent-lit);padding:3px 8px;">x402</div>
-        <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-dim);letter-spacing:.08em;margin-bottom:12px;">PAID \u00b7 STABLECOIN OVER x402 OR MPP</div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin-bottom:12px;">
+          <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-dim);letter-spacing:.08em;white-space:nowrap;">PAID \u00b7 STABLECOIN OVER x402 OR MPP</div>
+          <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;color:var(--accent-lit);border:1.5px solid var(--accent-lit);padding:3px 8px;">x402</div>
+        </div>
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px;">
           <span style="font-family:var(--font-body);font-weight:900;font-size:var(--fs-5xl);letter-spacing:-.03em;color:var(--on-panel);">${esc(floor)}</span>
           <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-dim);white-space:nowrap;">/ call &amp; up</span>

@@ -26,7 +26,7 @@
 //                 true for the whole answer, or the array keys it excuses).
 //   error-shaped  an `error` (set), `errors` (non-empty) or `ok: false` in a
 //                 200, where the documented example does not carry that key
-//                 (a validator's `errors` list and code-run's `error` are the
+//                 (a validator's `errors` list and a run's own `error` are the
 //                 contract), or a skill pack whose every step reports
 //                 `ok: false`.
 //   unchecked     not a JSON object or array, no documented example, or a
@@ -84,8 +84,6 @@ export const EMPTY_RESULT_OK = new Map([
   ["fema-disasters", true],
   ["event-logs", true],
   ["onchain-sql", true],
-  ["onchain-sql-range", true],
-  ["onchain-sql-week", true],
   ["search-suggest", true],
   // Keyed on the payer: a payer with no history, store or grants lists none.
   ["memory-grants", true],

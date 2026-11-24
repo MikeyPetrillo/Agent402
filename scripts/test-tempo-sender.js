@@ -137,7 +137,7 @@ const env = {
 process.env.TEMPO_API_KEY = "test-tempo-key";
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 process.env.TEMPO_CURRENCY = CURRENCY;
-const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, keychainCallerOf, KEYCHAIN_UNAVAILABLE, TEMPO_SENDER_CHECK_RETRY_AFTER_S, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED, TEMPO_KEYCHAIN_UNCONFIRMED } = await import("../src/mpp-tempo.js");
+const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, keychainCallerOf, KEYCHAIN_UNAVAILABLE, TEMPO_SENDER_CHECK_RETRY_AFTER_S, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED, TEMPO_KEYCHAIN_UNCONFIRMED, tempoHighSSignature, TEMPO_HIGH_S_REASON } = await import("../src/mpp-tempo.js");
 const { gatewaySettleBreakerKey } = await import("../src/gateway-settle-breaker.js");
 
 // Signed transactions, one per shape.
@@ -145,6 +145,20 @@ const TX_PLAIN = await signWith(plain);
 const TX_P256 = await signWith(p256Root);
 const TX_WEBAUTHN = await signWith(webAuthnRoot);
 const TX_AGENT = await signWith(agent);
+// The malleated twin of a signed transaction: s' = n - s with the parity
+// flipped. It verifies for the same sender over the same transaction and
+// hashes differently, which is why the gate refuses it.
+const SECP_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+const flipS = (sig) => ({ r: sig.r, s: SECP_N - sig.s, yParity: sig.yParity ? 0 : 1 });
+function highSTwin(raw) {
+  const { signature, from: _from, ...body } = TxEnvelopeTempo.deserialize(raw);
+  const twin = signature.type === "keychain"
+    ? { ...signature, inner: { ...signature.inner, signature: flipS(signature.inner.signature) } }
+    : { ...signature, signature: flipS(signature.signature) };
+  return TxEnvelopeTempo.serialize(TxEnvelopeTempo.from(body), { signature: twin });
+}
+const TX_PLAIN_HIGH_S = highSTwin(TX_PLAIN);
+const TX_AGENT_HIGH_S = highSTwin(TX_AGENT);
 const TX_P256_AGENT = await signWith(p256Agent);
 const TX_FORGED_KEYCHAIN = await signWith(forger);
 const TX_ROOT_AS_KEYCHAIN = await signWith(TempoAccount.fromSecp256k1(rootKey, { access: root }));
@@ -506,6 +520,25 @@ async function listen(app) {
   let r = await get("/spend", TX_PLAIN);
   ok(r.status === 200 && r.body.sender === lc(plain.address) && seen.validate === v0 + 1, `C: a plain-key credential reaches a spending route, keyed on its proven sender (${JSON.stringify(r.body)})`);
   ok(ledger.at(-1) === lc(plain.address), `C: ...and the ledger books it under that proven sender (${ledger.at(-1)})`);
+  // The high-s twin of that same credential: refused 402 before validate,
+  // before any claim, nothing charged; on an ordinary route too.
+  {
+    const twin = TxEnvelopeTempo.deserialize(TX_PLAIN_HIGH_S);
+    ok(lc(twin.from) === lc(plain.address) && SignatureEnvelope.verify(twin.signature, { address: plain.address, payload: TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(twin)) })
+      && TxEnvelopeTempo.hash(TxEnvelopeTempo.from(twin)) !== TxEnvelopeTempo.hash(TxEnvelopeTempo.from(TxEnvelopeTempo.deserialize(TX_PLAIN))),
+      "C: control: the high-s twin verifies for the same sender and hashes differently (what makes it a second credential)");
+    ok(tempoHighSSignature(TX_PLAIN_HIGH_S) && tempoHighSSignature(TX_AGENT_HIGH_S) && !tempoHighSSignature(TX_PLAIN) && !tempoHighSSignature(TX_AGENT) && !tempoHighSSignature(TX_P256_FORGED) && !tempoHighSSignature("0x00"),
+      "C: tempoHighSSignature reads the sender's and an access key's secp256k1 s, and not a low-s, p256 or undecodable one");
+    for (const [path, raw] of [["/spend", TX_PLAIN_HIGH_S], ["/plain", TX_PLAIN_HIGH_S], ["/plain", TX_AGENT_HIGH_S]]) {
+      v0 = seen.validate;
+      r = await get(path, raw);
+      ok(r.status === 402 && seen.validate === v0 && r.body.details?.reason === "high-s-signature" && r.body.details?.charged === false && String(r.body.detail).includes(TEMPO_HIGH_S_REASON),
+        `C: a high-s twin is refused 402 on ${path} before validate (status ${r.status}, validate +${seen.validate - v0}, ${r.body.details?.reason})`);
+    }
+    v0 = seen.validate;
+    r = await get("/plain", TX_PLAIN);
+    ok(r.status === 200 && seen.validate === v0 + 1, `C: ...and its low-s original still passes on an ordinary route (${r.status})`);
+  }
   for (const [name, raw] of [["a keychain envelope naming someone else's account", TX_FORGED_KEYCHAIN], ["a multisig envelope", TX_MULTISIG], ["a fee-payer-slot sender", TX_FEE_SLOT_VICTIM], ["a p256 envelope with someone else's key", TX_P256_FORGED]]) {
     v0 = seen.validate;
     r = await get("/spend", raw);

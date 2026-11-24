@@ -96,7 +96,7 @@ for (const [path, html] of Object.entries({ ...PAGES, "/what-is-x402": whatIsX40
   const { guidePage } = await import("../src/guides.js");
   const X = GUIDE_EXPLAINERS.x402, M = GUIDE_EXPLAINERS.mpp;
   const EXPLAINERS = [
-    { path: "/what-is-x402", html: whatIsX402Page(B), route: 'app.get("/what-is-x402"', title: "x402 and MPP on Agent402: how a paid request works", links: [[X, "What is x402?"], [M, "What is MPP?"]], sentence: "For each protocol in plain language, read What is x402? and What is MPP? on ask402.ai." },
+    { path: "/what-is-x402", html: whatIsX402Page(B), route: 'app.get("/what-is-x402"', title: "x402 on Agent402: how an x402 paid request settles", links: [[X, "What is x402?"], [M, "What is MPP?"]], sentence: "For each protocol in plain language, read What is x402? and What is MPP? on ask402.ai." },
     { path: "/what-is-mpp", html: whatIsMppPage(B, null), route: 'app.get("/what-is-mpp"', title: "MPP on Agent402: how a Machine Payments Protocol payment works", links: [[M, "What is MPP?"]], sentence: "For MPP in plain language, read What is MPP? on ask402.ai." },
     { path: "/learn/x402", html: learnPage(B, "x402"), route: 'app.get("/learn/:slug"', title: "x402 on Agent402: the headers, the offer and the receipt", links: [[X, "What is x402?"]], sentence: "For x402 in plain language, read What is x402? on ask402.ai." },
     { path: "/learn/mpp", html: learnPage(B, "mpp"), route: 'app.get("/learn/:slug"', title: "MPP challenges and credentials: the Payment auth scheme by header", links: [[M, "What is MPP?"]], sentence: "For MPP in plain language, read What is MPP? on ask402.ai." },

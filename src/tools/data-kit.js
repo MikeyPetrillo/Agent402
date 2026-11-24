@@ -18,8 +18,10 @@ import { readFileSync } from "node:fs";
 import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { ratesUrl, latestShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
-import { attribute } from "../data-attribution.js";
-import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON } from "../resale-terms.js";
+import { attribute, OPEN_FOOD_FACTS_SOURCE, OPEN_FOOD_FACTS_LICENSE, openFoodFactsProductUrl, COUNTRIES_ODBL_NOTICE, countriesDatabaseUrl } from "../data-attribution.js";
+import { DATA_UA } from "../user-agents.js";
+import { notChargedOn } from "../not-charged.js";
+import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON, markResaleCleared } from "../resale-terms.js";
 import { publicHolidaysCompat, HOLIDAY_HOSTS, parseCountry, parseYear, parseSubdivision, parseTypes, appliesIn, hasAnyType } from "./holiday-source.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
@@ -31,14 +33,14 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-async function getJson(url, { allowEmpty = false } = {}) {
+async function getJson(url, { allowEmpty = false, userAgent } = {}) {
   let html;
   // Retry once on upstream 5xx/timeout — community-run upstreams
   // intermittently flap on the first attempt then succeed immediately. Same
   // convention as gov-kit/finance-kit getJson.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      ({ html } = await safeFetch(url, { maxBytes: 3 * 1024 * 1024, ownUpstream: true }));
+      ({ html } = await safeFetch(url, { maxBytes: 3 * 1024 * 1024, ownUpstream: true, ...(userAgent ? { userAgent } : {}) }));
       break;
     } catch (e) {
       // No second attempt once a run's ceiling has passed (src/run-ceiling.js; never on a direct route).
@@ -68,6 +70,18 @@ async function getJson(url, { allowEmpty = false } = {}) {
 const CACHE_FRESH_MS = 24 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 500;
 const BARCODE_CACHE = new Map(); // code -> { response, fetchedAt }
+// Open Food Facts asks for at most 15 product reads a minute from one client
+// (its API docs); this process keeps under it. A cached product is free.
+export const OFF_READS_PER_MINUTE = 15;
+const offReads = []; // times of the product reads in the last minute
+function takeOffRead(now = Date.now()) {
+  while (offReads.length && now - offReads[0] >= 60_000) offReads.shift();
+  if (offReads.length >= OFF_READS_PER_MINUTE) return Math.max(1, Math.ceil((60_000 - (now - offReads[0])) / 1000));
+  offReads.push(now);
+  return 0;
+}
+/** Test seam: forget the cached products and the minute's reads. */
+export function _resetOpenFoodFactsForTest() { BARCODE_CACHE.clear(); offReads.length = 0; }
 
 function cacheFresh(cache, key) {
   const e = cache.get(key);
@@ -112,15 +126,20 @@ export const DATA_TOOLS = [
         },
       },
     },
-    handler: async (i) => {
+    handler: async (i, req) => {
       const code = String(i.code ?? "").trim();
       if (!/^\d{8,14}$/.test(code)) throw bad("code must be 8-14 digits (a UPC/EAN barcode)");
       const fresh = cacheFresh(BARCODE_CACHE, code);
       if (fresh) return { ...fresh.response };
       const url = `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=product_name,brands,categories,quantity,nutrition_grades,countries,image_url`;
+      const wait = takeOffRead();
+      if (wait) {
+        const paced = Object.assign(bad(`Product reads are paced to ${OFF_READS_PER_MINUTE} a minute for Open Food Facts; retry in ${wait} s.${notChargedOn(req)}`, 503), { retryAfter: wait });
+        return serveStaleOrThrow(BARCODE_CACHE, code, "barcode-lookup", paced);
+      }
       let j;
       try {
-        j = await getJson(url);
+        j = await getJson(url, { userAgent: DATA_UA });
       } catch (e) {
         return serveStaleOrThrow(BARCODE_CACHE, code, "barcode-lookup", e);
       }
@@ -133,8 +152,9 @@ export const DATA_TOOLS = [
               quantity: p.quantity || null, nutritionGrade: p.nutrition_grades || null,
               countries: p.countries || null, imageUrl: p.image_url || null,
             },
+            source: OPEN_FOOD_FACTS_SOURCE, license: OPEN_FOOD_FACTS_LICENSE, productUrl: openFoodFactsProductUrl(code),
           }
-        : { code, found: false };
+        : { code, found: false, source: OPEN_FOOD_FACTS_SOURCE, license: OPEN_FOOD_FACTS_LICENSE };
       cachePut(BARCODE_CACHE, code, response);
       return response;
     },
@@ -335,9 +355,12 @@ export const DATA_TOOLS = [
         );
       }
       const query = code || name;
-      if (!matches.length) return { query, found: false, matches: 0, country: null };
+      // Every answer carries the dataset's ODbL notice and the address of the
+      // database it was produced from (src/data-attribution.js).
+      const odbl = { license: COUNTRIES_ODBL_NOTICE, database: countriesDatabaseUrl() };
+      if (!matches.length) return { query, found: false, matches: 0, country: null, ...odbl };
       // Shallow-copy so callers can never mutate the module-level dataset.
-      return { query, found: true, matches: matches.length, country: { ...matches[0] } };
+      return { query, found: true, matches: matches.length, country: { ...matches[0] }, ...odbl };
     },
   },
 ];
@@ -350,3 +373,9 @@ markEndsAtCeiling(DATA_TOOLS, ["fx-rate", "public-holidays", "weather-forecast"]
 // Resale terms (src/resale-terms.js): a whole year's list is not resold through a third party.
 markResaleBarred(DATA_TOOLS, ["public-holidays"], HOLIDAY_PORTAL_RESALE_REASON);
 attribute(DATA_TOOLS.find((t) => t.slug === "public-holidays"), "nager");
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(DATA_TOOLS, ["weather-forecast"], "National Weather Service");
+
+// Resale clearance (src/resale-terms.js): cleared for resale through a third party.
+markResaleCleared(DATA_TOOLS, ["fx-rate"], "ECB reference rates");

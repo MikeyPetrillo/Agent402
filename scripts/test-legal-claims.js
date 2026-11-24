@@ -366,13 +366,14 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
 }
 
 // Signed receipts cover the direct routes. A referral copy (/ref/<slug>) is
-// never signed (src/server.js receiptFieldsOf), and a streamed answer that is
-// neither an event stream nor sent with TE: trailers carries none: the
-// lead sentence stays the owner's line, and the surfaces that detail the
-// receipt state both exceptions. This block runs last: it loads a key.
+// never signed (src/server.js receiptFieldsOf); a streamed answer that is
+// neither an event stream nor sent with TE: trailers is signed and fetched at
+// the address its head names: the lead sentence stays the owner's line, and
+// the surfaces that detail the receipt state how each one gets it. This block
+// runs last: it loads a key.
 {
   ok(/function receiptFieldsOf\(req, res\) \{\n\s+if \(FREE_MODE \|\| String\(req\.path \|\| ""\)\.startsWith\("\/ref\/"\)\) return null;/.test(src("src/server.js")), "control: a /ref answer is never signed");
-  ok(/A streamed answer that is[\s/]+neither \(no event stream, no trailers asked for\) carries none\./.test(src("src/receipt-signing.js")) && /A streamed answer that is neither carries no receipt\./.test(src("src/conformance.js")), "control: a stream that is neither an event stream nor asked trailers carries no receipt");
+  ok(/Every streamed answer is[\s/]+signed, a stream that is neither \(no event stream, no trailers asked[\s/]+for\) included: its head names X-Agent402-Receipt-Url/.test(src("src/receipt-signing.js")) && /a stream that is neither still gets it\./.test(src("src/conformance.js")), "control: a stream that is neither an event stream nor asked trailers still gets its receipt, fetched at the address its head names");
   const readme = src("README.md").replace(/\*\*/g, "");
   const bullet = readme.split("\n").find((l) => /signed receipt/.test(l) && /^- /.test(l)) || "";
   ok(!/Buyer protection/.test(readme), "README: no \"Buyer protection\" heading (it reads as a guarantee program)");

@@ -57,7 +57,7 @@ async function checkTitle(pathPrefix, slug, escapedName) {
 
 // --- /docs/:slug (wiki pages; the H1 comes from markdown, no title attribute) --
 {
-  const slugs = ["API-Reference", "AWS-Bedrock-AgentCore", "Architecture", "Code-Execution", "MCP-Connector", "Skill-Packs", "x402-Index-and-Router"];
+  const slugs = ["API-Reference", "AWS-Bedrock-AgentCore", "Architecture", "Buying-at-Volume", "MCP-Connector", "Skill-Packs", "x402-Index-and-Router"];
   let found = 0;
   for (const slug of slugs) {
     const res = await fetch(`${BASE}/docs/${slug}`);

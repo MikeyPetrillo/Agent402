@@ -33,7 +33,7 @@ t node scripts/test-inflight-burst.js
 t node scripts/test-inflight-admission.js
 # Settle first: on the model and image routes a wallet with no paid sale on the books, and a wallet or authorization holding runs that did not settle, has its payment settled before the upstream call; the order of the settle call and the upstream call read on every x402 exact wire, every refusal of the buyer's input before any settle, every failure after it booked owed in its class, a hang-up, a replay, a restart on the sales ledger, and the same calls with the switch off (boots paid servers against chain-like stubs - offline)
 t node scripts/test-settle-first.js
-# Settle first on the catalog routes with an upstream cost (search and answer, image generation, speech, transcription, judgment, code runs): the settle call before the upstream call, a buyer's mistake and a reached daily ceiling refused before any settle, a failure after it owed in its class and run free on the same payment, the switch off unchanged, and those routes feeding the same budget meter and per-wallet count (boots paid servers against stub upstreams - offline)
+# Settle first on the catalog routes with an upstream cost (search and answer, image generation, speech, transcription, judgment): the settle call before the upstream call, a buyer's mistake and a reached daily ceiling refused before any settle, a failure after it owed in its class and run free on the same payment, the switch off unchanged, and those routes feeding the same budget meter and per-wallet count (boots paid servers against stub upstreams - offline)
 t node scripts/test-settle-first-routes.js
 # A header a handler set for its answer is not sent on a refusal: dub on Tempo pull, MPP evm and x402 (boots a paid server - offline)
 t node scripts/test-answer-headers.js
@@ -47,6 +47,8 @@ t node scripts/test-conformance.js
 t node scripts/test-receipt-signing.js
 # Signed receipts beyond a one-piece answer: a settled stream ends with an agent402-receipt comment line no event parser dispatches (and a trailer with TE: trailers) over every byte streamed, on every wire; a credits call is debited before its answer ends and its receipt names the key id and the debit; a card-bought report's receipt covers the checkout and the report text on its page and email; tamper fails (boots paid servers - offline)
 t node scripts/test-receipt-streams.js
+# Our own upstream caps: each refusal counted per cap and slug, the upstreamCaps word, cached answers not counted, and a refused call never charged on any rail or debited from credits (boots a paid server - offline)
+t node scripts/test-upstream-cap-refusals.js
 # The audit report on a paid server with a key: one wallet's x402, MPP evm and Tempo calls each carry the receipt their header carried and verify through the public check, the summary verifies, another wallet sees none of them, EVM x402 only, and the store keeps one receipt per settled 200 (boots paid servers - offline)
 t node scripts/test-audit-report-paid.js
 # A streamed chat, Messages or Responses answer that ends with no answer (all reasoning) is a 502 before any byte and is never settled on any wire; one with content is relayed byte for byte and settled once; a hold commits at the CDN window tail (boots a paid server - offline)

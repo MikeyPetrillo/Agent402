@@ -52,5 +52,5 @@ When the server settles Tempo payments itself (`TEMPO_RELAY=off`), every party t
 
 ## Supply chain
 
-- `npm audit` is kept at zero known vulnerabilities - dependencies with unfixable advisories get removed along with their tools (this happened to the Excel tools: SheetJS prototype-pollution/ReDoS on untrusted input, no patched build installable - tools deleted rather than shipped vulnerable).
+- `npm audit` is kept at zero known vulnerabilities - dependencies with unfixable advisories get removed along with their tools (this happened to the earlier Excel-reading tools: SheetJS prototype-pollution/ReDoS on untrusted input, no patched build installable - tools deleted rather than shipped vulnerable). The current `xlsx-create` only writes workbooks from validated rows, in a worker thread, and does not use SheetJS.
 - ffmpeg and all child processes run via `execFile` (no shell interpolation), with size and time limits.

@@ -206,19 +206,17 @@ const KITS = [
   ["crypto-screens-kit.js", "CRYPTO_SCREENS_TOOLS", "exchange-spread", { coin: "ethereum" }, /^Market data upstream$/, /^coins ethereum tickers$/],
   ["lending-rates-kit.js", "LENDING_TOOLS", "lending-rates", { network: "ethereum" }, /^Chain RPC$/, /^eth_call$/],
   ["crypto-markets-kit.js", "CRYPTO_MARKETS_TOOLS", "exchange-rates", { currencies: "usd,eur,eth,xau" }, /^Market data upstream$/, /^exchange rates$/],
-  ["farcaster-social-kit.js", "FARCASTER_SOCIAL_TOOLS", "fc-channel", { id: "base" }, /^Farcaster upstream$/, /^channel$/],
   ["contract-kit.js", "CONTRACT_TOOLS", "contract-abi", { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", network: "base" }, /^[\w .-]+$/, /^lookup$/],
   ["enrich-kit.js", "ENRICH_TOOLS", "github-repo", { owner: "expressjs", repo: "express" }, /^GitHub$/, /^lookup$/],
   ["b2b-enrich-kit.js", "B2B_ENRICH_TOOLS", "hunter-domain-search", { domain: "stripe.com", limit: 10 }, /^[\w .-]+$/, /^lookup$/],
   ["x-data-kit.js", "X_DATA_TOOLS", "x-search-recent", { query: "x402 -is:retweet", max_results: 10 }, /^X API$/, /^tweets search recent$/],
   ["cve-kit.js", "CVE_TOOLS", "cve-lookup", { cve: "CVE-2024-3094" }, /^The NVD API$/, /^lookup$/],
   ["llm-context-kit.js", "LLM_CONTEXT_TOOLS", "llm-context", { query: "x402 payment protocol", maxTokens: 2048 }, /^LLM context$/, /^context$/],
-  ["web-kit.js", "WEB_TOOLS", "archive-snapshot", { url: "https://example.com" }, /^Wayback Machine$/, /^availability$/],
   ["edgar-kit.js", "EDGAR_TOOLS", "edgar-filings", { ticker: "AAPL", form: "10-K", limit: 5 }, /^EDGAR$/, /^document$/],
   ["crypto-kit.js", "CRYPTO_TOOLS", "crypto-price", { coins: "BTC,ETH,SOL", currency: "usd" }, /^[\w .-]+$/, /^query$/],
   ["captcha-kit.js", "CAPTCHA_TOOLS", "captcha-verify", { provider: "turnstile", secret: "test-secret", token: "test-token" }, /^Captcha provider$/, /^siteverify$/],
-  ["cdp-kit.js", "CDP_TOOLS", "wallet-balances", { address: "0x1111111111111111111111111111111111111111", network: "base" }, /^Coinbase Developer Platform$/, /^token balances$/],
-  ["solana-intel-kit.js", "SOLANA_INTEL_TOOLS", "sol-price", { mints: ["So11111111111111111111111111111111111111112"] }, /^Jupiter$/, /^price$/],
+  ["cdp-kit.js", "CDP_TOOLS", "wallet-balances", { address: "0x1111111111111111111111111111111111111111", network: "base" }, /^Chain RPC$/, /^(eth_getBalance|alchemy_getTokenBalances)$/],
+  ["solana-intel-kit.js", "SOLANA_INTEL_TOOLS", "sol-price", { mints: ["So11111111111111111111111111111111111111112"] }, /^DexScreener$/, /^pairs by mint$/],
 ];
 const mods = new Map();
 for (const [file, name] of KITS) if (!mods.has(file)) mods.set(file, await import(`../src/tools/${file}`).then((m) => m[name]));

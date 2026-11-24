@@ -11,9 +11,10 @@
 // filled on one replica refuses a fresh seller on the other. The running
 // sums stay equal to their windows when an older build (no running sum)
 // writes during a deploy overlap or after a rollback: the windows are
-// versioned, a sum that cannot be right (negative, above what its window
-// could hold) is rebuilt in the same call, and a reserve never renews the
-// sum's expiry. Requires REDIS_URL (under CI a missing one fails).
+// versioned, the unversioned window that build kept is never read, a sum that
+// cannot be right (negative, above what its window could hold) is rebuilt in
+// the same call, and a reserve never renews the sum's expiry. Requires
+// REDIS_URL (under CI a missing one fails).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
@@ -163,16 +164,15 @@ if (process.argv[2] === "drift") {
     let worst = 0; for (const k of keys) worst = Math.max(worst, await truthOf(k, now));
     out.overlap = { granted: r.ok, worst };
   }
-  { // Cutover: what the older build booked before this build's first touch
-    // counts (folded in by the rebuild), so a deploy is not a fresh day.
+  { // The unversioned window is retired: an entry left under that name is
+    // not read, so it neither counts toward the cap nor reaches a sum.
     const s = sellerOf("d3"); const keys = U.unprovenSellerKeys(s);
     let now = 1_900_000_000_000;
     await oldReserve(c, keys, 200_000, "old-3", now, DAY);
     now += H;
     const a = await reserve(s, 100_000, now);
-    const b = await reserve(s, 50_000, now + 1);
-    const aged = await reserve(s, 100_000, now - H + DAY + 1);
-    out.cutover = { refused: !a.ok, spentUsd: a.spentUsd, fits: b.ok, aged: aged.ok, sum: await sumOf(keys[0]), truth: await truthOf(keys[0], now - H + DAY + 1) };
+    const read = await U.__unprovenWindowSums(keys, now);
+    out.retired = { granted: a.ok, read, sum: await sumOf(keys[0]), truth: await truthOf(keys[0], now), oldLeft: (await c.zRange(await legacyWindowOf(keys[0]), 0, -1)).length };
   }
   { // A negative sum is rebuilt in the same call: another replica booked $0.10
     // (straight into the store), the sum reads -$0.50, and a $0.20 reserve is
@@ -333,8 +333,8 @@ for (const seed of [7, 4242, 90001]) {
   });
   ok(d.replay.drift === 0 && rp.drift === 0 && rp.worst <= 250_000 && rp.granted === rp.want, `replay of the overlap drift: an older-build $0.20 reserve, 36 h of 6-hourly reserves past its expiry, then a fresh process's $0.01 reserves at the $0.25 cap: every sum equals its window (${d.replay.drift}+${rp.drift} drifted), ${rp.granted} granted (want ${rp.want}), the window peaks at $${rp.worst / 1e6}`);
   ok(d.overlap.worst <= 250_000, `the older build's reserve never lands in a window this build sums: after its $0.20 the window this build sums holds $${d.overlap.worst / 1e6} (cap $0.25; granted ${d.overlap.granted})`);
-  const cu = d.cutover;
-  ok(cu.refused && Math.abs(cu.spentUsd - 0.2) < 1e-9 && cu.fits && cu.aged && cu.sum === cu.truth, `cutover: the older build's unexpired $0.20 counts at the first touch ($0.10 refused at $${cu.spentUsd}, $0.05 fits: ${cu.fits}), and ages out on schedule (${cu.aged}; sum ${cu.sum} = window ${cu.truth})`);
+  const rt = d.retired;
+  ok(rt.granted && rt.read.every((v) => v === 100_000) && rt.sum === 100_000 && rt.truth === 100_000 && rt.oldLeft === 1, `the unversioned window is not read: beside an older-build $0.20 left under that name a $0.10 reserve is granted and every sum holds $0.10 (granted ${rt.granted}; read ${rt.read}; sum ${rt.sum} = window ${rt.truth}; the old entry is left as it was: ${rt.oldLeft})`);
   ok(d.negative.refused && Math.abs(d.negative.spentUsd - 0.1) < 1e-9 && d.negative.first === 100_000 && d.negative.read.every((v) => v === 100_000), `a negative sum is rebuilt in the same call: a $0.20 reserve is refused on the window's $0.10 (read $${d.negative.spentUsd}; refusing window's sum ${d.negative.first}; a read rebuilds the rest: ${d.negative.read})`);
   ok(d.oversized.granted && d.oversized.sums.every((v) => v === d.oversized.truth) && d.oversized.truth === 150_000, `a sum above what its window could hold is rebuilt: a $0.05 reserve that fits is granted (sums ${d.oversized.sums}, window ${d.oversized.truth})`);
   ok(d.ttl.built > 23 * 3600_000 && d.ttl.after > 0 && d.ttl.after <= 5000, `a reserve never renews the sum's expiry (built with ${d.ttl.built} ms; ${d.ttl.after} ms left after a reserve on a sum with 5000 ms left)`);

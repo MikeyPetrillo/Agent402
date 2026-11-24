@@ -171,8 +171,8 @@ if (process.env.BRAVE_LIVE_TEST === "1") {
     (r) => r.query === "agent payments" && Array.isArray(r.results) && r.results.length > 0 && r.results.every((x) => typeof x.url === "string"),
     "search-videos agent payments count=3");
 
-  // Suggest should expand a brand prefix into completions. We don't assert any
-  // specific suggestion (Brave can re-rank), just that we get a non-empty array
+  // Suggest (Wikipedia opensearch) should expand a prefix into completions. We do not assert any
+  // specific suggestion (the source can re-rank), just that we get a non-empty array
   // of strings.
   await live("search-suggest", { q: "agent4", count: 5 },
     (r) => r.query === "agent4" && Array.isArray(r.suggestions) && r.suggestions.length > 0 && r.suggestions.every((s) => typeof s === "string"),

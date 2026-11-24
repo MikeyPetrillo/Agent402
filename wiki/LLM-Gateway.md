@@ -9,6 +9,8 @@
 
 `POST /v1/metered/chat/completions` is the default way to call a model (the Anthropic Messages and OpenAI Responses wires have twins: `/v1/metered/messages` and `/v1/metered/responses`). No API key and no account; model-backed (third-party models answer). The 402 quotes this exact request from its own body (the input estimated from its tokens with headroom, plus your `max_tokens`, at the model's list price plus a fee). On x402, Tempo and credits, settlement never exceeds that quote: an `exact` payer pays the quote, and an `upto` payer (where the 402 offers it) or a credits key settles what the answer used; a card payment adds the processor fee.
 
+The gateway is an Agent402 service: it prices each call before it runs (a flat tier price, or a quote from the request on the metered routes), routes `auto` chat calls to a model chosen for the task, falls back to the next model on a chat tier when one fails, and signs a receipt for each settled paid answer.
+
 ```bash
 curl -i -X POST https://agent402.tools/v1/metered/chat/completions -H 'content-type: application/json' \
   -d '{"model":"anthropic/claude-haiku-4.5","messages":[{"role":"user","content":"Summarize x402 in one line"}],"max_tokens":200}'
@@ -83,11 +85,8 @@ Questions your code can branch on instead of prose to parse. Model-backed, walle
 |---|---|---|
 | `POST /v1/judge` | $0.001 | `state` (text or JSON, up to 8,000 characters) and up to 8 `questions`, each `noul` (a yes/no probability), `choice` (one of your named options, with a probability each) or `score` (a position on levels you describe). `model` picks the first backend (`jev-latest`, `jev-preview`, `microsoft-decision-1`, `gemini-decision-1`, `gpt-6-luna`); the others are fallbacks, and the answer names the model that served and `fallbackFrom` when the first was unavailable. A `noul` the model gave no probability for reads `noul: null` with `noProbability: true`. |
 | `POST /v1/decisions` | $0.001 | The same judgment on OpenAI's Decisions wire: point an OpenAI SDK here and `decisions.create` works unchanged. |
-| `POST /v1/judge/vision` | $0.003 | Preview. Up to 4 PNG or JPEG images (`images`: your names mapped to `{ format, data_base64 }`, 256 to 1,568 px a side, 4 MiB each, never resized) and `questions`, which refer to an image as `` `name` `` and may also be `box` (where something is, as edges from 0 to 1). A box question always runs on `jev-preview`. |
-| `POST /v1/judge/locate` | $0.002 | Preview. One `image` and up to 4 `targets`; each comes back with `present` (a probability), `found`, `box` and `boxConfidence`. A box is always returned, so read `found` first. A target the model gave no presence probability for reads `present: null` and `found: null` with `noProbability: true`; treat it as unknown. |
-| `POST /v1/judge/long` | $0.02 | Preview. `/v1/judge`'s questions over a document of up to 900,000 bytes (about 262k tokens). |
 
-`jev-latest` is the Jev version we have tested; every answer names the version that served it (for example `jev-1.14.0`). `jev-preview` reaches the newer release. The preview routes are built on Jev features its maker labels experimental, carry `preview: true`, and are listed only where the judgment upstream is configured. A request larger than one call covers is refused with nothing charged on x402.
+`jev-latest` is the Jev version we have tested; every answer names the version that served it (for example `jev-1.14.0`). `jev-preview` reaches the newer release. A request larger than one call covers is refused with nothing charged on x402.
 
 ## Retired model ids
 

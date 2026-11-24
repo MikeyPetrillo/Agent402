@@ -22,6 +22,11 @@ const LOCK_STALE_MS = 10_000;
 
 export const DAY_CAP_ENV = "AGENT402_MAX_USD_PER_DAY";
 export const MONTH_CAP_ENV = "AGENT402_MAX_USD_PER_MONTH";
+// No daily or monthly cap is written or applied by default, for a new setup
+// or an existing one: `setup` and `wallet new` print a config with no cap and
+// one line saying how to set one (DAY_CAP_HOW), and the server says once at
+// start that none is set.
+export const DAY_CAP_HOW = `No daily spending cap is set. To set one that holds across restarts, add ${DAY_CAP_ENV}=<USD per UTC day> to the server's env (and ${MONTH_CAP_ENV} for a monthly one).`;
 
 /** A cap from the environment: Infinity when unset, empty or "off". A value
  *  that is not a non-negative USD amount is named on `warn` and read as 0

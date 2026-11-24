@@ -842,21 +842,6 @@
       }
     },
     {
-      "slug": "gravatar-check",
-      "name": "by email that has no avatar",
-      "input": {
-        "email": "nobody-zq7x@example.com"
-      },
-      "expect": {
-        "equals": {
-          "exists": false
-        },
-        "populated": [
-          "hash"
-        ]
-      }
-    },
-    {
       "slug": "robots-check",
       "name": "a disallowed path on a known robots.txt",
       "input": {

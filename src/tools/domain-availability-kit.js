@@ -26,11 +26,19 @@
 // Answers are kept briefly (CACHE_TTL_MS) so a buyer polling a name does not
 // make the registry answer the same question each time; checkedAt is when the
 // registry was read.
+//
+// The answer states registration only: the registry's record fields are not
+// copied into it (`registrar` and `status` stay in the shape, reading null).
+// Lookups share whois's per-registry pacing and daily ceiling
+// (./rdap-registry-limits.js).
 import { ssrfDispatcher, retryAfterSeconds, upstreamFailure } from "./fetch-guard.js";
 import { parseRdapBootstrap, rdapSaysNotFound } from "./kit.js";
 import { canonicalDnsName, internalNameReason } from "./dns-name-filter.js";
 import { markEndsAtCeiling, capByCeiling, assertBeforeCeiling, ceilingPassed } from "../run-ceiling.js";
 import { FETCH_UA } from "../user-agents.js";
+import { createRegistryLimits, registryLimits, PACE_MS } from "./rdap-registry-limits.js";
+
+export { PACE_MS };
 
 export const RDAP_BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json";
 const BOOTSTRAP_TTL_MS = 24 * 60 * 60 * 1000;
@@ -43,17 +51,12 @@ const DEFAULT_RETRY_AFTER_S = 30;
 // A registry's Retry-After is honored up to this long: one caller's flood
 // cannot close a registry to every buyer for a day.
 const MAX_RETRY_AFTER_S = 300;
-// Lookups to one registry host leave at least this far apart, queued in
-// order; a lookup whose turn is further off than PACE_MAX_WAIT_MS answers a
-// retryable 503 instead of waiting.
-export const PACE_MS = 100;
-const PACE_MAX_WAIT_MS = 3000;
 // Parents asked above a name that is not registered itself, from the
 // registrable level down: enough for a registry-run second level (co.uk)
 // and the registration under it.
 const MAX_PARENT_LOOKUPS = 3;
 
-export const AVAILABILITY_NOTE = "Read from the registry's RDAP service at checkedAt. Availability can change at any moment, and a name the registry reserves or blocks can read as not registered; registration itself happens at a registrar.";
+export const AVAILABILITY_NOTE = "Read from the registry's RDAP service at checkedAt. Availability can change at any moment, and a name the registry reserves or blocks can read as not registered; registration itself happens at a registrar. The answer states registration only: registrar and status read null.";
 
 const bad = (msg) => Object.assign(new Error(msg), { statusCode: 400 });
 
@@ -111,32 +114,17 @@ async function readBodyCapped(res, max) {
 /**
  * Build the tool's lookup with its own caches. `fetchImpl` and `now` are the
  * test seams (a stub RDAP server); production uses the global fetch through
- * the SSRF dispatcher.
+ * the SSRF dispatcher and the per-registry limits whois shares. A caller that
+ * names `paceMs` or `dailyMax` gets limits of its own (tests).
  */
-export function createDomainAvailability({ fetchImpl = null, now = () => Date.now(), bootstrapUrl = RDAP_BOOTSTRAP_URL, paceMs = PACE_MS } = {}) {
+export function createDomainAvailability({ fetchImpl = null, now = () => Date.now(), bootstrapUrl = RDAP_BOOTSTRAP_URL, paceMs, dailyMax, limits = null } = {}) {
   const doFetch = fetchImpl || ((url, init) => fetch(url, { ...init, dispatcher: ssrfDispatcher }));
+  const hostLimits = limits || (paceMs !== undefined || dailyMax !== undefined
+    ? createRegistryLimits({ ...(paceMs !== undefined ? { paceMs } : {}), ...(dailyMax !== undefined ? { dailyMax } : {}), now })
+    : registryLimits);
   let bootstrap = { at: 0, map: null, retryAt: 0 };
   const answers = new Map(); // domain -> { at, answer }
   const backoff = new Map(); // RDAP host -> epoch ms until which it is not asked
-  const nextSlot = new Map(); // RDAP host -> wall-clock ms its next lookup may leave
-  // A place in the host's queue (wall clock, so a test clock never stalls it).
-  async function paceFor(host) {
-    if (!(paceMs > 0)) return;
-    const t = Date.now();
-    const slot = Math.max(t, nextSlot.get(host) || 0);
-    // A turn further off than the pacing bound, or than this run's ceiling
-    // (the wait must end at it: the slug is marked endsAtCeiling), is not
-    // waited for and takes no place in the queue.
-    const wait = slot - t;
-    if (wait > PACE_MAX_WAIT_MS || (wait > 0 && capByCeiling(wait) < wait)) {
-      // Our own pacing, not the registry's: nothing was sent.
-      const retryAfter = Math.max(1, Math.ceil(wait / 1000));
-      throw Object.assign(new Error(`Lookups to this registry's RDAP service (${host}) are paced, and this one would wait ${wait > PACE_MAX_WAIT_MS ? `more than ${PACE_MAX_WAIT_MS / 1000} s` : "past this call's time limit"}, so it was not sent; retry in ${retryAfter}s`), { statusCode: 503, retryAfter, attribution: "ours" });
-    }
-    nextSlot.set(host, slot + paceMs);
-    if (nextSlot.size > 500) for (const [h, at] of nextSlot) { if (at < t) nextSlot.delete(h); }
-    if (slot > t) await new Promise((r) => setTimeout(r, slot - t));
-  }
 
   async function bootstrapMap() {
     const t = now();
@@ -171,7 +159,9 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
       const retryAfter = Math.max(1, Math.ceil((until - now()) / 1000));
       throw upstreamFailure(429, { retryAfter, host });
     }
-    await paceFor(host);
+    // The day's ceiling, then a place in the host's pacing queue (a turn past
+    // this run's ceiling is not waited for: the slug is marked endsAtCeiling).
+    await hostLimits.admit(host);
     assertBeforeCeiling();
     let res;
     try {
@@ -208,13 +198,6 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
     return { found: true, data };
   }
 
-  const registrarOf = (data) => {
-    const ent = Array.isArray(data.entities) ? data.entities.find((e) => Array.isArray(e?.roles) && e.roles.includes("registrar")) : null;
-    if (!ent) return null;
-    const fn = Array.isArray(ent.vcardArray?.[1]) ? ent.vcardArray[1].find((f) => Array.isArray(f) && f[0] === "fn")?.[3] : null;
-    const name = typeof fn === "string" && fn.trim() ? fn.trim() : typeof ent.handle === "string" ? ent.handle : null;
-    return name ? name.slice(0, 200) : null;
-  };
   // A parent answers 200 at some registries without being anyone's
   // registration: a second level the registry runs (co.uk, com.au) is served
   // as a domain object with no registration date, and some mark it a public
@@ -239,13 +222,12 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
     }
     return out.length ? { registryNotices: out } : {};
   };
-  const statusOf = (data) => (Array.isArray(data.status) ? data.status.filter((s) => typeof s === "string").slice(0, 20).map((s) => s.slice(0, 80)) : []);
 
   async function check(input) {
     const domain = domainOf(input);
     const t = now();
     const kept = answers.get(domain);
-    if (kept && t - kept.at < CACHE_TTL_MS) return { ...kept.answer, status: [...kept.answer.status] };
+    if (kept && t - kept.at < CACHE_TTL_MS) return structuredClone(kept.answer);
     const map = await bootstrapMap();
     if (!map) {
       throw Object.assign(new Error("The registry list (IANA's RDAP bootstrap) could not be read just now; retry shortly"), { statusCode: 503, retryAfter: 30, attribution: "upstream" });
@@ -260,7 +242,7 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
     let answer;
     const got = await rdapLookup(base, domain);
     if (got.found) {
-      answer = { domain, registered: true, status: statusOf(got.data), registrar: registrarOf(got.data), source: "RDAP", checkedAt, note: AVAILABILITY_NOTE, ...noticesOf(got.data) };
+      answer = { domain, registered: true, status: null, registrar: null, source: "RDAP", checkedAt, note: AVAILABILITY_NOTE, ...noticesOf(got.data) };
     } else {
       // The names above it, from the registrable level (one label under the
       // registry's suffix) down to its own parent: the first that is a
@@ -276,15 +258,15 @@ export function createDomainAvailability({ fetchImpl = null, now = () => Date.no
         if (!parentGot.found) break; // nothing registered here, so nothing deeper is
       }
       answer = holder
-        ? { domain, registered: null, status: [], registeredParent: holder.parent, source: "RDAP", checkedAt, note: `${domain} is a name under ${holder.parent}, which is registered; only ${holder.parent} itself is held at the registry. ${AVAILABILITY_NOTE}`, ...noticesOf(holder.data) }
-        : { domain, registered: false, status: [], source: "RDAP", checkedAt, note: AVAILABILITY_NOTE };
+        ? { domain, registered: null, status: null, registeredParent: holder.parent, source: "RDAP", checkedAt, note: `${domain} is a name under ${holder.parent}, which is registered; only ${holder.parent} itself is held at the registry. ${AVAILABILITY_NOTE}`, ...noticesOf(holder.data) }
+        : { domain, registered: false, status: null, source: "RDAP", checkedAt, note: AVAILABILITY_NOTE };
     }
     if (answers.size >= CACHE_MAX) {
       for (const [k, v] of answers) { if (now() - v.at >= CACHE_TTL_MS) answers.delete(k); }
       while (answers.size >= CACHE_MAX) answers.delete(answers.keys().next().value);
     }
     answers.set(domain, { at: t, answer });
-    return { ...answer, status: [...answer.status] };
+    return structuredClone(answer);
   }
 
   return { check, _state: () => ({ cached: answers.size, backoff: new Map(backoff), bootstrapAt: bootstrap.at }) };
@@ -300,7 +282,7 @@ export const DOMAIN_AVAILABILITY_TOOLS = [
     aliases: ["domain-available", "domain-name-availability", "is-domain-registered"],
     category: "network",
     price: "$0.001",
-    description: "Is a domain name registered? Asks the TLD's own registry over RDAP, the IETF registration data protocol (IANA's bootstrap names the registry): registered true, false, or null for a name under a registered domain (registeredParent names it), the registry status codes and the registrar when it is taken, the registry's notices as links (registryNotices, its terms among them) when it gives them, and when the registry was read. Availability can change at any moment; registration happens at a registrar.",
+    description: "Is a domain name registered? Asks the TLD's own registry over RDAP, the IETF registration data protocol (IANA's bootstrap names the registry): registered true, false, or null for a name under a registered domain (registeredParent names it), the registry's notices as links (registryNotices, its terms among them) when it gives them, and when the registry was read. The answer states registration only, so registrar and status read null. Lookups to each registry are paced and held to a daily limit. Availability can change at any moment; registration happens at a registrar.",
     tags: ["domain", "availability", "rdap", "registration", "available", "whois"],
     discovery: {
       bodyType: "json",
@@ -313,8 +295,8 @@ export const DOMAIN_AVAILABILITY_TOOLS = [
         example: {
           domain: "example.com",
           registered: true,
-          status: ["client delete prohibited", "client transfer prohibited", "client update prohibited"],
-          registrar: "RESERVED-Internet Assigned Numbers Authority",
+          status: null,
+          registrar: null,
           source: "RDAP",
           checkedAt: "2026-11-22T12:00:00.000Z",
           note: AVAILABILITY_NOTE,

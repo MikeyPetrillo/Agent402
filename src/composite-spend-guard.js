@@ -52,7 +52,11 @@ const blockedUntil = new Map(); // payer -> timestamp the block lifts
 // REPORTED: a console.warn and the unsettledReports word on
 // /api/gateway-status (ok / burst, held for GLOBAL_PAUSE_MS), which the
 // status Worker and the heartbeat page on. It refuses nothing: no buyer is
-// refused a report for other buyers' unsettled runs.
+// refused a report for other buyers' unsettled runs. The bound on unpaid
+// report runs across wallets is settle first (src/settle-first-tools.js
+// SETTLE_FIRST_REPORT_TOOLS): those runs feed the settle-first budget meter,
+// and past it a wallet with no settled history pays before the first model
+// call, so adding wallets adds no unpaid runs.
 //
 // Each buyer adds at most MAX_FAILS of its own failures to that count, so the
 // alarm reports several buyers failing together and never one buyer alone
@@ -192,9 +196,8 @@ export const EXPENSIVE_COMPOSITE_SLUGS = new Set([
  *  `image-gen-premium` (2026-09-29) renders the larger frame under a 75 s
  *  upstream bound, past what an SVM or Tempo credential reliably covers.
  *  `transcribe-long` (2026-11-18, listed only with TRANSCRIBE_LONG=on) runs
- *  up to 230 s on a thirty-minute file. `onchain-sql-range` (2026-11-22)
- *  reads a long range one day at a time for up to 180 s. */
-export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability", "image-gen-premium", "decide-execute", "flight-search", "flight-status", "transcribe-long", "onchain-sql-range"]);
+ *  up to 230 s on a thirty-minute file. */
+export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability", "image-gen-premium", "decide-execute", "flight-search", "flight-status", "transcribe-long"]);
 
 /** True when a route runs long enough that only EVM `exact` can settle it.
  *

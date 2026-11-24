@@ -30,8 +30,10 @@ export function notChargedOn(req) {
   return isRouteCall(req) ? ` ${NOT_CHARGED}` : "";
 }
 
-// Any wording of the claim, the shared sentence or a handler's own.
-const ANY_CHARGE_CLAIM = /\b(?:not|never) charged\b|\bnothing (?:was|is|has been) charged\b|\bno charge\b|\buncharged\b/i;
+// Any wording of the claim, the shared sentence or a handler's own: "not",
+// "never" or a contraction ("isn't", "won't be"), then "charged" or "billed";
+// "nothing (was) charged" or "billed"; "no charge"; "uncharged", "unbilled".
+const ANY_CHARGE_CLAIM = /(?:\b(?:not|never)|n['\u2019]t)\s+(?:be\s+|been\s+)?(?:charged|billed)\b|\bnothing\s+(?:(?:was|is|will be|has been)\s+)?(?:charged|billed)\b|\bno charge\b|\bun(?:charged|billed)\b/i;
 
 /** `text` without each sentence that says nothing was charged, whatever its
  *  wording: for a gate whose payment was taken before the handler ran (the

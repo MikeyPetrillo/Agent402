@@ -17,7 +17,7 @@ const HINT_RE = /^[a-z][a-z0-9-]{0,39}$/;
  */
 export const PAYMENT_RETRY_VERBS_NOTE = "On a refused payment the body's retry field says what helps: same-payment means send the same payment again after Retry-After, with no new signature; watch-transaction (the body lists transactions) and check-wallet (it lists none) mean the settlement is not confirmed (reason settlement-unconfirmed) and the transfer may still land, so do not sign a new authorization for that call before the expiry the body names (authorizationValidBefore, lastValidRound or expirationLedger), or, when it names none, before the paying wallet shows whether the transfer landed, and read refundStatusUrl (a free refund lookup) when it is there; fresh-authorization means sign a new payment, and with reason settled-refund-owed the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain proof (transactions names it, refundStatusUrl shows where the repayment stands), so that call was charged and not served; any other value (other-network, fund-wallet, rebuild-payment and the rest) names the change that helps.";
 
-/** { upstreamStatus?, attribution?, retryAfterSeconds?, hint?, charged?, upstreamMs?, reason?, rule?, retry?, refusedNetwork?, otherNetworksFrom?, fix? } from a thrown error. */
+/** { upstreamStatus?, attribution?, retryAfterSeconds?, hint?, charged?, upstreamMs?, reason?, rule?, robotsTxt?, retry?, refusedNetwork?, otherNetworksFrom?, fix? } from a thrown error. */
 export function toolErrorFields(err) {
   const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
   const attribution = typeof err?.attribution === "string" ? err.attribution : upstreamStatus ? "upstream" : null;
@@ -55,11 +55,29 @@ export function toolErrorFields(err) {
     // A spend ceiling of ours paused routing (src/external-spend-guard.js
     // SPEND_RULES): the fixed reason and the rule that refused.
     ...(spendRuleOf(err) ? { reason: "routing_paused", rule: spendRuleOf(err) } : {}),
+    // A caller-named URL its site's robots.txt disallows for our fetch token
+    // (src/tools/robots-gate.js): the fixed reason, the rule that decided it
+    // and the robots.txt it came from, both bounded printable text.
+    ...(robotsFieldsOf(err) || {}),
+    // A tool's own documented per-caller limit (a 429 whose error carries
+    // callerLimit): the fixed reason, so the caller and the alarms can tell
+    // it from a limit of ours (src/top-buyer-failures.js BUYER_LIMIT_REFUSALS).
+    ...(err?.callerLimit === true && Number(err?.statusCode) === 429 ? { reason: "caller_limit" } : {}),
     // One plain sentence or two on how to recover (bounded, printable text).
     ...(typeof err?.fix === "string" && FIX_RE.test(err.fix) ? { fix: err.fix } : {}),
   };
 }
 
+const ROBOTS_RULE_RE = /^(Allow|Disallow): [\x20-\x7e]{0,190}$/;
+const ROBOTS_URL_RE = /^https?:\/\/[\x21-\x7e]{1,300}\/robots\.txt$/;
+function robotsFieldsOf(err) {
+  if (err?.robotsDisallowed !== true) return null;
+  return {
+    reason: "robots_disallowed",
+    ...(typeof err.robotsRule === "string" && ROBOTS_RULE_RE.test(err.robotsRule) ? { rule: err.robotsRule } : {}),
+    ...(typeof err.robotsUrl === "string" && ROBOTS_URL_RE.test(err.robotsUrl) ? { robotsTxt: err.robotsUrl } : {}),
+  };
+}
 const isCount = (n) => Number.isSafeInteger(n) && n >= 0;
 const isAmount = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER;
 const NETWORK_RE = /^[a-z0-9]{3,8}:[A-Za-z0-9._=-]{1,64}$/; // CAIP-2

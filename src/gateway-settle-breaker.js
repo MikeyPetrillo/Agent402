@@ -887,7 +887,7 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
   // (walletCount:false), a withdrawn refusal (keyless) or a key that names
   // no wallet. Refuses nobody.
   // A catalog route the server arms for settle first (settleFirstRoute:
-  // search, image, speech, transcription, judgment, code runs) counts the same
+  // search, image, speech, transcription, judgment) counts the same
   // way, and only toward this: its failures stay off the /v1 burst alarm.
   const unsettled = (!!global || !!settleFirstRoute) && !!key && !withdrawn && walletCount && !!payerOfKey(key);
   const unsettledAuthKey = unsettled && typeof authKey === "string" && authKey ? authKey : null;

@@ -3,9 +3,9 @@
 // script, so it works with the strict policy the sign-in answers carry
 // (no framing, forms only to this site, the card checkout and the app's own
 // return address).
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
-import { ACCOUNT_CSS } from "./credits-account-page.js";
+import { ACCOUNT_CSS, balanceName } from "./credits-account-page.js";
 import { ACCOUNT_PATH } from "./credits-account.js";
 
 export const OAUTH_CONSENT_PATH = "/oauth/consent";
@@ -23,6 +23,10 @@ const CONSENT_CSS = `
   .oc-wrap .acct-msg{margin:0 0 8px}
   .oc-wrap form + form{margin-top:12px}
 `;
+
+// The sign-in pages close with the legal links and the help address only:
+// the site footer's dozens of links would lead away mid sign-in.
+const MINIMAL_FOOTER = `<footer style="border-top:1px solid var(--hairline);margin-top:40px;"><div style="max-width:1180px;margin:0 auto;padding:18px 30px;display:flex;flex-wrap:wrap;gap:8px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);"><span>Agent402</span><a href="/privacy" style="color:var(--faint);display:inline-block;padding:4px 0;">Privacy</a><a href="/terms" style="color:var(--faint);display:inline-block;padding:4px 0;">Terms</a><a href="mailto:help@agent402.tools" style="color:var(--faint);display:inline-block;padding:4px 0;">help@agent402.tools</a></div></footer>`;
 
 const usd = (n) => `$${Number(n || 0).toFixed(2)}`;
 const ERR_ID = "oc-err";
@@ -98,7 +102,7 @@ export function consentPage(baseUrl, v) {
       <form method="post" action="${OAUTH_CONSENT_PATH}">
         ${hidden(rid, csrf, "approve", false)}
         <div class="oc-pick" role="radiogroup" aria-label="Balance">
-          ${usable.map((b, i) => `<label><input type="radio" name="keyId" value="${esc(b.keyId)}"${i === 0 ? " checked" : ""}> Balance ${esc(b.keyId)}: ${esc(usd(b.balanceUsd))}</label>`).join("")}
+          ${usable.map((b, i) => `<label><input type="radio" name="keyId" value="${esc(b.keyId)}"${i === 0 ? " checked" : ""}> ${esc(balanceName(b, usable))}: ${esc(usd(b.balanceUsd))}</label>`).join("")}
         </div>
         <label class="flabel" for="oc-cap" style="margin-top:14px">Daily spending cap (USD, UTC day)</label>
         <div class="field"><input id="oc-cap" name="capUsd" inputmode="decimal" value="${esc(Number(capUsd).toFixed(2))}" required${tie()}></div>
@@ -124,8 +128,8 @@ export function consentPage(baseUrl, v) {
 <div class="wrap" style="padding-top:28px;">
   <section class="acct-signin oc-wrap"><div class="pcard"><h1 class="oc-h1">${esc(title)}</h1>${inner}</div></section>
 </div>
-${ledgerFooterCompact()}`;
-  return ledgerShell({ title: "Connect an app to your Agent402 credits", description: "Sign in by email and let an app pay for Agent402 tool calls from your prepaid credits, under a daily cap.", canonical: `${baseUrl}${OAUTH_CONSENT_PATH}`, baseUrl, activePath: "/credits", extraCss: REPORTS_CSS + ACCOUNT_CSS + CONSENT_CSS, body, robots: "noindex, nofollow" });
+${MINIMAL_FOOTER}`;
+  return ledgerShell({ title: "Connect an app to your Agent402 credits", description: "Sign in by email and let an app pay for Agent402 tool calls from your prepaid credits, under a daily cap.", canonical: `${baseUrl}${OAUTH_CONSENT_PATH}`, baseUrl, activePath: "/credits", extraCss: REPORTS_CSS + ACCOUNT_CSS + CONSENT_CSS, body, robots: "noindex, nofollow", minimal: true });
 }
 
 const ERROR_CSS = `
@@ -138,6 +142,6 @@ export function consentErrorPage(baseUrl, title, text) {
 <div class="wrap" style="padding-top:28px;">
   <div class="status"><h1>${esc(title)}</h1><p>${esc(text)}</p></div>
 </div>
-${ledgerFooterCompact()}`;
-  return ledgerShell({ title: `${title} - Agent402`, description: "Connect an app to your Agent402 credits.", canonical: `${baseUrl}${OAUTH_CONSENT_PATH}`, baseUrl, activePath: "/credits", extraCss: REPORTS_CSS + ERROR_CSS, body, robots: "noindex, nofollow" });
+${MINIMAL_FOOTER}`;
+  return ledgerShell({ title: `${title} - Agent402`, description: "Connect an app to your Agent402 credits.", canonical: `${baseUrl}${OAUTH_CONSENT_PATH}`, baseUrl, activePath: "/credits", extraCss: REPORTS_CSS + ERROR_CSS, body, robots: "noindex, nofollow", minimal: true });
 }
