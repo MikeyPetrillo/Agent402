@@ -151,6 +151,25 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
     const lines3 = [];
     const out3 = await executeRefunds(planRefunds(ROWS(), planOptions).send, { ...s3.deps, screen, block: async () => false, log: { log: () => {}, warn: (m) => lines3.push(String(m)), error: () => {} } });
     ok(out3.blocked === 0 && l3.status.get(2) === "owed" && lines3.some((l) => /HOLD\s+#2/.test(l)), "a block that did not land leaves the row owed and held");
+    const s4 = stubDeps(fakeLedger(ROWS()));
+    const lines4 = [];
+    const out4 = await executeRefunds(planRefunds(ROWS(), planOptions).send, { ...s4.deps, screen, block: async () => rr.BLOCK_UNRECORDED, log: { log: () => {}, warn: (m) => lines4.push(String(m)), error: () => {} } });
+    ok(out4.blocked === 1 && out4.failed >= 1 && !s4.calls.send.includes(2) && lines4.some((l) => /FAIL\s+#2 .*not recorded/.test(l)), "a row held blocked whose sanctions event did not land is reported as a failure of the run");
+  }
+  // blockListedRefund itself: true only when both the block and the event land.
+  {
+    const calls = [];
+    const fakeFetch = (evOk, evThrows = false) => async (url, init) => {
+      calls.push(String(url));
+      if (/sanctions-events/.test(String(url))) { if (evThrows) throw new Error("down"); return { ok: evOk, status: evOk ? 200 : 503, json: async () => ({}) }; }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+    const quiet = console.warn; console.warn = () => {};
+    try {
+      ok((await rr.blockListedRefund({ id: 9, payer: "0xabc", priceUsd: 0.01 }, { fetchImpl: fakeFetch(true) })) === true, "blockListedRefund: block and event both landed -> true");
+      ok((await rr.blockListedRefund({ id: 9, payer: "0xabc", priceUsd: 0.01 }, { fetchImpl: fakeFetch(false) })) === rr.BLOCK_UNRECORDED, "blockListedRefund: the event POST refused -> unrecorded, never true");
+      ok((await rr.blockListedRefund({ id: 9, payer: "0xabc", priceUsd: 0.01 }, { fetchImpl: fakeFetch(true, true) })) === rr.BLOCK_UNRECORDED, "blockListedRefund: the event POST unreachable -> unrecorded");
+    } finally { console.warn = quiet; }
   }
   const sol = readFileSync(fileURLToPath(new URL("./solana-refund-send.js", import.meta.url)), "utf8");
   ok(sol.indexOf("assertPayoutScreened(TO)") > 0 && sol.indexOf("assertPayoutScreened(TO)") < sol.indexOf("SOLANA_BURNER_KEY ||"), "the Solana refund sender screens its recipient before it reads a key");

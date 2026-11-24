@@ -882,9 +882,15 @@ export async function executeRefunds(rows, {
           // entity, and this log is published by the workflow run.
           const why = e?.sanctioned ? "address is listed" : e?.screenUnavailable ? "list not loaded" : e?.statusCode === 502 ? "address unreadable" : "screen did not run";
           if (e?.sanctioned && typeof block === "function") {
-            let done = false;
-            try { done = (await block(row)) === true; } catch { done = false; }
-            if (done) {
+            let outcome = false;
+            try { outcome = await block(row); } catch { outcome = false; }
+            if (outcome === BLOCK_UNRECORDED) {
+              log.warn(`FAIL  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: held as blocked property (never sent), but its sanctions event was not recorded; record it by hand`);
+              blocked++;
+              failed++;
+              continue;
+            }
+            if (outcome === true) {
               log.warn(`BLOCK #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: refused, the payee is on a sanctions list; held as blocked property (never sent) and recorded for the blocked-property report`);
               blocked++;
               continue;
@@ -1031,17 +1037,26 @@ async function releaseClaim(id, note) {
 // A refund whose payee is listed: the row is held as blocked property
 // (action "block", never sent, never voided) and the event is kept in the
 // server's sanctions store, which then reads `due` until the
-// blocked-property report is marked filed. True when both landed.
+// blocked-property report is marked filed. True only when both landed;
+// false when the row was not blocked (it stays owed); BLOCK_UNRECORDED when
+// the row is held blocked but the event did not land, which the run reports
+// as a failure (the event must be recorded by hand).
+export const BLOCK_UNRECORDED = "blocked-unrecorded";
 export async function blockListedRefund(row, { fetchImpl = fetch } = {}) {
   const res = await ledgerUpdate({ id: row.id, action: "block", note: "refund-run: payee is on a sanctions list; held as blocked property, never sent" }, { fetchImpl });
   if (!res.ok) return false;
-  const ev = await fetchImpl(`${TARGET}/__operator/sanctions-events`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify({ kind: "blocked-refund", address: row.payer, network: row.network, amountUsd: row.priceUsd, refundId: row.id, route: row.slug ? `refund of ${row.slug}` : null, rail: "refund" }),
-  });
-  if (!ev.ok) console.warn(`      #${row.id}: held as blocked, but the sanctions event was not recorded (HTTP ${ev.status}); record it by hand`);
-  return true;
+  let status = 0;
+  try {
+    const ev = await fetchImpl(`${TARGET}/__operator/sanctions-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ kind: "blocked-refund", address: row.payer, network: row.network, amountUsd: row.priceUsd, refundId: row.id, route: row.slug ? `refund of ${row.slug}` : null, rail: "refund" }),
+    });
+    status = ev.status;
+    if (ev.ok) return true;
+  } catch { status = 0; }
+  console.warn(`      #${row.id}: held as blocked, but the sanctions event was not recorded (HTTP ${status || "unreachable"}); record it by hand`);
+  return BLOCK_UNRECORDED;
 }
 
 async function main() {
