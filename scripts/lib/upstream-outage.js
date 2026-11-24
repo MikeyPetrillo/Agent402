@@ -171,7 +171,8 @@ export function declaresUpstreamHosts(slug, root = ROOT) {
 // (its legs) in process and answers a leg's source-side failure in its own
 // words, naming the first unit, the leg and the leg's message:
 //   "N of M unit(s) could not be completed on the source's side (first:
-//    <unit>, <leg>: <the leg's message>). Nothing was charged; retry later"
+//    <unit>, <leg>: <the leg's message>). Nothing was charged. Retry later."
+//   (src/tools/bundle-kit.js; the charge sentence only inside a route call)
 // as a 502, 503 or 504. That answer is read as the leg's own answer, by the
 // same rule: excused only when the leg's message is one of the shared fetch
 // helper's upstream answers, a failed request to a host the bundle declares
@@ -304,4 +305,58 @@ export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, bo
   }
   if (!(await readFails(row.url, opts))) return { verdict: "fail", reason: `${row.host} answers the runner's direct read of the same request` };
   return { verdict: "upstream", evidence: `${row.host} answered the server ${row.status || row.error} and refuses the runner's direct read of the same request too` };
+}
+
+// A SPENT SOURCE ALLOWANCE IS OURS UNLESS THE SOURCE REFUSES THE RUNNER TOO.
+// A tool that counts its reads of a source a day answers, past its own
+// budget, a fixed sentence without reading the source (us-macro-series' BLS
+// day: src/tools/us-macro-series.js). That budget is this server's, so such
+// an answer is excused only when ALL of these hold, and fails otherwise:
+//
+//   1. the answer is the source's fixed allowance sentence (anchored);
+//   2. the tool's own definition declares the source's host;
+//   3. the runner's own keyless direct GET of the source on that host, right
+//      now, fails (no answer, 429, or 500 and above) or is answered with the
+//      source's own refusal (BLS answers its daily threshold as a body whose
+//      status is not REQUEST_SUCCEEDED).
+//
+// If the source answers the runner, the spent budget is ours and it fails.
+export const SOURCE_ALLOWANCES = Object.freeze([
+  {
+    source: "BLS",
+    message: /^The U\.S\. Bureau of Labor Statistics daily query allowance of this server is used up;/,
+    host: "api.bls.gov",
+    // The keyless v1 read the tool makes without a key (one series, GET).
+    url: "https://api.bls.gov/publicAPI/v1/timeseries/data/LNS14000000",
+    refuses: (status, text) => {
+      if (status === 0 || status === 429 || status >= 500) return true;
+      if (status !== 200) return false;
+      try { return JSON.parse(text)?.status !== "REQUEST_SUCCEEDED"; } catch { return false; }
+    },
+  },
+]);
+/** The runner's own keyless direct GET of `url`: { status, text }, status 0
+ *  for no answer within 10 s. */
+export async function directReadAnswer(url) {
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": RUNNER_UA, Accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+    let text = "";
+    try { text = await res.text(); } catch { /* the status is still evidence */ }
+    return { status: res.status, text };
+  } catch {
+    return { status: 0, text: "" };
+  }
+}
+/** The verdict on a step's spent-allowance answer: null when `error` is no
+ *  source's allowance sentence (the caller grades it by its other rules),
+ *  else { verdict: "upstream", evidence } or { verdict: "fail", reason }. */
+export async function sourceAllowanceVerdict({ slug, error, read = directReadAnswer, root = ROOT }) {
+  const a = SOURCE_ALLOWANCES.find((x) => x.message.test(String(error || "")));
+  if (!a) return null;
+  if (!upstreamHostsForSlug(slug, root).has(a.host)) return { verdict: "fail", reason: `${slug} does not declare ${a.host}` };
+  const { status, text } = await read(a.url);
+  if (!a.refuses(status, text)) return { verdict: "fail", reason: `${a.source}'s daily allowance of this server is spent, but ${a.host} answers the runner's direct read (HTTP ${status || "none"})` };
+  let said = "";
+  try { said = status === 200 ? `, status ${String(JSON.parse(text)?.status).slice(0, 40)}` : ""; } catch { /* the HTTP status is the evidence */ }
+  return { verdict: "upstream", evidence: `${a.host} refuses the runner's direct read too (HTTP ${status || "none"}${said})` };
 }
