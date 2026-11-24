@@ -132,6 +132,8 @@ import {
   META_MCP_NAMES,
   MCP_CALL_ALIASES,
   resolveListedName,
+  plainToolName,
+  PLAIN_TOOL_NAMES_VALUE,
   FLAGSHIP_OPEN_WORLD,
   FLAGSHIP_WRITERS,
   FLAGSHIP_OUTPUT_SCHEMAS,
@@ -743,7 +745,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     } catch { return false; }
   }
 
-  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false, grant = null } = {}) {
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false, grant = null, plainNames = false } = {}) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -1000,7 +1002,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           },
           outputSchema: META_OUTPUT_SCHEMAS["sellers.list"],
         }] : []),
-      ]),
+      ]).map((t) => (plainNames ? { ...t, name: plainToolName(t.name) } : t)),
     }));
 
     /** Paid tool over native MPP: loopback to the real paid route.
@@ -2369,7 +2371,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       if (quiet) res.set("Cache-Control", "private, no-store");
       // A connector grant (src/mcp-oauth.js, resolved from this request's
       // bearer before this handler) pays this request's paid calls from credits.
-      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet, grant: creditsLoopback ? req.mcpCreditsGrant || null : null };
+      // ?tool_names=underscore lists each tool under a name of letters, digits,
+      // _ and - only, for a host that refuses a dot in a tool name
+      // (plainToolName); every call resolves either spelling.
+      const plainNames = req.query?.tool_names === PLAIN_TOOL_NAMES_VALUE;
+      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet, grant: creditsLoopback ? req.mcpCreditsGrant || null : null, plainNames };
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport?.close(); } catch { /* already closing */ } });
