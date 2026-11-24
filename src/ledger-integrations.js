@@ -3,7 +3,7 @@
 
 import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { INTEGRATIONS, NO_WALLET_NOTE, CREDITS_HELD } from "./integration-pages.js";
-import { PLATFORM_INTEGRATIONS } from "./platform-integrations.js";
+import { listedPlatformIntegrations } from "./platform-integrations.js";
 
 // Rows are derived from the per-package pages, so the hub lists exactly the
 // packages that have an /integrations/<slug> page.
@@ -60,7 +60,7 @@ export function ledgerIntegrationsPage(baseUrl) {
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 22px;">Agent platforms</h2>
     <div style="border:1px solid var(--hairline);background:var(--card);">
-      ${PLATFORM_INTEGRATIONS.map((p, i) => adapterRow({ name: esc(p.name), desc: esc(p.line), pkg: esc(p.surface), slug: p.slug }, i === PLATFORM_INTEGRATIONS.length - 1)).join("\n      ")}
+      ${listedPlatformIntegrations().map((p, i, all) => adapterRow({ name: esc(p.name), desc: esc(p.line), pkg: esc(p.surface), slug: p.slug }, i === all.length - 1)).join("\n      ")}
     </div>
   </section>
 

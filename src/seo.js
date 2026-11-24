@@ -18,7 +18,7 @@ import { guideSlugs } from "./guides.js";
 import { skillSlugs, SKILL_PACKS, PACK_PRICES, PACK_PRICE_RANGE, skillPackOfToolSlug } from "./skills.js";
 import { BLOG_POSTS } from "./blog.js";
 import { integrationSlugs } from "./integration-pages.js";
-import { PLATFORM_INTEGRATIONS } from "./platform-integrations.js";
+import { listedPlatformIntegrations } from "./platform-integrations.js";
 import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS, RAILS_OR, countWord } from "./rails.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
@@ -438,7 +438,7 @@ export function learnIntegrationUrls(baseUrl) {
     { loc: `${baseUrl}/learn`, priority: "0.8" },
     ...learnSlugs().map((s) => ({ loc: `${baseUrl}/learn/${s}`, priority: "0.8" })),
     ...integrationSlugs().map((s) => ({ loc: `${baseUrl}/integrations/${s}`, priority: "0.7" })),
-    ...PLATFORM_INTEGRATIONS.map((p) => ({ loc: `${baseUrl}/integrations/${p.slug}`, priority: "0.7" })),
+    ...listedPlatformIntegrations().map((p) => ({ loc: `${baseUrl}/integrations/${p.slug}`, priority: "0.7" })),
   ];
 }
 export function sitemapLearn(baseUrl) {
@@ -688,7 +688,7 @@ ${flatTiersLine()}
   - ${connectorPayShort()}
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
 - [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.17.0\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.17.0\`
-${PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
+${listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
 
 ## Framework adapters (zero-dependency npm)
 - [agent402-openai-tools](https://www.npmjs.com/package/agent402-openai-tools): OpenAI function-calling (chat.completions / Assistants / Responses)
@@ -800,7 +800,7 @@ export function llmsTxt(baseUrl, catalog) {
   const shortChains = (text) => text.replace(/(\nPrices by chain: [^\n]*?\.) \/api\/pricing lists [^\n]*\./, "$1");
   const shortAdapters = (text) => text.split("\n").map((l) => l.replace(/^(- \[[^\]]+\]\([^)\s]+\)): ([^:]+): .+$/, "$1: $2")).join("\n");
   const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "");
-  const platformLinks = new Set(PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug})`));
+  const platformLinks = new Set(listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug})`));
   const shortPlatforms = (text) => text.split("\n").map((l) => { const head = l.slice(0, l.indexOf("): ") + 1); return platformLinks.has(head) ? head : l; }).join("\n");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
   const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];

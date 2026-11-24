@@ -78,8 +78,10 @@ LLC: credit the entity, never a personal name.
   `/__operator/judge-timing.json`; `.claude/rules/gateway.md`).
 - `src/brand-mark.js` (the vector brand mark: `/logo.svg`, the favicons, the nav mark, the social
   cards' tile), `src/ask402-links.js` (the guide site's addresses, so a page never types one),
-  `src/platform-integrations.js` + `src/agentcore-page.js` (platform pages under
-  `/integrations/<slug>`: one list feeds the integrations index, the sitemap and `/llms.txt`).
+  `src/platform-integrations.js` + `src/agentcore-page.js` + `src/managed-agents-page.js` (platform
+  pages under `/integrations/<slug>`: one list feeds the integrations index, the sitemap and `/llms.txt`;
+  an entry with `listedWith` is served noindex and linked from none until its switch reads `on`:
+  `MANAGED_AGENTS_PAGE` for the Claude Managed Agents page).
 - `src/tools/dns-name-filter.js` (`canonicalDnsName`, `assertQueryableName`: a caller-chosen name
   is judged and queried in one canonical form), `src/tools/mailbox-provider.js` (email-validate's
   `mailboxProvider`, from the MX hosts already read), `src/tools/price-webhook-kit.js` (the

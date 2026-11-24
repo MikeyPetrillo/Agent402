@@ -6,16 +6,18 @@
 // definition is the one the page exports, every name it enables is a plain
 // name the connector lists, figures come from the code that decides them, and
 // what Anthropic's product does is attributed to its documentation.
-// Part 2 boots a FREE_MODE server on port 0: the route, the integrations
-// index, the sitemaps, /llms.txt, the page date, and the connector listing
-// every tool under a plain name with ?tool_names=underscore, dotted without
-// it, and running a call made by either spelling.
+// Part 2 boots a FREE_MODE server on port 0 with MANAGED_AGENTS_PAGE unset:
+// the route answers with noindex and no listing surface (integrations index,
+// sitemaps, /llms.txt, /llms-full.txt) links it; and the connector lists every
+// tool under a plain name with ?tool_names=underscore, dotted without it, and
+// runs a call made by either spelling. Part 3 boots with MANAGED_AGENTS_PAGE=on
+// (the control): every listing surface links and dates the page, no noindex.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { JSDOM } from "jsdom";
 import assert from "node:assert/strict";
 import { bootServer } from "./lib/boot-server.js";
-import { managedAgentsPage, agentDefinition, ENVIRONMENT, MANAGED_AGENTS_SLUG, MANAGED_AGENTS_NAME, BETA_HEADER, DISCOVERY_TOOLS, PAID_TOOL_NAME, SERVER_NAME, connectorUrl } from "../src/managed-agents-page.js";
-import { PLATFORM_INTEGRATIONS } from "../src/platform-integrations.js";
+import { managedAgentsPage, managedAgentsListed, agentDefinition, ENVIRONMENT, MANAGED_AGENTS_SLUG, MANAGED_AGENTS_NAME, BETA_HEADER, DISCOVERY_TOOLS, PAID_TOOL_NAME, SERVER_NAME, connectorUrl } from "../src/managed-agents-page.js";
+import { PLATFORM_INTEGRATIONS, listedPlatformIntegrations } from "../src/platform-integrations.js";
 import { integrationSlugs } from "../src/integration-pages.js";
 import { pageLastmod, PAGE_SOURCES } from "../src/page-dates.js";
 import { MAX_CALLS_PER_BURST, MAX_CALLS_PER_WINDOW } from "../src/rate-limit.js";
@@ -82,6 +84,16 @@ const PLAIN = /^[a-zA-Z0-9_-]{1,113}$/; // the tool name rule Claude Managed Age
 }
 {
   ok(PLATFORM_INTEGRATIONS.some((p) => p.slug === MANAGED_AGENTS_SLUG && p.name === MANAGED_AGENTS_NAME), "the platform list names the page");
+  // The listing switch: unset, off or any other text leaves the page unlisted; on (any case) lists it.
+  for (const v of [undefined, "", "off", "true", "1", "onn"]) {
+    const env = v === undefined ? {} : { MANAGED_AGENTS_PAGE: v };
+    ok(!managedAgentsListed(env) && !listedPlatformIntegrations(env).some((p) => p.slug === MANAGED_AGENTS_SLUG), `MANAGED_AGENTS_PAGE=${JSON.stringify(v)}: unlisted`);
+    ok(listedPlatformIntegrations(env).some((p) => p.slug === "agentcore"), `MANAGED_AGENTS_PAGE=${JSON.stringify(v)}: an entry with no switch stays listed`);
+  }
+  for (const v of ["on", " ON "]) ok(managedAgentsListed({ MANAGED_AGENTS_PAGE: v }) && listedPlatformIntegrations({ MANAGED_AGENTS_PAGE: v }).some((p) => p.slug === MANAGED_AGENTS_SLUG), `MANAGED_AGENTS_PAGE=${JSON.stringify(v)}: listed`);
+  const robotsOf = (html) => (/<meta name="robots" content="([^"]*)"/.exec(html) || [])[1] || "";
+  ok(/\bnoindex\b/.test(robotsOf(managedAgentsPage(BASE, CATALOG, { env: {} }))), "unlisted: the page carries a noindex robots meta");
+  ok(!/noindex/.test(robotsOf(managedAgentsPage(BASE, CATALOG, { env: { MANAGED_AGENTS_PAGE: "on" } }))) && robotsOf(managedAgentsPage(BASE, CATALOG, { env: { MANAGED_AGENTS_PAGE: "on" } })).startsWith("index"), "listed: the page is indexable");
   ok(!integrationSlugs().includes(MANAGED_AGENTS_SLUG), "no package page shares the slug");
   ok(pageLastmod(`/integrations/${MANAGED_AGENTS_SLUG}`), "the page has a date");
   assert.deepEqual(PAGE_SOURCES[`/integrations/${MANAGED_AGENTS_SLUG}`], ["src/managed-agents-page.js"], "dated from its own module"); pass++;
@@ -93,23 +105,36 @@ const PLAIN = /^[a-zA-Z0-9_-]{1,113}$/; // the tool name rule Claude Managed Age
 }
 
 // --- Part 2 -----------------------------------------------------------------
-const srv = await bootServer({ stores: "managed-agents-page", env: { FREE_MODE: "true", NODE_ENV: "test", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", TEMPO_API_KEY: "", MPP_SECRET_KEY: "" } });
-try {
-  const get = async (p) => { const r = await fetch(`${srv.url}${p}`); return { status: r.status, text: await r.text() }; };
+const BOOT_ENV = { FREE_MODE: "true", NODE_ENV: "test", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", TEMPO_API_KEY: "", MPP_SECRET_KEY: "" };
+// What every listing surface says about the page on one boot.
+async function listings(srv) {
+  const get = async (p) => { const r = await fetch(`${srv.url}${p}`); return { status: r.status, text: await r.text(), robots: r.headers.get("x-robots-tag") || "" }; };
   const page = await get(`/integrations/${MANAGED_AGENTS_SLUG}`);
-  eq(page.status, 200, "the route answers 200");
+  const index = await get("/integrations");
+  const sitemaps = {};
+  for (const sm of ["/sitemap-learn.xml", "/sitemap.xml"]) {
+    const x = await get(sm);
+    sitemaps[sm] = { status: x.status, row: x.text.split("<url>").find((u) => new RegExp(`<loc>[^<]*/integrations/${MANAGED_AGENTS_SLUG}</loc>`).test(u)) || "", agentcore: x.text.includes("/integrations/agentcore</loc>") };
+  }
+  const llms = {};
+  for (const f of ["/llms.txt", "/llms-full.txt"]) {
+    const x = await get(f);
+    llms[f] = { status: x.status, links: x.text.includes(`/integrations/${MANAGED_AGENTS_SLUG}`), agentcore: x.text.includes("/integrations/agentcore") };
+  }
+  return { get, page, index, sitemaps, llms };
+}
+
+const srv = await bootServer({ stores: "managed-agents-page", env: { ...BOOT_ENV, MANAGED_AGENTS_PAGE: "" } });
+try {
+  const { get, page, index, sitemaps, llms } = await listings(srv);
+  eq(page.status, 200, "the route answers 200 while unlisted");
+  ok(/\bnoindex\b/.test(page.robots) && /<meta name="robots" content="noindex/.test(page.text), "unlisted: X-Robots-Tag and robots meta say noindex");
   const t = main(page.text);
   ok(t.includes("Attach the connector") && t.includes("Run a free tool") && t.includes("Pay for calls") && t.includes("Limits"), "the sections");
   ok(page.text.includes(`${srv.url.replace(/\/$/, "")}/mcp?tool_names=underscore`) || /\/mcp\?tool_names=underscore/.test(page.text), "the served page names the plain-names URL");
-  const index = await get("/integrations");
-  ok(index.status === 200 && index.text.includes(`href="/integrations/${MANAGED_AGENTS_SLUG}"`), "the integrations index links the page");
-  for (const sm of ["/sitemap-learn.xml", "/sitemap.xml"]) {
-    const x = await get(sm);
-    const row = x.text.split("<url>").find((u) => new RegExp(`<loc>[^<]*/integrations/${MANAGED_AGENTS_SLUG}</loc>`).test(u)) || "";
-    ok(row && /<lastmod>\d{4}-\d{2}-\d{2}/.test(row), `${sm} lists and dates the page`);
-  }
-  const llms = await get("/llms.txt");
-  ok(llms.text.split("\n").some((l) => l.startsWith(`- [${MANAGED_AGENTS_NAME}](`) && l.includes(`/integrations/${MANAGED_AGENTS_SLUG})`)), "/llms.txt links the page");
+  ok(index.status === 200 && !index.text.includes(`/integrations/${MANAGED_AGENTS_SLUG}`) && index.text.includes('href="/integrations/agentcore"'), "unlisted: the integrations index does not link the page (agentcore still listed)");
+  for (const [sm, x] of Object.entries(sitemaps)) ok(x.status === 200 && !x.row && x.agentcore, `unlisted: ${sm} leaves the page out (agentcore still listed)`);
+  for (const [f, x] of Object.entries(llms)) ok(x.status === 200 && !x.links && x.agentcore, `unlisted: ${f} does not link the page (agentcore still listed)`);
 
   // The connector: plain names with the query, dotted without it, and a call by either spelling.
   const rpc = async (path, method, params, id = 1) => {
@@ -132,5 +157,15 @@ try {
   ok(!dottedCall.result?.isError, "the dotted spelling still runs under the query");
   eq((await get(`/integrations/${MANAGED_AGENTS_SLUG}-nope`)).status, 404, "an unknown slug is still a 404");
 } finally { await srv.stop(); }
+
+// --- Part 3: the control, MANAGED_AGENTS_PAGE=on lists it everywhere --------
+const on = await bootServer({ stores: "managed-agents-page-on", env: { ...BOOT_ENV, MANAGED_AGENTS_PAGE: "on" } });
+try {
+  const { page, index, sitemaps, llms } = await listings(on);
+  ok(page.status === 200 && !/noindex/.test(page.robots) && !/<meta name="robots" content="noindex/.test(page.text), "listed: no noindex on the page");
+  ok(index.status === 200 && index.text.includes(`href="/integrations/${MANAGED_AGENTS_SLUG}"`), "listed: the integrations index links the page");
+  for (const [sm, x] of Object.entries(sitemaps)) ok(x.row && /<lastmod>\d{4}-\d{2}-\d{2}/.test(x.row), `listed: ${sm} lists and dates the page`);
+  for (const [f, x] of Object.entries(llms)) ok(x.links, `listed: ${f} links the page`);
+} finally { await on.stop(); }
 
 console.log(`\nmanaged agents page: ${pass} passed`);

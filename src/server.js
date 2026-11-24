@@ -921,7 +921,7 @@ import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
 import { routerBenchmarks, ROUTER_BENCHMARKS_PATH } from "./router-benchmarks.js";
 import { agentcorePage, AGENTCORE_SLUG } from "./agentcore-page.js";
-import { managedAgentsPage, MANAGED_AGENTS_SLUG } from "./managed-agents-page.js";
+import { managedAgentsPage, MANAGED_AGENTS_SLUG, managedAgentsListed } from "./managed-agents-page.js";
 import { creditsSalesEnabled, creditsSalesSwitch, mcpOAuthSwitch, creditsTopupFields, creditsBalanceMaxCents, creditsTermsVersion } from "./credits-sales.js";
 
 // The /v1 settle breaker reads whether a wallet has ever paid from the sales
@@ -5308,7 +5308,11 @@ app.get("/integrations", (_req, res) => htmlCache(res, 300, 900).send(ledgerInte
 // Amazon Bedrock AgentCore (src/agentcore-page.js): a platform page, not a package page.
 app.get(`/integrations/${AGENTCORE_SLUG}`, (_req, res) => htmlCache(res, 300, 900).send(agentcorePage(BASE_URL, CATALOG)));
 // Claude Managed Agents (src/managed-agents-page.js): a platform page, not a package page.
-app.get(`/integrations/${MANAGED_AGENTS_SLUG}`, (_req, res) => htmlCache(res, 300, 900).send(managedAgentsPage(BASE_URL, CATALOG)));
+// Unlisted and noindex until MANAGED_AGENTS_PAGE=on (src/platform-integrations.js).
+app.get(`/integrations/${MANAGED_AGENTS_SLUG}`, (_req, res) => {
+  if (!managedAgentsListed()) res.set("X-Robots-Tag", "noindex");
+  htmlCache(res, 300, 900).send(managedAgentsPage(BASE_URL, CATALOG));
+});
 // One page per published package (src/integration-pages.js); tool links resolve against CATALOG.
 app.get("/integrations/:slug", (req, res) => {
   const html = integrationPage(BASE_URL, String(req.params.slug || ""), CATALOG, guideTitles());

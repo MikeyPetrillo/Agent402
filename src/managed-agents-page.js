@@ -25,12 +25,15 @@ import { isComputePayable } from "./pow.js";
 import { MAX_CALLS_PER_BURST, MAX_CALLS_PER_WINDOW } from "./rate-limit.js";
 import { connectorWires, X402_MCP_PAYMENT_KEY, MPP_MCP_CREDENTIAL_KEY } from "./connector-pay.js";
 import { plainToolName, PLAIN_TOOL_NAMES_VALUE } from "./mcp-flagship.js";
-import { PLATFORM_INTEGRATIONS } from "./platform-integrations.js";
+import { PLATFORM_INTEGRATIONS, platformListed } from "./platform-integrations.js";
 import { articleDates } from "./page-dates.js";
 
 const PLATFORM = PLATFORM_INTEGRATIONS.find((p) => p.slug === "claude-managed-agents");
 export const MANAGED_AGENTS_SLUG = PLATFORM.slug;
 export const MANAGED_AGENTS_NAME = PLATFORM.name;
+/** True once MANAGED_AGENTS_PAGE=on lists the page; until then it is served
+ *  with noindex and no listing surface links it (src/platform-integrations.js). */
+export const managedAgentsListed = (env = process.env) => platformListed(PLATFORM, env);
 // Anthropic's documentation, as the page links it.
 export const DOCS = Object.freeze({
   overview: "https://platform.claude.com/docs/en/managed-agents/overview",
@@ -249,5 +252,6 @@ ${toolCards}
   ${ledgerFooterCompact()}`;
 
   const extraCss = `@media (max-width:720px){.ip-tools{grid-template-columns:minmax(0,1fr)!important}}`;
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd: [breadcrumbLd, pageLd], extraCss, body, article: articleDates(`/integrations/${MANAGED_AGENTS_SLUG}`) });
+  const robots = managedAgentsListed(env) ? undefined : "noindex, follow";
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd: [breadcrumbLd, pageLd], extraCss, body, robots, article: articleDates(`/integrations/${MANAGED_AGENTS_SLUG}`) });
 }

@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1135 variables in 114 groups.
+1140 variables in 114 groups.
 
 ## Contents
 
@@ -72,7 +72,11 @@ holds it.
 | `ALGORAND_PAGE_WAIT_MS` | Algorand page wait, in milliseconds. | `8000` | `src/server.js` |
 | `ALGORAND_RELAY_TOKEN` | Algorand relay token (a credential, set on the host). |  | `src/revenue-live.js`, `src/x402-buyer.js` |
 | `ALGORAND_RELAY_URL` | Algorand relay URL. |  | `src/revenue-live.js`, `src/x402-buyer.js` |
+| `ALGORAND_SELLERS_BG_BUILD_MAX_MS` | Longest the background Algorand seller-catalog build (boot warm-up and scheduled refresh) runs, in milliseconds; never below the build limit a waiting buyer gets. |  | `src/algorand-sellers.js` |
+| `ALGORAND_SELLERS_BG_READ_TIMEOUT_MS` | Per-read time limit of the background Algorand seller-catalog build, in milliseconds; never below the short limit a waiting buyer gets. |  | `src/algorand-sellers.js` |
+| `ALGORAND_SELLERS_MAX_PAGES` | Most pages the Algorand seller-catalog build reads per listing (1 to 500); rows past the cap are not read. |  | `src/algorand-sellers.js` |
 | `ALGORAND_SELLERS_TTL_MS` | Algorand sellers lifetime, in milliseconds. | `1800000` | `src/algorand-sellers.js` |
+| `ALGORAND_SELLERS_WARM` | off skips the Algorand seller-catalog warm-up at boot and its scheduled refresh; any other value builds it in the background where the Algorand router can run. |  | `src/server.js` |
 | `ALGORAND_UPSTREAM_BUYER_ADDRESS` | Algorand upstream buyer address. |  | `src/own-wallets.js`, `src/payments.js`, `src/server.js` |
 | `ALGORAND_UPSTREAM_BUYER_LOW_USD` | Algorand upstream buyer low, in USD. | `0.5` | `src/x402-buyer.js` |
 | `ALGORAND_UPSTREAM_BUYER_MNEMONIC` | Mnemonic of the Algorand spending wallet route-execute buys with (a credential, set on the host). |  | `src/x402-buyer.js` |
@@ -470,7 +474,7 @@ holds it.
 | --- | --- | --- | --- |
 | `FREE_ALERTS` | Free alerts. |  | `src/server.js` |
 | `FREE_ALERTS_SECRET` | Free alerts secret (a credential, set on the host). |  | `src/server.js` |
-| `FREE_MODE` | true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer. |  | `src/aws-marketplace-gate.js`, `src/connector-pay.js`, `src/mcp-tasks.js` and 9 more |
+| `FREE_MODE` | true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer. |  | `src/aws-marketplace-gate.js`, `src/connector-pay.js`, `src/managed-agents-page.js` and 10 more |
 
 ## FUNNEL
 
@@ -740,7 +744,7 @@ holds it.
 | `MPP_RECONCILE_FILE` | MPP reconcile file path. | `/data/mpp-reconcile.json` | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_FIRST_DELAY_MS` | MPP reconcile first delay, in milliseconds. |  | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_NON_PAYMENT_USD` | MPP reconcile non payment, in USD. |  | `src/mpp-reconcile.js` |
-| `MPP_SECRET_KEY` | Turns on the MPP wire and signs its challenges (a credential, set on the host). |  | `src/connector-pay.js`, `src/discovery-refusals.js`, `src/hangup-forgiveness.js` and 8 more |
+| `MPP_SECRET_KEY` | Turns on the MPP wire and signs its challenges (a credential, set on the host). |  | `src/connector-pay.js`, `src/discovery-refusals.js`, `src/hangup-forgiveness.js` and 9 more |
 | `MPP_SUBMITTED_SEEDS_FILE` | MPP submitted seeds file path. | `/data/mpp-submitted-seeds.json` | `src/mpp-index.js` |
 | `MPP_SUBSCRIPTIONS` | MPP subscriptions. |  | `src/mpp-subscriptions.js` |
 | `MPP_SUB_CANARY_PERIOD_SECONDS` | MPP sub canary period, in seconds. |  | `src/mpp-subscriptions.js` |
@@ -1649,6 +1653,7 @@ holds it.
 | `LLM_ATTEMPT_MAX_MS` | Model attempt maximum, in milliseconds. |  | `src/tools/llm-gateway-kit.js` |
 | `LLM_MAX_TIMED_OUT_ATTEMPTS` | Model maximum timed out attempts. | `2` | `src/tools/llm-gateway-kit.js` |
 | `LOAD_SHED` | off disables load shedding of free routes under event-loop pressure. |  | `src/load-shed.js` |
+| `MANAGED_AGENTS_PAGE` | on lists /integrations/claude-managed-agents on the integrations index, the sitemaps, /llms.txt and /llms-full.txt; unset or any other value serves the page with noindex and links it from none of them. |  | `src/platform-integrations.js` |
 | `MARKET_SCAN_BUDGET_MS` | Market scan budget, in milliseconds. |  | `src/revenue-live.js` |
 | `MAX_CALL_USD` | Maximum call, in USD. | `0.75` | `src/leaderboard.js`, `src/revenue-live.js` |
 | `MAX_WALLETS_SCAN` | Maximum wallets scan. | `0` | `src/leaderboard.js` |
