@@ -6,11 +6,13 @@
 import "./lib/offline-stores.js";
 import { readFileSync } from "node:fs";
 
+const { LEGAL_ENTITY_SENTENCE } = await import("../src/legal-entity.js");
 const SENTENCE = "Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright";
 const flat = (t) => t.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[`*>]/g, "").replace(/\s+/g, " ");
 let pass = 0, fail = 0;
 for (const file of ["NOTICE", "README.md", "CONTRIBUTING.md", "src/seo.js"]) {
-  const text = flat(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"));
+  // A module names the entity through src/legal-entity.js; read it as printed.
+  const text = flat(readFileSync(new URL(`../${file}`, import.meta.url), "utf8").split("${LEGAL_ENTITY_SENTENCE}").join(LEGAL_ENTITY_SENTENCE));
   if (text.includes(SENTENCE)) { pass++; console.log(`ok - ${file} carries the ownership statement`); }
   else { fail++; console.error(`FAIL - ${file} does not carry the ownership statement word for word`); }
 }
