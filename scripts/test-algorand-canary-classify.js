@@ -234,7 +234,14 @@ ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", 
      "a no-answer is settled on chain BEFORE the retry signs, and only `retry` signs again");
   // An empty 200 is a charge: the retry block is entered on the classifier's
   // word alone, and there is no other attempt anywhere in the sweep.
-  ok(/const step = isEdgeTimeout\(a\.status\) \? "read-chain" : nextStep\(out\);(?:[ \t]*\n[ \t]*\/\/[^\n]*)*\s*let chargeRecorded = false;\s*if \(step === "retry" \|\| step === "read-chain"\) \{/.test(src), "the retry block is entered only on nextStep's retry or read-chain");
+  {
+    // Read line by line (no backtracking regex): the step line, then only
+    // comment or blank lines, then the charge flag and the gated block.
+    const marker = 'const step = isEdgeTimeout(a.status) ? "read-chain" : nextStep(out);';
+    const at = src.indexOf(marker);
+    const rest = at < 0 ? [] : src.slice(at + marker.length).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("//"));
+    ok(at >= 0 && rest[0] === "let chargeRecorded = false;" && rest[1] === 'if (step === "retry" || step === "read-chain") {', "the retry block is entered only on nextStep's retry or read-chain");
+  }
   ok((src.match(/await attemptOnce\(\)/g) || []).length === 2 && (src.match(/await attempt\(\)/g) || []).length === 2 && !/if \(out !== "ok"\) \{/.test(src) && !/nextStep\([^)]*\) (!==|===) "(done|charged-empty)"/.test(src),
      "...and the sweep holds exactly two attempts: the first, and the one inside that block");
   {
