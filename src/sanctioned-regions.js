@@ -44,7 +44,7 @@ const REGION_CODE_BY_NAME = Object.freeze({ crimea: "UA-43", krym: "UA-43", seva
 const SUBDIVISION_CODE_RE = /^(?:[A-Z]{2}-)?[A-Z0-9]{1,3}$/;
 
 /** Paths that answer from anywhere: the health probe and the legal pages. */
-export const SANCTIONS_EXEMPT_PATHS = Object.freeze(new Set(["/health", "/terms", "/privacy", "/security", "/company", "/.well-known/security.txt", "/robots.txt"]));
+export const SANCTIONS_EXEMPT_PATHS = Object.freeze(new Set(["/health", "/terms", "/privacy", "/dpa", "/accessibility", "/security", "/company", "/.well-known/security.txt", "/robots.txt"]));
 
 export const SANCTIONED_REGION_TEXT = `This service is not available in your region. ${NOT_CHARGED}`;
 

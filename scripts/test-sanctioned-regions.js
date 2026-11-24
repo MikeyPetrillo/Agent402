@@ -67,6 +67,7 @@ const run = (mw, r) => new Promise((resolve) => {
   ok((await run(mw, { ...req({ "cf-ipcountry": "KP" }, "/health"), viaCdn: true })).status === "next", "/health answers from anywhere");
   ok((await run(mw, { ...req({ "cf-ipcountry": "KP" }, "/terms"), viaCdn: true })).status === "next", "/terms answers from anywhere");
   ok((await run(mw, { ...req({ "cf-ipcountry": "KP" }, "/privacy"), viaCdn: true })).status === "next", "/privacy answers from anywhere");
+  for (const p of ["/dpa", "/accessibility"]) ok((await run(mw, { ...req({ "cf-ipcountry": "KP" }, p), viaCdn: true })).status === "next", `${p} answers from anywhere (a legal page)`);
   ok((await run(mw, { ...req({ "cf-ipcountry": "KP" }), viaCdn: false })).status === "next", "a request that did not come through the CDN is not blocked on its own header");
   ok(recorded.length === 0, "a blocked request with no payment is counted, not stored");
   await run(mw, { ...req({ "cf-ipcountry": "IR", "payment-signature": "e30=" }), viaCdn: true });
