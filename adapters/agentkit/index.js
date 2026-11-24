@@ -151,7 +151,7 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
       "checks), payable over x402 in USDC or free via proof-of-work. Returns the best-matching tools with slug, price, " +
       "whether a wallet is needed, and a ready example. Free: no payment is made.",
     schema: z.object({
-      task: z.string().min(1).describe("What you need done, in plain language, e.g. 'extract the article at a URL'"),
+      task: z.string().min(1).describe("What you need done, in your own words, e.g. 'extract the article at a URL'"),
       k: z.number().int().min(1).max(10).optional().describe("How many matches to return (default 5)"),
     }),
     invoke: async ({ task, k = 5 }) => {

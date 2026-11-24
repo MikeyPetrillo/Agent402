@@ -526,7 +526,7 @@ export class Agent402 {
     return m;
   }
 
-  /** Resolve a plain-language task to the best-matching tools (route, price, schema, example). */
+  /** Resolve a task description to the best-matching tools (route, price, schema, example). */
   async find(task, { k = 5 } = {}) {
     const r = await this._discoveryGet("find", `/api/find?q=${encodeURIComponent(task)}&k=${k}`);
     return (await r.json()).results || [];

@@ -121,7 +121,7 @@ payTo), settlement evidence kept per source instead of summed into one
 misleading total, the dispatch verdict per chain with its reason and any recent
 refusal or delivery failure, and what each route delivered when our router
 called it, paid calls and the unpaid non-answers it refused to resell alike.
-Plain-language flags, no score. Also offline - nothing is fetched from the seller.
+Written flags, no score. Also offline - nothing is fetched from the seller.
 Each catalog row's delivery record is `responseDelivery`; the deprecated
 `ourPaidCalls` carries the same value.
 

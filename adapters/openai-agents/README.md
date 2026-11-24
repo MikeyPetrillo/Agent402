@@ -43,7 +43,7 @@ The LLM picks tasks; the router ranks sellers; the caller handles payment.
 
 | Tool | Purpose |
 |---|---|
-| `agent402_find` | Resolve a plain-language task to the best **local** Agent402 tool - slug, route, price, input schema, and a ready example. |
+| `agent402_find` | Resolve a task description to the best **local** Agent402 tool - slug, route, price, input schema, and a ready example. |
 | `agent402_route` | **Cross-seller x402 router**: rank tools across the x402 sellers Agent402 indexes (its own catalog plus the other sellers it discovers and crawls). `include: "external"` excludes Agent402 itself - neutral discovery API over the rest of the ecosystem. |
 | `agent402_call` | Call a tool by slug. Pays automatically: pure-CPU tools via proof-of-work; wallet-only via your x402 fetch. |
 | `agent402_about` | The Agent402 service manifest - payment options, capability map, MCP connector, trust signals. |

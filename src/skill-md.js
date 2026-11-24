@@ -71,7 +71,7 @@ ${REPO_URL}
 
 - Search the live web and answer questions with citations
   (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`).
-- Resolve a plain-language task to the right tool, with its price, input
+- Resolve a task description to the right tool, with its price, input
   schema and a ready example (\`/api/find?q=<task>\`).
 - Call any of ${total} tools (${powCount} of them free via
   proof-of-work): rendering, PDFs, OCR, images, conversions, data lookups,

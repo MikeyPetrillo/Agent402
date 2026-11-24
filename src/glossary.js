@@ -99,7 +99,7 @@ export function glossaryPage(baseUrl) {
   const canonical = `${baseUrl}/glossary`;
   const title = "Agentic Finance (AIFI) glossary: x402, MPP, facilitators and receipts";
   const description =
-    "Plain-language definitions of the vocabulary of agentic commerce and Agentic Finance (AIFI), from x402, MPP and HTTP 402 to facilitators and receipts.";
+    "Definitions of the vocabulary of agentic commerce and Agentic Finance (AIFI), from x402, MPP and HTTP 402 to facilitators and receipts.";
 
   const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [

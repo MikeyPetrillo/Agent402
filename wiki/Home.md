@@ -42,7 +42,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[Amazon Bedrock AgentCore|AWS-Bedrock-AgentCore]] | Call Agent402 from an AgentCore-hosted agent through AgentCore Payments and the Gateway |
 | [[Buying at Volume|Buying-at-Volume]] | Buying hundreds or thousands of calls: a price checked before paying, retries that never pay twice, a spend ceiling and the limits to plan around |
 | [[Circle Gateway (batched USDC)|Circle-Gateway]] | Pay from a Circle Gateway deposit: batched settlement, no gas per call |
-| [[Decide]] | Describe a job in plain language; get a call-ready plan over this catalog and outside x402 sellers, run it yourself or through Agent402 |
+| [[Decide]] | Describe a job; get a call-ready plan over this catalog and outside x402 sellers, run it yourself or through Agent402 |
 | [[Tool Catalog]] | What the 500+ tools are and how agents discover them |
 | [[Skill-Packs]] | 80+ multi-tool workflows - `prompts/list` → `prompts/get`, ready-to-run plans |
 | [[x402-Index-and-Router]] | The cross-seller index + Smart Order Router (cheapest healthy tool across the ecosystem) |

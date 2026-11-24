@@ -501,7 +501,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
         : { task: "look up the DNS records of a domain", params: { name: "example.com", type: "A" } },
       inputSchema: {
         properties: {
-          task: { type: "string", description: "Plain-language task, e.g. \"look up the DNS records of a domain\" - resolved via the same ranker as /api/find. Provide task OR slug." },
+          task: { type: "string", description: "Task description, e.g. \"look up the DNS records of a domain\" - resolved via the same ranker as /api/find. Provide task OR slug." },
           slug: { type: "string", description: "Exact tool slug to execute (skips ranking). Provide task OR slug." },
           params: { type: "object", description: "Input for the resolved tool, matching its inputSchema (default {})" },
           include: { type: "string", description: 'Where to route: default runs a tool from THIS host\'s catalog; "external" routes to the best-matching x402 seller in the OPEN index, buys the result from it and sells it to you (marked untrustedContent). Requires task (not slug).' },
@@ -1159,7 +1159,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           );
         }
       } else {
-        throw bad('Provide "task" (plain language) or "slug" (exact tool)');
+        throw bad('Provide "task" (a description) or "slug" (exact tool)');
       }
 
       const underlying = toUsd(def.price);

@@ -739,7 +739,7 @@ Tools:
 ### 2026-11-21 (the guide site, report links and the brand mark)
 Site:
 - The site menu, the openings of /learn and /how-to-pay, /llms.txt and
-  /llms-full.txt link ask402.ai, the maintainer's plain-language guide to
+  /llms-full.txt link ask402.ai, the maintainer's guide to
   x402 and MPP for people.
 - /what-is-x402, /what-is-mpp and /learn/x402 are titled for how each
   protocol runs on this server, and each links the guide's explainer for the

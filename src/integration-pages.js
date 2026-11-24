@@ -53,7 +53,7 @@ const PER_SLUG_PAYMENT = [
   "Prices come from the live catalog at /api/pricing and are quoted in every 402 before anything is signed.",
 ];
 const META_EXPOSES = [
-  "`agent402_find`: a plain-language task in, the best-matching tools out (slug, route, price, input schema, a ready example).",
+  "`agent402_find`: a task description in, the best-matching tools out (slug, route, price, input schema, a ready example).",
   "`agent402_route`: ranks tools across every indexed x402 seller; `include: \"external\"` leaves this server out.",
   "`agent402_call`: calls a tool by slug and pays for it.",
   "`agent402_about`: the service manifest (payment options, capability map, MCP connector).",
@@ -253,7 +253,7 @@ tools = toolkit.get_tools()   # four meta-tools your agent can call`,
 # (method, url, **kwargs) -> requests.Response that signs the USDC payment
 toolkit = Agent402Toolkit(base_url="https://agent402.tools", x402_fetch=my_signed_fetch)`,
     exposes: [
-      "`agent402_find`: resolve a plain-language task to the best tool (slug, price, schema, example).",
+      "`agent402_find`: resolve a task description to the best tool (slug, price, schema, example).",
       "`agent402_route`: the cross-seller x402 router across the indexed ecosystem.",
       "`agent402_call`: call a tool by slug and pay for it.",
       "`agent402_about`: the service manifest.",
@@ -463,7 +463,7 @@ await agent402ActionProvider({
     pkg: "agent402-actions-plugin",
     formerly: "elizaos-plugin-agent402",
     dir: "adapters/eliza",
-    what: `An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a plain-language task and call it, paying in USDC over x402 or with ${CREDITS_HELD}, inside a per-call ceiling ($5 unless you set another) and any daily ceiling you set in the character config.`,
+    what: `An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a task description and call it, paying in USDC over x402 or with ${CREDITS_HELD}, inside a per-call ceiling ($5 unless you set another) and any daily ceiling you set in the character config.`,
     install: "npm install agent402-actions-plugin",
     lang: "json",
     example: CREDITS_ON ? `{

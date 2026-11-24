@@ -60,7 +60,7 @@ matches (use `POST /api/wish`, below).
 
 ## Discover: `GET /api/find?q=<task>`
 
-Free, no keys. Send a plain-language task; get back the best-matching tools
+Free, no keys. Send a task description; get back the best-matching tools
 with route, price, input schema and a ready-to-run example.
 
 ```bash

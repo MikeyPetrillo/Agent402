@@ -462,7 +462,7 @@ const ENTRIES = [
     date: "2026-11-21",
     title: "The guide site, report links and the brand mark",
     items: [
-      "Site: The site menu, the openings of /learn and /how-to-pay, /llms.txt and /llms-full.txt link ask402.ai, the maintainer's plain-language guide to x402 and MPP for people.",
+      "Site: The site menu, the openings of /learn and /how-to-pay, /llms.txt and /llms-full.txt link ask402.ai, the maintainer's guide to x402 and MPP for people.",
       "Site: /what-is-x402, /what-is-mpp and /learn/x402 are titled for how each protocol runs on this server, and each links the guide's explainer for the general question.",
       "Site: `/reports?product=<id>&input=<value>` opens the storefront with that report selected and its field filled; nothing is submitted until the buyer presses the button.",
       "Site: /integrations/agentcore covers Amazon Bedrock AgentCore: catalog tools through an AgentCore Gateway target, payment through AgentCore Payments, and the buyer sample.",

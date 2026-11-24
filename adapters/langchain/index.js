@@ -204,7 +204,7 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
     {
       name: "agent402_find",
       description:
-        "Resolve a plain-language task to the best Agent402 tool: returns slug, route, price, input schema, and a ready example so you skip the explore step. Local catalog only; for cross-seller use agent402_route.",
+        "Resolve a task description to the best Agent402 tool: returns slug, route, price, input schema, and a ready example so you skip the explore step. Local catalog only; for cross-seller use agent402_route.",
       parametersJsonSchema: {
         type: "object",
         properties: {

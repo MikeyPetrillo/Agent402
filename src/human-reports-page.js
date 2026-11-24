@@ -192,7 +192,7 @@ export function humanReportsPage(baseUrl) {
       <div class="pcard receipt" data-kind="filing">
         <div class="k">SEC filing report</div>
         <h3>What did they just file</h3>
-        <p>The company's newest SEC filings, with the document itself read and explained in plain language, cited to the filing.</p>
+        <p>The company's newest SEC filings, with the document itself read and explained, cited to the filing.</p>
         <form class="pcard-form" data-kind="filing" novalidate>${cardField("filing", "US ticker", "e.g. AAPL", { upper: true })}
         <div class="gets"><b>What you get:</b> the newest 10-K, 10-Q or 8-K read for you: what changed, what the numbers say, what the notes disclose, cited to the document.</div>
         ${cardError("filing")}

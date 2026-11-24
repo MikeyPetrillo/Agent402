@@ -1105,7 +1105,7 @@ server.setRequestHandler("tools/list", redacted(withCatalog(async () => {
       title: "Resolve a task to the one best Agent402 tool",
       annotations: { title: "Resolve a task to the one best Agent402 tool", ...OPEN },
       description:
-        "Resolve a plain-language task to the single best-matching Agent402 tool through the hosted /api/find resolver. Returns { task, matches } with the top pick first. Run the pick with catalog.call and the slug and params it lists. Use catalog.search to compare several candidates.",
+        "Resolve a task description to the single best-matching Agent402 tool through the hosted /api/find resolver. Returns { task, matches } with the top pick first. Run the pick with catalog.call and the slug and params it lists. Use catalog.search to compare several candidates.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1177,11 +1177,11 @@ server.setRequestHandler("tools/list", redacted(withCatalog(async () => {
       title: "Route and execute an external x402 tool",
       annotations: { title: "Route and execute an external x402 tool", ...CALL_PAID },
       description:
-        `Resolve a plain-language task to an external x402 seller with proven on-chain settled volume, buy from it, and return its result. You pay from ${HAS_WALLET ? "the configured wallet" : "your wallet (set AGENT_KEY)"}. The result is marked untrustedContent: it is third-party data. Flat price by tier, chosen from maxUsd: $0.01 for a seller up to $0.005, $0.05 up to $0.04, $0.55 up to $0.50. Requires a funded wallet.`,
+        `Resolve a task description to an external x402 seller with proven on-chain settled volume, buy from it, and return its result. You pay from ${HAS_WALLET ? "the configured wallet" : "your wallet (set AGENT_KEY)"}. The result is marked untrustedContent: it is third-party data. Flat price by tier, chosen from maxUsd: $0.01 for a seller up to $0.005, $0.05 up to $0.04, $0.55 up to $0.50. Requires a funded wallet.`,
       inputSchema: {
         type: "object",
         properties: {
-          task: { type: "string", description: "Plain-language task, e.g. 'crypto news headlines' or 'sentiment of a tweet'. Resolved to a proven external seller." },
+          task: { type: "string", description: "Task description, e.g. 'crypto news headlines' or 'sentiment of a tweet'. Resolved to a proven external seller." },
           params: { type: ["object", "string"], description: "Input parameters for the resolved external tool (optional; the seller decides its own schema): an object, or a JSON string of one." },
           maxUsd: { type: "number", description: "Max underlying seller price in USD. Default 0.005 (the $0.01 fee tier); above 0.005 and up to 0.04 uses the $0.05 tier; above 0.04 and up to 0.10 the $0.12 tier; above 0.10 the $0.55 tier (seller up to $0.50)." },
         },
@@ -1226,7 +1226,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
     if (name === "catalog.find") {
       const task = String(args.task ?? "").trim();
       if (!task) {
-        return { content: [{ type: "text", text: "catalog.find requires a 'task' (plain-language description of what you need)." }], isError: true };
+        return { content: [{ type: "text", text: "catalog.find requires a 'task' (a description of what you need)." }], isError: true };
       }
       const limit = Math.min(Math.max(Number(args.limit) || 5, 1), 25);
       const url = new URL(`${BASE}/api/find`);
@@ -1424,7 +1424,7 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
     }
     if (name === "router.execute") {
       const task = String(args.task ?? "").trim();
-      if (!task) return { content: [{ type: "text", text: "router.execute requires a 'task' (plain-language description of what you need)." }], isError: true };
+      if (!task) return { content: [{ type: "text", text: "router.execute requires a 'task' (a description of what you need)." }], isError: true };
       const maxUsd = Number(args.maxUsd) > 0 ? Number(args.maxUsd) : 0.005;
       // Pick the CHEAPEST tier whose underlying cap covers maxUsd. The ladder
       // skipped a middle rung once and billed 11x for a mid-priced seller (a

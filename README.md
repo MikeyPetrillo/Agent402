@@ -364,7 +364,7 @@ A credits key is understood by the SDKs: `agent402-mcp` reads
 
 ## Decide - describe the job, get the plan
 
-`POST /api/decide` turns a plain-language task into a call-ready plan: which tools, from this
+`POST /api/decide` turns a task description into a call-ready plan: which tools, from this
 catalog and from outside x402 sellers whose 402 was verified in the last week, in what order, with
 fallbacks, inputs that validate against each tool's schema, and cost and latency estimates.
 Priced by depth: quick (one best tool), plan (steps and fallbacks) and full (plus a compiled

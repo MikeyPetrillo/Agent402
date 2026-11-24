@@ -2210,7 +2210,7 @@ const SKILL_PACKS_ALL = [
     tagline:
       "Explain what an EVM transaction actually did: confirmation status, the raw transaction from the chain, decoded calldata with typed parameters, the resolved function signature, and labeled counterparties.",
     useCase:
-      "An agent (or its owner) is staring at a transaction hash and needs the plain-language story - did it confirm, which function was called, with what arguments, and is the counterparty a known contract or an unknown address.",
+      "An agent (or its owner) is staring at a transaction hash and needs the readable story - did it confirm, which function was called, with what arguments, and is the counterparty a known contract or an unknown address.",
     promptArgs: [
       { name: "hash", description: "0x-prefixed 32-byte transaction hash", required: true, // An all-zero hash exists on no chain, so evm-rpc returned nothing and
         // calldata-decode / selector-lookup both failed on every call. A real
@@ -2227,7 +2227,7 @@ const SKILL_PACKS_ALL = [
       "Label the counterparty with address-label - known token contract, DEX router, bridge, exchange wallet, or unknown.",
     ],
     claudePrompt:
-      "Explain what transaction 0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59 on base actually did, using Agent402's tx-forensics skill pack. (1) Check its confirmation status, (2) fetch the raw transaction via eth_getTransactionByHash, (3) decode the calldata into the function and arguments, (4) resolve the selector against the signature databases, (5) label the destination address. Summarize as a plain-language story: what was called, with what arguments, by whom, to whom, and whether it succeeded.",
+      "Explain what transaction 0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59 on base actually did, using Agent402's tx-forensics skill pack. (1) Check its confirmation status, (2) fetch the raw transaction via eth_getTransactionByHash, (3) decode the calldata into the function and arguments, (4) resolve the selector against the signature databases, (5) label the destination address. Summarize as a readable story: what was called, with what arguments, by whom, to whom, and whether it succeeded.",
   },
 
   {

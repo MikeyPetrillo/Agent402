@@ -40,7 +40,7 @@ All discovery endpoints are free GET requests. All paid tool calls go through th
 
 #### Find a tool by task description
 
-Resolves a plain-language task to the best-matching tools with route, price, input schema, and a ready example.
+Resolves a task description to the best-matching tools with route, price, input schema, and a ready example.
 
 ```
 GET https://agent402.tools/api/find?q={task}&k={limit}

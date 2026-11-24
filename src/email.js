@@ -327,7 +327,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
   // A "problem" mail reports a run that produced nothing, so it carries no note.
   const note = reason === "problem" ? { html: "", text: "" } : modelNoteParts(kind || (reason === "digest" ? "ipo" : null));
   const lead = leads[reason] || `Your ${lbl} has an update for ${t}.`;
-  // Plain-language "why you got this": recurring mail must say who asked for it
+  // A readable "why you got this": recurring mail must say who asked for it
   // and how to stop it, in words, next to the manage link (which stays the
   // keyed one the caller passed - never widened here).
   const why = `You are getting this because you subscribed to the ${lbl} for ${t} on agent402.tools. It runs on its own until you cancel.`;

@@ -3,7 +3,7 @@ pick up directly.
 
 Four meta-tools, all free to discover (the same design as the JS adapter):
 
-    agent402_find:    resolve a plain-language task to the best tool  (/api/find)
+    agent402_find:    resolve a task description to the best tool  (/api/find)
     agent402_route:   cross-seller x402 router                       (/api/route)
     agent402_call:    call a tool by slug, auto-pays (PoW free / x402 paid)
     agent402_about:   service manifest                     (/.well-known/x402)
@@ -265,7 +265,7 @@ def agent402_tool_specs(base_url: str = DEFAULT_BASE, x402_fetch: Optional[Calla
     return [
         {
             "name": "agent402_find",
-            "description": "Resolve a plain-language task to the best Agent402 tool: returns slug, route, price, input schema, and a ready example. Local catalog only; for cross-seller use agent402_route.",
+            "description": "Resolve a task description to the best Agent402 tool: returns slug, route, price, input schema, and a ready example. Local catalog only; for cross-seller use agent402_route.",
             "schema": {"type": "object", "properties": {
                 "task": {"type": "string", "description": 'What you want to do, e.g. "extract the article from this URL"'},
                 "limit": {"type": "number", "description": "Max results (default 5)"},

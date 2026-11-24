@@ -46,7 +46,7 @@ free tier still works.
 
 | Action | What it does | Cost |
 |---|---|---|
-| `AGENT402_FIND` | Plain-language task in, best-matching tools out: slug, price, whether payment is needed, a ready example input. Parameters: `task` (required), `k`. | Free |
+| `AGENT402_FIND` | Task description in, best-matching tools out: slug, price, whether payment is needed, a ready example input. Parameters: `task` (required), `k`. | Free |
 | `AGENT402_CALL` | Runs one tool and returns its JSON. Parameters: `slug`, `params` (both optional: with neither, the tool is chosen from the message and the last `AGENT402_FIND` result, see below). Proof-of-work for free-tier tools; the credits key or wallet for wallet-only tools, never above `AGENT402_MAX_PER_CALL_USD` (default $5) or, when set, the rolling `AGENT402_DAILY_LIMIT_USD`. | $0.001 and up, quoted in every 402 |
 | `AGENT402_ABOUT` | What Agent402 is, how it is paid, live tool counts. | Free |
 

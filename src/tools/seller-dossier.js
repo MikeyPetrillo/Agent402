@@ -4,7 +4,7 @@
 // against the wallets that have been PAID, settlement evidence per chain and
 // per source, the router's own dispatch verdict with its reason, what each
 // route delivered when our router called it (paid calls and the unpaid
-// non-answers it refused to resell), and a list of plain-language flags.
+// non-answers it refused to resell), and a list of written flags.
 //
 // Why it exists (2026-09-08): the ecosystem-data line (bestsellers, demand-
 // radar, x402-trending) has more distinct buyers than anything else we sell,
@@ -542,7 +542,7 @@ export function buildSellerDossierTool({
     category: "x402",
     price: "$0.05",
     description:
-      "Everything Agent402 knows about one x402 seller origin, in one read: identity and crawl history, the catalog with the provenance of every price (live-402 or manifest, when it was read, whether it is stale or disagrees with the seller's own declaration), advertised wallets against the wallets that were actually paid (own chain evidence, inherited wallets, shared claims), settlement evidence per source (our Base leaderboard, the x402 Bazaar discovery index, Solana SPL credits, MPP transfers), the router's own dispatch verdict per chain with its reason, both lanes it can pay through (proven, and the Base unproven lane for a seller below the settlement floor) with the route-execute tiers that can pay each and any recent refusal, and what each route delivered when our router called it, paid calls and the unpaid non-answers it refused to resell alike (each catalog row's responseDelivery; ourPaidCalls carries the same value and is deprecated). Ends in plain-language flags, never a score. Deterministic and offline: assembled from our crawl, probes, ledger and chain reads, never a live fetch of the seller. Priced above the list endpoints because it is the assembled record, not a listing.",
+      "Everything Agent402 knows about one x402 seller origin, in one read: identity and crawl history, the catalog with the provenance of every price (live-402 or manifest, when it was read, whether it is stale or disagrees with the seller's own declaration), advertised wallets against the wallets that were actually paid (own chain evidence, inherited wallets, shared claims), settlement evidence per source (our Base leaderboard, the x402 Bazaar discovery index, Solana SPL credits, MPP transfers), the router's own dispatch verdict per chain with its reason, both lanes it can pay through (proven, and the Base unproven lane for a seller below the settlement floor) with the route-execute tiers that can pay each and any recent refusal, and what each route delivered when our router called it, paid calls and the unpaid non-answers it refused to resell alike (each catalog row's responseDelivery; ourPaidCalls carries the same value and is deprecated). Ends in written flags, never a score. Deterministic and offline: assembled from our crawl, probes, ledger and chain reads, never a live fetch of the seller. Priced above the list endpoints because it is the assembled record, not a listing.",
     tags: ["x402", "seller", "dossier", "due-diligence", "trust", "reputation", "counterparty", "verify", "price-drift",
       "wallet", "settlement", "evidence", "router", "discovery", "check a seller before paying", "is this seller real",
       "who has paid this seller", "seller background check"],

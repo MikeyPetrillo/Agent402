@@ -347,7 +347,7 @@ function startBuildIfStale({ background = false } = {}) {
 
 const tokenize = (s) => String(s || "").toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 2);
 
-/** Rank the facilitator catalog against a plain-language task. Pure given a
+/** Rank the facilitator catalog against a task description. Pure given a
  *  resource list (exported for offline tests): DISTINCT task-token overlap on
  *  description + URL path (a spammy description repeating one keyword can't
  *  outrank a real match), with substring credit against path tokens so

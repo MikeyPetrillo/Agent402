@@ -173,7 +173,7 @@ const res = await myAgent.run("Search the web for x402 payment protocol adoption
 { "plugins": ["agent402-actions-plugin"], "settings": { "AGENT402_CREDITS_KEY": "a402_..." } }
 ```
 
-Three actions: `AGENT402_FIND` (free discovery from a plain-language task), `AGENT402_CALL` (`content.slug` + `content.params`; proof-of-work for the free tier, the credits key or an x402 wallet for wallet-only tools, capped by `AGENT402_MAX_PER_CALL_USD`), `AGENT402_ABOUT`. The `AGENT402` provider tells the agent every turn that the catalog exists and which payment mode is configured. No runtime dependency on `@elizaos/core`. Package: [`agent402-actions-plugin`](https://www.npmjs.com/package/agent402-actions-plugin).
+Three actions: `AGENT402_FIND` (free discovery from a task description), `AGENT402_CALL` (`content.slug` + `content.params`; proof-of-work for the free tier, the credits key or an x402 wallet for wallet-only tools, capped by `AGENT402_MAX_PER_CALL_USD`), `AGENT402_ABOUT`. The `AGENT402` provider tells the agent every turn that the catalog exists and which payment mode is configured. No runtime dependency on `@elizaos/core`. Package: [`agent402-actions-plugin`](https://www.npmjs.com/package/agent402-actions-plugin).
 
 ## Coinbase AgentKit
 

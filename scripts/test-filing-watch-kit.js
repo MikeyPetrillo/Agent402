@@ -212,7 +212,7 @@ const SCHED = { headers: { authorization: "sub:sub_abc123" } };
   ok(JSON.stringify(normForms("8-k, 10-Q ,8-K", "forms")) === JSON.stringify(["8-K", "10-Q"]), "normForms uppercases, trims and de-duplicates");
   ok(JSON.stringify(normForms(["def 14a"], "forms")) === JSON.stringify(["DEF 14A"]), "normForms accepts an array and keeps internal spaces");
   eq(normForms(null, "forms").length, 0, "normForms of null is empty");
-  eq(formLabel("8-K"), "current report (material event)", "8-K carries a plain-language label");
+  eq(formLabel("8-K"), "current report (material event)", "8-K carries a readable label");
   eq(formLabel("NOPE-99"), null, "an unknown form gets NO invented label");
 }
 
@@ -298,7 +298,7 @@ let base = null;
   next.keys = next.filings.map((f) => `${f.accession}|${f.form}`);
   const lines = describeFilingChanges(base, next);
   eq(lines.length, 1, "exactly one new filing is reported");
-  ok(/^8-K \(current report \(material event\)\) filed /.test(lines[0]), "the change line names the form in plain language");
+  ok(/^8-K \(current report \(material event\)\) filed /.test(lines[0]), "the change line names the form in words");
   ok(lines[0].includes("Entry into a Material Definitive Agreement"), "the change line carries EDGAR's own description");
   eq(describeFilingChanges(base, base).length, 0, "an unchanged index reports nothing");
   eq(describeFilingChanges(null, next).length, 0, "the first sight (no prior) reports nothing - that is the welcome run");

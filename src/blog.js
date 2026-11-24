@@ -53,10 +53,10 @@ export const BLOG_POSTS = [
   },
   {
     slug: "decide-plans-for-agents",
-    metaDescription: "One call turns a plain-language job into a call-ready plan over this catalog and outside x402 sellers, with tools in order, inputs filled and backups.",
+    metaDescription: "One call turns a job description into a call-ready plan over this catalog and outside x402 sellers, with tools in order, inputs filled and backups.",
     date: "2026-10-01",
     title: "Decide: describe the job, get a plan your agent can run",
-    excerpt: "One call turns a plain-language job into a call-ready plan over this catalog and outside x402 sellers: which tools, in what order, with inputs filled in, backups for each step, and steps wired to each other. Run it yourself or have Agent402 run it. A real two-step run on mainnet, end to end.",
+    excerpt: "One call turns a job description into a call-ready plan over this catalog and outside x402 sellers: which tools, in what order, with inputs filled in, backups for each step, and steps wired to each other. Run it yourself or have Agent402 run it. A real two-step run on mainnet, end to end.",
     body: `<p>An agent that needs something done in the world faces a long list of paid APIs. Which one does the job? What inputs does it take? What if the first choice is down, or needs a value only another call can produce? Guessing costs money: every wrong call is a paid call.</p>
 
 <p><strong><a href="/decide">Decide</a></strong> answers those questions in one request. Describe the job in plain words and get back a plan: the steps, the tool for each step with backups in order, inputs that fit each tool's schema, and which steps depend on which. It plans over this catalog and over outside x402 sellers (including sellers that also accept MPP) whose route answered a live 402 in the last seven days. Anything no indexed tool covers is listed as a gap instead of being papered over.</p>

@@ -35,7 +35,7 @@ export const MONITOR_PRODUCTS_ALL = {
   "filing-monitor": {
     label: "SEC filing watch", price: 500, kind: "filing", slug: "filing-report",
     inputField: "ticker", inputLabel: "a US stock ticker",
-    blurb: "We check this company's SEC filings index every day and email you a fresh cited report when anything new lands, an 8-K, a 10-Q, a 10-K, a proxy or a registration statement, with the new document read and explained in plain language.",
+    blurb: "We check this company's SEC filings index every day and email you a fresh cited report when anything new lands, an 8-K, a 10-Q, a 10-K, a proxy or a registration statement, with the new document read and explained.",
   },
   "token-monitor": {
     label: "Solana token risk watch", price: 500, kind: "token", slug: "token-brief",

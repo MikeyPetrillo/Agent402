@@ -885,7 +885,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Resolve a task to the one best Agent402 tool",
           annotations: { title: "Resolve a task to the one best Agent402 tool", ...SAFE },
           description:
-            "Resolve a plain-language task to the single best-matching Agent402 tool, returned call-ready: slug, price, input schema and a worked example. Use catalog.search to compare several candidates. Returns { task, results } with the top pick first; run it with catalog.call and the slug and params it lists.",
+            "Resolve a task description to the single best-matching Agent402 tool, returned call-ready: slug, price, input schema and a worked example. Use catalog.search to compare several candidates. Returns { task, results } with the top pick first; run it with catalog.call and the slug and params it lists.",
           inputSchema: {
             type: "object",
             properties: {
@@ -966,7 +966,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           inputSchema: {
             type: "object",
             properties: {
-              need: { type: "string", maxLength: 500, description: 'What you needed and could not find, in plain language, e.g. "convert a HEIC image to JPEG" or "look up a UK company by registration number"' },
+              need: { type: "string", maxLength: 500, description: 'What you needed and could not find, in your own words, e.g. "convert a HEIC image to JPEG" or "look up a UK company by registration number"' },
               context: { type: "string", maxLength: 300, description: "Optional: what you were trying to accomplish, or the input you had - helps disambiguate similar-sounding requests." },
             },
             required: ["need"],

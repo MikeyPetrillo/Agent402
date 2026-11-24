@@ -29,7 +29,7 @@ LLMs both choke on thousands of tools):
 
 | Tool | What it does |
 | --- | --- |
-| `agent402_find` | Resolve a plain-language task to the best tool (slug, price, schema, example) |
+| `agent402_find` | Resolve a task description to the best tool (slug, price, schema, example) |
 | `agent402_route` | Cross-seller x402 router across the sellers Agent402 indexes |
 | `agent402_call` | Call a tool by slug - auto-pays via proof-of-work (free) or your x402 fetch (paid) |
 | `agent402_about` | The service manifest (identity, payment options, trust signals) |

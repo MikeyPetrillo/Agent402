@@ -26,7 +26,7 @@ It exposes a **flagship-first** tools/list (~15 tools, each with titles + safety
 | `browser.render` | Headless Chromium render → markdown |
 | `audio.transcribe` | Speech-to-text |
 | `memory.read` / `memory.write` | Durable wallet-keyed memory |
-| `catalog.find` | Describe a task in plain language; returns the best-matching tool(s) **ready to call** - slug, price, input schema, an example, and the exact `catalog.call` invocation |
+| `catalog.find` | Describe a task; returns the best-matching tool(s) **ready to call** - slug, price, input schema, an example, and the exact `catalog.call` invocation |
 | `catalog.search` | Browse the long catalog by description; returns slugs + input schemas (plus matching skill packs) |
 | `catalog.call` | Execute any catalog tool by slug. Pure-CPU tools run **free** here (rate-limited: 20/min, 120/hr per client); wallet-only tools are payable right here over x402 or MPP (below) or return paid-path instructions |
 | `decide.plan` | (When Decide is enabled on the instance.) Describe a job; returns a call-ready plan over this catalog and outside x402 sellers: tools in order, fallbacks, validated params, chained steps. See [[Decide]] |
@@ -95,7 +95,7 @@ Other env knobs: `AGENT402_URL` (target service), `AGENT402_TOOLS` (override the
 | **`catalog.call` says a field is missing / "must be a number"** | Pass `params` as a JSON object, e.g. `{"slug":"unit-convert","params":{"value":42,"from":"kilometers","to":"miles"}}`. A stringified object (`"{\"value\":42}"`) is also accepted. |
 | **A tool returns "wallet required" / paid-path guidance** | That flagship (live search, browser render, STT, durable memory, …) isn't free on the authless hosted connector. Pay it in the call with an x402 MCP client (`_meta["x402/payment"]`) or an mppx MCP client, run the npm server `npx -y agent402-mcp@0.17.1` with `AGENT_KEY` (funded wallet) or `AGENT402_CREDITS_KEY` (a prepaid credits key, where sold or already issued), or call it over HTTP with any x402 client. |
 | **"Free-tier rate limit reached"** | The hosted connector is capped at 20 calls/min, 120/hour per client, shared across replicas. Wait, pay that call over x402 in the call (the limit answer carries the tool's x402 offer; send the signed payment in `_meta["x402/payment"]`), or use the npm server with a wallet (or a prepaid credits key) for the paid path. |
-| **Finding the right tool** | Call `catalog.find` with a plain-language task - it returns the best match ready to call (slug + example + the exact `catalog.call` invocation). `catalog.search` is the broader, lower-level browse. |
+| **Finding the right tool** | Call `catalog.find` with a task description - it returns the best match ready to call (slug + example + the exact `catalog.call` invocation). `catalog.search` is the broader, lower-level browse. |
 | **My client still sends `find_tool` / `call_tool`** | Those names remain CallTool aliases and keep working; only the listing moved to the dotted names. |
 
 More: [[Paying with x402]] · [[Paying with Compute]] · [Open an issue](https://github.com/MikeyPetrillo/Agent402/issues).

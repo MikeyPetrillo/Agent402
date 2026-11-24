@@ -188,7 +188,7 @@ const webSearch = await rpc("tools/call", { name: "search_tools", arguments: { q
 const webText = webSearch.result?.content?.[0]?.text ?? "";
 assert(webText.includes('"slug": "search"') || webText.includes('"slug":"search"'), `search_tools front-door lands on search (got ${webText.slice(0, 200)})`);
 
-// find_tool: resolve a plain-language task to a ready-to-call tool.
+// find_tool: resolve a task description to a ready-to-call tool.
 const find = await rpc("tools/call", { name: "find_tool", arguments: { task: "convert kilometers to miles", limit: 3 } });
 const findText = find.result?.content?.[0]?.text ?? "";
 assert(!find.result?.isError && findText.includes("unit-convert") && findText.includes("callWith"), "find_tool resolves a long-tail task with a ready call_tool invocation");

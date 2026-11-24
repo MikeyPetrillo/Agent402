@@ -212,7 +212,7 @@ const listJoin = (xs) => (xs.length <= 1 ? xs.join("") : xs.length === 2 ? `${xs
 const longDate = (iso) => { const d = new Date(`${iso}T00:00:00Z`); return Number.isNaN(d.getTime()) ? String(iso || "") : `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`; };
 const change = (cur, prev) => (Number.isFinite(cur) && Number.isFinite(prev) && prev !== 0 ? (cur - prev) / Math.abs(prev) : null);
 
-/** Plain-language paragraphs about one company, built only from its own filings. */
+/** Readable paragraphs about one company, built only from its own filings. */
 export function dossierNarrative(d) {
   if (!d) return [];
   const out = [];

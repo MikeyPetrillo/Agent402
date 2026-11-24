@@ -207,7 +207,7 @@ export function exhibitFromIndexHeaders(html, cikInt, accession) {
   return null;
 }
 
-// Plain-language names for the forms a filing watch actually sees. A form not
+// Readable names for the forms a filing watch actually sees. A form not
 // listed here is described by its bare code - never guessed at.
 const FORM_LABELS = {
   "8-K": "current report (material event)",
@@ -722,7 +722,7 @@ function makeFilingHandlerInner(tierSlug) {
 9. COUNTS: every count you state (filings, forms, documents read, forms parsed, filings not fetched) is the figure given in a block header below, never your own tally of a list. The documents read in full, the routine forms parsed and the filings not fetched add up to the filings found.
 10. TERMINOLOGY: Forms 3, 4 and 5 are Section 16 ownership reports; a Form 144 is a notice of proposed sale under Securities Act Rule 144, not a Section 16 report. Name each form for what it is.
 
-Write a well-structured report of up to ${t.words} words with these sections where the material supports them: SNAPSHOT (how many filings, which forms, the date range, and the single most consequential item), WHAT WAS FILED (each filing in the window, grouped by form, in plain language), WHAT THE DOCUMENTS SAY (the substance of the ${read.length} document${read.length === 1 ? "" : "s"} read in full - the event, the numbers as stated, the terms, the parties), WHAT CHANGED (per rule 5), and WHAT TO WATCH (concrete follow-ups a reader can verify in future filings - never a recommendation, per rule 7).
+Write a well-structured report of up to ${t.words} words with these sections where the material supports them: SNAPSHOT (how many filings, which forms, the date range, and the single most consequential item), WHAT WAS FILED (each filing in the window, grouped by form, in clear wording), WHAT THE DOCUMENTS SAY (the substance of the ${read.length} document${read.length === 1 ? "" : "s"} read in full - the event, the numbers as stated, the terms, the parties), WHAT CHANGED (per rule 5), and WHAT TO WATCH (concrete follow-ups a reader can verify in future filings - never a recommendation, per rule 7).
 
 === COMPANY ===
 ${name} · CIK ${pr.cik}${symbol ? ` · ticker ${symbol}` : ""}${pr.exchanges?.length ? ` · listed ${pr.exchanges.join(", ")}` : ""}${pr.sic ? ` · SIC ${pr.sic}` : ""}${pr.fiscalYearEnd ? ` · fiscal year end ${pr.fiscalYearEnd}` : ""}
@@ -831,7 +831,7 @@ export const FILING_WATCH_TOOLS = [
     slug: "filing-report",
     category: "llm",
     price: FILING_TIERS["filing-report"].price,
-    description: "Name a US ticker and get one cited, model-backed report on what the company just filed with the SEC: every filing in EDGAR's index for the window (8-K, 10-Q, 10-K, S-1, 424B4, DEF 14A and the rest, minus any form you exclude), the primary documents of the most consequential ones read in full and explained in plain language, and what changed versus the prior period where the filing itself says so, with a downloadable filings appendix. Not investment advice. Not cached.",
+    description: "Name a US ticker and get one cited, model-backed report on what the company just filed with the SEC: every filing in EDGAR's index for the window (8-K, 10-Q, 10-K, S-1, 424B4, DEF 14A and the rest, minus any form you exclude), the primary documents of the most consequential ones read in full and explained, and what changed versus the prior period where the filing itself says so, with a downloadable filings appendix. Not investment advice. Not cached.",
     tags: ["sec", "edgar", "filings", "8-k", "10-q", "10-k", "s-1", "proxy", "report", "equity", "agentic-finance", "x402", "mpp"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", days: 30 }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeFilingHandler("filing-report"),

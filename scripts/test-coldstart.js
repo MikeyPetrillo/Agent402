@@ -72,7 +72,7 @@ if (!srv) { console.error(bootError?.message || "(no output)"); done(1); }
 // 1. Resolve a task the way llms.txt tells an agent to.
 const find = await (await fetch(`${TARGET}/api/find?q=${encodeURIComponent("hash a string with sha256")}`)).json();
 const t = find.results?.[0];
-ok(Boolean(t), `/api/find resolves a plain-language task (got ${t?.slug})`);
+ok(Boolean(t), `/api/find resolves a task description (got ${t?.slug})`);
 ok(Boolean(t?.route && t?.price), "the result carries a callable route and a price");
 ok(Boolean(t?.example), "the result carries a ready-to-send example");
 

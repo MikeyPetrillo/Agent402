@@ -69,7 +69,7 @@ t node scripts/test-ga-snippet.js
 t node scripts/test-ga-key-events.js
 # Prefilled storefront link (/reports?product=&input=): the page's own script selects the card and fills the field in a DOM, never submits, unknown product is the plain page, the server never writes the value into the HTML
 t node scripts/test-reports-prefill.js
-# The plain-language guide site: named in the menu, /learn, /how-to-pay and llms.txt as plain links; this site's explainer pages link its explainers, keep their own canonical and stay indexable
+# The guide site: named in the menu, /learn, /how-to-pay and llms.txt as plain links; this site's explainer pages link its explainers, keep their own canonical and stay indexable
 t node scripts/test-guide-site-links.js
 # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
 t node scripts/test-analytics-privacy.js
