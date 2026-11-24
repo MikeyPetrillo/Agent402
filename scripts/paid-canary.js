@@ -526,7 +526,7 @@ export const TOOLS = [
     method: "POST",
     body: { mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN" },
     priceUsd: 0.005,
-    check: (r) => (typeof r.riskLevel === "string" && (typeof r.score === "number" || typeof r.normalizedScore === "number") && r.untrustedContent === true) || `expected a graded safety verdict, got ${JSON.stringify(r).slice(0, 120)}`,
+    check: (r) => (Array.isArray(r.flags) && Array.isArray(r.unknown) && typeof r.notice === "string" && !("riskLevel" in r) && !("score" in r) && r.untrustedContent === true) || `expected named facts with the notice and no score, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
     // Route-and-execute — the SOR's executing surface. Dispatches internally

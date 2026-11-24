@@ -305,7 +305,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     filing: `New 13F filing: ${t}`,
     problem: `We could not complete your ${lbl} for ${t}`,
     recall: `New FDA recall activity: ${t}`,
-    "safety-change": `Token risk changed: ${t}`,
+    "safety-change": `Token facts changed: ${t}`,
     "filing-new": `New SEC filing: ${t}`,
     digest: `${lbl}: this week's filings${t && t !== "all" ? ` for ${t}` : ""}`,
   };
@@ -319,7 +319,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
       ? `We could not produce a report for ${t}. We will keep trying, first within the hour and then daily; if the target is wrong, you can cancel (see below) and subscribe again with a corrected one.`
       : `We could not produce a report for ${t}. We will keep trying, first within the hour and then daily; if the target is wrong, you can cancel or re-subscribe with a corrected one from the manage link below.`,
     recall: `The FDA recall feeds show new activity for ${t} since your last report:`,
-    "safety-change": `The on-chain safety picture for this token changed since your last brief:`,
+    "safety-change": `These on-chain facts about this token changed since your last brief:`,
     "filing-new": `${t} has filed with the SEC since your last report. Here is what landed, with the new document read and explained:`,
     digest: `Your weekly IPO pipeline digest is ready${t && t !== "all" ? ` (filers matching "${t}")` : ""}.`,
   };

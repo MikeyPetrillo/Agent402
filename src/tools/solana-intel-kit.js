@@ -1,8 +1,13 @@
-// Solana intel kit - token safety, liquidity and price intel for SPL tokens,
-// from public keyless APIs and our own Solana RPC:
+// Solana intel kit - token risk facts, liquidity and price intel for SPL
+// tokens, from public keyless APIs and our own Solana RPC:
 //
-//   RugCheck    api.rugcheck.xyz      risk score, risks, authorities, LP lock,
-//                                     top holders, markets, lockers, insiders
+//   RugCheck    api.rugcheck.xyz      authorities, metadata, LP lock, top
+//                                     holders, markets, lockers, insiders
+//                                     (its own score, risk levels and verdict
+//                                     words are never passed through: the
+//                                     answers list named facts, each computed
+//                                     here from the report's fields, with the
+//                                     on-chain facts notice, src/token-claims.js)
 //   DexScreener api.dexscreener.com   pairs per mint (and the price read from
 //                                     them), search, boosted/new tokens
 //   Jupiter     lite-api.jup.ag       token search/audit (an input to the
@@ -38,6 +43,7 @@ import { HANDLER_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, budgetSpentError, 
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../rugcheck-switch.js";
 import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugcheck-pause.js";
 export { RUGCHECK_SLUGS, rugcheckEnabled };
+import { TOKEN_FACTS_NOTICE } from "../token-claims.js";
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // the hard ceiling on any one upstream document read here.
 import { readBytesCapped, readTextCapped, decodeUtf8 } from "../capped-body.js";
 import { JUPITER_ATTRIBUTION, RUGCHECK_ATTRIBUTION, attribute, creditAnswers } from "../data-attribution.js";
@@ -230,25 +236,34 @@ async function rugcheckReport(mint, budget, timeoutMs = RUGCHECK_REPORT_MS) {
 }
 
 // ---------------------------------------------------------------------------
-// RugCheck shaping
+// Named facts
 // ---------------------------------------------------------------------------
-function shapeRisks(risks) {
-  return (Array.isArray(risks) ? risks : []).slice(0, 25).map((r) => ({
-    name: String(r?.name ?? ""),
-    level: String(r?.level ?? ""),
-    score: num(r?.score),
-    value: r?.value ? String(r.value).slice(0, 120) : null,
-    description: r?.description ? String(r.description).slice(0, 240) : null,
-  }));
-}
+// The Solana token answers list named facts computed here from the sources'
+// structured fields, never the source's own score, risk levels or verdict
+// words. Each flag: an id, a description and the measured value. A fact the
+// sources did not report is listed in `unknown` with why, never read as the
+// absence of a flag.
+const SOL_FLAG_RULES = Object.freeze([
+  { id: "mint-authority-live", field: "mintAuthorityDisabled", when: (v) => v === false, says: "a mint authority is set, so new supply can be minted", value: (x) => x.mintAuthority ?? true },
+  { id: "freeze-authority-live", field: "freezeAuthorityDisabled", when: (v) => v === false, says: "a freeze authority is set, so holder token accounts can be frozen", value: (x) => x.freezeAuthority ?? true },
+  { id: "metadata-mutable", field: "metadataMutable", when: (v) => v === true, says: "the update authority can change the token's name, symbol and image", value: (x) => x.updateAuthority ?? true },
+  { id: "transfer-fee", field: "transferFeePct", when: (v) => v != null && v > 0, says: "transfers pay a fee set in the token's transfer-fee extension (percent)" },
+  { id: "lp-locked-under-50", field: "lpLockedPct", when: (v) => v != null && v < 50, says: "under 50% of the liquidity pool tokens are locked (percent locked)" },
+  { id: "top-holders-50-or-more", field: "topHoldersPct", when: (v) => v != null && v >= 50, says: "the largest holders together hold 50% or more of supply (percent)" },
+]);
+export const SOL_FLAG_IDS = Object.freeze(SOL_FLAG_RULES.map((r) => r.id));
 
-function riskCounts(risks) {
-  const c = { danger: 0, warn: 0, info: 0 };
-  for (const r of risks) {
-    const lvl = String(r?.level || "").toLowerCase();
-    if (lvl in c) c[lvl] += 1;
+/** The named facts found in `x` (the fields above, each null when the
+ *  sources did not report it), and the ones that could not be checked. */
+export function solanaTokenFlags(x, why = {}) {
+  const flags = [], unknown = [];
+  for (const r of SOL_FLAG_RULES) {
+    if (!(r.field in x)) continue;
+    const v = x[r.field];
+    if (v == null) { unknown.push({ field: r.field, reason: why[r.field] || "not reported by the sources read" }); continue; }
+    if (r.when(v)) flags.push({ id: r.id, field: r.field, description: r.says, value: r.value ? r.value(x) : v });
   }
-  return c;
+  return { flags, unknown };
 }
 
 // "is this mint/freeze authority still live?" - null, the system program
@@ -760,17 +775,17 @@ function shapeJupToken(t) {
 // ---------------------------------------------------------------------------
 export const SOLANA_INTEL_TOOLS = [
   // =========================================================================
-  // sol-token-safety - headline safety read: RugCheck summary + Jupiter audit
+  // sol-token-safety - risk facts: RugCheck summary + Jupiter audit
   // =========================================================================
   {
     route: "POST /api/sol-token-safety",
-    name: "Solana token risk check",
+    name: "Solana token risk facts",
     slug: "sol-token-safety",
     category: "crypto",
     price: "$0.005",
     description:
-      "Risk summary for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalized), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel and returned as one compact summary of what they report. Evidence from those sources, never a 'safe' or 'scam' verdict: a clean summary is not an endorsement. The full token-risk report is read only when a published field needs it (the aggregator does not index the mint, or the summary carries no score), and fullReport names the fields it filled.",
-    tags: ["solana", "token", "safety", "memecoin", "risk", "spl"],
+      "Risk facts for any Solana SPL token mint, read from two keyless public sources in parallel: whether the mint authority and the freeze authority are revoked or still set (with their addresses), the share of liquidity pool tokens locked, the largest holders' combined share, dev balance and dev mints, holder count, decimals, the aggregator's verified flag and organic score, and the token program. The answer lists each named fact it found (flags: an id, a description and the measured value), what the sources did not report (unknown, with why), and a fixed notice that these are on-chain facts only and not investment advice. Each flag is computed here from the sources' fields; no outside score, risk level or rating is passed through, and there is no verdict, so no flags is not a statement about the token. The full token report is read only when the aggregator does not index the mint, and fullReport names the fields it filled.",
+    tags: ["solana", "token", "authorities", "liquidity", "holders", "spl", "onchain"],
     discovery: {
       bodyType: "json",
       input: { mint: MINTS.JUP },
@@ -783,13 +798,15 @@ export const SOLANA_INTEL_TOOLS = [
       output: {
         example: {
           mint: MINTS.JUP,
-          score: 3550201, scoreNormalised: 97, lpLockedPct: 8.98,
-          risks: [{ name: "Mutable metadata", level: "warn", score: 100, value: null, description: "Token metadata can be changed by the update authority" }],
-          riskCounts: { danger: 0, warn: 1, info: 0 },
+          flags: [{ id: "lp-locked-under-50", field: "lpLockedPct", description: "under 50% of the liquidity pool tokens are locked (percent locked)", value: 8.98 }],
+          unknown: [],
+          lpLockedPct: 8.98,
+          tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
           token: { name: "Jupiter", symbol: "JUP", decimals: 6, holderCount: 835540, isVerified: true, organicScore: 99.3, organicScoreLabel: "high", launchpad: null },
           authorities: { mintAuthorityDisabled: true, freezeAuthorityDisabled: true, mintAuthority: null, freezeAuthority: null },
           holders: { topHoldersPct: 15.28, devBalancePct: null, devMints: 1 },
-          riskLevel: "good",
+          fullReport: null,
+          notice: TOKEN_FACTS_NOTICE,
           source: ["rugcheck", "jupiter"], fetchedAt: "2026-08-22T12:00:00.000Z",
         },
       },
@@ -800,17 +817,16 @@ export const SOLANA_INTEL_TOOLS = [
       // SUMMARY FIRST. The summary (a few hundred bytes, measured ~0.4 s) and
       // Jupiter's index entry carry every field this tool publishes for the
       // tokens it is asked about. The full report (megabytes on a blue chip,
-      // measured 3.6 s for JUP) is read only when a published field would
-      // otherwise be null: the summary carried no score, or Jupiter does not
-      // index the mint (token, authorities). That read is optional: when it
-      // cannot finish, the fields stay null and `fullReport` says why.
+      // measured 3.6 s for JUP) is read only when Jupiter does not index the
+      // mint (token, authorities). That read is optional: when it cannot
+      // finish, the fields stay null and `fullReport` says why. The summary's
+      // own score and risk levels are never read into the answer.
       const [summary, jupList] = await Promise.all([
         upstreamJson(`${RUGCHECK}/tokens/${mint}/report/summary`, { label: "RugCheck", step: "report summary", timeoutMs: RUGCHECK_SUMMARY_MS, budget, notFound: "RugCheck has no report for that mint (not an SPL token mint?)" }),
         upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(mint)}`, { label: "Jupiter", step: "token search", timeoutMs: JUPITER_MS, budget }),
       ]);
       const jt = shapeJupToken((Array.isArray(jupList) ? jupList : []).find((t) => t?.id === mint) || null);
       const need = [];
-      if (num(summary?.score_normalised) == null) need.push("score");
       if (!jt) need.push("token", "authorities");
       let full = null, fullReport = null;
       if (need.length) {
@@ -825,13 +841,6 @@ export const SOLANA_INTEL_TOOLS = [
         }
       }
       const filled = [];
-      let risks = shapeRisks(summary?.risks);
-      let score = num(summary?.score);
-      let normalised = num(summary?.score_normalised);
-      if (full && need.includes("score") && num(full?.score_normalised) != null) {
-        score = num(full.score); normalised = num(full.score_normalised); risks = shapeRisks(full.risks); filled.push("score", "risks");
-      }
-      const counts = riskCounts(risks);
       let token = jt ? { name: jt.name, symbol: jt.symbol, decimals: jt.decimals, holderCount: jt.holderCount, isVerified: jt.isVerified, organicScore: jt.organicScore, organicScoreLabel: jt.organicScoreLabel, launchpad: jt.launchpad } : null;
       let authorities = jt ? { mintAuthorityDisabled: jt.audit.mintAuthorityDisabled, freezeAuthorityDisabled: jt.audit.freezeAuthorityDisabled, mintAuthority: jt.mintAuthority, freezeAuthority: jt.freezeAuthority } : null;
       if (full && !jt) {
@@ -853,33 +862,28 @@ export const SOLANA_INTEL_TOOLS = [
         filled.push("token", "authorities");
       }
       if (full) fullReport = { read: true, needed: need, filled };
-      // Deterministic band from RugCheck's own numbers (lower is safer). Note
-      // RugCheck flags "LP Vault unlocked" as danger on established tokens too,
-      // so an old blue chip can land in "danger"; the authorities/holders
-      // fields carry the rest of the picture.
-      let riskLevel = "unknown";
-      if (normalised != null) {
-        if (counts.danger > 0 || normalised > 60) riskLevel = "danger";
-        else if (normalised > 20 || counts.warn > 1) riskLevel = "warn";
-        else riskLevel = "good";
-      }
+      const lpLockedPct = round(summary?.lpLockedPct, 2);
+      const holders = jt ? { topHoldersPct: jt.audit.topHoldersPct, devBalancePct: jt.audit.devBalancePct, devMints: jt.audit.devMints } : null;
+      const { flags, unknown } = solanaTokenFlags({
+        mintAuthorityDisabled: authorities?.mintAuthorityDisabled ?? null, mintAuthority: authorities?.mintAuthority ?? null,
+        freezeAuthorityDisabled: authorities?.freezeAuthorityDisabled ?? null, freezeAuthority: authorities?.freezeAuthority ?? null,
+        lpLockedPct, topHoldersPct: holders?.topHoldersPct ?? null,
+      }, jt ? {} : { mintAuthorityDisabled: "the aggregator does not index the mint and the full report did not answer", freezeAuthorityDisabled: "the aggregator does not index the mint and the full report did not answer", topHoldersPct: "the aggregator does not index the mint" });
       return {
         mint,
-        score,
-        scoreNormalised: normalised,
-        lpLockedPct: round(summary?.lpLockedPct, 2),
+        flags,
+        unknown,
+        lpLockedPct,
         tokenProgram: summary?.tokenProgram ?? full?.tokenProgram ?? null,
-        risks,
-        riskCounts: counts,
         token,
         authorities,
-        holders: jt ? { topHoldersPct: jt.audit.topHoldersPct, devBalancePct: jt.audit.devBalancePct, devMints: jt.audit.devMints } : null,
-        riskLevel,
+        holders,
         // null when the summary and Jupiter carried everything (the usual
         // case); otherwise which fields needed the full report, which it
         // filled, and why it could not when it could not.
         fullReport,
-        note: "riskLevel bands RugCheck's own score and risk levels (lower score is safer, normalized 0-100); it is not a recommendation. Jupiter fields are null when Jupiter does not index the mint; token and authorities then come from RugCheck's full report when it answers (fullReport says which), and holders stays null.",
+        note: "Flags are computed here from the sources' fields; no outside score or risk level is passed through. Jupiter fields are null when Jupiter does not index the mint; token and authorities then come from the full report when it answers (fullReport says which), and holders stays null.",
+        notice: TOKEN_FACTS_NOTICE,
         source: filled.length ? ["rugcheck", "jupiter", "rugcheck-report"] : ["rugcheck", "jupiter"],
         fetchedAt: stamp(),
       };
@@ -887,17 +891,17 @@ export const SOLANA_INTEL_TOOLS = [
   },
 
   // =========================================================================
-  // sol-token-report - RugCheck full report, trimmed
+  // sol-token-report - the full token report's facts, trimmed
   // =========================================================================
   {
     route: "POST /api/sol-token-report",
-    name: "Solana token risk report (full)",
+    name: "Solana token risk facts (full report)",
     slug: "sol-token-report", aliases: ["solana-token-risk-report", "solana-token-risk"],
     category: "crypto",
     price: "$0.010",
     description:
-      "Full public token-risk report for a Solana token mint, trimmed to what an agent acts on: score and risks, mint/freeze authority state, metadata mutability and update authority, supply and decimals, creator and creator balance, top 20 holders with percent, owner, insider flag and pool/locker labels, concentration totals, the deepest markets (liquidity, LP locked %), lockers, total market liquidity, LP providers, holder count, rugged flag, insider-network count, launchpad and transfer-fee config. One report read, plus at most two bounded reads from our Solana RPC (the 20 largest token accounts, then one batched owner lookup) only when the report carries no holder table; every read runs under a deadline, so a slow upstream answers as a retryable refusal, never a charge. The holders and markets blocks carry returned, matched and complete fields. Blue-chip reports run to megabytes upstream and come back here in a few KB.",
-    tags: ["solana", "token", "report", "holders", "liquidity", "risk", "spl"],
+      "The facts in a public token report for a Solana token mint, trimmed to what an agent acts on: mint/freeze authority state, metadata mutability and update authority, supply and decimals, creator and creator balance, top 20 holders with percent, owner, insider flag and pool/locker labels, concentration totals, the deepest markets (liquidity, LP locked %), lockers, total market liquidity, LP providers, holder count, insider-network count, launchpad and transfer-fee config. The answer lists each named fact found (flags: an id, a description and the measured value, computed here from the report's fields), what the report did not carry (unknown) and a fixed notice that these are on-chain facts only and not investment advice; the report's own score, risk levels and verdict words are never passed through. One report read, plus at most two bounded reads from our Solana RPC (the 20 largest token accounts, then one batched owner lookup) only when the report carries no holder table; every read runs under a deadline, so a slow upstream answers as a retryable refusal, never a charge. The holders and markets blocks carry returned, matched and complete fields. Blue-chip reports run to megabytes upstream and come back here in a few KB.",
+    tags: ["solana", "token", "report", "holders", "liquidity", "authorities", "spl"],
     discovery: {
       bodyType: "json",
       input: { mint: MINTS.JUP, marketLimit: 5, holderLimit: 10 },
@@ -914,13 +918,15 @@ export const SOLANA_INTEL_TOOLS = [
           mint: MINTS.JUP,
           token: { name: "Jupiter", symbol: "JUP", decimals: 6, supply: 6862431164.93, tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", metadataMutable: true, updateAuthority: "61aq585V8cR2sZBeawJFt2NPqmN7zDi1sws4KLs5xHXV" },
           authorities: { mint: { revoked: true, address: null }, freeze: { revoked: true, address: null } },
-          score: 3550201, scoreNormalised: 97, rugged: false, risks: [], riskCounts: { danger: 0, warn: 0, info: 0 },
+          flags: [{ id: "metadata-mutable", field: "metadataMutable", description: "the update authority can change the token's name, symbol and image", value: "61aq585V8cR2sZBeawJFt2NPqmN7zDi1sws4KLs5xHXV" }, { id: "top-holders-50-or-more", field: "topHoldersPct", description: "the largest holders together hold 50% or more of supply (percent)", value: 66.1 }],
+          unknown: [],
           creator: null, creatorBalance: 0, launchpad: null, detectedAt: "2024-05-29T00:40:51Z",
           priceUsd: 0.2027, totalMarketLiquidityUsd: 3585833.66, totalLpProviders: 173, totalHolders: 2873512, insiderNetworks: 0,
           transferFee: { pct: 0, maxAmount: 0 },
           holders: { rows: [{ tokenAccount: "6G4X...", owner: "EXJH...", uiAmount: 1700000000.1, pct: 24.77, insider: false, label: null }], returned: 10, matched: 20, complete: false, truncated: true, maxHolders: 20, concentration: { top1Pct: 24.77, top5Pct: 57.67, top10Pct: 66.1, top20Pct: 75.2, top10PctExcludingPools: 66.1, insiderHolders: 0, labeledPoolOrLockerAccounts: 0 } },
           markets: { total: 1409, rows: [{ pool: "C8Gr...", type: "meteoraDlmm", mintA: MINTS.JUP, mintB: MINTS.SOL, liquidityUsd: 1260729.15, lpLockedPct: 0, lpLockedUsd: 0, lpProviders: 0 }], returned: 5, matched: 1409, complete: false, truncated: true, maxMarkets: 25 },
           lockers: { total: 2, rows: [] },
+          notice: TOKEN_FACTS_NOTICE,
           source: "rugcheck", fetchedAt: "2026-08-22T12:00:00.000Z",
         },
       },
@@ -931,12 +937,22 @@ export const SOLANA_INTEL_TOOLS = [
       const holderLimit = takeLimit(i.holderLimit, 20, 20);
       const budget = budgetOf();
       const r = await rugcheckReport(mint, budget);
-      const risks = shapeRisks(r?.risks);
       const decimals = num(r?.token?.decimals);
       const rawSupply = num(r?.token?.supply);
       const rpc = Array.isArray(r?.topHolders) && r.topHolders.length ? { rows: null, why: null } : await topAccountsFromRpc(mint, rawSupply, budget);
       const holdersShaped = shapeHolders(r, holderLimit, rpc.rows);
       const marketsShaped = shapeMarkets(r, marketLimit);
+      const mintAuth = authorityState(r?.token?.mintAuthority ?? r?.mintAuthority);
+      const freezeAuth = authorityState(r?.token?.freezeAuthority ?? r?.freezeAuthority);
+      const transferFee = r?.transferFee ? { pct: num(r.transferFee.pct), maxAmount: num(r.transferFee.maxAmount) } : null;
+      const conc = holdersShaped.rows.length ? holdersShaped.concentration : null;
+      const { flags, unknown } = solanaTokenFlags({
+        mintAuthorityDisabled: mintAuth.revoked, mintAuthority: mintAuth.address,
+        freezeAuthorityDisabled: freezeAuth.revoked, freezeAuthority: freezeAuth.address,
+        metadataMutable: typeof r?.tokenMeta?.mutable === "boolean" ? r.tokenMeta.mutable : null, updateAuthority: r?.tokenMeta?.updateAuthority ?? null,
+        transferFeePct: transferFee ? transferFee.pct ?? 0 : 0,
+        topHoldersPct: num(conc?.top10Pct),
+      }, { topHoldersPct: "no holder table was read" });
       return {
         mint,
         token: {
@@ -949,15 +965,9 @@ export const SOLANA_INTEL_TOOLS = [
           updateAuthority: r?.tokenMeta?.updateAuthority ?? null,
           uri: r?.tokenMeta?.uri ?? null,
         },
-        authorities: {
-          mint: authorityState(r?.token?.mintAuthority ?? r?.mintAuthority),
-          freeze: authorityState(r?.token?.freezeAuthority ?? r?.freezeAuthority),
-        },
-        score: num(r?.score),
-        scoreNormalised: num(r?.score_normalised),
-        rugged: Boolean(r?.rugged),
-        risks,
-        riskCounts: riskCounts(risks),
+        authorities: { mint: mintAuth, freeze: freezeAuth },
+        flags,
+        unknown,
         creator: r?.creator ?? null,
         creatorBalance: num(r?.creatorBalance),
         launchpad: r?.launchpad?.name ?? r?.launchpad?.platform ?? null,
@@ -968,7 +978,7 @@ export const SOLANA_INTEL_TOOLS = [
         totalLpProviders: num(r?.totalLPProviders),
         totalHolders: num(r?.totalHolders),
         insiderNetworks: num(r?.graphInsidersDetected),
-        transferFee: r?.transferFee ? { pct: num(r.transferFee.pct), maxAmount: num(r.transferFee.maxAmount) } : null,
+        transferFee,
         verification: r?.verification ? { jupVerified: Boolean(r.verification.jup_verified), jupStrict: Boolean(r.verification.jup_strict) } : null,
         // Same RugCheck-empty fallback as /api/sol-token-holders: without it
         // this block's rows and concentration go hollow on every mint.
@@ -982,6 +992,7 @@ export const SOLANA_INTEL_TOOLS = [
         },
         markets: { ...marketsShaped, ...partialFields(marketsShaped.total, marketsShaped.rows.length), maxMarkets: 25 },
         lockers: shapeLockers(r, 10),
+        notice: TOKEN_FACTS_NOTICE,
         source: "rugcheck",
         fetchedAt: stamp(),
       };
@@ -1016,6 +1027,7 @@ export const SOLANA_INTEL_TOOLS = [
           holders: [{ tokenAccount: "6G4X...", owner: "EXJH...", uiAmount: 1700000000.1, pct: 24.77, insider: false, label: null }],
           returned: 10, matched: 20, complete: false, truncated: true, maxHolders: 20,
           concentration: { top1Pct: 24.77, top5Pct: 57.67, top10Pct: 66.1, top20Pct: 75.2, top10PctExcludingPools: 66.1, insiderHolders: 0, labeledPoolOrLockerAccounts: 0 },
+          notice: TOKEN_FACTS_NOTICE,
           source: "rugcheck", fetchedAt: "2026-08-22T12:00:00.000Z",
         },
       },
@@ -1060,6 +1072,7 @@ export const SOLANA_INTEL_TOOLS = [
         source: fromRugcheck ? "rugcheck" : h.rows.length ? "rugcheck+rpc" : "rugcheck",
         holdersSource: h.rows.length ? (fromRugcheck ? "rugcheck" : "solana-rpc") : null,
         insiderFlagAvailable: fromRugcheck,
+        notice: TOKEN_FACTS_NOTICE,
         fetchedAt: stamp(),
       };
     },
@@ -1233,7 +1246,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "What Solana tokens are being pushed right now: a public DEX pair index's top boosted tokens (paid promotion, ranked by boost amount - a signal of marketing spend, not quality) and the latest token profiles (fresh listings with a filled-in profile), both filtered to Solana. Each row carries the mint, the index's token page URL, description snippet and links. Computed on top: each boost's share of the Solana boost spend and the top five's share, the mints that are both boosted and newly profiled, community takeovers, and per row the link count and whether it lists a website and socials. Feed the mints into sol-token-safety to separate the promoted from the sound. Keyless; two small reads in parallel.",
+      "What Solana tokens are being pushed right now: a public DEX pair index's top boosted tokens (paid promotion, ranked by boost amount - a signal of marketing spend, not quality) and the latest token profiles (fresh listings with a filled-in profile), both filtered to Solana. Each row carries the mint, the index's token page URL, description snippet and links. Computed on top: each boost's share of the Solana boost spend and the top five's share, the mints that are both boosted and newly profiled, community takeovers, and per row the link count and whether it lists a website and socials. Feed the mints into sol-token-safety to read each one's authorities, LP lock and holder share before going further. Keyless; two small reads in parallel.",
     tags: ["solana", "trending", "boosts", "new-tokens", "memecoin", "discovery", "spl"],
     discovery: {
       bodyType: "json",
@@ -1310,7 +1323,7 @@ export const SOLANA_INTEL_TOOLS = [
           boostedAndNewlyProfiled: wantBoosts && wantProfiles ? inBoth.slice(0, limit) : null,
           communityTakeovers: wantProfiles ? pSol.filter((t) => t.cto).length : null,
         },
-        note: "Boosts are paid promotion ranked by amount; profiles are the newest tokens with a filled-in DexScreener profile. Neither is a safety signal.",
+        note: "Boosts are paid promotion ranked by amount; profiles are the newest tokens with a filled-in DexScreener profile. Neither is a fact about the token's contract or holders.",
         source: "dexscreener",
         fetchedAt: stamp(),
       };
@@ -1411,7 +1424,7 @@ export async function tokenIndexLookup(query, limit = 1) {
 }
 
 // Exported for offline unit tests (pure shaping, no network).
-export const __test = { PAIR_SIGNAL_FLAGS, pairSignals, takeMint, takeLimit, searchKeys, pairMatchesQuery, mergeFallbackRows, shapeHolders, shapeMarkets, shapePair, shapeJupToken, priceOfMint, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
+export const __test = { PAIR_SIGNAL_FLAGS, pairSignals, takeMint, takeLimit, searchKeys, pairMatchesQuery, mergeFallbackRows, shapeHolders, shapeMarkets, shapePair, shapeJupToken, priceOfMint, authorityState, solanaTokenFlags, BASE58_RE, budgetOf, topAccountsFromRpc,
   DEADLINES: Object.freeze({ HANDLER_BUDGET_MS, RUGCHECK_SUMMARY_MS, RUGCHECK_REPORT_MS, JUPITER_MS, DEXSCREENER_MS, RPC_MS, RPC_FLOOR_MS, FULL_REPORT_FLOOR_MS, RUGCHECK_FALLBACK_MS }), reportReadsInflight: () => reportReads.inflightSize() };
 
 // Free text in these results is written by third parties (headlines, posts,

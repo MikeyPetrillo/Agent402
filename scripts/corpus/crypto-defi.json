@@ -925,23 +925,27 @@
     "populated": [
      "token",
      "authorities",
-     "score"
-    ]
+     "notice"
+    ],
+    "minCount": {
+     "flags": 0,
+     "unknown": 0
+    }
    },
    "requires": "SOLANA_RPC_URL"
   },
   {
    "slug": "sol-token-safety",
    "requires": "RUGCHECK_TOOLS",
-   "name": "USDC safety",
+   "name": "USDC risk facts: live authorities are flags",
    "input": {
     "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
    },
    "expect": {
     "populated": [
-     "score",
-     "riskLevel",
-     "token"
+     "flags",
+     "token",
+     "notice"
     ]
    }
   },
