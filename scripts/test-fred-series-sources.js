@@ -240,6 +240,26 @@ try {
   // Never served: licensed or restricted series, and sources needing a key.
   for (const id of ["SP500", "MORTGAGE30US", "MORTGAGE15US", "DCOILWTICO", "DCOILBRENTEU", "HOUST", "RSAFS"]) ok(!SUPPORTED_IDS.includes(id), `${id} is not served (its terms or its access)`);
   ok(SUPPORTED_IDS.length >= 90, `the supported list is wide (${SUPPORTED_IDS.length} IDs)`);
+  // A count of the served IDs typed in prose (README, wiki, docs, package
+  // READMEs) is the supported list's length, so a series added or dropped
+  // without the copy fails here.
+  {
+    const { readFileSync, readdirSync, existsSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const root = fileURLToPath(new URL("..", import.meta.url));
+    const files = ["README.md", "CHANGELOG.md", "mcp/README.md", "tollbooth/README.md", "client/README.md",
+      ...["wiki", "docs"].flatMap((d) => existsSync(root + d) ? readdirSync(root + d).filter((f) => f.endsWith(".md")).map((f) => `${d}/${f}`) : [])];
+    const typed = [];
+    for (const f of files) {
+      if (!existsSync(root + f)) continue;
+      readFileSync(root + f, "utf8").split("\n").forEach((line, n) => {
+        for (const m of line.matchAll(/\b(\d+) (?:common )?FRED series/g)) typed.push({ at: `${f}:${n + 1}`, n: Number(m[1]) });
+      });
+    }
+    ok(typed.length >= 2, `the typed series counts are found (${typed.map((t) => t.at).join(", ")})`);
+    const wrong = typed.filter((t) => t.n !== SUPPORTED_IDS.length);
+    ok(wrong.length === 0, `every typed FRED series count is the supported list's length, ${SUPPORTED_IDS.length} (${wrong.map((t) => `${t.at} says ${t.n}`).join("; ") || "all match"})`);
+  }
 
   // 3: not served
   const e = await caught(run({ seriesId: "NOTSERVED1" }));
