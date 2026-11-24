@@ -18,7 +18,9 @@ ok(EXEC_TIERS.length > 0 && typeof buildRouteExecuteTool === "function", "route-
 ok(/spendsOwnWallet: true,[\s\S]{0,200}paysThirdPartySeller: true,/.test(re), "route-execute's tier definition is flagged");
 for (const [file, slug] of [["tools/seller-payability-kit.js", "seller-payability"], ["tools/decide-kit.js", "decide-execute"]]) {
   const s = src(file);
-  const at = s.indexOf(`slug: "${slug}"`);
+  // The definition's own line (a slug named inside a call, such as a refund
+  // row's, is not the definition).
+  const at = s.search(new RegExp(`\\n\\s+slug: "${slug}",\\n`));
   ok(at > 0 && /paysThirdPartySeller: true,/.test(s.slice(at, at + 1200)), `${slug} is flagged`);
 }
 // The flight routes buy each answer from an outside seller with our wallet: flagged too.
