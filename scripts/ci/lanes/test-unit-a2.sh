@@ -176,6 +176,7 @@ t node scripts/test-scan-state-version-pg.js
 t node scripts/test-revenue-ledger-pg.js
 t node scripts/test-revenue-ledger-enable-pg.js
 t node scripts/test-refund-ledger-pg.js
+t node scripts/test-ledger-retention-pg.js
 # A resend's void lands now or not at all: a debt whose buyer never retries stays owed after a store outage (real Postgres behind a relay)
 t node scripts/test-resend-void-pg.js
 # A payment cut at its settle deadline, landed and booked owed, then sent again: served the kept answer with its debt void and its evidence marked, the sale booked once on its real rail and wire, one served call; another call keeps the 402 (REAL postgres; redis when set)
