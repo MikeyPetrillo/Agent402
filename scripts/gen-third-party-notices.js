@@ -172,14 +172,17 @@ function pyDeps(file) {
   const deps = list((/^dependencies\s*=\s*\[([^\]]*)\]/m.exec(t) || [])[1]);
   const optBlock = (/\[project\.optional-dependencies\]([\s\S]*?)(?:\n\[|$)/.exec(t) || [])[1] || "";
   const opt = [...optBlock.matchAll(/^([A-Za-z0-9_-]+)\s*=\s*\[([^\]]*)\]/gm)].map((m) => `${m[1]}: ${list(m[2]).join(", ")}`);
-  return `  ${name} (${file.replace(/\/pyproject\.toml$/, "/")})\n    dependencies: ${deps.join(", ") || "none"}\n    optional dependencies: ${opt.join("; ") || "none"}`;
+  const moved = file.startsWith("renamed/") ? `; renamed, now ${deps[0] ? deps[0].split(/[<>=!~ ;\[]/)[0] : "a new name"}` : "";
+  return `  ${name} (${file.replace(/\/pyproject\.toml$/, "/")}${moved})\n    dependencies: ${deps.join(", ") || "none"}\n    optional dependencies: ${opt.join("; ") || "none"}`;
 }
 
 function declared(dir) {
   const p = read(`${dir}/package.json`);
   const deps = Object.entries(p.dependencies || {}).map(([k, v]) => `${k} ${v}`);
   const peers = Object.entries(p.peerDependencies || {}).map(([k, v]) => `${k} ${v}`);
-  return `  ${p.name} (${p.license})\n    dependencies: ${deps.join(", ") || "none"}\n    peer dependencies: ${peers.join(", ") || "none"}`;
+  // An earlier package name's last release (renamed/) says where it moved.
+  const moved = dir.startsWith("renamed/") ? `; renamed, now ${Object.keys(p.dependencies || {})[0] || "a new name"}` : "";
+  return `  ${p.name} (${p.license}${moved})\n    dependencies: ${deps.join(", ") || "none"}\n    peer dependencies: ${peers.join(", ") || "none"}`;
 }
 
 export function buildNotices() {

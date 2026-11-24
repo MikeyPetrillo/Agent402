@@ -747,37 +747,37 @@ These bundle no third-party code. Their dependencies are installed by the user's
   agent402-model-provider (MIT)
     dependencies: none
     peer dependencies: @x402/evm >=2.20.0 <3, @x402/fetch >=2.20.0 <3, viem >=2.48.11 <3
-  agent402-agentkit (MIT)
+  agent402-agentkit (MIT; renamed, now agent402-action-provider)
     dependencies: agent402-action-provider ^0.3.0
     peer dependencies: none
-  agent402-ai-sdk (MIT)
+  agent402-ai-sdk (MIT; renamed, now agent402-stream-tools)
     dependencies: agent402-stream-tools ^0.3.0
     peer dependencies: none
-  agent402-anthropic-tools (MIT)
+  agent402-anthropic-tools (MIT; renamed, now agent402-tool-use)
     dependencies: agent402-tool-use ^0.3.0
     peer dependencies: none
-  agent402-google-adk (MIT)
+  agent402-google-adk (MIT; renamed, now agent402-dev-kit-tools)
     dependencies: agent402-dev-kit-tools ^0.2.0
     peer dependencies: none
-  agent402-langchain (MIT)
+  agent402-langchain (MIT; renamed, now agent402-structured-tools)
     dependencies: agent402-structured-tools ^0.3.0
     peer dependencies: none
-  agent402-llamaindex (MIT)
+  agent402-llamaindex (MIT; renamed, now agent402-function-tools)
     dependencies: agent402-function-tools ^0.3.0
     peer dependencies: none
-  agent402-openai-agents (MIT)
+  agent402-openai-agents (MIT; renamed, now agent402-runner-tools)
     dependencies: agent402-runner-tools ^0.2.0
     peer dependencies: none
-  agent402-openai-tools (MIT)
+  agent402-openai-tools (MIT; renamed, now agent402-function-calling)
     dependencies: agent402-function-calling ^0.3.0
     peer dependencies: none
-  agent402-openclaw (MIT)
+  agent402-openclaw (MIT; renamed, now agent402-model-provider)
     dependencies: agent402-model-provider ^0.7.0
     peer dependencies: none
-  agent402-strands (MIT)
+  agent402-strands (MIT; renamed, now agent402-agent-loop-tools)
     dependencies: agent402-agent-loop-tools ^0.3.0
     peer dependencies: none
-  elizaos-plugin-agent402 (MIT)
+  elizaos-plugin-agent402 (MIT; renamed, now agent402-actions-plugin)
     dependencies: agent402-actions-plugin ^0.4.0
     peer dependencies: none
   agent402-tollbooth (MIT)
@@ -791,7 +791,7 @@ These bundle no third-party code. Their dependencies are installed by the user's
   agent402-structured-tools (adapters/langchain-py/)
     dependencies: requests>=2.25
     optional dependencies: langchain: langchain-core>=0.2, pydantic>=2
-  agent402-langchain (renamed/agent402-langchain-py/)
+  agent402-langchain (renamed/agent402-langchain-py/; renamed, now agent402-structured-tools)
     dependencies: agent402-structured-tools>=0.2.0,<0.3
     optional dependencies: langchain: 
 
