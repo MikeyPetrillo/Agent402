@@ -1374,7 +1374,9 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
   ok(drift.length === 0, `every copy of the settle-first words is one of the shared sentences, word for word${drift.length ? ` (drifted: ${[...new Set(drift)].join(", ")})` : ""}`);
   ok([..."A failed x402 call is not charged.".matchAll(GENERAL)].length === 1 && !carries("A failed x402 call is not charged. Retry later."),
-    "control: the bare claim is matched and is not taken as carrying the sentence");  ok(["so on x402 a 4xx or 5xx (a text over the cap, a format the tier does not serve, an upstream that could not answer) is not charged.",
+    "control: the bare claim is matched and is not taken as carrying the sentence");
+  ok(["Over x402 you weren't charged.", "you wasn\u2019t charged", "a failed call takes no money", "you will not be charged", "you won't be charged", "no money is taken"].every((t) => [...t.matchAll(notChargedClaims())].length === 1),
+    "control: the contracted and money forms of the claim are matched (weren't charged, will not be charged, takes no money)");  ok(["so on x402 a 4xx or 5xx (a text over the cap, a format the tier does not serve, an upstream that could not answer) is not charged.",
     "| 502 | a source answered with a failure | retry later; not charged on x402 |", "On x402 a call the tool fails is not charged: settlement runs after the tool.",
     "the ordinary failure case costs nothing and needs no refund.", "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.",
     "Any `4xx`/`5xx` (a bad input, a capacity `503`, an upstream `502`) **cancels settlement**, so the x402 buyer is not charged for a failure.",
