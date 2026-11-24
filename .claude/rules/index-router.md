@@ -309,3 +309,6 @@ Loaded when an index, discovery, router or buyer file is read.
   https link on the seller's exact host (under its own path for a seller listed with a path) and
   dropped on a row the listing screen flags; the detail then carries `sellerDocsUrlLegend`. The index
   never fetches it, and it changes no price, quote, routing or payment. `?seller=` is its only surface.
+
+## Algorand seller catalog
+- `ALGORAND_SELLERS_WARM` (default on; `off` skips the boot warm-up), `ALGORAND_SELLERS_MAX_PAGES` (default 80, at most 500 pages a listing), `ALGORAND_SELLERS_BG_BUILD_MAX_MS` (default 10 minutes for a background build), `ALGORAND_SELLERS_BG_READ_TIMEOUT_MS` (default 60 s a read), `ALGORAND_SELLERS_TTL_MS` (default 30 minutes). The timer rebuilds only when the router read the catalog since the last build started; each build logs the pages it read.

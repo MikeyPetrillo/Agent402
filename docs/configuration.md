@@ -1683,7 +1683,7 @@ holds it.
 | `OPEN_METEO_API_KEY` | Key for the weather data provider; unset uses its public hosts. |  | `src/tools/weather-kit.js` |
 | `OPEN_METEO_READ_CACHE` | off reads every forecast, archive and ensemble request upstream; unset keeps each successful read for up to an hour, as each listing says (src/tools/weather-kit.js). |  | `src/tools/weather-kit.js` |
 | `OPERATOR_AUTH_FAIL_ALERT` | Failed operator-token attempts per hour before the guessing alarm pages. | `100` | `src/server.js` |
-| `OPERATOR_SESSION_IDLE_SECONDS` | Idle lifetime of a browser operator session, in seconds. |  | `src/server.js` |
+| `OPERATOR_SESSION_IDLE_SECONDS` | Idle lifetime of a browser operator session, in seconds. |  | `src/operator-session-limits.js` |
 | `OWED_ESCALATE_DAYS` | Owed escalate, in days. |  | `src/tempo-push-debts.js` |
 | `PAID_TIMING_LOG` | Paid timing log. |  | `src/paid-phase-timing.js` |
 | `PAID_TIMING_WINDOW` | Paid timing window. |  | `src/paid-phase-timing.js` |
