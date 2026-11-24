@@ -167,6 +167,9 @@ Packages:
   agent402-mcp 0.17.1, agent402-client 0.12.2 and agent402-tollbooth 0.13.1
   carry them. The tollbooth README cites Coinbase's own documentation for its
   Coinbase Business section.
+- agent402-tollbooth 0.13.2 gives every Tempo challenge a random `opaque`
+  value bound into its id, so two challenges minted in the same millisecond
+  get distinct ids and paying one never refuses the other as already used.
 
 ## v2.15.0 - 2026-11-24
 

@@ -24,7 +24,7 @@
 // the splits must total strictly LESS than the price (the remainder is the
 // operator's); validated at config time so a bad split never mints a
 // challenge nobody can pay.
-import { createHmac, createHash, timingSafeEqual } from "node:crypto";
+import { createHmac, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 const SCHEME = "Payment";
 export const TEMPO_MAINNET_CHAIN_ID = 4217;
@@ -123,9 +123,14 @@ export function mintTempoChallenges({ price, realm, secretKey, tempo }) {
         ...(tempo.splits.length ? { splits: tempo.splits.map((s) => ({ recipient: s.recipient, amount: s.amount.toString() })) } : {}),
       },
     };
-    const c = { realm, method: "tempo", intent: "charge", request: b64url(canonicalJson(request)), expires };
+    // `opaque` carries a fresh random nonce per mint, bound into the id: two
+    // challenges minted in the same millisecond for the same request get
+    // distinct ids, so the single-use claim on one never refuses the other.
+    // The buyer echoes opaque back and the id recomputes from it.
+    const opaque = b64url(canonicalJson({ nonce: randomBytes(16).toString("base64url") }));
+    const c = { realm, method: "tempo", intent: "charge", request: b64url(canonicalJson(request)), expires, opaque };
     c.id = challengeId(secretKey, c);
-    out.push([authParam("id", c.id), authParam("realm", c.realm), authParam("method", c.method), authParam("intent", c.intent), authParam("request", c.request), authParam("expires", c.expires)].join(", "));
+    out.push([authParam("id", c.id), authParam("realm", c.realm), authParam("method", c.method), authParam("intent", c.intent), authParam("request", c.request), authParam("expires", c.expires), authParam("opaque", c.opaque)].join(", "));
   }
   return out.map((p) => `${SCHEME} ${p}`).join(", ");
 }
