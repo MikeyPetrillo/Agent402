@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { withoutLicenseFields } from "../src/data-attribution.js";
+import { WITHDRAWN_SOURCE_FIELDS } from "../src/resale-terms.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 let pass = 0, fail = 0;
@@ -104,8 +105,12 @@ export const REMOVED_SAMPLE_FIELDS = Object.freeze({
   "token-safety": Object.freeze(["verdict", "because", "blocking", "warnings"]),
 });
 
-/** What `now` lost against `then` for one route ([] when nothing). */
-export function listingLosses(then, now) {
+/** What `now` lost against `then` for one route ([] when nothing). A
+ *  sample field named for the route's slug in `withdrawn` (a source figure a
+ *  tool stopped answering, src/resale-terms.js WITHDRAWN_SOURCE_FIELDS) may
+ *  leave the sample; one still in the sample is a loss of its own (the
+ *  withdrawal did not happen). */
+export function listingLosses(then, now, withdrawn = WITHDRAWN_SOURCE_FIELDS) {
   const lost = [];
   if (!then?.pr) return lost;
   if (!now?.pr) return [`no 402 listing (status ${now?.status ?? now?.err})`];
@@ -116,8 +121,11 @@ export function listingLosses(then, now) {
   else if (ea !== undefined && !isPointer(ea) && isPointer(eb)) lost.push("sample output became the /openapi.json pointer");
   else if (ea && eb && typeof ea === "object" && typeof eb === "object" && !Array.isArray(ea) && !isPointer(ea)) {
     const removed = REMOVED_SAMPLE_FIELDS[then.slug] || [];
-    const gone = Object.keys(withoutLicenseFields(ea)).filter((k) => !(k in eb) && !removed.includes(k));
+    const out = Object.hasOwn(withdrawn || {}, then.slug) ? withdrawn[then.slug] : [];
+    const gone = Object.keys(withoutLicenseFields(ea)).filter((k) => !(k in eb) && !removed.includes(k) && !out.includes(k));
     if (gone.length) lost.push(`sample output lost ${gone.join(", ")}`);
+    const kept = out.filter((k) => k in eb);
+    if (kept.length) lost.push(`sample output still carries withdrawn source field ${kept.join(", ")}`);
   }
   // Input fields: each field the base listed is still listed, keeps a
   // description when it had one (it may be shortened), and keeps every bound.
@@ -141,6 +149,10 @@ export function listingLosses(then, now) {
   ok(/pointer/.test(listingLosses(pr("a", { a: 1 }), pr("a", { truncated: true, note: "full example in /openapi.json" }))[0] || ""), "control: a sample that became the pointer is a loss");
   ok(/lost a/.test(listingLosses(pr("a", { a: 1, b: 2 }), pr("a", { b: 2 }))[0] || ""), "control: a sample missing a field is a loss");
   ok(listingLosses({ slug: "token-safety", ...pr("a", { verdict: "x", flags: [] }) }, pr("a", { flags: [] })).length === 0 && /lost verdict/.test(listingLosses({ slug: "other", ...pr("a", { verdict: "x" }) }, pr("a", {}))[0] || ""), "control: a field an owner decision removed is excused for its slug only");
+  const slugged = (d, ex) => ({ slug: "z-tool", ...pr(d, ex) });
+  ok(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1, rawShare: 3 }), { "z-tool": ["rawUsd"] }).length === 0, "control: a withdrawn source field may leave the sample");
+  ok(/lost rawUsd/.test(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1 }), { "other-tool": ["rawUsd"] })[0] || ""), "control: a field withdrawn for another slug is still a loss");
+  ok(/still carries withdrawn source field rawUsd/.test(listingLosses(slugged("a", { a: 1, rawUsd: 2 }), slugged("a", { a: 1, rawUsd: 2 }), { "z-tool": ["rawUsd"] }).join() || ""), "control: a withdrawn field left in the sample is a loss");
   ok(listingLosses({ pr: null }, pr("a", {})).length === 0 && /no 402/.test(listingLosses(pr("a", {}), { status: 410 })[0] || ""), "control: a route the base did not list is not compared; one that stopped listing is a loss");
   const withInput = (props, where = "body") => ({ pr: { resource: { description: "a" }, extensions: { bazaar: { info: {}, schema: { properties: { input: { properties: { [where]: { properties: props } } } } } } } } });
   const full = { url: { type: "string", maxLength: 2048, description: "The URL to look up" }, mode: { type: "string", enum: ["a", "b"] } };
