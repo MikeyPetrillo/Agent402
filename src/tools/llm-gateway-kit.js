@@ -622,7 +622,7 @@ export const TIERS = {
     priceSort: true,
     fallbacks: ["openai/gpt-6-luna"],
     prefixes: autoPrefixes(),
-    web: { id: "web", engine: "exa", max_results: 5 },
+    web: { id: "web", engine: "exa", max_results: 5 }, // listed as engine PUBLIC_SEARCH_ENGINE
     get fixedUpstreamUsd() { return feeOf("groundedPerCall"); },
     extraInputTokens: 4_500,
     noCache: true,
@@ -1615,17 +1615,31 @@ const TOKEN_SAFETY = 1.15;   // headroom for BPE drift across vendors
 // Every subsequent model turn re-bills the whole accumulated transcript, so
 // the arithmetic below charges the full injected budget on EVERY turn - a
 // deliberate over-estimate of the true triangular growth.
+// The web search engine as every public surface names it (/v1/models, a
+// refusal, the docs): one neutral value. The upstream request keeps the pinned
+// internal engine (SERVER_TOOL_POLICY pin, the grounded tier's `web` plugin),
+// which bounds the per-search cost; a caller may name the public value, which
+// maps to that same engine, and any other engine is refused.
+export const PUBLIC_SEARCH_ENGINE = "agent402-web";
+const INTERNAL_SEARCH_ENGINE = "exa";
+/** `params` with an internal search engine shown as the public value. */
+export function publicEngineParams(params) {
+  return params && params.engine === INTERNAL_SEARCH_ENGINE ? { ...params, engine: PUBLIC_SEARCH_ENGINE } : params;
+}
 export const SERVER_TOOL_POLICY = {
   "openrouter:web_search": {
     get feeUsdPerUse() { return feeOf("webSearchPerUse"); }, // pinned engine + mode
     // Cost-neutral narrowing a buyer may still ask for. Domain filters only
     // ever shrink the result set and never change the per-request price.
     buyerParams: ["allowed_domains", "excluded_domains"],
+    // A parameter a buyer may name only with its one public value, which the
+    // pin below already sets (engine "agent402-web" is the pinned engine).
+    fixedParams: { engine: PUBLIC_SEARCH_ENGINE },
     // Everything a buyer must NOT set: each of these moves either the dollar
     // price (engine/mode) or the token volume (results/characters/uses).
     pin(limits) {
       return {
-        engine: "exa",   // never "auto": native search is priced by the provider
+        engine: INTERNAL_SEARCH_ENGINE, // never "auto": native search is priced by the provider
         mode: "auto",    // the deeper modes are priced higher
         max_uses: limits.max_uses,
         max_results: limits.max_results,
@@ -2179,10 +2193,15 @@ export function validateToolEntry(t, tier) {
         throw bad(`"parameters" on server tool "${shown}" must be an object`);
       }
       for (const k of Object.keys(params)) {
+        const fixed = policy.fixedParams && Object.hasOwn(policy.fixedParams, k) ? policy.fixedParams[k] : undefined;
+        if (fixed !== undefined) {
+          if (params[k] !== fixed) throw bad(`"${k}" on server tool "${shown}" accepts only "${fixed}" - any other value changes what the call costs.`);
+          continue;
+        }
         if (!policy.buyerParams.includes(k)) {
           throw bad(
             `"${k}" is not accepted on server tool "${shown}" - it changes what the call costs, and the loop budget is server-owned. ` +
-            (policy.buyerParams.length ? `Accepted here: ${policy.buyerParams.join(", ")}.` : "No parameters are accepted here.")
+            (policy.buyerParams.length || policy.fixedParams ? `Accepted here: ${[...policy.buyerParams, ...Object.entries(policy.fixedParams || {}).map(([p, v]) => `${p} ("${v}" only)`)].join(", ")}.` : "No parameters are accepted here.")
           );
         }
         const v = params[k];
@@ -5500,13 +5519,15 @@ export function modelsList() {
                 : false,
             },
           } : {}),
+          // The grounded tier's search, by its public engine name.
+          ...(tier.web ? { web: { engine: PUBLIC_SEARCH_ENGINE, maxResults: tier.web.max_results } } : {}),
           // Server tools and the exact server-owned limits that ride on them.
           // An agent picking a route must be able to SEE the loop budget it
           // gets, and that the per-tool caps are not negotiable.
           ...(tier.serverTools ? {
             serverTools: {
               maxSteps: tier.serverTools.maxSteps,
-              tools: Object.fromEntries(Object.entries(tier.serverTools.tools).map(([type, limits]) => [serverToolPublicType(type), { ...limits, ...SERVER_TOOL_POLICY[type].pin(limits) }])),
+              tools: Object.fromEntries(Object.entries(tier.serverTools.tools).map(([type, limits]) => [serverToolPublicType(type), publicEngineParams({ ...limits, ...SERVER_TOOL_POLICY[type].pin(limits) })])),
               note: "Server-owned. stop_server_tools_when and max_tool_calls are set by the gateway and refused on the request.",
             },
           } : {}),

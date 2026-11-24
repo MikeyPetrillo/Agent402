@@ -79,7 +79,13 @@ for (const [slug] of SELLING) {
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { max_uses: 50 } }] }, slug),
     "not accepted on server tool", `${slug} buyer max_uses:50 refused by name`);
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { engine: "native" } }] }, slug),
-    "not accepted on server tool", `${slug} buyer engine:"native" refused (it changes the price)`);
+    'accepts only "agent402-web"', `${slug} buyer engine:"native" refused (it changes the price)`);
+  throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { engine: "exa" } }] }, slug),
+    'accepts only "agent402-web"', `${slug} buyer naming the internal engine is refused like any other value`);
+  {
+    const named = validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { engine: "agent402-web", allowed_domains: ["arxiv.org"] } }] }, slug).tools[0].parameters;
+    ok(named.engine === "exa" && named.allowed_domains[0] === "arxiv.org" && named.max_uses === lim.max_uses, `${slug} buyer engine:"agent402-web" accepted and sent upstream as the pinned engine`);
+  }
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { mode: "deep-reasoning" } }] }, slug),
     "not accepted on server tool", `${slug} buyer mode:"deep-reasoning" refused (a dearer mode)`);
   throws(() => validateRequest({ model, messages: msg(), tools: [{ ...WS, parameters: { max_results: 25, max_characters: 100000 } }] }, slug),
@@ -291,10 +297,15 @@ console.log("\n# 8. the limits are disclosed on the machine surface");
     const row = data.find((m) => m.x402.tier === slug);
     const st = row?.x402?.serverTools;
     ok(st?.maxSteps === tier.serverTools.maxSteps, `${slug} /v1/models discloses the step budget`);
-    ok(st?.tools?.["agent402:web_search"]?.engine === "exa" && st.tools["agent402:web_search"].max_uses === tier.serverTools.tools["openrouter:web_search"].max_uses,
+    ok(st?.tools?.["agent402:web_search"]?.engine === "agent402-web" && st.tools["agent402:web_search"].max_uses === tier.serverTools.tools["openrouter:web_search"].max_uses,
       `${slug} /v1/models discloses the pinned per-tool limits`);
     ok(Object.keys(st?.tools || {}).every((k) => k.startsWith("agent402:")), `${slug} /v1/models names every server tool by its public agent402: type`);
   }
+  const listed = JSON.stringify(data);
+  ok(!/"exa"/i.test(listed) && !/\bexa\b/i.test(listed), "/v1/models names no search engine vendor anywhere");
+  const grounded = data.find((m) => m.x402.tier === "v1-chat-grounded");
+  ok(!grounded || grounded.x402.web?.engine === "agent402-web", "the grounded tier lists its search engine as agent402-web");
+  ok(TIERS["v1-chat-grounded"].web.engine === "exa", "CONTROL: the grounded tier still sends its pinned engine upstream");
   for (const [slug] of NOT_SELLING) {
     const row = data.find((m) => m.x402.tier === slug);
     if (row) ok(row.x402.serverTools === undefined, `${slug} advertises no server tools`);
