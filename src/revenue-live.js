@@ -18,6 +18,7 @@ import { blocksForSeconds, blockTimeChanges, refreshBlockMs } from "./chain-bloc
 import { rpcHeaderReader } from "./block-clock.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
+import { ONFINALITY_RPCS } from "./rpc-terms.js";
 import { ledgerShell, ledgerFooterCompact, codeBlock } from "./ledger-chrome.js";
 import { RAILS, RAILS_AMP, GATED_RAILS, railKey, chainDisplayName } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
@@ -147,11 +148,14 @@ export const EVM = {
     // span keeps the daily canary settle inside the "recent inbound" window;
     // Alchemy natively serves Monad (monad-mainnet.g.alchemy.com) for the
     // balance read + getAssetTransfers. Monad's public RPC is not used (its
-    // terms are personal, non-commercial: src/rpc-terms.js).
+    // terms are personal, non-commercial: src/rpc-terms.js); OnFinality's
+    // keyless lane (permitted, src/rpc-terms.js) is the second one, the same
+    // pair the payment verifier reads (src/evm-rpcs.js).
     label: "Monad", asset: "USDC", span: 200000,
     token: "0x754704bc059f8c67012fed69bc8a327a5aafb603",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://monad-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
+      ONFINALITY_RPCS.monad,
     ],
     explorer: (a) => `https://monadscan.com/address/${a}#tokentxns`,
     tx: (h) => `https://monadscan.com/tx/${h}`,
