@@ -41,6 +41,8 @@ for (const id of ["UNRATE", "CPIAUCSL", "FEDFUNDS", "DFF"]) ok(SUPPORTED_IDS.inc
 const realFetch = globalThis.fetch;
 const undoDns = stubGuardResolver(offlineGuardAnswer);
 const hosts = [];
+const frbAsks = [];
+let frbEmptyOnce = false;
 const blsBodies = [];
 const json = (body) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 const blsData = (startyear, endyear) => {
@@ -76,11 +78,26 @@ globalThis.fetch = async (url, opts = {}) => {
       { record_date: "2025-12-31", total_mil_amt: "38514008.7862368" },
     ] });
   }
+  if (u.hostname === "home.treasury.gov" && u.searchParams.get("type") === "daily_treasury_real_yield_curve") {
+    const year = Number(u.pathname.split("/").at(-2));
+    return new Response(['Date,"5 YR","7 YR","10 YR","20 YR","30 YR"', `12/31/${year},1.40,1.62,1.88,2.20,2.31`, `01/02/${year},1.85,1.99,2.10,2.30,2.41`].join("\n"), { status: 200, headers: { "content-type": "text/csv" } });
+  }
   if (u.hostname === "home.treasury.gov") {
     const year = Number(u.pathname.split("/").at(-2));
     const head = year < 2000 ? 'Date,"3 Mo","6 Mo","1 Yr","2 Yr","3 Yr","5 Yr","7 Yr","10 Yr","30 Yr"' : 'Date,"1 Mo","1.5 Month","2 Mo","3 Mo","4 Mo","6 Mo","1 Yr","2 Yr","3 Yr","5 Yr","7 Yr","10 Yr","20 Yr","30 Yr"';
     const rows = year < 2000 ? ["12/31/1999,5.33,5.78,5.98,6.24,6.30,6.36,6.45,6.45,6.48"] : [`12/31/${year},3.74,3.75,3.67,3.67,3.63,3.59,3.48,3.47,3.55,3.73,3.94,4.18,4.79,4.84`, `01/02/${year},4.40,4.41,4.39,4.36,4.33,4.25,4.17,4.25,4.29,4.38,4.47,4.57,4.86,4.79`];
     return new Response([head, ...rows].join("\n"), { status: 200, headers: { "content-type": "text/csv" } });
+  }
+  if (u.hostname === "www.federalreserve.gov" && u.searchParams.get("rel") === "H10") {
+    frbAsks.push(u.searchParams.get("series"));
+    if (frbEmptyOnce) { frbEmptyOnce = false; return new Response("", { status: 200 }); }
+    const rates = u.searchParams.get("series") === "60f32914ab61dfab590e0e470153e3ae";
+    const head = rates ? '"Time Period","RXI$US_N.B.EU","RXI_N.B.JA"' : '"Time Period","JRXWTFB_N.B","JRXWTFN_N.B","JRXWTFO_N.B"';
+    const rows = rates ? ["2026-11-19,1.1012,159.76", "2026-11-20,ND,158.76"] : ["2026-11-19,123.5253,116.7735,132.1409", "2026-11-20,123.5978,116.7217,132.3508"];
+    return new Response(['"Series Description","a","b"', '"Unit:","x","x"', head, ...rows].join("\n"), { status: 200, headers: { "content-type": "text/csv" } });
+  }
+  if (u.hostname === "www.federalreserve.gov" && u.searchParams.get("rel") === "H15") {
+    return new Response(['"Series Description","Prime","3-month bill","10-year"', '"Time Period","RIFSPBLP_N.M","RIFSGFSM03_N.M","RIFLGFCY10_N.M"', "2026-09,6.87,3.94,4.99", "2026-10,7.00,4.05,5.13"].join("\n"), { status: 200, headers: { "content-type": "text/csv" } });
   }
   if (u.hostname === "www.federalreserve.gov") {
     return new Response([
@@ -94,6 +111,15 @@ globalThis.fetch = async (url, opts = {}) => {
       "2026-09,20009.7,23339.6,20061.2,23413.9",
       "2026-10,,,,",
     ].join("\n"), { status: 200, headers: { "content-type": "text/csv" } });
+  }
+  if (u.hostname === "apps.bea.gov" && u.pathname.endsWith("NipaDataM.txt")) {
+    return new Response([
+      "%SeriesCode,Period,Value",
+      'DPCERG,2026M08,"131.611"', 'DPCERG,2026M09,"132.257"',
+      'DPCCRG,2026M08,"130.501"', 'DPCCRG,2026M09,"130.902"',
+      'DPCERC,2026M08,"22,339,658"', 'DPCERC,2026M09,"22,452,780"',
+      'DPCERX,2026M09,"16,977,581"', 'A065RC,2026M09,"27,707,845"', 'A067RC,2026M09,"24,289,049"', 'A072RC,2026M08,"4.0"', 'A072RC,2026M09,"3.8"',
+    ].join("\n"), { status: 200, headers: { "content-type": "text/plain" } });
   }
   if (u.hostname === "apps.bea.gov") {
     return new Response([
@@ -184,6 +210,36 @@ try {
   ok(ng.derived === true, "a transformed GDP answer is marked derived");
   const gd = await run({ seriesId: "GDP", startDate: "2025-01-01" });
   ok(gd.observations[2].value === 31180.493, `GDP is current dollars, billions (${gd.observations[2].value})`);
+
+  // BEA monthly: personal income and outlays
+  const pce = await run({ seriesId: "PCEPI", startDate: "2026-01-01" });
+  ok(pce.count === 2 && pce.observations[1].value === 132.257 && /Bureau of Economic Analysis/.test(pce.source) && /DPCERG/.test(pce.sourceSeries) && /not endorsed or certified by BEA/.test(pce.credit) && /bea\.gov/.test(pce.terms), `PCEPI is BEA's PCE price index, as published (${JSON.stringify(pce.observations)})`);
+  const pceL = await run({ seriesId: "PCE", startDate: "2026-01-01" });
+  ok(pceL.observations[1].value === 22452.78, `PCE is billions, from the file's millions (${pceL.observations[1].value})`);
+  const sav = await run({ seriesId: "PSAVERT", startDate: "2026-01-01" });
+  ok(sav.observations[1].value === 3.8 && (await run({ seriesId: "DSPI", startDate: "2026-01-01" })).observations[0].value === 24289.049, "a rate is read as published, a level in billions");
+  // FRB H.10 and H.15
+  _resetUsMacroForTest(); frbAsks.length = 0; frbEmptyOnce = true;
+  const eu = await run({ seriesId: "DEXUSEU", startDate: "2026-11-01" });
+  ok(eu.count === 1 && eu.observations[0].value === 1.1012 && /Board of Governors/.test(eu.source) && /H\.10/.test(eu.sourceSeries) && /not affiliated with the Federal Reserve/.test(eu.credit) && /federalreserve\.gov\/disclaimer/.test(eu.terms), `DEXUSEU is the H.10 noon buying rate, a no-data day skipped (${JSON.stringify(eu.observations)})`);
+  ok(frbAsks.length === 2, `an empty answer from the download program is read once more (${frbAsks.length} reads)`);
+  const jp = await run({ seriesId: "DEXJPUS" });
+  ok(jp.count === 2 && jp.window && frbAsks.length === 2, "a second series of the same file is served from the cache, the last two years by default");
+  const broad = await run({ seriesId: "DTWEXBGS", startDate: "2026-11-01" });
+  ok(broad.observations[1].value === 123.5978, "DTWEXBGS is the nominal broad dollar index");
+  const early = await caught(run({ seriesId: "DEXUSEU", startDate: "1999-01-01" }));
+  ok(early?.statusCode === 400 && /served from/.test(early.message), "an H.10 window before the years held is refused, naming the first date served");
+  const prime = await run({ seriesId: "MPRIME", startDate: "2026-01-01" });
+  const gs10 = await run({ seriesId: "GS10", startDate: "2026-01-01" });
+  ok(prime.observations[1].value === 7 && gs10.observations[0].value === 4.99 && /H\.15/.test(gs10.sourceSeries) && /H\.15 Selected Interest Rates/.test(gs10.credit), "MPRIME and GS10 are H.15's monthly columns, credited to the Board");
+  // Treasury real yields and breakeven inflation
+  const dfii = await run({ seriesId: "DFII10", startDate: "2025-01-01", endDate: "2025-12-31" });
+  ok(dfii.count === 2 && dfii.observations[0].value === 2.10 && /Real Yield Curve/.test(dfii.sourceSeries) && !dfii.derived, `DFII10 is the 10-year real par yield (${JSON.stringify(dfii.observations)})`);
+  const be = await run({ seriesId: "T10YIE", startDate: "2025-01-01", endDate: "2025-12-31" });
+  ok(be.derived === true && /Computed by Agent402/.test(be.source) && Math.abs(be.observations[0].value - (4.57 - 2.10)) < 1e-9 && /Real Yield Curve/.test(be.credit), `T10YIE is the nominal less the real 10-year yield, marked derived (${JSON.stringify(be.observations[0])})`);
+  // Never served: licensed or restricted series, and sources needing a key.
+  for (const id of ["SP500", "MORTGAGE30US", "MORTGAGE15US", "DCOILWTICO", "DCOILBRENTEU", "HOUST", "RSAFS"]) ok(!SUPPORTED_IDS.includes(id), `${id} is not served (its terms or its access)`);
+  ok(SUPPORTED_IDS.length >= 90, `the supported list is wide (${SUPPORTED_IDS.length} IDs)`);
 
   // 3: not served
   const e = await caught(run({ seriesId: "NOTSERVED1" }));

@@ -91,7 +91,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**fx-monitor**](https://agent402.tools/skills/fx-monitor) | $0.008 | Major currency snapshot: EUR/USD, GBP/USD, JPY/USD plus the full FX dashboard. |
 | [**fred-snapshot**](https://agent402.tools/skills/fred-snapshot) | $0.001 | Key Fed indicators - fed funds rate, unemployment, and CPI - in one call. |
 | [**world-data**](https://agent402.tools/skills/world-data) | $0.005 | GDP and population for a country - two key World Bank indicators. |
-| [**macro-dashboard**](https://agent402.tools/skills/macro-dashboard) | $0.042 | The full macro plus crypto dashboard in one call: 4 FRED series, 5 Treasury reads, the curve spread, crypto market/trending/global, and live gas. |
+| [**macro-dashboard**](https://agent402.tools/skills/macro-dashboard) | $0.042 | The full macro plus crypto dashboard in one call: 4 BLS and New York Fed indicators, 5 Treasury reads, the curve spread, crypto market/trending/global, and live gas. |
 
 ## Time series & forecasting (3)
 

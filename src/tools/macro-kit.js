@@ -850,14 +850,14 @@ MACRO_TOOLS.push(
     route: "GET /api/fred-series", name: "US economic time series by FRED series ID", slug: "fred-series", category: "data", attribution: "us-agencies", price: "$0.001",
     upstreamHosts: ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"],
     description:
-      `US economic series by FRED ID, from the agency that publishes each: GDP (GDPC1), jobs and prices (UNRATE, CPIAUCSL), Treasury yields (DGS10), money stock (M2SL), rates (FEDFUNDS), public debt (GFDEBTN). Units and frequencies; other IDs answer 404 listing those served. ${US_AGENCIES_ATTRIBUTION}`,
+      `US economic series by FRED ID, from the agency that publishes each: GDP and PCE (GDPC1, PCEPI), jobs and prices (UNRATE, CPIAUCSL), Treasury and real yields (DGS10, DFII10, T10YIE), money stock (M2SL), exchange rates (DEXUSEU), rates (FEDFUNDS, MPRIME), public debt (GFDEBTN). Units and frequencies; other IDs answer 404 listing those served. ${US_AGENCIES_ATTRIBUTION}`,
     tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed-funds", "sofr", "treasury-yields", "money-supply", "bls", "bea", "macro", "economic-data", "treasury"],
     discovery: {
       input: { seriesId: "GDPC1", startDate: "2024-01-01", endDate: "2024-12-31" },
       inputSchema: {
         properties: {
           seriesId: { type: "string", maxLength: 40, description: `FRED series ID, one of: ${US_MACRO_SUPPORTED_IDS.join(", ")}` },
-          startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional; a Bureau of Labor Statistics series answers its last 10 years without one" },
+          startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional; without one a Bureau of Labor Statistics series answers its last 10 years, a daily Treasury or exchange-rate series its last 2 calendar years" },
           endDate: { type: "string", description: "ISO end date (YYYY-MM-DD), optional" },
           limit: { type: "number", description: "Max observations, 1-100000 (default 1000)" },
           units: { type: "string", enum: [...FRED_UNITS], description: "Transformation: lin, chg, ch1, pch, pc1 (YoY %), pca, cca, log" },
