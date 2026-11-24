@@ -18,7 +18,7 @@ process.env.POSTHOG_TEST_CAPTURE = "1";
 
 const {
   TIERS, MARGIN, validateRequest, worstCaseUpstreamCost, serverToolWorstCase, serverToolsIn,
-  stopServerToolsFor, SERVER_TOOL_POLICY, modelsList, promptCacheKey, LLM_GATEWAY_TOOLS,
+  stopServerToolsFor, SERVER_TOOL_POLICY, modelsList, promptCacheKey, LLM_GATEWAY_TOOLS, SERVER_TOOL_PUBLIC,
 } = await import("../src/tools/llm-gateway-kit.js");
 const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
 requireUpstreamCosts("test-server-tools");
@@ -119,8 +119,8 @@ const UNBOUNDED = [
   ["file_search", "vector stores on our account"],
   // OpenRouter converts the OpenAI-syntax shorthand into openrouter:web_search
   // upstream, which would hand the ENGINE choice back to the caller.
-  ["web_search", 'use {type:"openrouter:web_search"} instead'],
-  ["web_search_preview", 'use {type:"openrouter:web_search"} instead'],
+  ["web_search", 'use {type:"agent402:web_search"} instead'],
+  ["web_search_preview", 'use {type:"agent402:web_search"} instead'],
 ];
 for (const [type, why] of UNBOUNDED) {
   throws(() => validateRequest({ model: "openai/gpt-5", messages: msg(), tools: [{ type }] }, "v1-chat-premium"),
@@ -273,6 +273,17 @@ console.log("\n# 7. end to end against a stubbed upstream");
   delete process.env.OPENROUTER_API_KEY;
 }
 
+console.log("\n# 7b. public names in, upstream names out; the earlier names still accepted");
+for (const [upstream, pub] of Object.entries(SERVER_TOOL_PUBLIC)) {
+  const viaPublic = validateRequest({ model: "openai/gpt-5", messages: msg(), tools: [{ type: pub }] }, "v1-chat-premium");
+  const viaOld = validateRequest({ model: "openai/gpt-5", messages: msg(), tools: [{ type: upstream }] }, "v1-chat-premium");
+  ok(viaPublic.tools?.[0]?.type === upstream && viaOld.tools?.[0]?.type === upstream, `${pub} and ${upstream} are both accepted and sent upstream as ${upstream}`);
+  ok(JSON.stringify(viaPublic.tools) === JSON.stringify(viaOld.tools), `${pub}: the same pinned limits whichever name the caller used`);
+  const tier = TIERS["v1-chat-premium"];
+  ok(serverToolWorstCase({ tools: [{ type: pub }] }, tier).feeUsd === serverToolWorstCase({ tools: [{ type: upstream }] }, tier).feeUsd && serverToolsIn({ tools: [{ type: pub }] }, tier).length === 1, `${pub}: priced the same as ${upstream}, before validation too`);
+}
+throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg(), tools: [{ type: "agent402:web_search" }] }, "v1-chat"), "agent402:web_search", "a public name refused on a budget tier is named by its public type");
+
 console.log("\n# 8. the limits are disclosed on the machine surface");
 {
   const data = modelsList().data;
@@ -280,8 +291,9 @@ console.log("\n# 8. the limits are disclosed on the machine surface");
     const row = data.find((m) => m.x402.tier === slug);
     const st = row?.x402?.serverTools;
     ok(st?.maxSteps === tier.serverTools.maxSteps, `${slug} /v1/models discloses the step budget`);
-    ok(st?.tools?.["openrouter:web_search"]?.engine === "exa" && st.tools["openrouter:web_search"].max_uses === tier.serverTools.tools["openrouter:web_search"].max_uses,
+    ok(st?.tools?.["agent402:web_search"]?.engine === "exa" && st.tools["agent402:web_search"].max_uses === tier.serverTools.tools["openrouter:web_search"].max_uses,
       `${slug} /v1/models discloses the pinned per-tool limits`);
+    ok(Object.keys(st?.tools || {}).every((k) => k.startsWith("agent402:")), `${slug} /v1/models names every server tool by its public agent402: type`);
   }
   for (const [slug] of NOT_SELLING) {
     const row = data.find((m) => m.x402.tier === slug);

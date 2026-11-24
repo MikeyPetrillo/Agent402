@@ -1656,6 +1656,21 @@ export const SERVER_TOOL_POLICY = {
   },
 };
 
+/** The public names of the server tools: a listing, an error and the docs say
+ *  "agent402:web_search"; the request sent upstream carries the upstream's own
+ *  type. Input takes either spelling, so a caller that learned the earlier
+ *  (upstream) names keeps working. */
+export const SERVER_TOOL_PUBLIC = Object.freeze({
+  "openrouter:web_search": "agent402:web_search",
+  "openrouter:web_fetch": "agent402:web_fetch",
+  "openrouter:datetime": "agent402:datetime",
+});
+const SERVER_TOOL_FROM_PUBLIC = Object.freeze(Object.fromEntries(Object.entries(SERVER_TOOL_PUBLIC).map(([up, pub]) => [pub, up])));
+/** The upstream type for a caller's type (a public name or an earlier upstream name). */
+export const serverToolUpstreamType = (type) => (Object.hasOwn(SERVER_TOOL_FROM_PUBLIC, type) ? SERVER_TOOL_FROM_PUBLIC[type] : type);
+/** The name a listing or an error shows for an upstream type. */
+export const serverToolPublicType = (type) => (Object.hasOwn(SERVER_TOOL_PUBLIC, type) ? SERVER_TOOL_PUBLIC[type] : type);
+
 /** Server-tool types OpenRouter accepts that we deliberately do not sell, with
  *  the reason a buyer gets back. Anything not listed here and not in
  *  SERVER_TOOL_POLICY falls through to the generic refusal. */
@@ -1674,8 +1689,8 @@ const SERVER_TOOL_REFUSALS = {
   code_interpreter: "hosted code execution has no per-call price we can bound",
   computer_use_preview: "hosted computer use has no per-call price we can bound",
   file_search: "it reads vector stores on our account, not yours",
-  web_search: 'the OpenAI-syntax shorthand hands the search ENGINE back to the caller - use {type:"openrouter:web_search"} instead, which we bound',
-  web_search_preview: 'the OpenAI-syntax shorthand hands the search ENGINE back to the caller - use {type:"openrouter:web_search"} instead, which we bound',
+  web_search: 'the OpenAI-syntax shorthand hands the search ENGINE back to the caller - use {type:"agent402:web_search"} instead, which we bound',
+  web_search_preview: 'the OpenAI-syntax shorthand hands the search ENGINE back to the caller - use {type:"agent402:web_search"} instead, which we bound',
 };
 
 /** The server-tool entries in a validated body, paired with the tier limits
@@ -1685,8 +1700,9 @@ export function serverToolsIn(body, tier) {
   const cfg = tier?.serverTools;
   if (!cfg || !Array.isArray(body?.tools)) return [];
   return body.tools
-    .filter((t) => t && typeof t === "object" && Object.hasOwn(SERVER_TOOL_POLICY, t.type) && Object.hasOwn(cfg.tools, t.type))
-    .map((t) => ({ type: t.type, limits: cfg.tools[t.type], policy: SERVER_TOOL_POLICY[t.type] }));
+    .map((t) => (t && typeof t === "object" ? serverToolUpstreamType(String(t.type ?? "")) : ""))
+    .filter((type) => Object.hasOwn(SERVER_TOOL_POLICY, type) && Object.hasOwn(cfg.tools, type))
+    .map((type) => ({ type, limits: cfg.tools[type], policy: SERVER_TOOL_POLICY[type] }));
 }
 
 /** The server-owned `stop_server_tools_when` array for an outbound body, or
@@ -2139,8 +2155,9 @@ export function validateToolEntry(t, tier) {
     }
     return t;
   }
-  const type = t && typeof t === "object" ? String(t.type ?? "") : "";
-  const shown = type.slice(0, 60);
+  const asSent = t && typeof t === "object" ? String(t.type ?? "") : "";
+  const type = serverToolUpstreamType(asSent);
+  const shown = serverToolPublicType(type).slice(0, 60);
   const policy = Object.hasOwn(SERVER_TOOL_POLICY, type) ? SERVER_TOOL_POLICY[type] : null;
   if (policy) {
     const limits = tier.serverTools && Object.hasOwn(tier.serverTools.tools, type) ? tier.serverTools.tools[type] : null;
@@ -2179,12 +2196,12 @@ export function validateToolEntry(t, tier) {
     return { type, parameters: { ...kept, ...policy.pin(limits) } };
   }
   const why = Object.hasOwn(SERVER_TOOL_REFUSALS, type) ? SERVER_TOOL_REFUSALS[type] : null;
-  const allowed = tier.serverTools ? Object.keys(tier.serverTools.tools) : [];
+  const allowed = tier.serverTools ? Object.keys(tier.serverTools.tools).map(serverToolPublicType) : [];
   throw bad(
     `Unsupported tools entry${type ? ` (type "${shown}")` : ""}. ` +
     (why ? `"${shown}" is not offered: ${why}. ` : "") +
     'The gateway accepts OpenAI function tools ({type:"function", function:{name, description, parameters}})' +
-    (allowed.length ? ` and these server tools on ${tier.route.split(" ")[1]}: ${allowed.join(", ")}.` : ". Server-side tool types (openrouter:*) are not available on this tier - their upstream spend is not covered by the flat per-call price.")
+    (allowed.length ? ` and these server tools on ${tier.route.split(" ")[1]}: ${allowed.join(", ")}.` : ". Server-side tool types (agent402:*) are not available on this tier - their upstream spend is not covered by the flat per-call price.")
   );
 }
 
@@ -2436,7 +2453,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // input tokens; only type:"function" keeps "input tokens" the whole story.
   if (body.tools !== undefined) {
     if (!Array.isArray(body.tools) || body.tools.length === 0) {
-      throw bad('"tools" must be a non-empty array of {type:"function", ...} or {type:"openrouter:..."} entries');
+      throw bad('"tools" must be a non-empty array of {type:"function", ...} or {type:"agent402:..."} entries');
     }
     body.tools = body.tools.flatMap((t) => { const v = validateToolEntry(t, tier); return Array.isArray(v) ? v : [v]; });
   }
@@ -5484,7 +5501,7 @@ export function modelsList() {
           ...(tier.serverTools ? {
             serverTools: {
               maxSteps: tier.serverTools.maxSteps,
-              tools: Object.fromEntries(Object.entries(tier.serverTools.tools).map(([type, limits]) => [type, { ...limits, ...SERVER_TOOL_POLICY[type].pin(limits) }])),
+              tools: Object.fromEntries(Object.entries(tier.serverTools.tools).map(([type, limits]) => [serverToolPublicType(type), { ...limits, ...SERVER_TOOL_POLICY[type].pin(limits) }])),
               note: "Server-owned. stop_server_tools_when and max_tool_calls are set by the gateway and refused on the request.",
             },
           } : {}),
