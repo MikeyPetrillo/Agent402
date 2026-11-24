@@ -17,6 +17,7 @@ import { LEDGER_HEAD, LEDGER_CSS, esc, jsSrc, codeBlock } from "./ledger-chrome.
 import { awsServedGroups, sentencesOf } from "./aws-listing.js";
 import { AWS_JWKS_PATH, AWS_NETWORK, AWS_PREFIX } from "./aws-marketplace-gate.js";
 import { AWS_UNANSWERED_SENTENCE } from "./aws-unanswered-copy.js";
+import { ELIGIBILITY_SENTENCE } from "./eligibility-copy.js";
 
 export const AWS_START_PATH = `${AWS_PREFIX}/start`;
 export const AWS_OPENAPI_PATH = `${AWS_PREFIX}/openapi.json`;
@@ -168,6 +169,9 @@ ${groups.map(table).join("\n")}
 
 <h2 id="limits">Limits</h2>
 <p>Up to ${esc(String(config?.quotesPerMin ?? ""))} unpaid requests a minute per client address, and up to ${esc(String(config?.paidPerMin ?? ""))} new paid requests a minute per AWS buyer and per client address. Past either, the answer is <code>429</code> with <code>Retry-After</code>; a paid request refused this way does not use its payment. A quote is valid for ${esc(String(Math.round(Number(config?.quoteSeconds || 0) / 60)))} minutes.</p>
+
+<h2 id="eligibility">Eligibility</h2>
+<p>${esc(ELIGIBILITY_SENTENCE)}</p>
 
 <h2 id="support">Support</h2>
 <p>Questions, billing and failed calls: <a href="mailto:${AWS_SUPPORT_EMAIL}">${AWS_SUPPORT_EMAIL}</a>. Security reports: <a href="mailto:${AWS_SECURITY_EMAIL}">${AWS_SECURITY_EMAIL}</a>.</p>
