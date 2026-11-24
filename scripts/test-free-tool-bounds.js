@@ -538,8 +538,13 @@ function rng(seed) {
   const maxSize = [["Python source", fill(pyDef, 100_000)], ["prose", fill("Some *text* with **bold**, `code` and a_snake_case name, 2 * 3 * 4 and x_i.\n\n", 100_000)], ["a table", "| a | b |\n|---|---|\n" + fill("| *x* | `y_z` |\n", 99_900)], ["a list", fill("- item *one* and **two** with `code`\n", 100_000)], ["one paragraph", fill("word *emph* another_word and more text here ", 100_000)]];
   ok(sizes.every((chars) => !markdownLooksCostly(docOf(chars))) && maxSize.every(([, m]) => !markdownLooksCostly(m)), "markdown-to-html: none of the ordinary documents is estimated costly, 100,000-character source, prose, table and list included");
   const hostile = [["unclosed emphasis", "*a ".repeat(30_000)], ["unclosed strong", "**a ".repeat(22_000)], ["unclosed underscore", "_a ".repeat(30_000)], ["nested quotes", "> ".repeat(45_000)]];
-  const slowUnits = ["*a ", "**a ", "_a ", "~~a ", "*a**b ", "_a*b ", "**a*b ", "*a_ ", "*a* *", "***a ", "__a ", "_a_b ", "*_a ", "*`a ", "`*a ", "*a\n"];
-  ok(hostile.every(([, m]) => markdownLooksCostly(m)) && slowUnits.every((u) => markdownLooksCostly(fill(u, 20_000))), "markdown-to-html: " + slowUnits.length + " slow marker shapes at 20,000 characters are all estimated costly");
+  // Documents the configured renderer still takes past the deadline on (each
+  // renders in seconds per 20,000 characters, growing with the square of the
+  // length), for the lane and deadline checks below. The shapes above that
+  // the renderer now parses in linear time stay as estimate checks only.
+  const slowDocs = [["mixed strong and emphasis", fill("**a*b ", 90_000)], ["emphasis over underscore", fill("*_a ", 90_000)], ["underscore runs", fill("_a_b ", 90_000)]];
+  const slowUnits = ["*a ","**a ", "_a ", "~~a ", "*a**b ", "_a*b ", "**a*b ", "*a_ ", "*a* *", "***a ", "__a ", "_a_b ", "*_a ", "*`a ", "`*a ", "*a\n"];
+  ok(hostile.every(([, m]) => markdownLooksCostly(m)) && slowDocs.every(([, m]) => markdownLooksCostly(m)) && slowUnits.every((u) => markdownLooksCostly(fill(u, 20_000))), "markdown-to-html: " + slowUnits.length + " slow marker shapes at 20,000 characters are all estimated costly");
   // A maximum-size ordinary document has the whole deadline as headroom: it renders in a small part of it.
   for (const [name, markdown] of maxSize) {
     const t = performance.now();
@@ -552,7 +557,7 @@ function rng(seed) {
   // the rest are told to retry, at once. Its queue never refuses the other lane.
   const slow = [], refused = [];
   for (let i = 0; i < COSTLY_AHEAD_MAX + 5; i++) {
-    const p = tool.handler({ markdown: hostile[i % 3][1] }).then(() => ({ statusCode: 200 }), (e) => e);
+    const p = tool.handler({ markdown: slowDocs[i % 3][1] }).then(() => ({ statusCode: 200 }), (e) => e);
     slow.push(p);
   }
   await new Promise((r) => setTimeout(r, 50));
@@ -645,7 +650,7 @@ function rng(seed) {
   // events (started, ended, moved), so a busy runner changes little of it.
   const overrunMark = events.length;
   const startOf = (e) => events.find((x) => x.type === "started" && x.job === e.job && x.worker === e.worker);
-  const overrun = await loopHold(() => runMarkdown("*a ".repeat(30_000), { costly: false }));
+  const overrun = await loopHold(() => runMarkdown(slowDocs[0][1], { costly: false }));
   const movedOne = events.slice(overrunMark).find((e) => e.type === "moved");
   const restarted = events.find((e) => e.type === "started" && e.costly && e.job === movedOne?.job);
   ok(movedOne?.admitted === true && restarted && restarted.lane === 1, "markdown-to-html: a render past the ordinary budget moves to the costly lane and starts again there (" + JSON.stringify(movedOne) + ")");
