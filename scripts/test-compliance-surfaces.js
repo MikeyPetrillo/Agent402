@@ -169,6 +169,7 @@ ok(/separate, required consent to the automatic renewal/.test(subsTerms) && /bef
 ok(/Cuba, Iran, North Korea and Syria, and the Crimea, Sevastopol, Donetsk and Luhansk regions of Ukraine/.test(termsText), "terms: the refused regions are named");
 ok(/No part of a payment is kept as a credit/.test(termsText) && !/service credit/.test(termsText), "terms: decide-execute keeps no credit");
 ok(/does not apply to\s+a claim by a consumer/.test(termsText) && !/permanently barred/.test(termsText), "terms: the one-year limit yields to consumer law");
+ok(/The token tools report on-chain facts only; they are not an assessment of any token's legitimacy and must not be relied on for trading or investment decisions\./.test(termsText.replace(/&#39;|&rsquo;/g, "'")), "terms: the token tools are facts, not an assessment");
 ok(/required choice, to request that we start at once/.test(termsText), "terms: the withdrawal sentence names the checkout choice");
 {
   const disputes = termsText.slice(termsText.indexOf("Governing law"));
