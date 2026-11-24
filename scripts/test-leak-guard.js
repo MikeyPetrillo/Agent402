@@ -44,8 +44,9 @@ delete process.env.BRAVE_SUGGEST_API_KEY;
 // buyer-visible error.
 process.env.COINGECKO_API_KEY = "cg-LEAKCANARY0000";
 delete process.env.WARPCAST_API_KEY;
-process.env.FRED_API_KEY = "fred-LEAKCANARY0000";
-process.env.FRED_API_KEY_V2 = "fredv2-LEAKCANARY0000";
+// fred-series reads the agencies that publish each series; the BLS key rides
+// the POST body as registrationkey.
+process.env.BLS_API_KEY = "bls-LEAKCANARY0000";
 process.env.DATABENTO_API_KEY = "db-LEAKCANARY00000000000000000000"; // public-IP literal → no DNS
 process.env.STOCK_DATA_PROVIDER = "databento";
 
@@ -115,9 +116,10 @@ let mode = "auth-echo-401";
 let sawCanaryCred = false; // sanity: the mock actually received the secret
 
 // Pull whatever credential the request carried — a header (Authorization,
-// x-subscription-token, x-cg-demo-api-key, x-api-key) OR a URL query param /
-// path segment (FRED v1 rides ?api_key=…; b20 bakes the Alchemy key into the
-// RPC URL). Returned as one string the adversarial upstream echoes back.
+// x-subscription-token, x-cg-demo-api-key, x-api-key), a URL query param /
+// path segment (b20 bakes the Alchemy key into the RPC URL) OR a JSON request
+// body (BLS v2 rides registrationkey). Returned as one string the adversarial
+// upstream echoes back.
 function credentialFrom(url, init) {
   const h = init?.headers || {};
   const parts = [];
@@ -126,6 +128,7 @@ function credentialFrom(url, init) {
     if (["authorization", "x-subscription-token", "x-cg-demo-api-key", "x-api-key"].includes(n)) parts.push(String(value));
   }
   parts.push(String(url)); // covers query-string and URL-embedded secrets
+  if (typeof init?.body === "string") parts.push(init.body); // covers body-carried keys
   return parts.join(" ");
 }
 
@@ -280,8 +283,8 @@ for (const { slug, handler, input } of HANDLER_CASES) {
 
 // ---------------------------------------------------------------------------
 // Non-AI credentialed kits (D5 follow-up). Each carries a secret to its
-// upstream (CoinGecko demo key header / Neynar x-api-key / FRED api_key query
-// param / Databento HTTP Basic / Alchemy key in the RPC URL) and has a
+// upstream (CoinGecko demo key header / Neynar x-api-key / BLS registrationkey
+// body field / Databento HTTP Basic / Alchemy key in the RPC URL) and has a
 // residual-4xx path that echoes the raw upstream body. Drive each through the
 // credential-echoing 400 upstream and assert the canary never reaches the
 // thrown error. Status shielding differs per kit (crypto/macro/finance map a
@@ -290,7 +293,7 @@ for (const { slug, handler, input } of HANDLER_CASES) {
 // "the mock actually received the canary" (test validity).
 const NON_AI_CASES = [
   { slug: "crypto-price", handler: bySlug(CRYPTO_TOOLS, "crypto-price"), input: { coins: "bitcoin" } },
-  { slug: "fred-series", handler: bySlug(MACRO_TOOLS, "fred-series"), input: { seriesId: "GDPC1" } },
+  { slug: "fred-series", handler: bySlug(MACRO_TOOLS, "fred-series"), input: { seriesId: "UNRATE", startDate: "2024-01-01", endDate: "2024-12-31" } },
   { slug: "stock-quote", handler: bySlug(FINANCE_TOOLS, "stock-quote"), input: { symbol: "AAPL" } },
 ];
 
@@ -337,7 +340,6 @@ for (const { slug, handler, input } of NON_AI_CASES) {
 // 200 SUCCESS body (it folds per-network errors into networks[].error).
 const ALCHEMY_ERROR_CASES = [
   { slug: "wallet-balance", handler: bySlug(CHAIN_TOOLS, "wallet-balance"), input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" }, mode: "rpc-error-200" },
-  { slug: "evm-rpc", handler: bySlug(CHAIN_TOOLS, "evm-rpc"), input: { network: "base", method: "eth_blockNumber", params: [] }, mode: "rpc-error-200" },
   { slug: "dex-pair", handler: bySlug(DEX_TOOLS, "dex-pair"), input: { tokenA: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", tokenB: "0x4200000000000000000000000000000000000006", fee: 500, network: "base" }, mode: "rpc-error-200" },
   { slug: "nft-floor", handler: bySlug(NFT_MARKET_TOOLS, "nft-floor"), input: { contract: "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d" }, mode: "bad-request-echo-400" },
 ];
@@ -354,6 +356,21 @@ for (const { slug, handler, input, mode: m } of ALCHEMY_ERROR_CASES) {
   if (leaked) console.error(`  LEAKED >>> ${blob.slice(0, 300)}`);
   ok(sawCanaryCred, `${slug} [${m}] mock received the Alchemy-keyed request (test validity)`);
   ok(err !== null && err.statusCode >= 400, `${slug} [${m}] surfaced a clean attributed error (got ${err ? err.statusCode : "no error"})`);
+}
+
+// evm-rpc is a Base-only relay through Base's own public endpoint
+// (BASE_RELAY_RPCS): no keyed lane, so the Alchemy key never leaves with it.
+// Driven through the same echoing JSON-RPC error, it must carry no canary
+// out and send none upstream.
+{
+  mode = "rpc-error-200";
+  sawCanaryCred = false;
+  let out, err = null;
+  try { out = await bySlug(CHAIN_TOOLS, "evm-rpc")({ network: "base", method: "eth_blockNumber", params: [] }); }
+  catch (e) { err = e; out = { thrown: e.message, statusCode: e.statusCode, ...e }; }
+  ok(!CANARIES.some((c) => scan(out).includes(c)), "evm-rpc [rpc-error-200] no secret leak");
+  ok(!sawCanaryCred, "evm-rpc [rpc-error-200] sends no Alchemy key upstream (Base public relay only)");
+  ok(err !== null && err.statusCode >= 400, `evm-rpc [rpc-error-200] surfaced a clean attributed error (got ${err ? err.statusCode : "no error"})`);
 }
 
 // l2-gas-comparison — WORST case: per-network errors are folded into a 200
