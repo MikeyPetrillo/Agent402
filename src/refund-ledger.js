@@ -1109,3 +1109,26 @@ export function __resetRefunds() {
 // Operator heap read (/__operator/heap.json `stores`).
 registerSqliteStore("refund-ledger.db", () => db, { note: "refund ledger (in memory with a state database)" });
 registerSqliteStore("refund-ledger.fileDb", () => fileDb, { note: "refund ledger write-through file" });
+
+
+/**
+ * Retention (src/ledger-retention.js): resolved debts (paid or void) created
+ * before `cutoffMs`. An owed, sending or blocked row is never removed (a
+ * blocked row is held property, kept as long as it is blocked). Counts only
+ * unless `apply` is true. Resolves { due, removed }.
+ */
+export async function pruneResolvedRefundsBefore(cutoffMs, { apply = false } = {}) {
+  const cut = Math.floor(Number(cutoffMs));
+  if (!Number.isFinite(cut) || cut <= 0) throw new Error("a cutoff time is required");
+  if (USE_PG) {
+    const where = `created_at < $1 AND status IN ('paid', 'void')`;
+    const due = Number((await stateQuery(`SELECT count(*)::bigint AS n FROM ${T("refunds")} WHERE ${where}`, [cut])).rows[0].n);
+    if (!apply || !due) return { due, removed: 0 };
+    const r = await stateQuery(`DELETE FROM ${T("refunds")} WHERE ${where}`, [cut]);
+    for (const h of [db, fileDb]) if (h) { try { h.prepare("DELETE FROM refunds WHERE createdAt < ? AND status IN ('paid', 'void')").run(cut); } catch { /* the table is the record */ } }
+    return { due, removed: r.rowCount };
+  }
+  const due = Number(db.prepare("SELECT count(*) AS n FROM refunds WHERE createdAt < ? AND status IN ('paid', 'void')").get(cut).n);
+  if (!apply || !due) return { due, removed: 0 };
+  return { due, removed: db.prepare("DELETE FROM refunds WHERE createdAt < ? AND status IN ('paid', 'void')").run(cut).changes };
+}

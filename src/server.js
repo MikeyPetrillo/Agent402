@@ -624,6 +624,7 @@ import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.
 import { settleComplianceView } from "./settle-compliance.js";
 import { sanctionedRegionsMiddleware, sanctionedRegionsView } from "./sanctioned-regions.js";
 import { applyActualCharge } from "./actual-charge.js";
+import { startLedgerRetention, ledgerRetentionStatus } from "./ledger-retention.js";
 import { recordSanctionsEvent, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
 import { relayPayerScreenView } from "./payer-screen-rails.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
@@ -3112,7 +3113,11 @@ app.use(sanctionedRegionsMiddleware({
   },
 }));
 // The report word's first read of the database (file mode reads at first use).
-{ const t = setTimeout(() => { refreshSanctionsEvents().catch(() => {}); }, 2_000); t.unref?.(); }
+{ const t = setTimeout(contained("sanctions-events-refresh", () => { refreshSanctionsEvents().catch(() => {}); }), 2_000); t.unref?.(); }
+// Money records past their retention period (src/ledger-retention.js): sales
+// and resolved refunds at 7 years, sanctions events at 10. A daily leased pass,
+// a dry run unless LEDGER_RETENTION=apply. Off with LEDGER_RETENTION=off.
+if (String(process.env.LEDGER_RETENTION || "").trim().toLowerCase() !== "off") startLedgerRetention();
 // A credits key in a URL is refused before anything reads or records the URL
 // (src/credits-key-url.js).
 app.use(refuseCreditsKeyInUrl());
@@ -8137,6 +8142,11 @@ app.get("/__operator/sanctions-events.json", async (req, res) => {
   res.set("Cache-Control", "private, no-store");
   try { res.json({ ...(await sanctionsEventsOperatorView()), geo: sanctionedRegionsView() }); }
   catch (e) { res.status(503).json({ error: `the sanctions events store could not be read (${String(e?.message || e).slice(0, 120)})` }); }
+});
+// The money records' retention pass (src/ledger-retention.js): its last run.
+app.get("/__operator/ledger-retention.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(ledgerRetentionStatus());
 });
 // Mark reportable events filed: { ids: [...] } or { all: true }, with the
 // filing's confirmation as `reference`. The status word clears when none is left.

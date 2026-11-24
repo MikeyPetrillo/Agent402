@@ -195,6 +195,8 @@ t node scripts/test-stellar-xdr-fixtures.js
 t node scripts/test-svm-clarify.js
 # Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)
 t node scripts/test-refund-ledger.js
+# Money records past retention (sales and resolved refunds 7 years, sanctions 10; dry run unless LEDGER_RETENTION=apply; owed and blocked refunds never removed - offline)
+t node scripts/test-ledger-retention.js
 # Outbound new-destination watch (first sighting per chain+recipient, ok/new/burst words, window expiry, file-mode persistence across a restart, word-only public field - offline +
 t node scripts/test-outbound-destinations.js
 # Refund lookup (exact tx only, unknown == no refund, no payer leak, own rows on my-usage, rate limited - boots its own server)
