@@ -128,9 +128,9 @@ function pageProblems(base, path, html, { selfCanonical = true } = {}) {
   const B = "https://agent402.tools";
   const before = sitemapXml(B, {});
   ok(!new RegExp(`<loc>${B}/reports/insider/${T}</loc><lastmod>`).test(before), `/reports/insider/${T} carries no lastmod before its page is built`);
-  const r = await loadTeaser("insider", T, { seeded: true, builders: { insider: async () => ({ name: T, latestFiledDate: "2026-10-02" }) } });
+  const r = await loadTeaser("insider", T, { seeded: true, builders: { insider: async () => ({ name: T, latestFiledDate: "2026-10-02", rows: [{}, {}, {}] }) } });
   ok(r.status === "ok" && entityLastmod(`/reports/insider/${T}`) === "2026-10-02", "a built insider page records its date");
-  await loadTeaser("dossier", T, { seeded: true, builders: { dossier: async () => ({ name: T, partial: true, latest10Q: { filingDate: "2026-07-30" } }) } });
+  await loadTeaser("dossier", T, { seeded: true, builders: { dossier: async () => ({ name: T, partial: true, latest10Q: { filingDate: "2026-07-30" }, activity: { total: 4, recent: [] } }) } });
   ok(entityLastmod(`/reports/dossier/${T}`) === null, "a partial build records no date");
   await loadTeaser("fund", M, { seeded: true, builders: { fund: async () => { throw new Error("EDGAR down"); } } });
   ok(entityLastmod(`/reports/fund/${M}`) === null, "a degraded build records no date");
