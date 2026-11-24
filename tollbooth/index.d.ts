@@ -65,7 +65,7 @@ export interface TollboothConfig {
   botUserAgents?: string[];
   /** Who pays: "bots" (default), "all", or "strict" (listed bots and anything that is not a browser page load). */
   mode?: "bots" | "all" | "strict";
-  /** Paths an empty-User-Agent GET or HEAD reads free in "bots" and "strict" modes (a health check). Default ["/healthz", "/health"]; [] for none. */
+  /** Paths an empty-User-Agent GET or HEAD reads free in "bots" and "strict" modes (a health check), matched exactly on the raw request path with the query aside; a path with a "%" escape or a "." or ".." segment never matches. Default ["/healthz", "/health"]; [] for none. */
   healthPaths?: string[];
   charge?: (req: TollboothRequest) => boolean;
   free?: (req: TollboothRequest) => boolean;

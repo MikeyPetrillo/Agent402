@@ -76,8 +76,9 @@ Packages:
 - agent402-tollbooth 0.13.0 answers `--help` and `--version`, ships its
   `deploy/` files, and charges a request with an empty User-Agent, except an
   empty-User-Agent GET or HEAD of a health path (`healthPaths`, default
-  `/healthz` and `/health`; `TOLLBOOTH_HEALTH_PATHS` for the CLI), so a load
-  balancer's health check keeps passing. A minor release: an empty
+  `/healthz` and `/health`; `TOLLBOOTH_HEALTH_PATHS` for the CLI, matched
+  exactly on the raw request path), so a load balancer's health check keeps
+  passing. A minor release: an empty
   User-Agent elsewhere now pays.
 - agent402-mcp 0.17.0: `wallet new --help` prints the usage and makes no key.
 - The meta-tool adapters pass the server's error body through to the caller.
