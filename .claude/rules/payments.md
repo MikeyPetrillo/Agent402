@@ -635,8 +635,10 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   listed facilitators stands as the buyer's 402 and the x402 payment is not settled
   (`scripts/test-own-relayer.js`, `scripts/test-rh-outage.js`). The settlement-gas row
   ("price floor") on 4663 compares gas to that minimum when the relayer is on and no floor is set.
-  Ink (eip155:57073) has none by default: only its listed facilitators pay its gas, so the
-  floor rule (a settler of ours may pay) does not apply; a per-settlement fee is a premium.
+  Ink (eip155:57073) has no floor by default; with `INK_RELAYER_KEY` our own Ink relayer pays the
+  gas of what it settles and takes a sale only at or over `INK_RELAYER_MIN_PRICE_USD` (default in
+  the code, withheld from the reference; "0" any price), the same refusal with nothing sent; a
+  per-settlement fee is a premium.
   A floored network, or one with a premium above zero, is never offered `upto` (the boot gate refuses it). /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
   the chain page and the guides read the same floor; `payment.premiumUsdByNetwork` there publishes
   each chain's premium, and llms.txt, openapi and MCP `payment.info` read the same map. Sales, hang-up debts and charged-failure
@@ -810,7 +812,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `INK_FACILITATOR_URL` (Ink, `eip155:57073`, native Circle USDC `0x2D27...AEEd`, domain
   "USDC" v2 in `TIER1_USDC`) is the same ordered list with the same boot choice
   (`chooseListedPrimary`), listed fallbacks (`wireListedFallbacks`) and pass-on rules
-  (`REVERT_RETRY_NETWORKS` holds both chains), but no own relayer and no outage read: an
+  (`REVERT_RETRY_NETWORKS` holds both chains), but no gas order and no outage read: an
   ambiguous or passed-on Ink failure that no listed facilitator settles stops as a 402 (the
   pending-settle read still applies; `EVM_RPC_57073` overrides the RPC, whose receipts are
   read at the sequencer's head). Its fallback override is the listed ones only (no
@@ -820,8 +822,19 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   RAILS (graduated after its first live settle). A new rail can start in `GATED_RAILS`
   (`src/rails.js`) with its read-config in `GATED_EVM` (`src/revenue-live.js`); graduating it
   after a live settle moves both entries, and every typed chain list and count follows
-  (`scripts/test-chain-list-copy.js`). No price floor by default (no settler of
-  ours pays its gas); `NETWORK_PRICE_FLOORS` sets one and /api/pricing
+  (`scripts/test-chain-list-copy.js`). `INK_RELAYER_KEY` (key present = on; its own wallet: a key
+  equal to `ROBINHOOD_RELAYER_KEY` or malformed leaves it off with a warning, `inkRelayerKeySafe`)
+  adds our own relayer (`src/robinhood-relayer.js`, `OWN_RELAYER_NETWORKS`) as Ink's LAST settle
+  fallback, after every confirmed listed one: reached only by a refusal that moved nothing (a
+  pre-broadcast refusal, a reverted transfer, an `isNothingSentNodeRefusal` answer), never by an
+  ambiguous answer, a passed-on refusal, a buyer verdict, a used authorization or a compliance
+  refusal; our Ink sales only (Ink USDC, `transferWithAuthorization`, treasury fixed), its own lease
+  (`ink-relayer-<address>`), caps (`INK_RELAYER_MAX_GWEI`, `INK_RELAYER_GAS_CAP`,
+  `INK_RELAYER_RECEIPT_MS`, `INK_RELAYER_LOCK_WAIT_MS`) and minimum, the payer screen; its signer
+  joins Ink's gas check (a low row pages `facilitatorFunds`; a dry listed row is
+  `coveredByOwnRelayer` only while the Ink minimum covers the lowest price sold there), and the
+  settlement-gas row compares gas to that minimum (`scripts/test-ink-relayer.js`). No price floor
+  by default; `NETWORK_PRICE_FLOORS` sets one and /api/pricing
   `minPriceUsdByNetwork` publishes any offered chain's floor (`scripts/test-ink-rail.js`,
   `scripts/test-ink-graduation.js`).
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
@@ -842,6 +855,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `scripts/test-tool-failure-monitor.js`).
   There is no extra Solana settle fallback by design: a
   Solana payment names the quoted facilitator's fee payer, and any other facilitator refuses it.
+  An own Solana settler cannot be a fallback for the same reason (the fee payer is a required
+  signer of the message the buyer signed); it could only take a share of quotes that name its own
+  fee payer, which changes the 402 and is not built.
   `SOLANA_FACILITATOR_URL` (ordered list; unset = unchanged) adds a second Solana mainnet
   facilitator that is never a routing client (`src/svm-facilitator-split.js`): it names
   `SOLANA_FACILITATOR_SHARE` percent (default 50) of Solana quotes, chosen by a hash of client
@@ -923,7 +939,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `settle_compliance_refused` with no transaction; the 402 is reason `settlement-compliance-refused`,
   `charged: false`, retry `do-not-retry` (`src/payment-reject.js complianceSettleRefusal`). Our own
   settlers screen the payer first (`src/own-settler-screen.js`, the OFAC list the payer screens
-  read): the Robinhood relayer and the Stellar settle client refuse a listed payer with nothing sent
+  read): the Robinhood and Ink relayers and the Stellar settle client refuse a listed payer with nothing sent
   (`own_settler_sanctions_screen`); with no list loaded they submit and count it unscreened. Counts,
   never an address: `settleCompliance` in the operator view of `/api/gateway-status`
   (`scripts/test-settle-compliance.js`).

@@ -90,6 +90,7 @@
     "ATTEST_MAX_GAS_USD": "a gas ceiling",
     "ATTEST_SCHEMA_MAX_GAS_USD": "a gas ceiling",
     "DATABENTO_MAX_QUERY_USD": "a vendor query ceiling",
+    "INK_RELAYER_MIN_PRICE_USD": "follows the relayer's gas",
     "ROBINHOOD_RELAYER_MIN_PRICE_USD": "follows the relayer's gas"
   },
   "vars": {
@@ -501,6 +502,12 @@
     "INFLIGHT_COVER_UNREAD_MAX": "Inflight cover unread maximum.",
     "INFLIGHT_COVER_UNREAD_PAID_MAX": "Inflight cover unread paid maximum.",
     "INK_FACILITATOR_URL": "Ink facilitator URL.",
+    "INK_RELAYER_GAS_CAP": "Ink relayer gas cap.",
+    "INK_RELAYER_KEY": "Ink relayer key (a credential, set on the host); its own wallet, never the Robinhood relayer's key.",
+    "INK_RELAYER_LOCK_WAIT_MS": "Ink relayer lock wait, in milliseconds.",
+    "INK_RELAYER_MAX_GWEI": "Ink relayer maximum gwei.",
+    "INK_RELAYER_MIN_PRICE_USD": "Least sale price, in USD, the own Ink relayer settles (0: any).",
+    "INK_RELAYER_RECEIPT_MS": "Ink relayer receipt, in milliseconds.",
     "JEV_DAILY_MAX_TOKENS": "Jev daily maximum tokens.",
     "JEV_MODEL": "Jev model.",
     "JUDGE_MAX_BODY_BYTES": "Judge maximum body bytes.",
