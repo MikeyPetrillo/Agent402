@@ -1,0 +1,136 @@
+#!/usr/bin/env node
+// /integrations/claude-managed-agents (src/managed-agents-page.js) and the
+// connector listing it relies on (/mcp?tool_names=underscore).
+//
+// Part 1 (in process) renders the page and reads its visible text: the agent
+// definition is the one the page exports, every name it enables is a plain
+// name the connector lists, figures come from the code that decides them, and
+// what Anthropic's product does is attributed to its documentation.
+// Part 2 boots a FREE_MODE server on port 0: the route, the integrations
+// index, the sitemaps, /llms.txt, the page date, and the connector listing
+// every tool under a plain name with ?tool_names=underscore, dotted without
+// it, and running a call made by either spelling.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { JSDOM } from "jsdom";
+import assert from "node:assert/strict";
+import { bootServer } from "./lib/boot-server.js";
+import { managedAgentsPage, agentDefinition, ENVIRONMENT, MANAGED_AGENTS_SLUG, MANAGED_AGENTS_NAME, BETA_HEADER, DISCOVERY_TOOLS, PAID_TOOL_NAME, SERVER_NAME, connectorUrl } from "../src/managed-agents-page.js";
+import { PLATFORM_INTEGRATIONS } from "../src/platform-integrations.js";
+import { integrationSlugs } from "../src/integration-pages.js";
+import { pageLastmod, PAGE_SOURCES } from "../src/page-dates.js";
+import { MAX_CALLS_PER_BURST, MAX_CALLS_PER_WINDOW } from "../src/rate-limit.js";
+import { plainToolName, resolveListedName, PLAIN_TOOL_NAMES_VALUE } from "../src/mcp-flagship.js";
+
+let pass = 0;
+const ok = (cond, msg) => { assert.ok(cond, msg); pass++; };
+const eq = (a, b, msg) => { assert.equal(a, b, msg); pass++; };
+const BASE = "https://example.test";
+const CATALOG = {
+  "GET /api/search": { slug: "search", name: "Web search", price: "$0.010" },
+  "GET /api/answer": { slug: "answer", name: "Cited answer", price: "$0.02", modelBacked: true },
+  "POST /api/hash": { slug: "hash", name: "Hash", price: "$0.001" },
+  "POST /api/uuid": { slug: "uuid", name: "UUID", price: "$0.001" },
+};
+const visible = (html) => {
+  const doc = new JSDOM(html).window.document;
+  for (const el of doc.querySelectorAll("head, script, style")) el.remove();
+  return (doc.body?.textContent || "").replace(/\s+/g, " ");
+};
+const main = (html) => { const v = visible(html); const a = v.indexOf("agent402 / integrations"); const b = v.indexOf("All integrations", a); return v.slice(a, b + "All integrations".length); };
+const PLAIN = /^[a-zA-Z0-9_-]{1,113}$/; // the tool name rule Claude Managed Agents enforces
+
+// --- Part 1 -----------------------------------------------------------------
+{
+  const html = managedAgentsPage(BASE, CATALOG, { env: { MPP_SECRET_KEY: "k" } });
+  const t = main(html);
+  const def = agentDefinition(BASE);
+  // The agent definition: the connector on the plain-names URL, a matching toolset, plain names only.
+  eq(def.mcp_servers[0].url, connectorUrl(BASE), "the agent names the connector's plain-names URL");
+  ok(connectorUrl(BASE) === `${BASE}/mcp?tool_names=${PLAIN_TOOL_NAMES_VALUE}`, "the URL carries the connector's own query value");
+  const ts = def.tools.find((x) => x.type === "mcp_toolset");
+  ok(ts && ts.mcp_server_name === SERVER_NAME && def.mcp_servers[0].name === SERVER_NAME, "the toolset references the declared server");
+  const names = ts.configs.map((c) => c.name);
+  ok(names.every((n) => PLAIN.test(n)), `every enabled MCP tool name is a plain name (${names.join(", ")})`);
+  ok(names.every((n) => resolveListedName(n) !== n || n === n.replace(/\./g, "")), "every enabled name resolves on the connector");
+  ok(DISCOVERY_TOOLS.every((d) => names.includes(plainToolName(d))), "the four discovery tools are enabled by their plain names");
+  ok(ts.configs.find((c) => c.name === "catalog_call") && !ts.configs.find((c) => c.name === "catalog_call").permission_policy, "catalog_call keeps the documented default policy");
+  ok(def.tools.some((x) => x.type === "custom" && x.name === PAID_TOOL_NAME && PLAIN.test(PAID_TOOL_NAME)), "the paid-call custom tool is declared");
+  ok(!def.tools.some((x) => x.type === "custom" && /^(mcp__|ant__)/.test(x.name)), "no reserved custom tool prefix");
+  eq(ENVIRONMENT.config.networking.allow_mcp_servers, true, "the environment lets the session reach the declared server");
+  // The commands on the page are the exported definition, on this base URL.
+  const pres = [...new JSDOM(html).window.document.querySelectorAll("pre")].map((p) => p.textContent);
+  ok(pres.some((p) => p.includes(JSON.stringify(def, null, 2))), "the agent request body is the exported definition");
+  ok(pres.some((p) => p.includes(`anthropic-beta: ${BETA_HEADER}`)), "the beta header is sent");
+  ok(pres.some((p) => p.includes('"type": "user.tool_confirmation"')) && pres.some((p) => p.includes("agent.custom_tool_use")), "approval and custom tool steps are shown");
+  // Figures from the code.
+  ok(t.includes(`${MAX_CALLS_PER_BURST} a minute and ${MAX_CALLS_PER_WINDOW} an hour`), "the free limits are the rate limiter's");
+  ok(/\b2 pure-CPU tools run free on the connector/.test(t), "the free count is the catalog's free-tier count");
+  ok(t.includes("free on /mcp") && t.includes("$0.01") && t.includes("$0.02"), "cards: free label for a free-tier tool, catalog prices for paid ones");
+  ok(t.includes("model-backed"), "the model-backed tool is labeled");
+  ok(!/\$\d/.test(main(managedAgentsPage(BASE, {}, { env: { MPP_SECRET_KEY: "k" } }))), "no catalog, no price");
+  // Wires: the connector's own account.
+  ok(t.includes("payable in the call on this connector over x402 or MPP"), "paid boot with MPP: both wires");
+  ok(main(managedAgentsPage(BASE, CATALOG, { env: {} })).includes("over x402:"), "paid boot without MPP: x402 alone");
+  const free = main(managedAgentsPage(BASE, CATALOG, { env: { FREE_MODE: "true" } }));
+  ok(free.includes("This instance runs in free mode") && !free.includes("payable in the call"), "FREE_MODE: no in-call payment offered");
+  // Anthropic's product is attributed to its documentation, linked.
+  for (const href of ["https://platform.claude.com/docs/en/managed-agents/mcp-connector", "https://platform.claude.com/docs/en/managed-agents/quickstart", "https://platform.claude.com/docs/en/managed-agents/vaults"]) ok(html.includes(`href="${href}"`), `links ${href}`);
+  for (const unattributed of ["Managed Agents cannot", "Managed Agents does not", "Anthropic's proxy", "will pay", "is not supported by"]) ok(!t.includes(unattributed), `no unattributed claim about the platform ("${unattributed}")`);
+  ok(!html.includes("—") && !/\bcolour|favour|behaviour\b/.test(t), "no em dash, US spelling");
+  ok(/<h1[^>]*>Agent402 with Claude Managed Agents<\/h1>/.test(html) && html.includes(`<link rel="canonical" href="${BASE}/integrations/${MANAGED_AGENTS_SLUG}"`), "heading and canonical");
+  eq((html.match(/<h1\b/g) || []).length, 1, "one h1");
+}
+{
+  ok(PLATFORM_INTEGRATIONS.some((p) => p.slug === MANAGED_AGENTS_SLUG && p.name === MANAGED_AGENTS_NAME), "the platform list names the page");
+  ok(!integrationSlugs().includes(MANAGED_AGENTS_SLUG), "no package page shares the slug");
+  ok(pageLastmod(`/integrations/${MANAGED_AGENTS_SLUG}`), "the page has a date");
+  assert.deepEqual(PAGE_SOURCES[`/integrations/${MANAGED_AGENTS_SLUG}`], ["src/managed-agents-page.js"], "dated from its own module"); pass++;
+  // The plain-name rule round-trips: a name is renamed only when it resolves back.
+  eq(plainToolName("catalog.search"), "catalog_search", "catalog.search -> catalog_search");
+  eq(plainToolName("decide.feedback"), "decide_feedback", "decide.feedback -> decide_feedback");
+  eq(plainToolName("hash"), "hash", "a dotless name is unchanged");
+  eq(resolveListedName("decide_feedback"), "decide.feedback", "decide_feedback resolves");
+}
+
+// --- Part 2 -----------------------------------------------------------------
+const srv = await bootServer({ stores: "managed-agents-page", env: { FREE_MODE: "true", NODE_ENV: "test", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", TEMPO_API_KEY: "", MPP_SECRET_KEY: "" } });
+try {
+  const get = async (p) => { const r = await fetch(`${srv.url}${p}`); return { status: r.status, text: await r.text() }; };
+  const page = await get(`/integrations/${MANAGED_AGENTS_SLUG}`);
+  eq(page.status, 200, "the route answers 200");
+  const t = main(page.text);
+  ok(t.includes("Attach the connector") && t.includes("Run a free tool") && t.includes("Pay for calls") && t.includes("Limits"), "the sections");
+  ok(page.text.includes(`${srv.url.replace(/\/$/, "")}/mcp?tool_names=underscore`) || /\/mcp\?tool_names=underscore/.test(page.text), "the served page names the plain-names URL");
+  const index = await get("/integrations");
+  ok(index.status === 200 && index.text.includes(`href="/integrations/${MANAGED_AGENTS_SLUG}"`), "the integrations index links the page");
+  for (const sm of ["/sitemap-learn.xml", "/sitemap.xml"]) {
+    const x = await get(sm);
+    const row = x.text.split("<url>").find((u) => new RegExp(`<loc>[^<]*/integrations/${MANAGED_AGENTS_SLUG}</loc>`).test(u)) || "";
+    ok(row && /<lastmod>\d{4}-\d{2}-\d{2}/.test(row), `${sm} lists and dates the page`);
+  }
+  const llms = await get("/llms.txt");
+  ok(llms.text.split("\n").some((l) => l.startsWith(`- [${MANAGED_AGENTS_NAME}](`) && l.includes(`/integrations/${MANAGED_AGENTS_SLUG})`)), "/llms.txt links the page");
+
+  // The connector: plain names with the query, dotted without it, and a call by either spelling.
+  const rpc = async (path, method, params, id = 1) => {
+    const r = await fetch(`${srv.url}${path}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id, method, params }) });
+    return r.json();
+  };
+  const init = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "managed-agents-test", version: "0" } };
+  await rpc("/mcp?tool_names=underscore", "initialize", init);
+  const plain = (await rpc("/mcp?tool_names=underscore", "tools/list", {}, 2)).result.tools.map((x) => x.name);
+  ok(plain.length > 0 && plain.every((n) => PLAIN.test(n)), `?tool_names=underscore lists every tool under a plain name (${plain.filter((n) => !PLAIN.test(n)).join(", ") || "all plain"})`);
+  ok(DISCOVERY_TOOLS.every((d) => plain.includes(plainToolName(d))) && plain.includes("catalog_call"), "the names the page enables are listed");
+  const dotted = (await rpc("/mcp", "tools/list", {}, 3)).result.tools.map((x) => x.name);
+  ok(dotted.includes("catalog.search") && !dotted.includes("catalog_search"), "without the query the listing is unchanged");
+  eq((await rpc("/mcp?tool_names=other", "tools/list", {}, 4)).result.tools.some((x) => x.name === "catalog.search"), true, "another query value lists dotted names");
+  const hashPlain = await rpc("/mcp?tool_names=underscore", "tools/call", { name: "catalog_call", arguments: { slug: "hash", params: { text: "hello world", algo: "sha256" } } }, 5);
+  ok(!hashPlain.result?.isError && JSON.stringify(hashPlain.result).includes("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"), "catalog_call runs a free tool");
+  const findPlain = await rpc("/mcp?tool_names=underscore", "tools/call", { name: "catalog_find", arguments: { task: "hash text with sha256" } }, 6);
+  ok(!findPlain.result?.isError && JSON.stringify(findPlain.result).includes("hash"), "catalog_find answers");
+  const dottedCall = await rpc("/mcp?tool_names=underscore", "tools/call", { name: "catalog.search", arguments: { query: "hash" } }, 7);
+  ok(!dottedCall.result?.isError, "the dotted spelling still runs under the query");
+  eq((await get(`/integrations/${MANAGED_AGENTS_SLUG}-nope`)).status, 404, "an unknown slug is still a 404");
+} finally { await srv.stop(); }
+
+console.log(`\nmanaged agents page: ${pass} passed`);

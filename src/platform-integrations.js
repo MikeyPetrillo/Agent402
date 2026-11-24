@@ -10,4 +10,11 @@ export const PLATFORM_INTEGRATIONS = Object.freeze([
     surface: "openapi.json · /mcp",
     llms: "set up an AgentCore Gateway target from openapi.json or the hosted MCP connector, and pay per call through AgentCore Payments over x402",
   }),
+  Object.freeze({
+    slug: "claude-managed-agents",
+    name: "Claude Managed Agents",
+    line: "The hosted MCP connector on a managed agent: free tools in the session, paid calls through a host-side custom tool.",
+    surface: "/mcp",
+    llms: "attach the hosted MCP connector to a Claude Managed Agents agent definition, run the free tools in a session, and pay for the rest through a host-side custom tool that pays from your wallet",
+  }),
 ]);

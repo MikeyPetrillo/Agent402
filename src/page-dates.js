@@ -54,6 +54,7 @@ export const PAGE_SOURCES = {
   "/tollbooth": ["src/tollbooth-landing.js"],
   "/integrations": ["src/ledger-integrations.js"],
   "/integrations/agentcore": ["src/agentcore-page.js"],
+  "/integrations/claude-managed-agents": ["src/managed-agents-page.js"],
   "/pricing": ["src/ledger-pricing.js"],
   "/changelog": ["src/changelog.js"],
   "/quickstart": ["src/quickstart.js"],
@@ -111,7 +112,7 @@ export const FAMILY_SOURCES = [
  *  published date is that module's first commit, their modified date the
  *  page's lastmod. Family entries (blog, guides, learn, integrations, skill
  *  packs) are dated one by one in the table's `entries`. */
-export const ARTICLE_PAGES = ["/what-is-x402", "/what-is-mpp", "/agentic-finance", "/x402-test", "/docs", "/integrations/agentcore", "/pay-per-call-api", "/paid-mcp-tools", "/compare"];
+export const ARTICLE_PAGES = ["/what-is-x402", "/what-is-mpp", "/agentic-finance", "/x402-test", "/docs", "/integrations/agentcore", "/integrations/claude-managed-agents", "/pay-per-call-api", "/paid-mcp-tools", "/compare"];
 /** The module whose first commit dates each article page. */
 export function articleSourceFiles() {
   return [...new Set(ARTICLE_PAGES.map((p) => (PAGE_SOURCES[p] || [])[0]).filter(Boolean))].sort();
