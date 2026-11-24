@@ -89,6 +89,8 @@ try {
   ok(blocked.status === 200 && (await row(3))?.status === "blocked" && blocked.json?.totals?.blocked?.n === 1, `block moves an owed row to blocked and the totals count it (${blocked.status})`);
   ok((await update({ id: 3, action: "claim", note: "refund-run: claimed before broadcast" })).status === 409, "a blocked row cannot be claimed for a send");
   ok((await update({ id: 3, action: "void", note: "write it off" })).status === 409, "a blocked row cannot be written off");
+  const blockedList = await (await fetch(`${srv.url}/__operator/refunds.json?status=blocked`, { headers: AUTH })).json();
+  ok(blockedList.status === "blocked" && blockedList.refunds.length === 1 && blockedList.refunds[0].id === 3, "refunds.json lists the blocked rows (the annual blocked-property report reads them)");
 } catch (e) {
   failed++;
   console.error(`FAIL - ${e?.stack || e}`);

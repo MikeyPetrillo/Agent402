@@ -7794,7 +7794,7 @@ app.get("/__operator/refunds.json", async (req, res) => {
   // "sending" must be listable: a row stranded mid-send is exactly what a human
   // has to resolve, and omitting it meant ?status=sending silently returned the
   // OWED list - the stuck rows were invisible except by paging status=all.
-  const status = ["owed", "sending", "paid", "void", "all"].includes(String(req.query.status)) ? String(req.query.status) : "owed";
+  const status = ["owed", "sending", "paid", "void", "blocked", "all"].includes(String(req.query.status)) ? String(req.query.status) : "owed";
   res.set("Cache-Control", "no-store").json({
     totals: refundTotals(),
     status,
