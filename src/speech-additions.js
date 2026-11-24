@@ -78,10 +78,11 @@ export const SPEECH_ADDITIONS = Object.freeze([
  *  provider); the live guard (scripts/test-gateway-model-ids.js) then holds the
  *  private per-minute row to the listing in that unit. mai-transcribe-2,
  *  measured 2026-11-24: the listing is per audio hour, billed per audio second
- *  (a part second bills as a whole one). */
+ *  (a part second bills as a whole one). The two Voxtral models, measured the
+ *  same day: the listing is per audio second. */
 export const STT_ADDITIONS = Object.freeze([
-  Object.freeze({ id: "mistralai/voxtral-mini-transcribe-3-0", aliases: Object.freeze(["voxtral-mini-transcribe-3-0", "voxtral-mini-transcribe"]) }),
-  Object.freeze({ id: "mistralai/voxtral-small-transcribe-3-0", aliases: Object.freeze(["voxtral-small-transcribe-3-0", "voxtral-small-transcribe"]) }),
+  Object.freeze({ id: "mistralai/voxtral-mini-transcribe-3-0", aliases: Object.freeze(["voxtral-mini-transcribe-3-0", "voxtral-mini-transcribe"]), listedPer: "second" }),
+  Object.freeze({ id: "mistralai/voxtral-small-transcribe-3-0", aliases: Object.freeze(["voxtral-small-transcribe-3-0", "voxtral-small-transcribe"]), listedPer: "second" }),
   Object.freeze({ id: "microsoft/mai-transcribe-2", aliases: Object.freeze(["mai-transcribe-2"]), listedPer: "hour" }),
 ]);
 

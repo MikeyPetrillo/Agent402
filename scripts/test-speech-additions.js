@@ -65,6 +65,8 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
   ok(A.ADDITION_COST_KEYS.length === 5 && A.ADDITION_COST_KEYS.every(([sec]) => sec === "speech" || sec === "sttPerMinute"), "one cost row per model");
   ok(A.speechAdditionNamed("ELEVEN-V3-CONVERSATIONAL")?.id === EL && A.sttAdditionNamed(" mai-transcribe-2 ")?.id === "microsoft/mai-transcribe-2" && A.speechAdditionNamed("nope") === null && A.sttAdditionNamed("") === null, "names and aliases resolve without regard to case");
   ok(A.STT_ADDITIONS.every((m) => m.listedPer === undefined || Object.hasOwn(A.LISTED_UNIT_MINUTES, m.listedPer)), "a declared listing unit is one the live guard can convert");
+  ok(A.STT_ADDITIONS.every((m) => typeof m.listedPer === "string"), "every transcription model declares its measured listing unit, so the live guard holds every row");
+  ok(A.sttAdditionNamed("voxtral-mini-transcribe")?.listedPer === "second" && A.sttAdditionNamed("voxtral-small-transcribe")?.listedPer === "second", "the two Voxtral models' measured listing unit is per audio second");
   ok(A.sttAdditionNamed("mai-transcribe-2")?.listedPer === "hour" && A.LISTED_UNIT_MINUTES.hour === 60 && A.LISTED_UNIT_MINUTES.second * 60 === 1, "mai-transcribe-2's measured listing unit is per audio hour, so the live guard holds its row to it");
   ok(A.withinMargin(10, 1, 100) && !A.withinMargin(10, 8, 100) && !A.withinMargin(10, undefined, 100) && !A.withinMargin(10, 0, 100) && !A.withinMargin(10, NaN, 100) && !A.withinMargin(0, 1, 100), "the bound needs a positive cap, rate and price");
 }
