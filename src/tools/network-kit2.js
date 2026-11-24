@@ -178,7 +178,7 @@ async function certTransparencyHandler(body) {
     }
     if (!result) {
       if (err?.statusCode) throw err;
-      throw bad(err?.name === "AbortError" ? "cert transparency log did not respond - try again later" : `Could not reach a cert transparency log: ${err?.message}`, 502);
+      throw bad(err?.name === "AbortError" ? "The upstream cert transparency log did not respond within 10 s; try again later" : `Could not reach a cert transparency log: ${err?.message}`, 502);
     }
   } else try {
     // Give crt.sh a head start; if it wins within HEDGE_MS, certspotter never fires.
@@ -194,7 +194,7 @@ async function certTransparencyHandler(body) {
       result = await firstSuccess([crtP, csP]);
     } catch (bothFailed) {
       if (bothFailed?.statusCode) throw bothFailed; // an upstream-status 502 already carries a clear message
-      throw bad(bothFailed?.name === "AbortError" ? "cert transparency logs did not respond - try again later" : `Could not reach a cert transparency log: ${bothFailed?.message}`, 502);
+      throw bad(bothFailed?.name === "AbortError" ? "The upstream cert transparency logs did not respond within 10 s; try again later" : `Could not reach a cert transparency log: ${bothFailed?.message}`, 502);
     }
   } finally {
     clearTimeout(hedgeTimer);
