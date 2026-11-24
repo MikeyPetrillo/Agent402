@@ -9,7 +9,7 @@ package manifest). Copyright and licensing of Agent402 itself: see NOTICE.
 Server image (Dockerfile, Dockerfile.worker)
 ============================================
 Installed by npm ci --omit=dev from package-lock.json.
-Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-Clause 7, 0BSD 2, BlueOak-1.0.0 2, MIT-0 2, (BSD-2-Clause OR MIT OR Apache-2.0) 1, (MIT AND Zlib) 1, (MIT OR GPL-3.0-or-later) 1, (MIT OR WTFPL) 1, (Unlicense OR Apache-2.0) 1, CC0-1.0 1, MIT (from its license file; the manifest names none) 1, PSF-2.0 1, Unlicense 1.
+Packages: 519. Licenses: MIT 404, Apache-2.0 62, ISC 24, BSD-2-Clause 7, BSD-3-Clause 7, 0BSD 2, BlueOak-1.0.0 2, MIT-0 2, (BSD-2-Clause OR MIT OR Apache-2.0) 1, (MIT AND Zlib) 1, (MIT OR GPL-3.0-or-later) 1, (MIT OR WTFPL) 1, (Unlicense OR Apache-2.0) 1, CC0-1.0 1, MIT (from its license file; the manifest names none) 1, PSF-2.0 1, Unlicense 1.
 
   @adraffy/ens-normalize@1.11.1  MIT
   @algorandfoundation/algokit-utils@10.0.0-alpha.46  MIT
@@ -33,7 +33,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   @aws-sdk/xml-builder@3.972.43  Apache-2.0
   @aws/fiat-extension-for-x402@1.0.1  Apache-2.0
   @aws/lambda-invoke-store@0.3.0  Apache-2.0
-  @borewit/text-codec@0.2.2  MIT
+  @borewit/text-codec@0.2.3  MIT
   @bramus/specificity@2.4.2  MIT
   @csstools/color-helpers@6.1.2  MIT-0
   @csstools/css-calc@3.4.3  MIT
@@ -102,8 +102,8 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   @payai/facilitator@2.4.6  Apache-2.0
   @pdf-lib/standard-fonts@1.0.0  MIT
   @pdf-lib/upng@1.0.1  MIT
-  @posthog/core@1.62.0  MIT
-  @posthog/types@1.419.0  MIT
+  @posthog/core@1.69.2  MIT
+  @posthog/types@1.427.1  MIT
   @redis/bloom@6.3.1  MIT
   @redis/client@6.3.1  MIT
   @redis/json@6.3.1  MIT
@@ -173,7 +173,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   @stellar/js-xdr@4.0.0  Apache-2.0
   @stellar/stellar-sdk@16.4.1  Apache-2.0
   @tokenizer/inflate@0.4.1  MIT
-  @tokenizer/inflate@0.5.1  MIT
+  @tokenizer/inflate@0.6.1  MIT
   @tokenizer/token@0.3.0  MIT
   @types/node@16.9.1  MIT
   @types/node@22.20.5  MIT
@@ -258,7 +258,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   destroy@1.2.0  MIT
   detect-libc@2.1.2  Apache-2.0
   dijkstrajs@1.0.3  MIT
-  docx@9.13.0  MIT
+  docx@9.15.4  MIT
   dotenv@16.6.1  BSD-2-Clause
   dunder-proto@1.0.1  MIT
   ee-first@1.1.1  MIT
@@ -285,7 +285,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   feaxios@0.0.23  MIT
   fflate@0.8.3  MIT
   file-type@21.3.4  MIT
-  file-type@22.2.0  MIT
+  file-type@22.3.0  MIT
   file-uri-to-path@1.0.0  MIT
   finalhandler@2.1.1  MIT
   find-up@4.1.0  MIT
@@ -301,11 +301,10 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   gifwrap@0.10.1  MIT
   github-from-package@0.0.0  MIT
   gopd@1.2.0  MIT
-  gpt-tokenizer@4.1.0  MIT
+  gpt-tokenizer@4.1.2  MIT
   graphql@16.15.0  MIT
   has-symbols@1.1.0  MIT
   has-tostringtag@1.0.2  MIT
-  hash.js@1.1.7  MIT
   hasown@2.0.4  MIT
   hi-base32@0.5.1  MIT
   hono@4.13.16  MIT
@@ -337,7 +336,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   jose@6.2.3  MIT  (optional, platform-specific)
   jpeg-js@0.4.4  BSD-3-Clause
   js-sha256@0.9.0  MIT
-  js-sha3@0.13.0  MIT
+  js-sha3@0.15.0  MIT
   js-sha3@0.8.0  MIT
   js-sha512@0.8.0  MIT
   js-yaml@5.5.0  MIT
@@ -350,7 +349,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   lie@3.3.0  MIT
   locate-path@5.0.0  MIT
   lru-cache@11.5.3  BlueOak-1.0.0
-  marked@18.1.2  MIT
+  marked@18.2.1  MIT
   math-intrinsics@1.1.0  MIT
   mdn-data@2.27.1  CC0-1.0
   media-typer@1.1.0  MIT
@@ -362,13 +361,12 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   mime-types@2.1.35  MIT
   mime-types@3.0.2  MIT
   mimic-response@3.1.0  MIT
-  minimalistic-assert@1.0.1  ISC
   minimist@1.2.8  MIT
   mkdirp-classic@0.5.3  MIT
   mppx@0.18.0  MIT
   ms@2.0.0  MIT
   ms@2.1.3  MIT
-  music-metadata@12.3.2  MIT
+  music-metadata@12.5.0  MIT
   nanoid@6.0.2  MIT
   napi-build-utils@2.0.0  MIT
   negotiator@0.6.4  MIT
@@ -409,8 +407,8 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   pgpass@1.0.5  MIT
   pixelmatch@5.3.0  ISC
   pkce-challenge@5.0.1  MIT  (optional, platform-specific)
-  playwright@1.64.1  Apache-2.0
-  playwright-core@1.64.1  Apache-2.0
+  playwright@1.65.1  Apache-2.0
+  playwright-core@1.65.1  Apache-2.0
   pngjs@5.0.0  MIT
   pngjs@6.0.0  MIT
   pngjs@7.0.0  MIT
@@ -418,7 +416,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   postgres-bytea@1.0.1  MIT
   postgres-date@1.0.7  MIT
   postgres-interval@1.2.0  MIT
-  posthog-node@5.60.0  MIT
+  posthog-node@5.74.0  MIT
   pptxgenjs@4.0.1  MIT
   prebuild-install@7.1.3  MIT
   process-nextick-args@2.0.1  MIT
@@ -428,7 +426,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   punycode@2.3.1  MIT
   qrcode@1.5.4  MIT
   qs@6.16.1  BSD-3-Clause
-  railway@3.16.0  MIT
+  railway@3.17.0  MIT
   range-parser@1.2.1  MIT
   raw-body@3.0.2  MIT
   rc@1.2.8  (BSD-2-Clause OR MIT OR Apache-2.0)
@@ -471,6 +469,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   strip-json-comments@2.0.1  MIT
   stripe@23.1.0  MIT
   strtok3@10.6.3  MIT
+  strtok3@10.8.0  MIT
   structured-headers@2.1.0  MIT
   tar-fs@2.1.5  MIT
   tar-stream@2.2.0  MIT
@@ -481,6 +480,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   tldts-core@7.4.10  MIT
   toidentifier@1.0.1  MIT
   token-types@6.1.2  MIT
+  token-types@6.2.0  MIT
   tough-cookie@6.0.2  BSD-3-Clause
   tr46@0.0.3  MIT
   tr46@7.0.0  MIT
@@ -488,7 +488,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   tslib@1.14.1  0BSD
   tslib@2.9.1  0BSD
   tunnel-agent@0.6.0  Apache-2.0
-  turndown@7.2.4  MIT
+  turndown@7.2.5  MIT
   tweetnacl@1.0.3  Unlicense
   type-is@2.1.0  MIT
   typescript@5.9.3  Apache-2.0  (optional, platform-specific)
