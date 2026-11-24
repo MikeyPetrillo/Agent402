@@ -1,6 +1,7 @@
 import dnsPromises, { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
-import { Agent, buildConnector } from "undici";
+import { buildConnector } from "undici";
+import { fetchAgent } from "../fetch-dispatcher.js";
 import { checkServerIdentity } from "../tls-distrust.js";
 import { capByCeiling, ceilingPassed, ceilingLeftMs, assertBeforeCeiling } from "../run-ceiling.js";
 // Who we say we are (src/user-agents.js, one string per component, each
@@ -449,7 +450,7 @@ function guardedConnector() {
     return connect(opts, callback);
   };
 }
-export const ssrfDispatcher = new Agent({ connect: guardedConnector() });
+export const ssrfDispatcher = fetchAgent({ connect: guardedConnector() });
 // A FRESH pinned dispatcher for callers that must not reuse a kept-alive
 // connection. Measured 2026-09-01 on a real seller: their edge corrupts the
 // socket after serving a 402, so a paid retry reusing the bare leg's
@@ -457,7 +458,7 @@ export const ssrfDispatcher = new Agent({ connect: guardedConnector() });
 // throw that surfaced as an uncaught exception - while the same request on a
 // fresh connection settled fine. Same guardedLookup pin, so SSRF safety is
 // identical; the caller owns close().
-export const freshSsrfDispatcher = () => new Agent({ connect: guardedConnector() });
+export const freshSsrfDispatcher = () => fetchAgent({ connect: guardedConnector() });
 
 // Distinguish an SSRF-block from a generic network failure on a thrown fetch error.
 export function isSsrfBlock(err) {

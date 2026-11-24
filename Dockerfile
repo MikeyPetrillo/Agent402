@@ -16,6 +16,24 @@
 #   docker pull node:24-slim
 #   docker inspect --format='{{index .RepoDigests 0}}' node:24-slim
 # (or, without docker: registry.hub.docker.com/v2/repositories/library/node/tags/24-slim -> .digest)
+#
+# The dependency install runs in a builder stage that has a compiler (python3,
+# make, g++): `npm ci` from the lockfile builds native addons from source (it
+# runs better-sqlite3's node-gyp build even though the package ships
+# prebuilds), and the runtime image gets only the resulting node_modules, no
+# compiler and no npm cache.
+FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS deps
+WORKDIR /app
+ENV NODE_ENV=production
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json ./
+# A failed npm ci prints the tail of npm's debug log before the build fails
+# with npm's own exit code (scripts/test-dockerfile-npm-log.js).
+RUN { npm ci --omit=dev || { s=$?; echo "npm ci failed (exit $s); npm debug log:" >&2; \
+      for f in "${HOME:-/root}"/.npm/_logs/*-debug-0.log; do [ -f "$f" ] && tail -n 200 "$f" >&2; done; exit $s; }; } \
+  && node -e "new (require('better-sqlite3'))(':memory:').prepare('select 1').get()"
+
 FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 
 WORKDIR /app
@@ -23,13 +41,10 @@ ENV NODE_ENV=production
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 COPY package.json package-lock.json ./
+COPY --from=deps /app/node_modules ./node_modules
 # ffmpeg powers the audio tools (normalize/convert/info); gosu drops privileges
 # at startup (see the entrypoint). Installed alongside Chromium's deps.
-# A failed npm ci prints the tail of npm's debug log before the build fails
-# with npm's own exit code (scripts/test-dockerfile-npm-log.js).
-RUN { npm ci --omit=dev || { s=$?; echo "npm ci failed (exit $s); npm debug log:" >&2; \
-      for f in "${HOME:-/root}"/.npm/_logs/*-debug-0.log; do [ -f "$f" ] && tail -n 200 "$f" >&2; done; exit $s; }; } \
-  && npx playwright install --with-deps chromium \
+RUN npx playwright install --with-deps chromium \
   && apt-get update && apt-get install -y --no-install-recommends ffmpeg gosu \
   && rm -rf /var/lib/apt/lists/* \
   # sanity-check gosu works (it silently no-ops on a broken install)

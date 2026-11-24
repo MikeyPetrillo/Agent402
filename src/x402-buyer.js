@@ -10,7 +10,7 @@
 // so the margin guard below refuses any upstream quote over the caller's cap.
 import { assertPublicUrl, ssrfDispatcher, freshSsrfDispatcher } from "./tools/fetch-guard.js";
 import { isAbortError, isNameNotFound, isOurResolverFailure } from "./upstream-deadline.js";
-import { Agent as UndiciAgent } from "undici";
+import { fetchAgent } from "./fetch-dispatcher.js";
 import { withDistrust } from "./tls-distrust.js";
 
 // THE ADDRESS GUARD ON EVERY SELLER REQUEST. assertPublicUrl runs before the
@@ -27,7 +27,7 @@ export function __setBuyerAddressGuardForTest(on) {
 export function buyerAddressGuardOn() { return buyerAddressGuard; }
 // The connection a suite gets with the guard off: no address pin, and still
 // the distrusted-intermediate refusal.
-const unguardedDispatcher = () => new UndiciAgent({ connect: withDistrust() });
+const unguardedDispatcher = () => fetchAgent({ connect: withDistrust() });
 // fresh: a new connection pool (the paid legs never reuse the bare leg's socket).
 const sellerDispatcher = (fresh) => (!buyerAddressGuard ? unguardedDispatcher() : fresh ? freshSsrfDispatcher() : ssrfDispatcher);
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2, canonicalAvmNetwork } from "./avm-network.js";
