@@ -269,7 +269,7 @@ stated on that route.</p>
 <p><b>Refunds on-chain.</b> ${clause("ordinary-failure")} ${clause("charged-but-failed")}
 ${clause("repayment-process")} ${clause("repayment-proof")}
 ${clause("connection-closed-review")} ${clause("unidentified-payer")}
-${clause("sanctions-before-repayment")} ${clause("rights-by-law")}
+${clause("sanctions-before-repayment")} ${clause("compliance-refusal-final")} ${clause("rights-by-law")}
 A machine-readable copy of these refund terms is published at <a href="${CONFORMANCE_PATH}"><code>${CONFORMANCE_PATH}</code></a>
 (its <code>refundTerms</code>); where the two differ, these terms govern.</p>
 <p><b>By card.</b> Card payments for reports and monitors, for pay-per-call purchases made with a card over MPP, and for prepaid credits are processed by

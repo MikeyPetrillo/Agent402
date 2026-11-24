@@ -64,6 +64,7 @@ const ENTRIES = [
       "Tools: Answers carry their source's credit where the source asks for one (crt.sh, Team Cymru, Hyperliquid, RugCheck, EAS, GoPlus and Wikipedia), and contract source answers carry each file's license; the catalog text and the 402 samples are unchanged.",
       "Tools: A tool that reads a URL the caller names sends the Agent402-Fetch token in its User-Agent and honors robots.txt for that token; site-crawl matches robots groups on the exact token.",
       "Payments: The report products settle first under the same plan as the /v1 routes. A streamed answer's signed receipt is kept and fetched at /api/receipt/<token>, by the random token its response head names, never by its settlement.",
+      "Payments: An x402 payment that a settlement provider's compliance check, or this server's own sanctions screening, refuses is final: it is not sent to another settlement provider, it is not charged, and its 402 says so (reason settlement-compliance-refused); /terms states it.",
       "Site: /terms adds a model outputs section and a clause on caller-named URLs, and /crawler describes those reads. The lead sentence scopes signed receipts to successful direct calls. /start shows the wallet new command for a first wallet.",
       "MCP: The connector sign-in answers every token it cannot accept with 401 invalid_token.",
     ],

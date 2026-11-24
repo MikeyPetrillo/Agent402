@@ -913,6 +913,20 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `PENDING_SETTLE_MAX_INFLIGHT` (default 8) reads run per process; past it, or after an RPC 429
   or rate-limit error, the read ends. Outcomes by network and facilitator are on
   `/__operator/tool-failures.json` (`pendingSettles`; `scripts/test-pending-settle.js`).
+- **A compliance refusal is final** (`src/settle-compliance.js`): a settle refusal that names no
+  transaction and whose reason or message matches `COMPLIANCE_REFUSAL_PATTERNS` (sanctions,
+  OFAC/SDN, a block or deny list, a blocked, flagged, restricted or frozen account, compliance,
+  AML, KYT, high risk) ends the settle in the failure hook before anything else (`complianceStop`:
+  no fallback, no outage read, no relayer, no Solana requote, nothing booked), in every fallback
+  step, in the demotion and slow-primary alternates and in the Stellar fallback;
+  `isRetryableSettleRefusal` and `isListedPassOnRefusal` read it false. The receipt is
+  `settle_compliance_refused` with no transaction; the 402 is reason `settlement-compliance-refused`,
+  `charged: false`, retry `do-not-retry` (`src/payment-reject.js complianceSettleRefusal`). Our own
+  settlers screen the payer first (`src/own-settler-screen.js`, the OFAC list the payer screens
+  read): the Robinhood relayer and the Stellar settle client refuse a listed payer with nothing sent
+  (`own_settler_sanctions_screen`); with no list loaded they submit and count it unscreened. Counts,
+  never an address: `settleCompliance` in the operator view of `/api/gateway-status`
+  (`scripts/test-settle-compliance.js`).
 - **A settle chain a FALLBACK ends unconfirmed** (`markUnconfirmedStop`, src/payments.js): the chain
   was opened by a refusal made before sending (a billing refusal, a 402, a revert, a passed-on
   refusal) and a fallback then answers something that does not prove nothing was sent: an HTTP error

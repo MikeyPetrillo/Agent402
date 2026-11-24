@@ -29,6 +29,10 @@ Payments:
 - The report products settle first under the same plan as the /v1 routes. A
   streamed answer's signed receipt is kept and fetched at /api/receipt/<token>,
   by the random token its response head names, never by its settlement.
+- An x402 payment that a settlement provider's compliance check, or this
+  server's own sanctions screening, refuses is final: it is not sent to
+  another settlement provider, it is not charged, and its 402 says so (reason
+  settlement-compliance-refused); /terms states it.
 Site:
 - /terms adds a model outputs section and a clause on caller-named URLs, and
   /crawler describes those reads. The lead sentence scopes signed receipts to
