@@ -681,8 +681,8 @@ holds it.
 | `LEDGER_MIRROR_MARGIN_MS` | Ledger mirror margin, in milliseconds. |  | `src/ledger-mirror.js` |
 | `LEDGER_MIRROR_REFRESH_MS` | Ledger mirror refresh, in milliseconds. |  | `src/ledger-mirror.js` |
 | `LEDGER_RETENTION` | The daily money-record retention pass: apply deletes rows past their period; anything else is a dry run. |  | `src/ledger-retention.js`, `src/server.js` |
-| `LEDGER_RETENTION_REFUND_YEARS` | Years a resolved refund row is kept (never under 7). |  | `src/ledger-retention.js` |
-| `LEDGER_RETENTION_SALES_YEARS` | Years a sales ledger row is kept (never under 7). |  | `src/ledger-retention.js` |
+| `LEDGER_RETENTION_REFUND_YEARS` | Years a resolved refund row is kept (7 at least). |  | `src/ledger-retention.js` |
+| `LEDGER_RETENTION_SALES_YEARS` | Years a sales ledger row is kept (7 at least). |  | `src/ledger-retention.js` |
 
 ## LOOP
 
@@ -1123,7 +1123,7 @@ holds it.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `SANCTIONS_EVENTS_FILE` | Sanctions events file path when the server runs without a state database. |  | `src/sanctions-events.js` |
-| `SANCTIONS_EVENTS_RETENTION_YEARS` | Years a sanctions event is kept (never under 10). |  | `src/sanctions-events.js` |
+| `SANCTIONS_EVENTS_RETENTION_YEARS` | Years a sanctions event is kept (10 at least). |  | `src/sanctions-events.js` |
 | `SANCTIONS_GEO_BLOCK` | The 451 answer for requests from sanctioned regions; off turns it off. |  | `src/sanctioned-regions.js` |
 | `SANCTIONS_GEO_COUNTRIES` | Comma list of ISO country codes the geo block refuses, replacing the default set. |  | `src/sanctioned-regions.js` |
 | `SANCTIONS_LIST_REFRESH_MS` | Sanctions list refresh, in milliseconds. | `21600000` | `src/sanctions-screen.js` |

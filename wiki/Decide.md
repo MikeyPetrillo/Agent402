@@ -67,7 +67,7 @@ One formula for every seller, ours included: fit to the step, observed reliabili
 - The decision fee comes back as a credit worth 100% of it, valid 24 hours, toward running that plan.
 - Our tools run at list price. Outside tools are bought from the seller and resold at the seller's price plus a disclosed 5% markup.
 - Spend stops at your budget, fallbacks run in order, and a run where no step succeeds is not charged on x402.
-- You pay only for what a run spent. The 402 lists `upto` first: you sign the budget as a ceiling, the settlement names what the run spent, and the rest is never charged. `exact` follows, priced at the plan's listed step prices (a `maxBudgetUsd` above them is headroom only `upto` carries); any part a run does not spend is repaid on chain to the paying wallet. The answer's `unspent` field says which; no part of a payment is kept as a credit.
+- You pay only for what a run spent. The 402 lists `upto` first: you sign the budget as a ceiling, the settlement names what the run spent, and the rest is not charged. `exact` follows, priced at the plan's listed step prices (a `maxBudgetUsd` above them is headroom only `upto` carries); any part a run does not spend is repaid on chain to the paying wallet. The answer's `unspent` field says which; no part of a payment is kept as a credit.
 - Every step returns its own receipt; outside results are marked as untrusted content.
 
 ## See also
