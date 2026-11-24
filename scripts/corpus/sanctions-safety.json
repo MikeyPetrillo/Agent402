@@ -107,23 +107,21 @@
     },
     {
       "slug": "token-safety",
-      "name": "USDC on Base: a verdict, a reason, and unknowns named rather than assumed safe",
+      "name": "USDC on Base: named facts and unknowns with the notice, never a verdict",
       "input": {
         "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         "chain": "base"
       },
       "expect": {
         "populated": [
-          "verdict",
-          "because"
+          "notice"
         ],
-        "isArray": [
-          "blocking",
-          "warnings",
-          "unknown"
-        ],
+        "minCount": {
+          "flags": 0,
+          "unknown": 0
+        },
         "matches": {
-          "verdict": "^(safe|caution|unsafe|unknown)$"
+          "notice": "^These are on-chain facts only\\."
         }
       }
     },

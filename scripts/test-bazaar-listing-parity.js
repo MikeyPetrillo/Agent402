@@ -96,6 +96,14 @@ const INPUT_CONSTRAINTS = ["enum", "const", "maxLength", "minLength", "maximum",
 const isPointer = (ex) => !!ex && typeof ex === "object" && ex.truncated === true && /openapi\.json/.test(String(ex.note || ""));
 const exampleOf = (pr) => pr?.extensions?.bazaar?.info?.output?.example;
 
+// Sample fields an owner decision removed on purpose, by slug: the field is
+// gone from the answer itself, so the sample must not keep it. token-safety
+// dropped its verdict (2026-11-24: no answer may read as a statement that a
+// token is fine); the named facts are listed in `flags` and `unknown` instead.
+export const REMOVED_SAMPLE_FIELDS = Object.freeze({
+  "token-safety": Object.freeze(["verdict", "because", "blocking", "warnings"]),
+});
+
 /** What `now` lost against `then` for one route ([] when nothing). */
 export function listingLosses(then, now) {
   const lost = [];
@@ -107,7 +115,8 @@ export function listingLosses(then, now) {
   if (ea !== undefined && eb === undefined) lost.push("sample output dropped");
   else if (ea !== undefined && !isPointer(ea) && isPointer(eb)) lost.push("sample output became the /openapi.json pointer");
   else if (ea && eb && typeof ea === "object" && typeof eb === "object" && !Array.isArray(ea) && !isPointer(ea)) {
-    const gone = Object.keys(withoutLicenseFields(ea)).filter((k) => !(k in eb));
+    const removed = REMOVED_SAMPLE_FIELDS[then.slug] || [];
+    const gone = Object.keys(withoutLicenseFields(ea)).filter((k) => !(k in eb) && !removed.includes(k));
     if (gone.length) lost.push(`sample output lost ${gone.join(", ")}`);
   }
   // Input fields: each field the base listed is still listed, keeps a
@@ -131,6 +140,7 @@ export function listingLosses(then, now) {
   ok(listingLosses(pr("abcdef", { a: 1 }), pr("abc", { a: 1 }))[0]?.startsWith("description"), "control: a shorter description is a loss");
   ok(/pointer/.test(listingLosses(pr("a", { a: 1 }), pr("a", { truncated: true, note: "full example in /openapi.json" }))[0] || ""), "control: a sample that became the pointer is a loss");
   ok(/lost a/.test(listingLosses(pr("a", { a: 1, b: 2 }), pr("a", { b: 2 }))[0] || ""), "control: a sample missing a field is a loss");
+  ok(listingLosses({ slug: "token-safety", ...pr("a", { verdict: "x", flags: [] }) }, pr("a", { flags: [] })).length === 0 && /lost verdict/.test(listingLosses({ slug: "other", ...pr("a", { verdict: "x" }) }, pr("a", {}))[0] || ""), "control: a field an owner decision removed is excused for its slug only");
   ok(listingLosses({ pr: null }, pr("a", {})).length === 0 && /no 402/.test(listingLosses(pr("a", {}), { status: 410 })[0] || ""), "control: a route the base did not list is not compared; one that stopped listing is a loss");
   const withInput = (props, where = "body") => ({ pr: { resource: { description: "a" }, extensions: { bazaar: { info: {}, schema: { properties: { input: { properties: { [where]: { properties: props } } } } } } } } });
   const full = { url: { type: "string", maxLength: 2048, description: "The URL to look up" }, mode: { type: "string", enum: ["a", "b"] } };

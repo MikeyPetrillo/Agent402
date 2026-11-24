@@ -361,8 +361,10 @@ t node scripts/test-sdk-snippet-credentials.js
 t node scripts/test-plugin-manifests.js
 # Docs that state a requirement match the engines that enforce it
 t node scripts/test-doc-claims.js
-# The cheap EVM token-safety verdict (unknown is never counted as safe)
+# The cheap EVM token risk facts (no verdict; an unchecked fact is unknown)
 t node scripts/test-token-safety.js
+# Token tools state facts, never a judgment: the claim check, the withheld report, the copy guard
+t node scripts/test-token-claims.js
 # Token facts computed from chain reads, Sourcify and DEX pairs (each null path named)
 t node scripts/test-token-facts.js
 # No source whose terms bar commercial use is read, served or credited anywhere

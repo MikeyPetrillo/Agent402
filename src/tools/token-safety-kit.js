@@ -1,10 +1,6 @@
-// token-safety: the cheap, deterministic EVM answer to "is this token safe to
-// trade", the counterpart to sol-token-safety on the Solana side.
-//
-// Why this exists (2026-09-13, measured): our only EVM answer to that question
-// was `token-risk` at $0.60, a model-written cited report. That is the wrong
-// SHAPE for the question an agent asks before a swap - it wants a verdict in
-// one call for a cent, not a report - and the wrong price.
+// token-safety: the cheap, deterministic EVM read of a token contract's
+// on-chain risk facts, the counterpart to sol-token-safety on the Solana side.
+// The slug keeps its name; the answer is facts, never a judgment of the token.
 //
 // Every fact is computed here (src/tools/token-facts.js) from chain reads on
 // commercial-use RPC lanes (ERC-20 calls, owner and proxy slots, a simulated
@@ -12,67 +8,70 @@
 // DexScreener's pairs. token-risk reads the SAME probe, so the report and the
 // cheap check cannot disagree about the same token. No model in this path.
 //
-// The verdict is derived from named facts and says which fact drove it. There
-// is deliberately NO score: a number invites a ranking, and a ranking over
-// computed flags reads as a measurement we did not make (the same reasoning as
-// the feedback kit's two verdicts, and why seller-dossier ends in sentences).
-// A fact this tool could not compute is null, listed in `unknown` and named
-// with its reason in `limits`; it never counts as safe.
+// There is deliberately NO verdict, level or score (owner decision,
+// 2026-11-24): an "ok" or a band reads as a statement that a token is fine,
+// which on-chain facts cannot support. The answer lists each named fact that
+// was found (`flags`: id, description, measured value), what could not be
+// checked and why (`unknown`), the sources and limits, and the fixed notice
+// (src/token-claims.js). A fact this tool could not compute is null and is
+// listed in `unknown`; it is never read as an absence of a flag.
 import { readTokenFacts, TOKEN_CHAIN_NAMES } from "./token-facts.js";
 import { addCredit, SOURCIFY_ATTRIBUTION } from "../data-attribution.js";
 import { markResaleCleared } from "../resale-terms.js";
+import { TOKEN_FACTS_NOTICE } from "../token-claims.js";
 
 const CHAINS = TOKEN_CHAIN_NAMES;
 const bad = (m, statusCode = 422) => Object.assign(new Error(m), { statusCode });
 
+// Each named fact a flag can report: its id, the fact field it reads, when it
+// fires and what it says. Order is the order flags are listed in.
+const FLAG_RULES = Object.freeze([
+  { id: "sell-simulation-reverted", field: "honeypot", when: (v) => v === true, says: "the simulated sell against the deepest pool reverted (a honeypot reading)" },
+  { id: "cannot-sell-full-balance", field: "cannotSellAll", when: (v) => v === true, says: "the simulated sell of the full balance did not go through" },
+  { id: "buy-blocked", field: "cannotBuy", when: (v) => v === true, says: "the simulated buy did not go through" },
+  { id: "listed-as-counterfeit", field: "fakeToken", when: (v) => v?.value === true, says: "a counterfeit list names this contract as a copy of another token" },
+  { id: "sell-tax-50-or-more", field: "sellTaxPct", when: (v) => v != null && v >= 50, says: "the simulated sell kept 50% or more of the tokens sold as tax" },
+  { id: "buy-tax-50-or-more", field: "buyTaxPct", when: (v) => v != null && v >= 50, says: "the simulated buy kept 50% or more of the tokens bought as tax" },
+  { id: "sell-tax-over-10", field: "sellTaxPct", when: (v) => v != null && v > 10 && v < 50, says: "the simulated sell kept more than 10% and under 50% of the tokens sold as tax" },
+  { id: "buy-tax-over-10", field: "buyTaxPct", when: (v) => v != null && v > 10 && v < 50, says: "the simulated buy kept more than 10% and under 50% of the tokens bought as tax" },
+  { id: "hidden-owner", field: "hiddenOwner", when: (v) => v === true, says: "an owner is set that the owner() reads do not return" },
+  { id: "ownership-reclaimable", field: "canTakeBackOwnership", when: (v) => v === true, says: "the contract has a function that can take back renounced ownership" },
+  { id: "owner-can-change-balances", field: "ownerChangeBalance", when: (v) => v === true, says: "the owner can change holder balances" },
+  { id: "mintable", field: "mintable", when: (v) => v === true, says: "the verified ABI has a function that mints new supply" },
+  { id: "transfers-pausable", field: "transferPausable", when: (v) => v === true, says: "the verified ABI has a function that pauses transfers" },
+  { id: "blacklist", field: "blacklist", when: (v) => v === true, says: "the verified ABI has a function that blocks addresses from transferring" },
+  { id: "owner-can-change-fees", field: "slippageModifiable", when: (v) => v === true, says: "the verified ABI has a function that sets transfer fees" },
+  { id: "upgradeable-proxy", field: "proxy", when: (v) => v === true, says: "the contract is an upgradeable proxy, so its code can be replaced" },
+  { id: "source-not-verified", field: "openSource", when: (v) => v === false, says: "the source is not verified on Sourcify, so its code cannot be read here" },
+]);
+export const FLAG_IDS = Object.freeze(FLAG_RULES.map((r) => r.id));
+
+// The checks whose absence is named in `unknown` when not computed, with the
+// words that name them.
+const CHECKS = Object.freeze([["honeypot", "sell simulation"], ["openSource", "source verification"], ["mintable", "mint function"],
+  ["hiddenOwner", "hidden owner"], ["blacklist", "blacklist function"], ["transferPausable", "pause function"],
+  ["buyTaxPct", "buy tax"], ["sellTaxPct", "sell tax"]]);
+
 /**
- * Deterministic verdict from computed facts.
- *
- * `unsafe` is reserved for things that take a buyer's money outright; `caution`
- * for powers an owner COULD use; `ok` only when nothing fired. A null flag is
- * UNKNOWN and never counts as safe - it lands in `unknown` so the caller can
- * see what was not computed rather than read silence as a pass.
+ * The named facts found, from computed facts. `limits` (the probe's reasons a
+ * field is null) name why a check is in `unknown`. A null fact never fires a
+ * flag and never reads as clear: it lands in `unknown`.
  */
-export function safetyVerdict(g) {
-  const blocking = [], warnings = [], unknown = [];
-  const t = (v) => v === true;
-  if (t(g.honeypot)) blocking.push("honeypot: the simulated sell reverted");
-  if (t(g.cannotSellAll)) blocking.push("cannot sell the full balance");
-  if (t(g.cannotBuy)) blocking.push("buying is blocked");
-  if (g.fakeToken?.value === true) blocking.push("flagged as a counterfeit of another token");
-  // The `!= null` on the tax thresholds is a READABILITY belt, not load-bearing:
-  // `(x ?? 0)` fails these comparisons identically, so no mutation can kill it.
-  // What IS load-bearing is listing an uncomputed tax under `unknown` below -
-  // the first cut computed thresholds off `?? 0` and reported nothing, so a
-  // token whose tax was never measured read as a clean bill.
-  if (g.sellTaxPct != null && g.sellTaxPct >= 50) blocking.push(`sell tax ${g.sellTaxPct}%`);
-  if (g.buyTaxPct != null && g.buyTaxPct >= 50) blocking.push(`buy tax ${g.buyTaxPct}%`);
-
-  if (t(g.hiddenOwner)) warnings.push("hidden owner");
-  if (t(g.canTakeBackOwnership)) warnings.push("ownership can be reclaimed");
-  if (t(g.ownerChangeBalance)) warnings.push("owner can change balances");
-  if (t(g.mintable)) warnings.push("supply is mintable");
-  if (t(g.transferPausable)) warnings.push("transfers can be paused");
-  if (t(g.blacklist)) warnings.push("addresses can be blacklisted");
-  if (t(g.slippageModifiable)) warnings.push("fees can be changed by the owner");
-  if (t(g.proxy)) warnings.push("upgradeable proxy");
-  if (g.openSource === false) warnings.push("source is not verified on Sourcify");
-  if (g.sellTaxPct != null && g.sellTaxPct > 10 && g.sellTaxPct < 50) warnings.push(`sell tax ${g.sellTaxPct}%`);
-  if (g.buyTaxPct != null && g.buyTaxPct > 10 && g.buyTaxPct < 50) warnings.push(`buy tax ${g.buyTaxPct}%`);
-
-  for (const [k, label] of [["honeypot", "honeypot"], ["openSource", "source verified"], ["mintable", "mintable"],
-    ["hiddenOwner", "hidden owner"], ["blacklist", "blacklist"], ["transferPausable", "pausable"],
-    ["buyTaxPct", "buy tax"], ["sellTaxPct", "sell tax"]]) {
-    if (g[k] == null) unknown.push(label);
+export function tokenFlags(g, limits = []) {
+  const flags = [];
+  for (const r of FLAG_RULES) {
+    const v = g[r.field];
+    if (r.when(v)) flags.push({ id: r.id, field: r.field, description: r.says, value: r.field === "fakeToken" ? true : v });
   }
-
-  const verdict = blocking.length ? "unsafe" : warnings.length ? "caution" : "ok";
-  const because = blocking[0] || warnings[0]
-    || (unknown.length ? "no blocking or owner-power flag fired, but some checks were not computed" : "no blocking or owner-power flag fired");
-  return { verdict, because, blocking, warnings, unknown };
+  const unknown = [];
+  for (const [field, check] of CHECKS) {
+    if (g[field] != null) continue;
+    const reason = (limits || []).find((l) => l.field === field)?.reason || "not computed";
+    unknown.push({ field, check, reason });
+  }
+  return { flags, unknown };
 }
 
-/** The `facts` an answer carries, in the order they have always been listed. */
 export const FACT_FIELDS = Object.freeze(["honeypot", "cannotSellAll", "cannotBuy", "openSource", "proxy", "mintable",
   "ownerAddress", "ownerRenounced", "hiddenOwner", "canTakeBackOwnership", "transferPausable", "blacklist",
   "slippageModifiable", "buyTaxPct", "sellTaxPct", "holderCount", "lpHolderCount", "lpLockedPct", "creatorPct",
@@ -86,11 +85,11 @@ export const TOKEN_SAFETY_TOOLS = [
     slug: "token-safety",
     category: "crypto",
     price: "$0.005",
-    aliases: ["honeypot-check", "honeypot", "rugpull-check", "scam-token-check", "token-scam-check",
-      "malicious-token", "is-this-token-safe", "evm-token-safety", "token-security"],
+    aliases: ["honeypot-check", "honeypot", "token-tax-check", "token-contract-facts", "evm-token-facts",
+      "token-owner-powers", "evm-token-risk-facts", "token-security"],
     description:
-      "Risk facts for an EVM token before a trade. One deterministic call returns a verdict (ok, caution, unsafe) with the named facts behind it, each computed here: honeypot, can-sell and buy and sell tax from a simulated buy and sell against the token's deepest pool (nothing is sent), owner and renounced state, upgradeable proxy from its storage slots, mintable supply, pausable transfers, blacklist and owner-set fees from the verified ABI, verified source, owner share and LP burn share. Covers Base, Ethereum, Polygon, Arbitrum, Optimism, BSC, Gnosis and Celo. A fact it could not compute is null, listed as unknown with its reason in limits, never counted as safe. For the cited, researched version see token-risk; for Solana mints see sol-token-safety.",
-    tags: ["token", "safety", "honeypot", "rugpull", "evm"],
+      "Risk facts for an EVM token contract, read on chain. One deterministic call lists each named fact it found (flags: an id, a description and the measured value), what it could not check and why (unknown), its sources, its limits and a fixed notice that these are on-chain facts only and not investment advice. Each fact is computed here: whether a simulated buy and sell against the token's deepest pool went through and what tax each kept (nothing is sent), owner and renounced state, upgradeable proxy from its storage slots, mint, pause, blacklist and fee-setting functions from the verified ABI, whether the source is publicly verified, owner share and the share of LP tokens held by burn addresses. Covers Base, Ethereum, Polygon, Arbitrum, Optimism, BSC, Gnosis and Celo. There is no verdict, level or score, and no flags is not a statement about the token. A fact it could not compute is null and listed in unknown with its reason. For the cited, model-written report see token-risk; for Solana mints see sol-token-safety.",
+    tags: ["token", "honeypot", "tax", "contract", "ownership", "evm", "onchain"],
     discovery: {
       bodyType: "json",
       input: { chain: "base", address: "0x940181a94A35A4569E4529A3CDfB74e38FD98631" },
@@ -107,14 +106,20 @@ export const TOKEN_SAFETY_TOOLS = [
         example: {
           "chain": "base",
           "address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
-          "verdict": "caution",
-          "because": "supply is mintable",
-          "blocking": [],
-          "warnings": [
-            "supply is mintable"
+          "flags": [
+            {
+              "id": "mintable",
+              "field": "mintable",
+              "description": "the verified ABI has a function that mints new supply",
+              "value": true
+            }
           ],
           "unknown": [
-            "hidden owner"
+            {
+              "field": "hiddenOwner",
+              "check": "hidden owner",
+              "reason": "a hidden owner needs bytecode analysis, which this tool does not run"
+            }
           ],
           "facts": {
             "honeypot": false,
@@ -185,6 +190,7 @@ export const TOKEN_SAFETY_TOOLS = [
               "reason": "no counterfeit list is read"
             }
           ],
+          "notice": "These are on-chain facts only. No flags does not mean a token is legitimate; off-chain fraud cannot be detected here. Not investment advice.",
           "credit": "Verified source from Sourcify (https://sourcify.dev)."
         },
       },
@@ -195,13 +201,15 @@ export const TOKEN_SAFETY_TOOLS = [
       const chain = String(input.chain || "base").trim().toLowerCase();
       if (!CHAINS.includes(chain)) throw bad(`\`chain\` must be one of: ${CHAINS.join(", ")}`);
       const g = await readTokenFacts({ chain, address });
-      const v = safetyVerdict(g);
+      const limits = g.limits.filter((l) => FACT_FIELDS.includes(l.field));
+      const { flags, unknown } = tokenFlags(g, g.limits);
       const facts = Object.fromEntries(FACT_FIELDS.map((k) => [k, g[k] ?? null]));
       const answer = {
-        chain, address, ...v, facts,
+        chain, address, flags, unknown, facts,
         source: TOKEN_SAFETY_SOURCE,
         sources: g.sources,
-        limits: g.limits.filter((l) => FACT_FIELDS.includes(l.field)),
+        limits,
+        notice: TOKEN_FACTS_NOTICE,
       };
       return g.verification ? addCredit(answer, SOURCIFY_ATTRIBUTION) : answer;
     },
