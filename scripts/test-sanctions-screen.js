@@ -360,7 +360,9 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
     for (let i = 0; i < 40 && !fresh; i++) { await new Promise((r) => setTimeout(r, 250)); fresh = (await status(base))?.status === "fresh"; }
     ok(fresh, "the retry tick loads the list once the source answers");
     ok(await tempoOffered(base), "with the list loaded the 402 offers tempo/charge");
-    proc.kill("SIGKILL");
+    // The restart reads the same store files: the first server is gone
+    // (its exit seen) before the second opens them.
+    await new Promise((r) => { if (proc.exitCode !== null || proc.signalCode !== null) r(); else { proc.once("exit", r); proc.kill("SIGKILL"); } });
     listUp = false;
     base = await boot();
     ok((await status(base))?.status === "fresh" && await tempoOffered(base), "a restart with the source down reads the stored list at once and offers tempo");

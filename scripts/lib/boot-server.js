@@ -70,14 +70,16 @@ export async function bootServer({ env = {}, stores = "boot", entry = "src/serve
     else await new Promise((r) => setTimeout(r, 100));
   }
   const url = `http://127.0.0.1:${port}`;
+  let lastReady = "none yet";
   while (readyPath) {
     if (exited) return fail(`exited before ${readyPath} answered (${JSON.stringify(exited)})`);
-    if (Date.now() > deadline) return fail(`${readyPath} did not answer 200 within ${timeoutMs} ms`);
+    if (Date.now() > deadline) return fail(`${readyPath} did not answer 200 within ${timeoutMs} ms (last answer: ${lastReady})`);
     try {
       const r = await fetch(url + readyPath, { signal: AbortSignal.timeout(2000) });
-      await r.arrayBuffer();
+      const body = await r.text();
       if (r.status === 200) break;
-    } catch { /* not yet */ }
+      lastReady = `${r.status} ${body.slice(0, 300)}`;
+    } catch (e) { lastReady = `no answer (${String(e?.cause?.code || e?.name || e?.message || e).slice(0, 80)})`; }
     await new Promise((r) => setTimeout(r, 200));
   }
   return { child, port, url, log: () => log, exited: () => exited, stop };
