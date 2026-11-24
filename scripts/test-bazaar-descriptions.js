@@ -126,9 +126,9 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   // The cut keeps a trailing attribution sentence for any route: the text
   // before it is shortened at a sentence end, and the notice is never cut.
   const lead = "A first sentence about the data that runs on for a while. A second sentence that adds detail and runs on further than the cut allows here.";
-  const kept = bazaarCapDescription(`${lead} ${NVD_NOTICE}`, 200);
+  const kept = bazaarCapDescription(`${lead} ${NVD_NOTICE}`, 94 + NVD_NOTICE.length);
   ok(kept === `A first sentence about the data that runs on for a while. ${NVD_NOTICE}`, `cut: a trailing attribution sentence stays whole and the text before it is cut at a sentence (got ${JSON.stringify(kept)})`);
-  ok(bazaarCapDescription(`${lead} Not the notice.`, 200).endsWith("allows here.") === false, "cut: text without an attribution tail is cut as before");
+  ok(bazaarCapDescription(`${lead} Not the notice.`, 94 + NVD_NOTICE.length).endsWith("allows here.") === false, "cut: text without an attribution tail is cut as before");
 }
 // Every source whose terms require an attribution (src/data-attribution.js):
 // the set is read from code, the tools' `attribution` marks across every kit
@@ -219,7 +219,7 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   }
   ok(packsWithSources >= 10, `the packs whose tools need an attribution are read from their steps (${packsWithSources})`);
   // The cut keeps a run of two sentences whole, as a two-source pack needs.
-  const two = `${ATTRIBUTIONS.fred} ${ATTRIBUTIONS.coingecko}`;
+  const two = `${ATTRIBUTIONS.nvd} ${ATTRIBUTIONS.coingecko}`;
   const kept2 = bazaarCapDescription(`${lead2()} ${two}`, CHALLENGE_SHORT_DESCRIPTION_MAX);
   ok(kept2.endsWith(two) && kept2.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && attributionTailOf(kept2) === two, `cut: a run of two attribution sentences stays whole (got ${JSON.stringify(kept2.slice(-80))})`);
   function lead2() { return "A first sentence about the data that runs on for a while. ".repeat(8).trim(); }
