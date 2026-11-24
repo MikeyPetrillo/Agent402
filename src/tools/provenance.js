@@ -11,7 +11,9 @@
 // Additive and non-destructive: it only adds the flag, never removes or renames
 // an existing key, so it can't break a consumer or the "answers its own
 // example" shape check (which only flags MISSING documented keys).
+import { keepAnswerCharges } from "../answer-charges.js";
+
 export function markUntrusted(result) {
   if (!result || typeof result !== "object" || Array.isArray(result)) return result;
-  return { ...result, untrustedContent: true };
+  return keepAnswerCharges(result, { ...result, untrustedContent: true });
 }

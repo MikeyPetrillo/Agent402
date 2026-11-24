@@ -37,6 +37,8 @@
 // description sentence carries the link, and
 // every CoinGecko-backed answer carries the same sentence as `credit`
 // (creditAnswers below).
+import { keepAnswerCharges } from "./answer-charges.js";
+
 export const COINGECKO_API_URL = "https://www.coingecko.com/en/api";
 export const COINGECKO_ATTRIBUTION = `Powered by CoinGecko (${COINGECKO_API_URL}).`;
 export const COINGECKO_CREDIT = COINGECKO_ATTRIBUTION;
@@ -284,10 +286,10 @@ const isPlainAnswer = (v) => v !== null && typeof v === "object" && !Array.isArr
  *  (a non-object, a credit that is not a string) is returned as it is. */
 export function withCredit(answer, credit) {
   if (!isPlainAnswer(answer)) return answer;
-  if (!Object.hasOwn(answer, "credit")) return { ...answer, credit };
+  if (!Object.hasOwn(answer, "credit")) return keepAnswerCharges(answer, { ...answer, credit });
   const cur = answer.credit;
   if (typeof cur !== "string" || cur.includes(credit)) return answer;
-  return { ...answer, credit: cur ? `${cur} ${credit}` : credit };
+  return keepAnswerCharges(answer, { ...answer, credit: cur ? `${cur} ${credit}` : credit });
 }
 
 /** The same as withCredit, for a handler crediting a source one of its legs
@@ -325,7 +327,7 @@ export function termsAnswers(tool, terms) {
   if (typeof inner === "function") {
     tool.handler = async function withTerms(...args) {
       const answer = await inner.apply(this, args);
-      return isPlainAnswer(answer) && !Object.hasOwn(answer, "terms") ? { ...answer, terms } : answer;
+      return isPlainAnswer(answer) && !Object.hasOwn(answer, "terms") ? keepAnswerCharges(answer, { ...answer, terms }) : answer;
     };
     // The guards that read a handler's source for the hosts and helpers it
     // names (scripts/test-bazaar-descriptions.js) read the tool's own code.
@@ -346,7 +348,7 @@ export function licensedAnswers(tool, fields) {
   const add = (v) => {
     if (!isPlainAnswer(v)) return v;
     const missing = Object.keys(fields).filter((k) => !Object.hasOwn(v, k));
-    return missing.length ? { ...v, ...Object.fromEntries(missing.map((k) => [k, fields[k]])) } : v;
+    return missing.length ? keepAnswerCharges(v, { ...v, ...Object.fromEntries(missing.map((k) => [k, fields[k]])) }) : v;
   };
   const ex = tool.discovery?.output?.example;
   if (isPlainAnswer(ex)) tool.discovery.output.example = add(ex);

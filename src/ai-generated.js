@@ -23,6 +23,7 @@
 // scripts/test-ai-generated.js holds every model-backed tool to it.
 import { AI_VOICE_HEADER } from "./ai-voice.js";
 import { markMediaBytes, markMediaBase64 } from "./ai-media-mark.js";
+import { keepAnswerCharges } from "./answer-charges.js";
 
 export const AI_GENERATED_HEADER = AI_VOICE_HEADER; // "X-AI-Generated"
 export const AI_GENERATED_FIELD = "aiGenerated";
@@ -36,10 +37,10 @@ export function isWireRoute(route) { return /^(GET|POST|PUT|DELETE|PATCH)?\s*\/v
  *  non-object) unchanged. Never touches the bytes. */
 export function withAiGenerated(answer, { wire = false } = {}) {
   if (!isPlain(answer) || typeof answer.__sse === "function") return answer;
-  if (answer.__binary) return { ...answer, __binary: markMediaBytes(answer.__binary), headers: { ...(isPlain(answer.headers) ? answer.headers : {}), [AI_GENERATED_HEADER]: "true" } };
+  if (answer.__binary) return keepAnswerCharges(answer, { ...answer, __binary: markMediaBytes(answer.__binary), headers: { ...(isPlain(answer.headers) ? answer.headers : {}), [AI_GENERATED_HEADER]: "true" } });
   const marked = withMarkedMedia(answer);
   if (wire || Object.hasOwn(marked, AI_GENERATED_FIELD)) return marked;
-  return { ...marked, [AI_GENERATED_FIELD]: true };
+  return keepAnswerCharges(answer, { ...marked, [AI_GENERATED_FIELD]: true });
 }
 
 /** A JSON answer whose generated images ride as base64 (the images wire's
@@ -62,7 +63,7 @@ export function withMarkedMedia(answer) {
     });
     if (changed) out = { ...out, data };
   }
-  return out;
+  return keepAnswerCharges(answer, out);
 }
 
 /** Mark every tool in `defs` that is model-backed: its handler's answers and

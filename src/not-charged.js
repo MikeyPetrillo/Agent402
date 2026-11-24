@@ -46,6 +46,7 @@
 // during which none was printed is returned unread. A streamed body is not
 // read: a stream writes no leg error into a delivered answer.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { keepAnswerCharges } from "./answer-charges.js";
 
 export const NOT_CHARGED = "Nothing was charged.";
 
@@ -96,7 +97,7 @@ function delivered(store, value) {
   try { r = withoutChargeSentence(value); } catch { return value; }
   if (!r.removed) return value;
   removals++;
-  return r.value;
+  return keepAnswerCharges(value, r.value);
 }
 
 /** Run `fn` as the handler of a call answered directly to its caller. What

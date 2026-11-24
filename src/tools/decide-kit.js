@@ -1039,7 +1039,7 @@ export function makeExecuteHandler({ ledger, getCatalog, bookUnspent = async (ro
       leftoverCredit: null,
       ...(replanned ? { replanned } : {}),
     };
-    return setActualCharge(answer, chargedUsd);
+    return setActualCharge(answer, chargedUsd, req);
   };
 }
 

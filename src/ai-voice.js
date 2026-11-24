@@ -7,6 +7,8 @@
 // answer (the `{ __binary }` sentinel) the header `X-AI-Generated: true`.
 // scripts/test-ai-voice.js holds every speech tool to it.
 
+import { keepAnswerCharges } from "./answer-charges.js";
+
 export const AI_VOICE_SENTENCE = "AI-generated voice: tell listeners so.";
 export const AI_VOICE_HEADER = "X-AI-Generated";
 
@@ -16,8 +18,8 @@ const isPlain = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
  *  answer; anything else (a stream writer, a non-object) unchanged. */
 export function withAiVoice(answer) {
   if (!isPlain(answer)) return answer;
-  if (answer.__binary) return { ...answer, headers: { ...(isPlain(answer.headers) ? answer.headers : {}), [AI_VOICE_HEADER]: "true" } };
-  return Object.hasOwn(answer, "aiGeneratedVoice") ? answer : { ...answer, aiGeneratedVoice: true };
+  if (answer.__binary) return keepAnswerCharges(answer, { ...answer, headers: { ...(isPlain(answer.headers) ? answer.headers : {}), [AI_VOICE_HEADER]: "true" } });
+  return Object.hasOwn(answer, "aiGeneratedVoice") ? answer : keepAnswerCharges(answer, { ...answer, aiGeneratedVoice: true });
 }
 
 /** Mark each tool in `tools` whose slug is in `slugs`: the sentence in its

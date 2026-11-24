@@ -9,14 +9,37 @@
 // its amount at the 402, so nothing is overridden there; the handler books
 // the difference as a refund owed instead (see decide-kit's execute handler).
 //
-// The amount rides a non-enumerable property, so it never reaches the buyer's
-// JSON, and it is removed before anything else can fail.
+// The amount rides the paying request itself when the handler holds it as a
+// route call (a step of another answer is handed no request, or runs inside
+// runAsStep, and sets none), so no wrapper that copies the answer between the
+// handler and the binder can drop it. It also rides the answer as a
+// non-enumerable property (never in the buyer's JSON; every answer copier keeps
+// it, src/answer-charges.js) for an in-process caller that reads it there. The
+// binder removes both before anything else can fail.
 import { paymentSchemeOf } from "./payer.js";
+import { isRouteCall } from "./not-charged.js";
 
-export function setActualCharge(result, usd) {
+const REQ_KEY = "__actualChargeUsd";
+
+export function setActualCharge(result, usd, req = null) {
   if (!result || typeof result !== "object" || !(Number(usd) >= 0)) return result;
   Object.defineProperty(result, "__actualChargeUsd", { value: Number(usd), enumerable: false, configurable: true, writable: true });
+  if (isRouteCall(req)) {
+    try { Object.defineProperty(req, REQ_KEY, { value: Number(usd), enumerable: false, configurable: true, writable: true }); } catch { /* a frozen request keeps the answer's copy */ }
+  }
   return result;
+}
+
+/** The actual charge a run named (the request's copy first, then the
+ *  answer's), with both removed; undefined when none was named. */
+function takeActualCharge(result, req) {
+  let usd;
+  if (req && typeof req === "object" && typeof req[REQ_KEY] !== "undefined") { usd = req[REQ_KEY]; try { delete req[REQ_KEY]; } catch { /* frozen */ } }
+  if (result && typeof result === "object" && typeof result.__actualChargeUsd !== "undefined") {
+    if (typeof usd === "undefined") usd = result.__actualChargeUsd;
+    try { delete result.__actualChargeUsd; } catch { /* frozen */ }
+  }
+  return usd;
 }
 
 /** True when this request's payment lets the server name the settled amount. */
@@ -31,9 +54,9 @@ export function chargesActualSpend(req) {
  * the settlement floor ($0.001).
  */
 export function applyActualCharge({ result, req, res, setOverrides, log = console.warn }) {
-  if (!result || typeof result !== "object" || typeof result.__actualChargeUsd === "undefined") return null;
-  const usd = Number(result.__actualChargeUsd);
-  delete result.__actualChargeUsd;
+  const named = takeActualCharge(result, req);
+  if (typeof named === "undefined") return null;
+  const usd = Number(named);
   try {
     if (!chargesActualSpend(req) || res?.headersSent || typeof setOverrides !== "function") return null;
     const quoted = Number(req?.__meteredQuoteUsd);

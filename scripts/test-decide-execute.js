@@ -13,6 +13,7 @@ import { decideConfig } from "../src/decide/config.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { buildDecideTools } from "../src/tools/decide-kit.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
+import { buildDecideTools as buildDecideToolsForWrap } from "../src/tools/decide-kit.js";
 import { makeExecuteHandler, executeQuoteUsd, executeBudgetUsd, makeDecideHandler, makeFeedbackHandler } from "../src/tools/decide-kit.js";
 import { sketchPlan, referencedSteps } from "../src/decide/sketch-plan.js";
 
@@ -565,6 +566,45 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   for (const fn of ureq.__onSettled.slice(-1)) fn(true, lateRes);
   await new Promise((r) => setImmediate(r));
   ok(booked.length === 1 && booked[0].priceUsd === 0.04, `...and the unspent amount is then booked owed, so the buyer never loses it (${JSON.stringify(booked[0])})`);
+}
+
+// ---- upto through the catalog definition, wrapped as the server wraps it ----
+// The real decide-execute def (buildDecideTools), marked model-backed and
+// wrapped by markAiGenerated, run inside runAsRouteCall while another call
+// prints the charge sentence (so the delivered answer is a copy), settled by
+// the binder's applyActualCharge: the settlement names what was spent and
+// nothing is booked owed.
+{
+  const { applyActualCharge } = await import("../src/actual-charge.js");
+  const { markAiGenerated } = await import("../src/ai-generated.js");
+  const { runAsRouteCall, notChargedHere } = await import("../src/not-charged.js");
+  const { listRefunds, refundLedgerFlush } = await import("../src/refund-ledger.js");
+  catalog.says = { slug: "says", route: "POST /api/says", price: "$0.002", discovery: { bodyType: "json" }, handler: async () => ({ note: "An outside body. Nothing was charged." }) };
+  const def = buildDecideToolsForWrap({ getCatalog: () => catalog, ledger, now }).find((t) => t.slug === "decide-execute");
+  def.modelBacked = true;
+  markAiGenerated([def]);
+  ok(def.aiGenerated === true, "the catalog def is wrapped by markAiGenerated, as the server wraps it");
+  const planW = [{ step: 1, purpose: "x", tool: tool("says", { priceUsd: 0.002 }), fallbacks: [], dependsOn: [] }];
+  ledger.saveDecision({ decisionId: "dW", depth: "quick", priceUsd: 0.005, plan: planW, costViaUsd: 0.002, now: clock });
+  ledger.markDecisionSettled("dW");
+  const uptoHeader = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "upto", network: "eip155:8453", amount: "50000" }, payload: {} })).toString("base64");
+  const wreq = { headers: { "payment-signature": uptoHeader }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? uptoHeader : undefined), ip: "0xwrap", __meteredQuoteUsd: 0.05 };
+  const run = runAsRouteCall(() => def.handler({ decisionId: "dW", maxBudgetUsd: 0.05 }, wreq));
+  await runAsRouteCall(async () => notChargedHere());
+  const out = await run;
+  ok(out.aiGenerated === true && out.steps[0].result?.note === "An outside body." && out.unspent?.handling === "not-charged", `the delivered answer is the marked, sentence-free copy (${JSON.stringify(out.unspent)})`);
+  const hdrs = {}; const set = [];
+  const res = { headersSent: false, setHeader: (k, v) => { hdrs[k.toLowerCase()] = v; }, getHeader: (k) => hdrs[String(k).toLowerCase()] };
+  const amount = applyActualCharge({ result: out, req: wreq, res, setOverrides: (_r, o) => set.push(o) });
+  ok(amount === out.chargedUsd && set.length === 1 && set[0].amount === `$${out.chargedUsd.toFixed(6)}` && hdrs["x-charged-usd"] === out.chargedUsd.toFixed(6), `upto through the wrapped def settles the spent amount, not the ceiling (${JSON.stringify(set)}, charged ${out.chargedUsd})`);
+  ok(!JSON.stringify(out).includes("__actualCharge") && !("__actualChargeUsd" in wreq), "the binder removed the charge figure from the request and the answer");
+  const before = listRefunds({ status: "owed", limit: 1000 }).filter((r) => r.slug === "decide-execute").length;
+  settle(wreq, 200, res);
+  await new Promise((r) => setTimeout(r, 30));
+  await refundLedgerFlush();
+  const after = listRefunds({ status: "owed", limit: 1000 }).filter((r) => r.slug === "decide-execute").length;
+  ok(after === before, `nothing is booked owed after an upto settle at the spent amount (${before} -> ${after})`);
+  delete catalog.says;
 }
 
 // ---- exact vs upto: the fixed price is the plan's listed step prices ----

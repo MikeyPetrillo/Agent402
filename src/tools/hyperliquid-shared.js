@@ -27,6 +27,7 @@
 //   * a shared document whose last good copy is at most HL_STALE_MAX_MS old is
 //     served from that copy, and the read is recorded as stale so the tool's
 //     answer can say so (see withHlFreshness); with no copy the refusal stands.
+import { keepAnswerCharges } from "../answer-charges.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createTtlCache } from "./ttl-dedupe.js";
 
@@ -141,13 +142,13 @@ export function labelHlStaleness(tools) {
     handler: async (input, ctx) => {
       const { result, staleSince } = await withHlFreshness(() => t.handler(input, ctx));
       if (staleSince == null || !result || typeof result !== "object" || Array.isArray(result)) return result;
-      return {
+      return keepAnswerCharges(result, {
         ...result,
         stale: true,
         dataAsOf: new Date(staleSince).toISOString(),
         staleAgeSeconds: Math.max(0, Math.round((nowFn() - staleSince) / 1000)),
         staleReason: "Hyperliquid refused the live read for rate; this answer is built from the last good read, at most " + Math.round(HL_STALE_MAX_MS / 1000) + " seconds old",
-      };
+      });
     },
   }));
 }
