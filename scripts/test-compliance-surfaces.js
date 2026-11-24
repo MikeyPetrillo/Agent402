@@ -170,7 +170,7 @@ ok(/We do not serve requests from Cuba, Iran and North Korea or from the Crimea,
 ok(/refused before its payment is verified or settled/.test(termsText) && !/before any payment is read/.test(termsText), "terms: the refusal's timing is worded as the code runs it");
 ok(/No part of a run's budget is kept as a credit/.test(termsText) && /execution credit, part of its fee, usable only toward running that decision's plan[^.]*until the expiry its answer states; it has no cash value/.test(termsText) && !/service credit/.test(termsText), "terms: decide-execute keeps no run budget as credit; the decision-fee credit is scoped (execute only, expiry, no cash value)");
 ok(/does not apply to\s+a claim by a consumer/.test(termsText) && !/permanently barred/.test(termsText), "terms: the one-year limit yields to consumer law");
-ok(/The token tools report on-chain facts only; they are not an assessment of any token's legitimacy and must not be relied on for trading or investment decisions\./.test(termsText.replace(/&#39;|&rsquo;/g, "'")), "terms: the token tools are facts, not an assessment");
+ok(/The token tools report facts read from the chain and named public sources; they are not an assessment of any token's legitimacy and must not be relied on for trading or investment decisions\./.test(termsText.replace(/&#39;|&rsquo;/g, "'")), "terms: the token tools are facts, not an assessment");
 ok(/required choice, to request that we start at once/.test(termsText), "terms: the withdrawal sentence names the checkout choice");
 {
   const disputes = termsText.slice(termsText.indexOf("Governing law"));

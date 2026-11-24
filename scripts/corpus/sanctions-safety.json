@@ -121,7 +121,7 @@
           "unknown": 0
         },
         "matches": {
-          "notice": "^These are on-chain facts only\\."
+          "notice": "^These are facts read from the chain and named public sources\\."
         }
       }
     },

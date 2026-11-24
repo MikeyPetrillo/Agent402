@@ -400,7 +400,7 @@ terms. If you use the service as a consumer, this applies only to the extent the
 "AS AVAILABLE", WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF
 MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, AND
 UNINTERRUPTED OR ERROR-FREE OPERATION. YOU USE THE SERVICE AT YOUR OWN RISK.</p>
-<p>The token tools report on-chain facts only; they are not an assessment of any token's legitimacy and must not be relied on for trading or investment decisions.</p>
+<p>The token tools report facts read from the chain and named public sources; they are not an assessment of any token's legitimacy and must not be relied on for trading or investment decisions.</p>
 
 <h2>Liability</h2>
 <p>TO THE MAXIMUM EXTENT PERMITTED BY LAW, ${LEGAL_ENTITY_SENTENCE}, AGENT402, AND THEIR MAINTAINERS AND
