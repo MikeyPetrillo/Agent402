@@ -1066,6 +1066,17 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
     if (fit >= tail.length + 1 + ATTRIBUTION_MIN_LEAD) { d = bazaarCapDescription(d, fit); trimmed.push("description-lead"); }
   }
   toPointer();
+  // The cuts above are made before the sample output gives way, and the fixed
+  // cut to CHALLENGE_SHORT_DESCRIPTION_MAX can take far more than the overage:
+  // a cut description takes back, from its full text, all the room the
+  // listing has left once every other step is done.
+  if (d && description && d !== description) {
+    const room = max - size(b, "");
+    if (room > d.length) {
+      const regrown = bazaarCapDescription(description, Math.min(room, BAZAAR_DESCRIPTION_MAX));
+      if (regrown.length > d.length && size(b, regrown) <= max) d = regrown;
+    }
+  }
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
 }
 

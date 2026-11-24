@@ -279,6 +279,22 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   const all = fitChallenge(block, long, declare, 200);
   ok(all.trimmed.join() === "input-descriptions-short,input-descriptions,input-types-only,description,output-example" && all.description.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && isExamplePointer(all.slim.output.example) && all.slim.output.schema === undefined && all.slim.inputSchema.properties.values.type === "array",
     "budget: input detail goes before the description and the sample output, which go last (the pointer takes the output schema with it)");
+  // A cut description takes back the room the listing has left at the end: a
+  // listing a few bytes over keeps all but those bytes' worth of its text (not
+  // the fixed short cut), and one whose sample output became the pointer
+  // regrows into the room the sample left.
+  {
+    const bare = { input: { q: "x" }, output: { type: "json", example: { ok: true } } };
+    const sentences = Array.from({ length: 9 }, (_, i) => `Sentence number ${i} says what the tool does.`).join(" ");
+    const near = fitChallenge(bare, sentences, declare, JSON.stringify(declare(bare)).length + sentences.length - 5);
+    ok(near.description.length > CHALLENGE_SHORT_DESCRIPTION_MAX && near.description.length >= sentences.length - 60 && near.bytes <= JSON.stringify(declare(bare)).length + sentences.length - 5 && !isExamplePointer(near.slim.output.example),
+      `budget: a listing a few bytes over keeps nearly all its description (${near.description.length} of ${sentences.length} chars)`);
+    const heavy = { input: { q: "x" }, output: { type: "json", example: { rows: Array.from({ length: 80 }, (_, i) => ({ i })) } } };
+    const budget = JSON.stringify(declare({ ...heavy, output: { type: "json", example: { truncated: true, note: "full example in /openapi.json" } } })).length + sentences.length + 10;
+    const regrown = fitChallenge(heavy, sentences, declare, budget);
+    ok(isExamplePointer(regrown.slim.output.example) && regrown.description === sentences && regrown.bytes <= budget,
+      `budget: after the sample output gives way the description regrows into the room it left (${regrown.description.length} of ${sentences.length} chars)`);
+  }
   // A tool's own sample output can carry a "truncated" field (a paged list): it is still trimmed.
   const paged = { ...block, output: { type: "json", example: { truncated: true, results: Array.from({ length: 60 }, (_, i) => ({ id: i })) } } };
   ok(isExamplePointer(fitChallenge(paged, "short", declare, 200).slim.output.example), "budget: a sample output with its own truncated field is still replaced by the pointer");
