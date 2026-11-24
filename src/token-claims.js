@@ -35,7 +35,7 @@ const FIXED = [
     re: /\bnot\s+(?:an?\s+)?(?:scam|rug|rugpull|rug[- ]pull|fraud|ponzi)\b/i },
   { rule: "names the token safe, legitimate, trustworthy or low-risk",
     re: new RegExp(`\\b(?:an?|the)\\s+(?:${"safe|unsafe|legitimate|legit|trustworthy|low[- ]risk|risk[- ]free|scam|fraudulent"})\\s+(?:token|coin|project|asset|investment|contract|bet|buy|play)\\b`, "i") },
-  { rule: "says it is safe to buy, hold or trade",
+  { rule: "calls buying, holding or trading the token safe",
     re: /\bsafe\s+to\s+(?:buy|hold|trade|use|invest|swap|ape)\b/i },
   { rule: "tells the reader to buy, sell, hold or avoid",
     re: /\b(?:you|investors?|buyers?|readers?|holders?|traders?|users?|one)\s+(?:should|must|may want to|might want to|ought to|need to|would be wise to)\s+(?:not\s+)?(?:buy|sell|avoid|hold|exit|invest|accumulate|dump|stay away|ape)\b/i },
