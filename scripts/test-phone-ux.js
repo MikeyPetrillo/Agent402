@@ -65,13 +65,14 @@ try {
       const lead = [...document.querySelectorAll("p")].find((x) => /tap a bar/.test(x.textContent));
       const d = document.createElement("div");
       d.className = "bars";
+      d.dataset.phoneUxProbe = "1"; // the page renders its own strip too: this one is marked
       d.innerHTML = Array.from({ length: 30 }, (_, i) => `<i class="b up" title="2026-11-${String(i + 1).padStart(2, "0")}: 100% of ${i + 1} probes"></i>`).join("");
       lead.after(d);
       d.scrollIntoView({ block: "center" });
     });
-    const box = await p.locator(".bars").last().boundingBox();
+    const box = await p.locator('.bars[data-phone-ux-probe="1"]').boundingBox();
     await p.touchscreen.tap(box.x + box.width * (2.5 / 30), box.y + box.height / 2);
-    const read = await p.evaluate(() => { const r = [...document.querySelectorAll(".bars")].at(-1).nextElementSibling; return r && r.classList.contains("bar-read") ? { t: r.textContent, live: r.getAttribute("aria-live") } : null; });
+    const read = await p.evaluate(() => { const r = document.querySelector('.bars[data-phone-ux-probe="1"]').nextElementSibling; return r && r.classList.contains("bar-read") ? { t: r.textContent, live: r.getAttribute("aria-live") } : null; });
     ok(read && read.t === "2026-11-03: 100% of 3 probes" && read.live === "polite", `/status: a tap on the strip reads that day under it (${read && read.t})`);
     await p.close();
   }
