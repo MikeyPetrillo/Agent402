@@ -24,7 +24,7 @@ import { createServer } from "node:http";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ownStoreEnv } from "./lib/own-stores.js";
-import { configureHowToCall, howToCallFor, howToCall402Field, howToCallField, MAX_GET_URL_CHARS, MAX_402_CALL_BYTES, MAX_CALL_BYTES } from "../src/how-to-call.js";
+import { configureHowToCall, howToCallFor, howToCall402Field, howToCallField, MAX_GET_URL_CHARS, MAX_402_CALL_BYTES, MAX_CALL_BYTES, MAX_ALTERNATE_BYTES } from "../src/how-to-call.js";
 import { isComputePayable } from "../src/pow.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -66,6 +66,19 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { faile
   ok(big && big.method === "POST" && big.url === "https://origin.example/api/long" && Object.keys(big).length === 2 && JSON.stringify(howToCallFor(long)).length > MAX_402_CALL_BYTES,
     `402 form: a call past ${MAX_402_CALL_BYTES} bytes goes out as its method and URL only`);
   ok(MAX_CALL_BYTES === MAX_402_CALL_BYTES, "one budget for the 400 and the 402");
+  {
+    const text = "The x402 protocol lets an agent pay for a single request. ".repeat(6).trim();
+    const wordy = { route: "POST /api/wordy", discovery: { input: { text } } };
+    configureHowToCall({ baseUrl: "https://origin.example/", catalog: { ...catalog, "POST /api/wordy": wordy } });
+    const fullForm = howToCallFor(wordy);
+    const bounded = howToCall402Field(wordy).howToCall;
+    ok(fullForm.alternate && JSON.stringify(fullForm.alternate).length > MAX_ALTERNATE_BYTES && bounded.body?.text === text && !bounded.alternate,
+      `an alternate past ${MAX_ALTERNATE_BYTES} bytes (the example again, in a URL) is left out; the call keeps its body example`);
+    const tiny = { route: "POST /api/tiny", discovery: { input: { n: "1" } } };
+    configureHowToCall({ baseUrl: "https://origin.example/", catalog: { ...catalog, "POST /api/tiny": tiny } });
+    ok(howToCall402Field(tiny).howToCall.alternate?.method === "GET", "a short alternate still rides");
+    configureHowToCall({ baseUrl: "https://origin.example/", catalog });
+  }
   ok(JSON.stringify(howToCallField(post).howToCall) === JSON.stringify(howToCallFor(post)), "400 form: a call that fits the budget goes out whole");
   const big400 = howToCallField(long).howToCall;
   ok(big400 && big400.method === "POST" && big400.url === "https://origin.example/api/long" && Object.keys(big400).length === 2,
