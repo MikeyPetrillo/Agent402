@@ -48,6 +48,7 @@ import { mapLimit } from "./map-limit.js";
 import { makeDossierHandler, DOSSIER_TIERS } from "./dossier-kit.js";
 import { makeInsiderHandler, INSIDER_TIERS, probeInsiderFilings } from "./insider-flow-kit.js";
 import { testSeamOn } from "../test-seams.js";
+import { notChargedHere } from "../not-charged.js";
 
 const SYNTH = "anthropic/claude-opus-5";
 // Exported so the live-catalog guard can check the id is still upstream.
@@ -573,7 +574,7 @@ function makeTickerPackHandlerInner(tierSlug, depsIn) {
     const resolved = await d.resolveCompany({ ticker });
     const companyName = resolved?.name || ticker;
     const cik = resolved?.cik;
-    if (!cik) throw bad(`Could not resolve "${ticker}" to a SEC registrant. Not charged.`, 404);
+    if (!cik) throw bad(`Could not resolve "${ticker}" to a SEC registrant.${notChargedHere()}`, 404);
 
     // 2) CHEAP PROBES FIRST (EDGAR only, no LLM, no upstream spend). These are
     //    the evidence gate: the expensive parts do not run unless at least two
@@ -600,7 +601,7 @@ function makeTickerPackHandlerInner(tierSlug, depsIn) {
         haveInsider ? null : `no Form 4 insider filings in the last ${insiderDays} days${insiderP.ok ? "" : ` (${insiderP.error})`}`,
         haveHolders ? null : `no 13F information table naming this issuer in the last ${t.holderWindowDays} days${holdersP.ok ? "" : ` (${holdersP.error})`}`,
       ].filter(Boolean).join("; ");
-      throw bad(`Not enough evidence to build a ticker pack for ${ticker}: ${why}. A pack needs at least two of the three legs. Not charged.`, 422);
+      throw bad(`Not enough evidence to build a ticker pack for ${ticker}: ${why}. A pack needs at least two of the three legs.${notChargedHere()}`, 422);
     }
 
     // 3) THE EXPENSIVE PARTS, in parallel. Each is settled: a failed part is
@@ -627,7 +628,7 @@ function makeTickerPackHandlerInner(tierSlug, depsIn) {
         insiderR.ok ? null : `insider leg failed (${insiderR.error})`,
         haveHolders ? null : "holders leg found nothing",
       ].filter(Boolean).join("; ");
-      throw bad(`Ticker pack for ${ticker} could not be completed: ${why}. Not charged - please retry.`, 502);
+      throw bad(`Ticker pack for ${ticker} could not be completed: ${why}.${notChargedHere()} Please retry.`, 502);
     }
 
     // 5) MERGE SOURCES across the parts (dedupe by URL), then renumber every

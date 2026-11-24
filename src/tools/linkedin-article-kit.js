@@ -29,6 +29,7 @@ import { makeResearchHandler } from "./research-deep-kit.js";
 import { imageTierHandler } from "./llm-images-fast-kit.js";
 import { runImageOffThread } from "./image-pool.js";
 import { runImageOp, MAX_SRC_PIXELS, declaredDimensions } from "./image-ops.js";
+import { notChargedHere } from "../not-charged.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -84,11 +85,11 @@ export function normLinkedInInput(input) {
  *  charged), never a half-article. Exported for tests. */
 export function parseArticleJson(text) {
   let j;
-  try { j = JSON.parse(String(text || "").replace(/^```(?:json)?\s*|\s*```$/g, "")); } catch { throw bad("Article synthesis returned malformed JSON - not charged, please retry", 502); }
+  try { j = JSON.parse(String(text || "").replace(/^```(?:json)?\s*|\s*```$/g, "")); } catch { throw bad(`Article synthesis returned malformed JSON.${notChargedHere()} Please retry.`, 502); }
   const arr = (v, n) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).map((x) => noEmDash(x.trim())).slice(0, n) : []);
   const headlines = arr(j.headlines, 3).map((h) => h.slice(0, LINKEDIN_LIMITS.headlineChars));
   const body = noEmDash(String(j.body_markdown || "").trim());
-  if (!headlines.length || body.split(/\s+/).length < 150) throw bad("Article synthesis produced no usable article - not charged, please retry", 502);
+  if (!headlines.length || body.split(/\s+/).length < 150) throw bad(`Article synthesis produced no usable article.${notChargedHere()} Please retry.`, 502);
   const hashtags = arr(j.hashtags, LINKEDIN_LIMITS.hashtagsMax).map((h) => (h.startsWith("#") ? h : `#${h}`).replace(/[^#\p{L}\p{N}_]/gu, ""));
   let post = noEmDash(String(j.post_caption || "").trim());
   if (post.length > LINKEDIN_LIMITS.postChars) post = post.slice(0, LINKEDIN_LIMITS.postChars - 1).replace(/\s+\S*$/, "") + "…";
@@ -149,7 +150,7 @@ function makeLinkedInHandlerInner(tierSlug) {
     const rq = `${p.topic}${p.angle ? ` - angle: ${p.angle}` : ""}${p.audience ? ` - for ${p.audience}` : ""}`;
     const research = await d.research({ query: rq, accountAs: (usd) => { spent += Number(usd) || 0; } }, req);
     const sources = Array.isArray(research?.sources) ? research.sources : [];
-    if (!research?.report || sources.length < 3) throw bad("Not enough grounded material to write this article - not charged, please retry with a more specific topic.", 502);
+    if (!research?.report || sources.length < 3) throw bad(`Not enough grounded material to write this article.${notChargedHere()} Please retry with a more specific topic.`, 502);
     const sourceBlock = sources.map((s) => `[${s.n}] ${s.title}${s.fullText ? " (full text read)" : " (excerpt)"} - ${s.url}`).join("\n");
 
     // 2) SYNTHESIS in LinkedIn's shape, as JSON.
@@ -213,7 +214,7 @@ ${quotedMaterial("SOURCES", sourceBlock)}`;
     const images = outcomes.filter((o) => o.image).map((o) => o.image);
     const imageErrors = outcomes.filter((o) => o.error).map((o) => o.error);
     // A cover was asked for and every image failed: the buyer is not charged.
-    if (p.cover && !images.some((i) => i.slot === "cover")) throw bad(`Image generation failed (${imageErrors.map((x) => x.error).join("; ") || "no image"}) - not charged, please retry.`, 502);
+    if (p.cover && !images.some((i) => i.slot === "cover")) throw bad(`Image generation failed (${imageErrors.map((x) => x.error).join("; ") || "no image"}).${notChargedHere()} Please retry.`, 502);
 
     // 4) ASSEMBLE the deliverable.
     const wordCount = art.body.split(/\s+/).filter(Boolean).length;

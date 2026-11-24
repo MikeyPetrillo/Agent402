@@ -27,6 +27,7 @@ import { CONTRACT_TOOLS } from "./contract-kit.js";
 import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
 import { testSeamOn } from "../test-seams.js";
 import { creditAnswers, GOPLUS_ATTRIBUTION } from "../data-attribution.js";
+import { notChargedHere } from "../not-charged.js";
 
 // Keyless control-plane facts the report used to disclaim as "not visible
 // here": GoPlus token_security (honeypot, proxy, mintable, hidden owner, taxes,
@@ -217,7 +218,7 @@ function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
       const why = gpR.attribution === "upstream" ? `the token-security source answered with a failure (${gpR.error})`
         : gpR.status == null ? "the token-security read hit an internal error on our side"
         : `the token-security read did not complete (${gpR.error})`;
-      throw Object.assign(bad(`The risk report for "${address}" on ${chain} could not be produced: ${why}. Not charged; try again shortly.`,
+      throw Object.assign(bad(`The risk report for "${address}" on ${chain} could not be produced: ${why}.${notChargedHere()} Try again shortly.`,
         UNAVAILABLE_STATUS.has(gpR.status) ? gpR.status : 503), {
         attribution: gpR.attribution || (gpR.status == null ? "ours" : "unknown"),
         ...(gpR.hint ? { hint: gpR.hint } : gpR.status == null ? { hint: "internal" } : {}),
@@ -230,7 +231,7 @@ function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
     if (!gp || (gp.totalSupply == null && !holders.length)) {
       const why = gp ? "the token-security record carried neither supply nor holders" : `the token-security probe failed: ${gpR.error}`;
       const also = [src ? "the contract source" : null, dex ? "the DEX pairs" : null].filter(Boolean);
-      throw bad(`Could not read token "${address}" on ${chain} (${why}${also.length ? `; only ${also.join(" and ")} ${also.length > 1 ? "were" : "was"} readable` : ""}). Confirm the address and chain. Not charged.`, 422);
+      throw bad(`Could not read token "${address}" on ${chain} (${why}${also.length ? `; only ${also.join(" and ")} ${also.length > 1 ? "were" : "was"} readable` : ""}). Confirm the address and chain.${notChargedHere()}`, 422);
     }
 
     const totalSupply = gp.totalSupply;
@@ -324,7 +325,7 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
     spent += costOf(sd);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(textOf(sd), web?.sources || []);
-    if (!prose) throw bad("Token risk synthesis produced nothing - not charged", 502);
+    if (!prose) throw bad(`Token risk synthesis produced nothing.${notChargedHere()}`, 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
     const report = prose;

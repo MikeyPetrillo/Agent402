@@ -24,6 +24,7 @@ import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { bundleLegAnswer, accessRefusalStatus, upstreamHostsForSlug } from "./lib/upstream-outage.js";
 import { stubGuardResolver } from "./lib/guard-resolver-stub.js";
 import { ATTRIBUTIONS, attributionTailOf, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COPERNICUS_DISCLAIMER } from "../src/data-attribution.js";
+import { runAsRouteCall } from "../src/not-charged.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -258,7 +259,7 @@ try {
   }
   // a source failure on one site fails the call (never a partial 200)
   stub("weather-air-quality", async (i) => { if (i.lat === 3) throw err(502, "upstream broke"); return { airQuality: { usAqi: 30 } }; });
-  await throwsStatus(() => tool("weather-risk-brief").handler({ sites: [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }] }), 502, /1 of 2 unit.*weather-air-quality.*Nothing was charged/, "weather: one site's source failure answers 502, uncharged, naming the leg");
+  await throwsStatus(() => runAsRouteCall(() => tool("weather-risk-brief").handler({ sites: [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }] })), 502, /1 of 2 unit.*weather-air-quality.*\. Nothing was charged\. Retry later\.$/, "weather: one site's source failure answers 502, uncharged, naming the leg");
   // a throttled leg is tried once more
   let calls = 0;
   stub("weather-air-quality", async () => { calls++; if (calls === 1) throw err(503, "throttled", { retryAfter: 5 }); return { airQuality: { usAqi: 30 } }; });
@@ -291,7 +292,7 @@ try {
   stub("company-financials", async (i) => { if (i.ticker === "ZZZZ") throw err(404, "unknown ticker ZZZZ"); return fin; });
   stub("edgar-filings", async () => filings);
   stub("edgar-insider-trades", async () => ({ total: 3, trades: [] }));
-  await throwsStatus(() => tool("filings-brief").handler({ tickers: ["MSFT", "ZZZZ"] }), 422, /1 of 2 input.*ZZZZ.*nothing was charged/, "filings: an unknown ticker is a 422 naming it, uncharged");
+  await throwsStatus(() => runAsRouteCall(() => tool("filings-brief").handler({ tickers: ["MSFT", "ZZZZ"] })), 422, /1 of 2 input.*ZZZZ.*send again\. Nothing was charged\.$/, "filings: an unknown ticker is a 422 naming it, uncharged");
   const f = await tool("filings-brief").handler({ tickers: ["MSFT", "AAPL"] });
   ok(f.companies === 2 && f.peers.byRevenue.length === 2 && f.rows.every((r) => r.financials.ratios.netMargin === -0.05), "filings: a complete answer ranks every company");
   restore();

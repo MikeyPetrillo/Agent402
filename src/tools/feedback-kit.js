@@ -25,6 +25,7 @@
 // in sales-ledger.js for why two, and feedbackByTool for why counts only.
 import { saleByTxFresh, recordSaleFeedback, feedbackForTx, feedbackByTool } from "../sales-ledger.js";
 import { identityPayerOf, freeModeOn, FREE_MODE_IDENTITY_NOTE } from "../payer.js";
+import { notChargedHere } from "../not-charged.js";
 
 const MAX_REASON = 1000;
 
@@ -61,7 +62,7 @@ export function makeFeedbackHandler(deps = {}) {
     // the entire point of collecting it.
     const reason = input?.reason === undefined || input?.reason === null ? "" : String(input.reason).trim();
     if (verdict === "bad" && reason.length < 10) {
-      throw bad('A "bad" verdict needs a "reason" of at least 10 characters saying what went wrong. Without it there is nothing to fix, and a count nobody can act on is not worth charging you for. Nothing was charged.', 400);
+      throw bad(`A "bad" verdict needs a "reason" of at least 10 characters saying what went wrong. Without it there is nothing to fix, and a count nobody can act on is not worth charging you for.${notChargedHere()}`, 400);
     }
     if (reason.length > MAX_REASON) throw bad(`"reason" is limited to ${MAX_REASON} characters.`, 400);
 
@@ -71,20 +72,20 @@ export function makeFeedbackHandler(deps = {}) {
     const caller = payerOf(req);
     if (!caller && freeModeOn()) throw bad(FREE_MODE_IDENTITY_NOTE, 400);
     if (!caller) {
-      throw bad("Feedback is bound to the wallet that PAID for the call being rated, so this call must itself be paid with a signed EVM authorization from that wallet. Nothing was charged.", 403);
+      throw bad(`Feedback is bound to the wallet that PAID for the call being rated, so this call must itself be paid with a signed EVM authorization from that wallet.${notChargedHere()}`, 403);
     }
 
     const sale = await lookup(tx);
     // The two refusals below are deliberately the same sentence: a wallet that
     // did not buy the call learns nothing about whether the transaction is ours
     // or what it bought. Same rule as attest - only the buyer sees detail.
-    const notYours = () => bad(`No settled call of yours was found for transaction ${tx}. Feedback covers calls this wallet paid for on this server; use the hash from your own receipt. Nothing was charged.`, 403);
+    const notYours = () => bad(`No settled call of yours was found for transaction ${tx}. Feedback covers calls this wallet paid for on this server; use the hash from your own receipt.${notChargedHere()}`, 403);
     if (!sale) throw notYours();
     if (!sale.payer || String(sale.payer).toLowerCase() !== String(caller).toLowerCase()) throw notYours();
 
     const prior = existing(tx);
     const row = await record({ tx, saleId: sale.id, slug: sale.slug, payer: caller, verdict, reason: reason || null });
-    if (!row) throw bad("The verdict could not be recorded. Nothing was charged.", 500);
+    if (!row) throw bad(`The verdict could not be recorded.${notChargedHere()}`, 500);
 
     // A bad verdict is a buyer telling us something is broken, and that has one
     // job: to be SEEN. It goes to the log with the slug and the digest of the

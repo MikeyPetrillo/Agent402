@@ -53,6 +53,7 @@ import { payerFromRequest } from "../payer.js";
 import { acceptsFromLive402, quoteFromAccepts } from "../x402-live-quote.js";
 import { readTextCapped } from "../capped-body.js";
 import { cachedSpendingWalletStatus, spendingWalletReadsLow, walletLowMessage } from "./route-execute.js";
+import { notChargedOn } from "../not-charged.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -281,7 +282,7 @@ export function buildSellerPayabilityTool({
       const settleableMs = evmCredentialSettleableMs(req, { nowMs: now() });
       if (settleableMs != null && settleableMs < EVM_SELLER_ALLOWANCE_MS) {
         adjustSpend(spendHandle, 0);
-        throw bad("Too little of your payment authorization's life is left to pay the seller and still settle this check (EVM credentials expire at their validBefore, and must still be valid 6 s after the check ends). Nothing was spent and nothing is charged. Retry with a fresh authorization: a stock client signs 300 s ahead.", 504);
+        throw bad(`Too little of your payment authorization's life is left to pay the seller and still settle this check (EVM credentials expire at their validBefore, and must still be valid 6 s after the check ends). Nothing was spent.${notChargedOn(req)} Retry with a fresh authorization: a stock client signs 300 s ahead.`, 504);
       }
       // Nothing is signed from a wallet that reads low (a cached reading).
       if (spendChain === "base" && await spendingWalletReadsLow(spendingWalletStatus)) {

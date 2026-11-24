@@ -30,7 +30,8 @@ globalThis.fetch = async (url, init) => {
   return new Response(JSON.stringify({ data: [{ b64_json: "iVBORw0KGgo" }], usage }), { status: 200, headers: { "content-type": "application/json" } });
 };
 const call = async (slug, input) => { sent = []; const out = await bySlug(slug).handler(input); return { out, req: sent[0]?.body }; };
-const thrown = async (slug, input) => { sent = []; try { await bySlug(slug).handler(input); return null; } catch (e) { return e; } };
+const { runAsRouteCall } = await import("../src/not-charged.js");
+const thrown = async (slug, input) => { sent = []; try { await runAsRouteCall(() => bySlug(slug).handler(input)); return null; } catch (e) { return e; } };
 const rejects = async (fn, frag, m) => { let e = null; try { await fn(); } catch (x) { e = x; } ok(e && e.statusCode === 400 && String(e.message).includes(frag), `${m} (${e ? e.statusCode + " " + e.message.slice(0, 90) : "no throw"})`); };
 
 try {
@@ -161,7 +162,7 @@ try {
     upstream = [openAIError(400, { message: `Your request was rejected by the safety system. If you believe this is an error, contact us and include the request ID req_123. safety_violations=[violence]. ${secret}`, type: "image_generation_user_error", param: null, code: "moderation_blocked" })];
     const e = await thrown("image-gen-premium", { prompt: "a" });
     ok(e?.statusCode === 400 && sent.length === 1, `a refusal is a 400 and is not retried (${e?.statusCode}, ${sent.length} requests)`);
-    ok(/^The model's content check refused this prompt\. This 400 is not charged on x402; rephrase the prompt and try again\./.test(e?.message || "") && /Flagged: violence\./.test(e.message) && !/"auto"/.test(e.message), `refusal message is plain and names what was flagged (${e?.message})`);
+    ok(/^The model's content check refused this prompt\. Nothing was charged\. Rephrase the prompt and try again\./.test(e?.message || "") && /Flagged: violence\./.test(e.message) && !/"auto"/.test(e.message), `refusal message is plain and names what was flagged (${e?.message})`);
     ok(!e.message.includes(secret) && !e.message.includes("req_123"), "the upstream body is not echoed (no key, no request id)");
     upstream = [openAIError(400, { message: "Your request was rejected as a result of our safety system.", type: "invalid_request_error", param: null, code: "content_policy_violation" })];
     const e2 = await thrown("image-gen", { prompt: "a", moderation: "auto" });

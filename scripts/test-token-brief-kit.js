@@ -266,13 +266,14 @@ let happy = null;
 }
 
 // ---------------------------------------------------------------------------
+const { runAsRouteCall } = await import("../src/not-charged.js");
 // 6) Thin-evidence refusals - all 4xx/5xx, so never charged
 // ---------------------------------------------------------------------------
 {
   // (a) nothing anywhere knows the mint
   stub({ rcReport: () => errRes(400, "{\"error\":\"invalid token mint\"}"), rcSummary: () => errRes(400, "{}"), jupSearch: [], dsPairs: [], jupPrice: {} });
-  const e = await throws(handler({ mint: MINT }), 422, "unresolvable mint");
-  ok(e && /Not charged/.test(e.message), "unresolvable-mint refusal says not charged");
+  const e = await throws(runAsRouteCall(() => handler({ mint: MINT })), 422, "unresolvable mint");
+  ok(e && /Nothing was charged\./.test(e.message), "unresolvable-mint refusal says not charged");
   ok(synthBodies.length === 0, "no synthesis call is made on an unresolvable mint");
   restore();
 }
@@ -311,8 +312,8 @@ for (const [status, expect, label] of [[500, 502, "upstream 500"], [503, 502, "u
 }
 {
   stub({ synth: { choices: [{ message: { content: "" } }] } });
-  const e = await throws(handler({ mint: MINT }), 502, "empty synthesis");
-  ok(e && /not charged/i.test(e.message), "empty synthesis says not charged");
+  const e = await throws(runAsRouteCall(() => handler({ mint: MINT })), 502, "empty synthesis");
+  ok(e && /Nothing was charged\.$/.test(e.message), "empty synthesis says not charged");
   restore();
 }
 

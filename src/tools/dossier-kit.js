@@ -21,6 +21,7 @@ import { EDGAR_TOOLS, fetchXmlText, isAnnualPeriod, isQuarterPeriod, periodMonth
 import { FINANCE_TOOLS } from "./finance-kit.js";
 import { stockDataEnabled } from "./stock-provider.js";
 import { testSeamOn } from "../test-seams.js";
+import { notChargedHere } from "../not-charged.js";
 
 // Read at boot, like every listing switch: the quote step runs only with an
 // active stock provider.
@@ -311,8 +312,8 @@ function makeDossierHandlerInner(tierSlug) {
     // ticker: retryable 502, not a 422 that blames the input. A 4xx (unknown
     // ticker) still falls through to the 422 below.
     const secDown = [k10, q10, k8].some((r) => r.ok === false && !(r.status >= 400 && r.status < 500));
-    if (!anyFilings && secDown) throw bad("SEC EDGAR unavailable, retry shortly. Not charged.", 502);
-    if (!anyFilings) throw bad(`No SEC EDGAR filings found for "${ticker}" - this product covers US-listed companies (try a ticker like AAPL). Not charged.`, 422);
+    if (!anyFilings && secDown) throw bad(`SEC EDGAR unavailable, retry shortly.${notChargedHere()}`, 502);
+    if (!anyFilings) throw bad(`No SEC EDGAR filings found for "${ticker}" - this product covers US-listed companies (try a ticker like AAPL).${notChargedHere()}`, 422);
 
     // 1b) FILING EXCERPTS - the newest 10-Q's own words on the items that move
     // a bottom line (runs alongside the web search below; one EDGAR read).
@@ -414,7 +415,7 @@ ${QUOTE_ON ? `=== LIVE QUOTE ===\n${quoteBlock}\n` : ""}=== SEC XBRL FINANCIALS 
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
-    if (!prose) throw bad("Dossier synthesis produced nothing - not charged", 502);
+    if (!prose) throw bad(`Dossier synthesis produced nothing.${notChargedHere()}`, 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
 

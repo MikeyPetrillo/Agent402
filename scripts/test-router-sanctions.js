@@ -126,9 +126,10 @@ const loud = () => { console.warn = origWarn; };
   try { await K.screenAddressForPayment(CLEAN); } catch { threw = true; }
   ok(threw, "with no list the screen throws (unknown), never answers null");
 
-  quiet(); const { e } = await buy("clean.example"); loud();
+  const { runAsRouteCall } = await import("../src/not-charged.js");
+  quiet(); const { e } = await runAsRouteCall(() => buy("clean.example")); loud();
   ok(e?.statusCode === 503 && e?.screenUnavailable === true, `no list: payX402 refuses 503 screenUnavailable (got ${e?.statusCode})`);
-  ok(/screening is temporarily unavailable/i.test(e?.message || "") && /Nothing was signed and nothing is charged/.test(e?.message || ""), "the message names screening as temporarily unavailable and says nothing was signed or charged");
+  ok(/screening is temporarily unavailable/i.test(e?.message || "") && /Nothing was signed\. Nothing was charged\. Retry in a few minutes\.$/.test(e?.message || ""), "the message names screening as temporarily unavailable and says nothing was signed or charged");
   eq(signs, 0, "no list: the signer was never called");
   eq(count("clean.example", "paid"), 0, "no list: no paid request left");
   ok(e?.committed !== true, "no list: the refusal is not marked committed (nothing may have left)");

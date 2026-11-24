@@ -35,7 +35,9 @@ const VW = videosWorstCaseUsd();
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
 const bySlug = (slug) => IMAGES_FAST_TOOLS.find((t) => t.slug === slug);
-const throws = async (fn, frag, m) => { let e = null; try { await fn(); } catch (x) { e = x; } ok(e && String(e.message).includes(frag), `${m} (${e ? e.statusCode + " " + String(e.message).slice(0, 80) : "no throw"})`); return e; };
+// Handlers are called as the route binder calls them, so a refusal carries its charge sentence (src/not-charged.js).
+const { runAsRouteCall } = await import("../src/not-charged.js");
+const throws = async (fn, frag, m) => { let e = null; try { await runAsRouteCall(fn); } catch (x) { e = x; } ok(e && String(e.message).includes(frag), `${m} (${e ? e.statusCode + " " + String(e.message).slice(0, 80) : "no throw"})`); return e; };
 const lastGatewayEvent = () => _testEventsForTest().filter((e) => e.event === "gateway_usage").pop();
 
 // ---- registration / pricing ----
@@ -334,7 +336,7 @@ const svmReq = () => payReq({ x402Version: 2, accepted: { scheme: "exact", netwo
   const t0 = Date.now();
   const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }, evmReq(1)), "did not finish", "job never completes -> 504 after the wait budget");
   ok(e?.statusCode === 504 && Date.now() - t0 >= 900, "…504 after VIDEOS_MAX_WAIT_MS");
-  ok(/same request again/.test(e?.message || "") && /not charged on x402/.test(e?.message || "") && !/job1/.test(e?.message || ""), "…504 tells an EVM payer to resend to collect the clip, scoped to x402, without naming the job");
+  ok(/Nothing was charged\. Send the same request again/.test(e?.message || "") && !/job1/.test(e?.message || ""), "…504 tells an EVM payer to resend to collect the clip, scoped to x402, without naming the job");
   // The retry the 504 asks for resumes the SAME upstream job instead of paying for a new one.
   const seen = installVideoFetch();
   const out = await bySlug("v1-videos").handler({ prompt: "a boat" }, evmReq(1));
@@ -359,7 +361,7 @@ const svmReq = () => payReq({ x402Version: 2, accepted: { scheme: "exact", netwo
 for (const [label, mk] of [["no payment header", () => undefined], ["a non-EVM payer", svmReq]]) {
   installVideoFetch({ statuses: ["pending"] });
   const e = await throws(() => bySlug("v1-videos").handler({ prompt: "an unkeyed boat" }, mk()), "did not finish", `${label}: timeout -> 504`);
-  ok(e?.statusCode === 504 && !/collect/.test(e?.message || "") && /not charged on x402/.test(e?.message || ""), `${label}: the 504 promises no collection and scopes the charge to x402`);
+  ok(e?.statusCode === 504 && !/collect/.test(e?.message || "") && /Nothing was charged\. Send the request again/.test(e?.message || ""), `${label}: the 504 promises no collection and scopes the charge to x402`);
   const seen = installVideoFetch();
   await bySlug("v1-videos").handler({ prompt: "an unkeyed boat" }, mk());
   ok(seen.submits === 1, `${label}: an identical retry submits its own job (nothing was parked)`);

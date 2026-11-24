@@ -41,6 +41,7 @@ import { attribute, addCredit, RUGCHECK_ATTRIBUTION } from "../data-attribution.
 import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { testSeamOn } from "../test-seams.js";
+import { notChargedHere } from "../not-charged.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -224,10 +225,10 @@ function makeTokenBriefHandlerInner(tierSlug) {
     const name = report?.token?.name ?? jup?.name ?? safety?.token?.name ?? null;
     const symbol = report?.token?.symbol ?? jup?.symbol ?? safety?.token?.symbol ?? null;
     if (!report && !safety && !jup) {
-      throw bad(`Could not resolve Solana mint "${mint}" on RugCheck, Jupiter or DexScreener (report: ${String(reportR.error || "").slice(0, 80)}). Confirm it is an SPL token mint address, not a wallet or a pair address. Not charged.`, 422);
+      throw bad(`Could not resolve Solana mint "${mint}" on RugCheck, Jupiter or DexScreener (report: ${String(reportR.error || "").slice(0, 80)}). Confirm it is an SPL token mint address, not a wallet or a pair address.${notChargedHere()}`, 422);
     }
     if (okLegs < Math.ceil(5 / 3)) {
-      throw bad(`Only ${okLegs} of 5 public Solana sources answered for "${mint}" - not enough to write a due-diligence brief. Not charged; please retry shortly.`, 502);
+      throw bad(`Only ${okLegs} of 5 public Solana sources answered for "${mint}" - not enough to write a due-diligence brief.${notChargedHere()} Please retry shortly.`, 502);
     }
     const holderRows = Array.isArray(report?.holders?.rows) ? report.holders.rows : [];
     const conc = report?.holders?.concentration || null;
@@ -241,7 +242,7 @@ function makeTokenBriefHandlerInner(tierSlug) {
     // evidence bar.
     const hasHolders = holderRows.length > 0 || n(jup?.audit?.topHoldersPct) != null;
     if (!hasMarket && !hasHolders) {
-      throw bad(`"${mint}"${symbol ? ` (${symbol})` : ""} has no market data and no holder data on any public Solana source - there is nothing to write a due-diligence brief from. Not charged.`, 422);
+      throw bad(`"${mint}"${symbol ? ` (${symbol})` : ""} has no market data and no holder data on any public Solana source - there is nothing to write a due-diligence brief from.${notChargedHere()}`, 422);
     }
 
     // 3) DERIVED FACTS (all traceable to a probe above; nothing invented).
@@ -362,7 +363,7 @@ ${riskBlock}`;
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
-    if (!prose) throw bad("Token brief synthesis produced nothing - not charged", 502);
+    if (!prose) throw bad(`Token brief synthesis produced nothing.${notChargedHere()}`, 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
 

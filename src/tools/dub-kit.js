@@ -35,6 +35,7 @@ import { LLM_GATEWAY_TOOLS, TIERS as GATEWAY_TIERS } from "./llm-gateway-kit.js"
 import { SETTLE_FIRST_SENTENCE } from "../settle-first-copy.js";
 import { TTS_TOOLS, VOICES, FORMATS, FORMAT_CONTENT_TYPES, ELEVENLABS_VOICES, validateInput as validateTtsInput, makeTtsHandler, ttsQuoteUsd } from "./tts-kit.js";
 import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { notChargedHere } from "../not-charged.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -180,7 +181,7 @@ async function dub(input) {
   if (!translation) throw stepError("translate", bad("the model returned no translation", 502));
   if (choice?.finish_reason === "length") throw stepError("translate", bad("the translation was cut off at the model's output limit; send a shorter text", 502));
   if (translation.length > cap) {
-    throw bad(`The translation is ${translation.length} chars, over the ${cap}-char cap of a dub; send a shorter text. Nothing was charged.`, 422);
+    throw bad(`The translation is ${translation.length} chars, over the ${cap}-char cap of a dub; send a shorter text.${notChargedHere()}`, 422);
   }
   const detected = (reported && normalizeLanguage(reported)?.tag) || source?.tag || null;
 

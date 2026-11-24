@@ -45,6 +45,7 @@ import { EventEmitter } from "node:events";
 import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown, markdownLooksCostly } from "./markdown-render.js";
+import { notChargedHere, claimLater, claimNow } from "../not-charged.js";
 
 const MARKDOWN_WORKER = fileURLToPath(new URL("./markdown-worker.js", import.meta.url));
 export const RENDER_DEADLINE_MS = 10_000;
@@ -75,7 +76,7 @@ let spare = null; // a started worker no lane holds yet
 let nextJobId = 1, nextWorkerId = 1, movedTotal = 0;
 
 const unavailable = (message) => Object.assign(new Error(message), { statusCode: 503 });
-const costlyFull = () => Object.assign(unavailable(`Slow markdown renders are queued ahead of this one (its unclosed emphasis or code markers make it slow to render); nothing was charged, retry in ${COSTLY_WAIT_MAX_MS / 1000} s`), { retryAfter: COSTLY_WAIT_MAX_MS / 1000, shed: true });
+const costlyFull = () => Object.assign(unavailable(`Slow markdown renders are queued ahead of this one (its unclosed emphasis or code markers make it slow to render).${notChargedHere()} Retry in ${COSTLY_WAIT_MAX_MS / 1000} s.`), { retryAfter: COSTLY_WAIT_MAX_MS / 1000, shed: true });
 const costlyAhead = () => costly.length + lanes.filter((l) => l.job?.costly).length;
 
 function forget(caller) {
@@ -192,9 +193,9 @@ function start() {
     const memory = e?.code === "ERR_WORKER_OUT_OF_MEMORY" || /memory limit/i.test(String(e?.message));
     die(memory && worker.lane?.job?.costly
       ? Object.assign(new Error('"markdown" needs more memory to render than one call allows (very deep quote or list nesting is the usual cause); flatten the nesting or send the document in parts'), { statusCode: 400 })
-      : unavailable(memory ? "The render ran out of memory on our side; nothing was charged, retry shortly" : "Markdown rendering failed on our side; nothing was charged, retry shortly"));
+      : claimLater(unavailable(memory ? "The render ran out of memory on our side." : "Markdown rendering failed on our side."), " Retry shortly."));
   });
-  worker.on("exit", () => die(unavailable("Markdown rendering stopped unexpectedly; nothing was charged, retry shortly")));
+  worker.on("exit", () => die(claimLater(unavailable("Markdown rendering stopped unexpectedly."), " Retry shortly.")));
   return worker;
 }
 
@@ -238,7 +239,7 @@ function pump() {
     clearTimeout(lane.idleTimer);
     lane.worker.ref();
     job.timer = setTimeout(() => {
-      settle(lane, "reject", unavailable("A markdown worker did not start in time; nothing was charged, retry shortly"));
+      settle(lane, "reject", claimLater(unavailable("A markdown worker did not start in time."), " Retry shortly."));
       retire(lane);
       pump();
     }, START_GUARD_MS);
@@ -258,9 +259,11 @@ export async function runMarkdown(text, { costly: lane = markdownLooksCostly(tex
   if (lane) {
     if (costlyAhead() >= COSTLY_AHEAD_MAX) throw costlyFull();
   } else if (ordinaryWaiting >= ORDINARY_QUEUE_MAX || (key && (callers.get(key)?.jobs.length ?? 0) >= ORDINARY_CALLER_MAX)) {
-    throw Object.assign(unavailable("Markdown workers are busy; nothing was charged, retry in a few seconds"), { retryAfter: 5, shed: true });
+    throw Object.assign(unavailable(`Markdown workers are busy.${notChargedHere()} Retry in a few seconds.`), { retryAfter: 5, shed: true });
   }
-  return new Promise((resolve, reject) => {
+  // A worker's error is built outside this call's async context: its charge
+  // sentence is added here, in the caller's (src/not-charged.js).
+  try { return await new Promise((resolve, reject) => {
     const job = { id: nextJobId++, text, costly: lane, resolve, reject, timer: null, caller: null, startedAt: 0, charged: false, moved: false };
     if (job.costly) costly.push(job);
     else {
@@ -275,7 +278,7 @@ export async function runMarkdown(text, { costly: lane = markdownLooksCostly(tex
       ordinaryWaiting++;
     }
     pump();
-  });
+  }); } catch (e) { throw claimNow(e); }
 }
 
 /** Pool state for tests and operator views. */

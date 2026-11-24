@@ -270,6 +270,30 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(out.steps[0].status === "ok" && calls.some((c) => c[0] === "bq" && c[1].query === "vitalik.eth" && !("name" in c[1])), `the backup ran with the value under its own name (${out.steps[0].status})`);
 }
 
+// ---- a router refusal inside a run is a step error: no charge claim ----
+// The outside step hands the router the paying request, so the router's
+// refusal would read as a route call's; the step runs marked
+// (src/not-charged.js runAsStep) and prints no claim inside a charged run.
+{
+  const PRO = EXEC_TIERS.find((t) => t.slug === "route-execute-pro");
+  const cand = { seller: "https://s2.example", slug: "s2.example", url: "https://s2.example/x", method: "POST", price: "$0.001", networks: ["eip155:8453"] };
+  let paid = 0;
+  const realRouter = buildRouteExecuteTool({ getCatalog: () => ({}), tier: PRO, resolveExternal: async () => [cand], payExternal: async () => { paid++; return { result: {}, quote: { usd: 0.001 } }; },
+    externalEnabled: () => true, externalChains: () => ["base"], spendingWalletStatus: async () => ({ status: "low" }) });
+  const sig = Buffer.from(JSON.stringify({ network: "eip155:8453", payload: {} })).toString("base64");
+  const rReq = (ip) => ({ headers: {}, ip, header: (h) => (h === "payment-signature" ? sig : undefined), __meteredQuoteUsd: 0.02 });
+  const direct = await throwsWith(() => realRouter.handler({ task: "t", include: "external" }, rReq("0xdirect")), 503, "temporarily unavailable. Nothing was charged.", "control: the router's wallet-low refusal on a direct route call carries the sentence");
+  const cat2 = { ...catalog, rx: realRouter };
+  const exS = makeExecuteHandler({ ledger, getCatalog: () => cat2, now, spendingWalletStatus: async () => ({ status: "ok" }) });
+  const ext = tool("xs", { seller: "s2.example", firstParty: false, endpoint: "https://s2.example/x", priceUsd: 0.01 });
+  ledger.saveDecision({ decisionId: "dstep", depth: "plan", priceUsd: 0.02, payer: "0xstep", plan: [{ step: 1, purpose: "x", tool: ext, fallbacks: [tool("b")], dependsOn: [] }], costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("dstep");
+  const out = await exS({ decisionId: "dstep" }, rReq("0xstep")).catch((e) => ({ threw: e, steps: e.steps || [] }));
+  const a = (out.steps[0]?.attempts || []).find((x) => x.id === "xs");
+  ok(direct && a && /temporarily unavailable/.test(a.error || "") && !/charged/i.test(a.error || "") && !out.threw && out.steps[0].status === "ok" && paid === 0,
+     `the same refusal as a step of a charged run prints no claim (${JSON.stringify(a)})`);
+}
+
 // ---- a seller that refuses a valid payment counts against that seller ----
 {
   routerMode = "refused";

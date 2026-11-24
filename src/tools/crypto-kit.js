@@ -29,6 +29,7 @@ import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.j
 import { hlSharedInfo } from "./hyperliquid-shared.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamErrorText } from "./redact.js";
+import { notChargedHere } from "../not-charged.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -207,7 +208,7 @@ async function jsonLoad(safeUrl, host, { isCg }) {
     if (s === 429) throw bad(`${host} rate-limited the request - retry shortly`, 503);
     if (s >= 500) throw bad(`${host} upstream HTTP ${s} - try again later`, 502);
     if (isCg && (s === 401 || s === 403) && !CG_PLAN_CODES.has(cgErrorCode(text))) {
-      throw bad(`${host} is not configured on this deployment. You were not charged.`, 503);
+      throw bad(`${host} is not configured on this deployment.${notChargedHere()}`, 503);
     }
     // Redact the FULL upstream body before slicing (a secret straddling the
     // 200-char cut would otherwise leave an unredactable prefix): the CoinGecko

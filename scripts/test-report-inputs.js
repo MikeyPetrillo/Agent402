@@ -176,11 +176,12 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
   // is that token's price); the report must read the market from the second.
   const dex = async () => ({ totalPairs: 2, liquidityUsd: 9e6, volume24h: 2e6, txns24h: 1800, pairs: [{ dex: "aerodrome", pair: "0xq", baseAddress: "0x940181a94A35A4569E4529A3CDfB74e38FD98631", quote: "WETH", priceUsd: 0.68, liquidityUsd: 4e6, volume24h: 1e6, volume1h: 1e4, buys24h: 400, sells24h: 500, buys1h: 10, sells1h: 12, fdv: 1e9, marketCap: 1e9, createdAt: null, hasProfile: true, websites: [] }, { dex: "uniswap", pair: "0xp", baseAddress: "0x4200000000000000000000000000000000000006", quote: "USDC", priceUsd: 2500, liquidityUsd: 5e6, volume24h: 1e6, volume1h: 1e4, buys24h: 400, sells24h: 500, buys1h: 10, sells1h: 12, fdv: 6e8, marketCap: 6e8, createdAt: null, hasProfile: true, websites: [] }] });
   const run = (deps) => makeTokenRiskHandler("token-risk", { tool, probeDexPairs: dex, chat, ...deps });
-  const refusal = async (deps) => { try { await run(deps)({ address: ADDR, chain: "base" }); return null; } catch (e) { return e; } };
+  const { runAsRouteCall } = await import("../src/not-charged.js");
+  const refusal = async (deps) => { try { await runAsRouteCall(() => run(deps)({ address: ADDR, chain: "base" })); return null; } catch (e) { return e; } };
 
   asked = 0;
   const e1 = await refusal({ probeGoPlus: async () => { throw Object.assign(new Error("GoPlus has no record for this token"), { statusCode: 422 }); } });
-  ok(e1?.statusCode === 422 && /token-security probe failed/.test(e1.message) && /Not charged/.test(e1.message) && asked === 0,
+  ok(e1?.statusCode === 422 && /token-security probe failed/.test(e1.message) && /Nothing was charged\./.test(e1.message) && asked === 0,
     "a failed token-security probe refuses 422 before any synthesis is bought");
   ok(/only the contract source and the DEX pairs were readable/.test(e1?.message || ""), "the refusal names what WAS readable, so the buyer knows why");
   asked = 0;
@@ -208,7 +209,7 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
   // The shapes the probe throws (its getJson): the source's own status is
   // attributed to it; our limit passing is the shared deadline class.
   const e3 = await refusal({ probeGoPlus: async () => { throw Object.assign(new Error("upstream HTTP 429"), { statusCode: 503, upstreamStatus: 429, attribution: "upstream" }); } });
-  ok(e3?.statusCode === 503 && /token-security source answered with a failure \(upstream HTTP 429\)/.test(e3.message) && /Not charged/.test(e3.message) && asked === 0,
+  ok(e3?.statusCode === 503 && /token-security source answered with a failure \(upstream HTTP 429\)/.test(e3.message) && /Nothing was charged\./.test(e3.message) && asked === 0,
     "a rate-limited token-security source refuses 503, not a 422 blaming the address");
   const e4 = await refusal({ probeGoPlus: async () => { throw Object.assign(new Error("upstream HTTP 500"), { statusCode: 502 }); } });
   ok(e4?.statusCode === 502, "an upstream error from the token-security source refuses 502");

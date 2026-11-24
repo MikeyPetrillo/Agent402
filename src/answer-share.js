@@ -45,6 +45,7 @@ import { createLimiter } from "./rate-limit.js";
 import { onResponseEnd } from "./hangup-settlement.js";
 import { allowanceOf } from "./allowance-state.js";
 import { brandMarkTile, CARD_ART_VERSION } from "./brand-mark.js";
+import { NOT_CHARGED } from "./not-charged.js";
 
 const DAY_MS = 86_400_000;
 /** The switch: shares are created only while ANSWER_SHARE is exactly "on" (read per call). */
@@ -265,7 +266,7 @@ export function reserveShare(req, { log = console.warn } = {}) {
   if (Object.hasOwn(req, RESERVATION)) return req[RESERVATION];
   const key = shareKeyOf(req);
   if (createLimit.check(key).limited) {
-    const e = new Error(`Share limit reached (${SHARES_PER_HOUR} shared answers an hour per payer). Call again without share, or later. Not charged.`);
+    const e = new Error(`Share limit reached (${SHARES_PER_HOUR} shared answers an hour per payer). Call again without share, or later. ${NOT_CHARGED}`);
     e.statusCode = 429;
     throw e;
   }

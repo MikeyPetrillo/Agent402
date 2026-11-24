@@ -42,6 +42,7 @@
 
 import { createSharedDailySpend } from "./shared-limits.js";
 import { useHeldUnit } from "./settle-first.js";
+import { notChargedHere } from "./not-charged.js";
 
 // `match` is a host suffix the fetch hook checks; null means the kit counts
 // its own units (one unit per network a multichain read asks for).
@@ -304,7 +305,7 @@ export function hardCapRefusalForHost(host, now = Date.now()) {
 }
 
 export function hardCapError() {
-  const e = new Error("This tool's upstream has reached today's usage limit - retry after 00:00 UTC. This call is not charged on x402.");
+  const e = new Error(`This tool's upstream has reached today's usage limit - retry after 00:00 UTC.${notChargedHere()}`);
   e.statusCode = 503;
   e.hardCap = true;
   return e;

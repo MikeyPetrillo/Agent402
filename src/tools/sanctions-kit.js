@@ -27,6 +27,7 @@ import { existsSync } from "node:fs";
 import { createJsonDocument } from "../json-document.js";
 import { trackStoreReady } from "../state-db.js";
 import { markResaleCleared } from "../resale-terms.js";
+import { notChargedHere } from "../not-charged.js";
 
 const REFRESH_MS = Math.max(3600_000, Number(process.env.SANCTIONS_REFRESH_MS) || 12 * 3600_000);
 // A parse the payment-party screen fetched within this window is taken as is
@@ -358,7 +359,7 @@ export async function screenAddressForPayment(address) {
 }
 
 /** The message a payout refused for want of a list carries to the buyer. */
-export const PAYOUT_SCREEN_UNAVAILABLE = "Payout screening is temporarily unavailable (the sanctions list is not loaded), so no outside seller is paid. Nothing was signed and nothing is charged. Retry in a few minutes.";
+export const PAYOUT_SCREEN_UNAVAILABLE = "Payout screening is temporarily unavailable (the sanctions list is not loaded), so no outside seller is paid. Nothing was signed.";
 
 /**
  * The gate every external payout path calls on the address it is about to
@@ -383,7 +384,7 @@ export async function assertPayoutScreened(address, { label = null } = {}) {
       throw Object.assign(new Error("Refusing to pay an unreadable address: the payout address cannot be screened. Nothing was signed."), { statusCode: 502 });
     }
     console.warn(`[sanctions] payout to ${shown.slice(0, 24)} refused: no sanctions list is loaded`);
-    throw Object.assign(new Error(PAYOUT_SCREEN_UNAVAILABLE), { statusCode: 503, screenUnavailable: true, code: "payout_screen_unavailable" });
+    throw Object.assign(new Error(`${PAYOUT_SCREEN_UNAVAILABLE}${notChargedHere()} Retry in a few minutes.`), { statusCode: 503, screenUnavailable: true, code: "payout_screen_unavailable" });
   }
   if (hit) {
     throw Object.assign(new Error(

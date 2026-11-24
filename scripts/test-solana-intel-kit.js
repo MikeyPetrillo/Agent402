@@ -457,7 +457,7 @@ try {
         return routed(url);
       });
       try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: spent budget with no rows resolved"); }
-      catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "budget-spent" && jupCalls === 0 && /^Solana token search found no pairs\. No Jupiter token search read was sent: our \d+ s limit for this call was used up by its earlier steps; nothing was charged/.test(e.message), `search fallback: budget spent before the Jupiter read -> 503 attributed ours, budget-spent, no request sent (got ${e.statusCode} ${e.attribution} ${e.hint} ${jupCalls} "${e.message}")`); }
+      catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "budget-spent" && jupCalls === 0 && /^Solana token search found no pairs\. No Jupiter token search read was sent: our \d+ s limit for this call was used up by its earlier steps\. Retry shortly\.$/.test(e.message), `search fallback: budget spent before the Jupiter read -> 503 attributed ours, budget-spent, no request sent (got ${e.statusCode} ${e.attribution} ${e.hint} ${jupCalls} "${e.message}")`); }
       finally { Date.now = realNow; }
     }
 

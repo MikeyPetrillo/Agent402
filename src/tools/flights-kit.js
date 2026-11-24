@@ -31,6 +31,7 @@ import { markUntrusted } from "./provenance.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
 import { maySpend as realMaySpend, noteSpend as realNoteSpend, adjustSpend as realAdjustSpend, reserveSpend as realReserveSpend, composeReserve, spendRefusalFields } from "../external-spend-guard.js";
 import { payerFromRequest } from "../payer.js";
+import { notChargedHere } from "../not-charged.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -222,7 +223,7 @@ async function buyFirst(sellers, params, { req, pay, kind, spend, now }) {
     if (now() - t0 > deadlineMs - 2_000) break;
     const settleableMs = evmCredentialSettleableMs(req, { nowMs: now() });
     if (settleableMs != null && settleableMs < EVM_SELLER_ALLOWANCE_MS) {
-      throw bad("Too little of your payment authorization's life is left to buy the flight data and still settle (a stock client signs 300 s ahead). Nothing was charged.", 504);
+      throw bad(`Too little of your payment authorization's life is left to buy the flight data and still settle (a stock client signs 300 s ahead).${notChargedHere()}`, 504);
     }
     const url = fillTemplate(seller.url, params);
     let paidOut = null;
@@ -253,10 +254,10 @@ async function buyFirst(sellers, params, { req, pay, kind, spend, now }) {
         // the cap when unknown. The buyer is not charged (>= 400 cancels settlement).
         const signed = Number(e?.signedUsd);
         spend.paid += Number.isFinite(signed) && signed >= 0 ? signed : seller.maxUsd;
-        throw bad("the flight data seller did not deliver after our payment went out; nothing was charged to you", 502);
+        throw bad(`the flight data seller did not deliver after our payment went out.${notChargedHere()}`, 502);
       }
       // A 404 from the seller is an answer about the flight, not an outage.
-      if (e?.statusCode === 404) throw bad("the flight data seller has no record for that request; nothing was charged", 404);
+      if (e?.statusCode === 404) throw bad(`the flight data seller has no record for that request.${notChargedHere()}`, 404);
       continue;
     }
     // Paid and answered. Outside the try: a garbled body here was paid once and
@@ -268,7 +269,7 @@ async function buyFirst(sellers, params, { req, pay, kind, spend, now }) {
   // The cause stays in our log: payX402's messages can carry the seller's quote,
   // our per-seller cap and its pinned address, which are not the buyer's to read.
   if (lastErr) console.warn(`[flights] ${kind}: every seller failed before payment: ${String(lastErr.message || lastErr).slice(0, 200)}`);
-  throw bad("no flight data seller could answer right now; nothing was charged", 503);
+  throw bad(`no flight data seller could answer right now.${notChargedHere()}`, 503);
 }
 
 /** Deps are injectable so the whole flow is testable offline with a stub
@@ -287,8 +288,8 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
       const allowed = await reserve(spendPayer, worst, { chain: "base" });
       if (!allowed?.ok) {
         throw Object.assign(bad(allowed?.code === "wallet_daily_ceiling"
-          ? "Flight data purchases have reached today's ceiling; they resume tomorrow (nothing was charged)"
-          : "Flight data purchases are paused right now; try again shortly (nothing was charged)", 429), spendRefusalFields(allowed));
+          ? `Flight data purchases have reached today's ceiling; they resume tomorrow.${notChargedHere()}`
+          : `Flight data purchases are paused right now; try again shortly.${notChargedHere()}`, 429), spendRefusalFields(allowed));
       }
       const handle = allowed.handle ?? null;
       if (handle && req && typeof req === "object") req.__externalSpend = handle;
@@ -296,7 +297,7 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
       try {
         const got = await buyFirst(list, params, { req, pay, kind, spend, now });
         const answer = got.format === "fare-search-v1" ? normalizeFareSearch(got.data, params) : normalizeFlightTrack(got.data, params, now());
-        if (answer.unreadable) throw bad("the flight data seller's answer could not be read; nothing was charged to you", 502);
+        if (answer.unreadable) throw bad(`the flight data seller's answer could not be read.${notChargedHere()}`, 502);
         return markUntrusted({ ...answer, servedBy: got.servedBy, fetchedAt: new Date(now()).toISOString() });
       } finally {
         adjustSpend(handle, spend.paid);

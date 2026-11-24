@@ -19,6 +19,7 @@ import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { get13fHoldings, resolveManager } from "./edgar-kit.js";
 import { testSeamOn } from "../test-seams.js";
+import { notChargedHere } from "../not-charged.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -117,8 +118,8 @@ function makeFundHandlerInner(tierSlug) {
       read13f({ cik: resolved.cik, index: 0 }),
       settleWithin(read13f({ cik: resolved.cik, index: 1 }), DATA_TIMEOUT_MS).then(async (r) => (r.ok ? r : settleWithin(read13f({ cik: resolved.cik, index: 1 }), DATA_TIMEOUT_MS))),
     ]);
-    if (!latest || !latest.holdings || !latest.holdings.length) throw bad(`No 13F-HR holdings found for "${manager || resolved.cik}" - confirm this is an institutional manager (>$100M AUM). Not charged.`, 422);
-    if (!priorR.ok) throw bad(`The prior-quarter 13F-HR for "${manager || resolved.cik}" exists but could not be read from SEC EDGAR (${String(priorR.error).slice(0, 120)}). Not charged - please retry.`, 502);
+    if (!latest || !latest.holdings || !latest.holdings.length) throw bad(`No 13F-HR holdings found for "${manager || resolved.cik}" - confirm this is an institutional manager (>$100M AUM).${notChargedHere()}`, 422);
+    if (!priorR.ok) throw bad(`The prior-quarter 13F-HR for "${manager || resolved.cik}" exists but could not be read from SEC EDGAR (${String(priorR.error).slice(0, 120)}).${notChargedHere()} Please retry.`, 502);
     const prior = priorR.data;
     const managerName = latest.managerName || resolved.name || manager || `CIK ${resolved.cik}`;
 
@@ -212,7 +213,7 @@ Write a thorough, well-structured report of up to ${t.words} words with these se
     spent += synthCalls.reduce((a, c) => a + costOf(c), 0);
     // Links only to listed sources, no images or HTML (src/report-grounding.js).
     const prose = sanitizeReportProse(proseOf(sd, cutShort), numbered);
-    if (!prose) throw bad("Fund report synthesis produced nothing - not charged", 502);
+    if (!prose) throw bad(`Fund report synthesis produced nothing.${notChargedHere()}`, 502);
     // Every number the model wrote, traced to the material it was given (src/report-grounding.js).
     const grounding = checkReportGrounding(prose, synthPrompt);
 

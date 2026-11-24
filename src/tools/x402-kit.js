@@ -48,6 +48,7 @@ import { leaderboardCadence } from "../refresh-cadence.js";
 import { createPublicClient, custom } from "viem";
 import { mainnet } from "viem/chains";
 import { normalize as normalizeEns } from "viem/ens";
+import { notChargedHere } from "../not-charged.js";
 
 // ENS (Ethereum mainnet) forward resolution goes through ENS's universal
 // resolver, the path current clients use: a name whose records moved off the
@@ -973,7 +974,7 @@ export function computeDemandRadar(agg, input = {}) {
   // the defect in hours rather than six weeks.
   if (!rows.length && Number(agg?.distinctClusters) > 0 && minCount <= 1 && !qualifiedOnly) {
     throw Object.assign(
-      new Error(`the demand board reports ${Number(agg.distinctClusters)} clusters but returned no rows to rank, so this answer would be empty for a reason that is ours, not a reading about demand - not charged, please retry`),
+      new Error(`the demand board reports ${Number(agg.distinctClusters)} clusters but returned no rows to rank, so this answer would be empty for a reason that is ours, not a reading about demand.${notChargedHere()} Please retry.`),
       { statusCode: 502 }
     );
   }

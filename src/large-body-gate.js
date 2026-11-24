@@ -29,6 +29,7 @@
 //
 // A route's own parser still enforces its limit with a 413; a body declared
 // over that limit is left to it and reserves nothing.
+import { NOT_CHARGED } from "./not-charged.js";
 export const UNPAID_BODY_MAX_BYTES = 100 * 1024;
 // The unpaid limiter server.js builds over these bodies (per client address; no
 // raise once the address has paid). Read by server.js and the buying-at-volume guide.
@@ -50,7 +51,7 @@ export function largeBodyInflightMaxBytes(env = process.env) {
  * @param {(req) => string} [o.clientKey]
  * @param {number} [o.maxInflightBytes]
  */
-export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, freeMode = false, unpaidLimiter = null, clientKey = (req) => String(req.ip || ""), maxInflightBytes = DEFAULT_INFLIGHT_MAX_BYTES, maxPerClientBytes, maxUnpaidBytes }) {
+export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, freeMode = false, unpaidLimiter = null, clientKey = (req) => String(req.ip || ""), maxInflightBytes = DEFAULT_INFLIGHT_MAX_BYTES, maxPerClientBytes, maxUnpaidBytes, pushException = (req, message) => message }) {
   const limits = new Map(routes);
   const largest = Math.max(0, ...limits.values());
   const perClientMax = maxPerClientBytes ?? Math.max(Math.floor(maxInflightBytes / 4), 2 * largest);
@@ -94,7 +95,7 @@ export function createLargeBodyGate({ routes, isPaid, bodyQuoted = () => false, 
     const who = clientKey(req), held = byClient.get(who) || 0;
     if (inFlight + size > maxInflightBytes || held + size > perClientMax || (unpaid && unpaidInFlight + size > unpaidMax)) {
       res.set("Retry-After", "5");
-      return res.status(503).json({ error: "busy", hint: "This host is reading other large request bodies right now; retry in a few seconds. Nothing was charged." });
+      return res.status(503).json({ error: "busy", hint: pushException(req, `This host is reading other large request bodies right now; retry in a few seconds. ${NOT_CHARGED}`) });
     }
     inFlight += size;
     if (unpaid) unpaidInFlight += size;

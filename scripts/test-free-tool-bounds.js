@@ -556,15 +556,16 @@ function rng(seed) {
   // The costly lane admits only what it can render within its wait bound;
   // the rest are told to retry, at once. Its queue never refuses the other lane.
   const slow = [], refused = [];
+  const { runAsRouteCall } = await import("../src/not-charged.js");
   for (let i = 0; i < COSTLY_AHEAD_MAX + 5; i++) {
-    const p = tool.handler({ markdown: slowDocs[i % 3][1] }).then(() => ({ statusCode: 200 }), (e) => e);
+    const p = runAsRouteCall(() => tool.handler({ markdown: slowDocs[i % 3][1] })).then(() => ({ statusCode: 200 }), (e) => e);
     slow.push(p);
   }
   await new Promise((r) => setTimeout(r, 50));
   const early = markdownPoolState();
   ok(early.queuedCostly === COSTLY_AHEAD_MAX - 1 && COSTLY_AHEAD_MAX * RENDER_DEADLINE_MS <= COSTLY_WAIT_MAX_MS, "markdown-to-html: the costly lane holds " + COSTLY_AHEAD_MAX + " renders (one running, " + early.queuedCostly + " waiting): at most " + COSTLY_WAIT_MAX_MS / 1000 + " s of work ahead of a new one");
   for (const p of slow.slice(COSTLY_AHEAD_MAX)) refused.push(await Promise.race([p, new Promise((r) => setTimeout(() => r({ statusCode: "still waiting" }), 1000))]));
-  ok(refused.length === 5 && refused.every((e) => e.statusCode === 503 && e.retryAfter === COSTLY_WAIT_MAX_MS / 1000 && e.shed === true && /nothing was charged/.test(e.message)), "markdown-to-html: a costly render past that is refused at once with a 503, Retry-After " + COSTLY_WAIT_MAX_MS / 1000 + " and no charge (" + refused.map((e) => e.statusCode).join(",") + ")");
+  ok(refused.length === 5 && refused.every((e) => e.statusCode === 503 && e.retryAfter === COSTLY_WAIT_MAX_MS / 1000 && e.shed === true && /\. Nothing was charged\. Retry in /.test(e.message)), "markdown-to-html: a costly render past that is refused at once with a 503, Retry-After " + COSTLY_WAIT_MAX_MS / 1000 + " and no charge (" + refused.map((e) => e.statusCode).join(",") + ")");
   // 100 ordinary documents at once, with the costly lane full: every one is
   // served, the event loop is never held, and the HTML pool (another tool
   // family's workers) neither queues nor waits.

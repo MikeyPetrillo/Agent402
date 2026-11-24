@@ -1,3 +1,4 @@
+import { notChargedHere } from "../not-charged.js";
 // Frankfurter v2 adapter: ECB reference rates in the shapes the FX tools
 // already serve.
 //
@@ -93,7 +94,7 @@ export function fxSourceUnavailable(cause) {
   const sc = cause?.statusCode;
   if (sc && sc < 500 && cause?.upstreamStatus === undefined) return cause;
   return Object.assign(
-    new Error("The European Central Bank reference rates could not be read right now. Retry in a few minutes; you were not charged."),
+    new Error(`The European Central Bank reference rates could not be read right now.${notChargedHere()} Retry in a few minutes.`),
     { statusCode: 503, retryAfter: 300, attribution: "upstream" },
   );
 }

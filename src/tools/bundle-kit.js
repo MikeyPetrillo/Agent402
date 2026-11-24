@@ -34,6 +34,7 @@ import { markEndsAtCeiling, ceilingLeftMs, CEILING_TIMER_SLACK_MS } from "../run
 import { markResaleComputed, markResaleCleared, markRefAnswer } from "../resale-terms.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
 import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION, openMeteoLicensed } from "../data-attribution.js";
+import { notChargedHere, runAsStep } from "../not-charged.js";
 
 const bad = weatherBad;
 
@@ -76,7 +77,9 @@ const isThrottled = (e) => e?.upstreamStatus === 429 || e?.throttled === true;
 async function runLeg(slug, input, ctx, { retries = 1 } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await legTool(slug).handler(input, ctx);
+      // A leg is a step of the bundle's answer: its own refusal makes no
+      // charge claim; the bundle's refusal makes it once (src/not-charged.js).
+      return await runAsStep(() => legTool(slug).handler(input, ctx));
     } catch (e) {
       const throttled = isThrottled(e);
       if (e?.ceilingCut === true) throw e;
@@ -104,12 +107,12 @@ async function runUnits(units, concurrency, runUnit, label) {
   const callers = failed.filter((r) => statusOf(r.error) < 500 && statusOf(r.error) !== 429);
   if (callers.length) {
     const named = callers.slice(0, 10).map((r) => `${label(r.unit)} (${r.error.message})`).join("; ");
-    throw Object.assign(new Error(`${callers.length} of ${units.length} input(s) could not be read: ${named}. Fix or remove them and send again; nothing was charged`), { statusCode: 422, attribution: "caller" });
+    throw Object.assign(new Error(`${callers.length} of ${units.length} input(s) could not be read: ${named}. Fix or remove them and send again.${notChargedHere()}`), { statusCode: 422, attribution: "caller" });
   }
   const worst = failed.map((r) => statusOf(r.error)).sort((a, b) => b - a)[0];
   const first = failed[0];
   const retryAfter = failed.map((r) => r.error.retryAfter).filter(Number.isInteger).sort((a, b) => b - a)[0];
-  throw Object.assign(new Error(`${notDone.length} of ${units.length} unit(s) could not be completed on the source's side (first: ${label(first.unit)}, ${first.error.leg || "leg"}: ${first.error.message}). Nothing was charged; retry later`), {
+  throw Object.assign(new Error(`${notDone.length} of ${units.length} unit(s) could not be completed on the source's side (first: ${label(first.unit)}, ${first.error.leg || "leg"}: ${first.error.message}).${notChargedHere()} Retry later.`), {
     statusCode: worst === 429 ? 503 : worst >= 500 ? worst : 502, attribution: "upstream", ...(Number.isInteger(retryAfter) ? { retryAfter } : {}),
   });
 }

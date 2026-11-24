@@ -38,15 +38,16 @@ eq(markets.resetCgRateLimit, rate.resetCgRateLimit, "crypto-markets-kit re-expor
 
 // crypto-kit refuses before fetching when the bucket is empty
 const priceTool = CRYPTO_TOOLS.find((t) => t.slug === "crypto-price");
+const { runAsRouteCall } = await import("../src/not-charged.js");
 const orig = globalThis.fetch; let fetched = 0;
 globalThis.fetch = async () => { fetched++; return new Response("{}", { status: 200, headers: { "content-type": "application/json" } }); };
 try {
   rate.resetCgRateLimit();
   while (rate.takeCgToken(Date.now())) { /* drain */ }
   let err = null;
-  try { await priceTool.handler({ coins: "BTC" }); } catch (e) { err = e; }
+  try { await runAsRouteCall(() => priceTool.handler({ coins: "BTC" })); } catch (e) { err = e; }
   eq(err?.statusCode, 503, "empty bucket -> 503 before any upstream call");
-  ok(/not charged/i.test(String(err?.message)), "the refusal says nobody paid");
+  ok(/Nothing was charged\.$/.test(String(err?.message)), "the refusal says nobody paid");
   eq(fetched, 0, "no CoinGecko request was made");
 } finally { globalThis.fetch = orig; delete process.env.COINGECKO_MAX_PER_MIN; rate.resetCgRateLimit(); }
 

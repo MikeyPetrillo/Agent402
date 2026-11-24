@@ -30,6 +30,7 @@ import { sharedLimitsEnabled, keyOf, noteSharedLimitsDegraded } from "../shared-
 import { withLoopTimeout } from "../loop-deadline.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { currentCallerKey } from "../request-timing.js";
+import { notChargedHere } from "../not-charged.js";
 
 const cgRatePerMin = () => Math.max(1, parseInt(process.env.COINGECKO_MAX_PER_MIN || "80", 10) || 80);
 let cgTokens = null, cgRefilledAt = 0;
@@ -419,8 +420,8 @@ export function cgPacingRetrySeconds(now = Date.now()) {
  *  its own request pacing. Neither says the upstream is down or throttling. */
 export function cgRefusalMessage(reason, label = "CoinGecko", now = Date.now()) {
   return reason === "day"
-    ? `This server's daily ${label} allowance is used up; it renews at 00:00 UTC. This is on our side, not your input. You were not charged.`
-    : `This server paces its ${label} requests and has no room this moment; retry in ${cgPacingRetrySeconds(now)} s. This is on our side, not your input. You were not charged.`;
+    ? `This server's daily ${label} allowance is used up; it renews at 00:00 UTC. This is on our side, not your input.${notChargedHere()}`
+    : `This server paces its ${label} requests and has no room this moment; retry in ${cgPacingRetrySeconds(now)} s. This is on our side, not your input.${notChargedHere()}`;
 }
 
 /** The 503 for a cgTokenRefusal reason: attributed to this server, with the
