@@ -216,7 +216,7 @@ try {
   // the stream, and the fetch address every streamed answer's head names.
   const src = readFileSync(new URL("../src/conformance.js", import.meta.url), "utf8");
   const line = src.split("\n").find((l) => l.startsWith("const STREAM_DELIVERY = ")) || "";
-  await ok(/An event-stream answer \(text\/event-stream\)/.test(line) && /request that sent TE: trailers/.test(line) && /head names \$\{RECEIPT_URL_HEADER\}, and GET \$\{RECEIPT_FETCH_PATH\}\/<settlement> answers the same receipt/.test(line) && /a stream that is neither still gets it/.test(line) && !/^const STREAM_DELIVERY = `A streamed answer gets/.test(line), "stream receipt wording names event streams, trailer requests and the fetch address for neither");
+  await ok(/An event-stream answer \(text\/event-stream\)/.test(line) && /request that sent TE: trailers/.test(line) && /head names \$\{RECEIPT_URL_HEADER\}, and GET \$\{RECEIPT_FETCH_PATH\}\/<token>, the token that header names, answers the same receipt/.test(line) && /a stream that is neither still gets it/.test(line) && !/^const STREAM_DELIVERY = `A streamed answer gets/.test(line), "stream receipt wording names event streams, trailer requests and the fetch address for neither");
 }
 rmSync(SCREEN_DIR, { recursive: true, force: true });
 console.log(`\n${pass} checks passed`);
