@@ -217,6 +217,10 @@ export function createRelayerGasCheck({ urls, network, rpcUrl, fetchImpl = fetch
         // price sold on this chain (src/payments.js ownRelayerCoversLowestPrice).
         let covers = {};
         if (typeof url.own.coversLowestPrice === "function") { try { covers = { coversLowestPrice: url.own.coversLowestPrice() === true }; } catch { covers = { coversLowestPrice: false }; } }
+        // Whether our relayer is reached after a listed facilitator's
+        // ambiguous answer (a 5xx, a timeout), read on chain first: false on a
+        // network where only a refusal that moved nothing reaches it (Ink).
+        if (typeof url.own.followsAmbiguous === "boolean") covers.followsAmbiguous = url.own.followsAmbiguous;
         const key = `own:${label}|${signer}`;
         const s = state.get(key) || { failures: 0, last: null };
         let error = gasError, reading = null;

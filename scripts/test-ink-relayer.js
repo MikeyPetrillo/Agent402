@@ -25,7 +25,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { createServer } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { keccak256, getAddress, toHex } from "viem";
@@ -305,7 +305,7 @@ await check("the gas check reads our Ink relayer as a facilitator of its own, lo
   try { assert.equal((await g.check())[0].status, "low"); } finally { st.ethBalance.set(relayer.address.toLowerCase(), saved); }
 });
 
-await check("a dry listed Ink facilitator is covered only while our relayer reads ok and its minimum covers the lowest price", async () => {
+await check("a dry listed Ink facilitator is never covered: our Ink relayer cannot follow its ambiguous 5xx", async () => {
   const catalog = { a: { price: "$0.001" }, b: { price: "$0.01" } };
   await withEnv({ INK_RELAYER_MIN_PRICE_USD: undefined, NETWORK_PRICE_FLOORS: undefined }, () => {
     assert.equal(ownRelayerCoversLowestPrice(catalog, INK), true, "the default Ink minimum covers a $0.001 sale");
@@ -317,14 +317,28 @@ await check("a dry listed Ink facilitator is covered only while our relayer read
   const { createToolFailureMonitor } = await import("../src/tool-failure-monitor.js");
   const now = Date.now();
   for (const coversLowestPrice of [true, false]) {
-    const mon = createToolFailureMonitor();
-    mon.noteRelayerGas([
-      { network: INK, facilitator: "listed.example", signer: OTHER, runway: 0, status: "empty", at: now },
-      { network: INK, facilitator: "own relayer", signer: relayer.address, own: true, runway: 9000, status: "ok", coversLowestPrice, at: now },
-    ], { network: INK });
-    const row = mon.evaluate().relayerGas.find((r) => r.facilitator === "listed.example");
-    assert.equal(row.coveredByOwnRelayer === true, coversLowestPrice, `coversLowestPrice ${coversLowestPrice}`);
+    for (const followsAmbiguous of [false, true]) {
+      const mon = createToolFailureMonitor();
+      mon.noteRelayerGas([
+        { network: INK, facilitator: "listed.example", signer: OTHER, runway: 0, status: "empty", at: now },
+        { network: INK, facilitator: "own relayer", signer: relayer.address, own: true, runway: 9000, status: "ok", coversLowestPrice, followsAmbiguous, at: now },
+      ], { network: INK });
+      const ev = mon.evaluate();
+      const row = ev.relayerGas.find((r) => r.facilitator === "listed.example");
+      // The control (followsAmbiguous true, a Robinhood-shaped relayer) is covered when its minimum covers the lowest price.
+      assert.equal(row.coveredByOwnRelayer === true, coversLowestPrice && followsAmbiguous, `coversLowestPrice ${coversLowestPrice}, followsAmbiguous ${followsAmbiguous}`);
+      if (!followsAmbiguous) assert.equal(ev.facilitatorFunds, "low", "the Ink row pages low");
+    }
   }
+  // The Ink relayer's own gas reading says it does not follow an ambiguous answer.
+  const { createRelayerGasCheck } = await import("../src/facilitator-gas.js");
+  const g = createRelayerGasCheck({ urls: [], network: INK, rpcUrl: RPC, settings: { minRunway: 500, gasPerSettlement: 100_000, failAfter: 3, intervalMs: 60_000 }, ownSigners: [{ label: "own relayer", signer: relayer.address, followsAmbiguous: false, coversLowestPrice: () => true }], log: () => {} });
+  assert.equal((await g.check())[0].followsAmbiguous, false, "the reading carries followsAmbiguous");
+});
+await check("boot wiring: Ink's own signer is marked followsAmbiguous false, Robinhood's true", () => {
+  const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
+  assert.match(src, /ownSigners: inkOwnRelayer \? \[\{ label: inkOwnRelayer\.name, signer: inkOwnRelayer\.client\.address, followsAmbiguous: false,/);
+  assert.match(src, /ownSigners: ownRelayer \? \[\{ label: ownRelayer\.name, signer: ownRelayer\.client\.address, followsAmbiguous: true,/);
 });
 
 await check("INK_RELAYER_KEY is Ink's own: the Robinhood key and a malformed key turn the Ink relayer off", () => {

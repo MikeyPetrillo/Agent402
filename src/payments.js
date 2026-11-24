@@ -1818,7 +1818,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       startFacilitatorGasCheck({
         network: ROBINHOOD_CAIP2,
         urls: () => gasCheckUrls(robinhoodPrimaryUrl, robinhoodFallbacks),
-        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, ROBINHOOD_CAIP2, { relayerMinUsd: robinhoodRelayerMinPriceUsd() }) }] : [],
+        ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address, followsAmbiguous: true, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, ROBINHOOD_CAIP2, { relayerMinUsd: robinhoodRelayerMinPriceUsd() }) }] : [],
         onReadings: robinhoodOrder ? (readings) => robinhoodOrder.update(readings) : null,
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
@@ -1861,7 +1861,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       startFacilitatorGasCheck({
         network: INK_CAIP2,
         urls: () => gasCheckUrls(listed.primaryUrl, inkFallbacks),
-        ownSigners: inkOwnRelayer ? [{ label: inkOwnRelayer.name, signer: inkOwnRelayer.client.address, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, INK_CAIP2, { relayerMinUsd: inkRelayerMinPriceUsd() }) }] : [],
+        // No outage read on Ink: a dry listed facilitator's ambiguous answer
+        // never reaches our relayer, so its empty wallet is never covered.
+        ownSigners: inkOwnRelayer ? [{ label: inkOwnRelayer.name, signer: inkOwnRelayer.client.address, followsAmbiguous: false, coversLowestPrice: () => ownRelayerCoversLowestPrice(catalog, INK_CAIP2, { relayerMinUsd: inkRelayerMinPriceUsd() }) }] : [],
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
   }
