@@ -78,7 +78,7 @@ records, logs, rate limits, analytics), we are an independent controller, as the
 <h2>2. The processing</h2>
 <ul>
   <li><b>Subject matter and purpose:</b> computing the answer to each call you make, and keeping it only where
-  the tool's purpose is storage (memory) or you asked for a later fetch (async jobs and tasks).</li>
+  the tool's purpose is storage (memory) or you asked to fetch the result later (async jobs and tasks).</li>
   <li><b>Data subjects and categories:</b> whatever people and data you choose to send; the service asks for
   none. Do not send special category data unless the tool needs it and you have a lawful basis.</li>
   <li><b>Duration:</b> in memory for the call, then deleted, except: short caches of identical calls (up to
