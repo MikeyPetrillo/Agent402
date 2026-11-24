@@ -850,7 +850,7 @@ const stop = (b) => b.srv.stop();
     ok(html.includes("direct inference provider") && html.includes("Zero data retention is requested on every such call") && html.includes("calls to listed models") && !/open-weight/i.test(html), "/privacy carries the sentence while configured, naming listed models (the switch takes any id)");
     const item = (html.match(/<li id="direct-inference">([\s\S]*?)<\/li>/) || [])[1] || "";
     ok(item.includes("Example &lt;Inference&gt; &amp; Co") && item.includes('<a href="https://example.com/privacy?a=1&amp;b=2" rel="noopener">its privacy policy</a>') && /zero data retention is requested on every such call/.test(item) && !html.includes("<Inference>"), `/privacy Third parties names the provider, escaped, with its policy link (${item.slice(0, 80)})`);
-    ok(/processed and stored there, except where a provider listed under Third parties operates elsewhere\./.test(html) && !/as noted there/.test(html), "/privacy: the location sentence carries its exception while configured, pointing at nothing the item does not say");
+    ok(/processed and stored there, except where a provider listed under Third parties operates elsewhere, and AI model requests/.test(html) && !/as noted there/.test(html), "/privacy: the location sentence carries its exception while configured, pointing at nothing the item does not say");
     ok(/Zero data retention is requested on every such call\./.test(html) && !/the provider's gateway stores no prompts|keep no prompts or outputs|or refuses it/.test(html), "/privacy claims the zero-retention request and nothing about how the provider serves or refuses");
     ok(!b.log.join("").includes("direct-test-key"), "the boot log never prints the key");
   } finally { await stop(b); }
@@ -859,7 +859,7 @@ const stop = (b) => b.srv.stop();
   const b = await boot({});
   try {
     const html = await (await realFetch(`${b.url}/privacy`)).text();
-    ok(b.up && !html.includes("direct inference provider") && !html.includes('id="direct-inference"') && /processed and stored there\.<\/p>/.test(html), "/privacy leaves the sentence, the Third parties item and the location exception out while unconfigured");
+    ok(b.up && !html.includes("direct inference provider") && !html.includes('id="direct-inference"') && /processed and stored there, except AI model requests/.test(html), "/privacy leaves the sentence, the Third parties item and the location exception out while unconfigured");
     const r = await realFetch(`${b.url}/__operator/direct-upstream.json`, { headers: { Authorization: `Bearer ${TOKEN}` } });
     ok((await r.json()).configured === false, "the operator view reads configured false while off");
   } finally { await stop(b); }

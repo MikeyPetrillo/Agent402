@@ -34,6 +34,8 @@ import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUB
 import { referralOffered } from "./referral-gate.js";
 import { walletSignInEnabled } from "./wallet-sign-in.js";
 import { webBotAuthEnabled } from "./web-bot-auth.js";
+import { awsMarketplaceOffered } from "./aws-marketplace-gate.js";
+import { AWS_UNANSWERED_KEEP_DAYS } from "./aws-unanswered.js";
 import { aiEventsEnabled, exceptionEventsEnabled } from "./posthog-observability.js";
 import { GOOD_READ_MAX_MS, SETTLED_MARK_MS, COVER_WALLETS_MAX, sharedWindowMs } from "./inflight-cover.js";
 
@@ -68,6 +70,9 @@ export function privacyPage(baseUrl) {
   const aiEventsOn = aiEventsEnabled();
   const exceptionEventsOn = exceptionEventsEnabled();
   const webBotAuthOn = webBotAuthEnabled();
+  // The AWS Marketplace front door (src/aws-marketplace-gate.js): its sentence
+  // renders only while the gate is configured.
+  const awsOn = awsMarketplaceOffered();
   // Job and task results, and the funding screen's bounds, as the server runs
   // them (src/mcp-tasks.js, src/sanctions-screen.js).
   const jobs = taskRetentionPublic();
@@ -135,23 +140,27 @@ export function privacyPage(baseUrl) {
 you scrolled) and page load timings (web vitals), with your browser, user agent string, operating system,
 device type, screen and window size, browser language and time zone, the page address with any query
 string cut to its <code>utm_*</code> campaign parameters, and the address of the page that linked you here,
-cut the same way. It keeps a random per-visit id in session storage, never a cookie; our server relays the
+cut the same way. It keeps nothing in your browser (no cookie, no storage, not even a per-visit id), so each
+page view stands alone; our server relays the
 events and forwards only their body and content type, so your IP address is not passed on to the
 analytics provider. It keeps no session
 replay: nothing you click, type or see on a page is recorded. Pages also run
 <b>Google Analytics</b> (advertising features off) to count visits, see how people find the site and count clicks that start a report or monitor checkout (the product name only, never what you type). It sets a measurement cookie
 (<code>_ga</code>) and Google receives your IP address and browser details under
 <a href="https://policies.google.com/privacy" rel="noopener">Google's privacy policy</a>. Advertising
-features, ad personalization and Google signals are off. If your browser's time zone is in Europe, the
-cookie is off until you choose "Allow" in the strip at the bottom of the page, and Google only receives
-cookieless pings before that; your choice is kept in your browser. Wherever you are, you can make or
+features, ad personalization and Google signals are off; Google Analytics keeps its data for 14 months. If you
+are in the European Union, the European Economic Area, the United Kingdom or Switzerland, neither Google Analytics nor the page counter loads until you choose "Allow" in the strip at the bottom of the
+page: nothing is sent to Google and nothing is counted before that. We tell from your browser's time zone, or,
+when that is not European, from the country our network provider reports for the request, which we read once
+for that answer and do not keep. Your choice is kept in your browser. Wherever you are, you can make or
 change that choice at any time with "analytics choices" at the foot of the page. If your browser sends the Global Privacy Control signal,
-the cookie stays off, you are not asked, and the page counter does not load. Pages whose address is itself a private
+neither counter loads and you are not asked. We do not read the older Do Not Track setting, which has no agreed meaning; Global Privacy Control is the signal we honor. Pages whose address is itself a private
 link (a paid report, a receipt, a shared answer, a signed alert or manage link) do not load Google Analytics. Free email
 alerts are the form that takes an address, and it
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
 keep, and for how long, is listed below, including the backups of it. The providers that receive it and how
-the stores are protected are summarized at <a href="/trust">/trust</a>. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
+the stores are protected are summarized at <a href="/trust">/trust</a>. A business that sends personal data
+through the service is covered by our <a href="/dpa">Data Processing Addendum</a>. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
 so every claim below is verifiable in code.</p>
 
 <h2>What we process, and why</h2>
@@ -215,7 +224,12 @@ so every claim below is verifiable in code.</p>
     seller whose own payment offer names it as the receiving address. The result is held in memory for
     up to seven days and only counts of operators leave it;</li>
     <li>a verdict you leave on a paid call through <code>/api/feedback</code>, including the reason
-    you write, is kept with that call's transaction id and is never published;</li>${allowanceOn ? `
+    you write, is kept with that call's transaction id and is never published; the reason is kept in that
+    record only, never copied into our logs;</li>
+    <li>if you ask for an attestation on <code>/api/attest</code> (the request itself is the choice; nothing
+    is attested unless you ask), we write a permanent, public record on the Base blockchain naming your
+    wallet, the tool, the SHA-256 digest of the answer, the settlement transaction, the time and the price.
+    A blockchain record cannot be changed or deleted, by us or anyone, so an erasure request cannot reach it;</li>${allowanceOn ? `
     <li>the first-call allowance (a wallet's first paid call on an eligible tool served without
     charge, so each wallet gets one free first call) keeps the address of each wallet granted one,
     without expiry, so the same wallet is never granted twice, and a daily count of grants per client
@@ -251,6 +265,10 @@ so every claim below is verifiable in code.</p>
   completed a call later the same day (with the User-Agent's product name; each day is deleted after ${DISCOVERY_REFUSALS_KEEP_DAYS} days), in the record that limits how often a dropped
   connection is excused from payment (24 hours), in the record that an address paid recently, which
   raises its limit on unpaid price quotes (one hour at most), and on the demand board (combined with the day).
+  Requests reach our server through Cloudflare, which adds headers locating the visitor from the IP address
+  (country, region, city and approximate coordinates); we read only the country and the region, in memory, to
+  refuse requests from sanctioned regions and, for the analytics choice above, the country, and we do not store
+  or log any of them.
   The tollbooth waitlist form is closed, and every record it collected has been deleted from our
   database; those records were never part of our offsite backups.</li>
   <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat in the
@@ -320,8 +338,8 @@ so every claim below is verifiable in code.</p>
   domain, a research question) is stored with the paid session so the report can be generated once and
   served back to you; the finished report is served at an unguessable link and is not published.</li>
   <li><b>Operational telemetry.</b> The server records service events (tool called, payment settled,
-  errors) with metadata - tool name, HTTP status, price, settlement chain, the paying wallet
-  address (already public on-chain) and, on a settled payment, the first word of the caller's
+  errors) with metadata - tool name, HTTP status, price, settlement chain, a keyed hash of the paying wallet
+  (never the address; events sent before 2026-11-25 named the address, and on request we delete those too) and, on a settled payment, the first word of the caller's
   User-Agent; a call to a retired route carries the first word of the User-Agent, the host name of the
   Referer (no path or query) and which kind of payment header was present (never its value) - in a
   server-side analytics tool (PostHog). This is used to run
@@ -366,6 +384,11 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   records, what its settlement transaction shows: the amount, how the network's contract split it, and the wallet
   address each share was paid to, the reviewer's included; all of it is public on chain. A sale, and a refund we owe,
   are recorded as for any other payment.</li>
+` : ""}${awsOn ? `  <li id="aws-marketplace"><b>AWS Marketplace.</b> A call bought through AWS Marketplace is paid with a token AWS
+  issues; AWS processes your AWS account and billing data under its own privacy notice. We do not store the AWS buyer
+  id: a digest of it, held in memory for one minute, limits request rates. We keep, for ${AWS_UNANSWERED_KEEP_DAYS} days, each AWS
+  payment that bought no answer (the payment id, the tool, the times, the status, the attempts left and the list
+  price), so it can be reviewed and adjusted through AWS.</li>
 ` : ""}  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
   code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
@@ -456,6 +479,8 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   the result to you, that seller receives the request it needs to answer, sent and paid for by us.
   A candidate seller may receive a request's inputs unpaid before we pay it, sometimes more than once:
   to check that it can serve the request and to read its price.</li>
+  <li>Some tools return public information about people, such as posts on X. We keep those answers only in the short caches described above. If
+  you appear in one and want to object, write to <a href="mailto:help@agent402.tools">help@agent402.tools</a>.</li>
   <li>Card payments and subscriptions are processed by Stripe; transactional email (report links,
   monitor and free alerts) is sent through ZeptoMail, with Resend as a fallback. Report products read public sources named in each
   report (for example SEC EDGAR, openFDA, DNS and certificate-transparency logs, public blockchain
@@ -466,6 +491,7 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   <li>Hosting is on Railway, and the nightly backups described below are stored in object storage there.
   Requests to the site pass through Cloudflare, which sees each request and its answer, with the
   caller's IP address and request headers, on the way to and from our server.
+  Email you send us, including a data or rights request, is received and kept in our mailbox at Zoho Mail.
   On-chain settlement is on Base (Coinbase CDP facilitator) and the other
   per-chain facilitators${gatewayBatched ? "; Circle Gateway batched payments settle off chain at Circle Gateway" : ""}.</li>${directUpstreamParty ? `
   <li id="direct-inference">${directUpstreamParty}</li>` : ""}${publicIndex ? `
@@ -480,10 +506,10 @@ also carries the paying wallet's address, which is recorded as it is for any pai
 Tool calls made through it are processed exactly like the HTTP API.</p>
 
 <h2>Retention</h2>
-<p>Operational logs are kept for our hosting platform's default log retention. Rate-limit counters
+<p>Operational logs are kept by our hosting provider for 30 days. Rate-limit counters
 expire with their window (one hour, or 24 hours for the free trial's daily allowance). Memory-tool data
 persists until deleted by its owner or TTL expiry. Card-purchase records (session id, input, the
-finished report) are kept while the report link or subscription is live and for accounting afterwards.
+finished report and its signed receipt) are kept for seven years after the purchase, the period our accounting records must cover.
 A prepaid credits key's record (the purchase details listed above and the calls it paid for) is kept for
 the life of the key and three years after its last use, the period sales tax records must be kept, and is
 deleted on request after that; within that period a deletion request removes what tax records do not need.${creditsSalesEnabled() ? ` A balance page session is deleted when it ends (${sessionIdleWords()} without use, ${sessionMaxWords()} at most, or when you sign out), and the record of a used sign-in link when the link would have expired (${signInLifeWords()}).` : ""}
@@ -499,26 +525,43 @@ monitor subscription's signing key is deleted when the subscription is canceled 
 record ${mppSub.keepDays} days after it ends. You can ask
 us at the address below to delete your email from our alert, follow-up and subscription
 records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
-on-chain${gatewayBatched ? " (for a Circle Gateway batched payment, it keeps Gateway's transfer id instead)" : ""}. Aggregate, non-personal counters (total calls served per tool) are kept for the public
+on-chain${gatewayBatched ? " (for a Circle Gateway batched payment, it keeps Gateway's transfer id instead)" : ""}. The sales and refund
+ledgers (wallet address, amount, chain, transaction id, tool, response digest${referralOn ? ", and for a referral payment the split its transaction shows" : ""}) are kept for seven years after
+the sale, the period our accounting and tax records must cover. A record of a payment refused or held under sanctions
+screening (the address, rail, network, amount, route, time and list entry) is kept for ten years, as US sanctions rules
+require. A feedback verdict and its reason are kept with the sale they rate${awsOn ? `; an AWS payment that bought no answer is kept ${AWS_UNANSWERED_KEEP_DAYS} days` : ""}.
+Server events in our analytics tool are kept for the period our analytics plan sets, and Google Analytics data for 14 months. Aggregate, non-personal counters (total calls served per tool) are kept for the public
 <a href="/api/stats">/api/stats</a> page.</p>
 <p><b>Backups.</b> Each night we copy the stored records above (the state database, including the
 email, memory and ledger records) to separate object storage, and each copy is deleted
 after ${backupKeepDays()} days. A deletion you ask for therefore reaches the last backup that still holds
 the record within ${backupKeepDays()} days.</p>
 
-<h2>Your rights (EU and UK)</h2>
-<p>If you are in the European Economic Area or the United Kingdom, the controller of the data described
+<h2>Your rights (EU, UK and Switzerland)</h2>
+<p>If you are in the European Economic Area, the United Kingdom or Switzerland, the controller of the data described
 on this page is <strong>Cardhavok LLC</strong>, doing business as <strong>Havok Holdings LLC</strong>
 (see <a href="/company">/company</a>). Our legal bases are: the contract you enter by paying, for a paid
-call or a purchase; our legitimate interest in running and protecting the service, for the operational logs,
-rate limiting and abuse control above; and your consent, for the analytics cookie and for email alerts,
+call or a purchase, a receipt and a refund; our legitimate interest in running and protecting the service, for the operational logs,
+rate limiting, abuse control and, outside the regions above, the page counters; our legal obligations and our
+legitimate interest in not dealing with sanctioned parties, for sanctions screening and the records it keeps;
+and your consent, for the analytics counters and for email alerts,
 which you can withdraw at any time ("analytics choices" at the foot of the page, or the unsubscribe link
-in every alert). Where your browser reports a European time zone, the cookie waits for your choice;
-elsewhere it is set until you say no, and the choice is yours to make either way. You have the right to ask for access to your data, to have it corrected or erased, to
+in every alert). In the regions above neither counter loads before you choose; elsewhere they run until
+you say no, and the choice is yours to make either way. A payment from an address on the US sanctions
+list is refused automatically; if you think that is wrong, write to us and a person will review it. You have the right to ask for access to your data, to have it corrected or erased, to
 receive it in a portable form, to object to processing based on our legitimate interest, to withdraw
-consent, and to complain to your supervisory authority. To exercise a right, email
-<a href="mailto:help@agent402.tools">help@agent402.tools</a>; we answer within one month. The service is
-operated from the United States, and the data described here is processed and stored there${directUpstreamWhere}.</p>
+consent, and to complain to your supervisory authority (in Switzerland, the Federal Data Protection and
+Information Commissioner, under the Federal Act on Data Protection). To exercise a right, email
+<a href="mailto:help@agent402.tools">help@agent402.tools</a>; we answer within one month. For data kept
+under a wallet address (memory, receipts, feedback, decisions, a first-call grant), send the request text we
+give you signed by that wallet (an Ethereum signed message, or an Ed25519 signature for a Solana or Stellar
+account), so we know the wallet is yours; we then export or delete that data, except the sales and refund
+ledgers and sanctions records, which the law requires us to keep and whose payments are public on chain
+anyway. Wherever you live, including in any US state, you can ask what we hold about you and ask us to
+delete it the same way. The service is
+operated from the United States, and the data described here is processed and stored there${directUpstreamWhere}${directUpstreamWhere ? ", and" : ", except"} AI model requests,
+which the model operator serving the call may process in another country (the model provider's listing names
+each operator).</p>
 
 <h2>Children</h2>
 <p>The service is for people 18 and older (see the <a href="/terms">terms</a>) and is not directed at

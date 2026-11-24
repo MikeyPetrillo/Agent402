@@ -90,9 +90,11 @@ export function makeFeedbackHandler(deps = {}) {
     // A bad verdict is a buyer telling us something is broken, and that has one
     // job: to be SEEN. It goes to the log with the slug and the digest of the
     // bytes they were served, so an operator can identify the exact response
-    // being complained about instead of guessing from a timestamp.
+    // being complained about instead of guessing from a timestamp. The
+    // buyer's own words stay in the feedback record and are never copied
+    // into the operational log (the privacy page says so).
     if (verdict === "bad") {
-      log(`[feedback] BAD verdict on ${sale.slug} (tx ${tx}, digest ${sale.responseSha256 || "none recorded"}): ${reason}`);
+      log(`[feedback] BAD verdict on ${sale.slug} (tx ${tx}, digest ${sale.responseSha256 || "none recorded"}); reason kept with the verdict (${reason.length} chars)`);
     }
 
     return {

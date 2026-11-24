@@ -30,6 +30,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { CHAIN_PAGES } from "./market-page.js";
 import { termsPage } from "./terms.js";
 import { privacyPage } from "./privacy.js";
+import { dpaPage } from "./dpa.js";
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -170,7 +171,7 @@ let legalDates = null;
 export function legalLastmod(path) {
   if (!legalDates) {
     const read = (fn) => { try { return validDay((String(fn("https://agent402.tools")).match(LEGAL_RE) || [])[1]); } catch { return null; } };
-    legalDates = { "/terms": read(termsPage), "/privacy": read(privacyPage) };
+    legalDates = { "/terms": read(termsPage), "/privacy": read(privacyPage), "/dpa": read(dpaPage) };
   }
   return legalDates[path] || null;
 }
@@ -212,7 +213,7 @@ export function packLastmod(slug) {
 /** lastmod for a sitemap path, or null when nothing truthful is known. */
 export function pageLastmod(path) {
   const p = String(path || "").split("?")[0];
-  if (p === "/terms" || p === "/privacy") return legalLastmod(p);
+  if (p === "/terms" || p === "/privacy" || p === "/dpa") return legalLastmod(p);
   if (PAGE_SOURCES[p]) return filesLastmod(PAGE_SOURCES[p]);
   if (p.startsWith("/tools/category/")) return null;
   // A wiki page under /docs is dated by its own markdown file.

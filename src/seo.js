@@ -384,6 +384,7 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/compare`, priority: "0.8" },
     ...docsUrls(baseUrl),
     { loc: `${baseUrl}/privacy`, priority: "0.4" },
+    { loc: `${baseUrl}/dpa`, priority: "0.3" },
     { loc: `${baseUrl}/terms`, priority: "0.4" },
     { loc: `${baseUrl}/transparency`, priority: "0.4" },
   ];
@@ -719,6 +720,7 @@ ${toolSections}
 - [Tool docs](${baseUrl}/tools): human-readable documentation per tool
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
 - [Trust](${baseUrl}/trust): subprocessors, what is stored and where, encryption, nightly backups and restore tests, incident response
+- [Data processing addendum](${baseUrl}/dpa): for business customers: our role as processor, the EU Standard Contractual Clauses and UK Addendum, sub-processors, security measures, breach notice
 - [Conformance](${baseUrl}${CONFORMANCE_PATH}): per payment rail, the protocol features this server implements (settle after the answer, idempotency key, payment-identifier, replay guard, refund on a charged failure, hang-up forgiveness, payer sanctions screening, receipts) and the refund terms as data, computed from the serving code at each request
 - [Refund terms](${baseUrl}${REFUND_TERMS_PATH}): per payment rail, whether an error answer is charged, whether a hang-up is forgiven and how a charged failure is repaid, with the refund ledger, credits and card report rules, computed from the serving code
 ${toolReliabilityEnabled() ? `- [Per-tool reliability](${baseUrl}${TOOL_RELIABILITY_PATH}): every tool's success rate and p50/p95 latency over the last ${TOOL_RELIABILITY_WINDOW_HOURS / 24} days, each marked measured or not enough data (below ${TOOL_RELIABILITY_MIN_SAMPLE} calls)
