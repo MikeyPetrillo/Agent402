@@ -71,13 +71,24 @@ export const NETWORK_NAMES = Object.freeze({
   algorand: ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="],
 });
 
-/** The network ids a preference names: a chain name's ids; for an id, every
- *  id of the chain it belongs to (so either spelling matches the other); an
- *  id the table does not know passes through as itself. */
+/** A chain's official name, as the server's rails and pages print it, read
+ *  as the short name the table keys it by ("Arbitrum One" is arbitrum). */
+export const NETWORK_NAME_ALIASES = Object.freeze({
+  "arbitrum one": "arbitrum",
+  "avalanche c-chain": "avalanche",
+  "op mainnet": "optimism",
+  "robinhood chain": "robinhood",
+});
+
+/** The network ids a preference names: a chain name's ids (its short or its
+ *  official name); for an id, every id of the chain it belongs to (so either
+ *  spelling matches the other); an id the table does not know passes through
+ *  as itself. */
 export function networkIdsOf(pref) {
   const p = String(pref || "").trim();
   if (!p) return [];
-  const byName = NETWORK_NAMES[p.toLowerCase()];
+  const low = p.toLowerCase().replace(/\s+/g, " ");
+  const byName = NETWORK_NAMES[NETWORK_NAME_ALIASES[low] || low];
   if (byName) return [...byName];
   for (const ids of Object.values(NETWORK_NAMES)) if (ids.some((id) => id.toLowerCase() === p.toLowerCase())) return [...ids];
   return [p];
