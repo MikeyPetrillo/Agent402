@@ -623,6 +623,7 @@ import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sa
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
 import { settleComplianceView } from "./settle-compliance.js";
 import { sanctionedRegionsMiddleware, sanctionedRegionsView } from "./sanctioned-regions.js";
+import { applyActualCharge } from "./actual-charge.js";
 import { recordSanctionsEvent, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
 import { relayPayerScreenView } from "./payer-screen-rails.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
@@ -14824,7 +14825,7 @@ for (const tool of ALL_KIT) {
       // settlement then failed.
       if (Array.isArray(req.__onSettled) && req.__onSettled.length) {
         const hooks = req.__onSettled;
-        onSettleOutcome(req, res, () => { const ok = res.statusCode === 200; for (const fn of hooks) { try { fn(ok); } catch { /* never break a response */ } } });
+        onSettleOutcome(req, res, () => { const ok = res.statusCode === 200; for (const fn of hooks) { try { fn(ok, res); } catch { /* never break a response */ } } });
       }
       if (req.__externalSpend) {
         const handles = Array.isArray(req.__externalSpends) && req.__externalSpends.length ? req.__externalSpends : [req.__externalSpend];
@@ -14851,6 +14852,10 @@ for (const tool of ALL_KIT) {
         enabled: GATEWAY_METER_ON,
         setOverrides: setSettlementOverrides,
       });
+      // ACTUAL SPEND (upto only): a handler that knows its cost only after it
+      // ran (decide-execute) names what it spent, and an upto payment settles
+      // that, never the rest of the ceiling (src/actual-charge.js).
+      applyActualCharge({ result, req, res, setOverrides: setSettlementOverrides });
       if (result && result.__binary) {
         // A binary answer may carry headers of its own (the dub tool's
         // translation rides beside the audio); the content type is set last.
