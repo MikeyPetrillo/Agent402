@@ -20,7 +20,7 @@
 // and symbol are removed first: a token called "Safe" is not a claim.
 import { notChargedHere } from "./not-charged.js";
 
-export const TOKEN_FACTS_NOTICE = "These are on-chain facts only. No flags does not mean a token is legitimate; off-chain fraud cannot be detected here. Not investment advice.";
+export const TOKEN_FACTS_NOTICE = "These are facts read from the chain and named public sources. No flags does not mean a token is legitimate; off-chain fraud cannot be detected here. Not investment advice.";
 
 // The wording rule the report prompts carry, so the model is told the same
 // rule the checker enforces.
@@ -52,6 +52,18 @@ const CAVEAT = /\b(?:cannot|can't|can not|could not|couldn't|does not|doesn't|do
 // Proper names that hold a judgment word and name no token: the Safe multisig.
 const PROPER = /\b(?:Gnosis\s+Safe|Safe\s*\{\s*Wallet\s*\}|Safe\s+(?:multisig|wallet|smart account|contract wallet)s?)\b/gi;
 
+const CAVEAT_ALL = new RegExp(CAVEAT.source, "gi");
+// The earliest end of any can-not-detect caveat in a clause; NaN when none.
+function firstCaveatEnd(clause) {
+  let end = NaN;
+  CAVEAT_ALL.lastIndex = 0;
+  for (const m of clause.matchAll(CAVEAT_ALL)) {
+    const e = m.index + m[0].length;
+    if (!(e >= end)) end = e;
+  }
+  return end;
+}
+
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Every judgment the text makes about a token: [{ phrase, rule }], [] when
@@ -73,12 +85,16 @@ export function tokenClaimViolations(text, { names = [] } = {}) {
     const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
     for (const m of t.matchAll(g)) push(m[0], rule);
   }
-  // Clause by clause for a bare judgment word.
+  // Clause by clause for a bare judgment word. A word is excused when a
+  // caveat ends before it; the caveat's earliest end is found once per clause
+  // (a judgment word starts on a word boundary, so a caveat that ends before
+  // it reads the same in the prefix as in the whole clause).
   for (const clause of t.split(/[.;!?\n]+/)) {
     WORD.lastIndex = 0;
+    let caveatEnd;
     for (const m of clause.matchAll(WORD)) {
-      const before = clause.slice(0, m.index);
-      if (CAVEAT.test(before)) continue;
+      if (caveatEnd === undefined) caveatEnd = firstCaveatEnd(clause);
+      if (m.index >= caveatEnd) continue;
       push(m[0], "uses a judgment word outside a can-not-detect caveat");
     }
   }

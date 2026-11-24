@@ -62,7 +62,18 @@ for (const t of FAILS) ok(tokenClaimViolations(t).length > 0, `fails: "${t}"`);
 ok(tokenClaimViolations("SafeCoin (SAFE) has a live mint authority.", { names: ["SafeCoin", "SAFE"] }).length === 0 && tokenClaimViolations("Safe (SAFE) has a live mint authority.").length > 0, "the token's own name and symbol are not a claim; the same words otherwise are");
 ok(tokenClaimViolations("Earlier text cannot see everything. This token is not a scam.").length > 0, "a caveat in one sentence does not excuse a claim in the next");
 ok(/cannot detect off-chain fraud/.test(TOKEN_CLAIM_RULE) && tokenClaimViolations("On-chain data cannot detect off-chain fraud.").length === 0, "the caveat the prompt asks for passes the check");
-ok(TOKEN_FACTS_NOTICE === "These are on-chain facts only. No flags does not mean a token is legitimate; off-chain fraud cannot be detected here. Not investment advice.", "the notice is the owner's sentence, word for word");
+// A long clause is read in linear time: the caveat is found once per clause,
+// not once per judgment word (a 32 KB clause of judgment words took ~150 ms
+// when every word re-read its prefix).
+{
+  const words = "fraud scam rug ".repeat(Math.ceil(32768 / 15)).slice(0, 32768);
+  const timed = (text) => { let best = Infinity; for (let k = 0; k < 3; k++) { const t0 = performance.now(); tokenClaimViolations(text); best = Math.min(best, performance.now() - t0); } return best; };
+  const bare = timed(words), caveat = timed(`On-chain data cannot detect ${words}`);
+  ok(bare < 25 && caveat < 25, `a 32 KB clause is checked in under 25 ms, best of 3 (no caveat ${bare.toFixed(1)} ms, with caveat ${caveat.toFixed(1)} ms)`);
+  ok(tokenClaimViolations(`On-chain data cannot detect ${words}`).length === 0 && tokenClaimViolations(words).length > 0, "the long clause is still judged: excused after a caveat, flagged without one");
+  ok(tokenClaimViolations("This token is a rug. On-chain data cannot detect fraud.").length > 0 && tokenClaimViolations("Scams exist; data cannot detect a scam").length > 0, "a caveat excuses only the words after it, in its own clause");
+}
+ok(TOKEN_FACTS_NOTICE === "These are facts read from the chain and named public sources. No flags does not mean a token is legitimate; off-chain fraud cannot be detected here. Not investment advice.", "the notice is the owner's sentence, word for word");
 
 // checkedTokenProse: once more with the violation named, then withheld.
 {
