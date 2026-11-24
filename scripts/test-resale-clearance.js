@@ -148,6 +148,52 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
   ok(JSON.stringify(pub) === before, "the trim leaves the public answer untouched");
 }
 
+// CLASS GUARD, raw upstream figures sold on a resale surface: every tool
+// cleared as computed over market data (R.MARKET_DATA_CLEARANCE) has its
+// published example driven through the one resale serializer both gates
+// serve (refAnswerOf: /ref and /aws), and the resold answer may carry no field
+// on the shared list (R.RAW_MARKET_FIELDS) at any depth, nor any field the
+// tool's own trim names (markRefAnswer rawFields). Each named field must be in
+// the public example (else the check reads nothing) and gone after the trim.
+{
+  const CLASS = "[raw upstream on a resale surface]";
+  const FIX = "drop it in the tool's markRefAnswer transform and name it in its rawFields (src/resale-terms.js)";
+  const keysAnywhere = (v, acc = new Set()) => { if (Array.isArray(v)) for (const x of v) keysAnywhere(x, acc); else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { acc.add(k); keysAnywhere(x, acc); } return acc; };
+  const market = [...defs.values()].filter((d) => d.resaleCleared === true && d.resaleClearedBy === R.MARKET_DATA_CLEARANCE);
+  const expected = CLEARED.filter((s) => /market data/.test(String(defs.get(s)?.resaleClearedBy || "")));
+  ok(market.length >= 9 && expected.every((s) => market.some((d) => d.slug === s)), `${CLASS} every tool cleared over market data reads the shared clearance constant (${market.length}: ${expected.filter((s) => !market.some((d) => d.slug === s)).join(",") || "all"})`);
+  ok(R.RAW_MARKET_FIELDS.length >= 10 && R.RAW_MARKET_FIELDS.includes("price") && R.RAW_MARKET_FIELDS.includes("marketCap"), "the shared raw-field list names the source's own figures");
+  for (const d of market) {
+    const pub = d.discovery?.output?.example;
+    ok(pub && typeof pub === "object", `${CLASS} ${d.slug}: has a published example to drive through the resale serializer`);
+    if (!pub || typeof pub !== "object") continue;
+    const before = JSON.stringify(pub);
+    let resold;
+    try { resold = R.refAnswerOf(d, structuredClone(pub)); } catch (e) { resold = undefined; ok(false, `${CLASS} ${d.slug}: the resale trim threw (${e?.message})`); continue; }
+    const leaked = R.RAW_MARKET_FIELDS.filter((k) => keysAnywhere(resold).has(k));
+    ok(leaked.length === 0, `${CLASS} ${d.slug}: the resold example carries no shared raw field (${leaked.join(",") || "none"}${leaked.length ? `; ${FIX}` : ""})`);
+    if (typeof d.refAnswer === "function") {
+      const paths = Array.isArray(d.refRawFields) ? d.refRawFields : [];
+      ok(paths.length > 0, `${CLASS} ${d.slug}: its trim names the raw fields it drops (${FIX})`);
+      const absentInPublic = paths.filter((p) => R.valuesAtPath(pub, p).length === 0);
+      ok(absentInPublic.length === 0, `${CLASS} ${d.slug}: CONTROL, each named raw field is in the public example, so the check reads something (${absentInPublic.join(",") || paths.length})`);
+      const kept = paths.filter((p) => R.valuesAtPath(resold, p).length > 0);
+      ok(kept.length === 0, `${CLASS} ${d.slug}: each named raw field is gone from the resold answer (${kept.join(",") || "all dropped"}${kept.length ? `; ${FIX}` : ""})`);
+    }
+    ok(JSON.stringify(pub) === before, `${d.slug}: the trim leaves the public answer untouched`);
+  }
+  // Both resale gates serve through the one serializer.
+  const { readFileSync } = await import("node:fs");
+  for (const f of ["referral-gate.js", "aws-marketplace-gate.js"]) {
+    const src = readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+    ok(/refAnswerOf\(def, result\)/.test(src), `${CLASS} src/${f} serves a sale's answer through refAnswerOf`);
+  }
+  // A trim must name what it drops.
+  let threw = false;
+  try { R.markRefAnswer([{ slug: "z" }], ["z"], (a) => a); } catch { threw = true; }
+  ok(threw, "a resale trim that names no raw fields is refused when the kit loads");
+}
+
 // The suite seam: clears named slugs for a test boot, never in production.
 {
   const d = { slug: "zz-seam", handler: () => ({}) };
