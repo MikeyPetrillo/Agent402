@@ -695,6 +695,7 @@
     "POW_PG_REFRESH_MS": "Proof-of-work Postgres refresh, in milliseconds.",
     "NAMED_AUDIO_MODELS": "Comma list of the named speech and transcription model ids to serve beside the default chains, or all (unset: none). Each also needs its cost row, inside the route's margin bound.",
     "POW_SECRET": "Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process).",
+    "BLS_DAILY_MAX": "Lowers the BLS API queries this server makes a UTC day (never raises it past the keyless or keyed limit); the CI sweep server sets it to the per-run cap.",
     "PROGRAMMATIC_THIN_FILE": "File holding the entity report pages kept as thin (left out of the sitemap from boot) when no state database is configured; with one, a state database document.",
     "PRICE_WEBHOOKS_FILE": "File for price webhook registrations, the kept list prices and queued deliveries.",
     "PRICE_WEBHOOK_DELIVERIES": "Runtime switch for outbound price webhook deliveries (on; off: registrations and removals keep working and queued deliveries wait).",

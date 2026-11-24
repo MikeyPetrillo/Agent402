@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1128 variables in 113 groups.
+1129 variables in 113 groups.
 
 ## Contents
 
@@ -1576,6 +1576,7 @@ holds it.
 | `BING_SITE_URL` | Bing site URL. | `https://agent402.tools/` | `src/search-data.js` |
 | `BING_WEBMASTER_API_KEY` | Bing webmaster API key (a credential, set on the host). |  | `src/search-data.js` |
 | `BLS_API_KEY` | U.S. Bureau of Labor Statistics Public Data API v2 registration key (a credential, set on the host). fred-series reads BLS series keyless (v1, 25 queries a day) without it, 500 a day with it; reads are cached by decade. |  | `src/tools/us-macro-series.js` |
+| `BLS_DAILY_MAX` | Lowers the BLS API queries this server makes a UTC day (never raises it past the keyless or keyed limit); the CI sweep server sets it to the per-run cap. |  | `src/tools/us-macro-series.js` |
 | `BRAVE_ANSWERS_API_KEY` | Brave answers API key (a credential, set on the host). |  | `src/tools/search.js` |
 | `BRAVE_API_KEY` | Key for the web search tools (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/llm-context-kit.js`, `src/tools/search.js` |
 | `BUYER_REFUSAL_WINDOW_MS` | Buyer refusal window, in milliseconds. |  | `src/tool-failure-monitor.js` |

@@ -139,6 +139,12 @@ export const CG_KEYLESS_SAMPLE_SIZE = 2;
 export const CG_KEYED_SAMPLE_SIZE = 6;
 export const CG_RUN_READ_CAP = 40;
 export const CG_RUN_MAX_PER_MIN = 30;
+// The BLS key (BLS_API_KEY, the BLS-backed macro tools) is capped per run the
+// same way: the sweep server's BLS_DAILY_MAX is this (a fresh server's day is
+// the run). The examples read a handful of series decades, each read once and
+// cached, so 12 covers a run with one retry in two and spends at most that
+// of the key's daily allowance.
+export const BLS_RUN_READ_CAP = 12;
 // The nightly corpus drives every CoinGecko case once with its own server.
 export const CG_NIGHTLY_READ_CAP = 200;
 export const CG_EXAMPLE_READS = Object.freeze({

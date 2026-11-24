@@ -196,6 +196,13 @@ try {
   // The BLS daily budget is sized for the keyed limit when the key is set.
   process.env.BLS_API_KEY = "test-key";
   ok(blsDailyBudget() > 25 && blsDailyBudget() < 500, `with BLS_API_KEY the budget sits under the keyed limit of 500 (${blsDailyBudget()})`);
+  process.env.BLS_DAILY_MAX = "12";
+  ok(blsDailyBudget() === 12, "BLS_DAILY_MAX lowers the day's budget (the CI sweep's per-run cap)");
+  process.env.BLS_DAILY_MAX = "9999";
+  ok(blsDailyBudget() < 500, "BLS_DAILY_MAX never raises it past the keyed limit");
+  process.env.BLS_DAILY_MAX = "junk";
+  ok(blsDailyBudget() > 25, "an unusable BLS_DAILY_MAX leaves the budget as it is");
+  delete process.env.BLS_DAILY_MAX;
   delete process.env.BLS_API_KEY;
 } finally {
   globalThis.fetch = realFetch;

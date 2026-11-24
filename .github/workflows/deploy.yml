@@ -2898,6 +2898,10 @@ jobs:
           # The BLS-backed macro tools (fred-series, sahm-rule, cpi-yoy,
           # unemployment-rate, fed-funds) read BLS v2 with it, keyless v1 without.
           BLS_API_KEY: ${{ secrets.BLS_API_KEY }}
+          # The sweep's per-run BLS read cap (BLS_RUN_READ_CAP in
+          # scripts/test-non-metered-examples.js): past it a BLS read answers
+          # the cap refusal, never another query on the key.
+          BLS_DAILY_MAX: "12"
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_CI_API_KEY }}
           COINGECKO_API_TIER: pro
           COINGECKO_DAILY_MAX: "40"
@@ -2907,7 +2911,7 @@ jobs:
           om=keyless; if [ -n "$OPEN_METEO_API_KEY" ]; then om=keyed; fi
           bls=keyless; if [ -n "$BLS_API_KEY" ]; then bls=keyed; fi
           echo "CoinGecko: $cg; Open-Meteo: $om; BLS: $bls"
-          { echo "NON_METERED_CG_MODE=$cg"; echo "NON_METERED_OM_MODE=$om"; echo "NON_METERED_BLS_MODE=$bls"; } >> "$GITHUB_ENV"
+          { echo "NON_METERED_CG_MODE=$cg"; echo "NON_METERED_OM_MODE=$om"; } >> "$GITHUB_ENV"
           # The run's own operator token: the CoinGecko check after the sweeps
           # reads the server's read count from the operator view with it.
           token=$(openssl rand -hex 24)

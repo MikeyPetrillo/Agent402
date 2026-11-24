@@ -145,8 +145,15 @@ function once(key, fn) {
 }
 
 const blsKey = () => (process.env.BLS_API_KEY || "").trim();
-/** Queries a UTC day this server makes to the BLS API, under its limit (25 keyless, 500 keyed). */
-export const blsDailyBudget = () => (blsKey() ? 450 : 20);
+/** Queries a UTC day this server makes to the BLS API, under its limit (25
+ *  keyless, 500 keyed). BLS_DAILY_MAX lowers it, never raises it: the CI sweep
+ *  server sets it to the sweep's per-run cap (a fresh server's day is the run),
+ *  so a run never spends the key's daily allowance. */
+export const blsDailyBudget = () => {
+  const base = blsKey() ? 450 : 20;
+  const cap = Number(process.env.BLS_DAILY_MAX);
+  return Number.isInteger(cap) && cap >= 0 ? Math.min(base, cap) : base;
+};
 const blsDay = { day: "", used: 0 };
 function takeBlsQuery() {
   const d = new Date().toISOString().slice(0, 10);
