@@ -583,6 +583,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
     `Hosted connector (proof-of-work tools free; ${x402 || mpp ? `other tools paid in the call over ${[x402 && "x402", mpp && "MPP"].filter(Boolean).join(" or ")} from a wallet` : "others need a wallet on the npm package"}): ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
     `Docs: ${baseUrl}/llms.txt · status ${baseUrl}/status`,
+    `Terms: use of this server is subject to the Terms of Service at ${baseUrl}/terms.`,
   ].join("\n");
 }
 

@@ -1,4 +1,5 @@
 import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
+import { LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 import { gatewayProductSentence } from "./gateway-product-copy.js";
 import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_COMMENT, RECEIPT_URL_HEADER, RECEIPT_FETCH_PATH } from "./receipt-signing.js";
 import { RECEIPT_FETCH_DAYS } from "./receipt-store.js";
@@ -341,6 +342,7 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
     { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/accessibility`, priority: "0.4" },
     { loc: `${baseUrl}/wholesale`, priority: "0.6" },
     { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
@@ -678,6 +680,7 @@ ${flatTiersLine()}
 - [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool (\`?category=\` or \`?tag=\` for a part; markdown by category: /tools.md)
 - [/api/wishes](${baseUrl}/api/wishes): the demand board, aggregated; request a tool we do not have yet with \`POST /api/wish\` (clustered by demand; repeated asks get built)
 - [/terms](${baseUrl}/terms): terms of service + acceptable-use policy - using the service (including programmatically) constitutes acceptance
+- [/accessibility](${baseUrl}/accessibility): accessibility statement - the standard the pages aim at (WCAG 2.2 AA), how they are checked, known limits, where to report a barrier
 - [/health](${baseUrl}/health): health check
 
 ## Connect via MCP
@@ -737,7 +740,7 @@ ${toolReliabilityEnabled() ? `- [Per-tool reliability](${baseUrl}${TOOL_RELIABIL
 - [Integrations](${baseUrl}/integrations): one page per published package (framework adapters, MCP server, buyer SDK, tollbooth, OpenClaw provider) with install line, example and payment modes
 - [llms-full.txt](${baseUrl}/llms-full.txt): this file plus every catalog route (slug, method, route, price, one-line description) and the learn summaries
 - [Maintainer](${REPO_URL}): Havok Holdings LLC, help@agent402.tools
-- [Ownership and licensing](${REPO_URL}#ownership-and-licensing): Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright; server AGPL-3.0-or-later, published packages MIT; a commercial license to the code at help@agent402.tools; outside contributions carry a DCO sign-off and the contributor license agreement (CLA.md), which covers new and earlier contributions
+- [Ownership and licensing](${REPO_URL}#ownership-and-licensing): ${LEGAL_ENTITY_SENTENCE} owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright; server AGPL-3.0-or-later, published packages MIT; a commercial license to the code at help@agent402.tools; outside contributions carry a DCO sign-off and the contributor license agreement (CLA.md), which covers new and earlier contributions
 `;
 }
 

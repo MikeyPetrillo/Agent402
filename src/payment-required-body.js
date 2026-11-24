@@ -59,6 +59,10 @@
 // decision is made here, after the full header is in the body, so the body
 // always holds every accept.
 //
+// THE TERMS. A mirrored body also names the terms the payment is made under
+// (`terms`, the /terms URL, and `termsNote`), so an agent that reads only the
+// 402 meets them before it pays. Body only: the header is never touched.
+//
 // Rollback lever: PAYMENT_REQUIRED_BODY=off and server.js does not mount it.
 import { decodeB64Json } from "./payment-reject.js";
 import { COMPACT_REQUEST_EXAMPLE, compactPaymentRequired, markCompactHeader, wantsCompactHeader } from "./payment-required-compact.js";
@@ -68,6 +72,16 @@ export const MIRRORED_STATUSES = Object.freeze(new Set([402, 412]));
 
 /** The body field that describes the PAYMENT-REQUIRED header itself. */
 export const HEADER_NOTE_KEY = "paymentRequiredHeader";
+/** The body field that names the terms a payment is made under: the URL of
+ *  /terms (`terms`) and one sentence saying so (`termsNote`). Body only, so
+ *  the header and its size budget are unchanged. */
+export const TERMS_KEY = "terms";
+export const TERMS_NOTE_KEY = "termsNote";
+/** The `terms` and `termsNote` fields for a terms URL, or {} without one. */
+export function termsFields(termsUrl) {
+  if (typeof termsUrl !== "string" || !termsUrl) return {};
+  return { [TERMS_KEY]: termsUrl, [TERMS_NOTE_KEY]: `Paying for this call accepts the Terms of Service at ${termsUrl}.` };
+}
 
 /** The protocol keys that make up the offer. `error` is deliberately not
  *  here: it is the refusal's own sentence and a stripped copy keeps it. */
@@ -121,6 +135,8 @@ export function withoutPaymentRequired(doc) {
   const out = { ...doc };
   for (const k of PAYMENT_REQUIRED_OFFER_KEYS) delete out[k];
   delete out[HEADER_NOTE_KEY];
+  delete out[TERMS_KEY];
+  delete out[TERMS_NOTE_KEY];
   return out;
 }
 
@@ -136,7 +152,8 @@ export function headerNoteFor(req, headerValue, statusCode) {
 }
 
 /** Express middleware. See the header comment for the mount-order rule. */
-export function paymentRequiredBodyMiddleware({ compact = false } = {}) {
+export function paymentRequiredBodyMiddleware({ compact = false, termsUrl = null } = {}) {
+  const terms = termsFields(termsUrl);
   return function paymentRequiredBody(req, res, next) {
     const origSend = res.send;
     res.send = function mirroredSend(chunk) {
@@ -144,7 +161,7 @@ export function paymentRequiredBodyMiddleware({ compact = false } = {}) {
         if (typeof chunk === "string" && MIRRORED_STATUSES.has(res.statusCode) && !res.headersSent) {
           const header = res.getHeader("PAYMENT-REQUIRED");
           const h = compact && decodePaymentRequired(header) ? headerNoteFor(req, header, res.statusCode) : null;
-          const merged = mergePaymentRequiredBody(chunk, header, h ? { [HEADER_NOTE_KEY]: h.note } : null);
+          const merged = mergePaymentRequiredBody(chunk, header, { ...terms, ...(h ? { [HEADER_NOTE_KEY]: h.note } : {}) });
           if (merged !== null) {
             chunk = merged;
             if (h?.compactValue) markCompactHeader(res, header, h.compactValue);

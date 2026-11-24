@@ -46,6 +46,7 @@ const PAGES = [
   { path: "/privacy",     titleSubstr: "Privacy" },
   { path: "/faq",         titleSubstr: "FAQ" },
   { path: "/terms",       titleSubstr: "Terms" },
+  { path: "/accessibility", titleSubstr: "Accessibility" },
   { path: "/leaderboard", titleSubstr: "Leaderboard" },
   { path: "/marketplace", titleSubstr: "marketplace" },
   { path: "/tools",       titleSubstr: "Agent402 Tools" },
