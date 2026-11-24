@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent402-langchain"
+version = "0.1.7"
+description = "Renamed to agent402-structured-tools: this last release depends on it and re-exports it. Install agent402-structured-tools instead."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Cardhavok LLC (doing business as Havok Holdings LLC)", email = "mike@agent402.tools" }]
+classifiers = ["Development Status :: 7 - Inactive"]
+dependencies = ["agent402-structured-tools>=0.2.0,<0.3"]
+
+[project.optional-dependencies]
+langchain = ["agent402-structured-tools[langchain]>=0.2.0,<0.3"]
+
+[project.urls]
+Homepage = "https://pypi.org/project/agent402-structured-tools/"
+Source = "https://github.com/MikeyPetrillo/Agent402"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent402_langchain"]

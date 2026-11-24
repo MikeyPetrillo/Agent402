@@ -1,0 +1,64 @@
+{
+  "id": "agent402",
+  "name": "Agent402",
+  "description": "Agent402 model provider: an auto-routed tier at a flat per-call price and explicit frontier models priced per request, paid in USDC over x402 or with a prepaid credits key. Same key reaches 500+ pay-per-call tools.",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "agent402"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "creditsKey": {
+        "type": "string",
+        "description": "Agent402 prepaid credits key (a402_...). Precedence: this, then AGENT402_CREDITS_KEY, then ~/.openclaw/agent402/credits.key."
+      },
+      "walletKey": {
+        "type": "string",
+        "description": "Optional EVM private key for x402 USDC payment (needs @x402/fetch + @x402/evm + viem installed). Precedence: this, then AGENT402_WALLET_KEY, then the wallet `setup` generates at ~/.openclaw/agent402/wallet.key."
+      },
+      "port": {
+        "type": "number",
+        "description": "Loopback proxy port (default 8412)."
+      },
+      "upstream": {
+        "type": "string",
+        "description": "Agent402 gateway base URL (default https://agent402.tools)."
+      },
+      "pricing": {
+        "type": "string",
+        "enum": [
+          "metered",
+          "flat"
+        ],
+        "description": "metered (default): explicit models pay a per-request quote; flat: every model on its flat tier."
+      },
+      "maxPerCallUsd": {
+        "type": [
+          "number",
+          "string"
+        ],
+        "description": "Per-call ceiling in USD for wallet (x402) payments, checked before signing and again on the signed amount before sending (default 5; 0 or \"off\" turns it off; a value that does not parse keeps the default). Also AGENT402_MAX_PER_CALL_USD."
+      },
+      "allowUncappedPayments": {
+        "type": "boolean",
+        "description": "Accepted for earlier configurations; 0 or \"off\" turns the ceiling off without it, so this changes nothing. Also AGENT402_ALLOW_UNCAPPED_PAYMENTS=true."
+      }
+    }
+  },
+  "uiHints": {
+    "creditsKey": {
+      "label": "Credits key",
+      "help": "Issued at https://agent402.tools/credits; that page says whether new keys are on sale",
+      "sensitive": true
+    },
+    "walletKey": {
+      "label": "Wallet key",
+      "sensitive": true
+    }
+  }
+}

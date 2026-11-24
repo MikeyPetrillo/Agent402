@@ -344,6 +344,8 @@ t node scripts/test-package-readme-claims.js
 t node scripts/test-meta-adapter-caps.js
 # Published packages ship TypeScript declarations: types conditions, strict nodenext consumers compile, runtime and declared exports agree, a misuse fails (offline, typescript)
 t node scripts/test-package-types.js
+# Package renames: each new name at its version, each earlier name's forwarding release exports the same names and warns once, no published name carries another party's mark, the publish job orders them (offline)
+t node scripts/test-package-renames.js
 t node scripts/test-pack-copy-retired.js
 # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
 t node scripts/test-tollbooth-cloud-retired.js

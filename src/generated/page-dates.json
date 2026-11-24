@@ -6,7 +6,7 @@
     "src/agentic-finance.js": "2026-11-23",
     "src/api-explorer.js": "2026-11-18",
     "src/base-no-gas.js": "2026-11-23",
-    "src/blog.js": "2026-11-23",
+    "src/blog.js": "2026-11-24",
     "src/changelog.js": "2026-11-24",
     "src/company.js": "2026-11-23",
     "src/contribute.js": "2026-11-12",
@@ -14,30 +14,30 @@
     "src/credits-page.js": "2026-11-23",
     "src/decide-page.js": "2026-11-23",
     "src/glossary.js": "2026-11-23",
-    "src/guides.js": "2026-11-23",
-    "src/how-to-pay.js": "2026-11-23",
+    "src/guides.js": "2026-11-24",
+    "src/how-to-pay.js": "2026-11-24",
     "src/human-reports-page.js": "2026-11-23",
     "src/index-tools-page.js": "2026-11-23",
-    "src/integration-pages.js": "2026-11-23",
-    "src/learn.js": "2026-11-23",
+    "src/integration-pages.js": "2026-11-24",
+    "src/learn.js": "2026-11-24",
     "src/ledger-catalog.js": "2026-11-23",
-    "src/ledger-docs.js": "2026-11-23",
+    "src/ledger-docs.js": "2026-11-24",
     "src/ledger-home.js": "2026-11-23",
     "src/ledger-integrations.js": "2026-11-24",
     "src/ledger-leaderboard.js": "2026-11-21",
-    "src/ledger-pricing.js": "2026-11-23",
+    "src/ledger-pricing.js": "2026-11-24",
     "src/managed-agents-page.js": "2026-11-24",
     "src/market-page.js": "2026-11-22",
     "src/markets.js": "2026-11-23",
     "src/monitors-page.js": "2026-11-20",
     "src/mpp-market-page.js": "2026-11-21",
-    "src/pages.js": "2026-11-23",
+    "src/pages.js": "2026-11-24",
     "src/playground.js": "2026-11-23",
     "src/press-page.js": "2026-11-18",
     "src/programmatic-pages.js": "2026-11-23",
     "src/programmatic-seeds.js": "2026-08-22",
     "src/proof.js": "2026-11-18",
-    "src/quickstart.js": "2026-11-23",
+    "src/quickstart.js": "2026-11-24",
     "src/revenue-live.js": "2026-11-23",
     "src/scorecard.js": "2026-11-18",
     "src/sdk-playground.js": "2026-11-18",
@@ -46,8 +46,8 @@
     "src/sell.js": "2026-11-23",
     "src/seo.js": "2026-11-24",
     "src/server.js": "2026-11-24",
-    "src/skill-md.js": "2026-11-23",
-    "src/skills.js": "2026-11-23",
+    "src/skill-md.js": "2026-11-24",
+    "src/skills.js": "2026-11-24",
     "src/speech-page.js": "2026-11-22",
     "src/stable-error-code.js": "2026-11-20",
     "src/start-page.js": "2026-11-23",
@@ -144,7 +144,7 @@
     "src/tools/lending-rates-kit.js": "2026-11-21",
     "src/tools/linkedin-article-kit.js": "2026-11-24",
     "src/tools/llm-context-kit.js": "2026-11-21",
-    "src/tools/llm-gateway-kit.js": "2026-11-23",
+    "src/tools/llm-gateway-kit.js": "2026-11-24",
     "src/tools/llm-gemini-kit.js": "2026-11-21",
     "src/tools/llm-images-fast-kit.js": "2026-11-24",
     "src/tools/llm-kit.js": "2026-11-17",
@@ -157,7 +157,7 @@
     "src/tools/markdown-pool.js": "2026-11-24",
     "src/tools/markdown-render.js": "2026-11-09",
     "src/tools/markdown-worker.js": "2026-11-10",
-    "src/tools/mcp-package-kit.js": "2026-11-23",
+    "src/tools/mcp-package-kit.js": "2026-11-24",
     "src/tools/media-kit.js": "2026-11-23",
     "src/tools/memory.js": "2026-11-13",
     "src/tools/mev-and-l2-kit.js": "2026-11-23",
@@ -247,14 +247,14 @@
     "src/x402-101.js": "2026-11-23",
     "src/x402-test-page.js": "2026-11-23",
     "wiki/API-Reference.md": "2026-11-23",
-    "wiki/AWS-Bedrock-AgentCore.md": "2026-11-23",
-    "wiki/Adapters.md": "2026-11-21",
+    "wiki/AWS-Bedrock-AgentCore.md": "2026-11-24",
+    "wiki/Adapters.md": "2026-11-24",
     "wiki/Agentic-Finance.md": "2026-11-06",
     "wiki/Algorand.md": "2026-11-23",
     "wiki/Arc.md": "2026-10-29",
     "wiki/Architecture.md": "2026-11-23",
     "wiki/Audit-Report.md": "2026-11-20",
-    "wiki/Buying-at-Volume.md": "2026-11-23",
+    "wiki/Buying-at-Volume.md": "2026-11-24",
     "wiki/Card-Payments.md": "2026-11-23",
     "wiki/Circle-Gateway.md": "2026-11-22",
     "wiki/Configuration.md": "2026-11-23",
@@ -264,17 +264,17 @@
     "wiki/Decide.md": "2026-10-28",
     "wiki/Embeddings.md": "2026-11-06",
     "wiki/FAQ.md": "2026-11-23",
-    "wiki/Getting-Started.md": "2026-11-23",
+    "wiki/Getting-Started.md": "2026-11-24",
     "wiki/Home.md": "2026-11-23",
     "wiki/Image-Gen.md": "2026-11-12",
     "wiki/Ink.md": "2026-11-06",
-    "wiki/LLM-Gateway.md": "2026-11-23",
+    "wiki/LLM-Gateway.md": "2026-11-24",
     "wiki/LLM-Proxy.md": "2026-11-12",
-    "wiki/MCP-Connector.md": "2026-11-23",
+    "wiki/MCP-Connector.md": "2026-11-24",
     "wiki/Memory-and-Coordination.md": "2026-10-11",
     "wiki/Operations.md": "2026-11-23",
     "wiki/Pay-per-crawl-Walkthrough.md": "2026-11-21",
-    "wiki/Pay-per-crawl.md": "2026-11-06",
+    "wiki/Pay-per-crawl.md": "2026-11-24",
     "wiki/Paying-with-Compute.md": "2026-08-26",
     "wiki/Paying-with-MPP.md": "2026-11-23",
     "wiki/Paying-with-x402.md": "2026-11-23",
@@ -325,7 +325,7 @@
     },
     "/blog/pay-per-call-tools-on-arc": {
       "published": "2026-10-21",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/blog/proof-of-work-free-tier": {
       "published": "2026-06-23",
@@ -341,15 +341,15 @@
     },
     "/guides/agent-hosts": {
       "published": "2026-08-27",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/guides/buying-at-volume": {
       "published": "2026-11-07",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/guides/coinbase-business-get-paid-by-agents": {
       "published": "2026-08-26",
-      "modified": "2026-10-11"
+      "modified": "2026-11-24"
     },
     "/guides/content-pipeline": {
       "published": "2026-11-07",
@@ -365,7 +365,7 @@
     },
     "/guides/openclaw-model-provider": {
       "published": "2026-08-25",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/guides/pay-with-coinbase-agentic-wallet": {
       "published": "2026-08-19",
@@ -393,7 +393,7 @@
     },
     "/guides/x402-in-5-minutes": {
       "published": "2026-06-13",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/guides/x402-payments-toolkit": {
       "published": "2026-06-14",
@@ -401,15 +401,15 @@
     },
     "/integrations/agentkit": {
       "published": "2026-09-24",
-      "modified": "2026-11-18"
+      "modified": "2026-11-24"
     },
     "/integrations/ai-sdk": {
       "published": "2026-09-24",
-      "modified": "2026-11-16"
+      "modified": "2026-11-24"
     },
     "/integrations/anthropic": {
       "published": "2026-09-24",
-      "modified": "2026-11-03"
+      "modified": "2026-11-24"
     },
     "/integrations/client": {
       "published": "2026-09-24",
@@ -417,43 +417,43 @@
     },
     "/integrations/eliza": {
       "published": "2026-09-24",
-      "modified": "2026-11-18"
+      "modified": "2026-11-24"
     },
     "/integrations/google-adk": {
       "published": "2026-09-24",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/integrations/langchain": {
       "published": "2026-09-24",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/integrations/langchain-python": {
       "published": "2026-09-24",
-      "modified": "2026-09-24"
+      "modified": "2026-11-24"
     },
     "/integrations/llamaindex": {
       "published": "2026-09-24",
-      "modified": "2026-11-16"
+      "modified": "2026-11-24"
     },
     "/integrations/mcp": {
       "published": "2026-09-24",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/integrations/openai": {
       "published": "2026-09-24",
-      "modified": "2026-11-16"
+      "modified": "2026-11-24"
     },
     "/integrations/openai-agents": {
       "published": "2026-09-24",
-      "modified": "2026-11-03"
+      "modified": "2026-11-24"
     },
     "/integrations/openclaw": {
       "published": "2026-09-24",
-      "modified": "2026-11-07"
+      "modified": "2026-11-24"
     },
     "/integrations/strands": {
       "published": "2026-09-24",
-      "modified": "2026-11-21"
+      "modified": "2026-11-24"
     },
     "/integrations/tollbooth": {
       "published": "2026-09-24",
@@ -469,7 +469,7 @@
     },
     "/learn/mcp-payments": {
       "published": "2026-09-24",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/learn/mpp": {
       "published": "2026-09-24",

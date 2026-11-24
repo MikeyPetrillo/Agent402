@@ -1,0 +1,38 @@
+{
+  "name": "agent402-anthropic-tools",
+  "version": "0.2.3",
+  "description": "Renamed to agent402-tool-use: this last release depends on it and re-exports it, with a one-time notice. Install agent402-tool-use instead.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "notice.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "agent402-tool-use": "^0.3.0"
+  },
+  "keywords": [
+    "agent402",
+    "renamed"
+  ],
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC) <mike@agent402.tools> (https://agent402.tools)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MikeyPetrillo/Agent402.git",
+    "directory": "renamed/agent402-anthropic-tools"
+  },
+  "homepage": "https://www.npmjs.com/package/agent402-tool-use"
+}

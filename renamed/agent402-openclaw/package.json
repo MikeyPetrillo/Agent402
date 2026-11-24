@@ -1,0 +1,70 @@
+{
+  "name": "agent402-openclaw",
+  "version": "0.6.3",
+  "description": "Renamed to agent402-model-provider: this last release depends on it and re-exports it, with a one-time notice. Install agent402-model-provider instead.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./proxy": {
+      "types": "./proxy.d.ts",
+      "default": "./proxy.js"
+    },
+    "./models": {
+      "types": "./models.d.ts",
+      "default": "./models.js"
+    }
+  },
+  "bin": {
+    "agent402-openclaw": "cli.js"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.7.1"
+    },
+    "build": {
+      "openclawVersion": "2026.8.1"
+    },
+    "install": {
+      "minHostVersion": ">=2026.7.1",
+      "npmSpec": "agent402-openclaw"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "notice.js",
+    "README.md",
+    "proxy.js",
+    "proxy.d.ts",
+    "models.js",
+    "models.d.ts",
+    "cli.js",
+    "openclaw.plugin.json"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "agent402-model-provider": "^0.7.0"
+  },
+  "keywords": [
+    "agent402",
+    "renamed"
+  ],
+  "author": "Cardhavok LLC (doing business as Havok Holdings LLC) <mike@agent402.tools> (https://agent402.tools)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MikeyPetrillo/Agent402.git",
+    "directory": "renamed/agent402-openclaw"
+  },
+  "homepage": "https://www.npmjs.com/package/agent402-model-provider"
+}
