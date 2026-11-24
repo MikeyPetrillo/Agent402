@@ -79,7 +79,7 @@ for (const t of CRYPTO_SCREENS_TOOLS) {
   ok(t.credit === COINGECKO_CREDIT && t.discovery.output.example.credit === COINGECKO_CREDIT, `${t.slug}: published example carries the credit`);
   ok(/Deterministic code over market data/.test(t.description) && t.modelBacked !== true, `${t.slug}: says it is deterministic code, and is not marked model-backed`);
   noSourceFigure(`${t.slug} published example`, t.discovery.output.example);
-  ok(typeof t.discovery.output.example.method === "string" && t.discovery.output.example.method.length > 80, `${t.slug}: the published example states its formulas in \`method\``);
+  ok(/`method`/.test(t.description), `${t.slug}: the description points to the answer's \`method\` field`);
   ok(!ADVICE.test(t.description) &&!ADVICE.test(JSON.stringify(t.discovery.output.example)) && !ADVICE.test(t.name), `${t.slug}: no advice, rating or trade-direction wording`);
   ok(t.discovery.output.example.source === "coingecko" && typeof t.discovery.output.example.fetchedAt === "string", `${t.slug}: example carries source and fetchedAt`);
   ok(typeof t.handler === "function" && t.handler.__budgetMs > 0, `${t.slug}: handler runs under a budget`);
@@ -527,21 +527,21 @@ reset();
   const out = await h("dex-pool-health")({ network: "eth", pool: PA });
   ok(calls.length === 2, "two reads: the pool and its latest trades (a hex address is lowercased for the path)");
   ok(out.pool === "0xpool00000000000000000000000000000000000001" && out.name === "WETH / USDC 0.05%" && out.dex === "uniswap_v3" && out.ageDays === 400, "identity and age");
-  ok(out.liquidityTier === "moderate ($500K-$5M)" && out.turnover24h === 1.5 && out.lockedLiquidity === "under half", "liquidity tier, turnover, locked band");
+  ok(out.liquidityTier === "moderate" && out.turnover24h === 1.5, "liquidity tier and turnover");
   ok(["liquidityUsd", "volume24hUsd", "lockedLiquidityPct"].every((k) => !(k in out)), "the pool's own liquidity, volume and locked share are not answered");
-  ok(out.activity24h.tier === "moderate (100-999 trades)" && !("trades" in out.activity24h) && out.activity24h.buyTradeSharePct === 60 && out.activity24h.buyerSharePct === 60 && out.activity24h.buySellTradeRatio === 1.5, "24h activity: a tier, buy share of trades and of traders, buy/sell ratio");
+  ok(out.activity24h.tier === "moderate" && !("trades" in out.activity24h) && out.activity24h.buyTradeSharePct === 60 && out.activity24h.buyerSharePct === 60 && out.activity24h.buySellRatio === 1.5, "24h activity: a tier, buy share of trades and of traders, buy/sell ratio");
   // liquidity (log10(2e6) - 4) / 3 = 0.767; activity log10(101) / 3 = 0.668; flow 1 - 10/50; wallets 1 - 40/50; age 400 days
   const hs = out.healthScore;
-  ok(JSON.stringify(hs.components) === JSON.stringify({ liquidity: 77, activity: 67, flowBalance: 80, walletSpread: 20, age: 100 }) && hs.componentsUsed === 5, `health score components from the stated formulas (${JSON.stringify(hs.components)})`);
-  ok(hs.score === Math.round((35 * 77 + 20 * 67 + 15 * 80 + 15 * 20 + 15 * 100) / 100) && hs.weights.liquidity === 35, `the score is the weighted mean (${hs.score})`);
+  ok(JSON.stringify(hs.components) === JSON.stringify({ depth: 77, activity: 67, balance: 80, wallets: 20, age: 100 }), `health score components from the stated formulas (${JSON.stringify(hs.components)})`);
+  ok(hs.score === Math.round((35 * 77 + 20 * 67 + 15 * 80 + 15 * 20 + 15 * 100) / 100) , `the score is the weighted mean (${hs.score})`);
   const r = out.recentTrades;
   ok(r.count === 40 && r.uniqueWallets === 22 && near(r.topWalletTradeSharePct, 40) && near(r.repeatWalletTradeSharePct, 50) && r.anomalous === 1, "wallet mix of the latest trades: top wallet, repeat wallets, anomalous count");
-  ok(r.largestToMedianRatio === 250 && r.p90ToMedianRatio === 5 && near(r.largestShareOfLiquidityPct, 2.5) && r.windowMinutes === 60 && !("medianUsd" in r) && !("largestUsd" in r), "trade sizes against the median, and the window they span");
+  ok(r.largestToMedian === 250 && r.p90ToMedian === 5 && near(r.largestShareOfLiquidityPct, 2.5) && r.windowMinutes === 60 && !("medianUsd" in r) && !("largestUsd" in r), "trade sizes against the median, and the window they span");
   noSourceFigure("dex-pool-health", out);
   ok(/healthScore\.score is the weighted mean/.test(out.method), "the answer states its formulas");
   // buy volume: 8*100 + 4*1000 + 50000 of 16*100 + 4000 + 19*200 + 50000
   ok(near(r.buyVolumeSharePct, +((54800 / 59400) * 100).toFixed(2)), "buy share of recent volume");
-  ok(near(out.priceImpactEstimate.per10kUsdPct, +((10000 / 1010000) * 100).toFixed(4)) && near(out.priceImpactEstimate.per1kUsdPct, +((1000 / 1001000) * 100).toFixed(4)) && /constant-product/.test(out.priceImpactEstimate.method), "price-impact estimate and its method");
+  ok(near(out.priceImpactEstimate.per10kUsdPct, +((10000 / 1010000) * 100).toFixed(4)) && near(out.priceImpactEstimate.per1kUsdPct, +((1000 / 1001000) * 100).toFixed(4)) && /constant product/.test(out.priceImpactEstimate.method), "price-impact estimate and its method");
   ok(out.flags.join() === "wallet-concentration", `one wallet above a quarter of the latest trades is flagged (${out.flags.join()})`);
   ok(!JSON.stringify(out).includes("tx_from_address") && !JSON.stringify(out).includes("w0"), "no trade row or wallet address is passed through");
   const again = await h("dex-pool-health")({ network: "eth", pool: PA.toLowerCase() });
@@ -582,7 +582,7 @@ reset();
   routes = [[(u) => u.pathname === poolPath, () => jsonRes(500, {})]];
   await throws(h("dex-pool-health")({ network: "eth", pool: PA }), 502, "an upstream failure on the pool");
   routes = keep;
-  ok((await h("dex-pool-health")({ network: "eth", pool: PA })).liquidityTier === "moderate ($500K-$5M)", "a pool whose read failed upstream is read again");
+  ok((await h("dex-pool-health")({ network: "eth", pool: PA })).liquidityTier === "moderate", "a pool whose read failed upstream is read again");
   // The pool's totals are kept longer than its trades: past the trades' window only the trades are read again.
   reset();
   await h("dex-pool-health")({ network: "eth", pool: PA });
@@ -616,7 +616,7 @@ reset();
   let tradesStatus = 404;
   routes = [[(u) => u.pathname === poolPath, () => jsonRes(200, POOL())], [(u) => u.pathname === `${poolPath}/trades`, () => (tradesStatus === 200 ? jsonRes(200, TRADES) : jsonRes(tradesStatus, {}))]];
   const first = await h("dex-pool-health")({ network: "eth", pool: PA }).catch((e) => e);
-  ok(!(first instanceof Error) && first.name === "WETH / USDC 0.05%" && first.liquidityTier === "moderate ($500K-$5M)" && first.activity24h.tier === "moderate (100-999 trades)", `a trades 404 after a good pool read is answered from the pool's data (${first instanceof Error ? `${first.statusCode} ${first.message}` : "200"})`);
+  ok(!(first instanceof Error) && first.name === "WETH / USDC 0.05%" && first.liquidityTier === "moderate" && first.activity24h.tier === "moderate", `a trades 404 after a good pool read is answered from the pool's data (${first instanceof Error ? `${first.statusCode} ${first.message}` : "200"})`);
   ok(first.recentTrades === null && first.tradesRead === false && !first.flags.includes("wallet-concentration"), "the trades are absent and a field says they were not read");
   const second = await h("dex-pool-health")({ network: "eth", pool: PA }).catch((e) => e);
   ok(!(second instanceof Error) && calls.length === 3 && calls[2].url.pathname.endsWith("/trades"), `the pool is not remembered as unknown: the next call reads the trades again (${calls.length} reads${second instanceof Error ? `, ${second.statusCode}` : ""})`);
@@ -675,7 +675,7 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
   process.env.COINGECKO_API_KEY = "placeholder-not-a-key"; process.env.COINGECKO_API_TIER = "pro";
   routes = [[(u) => u.pathname === poolPath, () => jsonRes(200, POOL())], [(u) => u.pathname === `${poolPath}/trades`, () => jsonRes(200, TRADES)]];
   const out = await h("dex-pool-health")({ network: "eth", pool: PA });
-  ok(out.liquidityTier === "moderate ($500K-$5M)" && calls.length === 2 && calls.every((c) => c.url.hostname === "pro-api.coingecko.com" && c.headers["x-cg-pro-api-key"] === "placeholder-not-a-key"), "keyed: the pro host with the key in its header");
+  ok(out.liquidityTier === "moderate" && calls.length === 2 && calls.every((c) => c.url.hostname === "pro-api.coingecko.com" && c.headers["x-cg-pro-api-key"] === "placeholder-not-a-key"), "keyed: the pro host with the key in its header");
   ok(!JSON.stringify(out).includes("placeholder-not-a-key") && calls.every((c) => !c.url.href.includes("placeholder-not-a-key")), "the key is in no URL and no answer");
   delete process.env.COINGECKO_API_KEY; delete process.env.COINGECKO_API_TIER;
 }

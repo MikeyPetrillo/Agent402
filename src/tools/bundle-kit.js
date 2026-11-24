@@ -641,7 +641,7 @@ export const BUNDLE_TOOLS = [
     attribution: "coingecko",
     ...quoted(TOKEN_DILIGENCE_LEGS, coinUnitsCount, TOKEN_DILIGENCE_MAX_COINS, { coins: [COINS_EXAMPLE[0]] }),
     description:
-      `One market diligence read for up to ${TOKEN_DILIGENCE_MAX_COINS} coins in one call: per coin the profile with turnover (24h volume over market cap), dilution (fully diluted value over market cap) and circulating share computed from the market snapshot, one year of candles reduced to return, largest drawdown and annualized volatility, and contract addresses per chain; flags for high dilution, thin turnover, far below the all-time high, high volatility and a deep drawdown, with the list ranked by market cap (order only), one-year return and volatility. Answers ratios, ranks and flags, never the source's own price, cap, volume or supply figures. Priced per coin: the two tools it runs (${TOKEN_DILIGENCE_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(TOKEN_DILIGENCE_LEGS)} a coin, quoted in the 402 for the coins you send. Coins by coin id (coin-search finds one). Deterministic code, no model; market facts, not investment advice. ${COINGECKO_ATTRIBUTION}`,
+      `One market diligence read for up to ${TOKEN_DILIGENCE_MAX_COINS} coins in one call: per coin the profile with turnover, dilution and circulating share computed from the market snapshot, a year of candles reduced to return, largest drawdown and annualized volatility, and contract addresses per chain; flags for high dilution, thin turnover, far below the all-time high, high volatility and a deep drawdown, with the list ranked by market cap (order only), one-year return and volatility. Ratios, ranks and flags only. Priced per coin: the two tools it runs (${TOKEN_DILIGENCE_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(TOKEN_DILIGENCE_LEGS)} a coin, quoted in the 402 for the coins you send. Coins by coin id (coin-search finds one). Deterministic code, no model; market facts, not investment advice. ${COINGECKO_ATTRIBUTION}`,
     tags: ["crypto", "token", "diligence", "volatility", "drawdown", "dilution", "portfolio", "bundle"],
     discovery: {
       bodyType: "json",
@@ -656,12 +656,17 @@ export const BUNDLE_TOOLS = [
           product: "token-diligence", generatedAt: "2026-11-18T23:40:00.000Z", coins: COINS_EXAMPLE.length,
           comparison: { byMarketCap: [{ rank: 1, id: "bitcoin" }], byReturn1y: [{ rank: 1, id: "bitcoin", value: -1.2 }], byVolatilityLowFirst: [{ rank: 1, id: "bitcoin", value: 41.7 }], flagged: [{ id: "chainlink", flags: ["farBelowATH", "deepDrawdown1y"] }] },
           rows: [{
+            id: "bitcoin", symbol: "BTC", name: "Bitcoin", flags: [],
+            supply: { circulatingShare: 0.9524 },
+            computed: { turnover24h: 0.0211, fdvToMarketCap: 1.05, return1yPct: -1.2, maxDrawdown1yPct: 32.1, volatilityAnnualizedPct: 41.7, candles: { days: 365, bars: 92, granularity: "4d" } },
+            profile: { genesisDate: "2009-01-03", categories: ["Cryptocurrency", "Layer 1 (L1)"], homepage: "https://bitcoin.org", chains: 0, contracts: [], contractsPartial: { returned: 0, matched: 0, complete: true, truncated: false } },
+          }, {
             id: "chainlink", symbol: "LINK", name: "Chainlink", flags: ["farBelowATH"],
             supply: { circulatingShare: 0.7668 },
             computed: { turnover24h: 0.0264, fdvToMarketCap: 1.304, return1yPct: -34.1, maxDrawdown1yPct: 55.5, volatilityAnnualizedPct: 71.3, candles: { days: 365, bars: 92, granularity: "4d" } },
             profile: { genesisDate: "2017-09-16", categories: ["Infrastructure", "Oracle"], homepage: "https://chain.link/", chains: 89, contracts: [{ platform: "ethereum", contract: "0x514910771af9ca656af840dff83e8264ecf986ca" }], contractsPartial: { returned: 5, matched: 89, complete: false, truncated: true } },
           }],
-          method: "byMarketCap orders the coins by market cap (the order only); turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap; the full answer states every formula.",
+          method: "turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap.",
           pricing: pricingFields(COINS_EXAMPLE.length, TOKEN_DILIGENCE_LEGS),
           source: "computed from CoinGecko coin profiles and OHLC candles",
           credits: [COINGECKO_ATTRIBUTION],

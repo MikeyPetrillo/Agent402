@@ -345,7 +345,6 @@ const fundingScreener = {
         highest: [{ rank: 1, venue: "Example Futures", symbol: "ETH_PERP", annualizedPct: 19.93, vsMedianPct: 0.0216, percentile: 100, openInterestSharePct: 1.2, basisVsMedianPct: 0.0358, flags: [] }],
         lowest: [{ rank: 1, venue: "Sample Derivatives", symbol: "ETHUSDT", annualizedPct: -16.75, vsMedianPct: -0.0119, percentile: 2.4, openInterestSharePct: 0.8, basisVsMedianPct: -0.0281, flags: [] }],
         flags: ["funding-sign-split"],
-        method: FUNDING_METHOD,
       },
     },
   },
@@ -476,7 +475,7 @@ const depegWatch = {
   category: "crypto",
   price: "$0.005",
   description:
-    "Every USD stablecoin above a market-cap floor in one call, flagged ones first: deviation from $1 now in basis points, the worst deviation over 24 hours and over 7 days, an on-peg / stressed / depegged status (within 50 bps, within 200 bps, beyond), each coin's share of the watched market cap, and how much of that cap sits on peg. A coin counts as USD-pegged when its 7-day median price is within 2% of $1; the rest of the category (other currencies, value-accruing tokens, pegs lost more than a week ago) is listed separately with its distance from $1, never dropped silently. The whole-market sibling of stablecoin-peg, which checks a named list. Deterministic code over market data; refreshed every 15 minutes.",
+    "Every USD stablecoin above a market-cap floor in one call, flagged ones first: deviation from $1 now in basis points, the worst deviation over 24 hours and over 7 days, an on-peg / stressed / depegged status (within 50 bps, within 200 bps, beyond), each coin's share of the watched market cap, and how much of that cap sits on peg. A coin counts as USD-pegged when its 7-day median price is within 2% of $1; the rest of the category (other currencies, value-accruing tokens, pegs lost more than a week ago) is listed separately with its distance from $1, never dropped silently. The whole-market sibling of stablecoin-peg, which checks a named list. The `method` field of each answer states its formulas. Deterministic code over market data; refreshed every 15 minutes.",
   tags: ["crypto", "stablecoin", "depeg", "peg", "risk", "monitoring", "usdt", "usdc", "screener"],
   discovery: {
     input: { minMarketCapUsd: 100000000 },
@@ -499,7 +498,6 @@ const depegWatch = {
           { rank: 2, id: "tether", symbol: "USDT", name: "Tether", deviationBps: -6.49, maxDeviation24hBps: 9.1, maxDeviation7dBps: 14.3, marketCapSharePct: 61.2, status: "on-peg", flags: [] },
         ],
         notAssessed: { count: 5, reason: "7-day median price is more than 2% from $1: another currency's peg, a value-accruing token, or a peg lost more than a week ago", coins: [{ id: "example-euro", symbol: "XEUR", distanceFromUsdPct: 9.9 }] },
-        method: DEPEG_METHOD,
       },
     },
   },
@@ -597,7 +595,6 @@ const exchangeSpread = {
         lowest: { venue: "Sample Markets", pair: "ETH/USD", deviationBps: -17.1 },
         venues: [{ rank: 1, venue: "Example Exchange", pair: "ETH/USDT", deviationBps: 21.3, pricePercentile: 100, quoteWidthVsMedian: 1.71, volumeSharePct: 0.4, flags: ["outlier"] }],
         excluded: { stale: 1, anomalous: 0 },
-        method: SPREAD_METHOD,
       },
     },
   },
@@ -715,7 +712,6 @@ const defiScreener = {
         screened: 250, returned: 1, matched: 58, complete: false, truncated: true,
         categoryTotals: { turnoverPct: 6.31, capWeightedChange24hPct: -0.42, capWeightedChange7dPct: 1.85, tokensUpSharePct: 37.2, top10CapSharePct: 61.8 },
         tokens: [{ rank: 1, capRank: 14, id: "example-dex", symbol: "XDEX", name: "Example DEX", capSharePct: 0.91, turnoverPct: 48.2, change24hVsCategoryPct: 6.52, change24hPercentile: 98.4, change7dVsCategoryPct: -5.25, change7dPercentile: 22.8, athDrawdownBand: "50-80% below", fdvToCapRatio: 1.62, flags: ["high-turnover", "deep-drawdown", "dilution-overhang"] }],
-        method: DEFI_METHOD,
       },
     },
   },
@@ -816,7 +812,6 @@ const chainBoard = {
         returned: 1, matched: 74, complete: false, truncated: true,
         market: { nativeAssetsCapSharePct: 71.4, outpacingMarketSharePct: 41.9 },
         assets: [{ rank: 1, nativeCoin: "ethereum", symbol: "ETH", name: "Ethereum", capRank: 2, capSharePct: 10.01, change24hVsMarketPct: 0.46, change24hPercentile: 66.2, turnoverPct: 4.2, athDrawdownBand: "50-80% below", chainCount: 58, chains: [{ id: "ethereum", name: "Ethereum", chainId: 1 }, { id: "base", name: "Base", chainId: 8453 }] }],
-        method: CHAIN_METHOD,
       },
     },
   },
@@ -907,7 +902,7 @@ const dexVolumeBoard = {
   category: "crypto",
   price: "$0.005",
   description:
-    "A network's decentralized exchanges ranked by their share of 24h volume across the network's top pools (the 60 largest by volume, or 20-100 with `pools`): each DEX's volume share, liquidity share, turnover (volume over liquidity), pool count, buy share of trades and its largest pool, with the network's concentration (the top DEX's share and a Herfindahl index). Networks use on-chain ids such as eth, base, solana, arbitrum, bsc, polygon_pos. Shares are of the pools read, stated in the answer. Deterministic code over market data; refreshed every 30 minutes.",
+    "A network's decentralized exchanges ranked by their share of 24h volume across the network's top pools (the 60 largest by volume, or 20-100 with `pools`): each DEX's volume share, liquidity share, turnover (volume over liquidity), pool count, buy share of trades and its largest pool, with the network's concentration (the top DEX's share and a Herfindahl index). Networks use on-chain ids such as eth, base, solana, arbitrum, bsc, polygon_pos. Shares are of the pools read, stated in the answer; no summed volume or liquidity is returned, and the `method` field states each formula. Deterministic code over market data; refreshed every 30 minutes.",
   tags: ["crypto", "dex", "volume", "market-share", "liquidity", "network", "ranking", "defi", "concentration"],
   discovery: {
     input: { network: "base" },
@@ -927,7 +922,6 @@ const dexVolumeBoard = {
         totals: { turnover: 1.44, dexes: 7, topDexSharePct: 58.3, hhi: 4120 },
         dexes: [{ rank: 1, dex: "example-dex-base", name: "Example DEX (Base)", volumeSharePct: 58.3, liquiditySharePct: 41.2, turnover: 2.04, pools: 22, buyTradeSharePct: 50.6, topPool: { name: "WETH / USDC", address: "0x0000000000000000000000000000000000000001", shareOfDexVolumePct: 37.5 } }],
         flags: ["concentrated"],
-        method: DEX_BOARD_METHOD,
       },
     },
   },
@@ -995,26 +989,26 @@ const dexVolumeBoard = {
 // makes none. The pool's own totals move over a rolling day and are kept
 // longer than its trades.
 // The pool's own liquidity and its day's trade count, answered as bands.
-const LIQUIDITY_TIERS = Object.freeze([[50_000, "thin (under $50K)"], [500_000, "shallow ($50K-$500K)"], [5_000_000, "moderate ($500K-$5M)"], [50_000_000, "deep ($5M-$50M)"], [Infinity, "very deep ($50M or more)"]]);
-const ACTIVITY_TIERS = Object.freeze([[1, "none"], [100, "low (1-99 trades)"], [1_000, "moderate (100-999 trades)"], [10_000, "high (1,000-9,999 trades)"], [Infinity, "very high (10,000 or more trades)"]]);
-export const POOL_SCORE_WEIGHTS = Object.freeze({ liquidity: 35, activity: 20, flowBalance: 15, walletSpread: 15, age: 15 });
+const LIQUIDITY_TIERS = Object.freeze([[50_000, "thin"], [500_000, "shallow"], [5_000_000, "moderate"], [50_000_000, "deep"], [Infinity, "very-deep"]]);
+const ACTIVITY_TIERS = Object.freeze([[1, "none"], [100, "low"], [1_000, "moderate"], [10_000, "high"], [Infinity, "very-high"]]);
+export const POOL_SCORE_WEIGHTS = Object.freeze({ depth: 35, activity: 20, balance: 15, wallets: 15, age: 15 });
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 /** The 0-100 health score: each component 0-100 (null when it cannot be
  *  measured), the score their weighted mean over the components measured. */
 export function poolHealthScore({ liq, trades, buyTradeShare, recent, ageDays }) {
   const pct = (x) => Math.round(clamp01(x) * 100);
   const components = {
-    liquidity: liq == null ? null : liq > 0 ? pct((Math.log10(liq) - 4) / 3) : 0,
+    depth: liq == null ? null : liq > 0 ? pct((Math.log10(liq) - 4) / 3) : 0,
     activity: trades == null ? null : pct(Math.log10(1 + trades) / 3),
-    flowBalance: trades >= 20 && buyTradeShare != null ? pct(1 - Math.abs(buyTradeShare - 50) / 50) : null,
-    walletSpread: recent && recent.count >= 30 && recent.topWalletTradeSharePct != null ? pct(1 - recent.topWalletTradeSharePct / 50) : null,
+    balance: trades >= 20 && buyTradeShare != null ? pct(1 - Math.abs(buyTradeShare - 50) / 50) : null,
+    wallets: recent && recent.count >= 30 && recent.topWalletTradeSharePct != null ? pct(1 - recent.topWalletTradeSharePct / 50) : null,
     age: ageDays == null ? null : pct(ageDays / 90),
   };
   const used = Object.keys(components).filter((k) => components[k] != null);
   const w = sum(used.map((k) => POOL_SCORE_WEIGHTS[k]));
-  return { score: w > 0 ? Math.round(sum(used.map((k) => components[k] * POOL_SCORE_WEIGHTS[k])) / w) : null, components, weights: POOL_SCORE_WEIGHTS, componentsUsed: used.length };
+  return { score: w > 0 ? Math.round(sum(used.map((k) => components[k] * POOL_SCORE_WEIGHTS[k])) / w) : null, components };
 }
-const POOL_METHOD = "healthScore.score is the weighted mean of the components measured (weights in healthScore.weights; a component that cannot be measured is left out and the weights of the rest are used): liquidity = (log10(liquidity in USD) - 4) / 3, so $10K scores 0 and $10M or more 100; activity = log10(1 + the day's trades) / 3, so 999 trades or more score 100; flowBalance = 1 - |buy share of the day's trades - 50%| / 50% (20 trades or more); walletSpread = 1 - the top wallet's share of the latest trades / 50% (30 trades or more read); age = pool age in days / 90; each clamped to 0-1 and shown x 100. liquidityTier and activity24h.tier band the pool's liquidity and the day's trade count; turnover24h is the day's volume over liquidity; buySellTradeRatio is buys over sells. recentTrades: p90ToMedianRatio and largestToMedianRatio compare trade sizes with the median trade; largestShareOfLiquidityPct is the largest trade over liquidity; buyVolumeSharePct is buy volume over all recent volume; topWalletTradeSharePct and repeatWalletTradeSharePct are shares of the trades that name a wallet. priceImpactEstimate: d / (liquidity / 2 + d) for a trade of d. lockedLiquidity bands the locked share (none, under half, half or more). Flags: thin-liquidity (under $50K), new-pool (under 7 days), high-churn (turnover above 5), one-sided-flow (over 80% of 20+ trades on one side), wallet-concentration (one wallet above 25% of 30+ trades), repeat-wallet-flow (wallets trading 3+ times above 60% of 30+ trades), no-recent-trades.";
+const POOL_METHOD = "healthScore.score is the weighted mean of the components measured (weights: depth 35, activity 20, balance 15, wallets 15, age 15; a component that cannot be measured reads null and the weights of the rest are used): depth = (log10(liquidity in USD) - 4) / 3, so $10K scores 0 and $10M or more 100; activity = log10(1 + the day's trades) / 3, so 999 trades or more score 100; balance = 1 - |buy share of the day's trades - 50%| / 50% (20 trades or more); wallets = 1 - the top wallet's share of the latest trades / 50% (30 trades or more read); age = pool age in days / 90; each clamped to 0-1 and shown x 100. liquidityTier bands the pool's liquidity (thin under $50K, shallow to $500K, moderate to $5M, deep to $50M, very-deep beyond); activity24h.tier bands the day's trade count (none, low under 100, moderate under 1,000, high under 10,000, very-high beyond); turnover24h is the day's volume over liquidity; buySellRatio is buys over sells. recentTrades: p90ToMedian and largestToMedian compare trade sizes with the median trade; largestShareOfLiquidityPct is the largest trade over liquidity; buyVolumeSharePct is buy volume over all recent volume; topWalletTradeSharePct and repeatWalletTradeSharePct are shares of the trades that name a wallet. priceImpactEstimate: d / (liquidity / 2 + d) for a trade of d, a constant-product approximation from total liquidity (a concentrated-liquidity pool trades tighter near the current price). Flags: thin-liquidity (under $50K), new-pool (under 7 days), high-churn (turnover above 5), one-sided-flow (over 80% of 20+ trades on one side), wallet-concentration (one wallet above 25% of 30+ trades), repeat-wallet-flow (wallets trading 3+ times above 60% of 30+ trades), no-recent-trades.";
 const unknownPool = (network, pool) => bad(`No pool "${pool}" is tracked on network "${network}" - check the network id and the pool address`, 422);
 const dexPoolHealth = {
   route: "GET /api/dex-pool-health",
@@ -1023,7 +1017,7 @@ const dexPoolHealth = {
   category: "crypto",
   price: "$0.005",
   description:
-    "Measured health of one DEX pool by network and pool address: a 0-100 health score built from five stated components (liquidity depth on a log scale, 24h trade activity, buy/sell balance, wallet spread of the latest trades and pool age, weights in the answer), a liquidity tier, 24h turnover (volume over liquidity), a trade-activity tier, buy share of trades and of traders and the buy/sell ratio, the shape of its latest trades (90th percentile and largest against the median, largest as a share of liquidity), how concentrated those trades are among wallets (top wallet's share, share from wallets trading three times or more), buy share of recent volume, a constant-product price-impact estimate for $1,000 and $10,000, the pool's age and a locked-liquidity band. Answers tiers, ratios, shares and the score, never the pool's own liquidity, volume or trade sizes; the `method` field states each formula. The score measures the pool's market structure only, with no verdict on any token and no advice. `tradesRead` is false, and the recent-trades block null, when the pool's trade list could not be read. Flags name measured conditions with fixed thresholds (thin liquidity, new pool, high churn, one-sided flow, wallet concentration, repeat-wallet flow, no recent trades). Networks use on-chain ids such as eth, base, solana. Deterministic code over market data; recent trades refreshed every 5 minutes, the pool's liquidity, 24h volume and 24h counts every 30 minutes.",
+    "Measured health of one DEX pool by network and pool address: a 0-100 health score built from five stated components (liquidity depth on a log scale 35%, 24h trade activity 20%, buy/sell balance 15%, wallet spread of the latest trades 15% and pool age 15%), a liquidity tier, 24h turnover (volume over liquidity), a trade-activity tier, buy share of trades and of traders and the buy/sell ratio, the shape of its latest trades (90th percentile and largest against the median, largest as a share of liquidity), how concentrated those trades are among wallets (top wallet's share, share from wallets trading three times or more), buy share of recent volume, a constant-product price-impact estimate for $1,000 and $10,000, and the pool's age. Answers tiers, ratios, shares and the score, never the pool's own liquidity, volume or trade sizes; the `method` field states each formula. The score measures the pool's market structure only, with no verdict on any token and no advice. `tradesRead` is false, and the recent-trades block null, when the pool's trade list could not be read. Flags name measured conditions with fixed thresholds (thin liquidity, new pool, high churn, one-sided flow, wallet concentration, repeat-wallet flow, no recent trades). Networks use on-chain ids such as eth, base, solana. Deterministic code over market data; recent trades refreshed every 5 minutes, the pool's liquidity, 24h volume and 24h counts every 30 minutes.",
   tags: ["crypto", "dex", "pool", "liquidity", "pool-health", "price-impact", "repeat-wallets", "trades", "defi"],
   discovery: {
     input: { network: "eth", pool: "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640" },
@@ -1038,13 +1032,12 @@ const dexPoolHealth = {
       example: {
         source: "coingecko", fetchedAt: "2026-11-16T12:00:00.000Z", cached: false,
         network: "eth", pool: "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640", name: "WETH / USDC 0.05%", dex: "uniswap_v3", ageDays: 1783,
-        healthScore: { score: 98, components: { liquidity: 100, activity: 100, flowBalance: 100, walletSpread: 87, age: 100 }, weights: { liquidity: 35, activity: 20, flowBalance: 15, walletSpread: 15, age: 15 }, componentsUsed: 5 },
-        liquidityTier: "very deep ($50M or more)", turnover24h: 1.36, lockedLiquidity: "none",
-        activity24h: { tier: "high (1,000-9,999 trades)", buyTradeSharePct: 50.18, buyerSharePct: 48.08, buySellTradeRatio: 1.01 },
-        tradesRead: true, recentTrades: { count: 300, windowMinutes: 96, p90ToMedianRatio: 22.39, largestToMedianRatio: 278.18, largestShareOfLiquidityPct: 0.67, buyVolumeSharePct: 47.3, uniqueWallets: 168, topWalletTradeSharePct: 6.33, repeatWalletTradeSharePct: 38.67, anomalous: 0 },
-        priceImpactEstimate: { per1kUsdPct: 0.0026, per10kUsdPct: 0.0261, method: "constant-product approximation from total liquidity; a concentrated-liquidity pool trades tighter near the current price" },
+        healthScore: { score: 98, components: { depth: 100, activity: 100, balance: 100, wallets: 87, age: 100 } },
+        liquidityTier: "very-deep", turnover24h: 1.36,
+        activity24h: { tier: "high", buyTradeSharePct: 50.18, buyerSharePct: 48.08, buySellRatio: 1.01 },
+        tradesRead: true, recentTrades: { count: 300, windowMinutes: 96, p90ToMedian: 22.39, largestToMedian: 278.18, largestShareOfLiquidityPct: 0.67, buyVolumeSharePct: 47.3, uniqueWallets: 168, topWalletTradeSharePct: 6.33, repeatWalletTradeSharePct: 38.67, anomalous: 0 },
+        priceImpactEstimate: { per1kUsdPct: 0.0026, per10kUsdPct: 0.0261, method: "constant product; see method" },
         flags: [],
-        method: POOL_METHOD,
       },
     },
   },
@@ -1097,7 +1090,7 @@ const dexPoolHealth = {
       recent = {
         count: trades.length,
         windowMinutes: times.length >= 2 ? Math.round((Math.max(...times) - Math.min(...times)) / 60_000) : null,
-        p90ToMedianRatio: mid > 0 ? round(quantile(sizes, 0.9) / mid, 2) : null, largestToMedianRatio: mid > 0 ? round(largest / mid, 2) : null,
+        p90ToMedian: mid > 0 ? round(quantile(sizes, 0.9) / mid, 2) : null, largestToMedian: mid > 0 ? round(largest / mid, 2) : null,
         largestShareOfLiquidityPct: round(share(largest, liq), 4),
         buyVolumeSharePct: round(share(sum(trades.filter((t) => t.kind === "buy").map((t) => t.usd)), volRecent), 2),
         uniqueWallets: perWallet.size,
@@ -1122,15 +1115,13 @@ const dexPoolHealth = {
     if (recent && recent.count >= 30 && recent.topWalletTradeSharePct > 25) flags.push("wallet-concentration");
     if (recent && recent.count >= 30 && recent.repeatWalletTradeSharePct > 60) flags.push("repeat-wallet-flow");
     if (buys + sells === 0) flags.push("no-recent-trades");
-    const locked = num(a.locked_liquidity_percentage);
     return {
       network, pool: a.address ?? pool, name: a.name ?? null, dex: reads[0].data.data.relationships?.dex?.data?.id ?? null, ageDays,
       healthScore: poolHealthScore({ liq, trades: buys + sells, buyTradeShare, recent, ageDays }),
       liquidityTier: tierOf(LIQUIDITY_TIERS, liq), turnover24h: round(turnover, 2),
-      lockedLiquidity: locked == null ? null : locked <= 0 ? "none" : locked < 50 ? "under half" : "half or more",
-      activity24h: { tier: tierOf(ACTIVITY_TIERS, buys + sells), buyTradeSharePct: round(buyTradeShare, 2), buyerSharePct: buyers != null && sellers != null ? round(share(buyers, buyers + sellers), 2) : null, buySellTradeRatio: sells > 0 ? round(buys / sells, 2) : null },
+      activity24h: { tier: tierOf(ACTIVITY_TIERS, buys + sells), buyTradeSharePct: round(buyTradeShare, 2), buyerSharePct: buyers != null && sellers != null ? round(share(buyers, buyers + sellers), 2) : null, buySellRatio: sells > 0 ? round(buys / sells, 2) : null },
       tradesRead, recentTrades: recent,
-      priceImpactEstimate: { per1kUsdPct: impact(1_000), per10kUsdPct: impact(10_000), method: "constant-product approximation from total liquidity; a concentrated-liquidity pool trades tighter near the current price" },
+      priceImpactEstimate: { per1kUsdPct: impact(1_000), per10kUsdPct: impact(10_000), method: "constant product; see method" },
       flags,
       method: POOL_METHOD,
     };

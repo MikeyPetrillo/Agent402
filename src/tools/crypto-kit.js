@@ -713,7 +713,7 @@ export const CRYPTO_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Live $1-peg deviation for the top USD stablecoins (USDT, USDC, USDS, DAI, USDe, PYUSD, USDD, TUSD, FDUSD by default, or pass your own list): deviation from $1 in basis points now, the worst deviation over 24 hours, each coin's share of the listed coins' market cap and its place by cap, and an on-peg / stressed / depegged status (within 50 bps, within 200 bps, beyond). Answers deviations, shares and bands computed here, not the source's prices or market caps; the `method` field states each formula.",
+      "Live $1-peg deviation for the top USD stablecoins (USDT, USDC, USDS, DAI, USDe, PYUSD, USDD, TUSD, FDUSD by default, or pass your own list): deviation in bps now and worst over 24h, share of the listed market cap, and an on-peg / stressed / depegged status; `method` states each formula.",
     tags: ["crypto", "stablecoin", "peg", "usdt", "usdc", "risk", "monitoring"],
     discovery: {
       input: {},
@@ -730,7 +730,6 @@ export const CRYPTO_TOOLS = [
             { id: "tether", symbol: "USDT", name: "Tether", deviationBps: -11.32, maxDeviation24hBps: 13.26, capRank: 1, marketCapSharePct: 71.6, status: "on-peg" },
             { id: "usd-coin", symbol: "USDC", name: "USDC", deviationBps: -1.81, maxDeviation24hBps: 4.7, capRank: 2, marketCapSharePct: 28.4, status: "on-peg" },
           ],
-          method: STABLECOIN_PEG_METHOD,
         },
       },
     },

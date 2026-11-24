@@ -25,8 +25,8 @@ Tools:
 - dex-pool-health no longer returns liquidityUsd, volume24hUsd,
   lockedLiquidityPct, activity24h.trades or the recent trades' medianUsd,
   p90Usd and largestUsd; it returns a 0-100 healthScore from five stated
-  components, liquidityTier, lockedLiquidity, activity24h.tier and
-  buySellTradeRatio, and p90ToMedianRatio and largestToMedianRatio.
+  components, liquidityTier, activity24h.tier and
+  buySellRatio, and p90ToMedian and largestToMedian.
 - defi-screener no longer returns each token's change24hPct, change7dPct and
   athDrawdownPct or categoryTotals.marketCapUsd; it returns
   change24hPercentile, change7dVsCategoryPct, change7dPercentile,
