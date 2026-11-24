@@ -87,7 +87,7 @@ for (const name of ["ai-sdk", "langchain", "google-adk", "openai-agents"]) {
   {
     const h = stubHost({ "/api/find": Infinity });
     const err = await rejects(byName(agent402ToolSpecs({ baseUrl: BASE, fetchImpl: h.fetchImpl }), "agent402_find").execute({ task: "hash" }));
-    ok(err && /^GET \/api\/find\?q=hash&k=5: HTTP 503 after 3 attempts$/.test(err.message) && err.status === 503 && h.counts["/api/find"] === 3,
+    ok(err && /^GET \/api\/find\?q=hash&k=5: HTTP 503 after 3 attempts: The server is busy$/.test(err.message) && err.status === 503 && h.counts["/api/find"] === 3,
       `${name}: 3 shed 503s fail naming the surface and status (${err && err.message})`);
   }
   {
@@ -103,7 +103,7 @@ for (const name of ["ai-sdk", "langchain", "google-adk", "openai-agents"]) {
   {
     const h = stubHost({ "/api/pricing": Infinity });
     const err = await rejects(byName(agent402ToolSpecs({ baseUrl: BASE, fetchImpl: h.fetchImpl }), "agent402_call").execute({ slug: "hash", params: {} }));
-    ok(err && /GET \/api\/pricing\): HTTP 503 after 3 attempts$/.test(err.message), `${name}: a shed catalog read names /api/pricing (${err && err.message})`);
+    ok(err && /GET \/api\/pricing\): HTTP 503 after 3 attempts: The server is busy$/.test(err.message), `${name}: a shed catalog read names /api/pricing (${err && err.message})`);
   }
 }
 
@@ -119,7 +119,7 @@ for (const name of ["anthropic-tools", "openai-tools", "llamaindex", "strands"])
   {
     const h = stubHost({ "/openapi.json": Infinity });
     const err = await rejects(withGlobalFetch(h.fetchImpl, () => agent402Tools({ baseUrl: BASE })));
-    ok(err && err.message === `Could not load ${BASE}/openapi.json: HTTP 503 after 3 attempts` && h.counts["/openapi.json"] === 3,
+    ok(err && err.message === `Could not load ${BASE}/openapi.json: HTTP 503 after 3 attempts: The server is busy` && h.counts["/openapi.json"] === 3,
       `${name}: 3 shed 503s fail naming the surface and status (${err && err.message})`);
   }
 }
@@ -137,7 +137,7 @@ for (const name of ["anthropic-tools", "openai-tools", "llamaindex", "strands"])
   const h2 = stubHost({ "/api/find": Infinity });
   const actions2 = await agent402Actions({ baseUrl: BASE, fetchImpl: h2.fetchImpl, zod: z });
   const err = await rejects(actions2.find((a) => a.name === "agent402_find").invoke({ task: "hash" }));
-  ok(err && err.message === "agent402_find failed (GET /api/find): HTTP 503 after 3 attempts" && h2.counts["/api/find"] === 3, `agentkit: 3 shed 503s fail clearly (${err && err.message})`);
+  ok(err && err.message === "agent402_find failed (GET /api/find): HTTP 503 after 3 attempts: The server is busy" && h2.counts["/api/find"] === 3, `agentkit: 3 shed 503s fail clearly (${err && err.message})`);
 }
 
 // 4) elizaos-plugin-agent402: AGENT402_ABOUT reads /api/pricing on global fetch.
@@ -160,7 +160,7 @@ for (const name of ["anthropic-tools", "openai-tools", "llamaindex", "strands"])
   ok(routes.has("m1") && h.counts["/v1/models"] === 2, "openclaw: the model table loads after one shed 503");
   const h2 = stubHost({ "/v1/models": Infinity });
   const err = await rejects(loadRoutes(BASE, h2.fetchImpl));
-  ok(err && err.message === "GET /v1/models: HTTP 503 after 3 attempts" && h2.counts["/v1/models"] === 3, `openclaw: 3 shed 503s fail clearly (${err && err.message})`);
+  ok(err && err.message === "GET /v1/models: HTTP 503 after 3 attempts: The server is busy" && h2.counts["/v1/models"] === 3, `openclaw: 3 shed 503s fail clearly (${err && err.message})`);
 }
 
 // 6) The wait honors the server's delay (one real second here).

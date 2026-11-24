@@ -82,6 +82,8 @@ Packages:
   User-Agent elsewhere now pays.
 - agent402-mcp 0.17.0: `wallet new --help` prints the usage and makes no key.
 - The meta-tool adapters pass the server's error body through to the caller.
+- The other adapters (agent402-eliza 0.3.2 among them) and agent402-openclaw
+  add the server's error text to a failed catalog or discovery read.
 
 ### 2026-11-24 (agent402-mcp 0.17.0)
 Packages:

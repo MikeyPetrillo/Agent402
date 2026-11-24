@@ -48,7 +48,8 @@ async function shedRetryWaitMs(r) {
 }
 
 // Resolves with the 2xx response, or throws `${label}: HTTP <status>` (plus
-// "after N attempts" when it retried) with `.status` and `.attempts` set.
+// "after N attempts" when it retried, and the server's `error` text) with
+// `.status`, `.body` and `.attempts` set.
 // `init` may be a function, so each attempt gets its own timeout signal.
 async function discoveryFetch(fetchImpl, label, url, init) {
   let r;
@@ -63,10 +64,27 @@ async function discoveryFetch(fetchImpl, label, url, init) {
     if (wait == null) break;
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
-  const err = new Error(`${label}: HTTP ${r.status}${attempts > 1 ? ` after ${attempts} attempts` : ""}`);
-  err.status = r.status;
+  const err = await responseError(`${label}: HTTP ${r.status}${attempts > 1 ? ` after ${attempts} attempts` : ""}`, r);
   err.attempts = attempts;
   throw err;
+}
+
+// The server's own answer to a failed request, on the thrown error: its
+// `error` text joins the message, and `.status` and `.body` (the parsed JSON,
+// else the text, at most ERROR_BODY_MAX characters) are set, so a caller sees
+// why the call failed (a refusal, a limit, a missing parameter).
+const ERROR_BODY_MAX = 4000;
+async function responseError(message, r) {
+  let text = "";
+  try { text = typeof r?.text === "function" ? String(await r.text()) : ""; } catch { text = ""; }
+  text = text.slice(0, ERROR_BODY_MAX);
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+  const said = body && typeof body === "object" && typeof body.error === "string" ? body.error.slice(0, 500) : (!body ? text.trim().slice(0, 300) : "");
+  const err = new Error(said ? `${message}: ${said}` : message);
+  err.status = r?.status;
+  err.body = body ?? (text || null);
+  return err;
 }
 
 // Strands tool names, function-name shape, conservative.

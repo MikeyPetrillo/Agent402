@@ -84,6 +84,7 @@ const ENTRIES = [
       "Packages: agent402-tollbooth 0.13.0 answers `--help` and `--version`, ships its `deploy/` files, and charges a request with an empty User-Agent, except an empty-User-Agent GET or HEAD of a health path (`healthPaths`, default `/healthz` and `/health`; `TOLLBOOTH_HEALTH_PATHS` for the CLI, matched exactly on the raw request path), so a load balancer's health check keeps passing. A minor release: an empty User-Agent elsewhere now pays.",
       "Packages: agent402-mcp 0.17.0: `wallet new --help` prints the usage and makes no key.",
       "Packages: The meta-tool adapters pass the server's error body through to the caller.",
+      "Packages: The other adapters (agent402-eliza 0.3.2 among them) and agent402-openclaw add the server's error text to a failed catalog or discovery read.",
     ],
   },
   {
