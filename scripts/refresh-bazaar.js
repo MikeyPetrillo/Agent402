@@ -110,6 +110,7 @@ import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/open
 import { usdMicros, passMicros, spendCapVerdict, fromInputOf } from "./lib/keepalive-plan.js";
 import { selectMcpListings, isMcpFeedRow, mcpOfferProblems, mcpListingSlugOf, publishedPayTo, usdText, MCP_LISTING_TOOLS } from "./lib/mcp-listings.js";
 import { connectMcp, askMcpOffer, buyMcpListing } from "./lib/mcp-x402-client.js";
+import { slowPreferOf, RESPOND_ASYNC } from "./lib/slow-route-buy.js";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
@@ -301,6 +302,11 @@ async function loadCatalog() {
     path: t.path,
     price: t.price,
     priceUsd: priceToUsd(t.price),
+    // A slow route (its row's async block) is paid with Prefer: respond-async
+    // up front: sent bare, it signs a payment the 400 throws away, and the
+    // signed-spend budget, which counts every signature, refuses the retry.
+    prefer: slowPreferOf(t.async, { method: t.method }),
+    asyncMaxSeconds: Number(t.async?.maxSeconds) || null,
     // Whether the route sells on the --chain filter (always true without one).
     onChain: MISSING_CHAIN ? routeSellsOn(t, MISSING_CHAIN, rails) : true,
     // The server's own PoW-eligibility flag. A tool is compute-payable only
@@ -404,6 +410,7 @@ async function speechClip() {
  *  its example. */
 export async function sweepRequest(t, examples, { target = TARGET, headers = {}, clip = speechClip } = {}) {
   const key = `${t.method} ${t.path}`;
+  if (t.prefer) headers = { ...headers, Prefer: t.prefer };
   const from = fromInputOf(t);
   if (from && t.method !== "GET") return { url: `${target}${t.path}`, init: { method: t.method, headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(from) } };
   const example = from || examples.get(key) || {};
@@ -528,7 +535,7 @@ export async function runMissingMode({ sweep = false } = {}) {
       budget.refused = null;
       try {
         const { url, init } = await sweepRequest(t, examples, { headers: heartbeatHeaders() });
-        const res = await buyOnce(payFetch, url, init);
+        const res = await buyOnce(payFetch, url, init, { maxSeconds: t.asyncMaxSeconds });
         lastStatus = res.status;
         if (res.status === 200) {
           results.ok++;
@@ -670,16 +677,27 @@ export function retryable(res, attempt) {
  *  Measured 2026-11-03: the keep-alive's one stale route, decide-execute,
  *  answered 400 respond_async_required and the pass failed; the route would
  *  have aged out of the Bazaar after 30 days without a settlement. */
-export async function buyOnce(payFetch, url, init, { plainFetch = fetch, target = TARGET, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
-  const res = await payFetch(url, init);
-  if (res.status !== 400) return { status: res.status, res };
-  const text = await res.text().catch(() => "");
-  let refusal = null;
-  try { refusal = JSON.parse(text); } catch { refusal = null; }
-  if (refusal?.error !== "respond_async_required") return { status: 400, text };
-  const maxSeconds = Math.max(30, Number(refusal.maxSeconds) || 180);
-  const r2 = await payFetch(url, { ...init, headers: { ...(init.headers || {}), Prefer: "respond-async" } });
-  if (r2.status !== 202) return { status: r2.status, text: await r2.text().catch(() => ""), note: "the async call did not answer 202" };
+export async function buyOnce(payFetch, url, init, { plainFetch = fetch, target = TARGET, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, maxSeconds: routeMaxSeconds = null } = {}) {
+  // A call sent with Prefer: respond-async up front (a route the catalog marks
+  // slow) is one paid call: its 202 job is followed, and any other answer is
+  // returned as is, never sent again bare.
+  const upFront = Object.entries(init.headers || {}).some(([k, v]) => /^prefer$/i.test(k) && String(v).trim().toLowerCase() === RESPOND_ASYNC);
+  let r2;
+  let maxSeconds = Math.max(30, Number(routeMaxSeconds) || 180);
+  if (upFront) {
+    r2 = await payFetch(url, init);
+    if (r2.status !== 202) return { status: r2.status, res: r2 };
+  } else {
+    const res = await payFetch(url, init);
+    if (res.status !== 400) return { status: res.status, res };
+    const text = await res.text().catch(() => "");
+    let refusal = null;
+    try { refusal = JSON.parse(text); } catch { refusal = null; }
+    if (refusal?.error !== "respond_async_required") return { status: 400, text };
+    maxSeconds = Math.max(30, Number(refusal.maxSeconds) || 180);
+    r2 = await payFetch(url, { ...init, headers: { ...(init.headers || {}), Prefer: RESPOND_ASYNC } });
+    if (r2.status !== 202) return { status: r2.status, text: await r2.text().catch(() => ""), note: "the async call did not answer 202" };
+  }
   const job = await r2.json().catch(() => ({}));
   const statusUrl = job.statusUrl || r2.headers.get("location");
   if (!statusUrl) return { status: 502, text: "", note: "the 202 named no job" };
