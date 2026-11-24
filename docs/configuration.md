@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1127 variables in 113 groups.
+1128 variables in 113 groups.
 
 ## Contents
 
@@ -897,6 +897,7 @@ holds it.
 | `PROGRAMMATIC_NEG_TTL_MS` | Programmatic neg lifetime, in milliseconds. |  | `src/programmatic-pages.js` |
 | `PROGRAMMATIC_PARTIAL_TTL_MS` | Programmatic partial lifetime, in milliseconds. |  | `src/programmatic-pages.js` |
 | `PROGRAMMATIC_QUEUE_MAX` | Programmatic queue maximum. |  | `src/programmatic-pages.js` |
+| `PROGRAMMATIC_THIN_FILE` | File holding the entity report pages kept as thin (left out of the sitemap from boot) when no state database is configured; with one, a state database document. | `/data/programmatic-thin.json` | `src/programmatic-pages.js` |
 | `PROGRAMMATIC_TIMEOUT_MS` | Programmatic timeout, in milliseconds. |  | `src/programmatic-pages.js` |
 | `PROGRAMMATIC_TTL_MS` | Programmatic lifetime, in milliseconds. |  | `src/programmatic-pages.js` |
 

@@ -35,6 +35,12 @@ const h1Of = (html) => [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/g)].map((m) 
 const ldNodes = (html) => [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)]
   .map((m) => JSON.parse(m[1])).flatMap((j) => (Array.isArray(j["@graph"]) ? j["@graph"] : [j]));
 
+// The kept thin decisions (src/programmatic-pages.js) go to a file of this run's own.
+const { mkdtempSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
+const { tmpdir } = await import("node:os");
+const THIN_DIR = mkdtempSync(join(tmpdir(), "a402-thin-"));
+process.env.PROGRAMMATIC_THIN_FILE = join(THIN_DIR, "offline-thin.json");
+
 // --- offline: a degraded entity page agrees with itself and leaves the sitemap ----
 {
   const pp = await import("../src/programmatic-pages.js");
@@ -58,6 +64,19 @@ const ldNodes = (html) => [...html.matchAll(/<script type="application\/ld\+json
   ok(sitemapXml(SITE, {}).includes(`<loc>${SITE}${path}</loc>`), `${path} returns to the sitemap after a complete build`);
   await pp.loadTeaser("insider", SEED_TICKERS[1], { seeded: true, builders: { insider: async () => ({ ...good, rows: [] }) } });
   ok(pp.entityDegraded(`/reports/insider/${SEED_TICKERS[1]}`) && !sitemapXml(SITE, {}).includes(`<loc>${SITE}/reports/insider/${SEED_TICKERS[1]}</loc>`), "a thin build (no rows) keeps the page out of the sitemap");
+  // The thin decision is kept: a new process (a restart) leaves the page out
+  // of its first sitemap without building it again.
+  for (let i = 0; i < 40 && !(existsSync(process.env.PROGRAMMATIC_THIN_FILE) && readFileSync(process.env.PROGRAMMATIC_THIN_FILE, "utf8").includes(SEED_TICKERS[1])); i++) await sleep(25);
+  const { execFileSync } = await import("node:child_process");
+  const probe = `import "./scripts/lib/offline-stores.js"; const pp = await import("./src/programmatic-pages.js"); const { sitemapXml } = await import("./src/seo.js"); await pp.programmaticThinReady(); const x = sitemapXml(${JSON.stringify(SITE)}, {}); console.log(JSON.stringify({ thin: x.includes(${JSON.stringify(`<loc>${SITE}/reports/insider/${SEED_TICKERS[1]}</loc>`)}), other: x.includes(${JSON.stringify(`<loc>${SITE}/reports/insider/${SEED_TICKERS[2]}</loc>`)}) }));`;
+  const after = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: ROOT, encoding: "utf8", env: { ...process.env } }).trim().split("\n").pop());
+  ok(after.thin === false && after.other === true, `after a restart the thin page stays out of the sitemap from the first read, and other pages stay in (${JSON.stringify(after)})`);
+  // A later complete build brings it back, in this process and the next.
+  pp.__clearTeaserCache();
+  await pp.loadTeaser("insider", SEED_TICKERS[1], { seeded: true, builders: { insider: async () => good } });
+  for (let i = 0; i < 40 && readFileSync(process.env.PROGRAMMATIC_THIN_FILE, "utf8").includes(SEED_TICKERS[1]); i++) await sleep(25);
+  const back = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: ROOT, encoding: "utf8", env: { ...process.env } }).trim().split("\n").pop());
+  ok(!pp.entityDegraded(`/reports/insider/${SEED_TICKERS[1]}`) && back.thin === true, "a complete build clears the kept decision, so the next process lists the page again");
   const okHtml = pp.insiderPage({ ticker: t, data: good, baseUrl: SITE });
   ok(!/noindex/.test(robotsOf(okHtml)), "a complete page is indexable");
 }
@@ -65,9 +84,14 @@ const ldNodes = (html) => [...html.matchAll(/<script type="application\/ld\+json
 // --- booted ------------------------------------------------------------------
 const PORT = await getFreePort();
 const BASE = `http://127.0.0.1:${PORT}`;
+// A thin decision kept by an earlier process: the booted server's first sitemap leaves the page out.
+const { SEED_TICKERS: SEEDS } = await import("../src/programmatic-seeds.js");
+const BOOT_THIN = `/reports/insider/${SEEDS[3]}`;
+const BOOT_THIN_FILE = join(THIN_DIR, "boot-thin.json");
+writeFileSync(BOOT_THIN_FILE, JSON.stringify({ paths: [BOOT_THIN] }));
 const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
-  env: { ...process.env, ...ownStoreEnv("crawl-signals"), FREE_MODE: "true", PORT: String(PORT), BASE_URL: SITE, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
+  env: { ...process.env, ...ownStoreEnv("crawl-signals"), PROGRAMMATIC_THIN_FILE: BOOT_THIN_FILE, FREE_MODE: "true", PORT: String(PORT), BASE_URL: SITE, X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0" },
   stdio: "ignore",
 });
 const get = async (p, opts = {}) => { const r = await fetch(`${BASE}${p}`, { redirect: "manual", ...opts }); return { status: r.status, headers: r.headers, text: await r.text() }; };
@@ -75,6 +99,11 @@ try {
   let up = false;
   for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) { up = true; break; } } catch {} await sleep(500); }
   ok(up, "server booted");
+  {
+    const first = (await get("/sitemap.xml")).text;
+    const reports = (await get("/sitemap-reports.xml")).text;
+    ok(!first.includes(`<loc>${SITE}${BOOT_THIN}</loc>`) && !reports.includes(`<loc>${SITE}${BOOT_THIN}</loc>`) && first.includes(`<loc>${SITE}/reports/insider/${SEEDS[4]}</loc>`), `the first sitemap after boot leaves out a page kept as thin (${BOOT_THIN}), others listed`);
+  }
 
   // Crawl trap.
   const robots = (await get("/robots.txt")).text;

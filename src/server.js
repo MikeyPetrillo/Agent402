@@ -482,7 +482,7 @@ import { mppProblem, sendMppProblem } from "./mpp-problem.js";
 import { settleReceiptHeaderGuard } from "./facilitator-diagnostics.js";
 import { monitorsPage, monitorThanksPage } from "./monitors-page.js";
 import { createManageLinkHandler, subManageMessage } from "./monitor-manage-link.js";
-import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicker, normalizeManagerSlug, isSeededTicker, seededManager } from "./programmatic-pages.js";
+import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicker, normalizeManagerSlug, isSeededTicker, seededManager, programmaticThinReady } from "./programmatic-pages.js";
 import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, sellablePacks } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
@@ -6632,9 +6632,11 @@ app.get("/docs/webhooks", (_req, res) => htmlCache(res, 300, 900).send(webhooksP
 // One page per framework adapter: /integrations/<slug>. The old docs path moves there.
 app.get("/docs/adapters/:slug", (req, res) => { const to = adapterRedirectTarget(req.params.slug); if (!to) return notFoundPage(res, { what: "Adapter", href: "/docs/adapters", label: "All adapters" }); res.redirect(301, to); });
 app.get("/changelog.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=600"); res.type("application/rss+xml").send(changelogRss(BASE_URL)); });
-app.get("/sitemapindex.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapIndex(BASE_URL, CATALOG)); });
+// The kept thin entity pages are read at boot, so the first sitemap after a deploy leaves them out.
+void programmaticThinReady();
+app.get("/sitemapindex.xml", async (_req, res) => { await programmaticThinReady(); res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapIndex(BASE_URL, CATALOG)); });
 app.get("/sitemap-pages.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapPages(BASE_URL, CATALOG)); });
-app.get("/sitemap-reports.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapReports(BASE_URL)); });
+app.get("/sitemap-reports.xml", async (_req, res) => { await programmaticThinReady(); res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapReports(BASE_URL)); });
 app.get("/sitemap-tools.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapTools(BASE_URL, CATALOG)); });
 app.get("/sitemap-categories.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapCategories(BASE_URL, CATALOG)); });
 app.get("/sitemap-guides.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapGuides(BASE_URL)); });
@@ -10686,7 +10688,7 @@ if (process.env.INDEXNOW_KEY) {
   app.get(`/${process.env.INDEXNOW_KEY}.txt`, (_req, res) =>
     res.type("text/plain").set("Cache-Control", "public, max-age=86400").send(process.env.INDEXNOW_KEY));
 }
-app.get("/sitemap.xml", (_req, res) => res.type("application/xml").set("Cache-Control", "public, max-age=3600").send(sitemapXml(BASE_URL, CATALOG)));
+app.get("/sitemap.xml", async (_req, res) => (await programmaticThinReady(), res).type("application/xml").set("Cache-Control", "public, max-age=3600").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(llmsTxt(BASE_URL, CATALOG)));
 app.get("/llms-full.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(llmsFullTxt(BASE_URL, CATALOG)));
 // /SKILL.md - agent-onboarding sheet ("Read <url>/SKILL.md and set up X" is

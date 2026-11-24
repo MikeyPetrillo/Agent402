@@ -31,6 +31,7 @@
 // cap: the largest index complexes publish tables in the tens of megabytes, and
 // a free page must be able to decline that read.
 import { siteOrgRef } from "./site-org.js";
+import { createJsonDocument } from "./json-document.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd, breadcrumbLd as sharedBreadcrumbLd } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
@@ -104,6 +105,8 @@ export function createTeaserCache({ ttlMs = TTL_MS, negTtlMs = NEG_TTL_MS, max =
 }
 
 const cache = createTeaserCache();
+// Tests empty the process cache to rebuild a page (scripts/test-crawl-signals.js).
+export const __clearTeaserCache = () => cache.clear();
 
 // --- sitemap lastmod for a seeded entity page --------------------------------
 // The newest filing date a page shows: the newest Form 4 on an insider page,
@@ -129,7 +132,45 @@ export const entityLastmod = (path) => entityDates.get(path) || null;
 // itself sends (meta robots and X-Robots-Tag noindex). Bounded by the seed
 // list, since only a seeded entity degrades.
 const degradedEntities = new Set();
-export const entityDegraded = (path) => degradedEntities.has(path);
+// Paths whose last complete build was thin (entityThin below). Unlike a
+// degraded render, a thin decision is about the data, so it is kept across
+// restarts (one JSON document: the state database row, else the file
+// PROGRAMMATIC_THIN_FILE) and read at boot, and the sitemap leaves the page out
+// from the first request after a deploy, not only once this process has built
+// it again. Bounded by the seed list; the sitemap routes wait for the read
+// (programmaticThinReady, at most THIN_READ_WAIT_MS).
+const thinEntities = new Set();
+export const PROGRAMMATIC_THIN_DOC = "programmatic-thin";
+export const THIN_READ_WAIT_MS = 2_000;
+const SEEDED_PATH = /^\/reports\/(?:insider|fund|dossier)\/[A-Za-z0-9.-]{1,64}$/;
+let thinDoc = null;
+const thinStore = () => (thinDoc ||= createJsonDocument({ name: PROGRAMMATIC_THIN_DOC, file: process.env.PROGRAMMATIC_THIN_FILE || "/data/programmatic-thin.json", log: () => {} }));
+let thinRead = null;
+/** Resolves once the kept thin decisions are read (or the read gave up). */
+export function programmaticThinReady() {
+  thinRead ||= (async () => {
+    try {
+      const r = await thinStore().read({ quiet: true });
+      const paths = r && r.ok && r.body && Array.isArray(r.body.paths) ? r.body.paths : [];
+      // A decision this process made before the read finished stands.
+      for (const p of paths) if (typeof p === "string" && SEEDED_PATH.test(p) && !thinDecided.has(p)) thinEntities.add(p);
+    } catch { /* unreadable: the pages are judged again when built */ }
+  })();
+  return Promise.race([thinRead, new Promise((r) => setTimeout(r, THIN_READ_WAIT_MS).unref?.())]);
+}
+const thinDecided = new Set();
+function keepThin(path, thin) {
+  thinDecided.add(path);
+  const had = thinEntities.has(path);
+  if (thin) thinEntities.add(path); else thinEntities.delete(path);
+  if (had === thin) return;
+  void thinStore().update((b) => {
+    const set = new Set(b && Array.isArray(b.paths) ? b.paths.filter((x) => typeof x === "string" && SEEDED_PATH.test(x)) : []);
+    if (thin) set.add(path); else set.delete(path);
+    return { paths: [...set].sort() };
+  }, { fallback: { paths: [] } }).catch(() => {});
+}
+export const entityDegraded = (path) => degradedEntities.has(path) || thinEntities.has(path);
 export function markEntityDegraded(kind, slug) { degradedEntities.add(`/reports/${kind}/${slug}`); }
 
 /** A page whose free data stays too thin to stand on its own: an insider page
@@ -147,7 +188,7 @@ export function entityThin(kind, data) {
 }
 function recordEntityDate(kind, slug, data) {
   degradedEntities.delete(`/reports/${kind}/${slug}`);
-  if (entityThin(kind, data)) degradedEntities.add(`/reports/${kind}/${slug}`);
+  keepThin(`/reports/${kind}/${slug}`, entityThin(kind, data));
   const d = data && !data.partial ? teaserLastmod(kind, data) : null;
   if (d) entityDates.set(`/reports/${kind}/${slug}`, d);
 }
