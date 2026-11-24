@@ -164,6 +164,8 @@ ok(defaultOf("PLANTED_NAMED", ["process.env.PLANTED_NAMED || 24 * HOUR_MS"]) ===
     CREDITS_DAILY_MAX_USD: async () => unset(["CREDITS_DAILY_MAX_USD"], async () => String((await import("../src/credits-sales.js")).creditsDailyMaxCents() / 100)),
     FUNNEL_FOUND_CAP: async () => unset(["FUNNEL_FOUND_CAP"], async () => String((await import("../src/funnel-sources.js?cap")).FOUND_CAP)),
     FUNNEL_FOUND_WINDOW_MS: async () => unset(["FUNNEL_FOUND_WINDOW_MS"], async () => String((await import("../src/funnel-sources.js?window")).FOUND_WINDOW_MS)),
+    // With no keyed lane configured, the first Solana endpoint read (src/rpc-terms.js).
+    SOLANA_RPC_URL: async () => unset(["SOLANA_RPC_URL", "ALCHEMY_API_KEY"], async () => (await import("../src/rpc-terms.js")).defaultSolanaRpcs({})[0] ?? null),
   };
   const explicit = config.defaults || {};
   const texts = new Map();

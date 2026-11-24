@@ -84,7 +84,8 @@
     "COINGECKO_UNSETTLED_PER_CALLER_HOUR": "8",
     "CREDITS_INDEXES": "on",
     "FUNNEL_FOUND_CAP": "50000",
-    "FUNNEL_FOUND_WINDOW_MS": "21600000"
+    "FUNNEL_FOUND_WINDOW_MS": "21600000",
+    "SOLANA_RPC_URL": "https://solana-rpc.publicnode.com"
   },
   "builtInDefaults": {
     "ALGORAND_FACILITATOR_URL": "an outside facilitator's endpoint",
@@ -968,7 +969,7 @@
     "SOLANA_LB_STUCK_READ_SCANS": "Solana lb stuck read scans.",
     "SOLANA_LEADERBOARD": "Solana leaderboard.",
     "SOLANA_RPCS": "Solana RPC endpoints.",
-    "SOLANA_RPC_URL": "Solana RPC endpoint URL.",
+    "SOLANA_RPC_URL": "Solana RPC endpoint URL; unset, the keyed lane when ALCHEMY_API_KEY is set, else the public endpoint listed as the default.",
     "SOLANA_DEVNET_RPC_URL": "Solana devnet RPC endpoint URL for wallet-balances on solana-devnet; unset, the devnet host of the same keyed provider as SOLANA_RPC_URL is used when it has one.",
     "SOLANA_UPSTREAM_BUYER_KEY": "Private key of the Solana spending wallet route-execute buys with (a credential, set on the host).",
     "SOLANA_UPSTREAM_BUYER_LOW_USD": "Solana upstream buyer low, in USD.",
