@@ -126,7 +126,7 @@ try {
   // ---- a bundle product's failure is read as its leg's, against the hosts the bundle declares
   {
     const limitedWords = "The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later";
-    const bundleBody = (leg, words, unit = "Chicago DC") => ({ error: `6 of 6 unit(s) could not be completed on the source's side (first: ${unit}, ${leg}: ${words}). Nothing was charged; retry later` });
+    const bundleBody = (leg, words, unit = "Chicago DC") => ({ error: `6 of 6 unit(s) could not be completed on the source's side (first: ${unit}, ${leg}: ${words}). Nothing was charged. Retry later.` });
     const legs = ["stub-tool", "other-tool"];
     const inner = bundleLegAnswer(503, bundleBody("stub-tool", limitedWords), legs);
     ok(inner?.leg === "stub-tool" && inner.status === 503 && inner.body.error === limitedWords, "a bundle's source-side failure names its leg and carries the leg's own message");
@@ -182,7 +182,7 @@ try {
       ok(hostsOf(slug).some((h) => h.endsWith(".open-meteo.com")), `${slug} (reads through the weather kit's helper) names an Open-Meteo host`);
     }
     // The exact answer that failed a sweep: the forecast host rate-limited the runner.
-    const real = { error: "6 of 6 unit(s) could not be completed on the source's side (first: Chicago DC, weather-thresholds: The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later). Nothing was charged; retry later" };
+    const real = { error: "6 of 6 unit(s) could not be completed on the source's side (first: Chicago DC, weather-thresholds: The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later). Nothing was charged. Retry later." };
     const realRow = { url: "https://api.open-meteo.com/v1/forecast?latitude=41.88&longitude=-87.63&hourly=temperature_2m&forecast_hours=168", host: "api.open-meteo.com", status: 429 };
     const realFor = (got) => bundleOutageVerdict({ slug: "weather-risk-brief", legs: BUNDLE_LEGS["weather-risk-brief"], status: 503, body: real, t0: 900, t1: 1100, logPath: log, readStatus: async () => got });
     rmSync(log, { force: true }); row(realRow);
@@ -192,7 +192,7 @@ try {
     const cgWords = "Market data upstream rate-limited this request - retry in about 60 seconds";
     ok(legRefusalStatus(503, { error: cgWords }) === 429 && legRefusalStatus(503, { error: limitedWords }) === 429 && legRefusalStatus(502, { error: cgWords }) === null && legRefusalStatus(503, { error: "Market data is not configured on this deployment. You were not charged." }) === null && legRefusalStatus(503, { error: "This server paces its Market data requests and has no room this moment; retry in 1 s." }) === null,
       "a market leg's rate-limit answer reads as the source's 429; its other 503s (not configured, our own pacing) do not");
-    const cgBody = { error: `4 of 4 unit(s) could not be completed on the source's side (first: bitcoin, coin-profile: ${cgWords}). Nothing was charged; retry later` };
+    const cgBody = { error: `4 of 4 unit(s) could not be completed on the source's side (first: bitcoin, coin-profile: ${cgWords}). Nothing was charged. Retry later.` };
     const cgRow = { url: "https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&market_data=true", host: "api.coingecko.com", status: 429 };
     const cgFor = (got, o = {}) => bundleOutageVerdict({ slug: "token-diligence", legs: BUNDLE_LEGS["token-diligence"], status: 503, body: cgBody, t0: 900, t1: 1100, logPath: log, readStatus: async () => got, ...o });
     rmSync(log, { force: true }); row(cgRow);
