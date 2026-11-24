@@ -273,10 +273,10 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   ok(two.trimmed.join() === "input-descriptions-short,input-descriptions" && !JSON.stringify(two.slim.inputSchema).includes("xxxx") && two.slim.output.example === block.output.example && two.description === long,
     `budget: past the short descriptions they go (${two.trimmed.join()})`);
   {
-    const bounded = { input: { q: "a" }, inputSchema: { type: "object", properties: { q: { type: "string", maxLength: 81, enum: ["a", "b"], description: "z".repeat(300) } } }, output: { type: "json", example: { ok: true } } };
+    const bounded = { input: { q: "a" }, inputSchema: { type: "object", properties: { q: { type: "string", maxLength: 81, enum: ["a", "b"], default: "a".repeat(200), description: "z".repeat(300) } } }, output: { type: "json", example: { ok: true } } };
     const typesOnlySize = JSON.stringify(declare({ ...bounded, inputSchema: { type: "object", properties: { q: { type: "string", maxLength: 81, enum: ["a", "b"] } } } })).length + 5;
     const kept = fitChallenge(bounded, "short", declare, typesOnlySize);
-    ok(kept.slim.inputSchema.properties.q.maxLength === 81 && JSON.stringify(kept.slim.inputSchema.properties.q.enum) === '["a","b"]' && kept.slim.inputSchema.type === "object" && !kept.trimmed.includes("input-types-bare"),
+    ok(kept.trimmed.includes("input-types-only") && !("default" in kept.slim.inputSchema.properties.q) && kept.slim.inputSchema.properties.q.maxLength === 81 && JSON.stringify(kept.slim.inputSchema.properties.q.enum) === '["a","b"]' && kept.slim.inputSchema.type === "object" && !kept.trimmed.includes("input-types-bare"),
       `budget: past the descriptions a field keeps its bounds (enum, lengths) before they go (${kept.trimmed.join()})`);
     const noType = fitChallenge({ ...bounded, inputSchema: { properties: bounded.inputSchema.properties } }, "short", declare, 10);
     ok(!("type" in noType.slim.inputSchema), "budget: the types-only cut adds no type the schema did not have");
