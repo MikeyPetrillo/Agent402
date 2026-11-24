@@ -7,7 +7,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { encodeAbiParameters, decodeFunctionData, parseAbi } from "viem";
 import {
-  readTokenFacts, readSourcify, simulateTrade, holderIndex, taxPct, decodeText, abiFlags, minimalProxyTarget,
+  readTokenFacts, readSourcify, simulateTrade, rpcBatch, holderIndex, taxPct, decodeText, abiFlags, minimalProxyTarget,
   tokenRpcLanes, TOKEN_CHAINS, SLOTS, SIM_BUYER, MAX_RPC_REQUESTS, HOLDER_LOG_CAP,
 } from "../src/tools/token-facts.js";
 import { isNonCommercialRpc } from "../src/rpc-terms.js";
@@ -281,6 +281,10 @@ const reason = (f, field) => f.limits.find((l) => l.field === field)?.reason || 
   ok(s0.ran === false && /did not complete/.test(s0.reasons.honeypot) && st.requests === 1, "a simulation whose lane does not answer is reported as not completed, after one request");
   const late = await simulateTrade({ lanes: ["x"], requests: 0, deadline: Date.now() + 1000 }, { token: TOKEN, pool: POOL, poolBal: 100n });
   ok(late.ran === false && /time budget was spent/.test(late.reasons.honeypot), "with the time budget nearly spent, the simulation is skipped and says so");
+  let sent = 0;
+  globalThis.fetch = async () => { sent++; return new Response("[]", { status: 200 }); };
+  const spent = await rpcBatch({ lanes: ["https://rpc.test/a"], requests: MAX_RPC_REQUESTS, deadline: Date.now() + 10_000 }, [{ method: "eth_blockNumber", params: [] }], "a read").then(() => null, (e) => e).finally(() => { globalThis.fetch = realFetch; });
+  ok(spent?.statusCode === 503 && spent.budgetSpent === true && sent === 0, "a call whose request budget is spent sends nothing and says so");
   ok(SIM_BUYER === SIM_BUYER.toLowerCase() && /^0x[0-9a-f]{40}$/.test(SIM_BUYER), "the simulated buyer is a fixed address");
 }
 

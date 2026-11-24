@@ -119,6 +119,7 @@ for (const [label, g] of [
     ok(r.verdict === "caution" && r.because === "supply is mintable" && r.facts.honeypot === null && r.unknown.includes("honeypot") && r.unknown.includes("sell tax"), "no pool listed: the verdict names the fact it read and lists the uncomputed checks as unknown");
     ok(r.limits.some((l) => l.field === "honeypot" && /no DEX pool/.test(l.reason)) && r.credit === SOURCIFY_ATTRIBUTION && r.source === TOKEN_SAFETY_SOURCE, "limits say why; the Sourcify credit rides an answer whose verification was read");
     ok(Object.keys(r.facts).join(",") === FACT_FIELDS.join(","), "the live answer's facts are the published fields");
+    ok(r.limits.length > 0 && r.limits.every((l) => FACT_FIELDS.includes(l.field)), `the live answer's limits name only fields it carries (${r.limits.map((l) => l.field).join(", ")})`);
   } finally { globalThis.fetch = realFetch; }
 }
 
