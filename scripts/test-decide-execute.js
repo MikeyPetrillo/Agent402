@@ -584,6 +584,21 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const def = buildDecideTools({ getCatalog: () => catalog, ledger, now }).find((t) => t.slug === "decide-execute");
   ok(def.chargesActualSpend === true && typeof def.uptoQuote === "function", "decide-execute settles actual spend and carries its own upto ceiling");
   ok(def.quote({ decisionId: "dX", maxBudgetUsd: 0.05 }) === 0.01 && def.uptoQuote({ decisionId: "dX", maxBudgetUsd: 0.05 }) === 0.05, "its quote is the exact price and its uptoQuote the ceiling");
+  // The 402's accepts: upto first on Base at the ceiling, exact after at the
+  // fixed price; a request PAID on upto carries the ceiling as its one quote.
+  const { acceptsForItem } = await import("../src/payments.js");
+  const rails = { evmCaip2: ["eip155:8453", "eip155:137"], svmCaip2: [], stellarCaip2: [], avmCaip2: [], walletAddress: "0x000000000000000000000000000000000000dEaD", uptoCaip2: ["eip155:137", "eip155:8453"] };
+  const acc = acceptsForItem(def, rails);
+  ok(acc.map((a) => `${a.scheme}@${a.network}`).join(",") === "upto@eip155:8453,exact@eip155:8453", `upto is listed first, on the route's own network only (${acc.map((a) => `${a.scheme}@${a.network}`).join(",")})`);
+  const body = { decisionId: "dX", maxBudgetUsd: 0.05 };
+  const unpaid = { body, headers: {}, header: () => undefined, method: "POST", query: {} };
+  const ctxOf = (req) => ({ adapter: { req, getBody: () => body } });
+  const unpaidPrices = await Promise.all(acc.map((a) => a.price(ctxOf(unpaid))));
+  ok(unpaidPrices[0] === "$0.05" && unpaidPrices[1] === "$0.01" && unpaid.__meteredQuoteUsd === 0.01 && unpaid.__uptoQuoteUsd === 0.05, `the unpaid 402 quotes the ceiling on upto and the plan on exact (${unpaidPrices.join(" / ")})`);
+  const uptoSig = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "upto", network: "eip155:8453" }, payload: {} })).toString("base64");
+  const paidU = { body, headers: { "payment-signature": uptoSig }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? uptoSig : undefined), method: "POST", query: {} };
+  await Promise.all([...acc].reverse().map((a) => a.price(ctxOf(paidU))));
+  ok(paidU.__meteredQuoteUsd === 0.05, `a request paid on upto carries the ceiling it signed as its quote (${paidU.__meteredQuoteUsd})`);
   // An exact payment at the fixed price runs with no refusal and leaves nothing unspent.
   const exactHeader = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", amount: "10000" }, payload: {} })).toString("base64");
   const xreq = { headers: { "payment-signature": exactHeader }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? exactHeader : undefined), ip: "0xexactfix", __meteredQuoteUsd: fixedQ };
