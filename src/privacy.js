@@ -148,7 +148,7 @@ replay: nothing you click, type or see on a page is recorded. Pages also run
 <b>Google Analytics</b> (advertising features off) to count visits, see how people find the site and count clicks that start a report or monitor checkout (the product name only, never what you type). It sets a measurement cookie
 (<code>_ga</code>) and Google receives your IP address and browser details under
 <a href="https://policies.google.com/privacy" rel="noopener">Google's privacy policy</a>. Advertising
-features, ad personalization and Google signals are off; Google Analytics keeps its data for 14 months. If you
+features, ad personalization and Google signals are off; Google Analytics keeps its event and user data for 2 months. If you
 are in the European Union, the European Economic Area, the United Kingdom or Switzerland, neither Google Analytics nor the page counter loads until you choose "Allow" in the strip at the bottom of the
 page: nothing is sent to Google and nothing is counted before that. We tell from your browser's time zone, or,
 when that is not European, from the country our network provider reports for the request, which we read once
@@ -160,7 +160,7 @@ alerts are the form that takes an address, and it
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
 keep, and for how long, is listed below, including the backups of it. The providers that receive it and how
 the stores are protected are summarized at <a href="/trust">/trust</a>. A business that sends personal data
-through the service is covered by our <a href="/dpa">Data Processing Addendum</a>. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
+through the service can ask for our <a href="/dpa">Data Processing Addendum</a>. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
 so every claim below is verifiable in code.</p>
 
 <h2>What we process, and why</h2>
@@ -268,7 +268,8 @@ so every claim below is verifiable in code.</p>
   Requests reach our server through Cloudflare, which adds headers locating the visitor from the IP address
   (country, region, city and approximate coordinates); we read only the country and the region, in memory, to
   refuse requests from sanctioned regions and, for the analytics choice above, the country, and we do not store
-  or log any of them.
+  or log any of them, with one exception: a request refused from a sanctioned region that carried a payment keeps
+  the sanctioned country or region code as the reason it was refused (see Retention).
   The tollbooth waitlist form is closed, and every record it collected has been deleted from our
   database; those records were never part of our offsite backups.</li>
   <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat in the
@@ -318,7 +319,7 @@ so every claim below is verifiable in code.</p>
   <li><b>Card purchases (reports, monitors and prepaid credits).</b> Card details are entered on Stripe's
   hosted checkout and processed by <a href="https://stripe.com/privacy" rel="noopener">Stripe</a>; we never see card
   numbers. Stripe gives us the email address you entered, a customer and session id, and the payment
-  status. A delivered report is private to its link unless you choose "Make public" on it, which gives it a second, unguessable address that anyone can read and search engines may index (you can make it private again any time, and the report never contains your name or email). We use the email to deliver what you bought and, after a one-off report, for at most two follow-up emails about that purchase (the monitor for the same subject two days later, other reports a week later), each carrying a link that stops them; if a report fails we email you about the refund. The report link, monitor reports and alerts are
+  status. A delivered report is private to its link unless you choose "Make public" on it, which gives it a second, unguessable address that anyone can read and search engines may index (you can make it private again any time, and the report never contains your name or email). We use the email to deliver what you bought and, after a one-off report, for at most two follow-up emails about that purchase (the monitor for the same subject two days later, other reports a week later); you can turn them off at checkout ("No follow-up emails"), and each carries a link that stops them; if a report fails we email you about the refund. The report link, monitor reports and alerts are
   sent through a transactional email provider (ZeptoMail, with Resend as a fallback). Stripe keeps the
   email address with your payment; the report record on our server holds the session id, your input, the
   finished report and the signed receipt we issued for it at delivery (SHA-256 digests of the request and of
@@ -528,9 +529,12 @@ records; the card processor's copy is deleted through Stripe. The sales ledger k
 on-chain${gatewayBatched ? " (for a Circle Gateway batched payment, it keeps Gateway's transfer id instead)" : ""}. The sales and refund
 ledgers (wallet address, amount, chain, transaction id, tool, response digest${referralOn ? ", and for a referral payment the split its transaction shows" : ""}) are kept for seven years after
 the sale, the period our accounting and tax records must cover. A record of a payment refused or held under sanctions
-screening (the address, rail, network, amount, route, time and list entry) is kept for ten years, as US sanctions rules
-require. A feedback verdict and its reason are kept with the sale they rate${awsOn ? `; an AWS payment that bought no answer is kept ${AWS_UNANSWERED_KEEP_DAYS} days` : ""}.
-Server events in our analytics tool are kept for the period our analytics plan sets, and Google Analytics data for 14 months. Aggregate, non-personal counters (total calls served per tool) are kept for the public
+screening, or refused because it came from a sanctioned region (the address, rail, network, amount, route, time, the IP
+address the request came from, the list entry, and for a refusal by location the sanctioned country or region code), is
+kept privately for ten years, as US sanctions rules require. The consent a card checkout records (that you accepted
+the terms, asked us to start at once and, for a monitor, agreed to the automatic renewal at the price shown, with the
+time and the checkout session id) is kept with the purchase or subscription record for as long as that record is kept. A feedback verdict and its reason are kept with the sale they rate${awsOn ? `; an AWS payment that bought no answer is kept ${AWS_UNANSWERED_KEEP_DAYS} days` : ""}.
+Server events in our analytics tool (PostHog) are kept for one year, and Google Analytics event and user data for 2 months. Aggregate, non-personal counters (total calls served per tool) are kept for the public
 <a href="/api/stats">/api/stats</a> page.</p>
 <p><b>Backups.</b> Each night we copy the stored records above (the state database, including the
 email, memory and ledger records) to separate object storage, and each copy is deleted

@@ -39,6 +39,9 @@ const privacy = privacyPage(BASE), privacyText = strip(privacy);
 
 // 1. Age
 ok(/must be 18 or older/.test(termsText) && !/must be at least 18/.test(termsText) && /not directed at children/.test(termsText) && /under 13/.test(termsText), "terms: 18 and older, not directed at children, nothing knowingly collected under 13; the age rule stated once");
+ok(/Google Analytics keeps its event and user data for 2 months/.test(privacyText) && /PostHog\) are kept for one year/.test(privacyText) && !/14 months/.test(privacyText), "privacy: the analytics retention periods set in each tool");
+ok(/IP address the request came from/.test(privacyText) && /sanctioned country or region code/.test(privacyText) && /kept privately for ten years/.test(privacyText), "privacy: every field the sanctions events store keeps, and for how long");
+ok(/consent a card checkout records/.test(privacyText) && /No follow-up emails/.test(privacyText), "privacy: checkout consent records and the follow-up opt-out");
 ok(/18 and older/.test(privacyText) && /under 13/.test(privacyText) && /we will delete it/.test(privacyText), "privacy: children statement says how to have a child's data deleted");
 
 // 2. Externally loaded fonts and stylesheets

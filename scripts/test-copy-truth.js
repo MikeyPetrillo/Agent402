@@ -26,7 +26,9 @@ const flat = (s) => { let out = "", inTag = false; for (const ch of s) { if (inT
 // --- Card reports: charged at checkout ---------------------------------------
 {
   const hc = read("src/human-checkout.js");
-  const at = hc.indexOf("stripe.checkout.sessions.create({");
+  // The session is made through the consent wrapper (src/checkout-consent.js
+  // createWithConsent), which passes these params to Stripe unchanged.
+  const at = Math.max(hc.indexOf("stripe.checkout.sessions.create({"), hc.indexOf("createWithConsent(stripe, {"));
   const block = at >= 0 ? hc.slice(at, at + 2500) : "";
   const chargedAtCheckout = /mode: "payment"/.test(block) && !/capture_method/.test(hc);
   ok(chargedAtCheckout, "card report checkout is mode \"payment\" with no manual capture: the card is charged at checkout");
