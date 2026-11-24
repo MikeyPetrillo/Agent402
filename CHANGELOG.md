@@ -6,6 +6,14 @@ carries its own version on npm.
 
 ## v2.16.0 - 2026-11-24
 
+### 2026-11-24 (neutral provider and server tool names)
+Gateway:
+- Speech and transcription answers name agent402 in their provider field;
+  the model field still names the model that ran.
+- The pro and premium chat tiers list their server tools as agent402:web_search,
+  agent402:web_fetch and agent402:datetime on /v1/models; the earlier type
+  names are still accepted on input.
+
 ### 2026-11-24 (plain connector names, Algorand catalog, Ink relayer, dependency moves)
 Tools:
 - rwa-markets says why a reference rate is missing (referenceStatus read,
@@ -2473,7 +2481,7 @@ Server:
 - The LLM tiers advertise the successors of the OpenAI models retiring
   2026-12-11; the retiring ids are still accepted.
 - /api/llm-premium's refusal lists every model family it accepts.
-- The insider, LinkedIn article and IPO reports fence the filer- and
+- The insider, professional article and IPO reports fence the filer- and
   publisher-written text they read.
 - Daily upstream ceilings no longer count a call the upstream refused.
 - /mcp and the revenue view redact secrets from error text, including keys

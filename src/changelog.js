@@ -57,6 +57,14 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 const ENTRIES = [
   {
     date: "2026-11-24",
+    title: "Neutral provider and server tool names",
+    items: [
+      "Gateway: Speech and transcription answers name agent402 in their provider field; the model field still names the model that ran.",
+      "Gateway: The pro and premium chat tiers list their server tools as agent402:web_search, agent402:web_fetch and agent402:datetime on /v1/models; the earlier type names are still accepted on input.",
+    ],
+  },
+  {
+    date: "2026-11-24",
     title: "Plain connector names, Algorand catalog, Ink relayer, dependency moves",
     items: [
       "Tools: rwa-markets says why a reference rate is missing (referenceStatus read, rate_table_unreadable or rate_not_listed) and never reports a missing rate as 0.",
