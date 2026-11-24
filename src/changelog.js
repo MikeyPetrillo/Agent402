@@ -120,7 +120,7 @@ const ENTRIES = [
       "Packages: agent402-tollbooth 0.13.0 answers `--help` and `--version`, ships its `deploy/` files, and charges a request with an empty User-Agent, except an empty-User-Agent GET or HEAD of a health path (`healthPaths`, default `/healthz` and `/health`; `TOLLBOOTH_HEALTH_PATHS` for the CLI, matched exactly on the raw request path), so a load balancer's health check keeps passing. A minor release: an empty User-Agent elsewhere now pays.",
       "Packages: agent402-mcp 0.17.0: `wallet new --help` prints the usage and makes no key.",
       "Packages: The meta-tool adapters pass the server's error body through to the caller.",
-      "Packages: The other adapters (agent402-eliza 0.3.2 among them) and agent402-openclaw add the server's error text to a failed catalog or discovery read.",
+      "Packages: The other adapters (elizaos-plugin-agent402 0.3.2 among them) and agent402-openclaw add the server's error text to a failed catalog or discovery read.",
     ],
   },
   {
@@ -130,7 +130,7 @@ const ENTRIES = [
       "Packages: agent402-mcp 0.17.0: `npx agent402-mcp wallet new` makes a fresh wallet key on this computer, stores it where `npx agent402-mcp setup` would, and prints the wallet's address, how to fund it and the client config; the key is never printed, and a key already stored is never replaced.",
       "Packages: agent402-client 0.12.1, agent402-tollbooth 0.13.0 and agent402-openclaw 0.6.2 publish their READMEs with the lead sentence that scopes signed receipts to successful direct calls.",
       "Packages: agent402-mcp 0.17.0: no daily budget is written or applied by default, for a new setup or an existing one; `setup` and `wallet new` print one line showing how to set `AGENT402_MAX_USD_PER_DAY`, and a server with no daily cap says so in one line at start. The $5 per-call cap is unchanged.",
-      "Packages: agent402-langchain 0.2.13, agent402-ai-sdk 0.2.14, agent402-openai-agents 0.1.14 and agent402-google-adk 0.1.14 refuse a paid call listed above $5 by default (`maxPerCallUsd`; `0` or `off` turns it off), take an opt-in `dailyLimitUsd`, and refuse a proof-of-work challenge above 28 bits; agent402-langchain for Python 0.1.7 does the same through `max_per_call_usd` and `daily_limit_usd`, its own option names.",
+      "Packages: agent402-langchain 0.2.13, agent402-ai-sdk 0.2.14, agent402-openai-agents 0.1.14 and agent402-google-adk 0.1.14 refuse a paid call listed above $5 by default (`maxPerCallUsd`; `0` or `off` turns it off), take an opt-in `dailyLimitUsd`, and refuse a proof-of-work challenge above 28 bits; the Python adapter does the same from its next PyPI release, through `max_per_call_usd` and `daily_limit_usd`, its own option names.",
       "Packages: agent402-openclaw 0.6.2, agent402-agentkit 0.2.1, agent402-anthropic-tools, agent402-openai-tools, agent402-llamaindex and agent402-strands 0.2.2 ship TypeScript declarations, as do the four adapters above.",
       "Packages: agent402-tollbooth 0.13.0 charges Claude-SearchBot, MistralAI-User, GoogleOther and other current AI crawlers by default, refuses to start in one line when its facilitator does not settle the configured network, and names the path when its SQLite replay store cannot be opened.",
       "Site: Every install line on the site and in the docs pins agent402-mcp 0.17.0.",
