@@ -10,11 +10,16 @@ Two entry points:
 | File | What it is | Use it to |
 |------|------------|-----------|
 | `direct_buy.py` | Deterministic loop, no LLM: fetch → 402 → sign → retry → verify | **Prove the wallet works.** Reliable, scriptable. |
-| `agent_buy.py` | A Strands agent + the AgentCore Payments plugin + an HTTP tool | **Showcase.** The agent runs a web search, then a cited answer, and the plugin settles each 402. |
+| `agent_buy.py` | A Strands agent + the AgentCore Payments plugin + an HTTP tool | **Showcase.** The agent lists a company's SEC filings, then its filed revenue and total assets, and the plugin settles each 402. |
 
-`agent_buy.py` runs a web search and then a cited answer, each paid from the wallet:
-`GET https://agent402.tools/api/search?q=x402+payment+protocol+adoption&count=5`, then
-`GET https://agent402.tools/api/answer?q=what+is+the+x402+payment+protocol%3F`.
+`agent_buy.py` reads Apple's SEC filings (SEC EDGAR, public domain), each call paid from the wallet:
+`GET https://agent402.tools/api/edgar-filings?ticker=AAPL&form=10-K&limit=5` answers the five
+newest 10-K filings (`filings[]`, each with its `filingDate`, `reportDate` and document `url`), then
+`GET https://agent402.tools/api/edgar-company-facts?ticker=AAPL&tags=RevenueFromContractWithCustomerExcludingAssessedTax,Assets`
+answers each concept's filed values (`taxonomies["us-gaap"].<concept>.units.USD[]`, each with
+`end`, `val`, `form` and `fp`), from which the agent reports the latest fiscal year's revenue and
+total assets. Apple files revenue under `RevenueFromContractWithCustomerExcludingAssessedTax`; its `Revenues`
+concept stops at fiscal 2018.
 
 `direct_buy.py` buys a deterministic target, `POST https://agent402.tools/api/hash` with
 `{"text":"hello world","algo":"sha256"}`, so it can verify the paid response equals

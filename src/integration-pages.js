@@ -561,7 +561,7 @@ const a = new Agent402({ fetch: payFetch });   // https://agent402.tools, paying
 
 // SEC filings, then the filed financials: each call paid on its own
 const filings = await a.call("edgar-filings", { ticker: "AAPL", form: "10-K", limit: 5 });
-const facts = await a.call("edgar-company-facts", { ticker: "AAPL", tags: "Revenues,Assets" });
+const facts = await a.call("edgar-company-facts", { ticker: "AAPL", tags: "RevenueFromContractWithCustomerExcludingAssessedTax,Assets" });
 console.log(filings, facts);
 
 const matches = await a.find("extract the article from a url");
