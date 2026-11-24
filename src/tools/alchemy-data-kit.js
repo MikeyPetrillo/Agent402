@@ -966,7 +966,7 @@ export const ALCHEMY_DATA_TOOLS = [
     category: "crypto",
     price: "$0.01",
     description:
-      "A wallet's token and native transfers on up to 5 EVM networks in one call (Ethereum, Base, Arbitrum, Optimism, Polygon, BNB, Celo, Gnosis, Arc and more), merged newest first by block time: network, block, time, hash, from, to, category, asset, exact decimal value, token contract and NFT token ids. Filter by direction, category, token contracts and a time window; page with the cursor. Each network's state is in the answer, so a network that did not answer is never read as having no transfers.",
+      "A wallet's token and native transfers on up to 5 EVM networks in one call (Ethereum, Base, Arbitrum One, OP Mainnet, Polygon, BNB, Celo, Gnosis, Arc and more), merged newest first by block time: network, block, time, hash, from, to, category, asset, exact decimal value, token contract and NFT token ids. Filter by direction, category, token contracts and a time window; page with the cursor. Each network's state is in the answer, so a network that did not answer is never read as having no transfers.",
     tags: ["crypto", "transfers", "multichain", "wallet", "history", "erc20", "erc721", "evm", "ethereum", "base", "arbitrum"],
     discovery: {
       bodyType: "json",

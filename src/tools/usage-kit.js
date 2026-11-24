@@ -55,7 +55,7 @@ export const USAGE_TOOLS = [
     category: "payments",
     price: "$0.005",
     description:
-      "Your own purchase history, keyed to the wallet that pays for the call - no wallet parameter, no signup: the x402 payment IS the identity, so nobody can read another wallet's profile. Returns totals, per-tool counts, per-chain breakdown, recent receipts with settle tx hashes (independently verifiable on-chain), and this wallet's refunds: any payment that settled for a call that failed to deliver, with its status and our refund transaction once sent. Anyone holding a settlement tx can also check it for free at GET /api/refunds/lookup?tx=<hash>. Requires an EIP-3009 payment (USDC on Base, Polygon, or Arbitrum); Solana/Stellar payments carry no signed payer the server can verify.",
+      "Your own purchase history, keyed to the wallet that pays for the call - no wallet parameter, no signup: the x402 payment IS the identity, so nobody can read another wallet's profile. Returns totals, per-tool counts, per-chain breakdown, recent receipts with settle tx hashes (independently verifiable on-chain), and this wallet's refunds: any payment that settled for a call that failed to deliver, with its status and our refund transaction once sent. Anyone holding a settlement tx can also check it for free at GET /api/refunds/lookup?tx=<hash>. Requires an EIP-3009 payment (USDC on Base, Polygon, or Arbitrum One); Solana/Stellar payments carry no signed payer the server can verify.",
     tags: ["usage", "receipts", "billing", "audit", "wallet", "x402", "history"],
     discovery: {
       bodyType: "json",
@@ -109,7 +109,7 @@ export const USAGE_TOOLS = [
     category: "payments",
     price: "$0.005",
     description:
-      "Your own settled calls in the shape a finance system posts: one row per payment with what was bought, the amount settled, the quoted ceiling where one applied, and the evidence - settlement transaction, sha256 of the bytes delivered, and the on-chain attestation id where one exists. Keyed to the wallet that pays for the call, so nobody can read another wallet's payables; no account, no export request, no support ticket. Requires an EIP-3009 payment (USDC on Base, Polygon, or Arbitrum). Use format \"csv\" for a subledger import.",
+      "Your own settled calls in the shape a finance system posts: one row per payment with what was bought, the amount settled, the quoted ceiling where one applied, and the evidence - settlement transaction, sha256 of the bytes delivered, and the on-chain attestation id where one exists. Keyed to the wallet that pays for the call, so nobody can read another wallet's payables; no account, no export request, no support ticket. Requires an EIP-3009 payment (USDC on Base, Polygon, or Arbitrum One). Use format \"csv\" for a subledger import.",
     tags: ["receipts", "accounting", "reconciliation", "audit", "erp"],
     aliases: ["invoice", "invoices", "journal", "ledger-export", "accounts-payable"],
     discovery: {

@@ -93,5 +93,29 @@ ok(sumBefore === sumAfter, `merging conserves the total (${sumBefore} -> ${sumAf
   ok(/networkLabel: chainKey \? chainDisplayName\(chainKey\) : null/.test(server), "the chain pages' host figures name the chain with chainDisplayName");
 }
 
+// 6. Tool descriptions, the curated Bazaar listings and the flagship list name
+//    chains officially. A param's value list keeps its keys (lowercase), and
+//    the GoPlus tools wait on an owner decision.
+{
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const SHORT = /\b(Optimism\b(?!:)|Arbitrum\b(?! One| Orbit| Sepolia)|Avalanche\b(?! C-Chain| Fuji)|Robinhood\b(?! Chain))/;
+  const files = [...readdirSync(new URL("../src/tools/", import.meta.url)).filter((f) => f.endsWith(".js") && f !== "token-safety-kit.js").map((f) => `src/tools/${f}`), "src/mpp-flagship.js"];
+  const hits = [];
+  for (const f of files) {
+    readFileSync(new URL(`../${f}`, import.meta.url), "utf8").split("\n").forEach((line, i) => {
+      const t = line.trim();
+      if (t.startsWith("//") || t.startsWith("*")) return;
+      if (!/description|why:|^"|^`/.test(t)) return;
+      if (/label: "Optimism: /.test(t)) return; // a contract's own label
+      if (SHORT.test(line)) hits.push(`${f}:${i + 1}`);
+    });
+  }
+  ok(hits.length === 0, `tool descriptions name chains officially (${hits.slice(0, 6).join(", ") || "none"})`);
+  const { BAZAAR_DESCRIPTIONS } = await import("../src/payments.js");
+  const curated = Object.entries(BAZAAR_DESCRIPTIONS).filter(([, d]) => SHORT.test(d)).map(([k]) => k);
+  ok(curated.length === 0, `curated Bazaar listings name chains officially (${curated.join(", ") || "none"})`);
+  ok(SHORT.test("on Arbitrum or Optimism") && !SHORT.test("on Arbitrum One or OP Mainnet (an Arbitrum Orbit chain)"), "CONTROL: the check catches a short name and passes the official ones");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

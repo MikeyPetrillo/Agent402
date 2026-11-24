@@ -336,7 +336,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Look up the native coin balance (ETH/MATIC) plus every ERC-20 holding for a wallet address on Ethereum, Base, Polygon, Arbitrum, or Optimism. Returns clean decimal balances (already scaled by token decimals) plus symbol and contract - ready to display in a UI or feed into a portfolio tool.",
+      "Look up the native coin balance (ETH/MATIC) plus every ERC-20 holding for a wallet address on Ethereum, Base, Polygon, Arbitrum One, or OP Mainnet. Returns clean decimal balances (already scaled by token decimals) plus symbol and contract - ready to display in a UI or feed into a portfolio tool.",
     tags: ["crypto", "wallet", "balance", "erc20", "evm", "base", "ethereum", "token", "balances"],
     discovery: {
       bodyType: "json",
@@ -849,7 +849,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "The latest block number on Ethereum, Base, Polygon, Arbitrum, or Optimism: returns network, blockNumber (integer) and hex. The cheapest possible on-chain read - the hello world of paid chain access. For block number plus chain id and gas price in one call use chain-info. Keyless multi-endpoint failover. ?network=base",
+      "The latest block number on Ethereum, Base, Polygon, Arbitrum One, or OP Mainnet: returns network, blockNumber (integer) and hex. The cheapest possible on-chain read - the hello world of paid chain access. For block number plus chain id and gas price in one call use chain-info. Keyless multi-endpoint failover. ?network=base",
     tags: ["crypto", "block", "number", "latest", "height", "rpc", "evm", "chain"],
     discovery: {
       input: { network: "base" },
@@ -873,7 +873,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Chain info in one call: chain id, gas price (wei and gwei) and the current block for Ethereum, Base, Polygon, Arbitrum, or Optimism, as chainId, latestBlock, gasPriceWei and gasPriceGwei. Keyless multi-endpoint failover. ?network=base",
+      "Chain info in one call: chain id, gas price (wei and gwei) and the current block for Ethereum, Base, Polygon, Arbitrum One, or OP Mainnet, as chainId, latestBlock, gasPriceWei and gasPriceGwei. Keyless multi-endpoint failover. ?network=base",
     tags: ["crypto", "chain", "info", "chainid", "gas", "price", "block", "rpc", "evm"],
     discovery: {
       input: { network: "base" },
@@ -908,7 +908,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Header-level detail for one block on Ethereum, Base, Polygon, Arbitrum, or Optimism: hash, timestamp (unix + ISO), transaction count, gas used/limit, base fee. Pass a block number, 0x hex, or \"latest\". Keyless multi-endpoint failover. ?block=latest&network=base",
+      "Header-level detail for one block on Ethereum, Base, Polygon, Arbitrum One, or OP Mainnet: hash, timestamp (unix + ISO), transaction count, gas used/limit, base fee. Pass a block number, 0x hex, or \"latest\". Keyless multi-endpoint failover. ?block=latest&network=base",
     tags: ["crypto", "block", "info", "header", "timestamp", "gas", "rpc", "evm"],
     discovery: {
       input: { block: "latest", network: "base" },
@@ -952,7 +952,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Who owns this NFT? Calls ownerOf(tokenId) on any ERC-721 contract on Ethereum, Base, Polygon, Arbitrum, or Optimism. Complements nft-holdings (which lists a WALLET's NFTs) - this answers by TOKEN. Keyless multi-endpoint failover. ?contract=0x…&tokenId=123&network=ethereum",
+      "Who owns this NFT? Calls ownerOf(tokenId) on any ERC-721 contract on Ethereum, Base, Polygon, Arbitrum One, or OP Mainnet. Complements nft-holdings (which lists a WALLET's NFTs) - this answers by TOKEN. Keyless multi-endpoint failover. ?contract=0x…&tokenId=123&network=ethereum",
     tags: ["crypto", "nft", "erc721", "owner", "ownerof", "token", "rpc", "evm"],
     discovery: {
       input: {
@@ -999,7 +999,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Is this address a contract, and what code does it hold? Returns isContract, deployed bytecode size, and the keccak-256 hash of the bytecode (stable fingerprint for comparing deployments) on Ethereum, Base, Polygon, Arbitrum, or Optimism. Keyless multi-endpoint failover. ?address=0x…&network=base",
+      "Is this address a contract, and what code does it hold? Returns isContract, deployed bytecode size, and the keccak-256 hash of the bytecode (stable fingerprint for comparing deployments) on Ethereum, Base, Polygon, Arbitrum One, or OP Mainnet. Keyless multi-endpoint failover. ?address=0x…&network=base",
     tags: ["crypto", "contract", "bytecode", "code", "keccak", "verify", "rpc", "evm"],
     discovery: {
       input: { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", network: "base" },

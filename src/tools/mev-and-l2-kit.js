@@ -473,7 +473,7 @@ export const MEV_AND_L2_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Current gas snapshot across Ethereum + supported L2s (Base, Polygon, Arbitrum, Optimism), sorted cheapest-first. Returns gas price in gwei, latest block number, chain id, and an isL2 flag per chain. Use to route a transaction to the cheapest viable L2 or to track L1→L2 gas spread.",
+      "Current gas snapshot across Ethereum + supported L2s (Base, Polygon, Arbitrum One, OP Mainnet), sorted cheapest-first. Returns gas price in gwei, latest block number, chain id, and an isL2 flag per chain. Use to route a transaction to the cheapest viable L2 or to track L1→L2 gas spread.",
     // Deliberately NOT "l2beat"/"tvs" - those name a TVL/risk dataset, and
     // pointing a gas query at them would be the same wrong-answer failure in
     // the other direction. The "layer 2" spelling is handled in find.js.

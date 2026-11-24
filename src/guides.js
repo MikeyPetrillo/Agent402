@@ -1155,7 +1155,7 @@ on-chain customer detector - is in
     title: "Let your agent pay anyone: the non-custodial x402 payments toolkit",
     seoTitle: "The non-custodial x402 payments toolkit",
     description:
-      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain - across Base, Polygon, Arbitrum, Optimism and Ethereum. These tools never touch funds.",
+      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain - across Base, Polygon, Arbitrum One, OP Mainnet and Ethereum. These tools never touch funds.",
     md: `
 An autonomous agent that can *pay* is far more useful than one that can't - but
 you don't want a middleman holding your money. Agent402's payments tools are
@@ -1164,7 +1164,7 @@ These tools never hold, sign, or send funds - they decode quotes, read public
 chain state, and build the authorization *you* sign. (Two paths elsewhere on
 the service are not non-custodial and we say so: ${creditsPrepaymentPhrase()}, and a card report purchase is an ordinary card
 charge, taken at checkout; if the report fails to generate, the charge is refunded to the card automatically.) Everything below works on
-**Base, Polygon, Arbitrum, Optimism and Ethereum** (\`network\` param, default
+**Base, Polygon, Arbitrum One, OP Mainnet and Ethereum** (\`network\` param, default
 base); \`tx-status\` and \`gas-estimate\` also read Robinhood Chain. None of it
 needs an API key.
 
