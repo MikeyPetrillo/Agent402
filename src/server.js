@@ -12221,7 +12221,7 @@ app.get("/__operator/referral-legs.json", async (req, res) => {
   if (!REFERRAL_LEGS) return res.json({ enabled: false });
   const thisYear = new Date().getUTCFullYear();
   const y = /^\d{4}$/.test(String(req.query?.year || "")) ? Number(req.query.year) : thisYear;
-  try { res.json({ enabled: true, ...(await REFERRAL_LEGS.totals(y)), recorded: REFERRAL_LEGS.view() }); } catch (e) { res.status(503).json({ error: "the split records could not be read", detail: String(e?.message || e).slice(0, 160) }); }
+  try { res.json({ enabled: true, ...(await REFERRAL_LEGS.totals(y)), recorded: REFERRAL_LEGS.view() }); } catch (e) { res.status(503).json({ error: "the split records could not be read", detail: redactSecrets(String(e?.message || e)).slice(0, 160) }); }
 });
 // Per tool over one window (?days=, default 30, at most 90): the answers the
 // referral copy served, the sales booked for it in the sales ledger (gross and
