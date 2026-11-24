@@ -145,7 +145,7 @@ for (let i = 0; i < 60; i++) CATALOG[`GET /api/w${i}`] = def(`w${i}`, async () =
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 mountMcp(app, CATALOG, { baseUrl: "http://localhost", isComputePayable: () => true, taskStoreDir: join(TMP, "store") });
-const server = app.listen(0);
+const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 let rpcId = 0;

@@ -152,7 +152,7 @@ app.post("/paid", handler);
 app.post("/slow", handler);
 app.post("/long", handler);
 app.post("/ident", handler);
-const server = app.listen(0);
+const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const url = `http://127.0.0.1:${server.address().port}/paid`;
 const postTo = async (path, cred, body, headers = {}) => { const r = await fetch(`http://127.0.0.1:${server.address().port}${path}`, { method: "POST", headers: { "content-type": "application/json", Authorization: cred, ...headers }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
@@ -370,7 +370,7 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   }));
   slowApp.use((req, res, next) => (req.tempoSettling ? next() : res.status(402).json({ error: "Payment Required" })));
   slowApp.post("/paid", (req, res) => { handlerStarts.push(Date.now()); res.json({ ok: true }); });
-  const srv = slowApp.listen(0);
+  const srv = slowApp.listen(0, "127.0.0.1");
   await new Promise((r) => srv.once("listening", r));
   const slowUrl = `http://127.0.0.1:${srv.address().port}/paid`;
   const buy = async (h) => { const t0 = Date.now(); const r = await fetch(slowUrl, { method: "POST", headers: { "content-type": "application/json", Authorization: pushCred(h) }, body: JSON.stringify({ text: "x" }) }); return { status: r.status, ms: Date.now() - t0 }; };
@@ -824,7 +824,7 @@ for (const [label, i, firstBody, fail] of [["an unanswered finalize", 76, { text
   front.use(express.json());
   front.use(jobs.middleware);
   front.get("/api/jobs/:id", jobs.statusHandler);
-  const fsrv = front.listen(0);
+  const fsrv = front.listen(0, "127.0.0.1");
   await new Promise((r) => fsrv.once("listening", r));
   const FB = `http://127.0.0.1:${fsrv.address().port}`;
   const h = hashFor(987654);

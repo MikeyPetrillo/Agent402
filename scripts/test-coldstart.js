@@ -19,8 +19,7 @@
 // retry that works.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
-import { getFreePort } from "./lib/free-port.js";
-import { spawn } from "node:child_process";
+import { bootServer } from "./lib/boot-server.js";
 import { createServer } from "node:http";
 
 let pass = 0, fail = 0;
@@ -32,10 +31,6 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // against a paywall that is not there. Same stub-facilitator pattern as
 // scripts/test-trial.js - @x402/core refuses to BUILD a 402 for a scheme the
 // facilitator does not advertise, and nothing is ever settled here.
-const PORT = await getFreePort();
-const FAC_PORT = PORT + 100;
-const TARGET = `http://127.0.0.1:${PORT}`;
-let log = "";
 const facilitator = createServer((req, res) => {
   req.on("data", () => {});
   req.on("end", () => {
@@ -46,33 +41,33 @@ const facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, r));
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: {
-    ...process.env,
-    PORT: String(PORT), FREE_MODE: "", NETWORK: "base", PAYMENT_NETWORKS: "base",
-    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
-    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
-    NODE_ENV: "test", X402_INDEX_CRAWL: "off",
-    WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
-    STATS_ALLOW_EPHEMERAL: "true",
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-child.stdout.on("data", (d) => { log += d; });
-child.stderr.on("data", (d) => { log += d; });
+// Both on port 0, each port read back: the stub from its own address, the
+// server from its listening line (scripts/lib/boot-server.js).
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
+let srv = null;
+let bootError = null;
+try {
+  srv = await bootServer({
+    env: {
+      FREE_MODE: "", NETWORK: "base", PAYMENT_NETWORKS: "base",
+      FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
+      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
+      NODE_ENV: "test", X402_INDEX_CRAWL: "off",
+      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
+      STATS_ALLOW_EPHEMERAL: "true",
+    },
+    stores: false, timeoutMs: 60_000,
+  });
+} catch (e) { bootError = e; }
+const TARGET = srv?.url;
 const done = (code) => {
-  try { child.kill("SIGKILL"); } catch { /* */ }
+  try { srv?.child.kill("SIGKILL"); } catch { /* */ }
   try { facilitator.close(); } catch { /* */ }
   process.exit(code);
 };
-let up = false;
-for (let i = 0; i < 240; i++) {
-  try { if ((await fetch(`${TARGET}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-  await wait(250);
-}
-ok(up, `server booted on :${PORT}`);
-if (!up) { console.error(log.slice(-2000) || "(no output)"); done(1); }
+ok(Boolean(srv), `server booted${srv ? ` on :${srv.port}` : ""}`);
+if (!srv) { console.error(bootError?.message || "(no output)"); done(1); }
 
 // 1. Resolve a task the way llms.txt tells an agent to.
 const find = await (await fetch(`${TARGET}/api/find?q=${encodeURIComponent("hash a string with sha256")}`)).json();
@@ -95,7 +90,10 @@ const chUrl = unpaid.headers.get("x-pow-challenge");
 ok(Boolean(chUrl), "the 402 names the proof-of-work challenge URL");
 
 // 3. The challenge must SAY that hashing and submitting use different fields.
-const ch = await (await fetch(chUrl)).json();
+// The server booted on PORT=0 with no BASE_URL, so the header's origin names
+// port 0: read its path on the port the server bound.
+const chAt = new URL(chUrl);
+const ch = await (await fetch(new URL(chAt.pathname + chAt.search, TARGET))).json();
 ok(typeof ch.challenge === "string" && typeof ch.token === "string", "challenge response carries both `challenge` and `token`");
 ok(ch.challenge !== ch.token, "they are DIFFERENT values — the whole reason this test exists");
 ok(/hash the `challenge`/i.test(ch.submitNote || "") && /submit the `token`/i.test(ch.submitNote || ""),

@@ -21,13 +21,10 @@
 //
 //   node scripts/test-direct-upstream.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { ownStoreEnv } from "./lib/own-stores.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { urlMatches } from "./lib/url-host.js";
 
 delete process.env.UPSTREAM_COSTS_JSON;
@@ -826,26 +823,19 @@ ok(direct.hits.length >= N * 0.4 && direct.hits.length <= N * 0.6, `share 50: th
 
 // ---- booted: operator view and privacy page -------------------------------------
 setEnv({});
-const PORT = await getFreePort();
 const TOKEN = "direct-upstream-test-operator-token-0123456789";
+// PORT=0, the port read back from the listening line (scripts/lib/boot-server.js).
+// Readiness is polled here with the real fetch: the global one is the stub above.
 async function boot(extraEnv) {
-  const log = [];
-  const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: { ...process.env, ...ownStoreEnv("direct-upstream"), PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, ...extraEnv },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", (d) => log.push(String(d)));
-  child.stderr.on("data", (d) => log.push(String(d)));
-  const url = `http://127.0.0.1:${PORT}`;
+  const srv = await bootServer({ env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, ...extraEnv }, stores: "direct-upstream", readyPath: null });
   let up = false;
   for (let i = 0; i < 240 && !up; i++) {
-    try { up = (await realFetch(`${url}/health`)).ok; } catch { /* booting */ }
+    try { up = (await realFetch(`${srv.url}/health`)).ok; } catch { /* booting */ }
     if (!up) await new Promise((r) => setTimeout(r, 500));
   }
-  return { child, url, up, log };
+  return { child: srv.child, url: srv.url, up, log: { join: () => srv.log() }, srv };
 }
-const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { b.child.once("exit", r); setTimeout(r, 5000); }); };
+const stop = (b) => b.srv.stop();
 {
   const b = await boot({ ...ON, ...BOOT_STUBS, DIRECT_UPSTREAM_SINCE: "2026-01-01", DIRECT_UPSTREAM_NAME: "Example <Inference> & Co", DIRECT_UPSTREAM_POLICY_URL: "https://example.com/privacy?a=1&b=2" });
   try {

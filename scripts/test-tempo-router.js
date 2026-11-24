@@ -159,7 +159,7 @@ const seller = createServer((req, res) => {
     res.end("{}");
   });
 });
-await new Promise((r) => seller.listen(0, r));
+await new Promise((r) => seller.listen(0, "127.0.0.1", r));
 const URL_ = `http://127.0.0.1:${seller.address().port}/v1/scrape`;
 let minted = 0;
 let lastMinted = null;

@@ -1100,7 +1100,7 @@ function buildApp({ grant }) {
 }
 
 function listen(app) {
-  return new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  return new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
 }
 
 try {

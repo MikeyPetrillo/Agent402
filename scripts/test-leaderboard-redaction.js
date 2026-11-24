@@ -23,7 +23,7 @@ const echo = createServer((req, res) => {
   res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: 429, message: `rate limited for ${req.url}` } }));
 });
 const junk = createServer((req, res) => { res.writeHead(502); res.end("<html>bad gateway</html>"); });
-await Promise.all([new Promise((r) => echo.listen(0, r)), new Promise((r) => junk.listen(0, r))]);
+await Promise.all([new Promise((r) => echo.listen(0, "127.0.0.1", r)), new Promise((r) => junk.listen(0, "127.0.0.1", r))]);
 const urls = [
   `http://127.0.0.1:${echo.address().port}/v2/${FAKE_KEY}`,
   `http://127.0.0.1:${junk.address().port}/v2/${FAKE_KEY}`,

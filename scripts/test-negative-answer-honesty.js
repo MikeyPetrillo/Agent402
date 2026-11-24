@@ -20,14 +20,13 @@
 //
 //   node scripts/test-negative-answer-honesty.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readinessOf } from "../src/x402-index.js";
 import { upstreamFailure, retryAfterSeconds, retryTransient } from "../src/tools/fetch-guard.js";
 import { notCallersInput, faultAdvice } from "../src/tool-error-fields.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -175,20 +174,19 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
 
 // ------------------------------------------------------------- live server
 {
-  const port = await getFreePort();
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: ROOT,
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), BASE_URL: `http://127.0.0.1:${port}`,
-      X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off",
-      MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
-    stdio: ["ignore", "ignore", "inherit"],
-  });
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    try { up = (await fetch(`${base}/health`)).ok; } catch { /* not yet */ }
-  }
+  // PORT=0, the port read back (scripts/lib/boot-server.js). No BASE_URL: no
+  // check below reads an absolute link.
+  let srv = null;
+  try {
+    srv = await bootServer({
+      env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off",
+        MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
+      stores: false, timeoutMs: 60_000,
+    });
+  } catch (e) { console.error(e.message); }
+  const proc = { kill: (sig) => srv?.child.kill(sig) };
+  const base = srv?.url;
+  const up = Boolean(srv);
   try {
     ok(up, "server booted");
 

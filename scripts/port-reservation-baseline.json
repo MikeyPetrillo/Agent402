@@ -5,21 +5,13 @@
     "test-answer-share.js",
     "test-avm-subcent-offer.js",
     "test-circle-evm-fallback.js",
-    "test-coldstart.js",
-    "test-direct-upstream.js",
     "test-front-door.js",
     "test-gateway-nanopayments.js",
     "test-hangup-settlement.js",
-    "test-negative-answer-honesty.js",
     "test-paytime-bounds.js",
-    "test-pending-settle.js",
-    "test-sale-path.js",
     "test-settle-fallback.js",
-    "test-stall-routes.js",
-    "test-svm-funding-refusal.js",
     "test-tempo-sender.js",
     "test-tool-failure-monitor.js",
-    "test-unpaid-quote-budget.js",
     "test-wrap-quality.js"
   ]
 }

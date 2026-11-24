@@ -52,7 +52,7 @@ const facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(0, r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
 const FAC_PORT = facilitator.address().port;
 const bootEnv = {
   FREE_MODE: "",
