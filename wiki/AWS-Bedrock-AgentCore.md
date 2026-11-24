@@ -12,7 +12,7 @@ This page is a 5-minute recipe to wire the two together - buy side (let an Agent
 
 AWS ships an agent-side **Payments plugin** that reads an x402 `402 Payment Required`, authorizes a USDC micropayment from an AgentCore-managed wallet, and retries the request with the payment proof. The agent code holds no keys and no payment logic, and spend is bounded by the Payment Session limit you set. It speaks both **x402 and MPP** - exactly the two wires every Agent402 endpoint serves.
 
-We publish a runnable sample: [`examples/agentcore-x402-buyer`](https://github.com/MikeyPetrillo/Agent402/tree/main/examples/agentcore-x402-buyer). It has a deterministic proof loop (`direct_buy.py`: fetch → 402 → sign → retry → verify the paid sha256 answer) and a Strands-agent showcase (`agent_buy.py`: a web search, then a cited answer, each paid from the wallet), with the full testnet (Base Sepolia faucet) → mainnet (Base USDC) path in its README. Validated live: an AgentCore agent bought `POST /api/hash` from agent402.tools for $0.001, settled on Base mainnet.
+We publish a runnable sample: [`examples/agentcore-x402-buyer`](https://github.com/MikeyPetrillo/Agent402/tree/main/examples/agentcore-x402-buyer). It has a deterministic proof loop (`direct_buy.py`: fetch → 402 → sign → retry → verify the paid sha256 answer) and a Strands-agent showcase (`agent_buy.py`: Apple's latest 10-K filings, then its filed revenue and total assets, each paid from the wallet), with the full testnet (Base Sepolia faucet) → mainnet (Base USDC) path in its README. Validated live: an AgentCore agent bought `POST /api/hash` from agent402.tools for $0.001, settled on Base mainnet.
 
 > **x402 works with no extra configuration.** The Payments plugin calls sellers with the `python-httpx` User-Agent, and Agent402 answers that client with the x402 offer alone: the `402` carries the `PAYMENT-REQUIRED` header and the full offer in its body, with no `WWW-Authenticate: Payment` challenge, so the plugin pays over x402 in USDC on Base from the same funded wallet.
 >
@@ -50,16 +50,16 @@ npm install agent402-agent-loop-tools @strands-agents/sdk zod
 import { Agent } from "@strands-agents/sdk";
 import { agent402Tools } from "agent402-agent-loop-tools";
 
-// web search, then a cited answer: both wallet-only, paid per call through payFetch,
+// SEC filings, then the filed financials: both wallet-only, paid per call through payFetch,
 // an @x402/fetch-wrapped fetch (the Adapters page builds one from a viem account)
 const { tools } = await agent402Tools({
-  slugs: ["search", "answer"],
+  slugs: ["edgar-filings", "edgar-company-facts"],
   freeOnly: false,
   fetch: payFetch,
 });
 
 const agent = new Agent({ tools });
-const out = await agent.invoke("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
+const out = await agent.invoke("List Apple's latest 10-K filings, then report its revenue and total assets from the filed financials.");
 ```
 
 **No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown-to-html, json-to-csv and more) run free with proof-of-work and no wallet. Leave out `fetch`; the default (`freeOnly: true`) keeps only those tools:

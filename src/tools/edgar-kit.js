@@ -357,12 +357,15 @@ export const EDGAR_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "All XBRL concepts reported by a company. Default returns a compact summary per tag (label, unit, latest value, latest end date) - typically a few hundred KB. Pass tags=Revenues,Assets,NetIncomeLoss to get full time-series for just those concepts. Source: data.sec.gov/api/xbrl/companyfacts. ?ticker=AAPL&tags=Revenues,Assets",
+      "All XBRL concepts reported by a company, as a compact summary per tag by default. Pass tags=Revenues,Assets for full time series of just those. Revenue tags vary: banks such as JPMorgan file Revenues; most others (Apple, since 2019) file RevenueFromContractWithCustomerExcludingAssessedTax.",
     tags: ["edgar", "sec", "xbrl", "financials", "fundamentals", "facts", "company"],
     discovery: {
       // The published example names two concepts: its answer is tens of KB,
-      // where the summary of every tag (no `tags`) is over a hundred.
-      input: { ticker: "AAPL", tags: "Revenues,Assets" },
+      // where the summary of every tag (no `tags`) is over a hundred. It is a
+      // filer whose revenue concept is still Revenues (a bank), so the example
+      // answers current years; Apple's Revenues series ends at fiscal 2018
+      // (it files the ASC 606 concept the description names).
+      input: { ticker: "JPM", tags: "Revenues,Assets" },
       inputSchema: {
         properties: {
           ticker: { type: "string", description: "US stock ticker (alternative to cik)" },
@@ -373,11 +376,11 @@ export const EDGAR_TOOLS = [
       },
       output: {
         example: {
-          cik: "0000320193",
-          entityName: "Apple Inc.",
+          cik: "0000019617",
+          entityName: "JPMORGAN CHASE & CO",
           mode: "full",
           tagsFilter: ["Revenues", "Assets"],
-          taxonomies: { "us-gaap": { Revenues: { label: "Revenues", units: { USD: [{ end: "2018-09-29", val: 265595000000, fy: 2018, fp: "FY", form: "10-K" }] } } } },
+          taxonomies: { "us-gaap": { Revenues: { label: "Revenues", units: { USD: [{ end: "2025-12-31", val: 182447000000, fy: 2025, form: "10-K" }] } } } },
         },
       },
     },

@@ -19,7 +19,7 @@ import { rpcHeaderReader } from "./block-clock.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact, codeBlock } from "./ledger-chrome.js";
-import { RAILS, RAILS_AMP, GATED_RAILS, railKey } from "./rails.js";
+import { RAILS, RAILS_AMP, GATED_RAILS, railKey, chainDisplayName } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { REVENUE_RANGE_PRESETS, REVENUE_RANGE_PRESET_LABELS, windowLabel } from "./revenue-range.js";
 // Pure, main-guarded helpers shared with the daily scanners — one
@@ -812,6 +812,20 @@ export function newestOwnSettle(recent) {
  * totals, and `lastInbound`, which is only ever one of OUR settles (see
  * newestOwnSettle). Pure: never mutates the cached snapshot.
  */
+/** A snapshot rail label's chain key ("Optimism" -> "optimism"). The label is
+ *  the scan's join key (stored snapshots, the market pages), so it stays as
+ *  it is; pages and answers show railDisplayName instead. */
+export function railKeyOfLabel(label) {
+  const hit = Object.entries(EVM).find(([, c]) => c.label === label) || Object.entries(GATED_EVM).find(([, c]) => c.label === label);
+  if (hit) return hit[0];
+  return { Solana: "solana", Stellar: "stellar", Algorand: "algorand" }[label] || null;
+}
+/** The official chain name for a snapshot rail label (src/rails.js), else the label. */
+export function railDisplayName(label) {
+  const key = railKeyOfLabel(label);
+  return key ? chainDisplayName(key) : label;
+}
+
 export function publicRevenueSnapshot(snap) {
   if (!snap || !Array.isArray(snap.rails)) return snap;
   const rails = snap.rails.map((r) => {
@@ -819,13 +833,13 @@ export function publicRevenueSnapshot(snap) {
     const { recent, balance, staleBalance, balanceAsOf, ...rest } = r;
     const li = rest.lastInbound;
     if (li && li.internal !== true) delete rest.lastInbound;
-    return { ...rest, status: railStatus(r), ...(balanceAsOf ? { readAsOf: balanceAsOf } : {}) };
+    return { ...rest, name: railDisplayName(rest.rail), status: railStatus(r), ...(balanceAsOf ? { readAsOf: balanceAsOf } : {}) };
   });
   const { totalUsd, ...pub } = snap;
   return {
     ...pub,
     rails,
-    note: "Rails read from public RPCs (best-effort per rail). Wallet balances are not published; each wallet address is public and its holdings can be read on chain. windowExternalUsd counts only classified external per-call payments in the recent scan windows. Per-payment rows are not published: a transaction hash resolves to its payer on chain. lastInbound is our own newest settle on each rail (canary or volume run), never an outside buyer's.",
+    note: "Rails read from public RPCs (best-effort per rail). Wallet balances are not published; each wallet address is public and its holdings can be read on chain. windowExternalUsd counts only classified external per-call payments in the recent scan windows. Per-payment rows are not published: a transaction hash resolves to its payer on chain. lastInbound is our own newest settle on each rail (canary or volume run), never an outside buyer's. name is the chain's official name; rail is its fixed label.",
   };
 }
 
@@ -2410,6 +2424,9 @@ export function revenueRangeControl(range) {
 export function revenueChartSection(range = null) {
   const w = range?.window || null;
   const rangeAttrs = w ? ` data-from="${esc(w.from)}" data-to="${esc(w.to)}" data-preset="${esc(w.preset || "")}" data-first="${esc(range.firstDay || "")}" data-today="${esc(range.today || "")}"` : "";
+  // Each chain's official name (src/rails.js), read by the chart's legend and
+  // table; the series stay keyed on the chain key.
+  const chainNames = Object.fromEntries([...RAILS, ...GATED_RAILS].map((r) => [railKey(r), r.name]));
   return `
   <style>
   /* design-tokens: off-start (categorical chart series, a data-viz palette pinned by test-theme.js) */
@@ -2448,7 +2465,7 @@ export function revenueChartSection(range = null) {
   .rvr-note{color:var(--warn)}
   @media (max-width:520px){.rvr-custom label{flex:1 1 130px}.rvr-custom input{flex:1 1 auto;width:100%}}` : ""}
   </style>
-  <div class="rvz" id="rvz"${rangeAttrs}>
+  <div class="rvz" id="rvz"${rangeAttrs} data-chains="${esc(JSON.stringify(chainNames))}">
     <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;">
       <span style="font-weight:800;font-size:var(--fs-lg);">Over time <span class="ml-meta" style="display:inline-flex;margin:0 0 0 8px;font-size:var(--fs-xs);color:var(--muted);font-weight:400;"><span>by chain</span><span>external only unless you widen it</span></span></span>
       <a id="rvzRaw" href="/api/revenue/daily${w ? `?from=${esc(w.from)}&amp;to=${esc(w.to)}` : ""}" style="font-family:var(--font-mono);font-size:var(--fs-xs);">raw data →</a>
@@ -2545,7 +2562,7 @@ export function revenuePage(baseUrl, snap) {
       ? `${r.explorer ? `<a href="${esc(r.explorer)}" rel="noopener">` : ""}${latest.usd != null ? `$${esc(String(latest.usd))}` : "settled"}${r.explorer ? "</a>" : ""} <span style="color:var(--muted);">${esc(String(latest.when).slice(0, 10))}${ours ? " · ours" : ""}</span>`
       : `<span style="color:var(--muted);">${hasBalance ? "none read yet" : "-"}</span>`;
     return `<tr>
-      <td><strong>${esc(r.rail)}</strong> <span style="color:var(--muted);">${esc(r.asset)}</span></td>
+      <td><strong>${esc(railDisplayName(r.rail))}</strong> <span style="color:var(--muted);">${esc(r.asset)}</span></td>
       <td class="num">${c ? Number(c.inboundCount).toLocaleString() : "-"}${c && !c.caughtUp ? `<span style="display:block;font-size:var(--fs-2xs);font-weight:400;color:var(--muted);">still syncing</span>` : ""}</td>
       <td class="num">${c && c.externalCount ? Number(c.externalCount).toLocaleString() : "0"}</td>
       <td class="num">${c ? esc(usdCell(c.externalUsd)) : "$0"}</td>

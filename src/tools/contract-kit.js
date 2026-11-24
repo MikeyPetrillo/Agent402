@@ -522,7 +522,7 @@ const ADDRESS_LABELS = {
   "0xdac17f958d2ee523a2206206994597c13d831ec7": [{ label: "USDT", category: "token", network: "ethereum", note: "Tether USD" }],
   "0x6b175474e89094c44da98b954eedeac495271d0f": [{ label: "DAI", category: "token", network: "ethereum", note: "Dai Stablecoin" }],
   "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": [{ label: "WETH", category: "token", network: "ethereum", note: "Wrapped Ether" }],
-  "0x4200000000000000000000000000000000000006": [{ label: "WETH", category: "token", network: "base", note: "Wrapped Ether (OP-stack predeploy - same address on Optimism)" }],
+  "0x4200000000000000000000000000000000000006": [{ label: "WETH", category: "token", network: "base", note: "Wrapped Ether (OP-stack predeploy - same address on OP Mainnet)" }],
   "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599": [{ label: "WBTC", category: "token", network: "ethereum", note: "Wrapped BTC" }],
   "0x514910771af9ca656af840dff83e8264ecf986ca": [{ label: "LINK", category: "token", network: "ethereum", note: "Chainlink token" }],
   // --- DEX routers ---

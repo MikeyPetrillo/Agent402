@@ -64,5 +64,58 @@ const sumBefore = before.reduce((a, [, n]) => a + n, 0);
 const sumAfter = Object.values(mergeNetworkCounters(before)).reduce((a, n) => a + n, 0);
 ok(sumBefore === sumAfter, `merging conserves the total (${sumBefore} -> ${sumAfter})`);
 
+// 5. Pages and answers show each chain's official name (src/rails.js), while
+//    the snapshot's rail label, the counters and the URLs keep their keys.
+{
+  const { revenuePage, publicRevenueSnapshot, liveScanRailLabels } = await import("../src/revenue-live.js");
+  const { RAILS, chainDisplayName } = await import("../src/rails.js");
+  const labels = liveScanRailLabels();
+  const snap = {
+    asOf: "2026-11-24T00:00:00.000Z",
+    rails: labels.map((rail) => ({ rail, asset: "USDC", wallet: "0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0", recent: [] })),
+    allTime: { allTimeInboundCount: 0, allTimeExternalCount: 0, allTimeExternalUsd: 0, perChain: {} },
+    standing: {},
+  };
+  const html = revenuePage("https://example.test", snap);
+  const x402Rows = html.slice(html.indexOf('data-rv-live="rails"'), html.indexOf("</tbody>", html.indexOf('data-rv-live="rails"')));
+  const cells = [...x402Rows.matchAll(/<td><strong>([^<]+)<\/strong> <span/g)].map((m) => m[1]);
+  const official = new Set(RAILS.map((r) => r.name));
+  ok(cells.length === labels.length && cells.every((c) => official.has(c)), `every /revenue chain row shows its official name (${cells.filter((c) => !official.has(c)).join(", ") || "all"})`);
+  for (const n of ["OP Mainnet", "Arbitrum One", "Avalanche C-Chain", "Robinhood Chain"]) ok(cells.includes(n), `/revenue names ${n}`);
+  ok(!cells.some((c) => /^(Optimism|Arbitrum|Avalanche)$/.test(c)), "/revenue shows no short chain name as a display name");
+  const pub = publicRevenueSnapshot(snap);
+  ok(pub.rails.every((r, i) => r.rail === labels[i]), "/api/revenue keeps each rail's label unchanged (a join key)");
+  ok(pub.rails.every((r) => official.has(r.name)), `/api/revenue gives each rail its official name (${pub.rails.filter((r) => !official.has(r.name)).map((r) => r.rail).join(", ") || "all"})`);
+  ok(pub.rails.find((r) => r.rail === "Optimism")?.name === "OP Mainnet" && chainDisplayName("optimism") === "OP Mainnet", "OP Mainnet is read from the one name source");
+  // A chain page's host line ("outside buyers on <chain> only") reads the same source.
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/networkLabel: chainKey \? chainDisplayName\(chainKey\) : null/.test(server), "the chain pages' host figures name the chain with chainDisplayName");
+}
+
+// 6. Tool descriptions, the curated Bazaar listings and the flagship list name
+//    chains officially. A param's value list keeps its keys (lowercase), and
+//    the GoPlus tools wait on an owner decision.
+{
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const SHORT = /\b(Optimism\b(?!:)|Arbitrum\b(?! One| Orbit| Sepolia)|Avalanche\b(?! C-Chain| Fuji)|Robinhood\b(?! Chain))/;
+  const files = [...readdirSync(new URL("../src/tools/", import.meta.url)).filter((f) => f.endsWith(".js") && f !== "token-safety-kit.js").map((f) => `src/tools/${f}`), "src/mpp-flagship.js"];
+  const hits = [];
+  for (const f of files) {
+    readFileSync(new URL(`../${f}`, import.meta.url), "utf8").split("\n").forEach((line, i) => {
+      const t = line.trim();
+      if (t.startsWith("//") || t.startsWith("*")) return;
+      if (!/description|why:|^"|^`/.test(t)) return;
+      if (/label: "Optimism: /.test(t)) return; // a contract's own label
+      if (SHORT.test(line)) hits.push(`${f}:${i + 1}`);
+    });
+  }
+  ok(hits.length === 0, `tool descriptions name chains officially (${hits.slice(0, 6).join(", ") || "none"})`);
+  const { BAZAAR_DESCRIPTIONS } = await import("../src/payments.js");
+  const curated = Object.entries(BAZAAR_DESCRIPTIONS).filter(([, d]) => SHORT.test(d)).map(([k]) => k);
+  ok(curated.length === 0, `curated Bazaar listings name chains officially (${curated.join(", ") || "none"})`);
+  ok(SHORT.test("on Arbitrum or Optimism") && !SHORT.test("on Arbitrum One or OP Mainnet (an Arbitrum Orbit chain)"), "CONTROL: the check catches a short name and passes the official ones");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

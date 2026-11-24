@@ -74,13 +74,21 @@ const check = (name, fn) => {
   catch (e) { failures++; console.log(`  FAIL ${name}\n       ${e.message}`); }
 };
 
+check("the chart reads each chain's official name from the page (src/rails.js)", () => {
+  const sec = revenueChartSection();
+  const m = sec.match(/id="rvz"[^>]*data-chains="([^"]*)"/);
+  if (!m) throw new Error("#rvz carries no data-chains map");
+  const map = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&"));
+  if (map.optimism !== "OP Mainnet" || map.arbitrum !== "Arbitrum One" || map.avalanche !== "Avalanche C-Chain" || map.robinhood !== "Robinhood Chain") throw new Error(`names map: ${m[1].slice(0, 200)}`);
+});
+
 check("Robinhood has its own chart color and Arbitrum folds into Other", () => {
   const slots = REVENUE_CHART_JS.match(/var SLOTS=(\{[^}]*\})/)[1].replace(/(\w+):/g, '"$1":');
   const SLOTS = JSON.parse(slots);
   if (!SLOTS.robinhood) throw new Error(`robinhood has no named slot: ${slots}`);
   if (SLOTS.arbitrum) throw new Error("arbitrum still holds a named slot");
   const names = REVENUE_CHART_JS.match(/var NAMES=\{[^}]*\}/)[0];
-  if (!names.includes(`${SLOTS.robinhood}:"Robinhood"`)) throw new Error("the legend does not name Robinhood's slot");
+  if (!names.includes(`${SLOTS.robinhood}:"Robinhood Chain"`)) throw new Error("the legend does not name Robinhood Chain's slot");
   if (new Set(Object.values(SLOTS)).size !== Object.keys(SLOTS).length || Object.values(SLOTS).some((n) => n < 1 || n > 7)) throw new Error("slots must be distinct, 1-7 (8 is Other)");
 });
 
@@ -218,9 +226,9 @@ console.log("revenue chart — free-tier lane");
     const rows = [...w.document.querySelectorAll("#rvzTable tr")].slice(1);
     assert.equal(rows.length, 1, `two June days in one ISO week must render one weekly row, got ${rows.length}`);
     assert.ok(rows[0].textContent.includes("2026-06-15"), `weekly row keyed on the Monday: ${rows[0].textContent}`);
-    // Sei 3 + Optimism 2 internal tx on 06-21 stay itemized under Other.
+    // Sei 3 + OP Mainnet 2 internal tx on 06-21 stay itemized under Other.
     const html = w.document.getElementById("rvzTable").innerHTML;
-    assert.ok(/Sei/.test(html) && /Optimism/.test(html), "folded chains stay itemized in the weekly table");
+    assert.ok(/Sei/.test(html) && /OP Mainnet/.test(html) && !/Optimism/.test(html), "folded chains stay itemized in the weekly table, by official name");
     click(w, "rvzScope", "ext");
     click(w, "rvzMode", "daily");
   });
@@ -234,7 +242,7 @@ console.log("revenue chart — free-tier lane");
     assert.ok(rows[0].textContent.includes("2026-06-01"), `monthly row keyed on the first: ${rows[0].textContent}`);
     const html = w.document.getElementById("rvzTable").innerHTML;
     assert.ok(/month/.test(html), "the table names the bucket it is showing");
-    assert.ok(/Sei/.test(html) && /Optimism/.test(html), "folded chains stay itemized in the monthly table");
+    assert.ok(/Sei/.test(html) && /OP Mainnet/.test(html), "folded chains stay itemized in the monthly table");
     click(w, "rvzScope", "ext");
     click(w, "rvzMode", "daily");
   });
@@ -374,12 +382,12 @@ console.log("revenue chart — settled-to (SOR) lane");
     click(w, "rvzScope", "int");
     const l = legend(w);
     assert.ok(l.includes("Other"), "Other lane missing from the legend");
-    assert.ok(l.includes("Optimism") && l.includes("Sei"), `legend must name the folded chains: ${l}`);
+    assert.ok(l.includes("OP Mainnet") && l.includes("Sei") && !l.includes("Optimism"), `legend must name the folded chains by official name: ${l}`);
   });
 
   check("table breaks Other down per chain without double counting the total", () => {
     const tb = w.document.getElementById("rvzTable");
-    assert.ok(tb.textContent.includes("· Optimism") && tb.textContent.includes("· Sei"), "Other sub-columns missing");
+    assert.ok(tb.textContent.includes("· OP Mainnet") && tb.textContent.includes("· Sei"), "Other sub-columns missing");
     const rows = tb.querySelectorAll("tr");
     const cells = [...rows[rows.length - 1].querySelectorAll("td")].map((t) => t.textContent);
     // day, Base, Other, · Optimism, · Sei, total (cumulative int tx; Solana

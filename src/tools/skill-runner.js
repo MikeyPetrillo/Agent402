@@ -842,7 +842,7 @@ export const PACK_STEPS = {
     steps: [
       { slug: "edgar-company-lookup",  mapInput: (a) => ({ ticker: a.ticker }) },
       { slug: "edgar-filings",         mapInput: (a) => ({ ticker: a.ticker, limit: 25 }) },
-      { slug: "edgar-company-facts",   mapInput: (a) => ({ ticker: a.ticker, tags: "Revenues,NetIncomeLoss,Assets" }) },
+      { slug: "edgar-company-facts",   mapInput: (a) => ({ ticker: a.ticker, tags: "RevenueFromContractWithCustomerExcludingAssessedTax,Revenues,NetIncomeLoss,Assets" }) },
       { slug: "edgar-company-concept", mapInput: (a) => ({ ticker: a.ticker, taxonomy: "us-gaap", tag: "Revenues" }) },
       { slug: "edgar-insider-trades",  mapInput: (a) => ({ ticker: a.ticker, days: 90, limit: 25 }) },
       { slug: "edgar-search",          mapInput: (a) => ({ q: "going concern", ticker: a.ticker, limit: 5 }) },

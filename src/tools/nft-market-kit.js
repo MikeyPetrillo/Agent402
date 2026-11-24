@@ -178,7 +178,7 @@ export const NFT_MARKET_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Fetch NFT collection (ERC-721 / ERC-1155) metadata by contract address on Ethereum, Base, Polygon, Arbitrum, or Optimism: name, symbol, token type, total supply, deployer, OpenSea slug + image, floor (ETH), Twitter/Discord, and verification (safelist) status. Use to label a contract address with its collection identity before pulling tokens or sales.",
+      "Fetch NFT collection (ERC-721 / ERC-1155) metadata by contract address on Ethereum, Base, Polygon, Arbitrum One, or OP Mainnet: name, symbol, token type, total supply, deployer, OpenSea slug + image, floor (ETH), Twitter/Discord, and verification (safelist) status. Use to label a contract address with its collection identity before pulling tokens or sales.",
     tags: ["nft", "collection", "erc721", "erc1155", "metadata", "opensea"],
     discovery: {
       bodyType: "json",

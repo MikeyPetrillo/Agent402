@@ -296,7 +296,7 @@ export const ONCHAIN_IDENTITY_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "List EAS (Ethereum Attestation Service) attestations for an address as recipient, attester, or either, on mainnet/Base/Optimism/Arbitrum/Sepolia. Returns attestation id, attester, recipient, schema id, revocable/revoked flags, timestamp, and decoded data JSON. Use to verify Gitcoin Passport stamps, Coinbase verifications, KYC attestations, or any other on-chain claim about an address.",
+      "List EAS (Ethereum Attestation Service) attestations for an address as recipient, attester, or either, on mainnet/Base/OP Mainnet/Arbitrum One/Sepolia. Returns attestation id, attester, recipient, schema id, revocable/revoked flags, timestamp, and decoded data JSON. Use to verify Gitcoin Passport stamps, Coinbase verifications, KYC attestations, or any other on-chain claim about an address.",
     tags: ["eas", "attestations", "identity", "verification", "credentials"],
     discovery: {
       bodyType: "json",
