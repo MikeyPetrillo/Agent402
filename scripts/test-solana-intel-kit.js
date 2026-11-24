@@ -204,7 +204,8 @@ try {
   ok(!["score", "scoreNormalised", "risks", "riskCounts", "riskLevel", "rugged", "verdict"].some((k) => k in r) && !/danger|"warn"|"good"/i.test(JSON.stringify(r)), "safety: no score, risk level, risk label or verdict word is passed through");
   ok(r.flags.map((f) => f.id).join() === "lp-locked-under-50" && r.flags[0].value === 8.98 && r.unknown.length === 0, `safety: the named facts found, with values (${JSON.stringify(r.flags)})`);
   ok(r.notice === TOKEN_FACTS_NOTICE, "safety: the fixed notice rides the answer");
-  ok(r.token.symbol === "JUP" && r.token.holderCount === 835540 && r.token.isVerified === true, "safety: Jupiter exact-mint match picked (not the first row)");
+  ok(r.token.symbol === "JUP" && r.token.holderCount === 835540, "safety: Jupiter exact-mint match picked (not the first row)");
+  ok(!["isVerified", "organicScore", "organicScoreLabel"].some((k) => k in r.token), "safety: the aggregator's own verified flag and organic score are not passed through");
   ok(r.authorities.mintAuthorityDisabled === true && r.authorities.freezeAuthorityDisabled === true, "safety: authorities from Jupiter audit");
   ok(r.holders.topHoldersPct === 15.28 && r.holders.devMints === 1, "safety: holder facts");
   ok(Array.isArray(r.source) && r.source.includes("rugcheck") && typeof r.fetchedAt === "string", "safety: source + fetchedAt");
@@ -218,7 +219,7 @@ try {
   r = await h("sol-token-safety")({ mint: PUMP });
   ok(calls.length === 3 && calls.filter((c) => c.url.endsWith(`/tokens/${PUMP}/report`)).length === 1, `safety: a Jupiter miss reads the full report once (${calls.length} reads)`);
   ok(!("riskLevel" in r) && !("scoreNormalised" in r) && r.flags.some((f) => f.id === "freeze-authority-live" && f.value === "7dGbd2QZcCKcTndnHcTL8q7SMVXAkp688NTQYwrRCrar"), "safety: a live freeze authority from the report is a flag with its address; no score");
-  ok(r.token?.symbol === "JUP" && r.token.decimals === 6 && r.token.holderCount === 2873512 && r.token.isVerified === true && r.token.organicScore === null && r.token.launchpad === "Pump.Fun", "safety: token block from the report; Jupiter-only organic score stays null");
+  ok(r.token?.symbol === "JUP" && r.token.decimals === 6 && r.token.holderCount === 2873512 && !("isVerified" in r.token) && !("organicScore" in r.token) && r.token.launchpad === "Pump.Fun", "safety: token block from the report; no outside verified flag or score");
   ok(r.authorities?.mintAuthorityDisabled === true && r.authorities.freezeAuthorityDisabled === false && r.authorities.freezeAuthority === "7dGbd2QZcCKcTndnHcTL8q7SMVXAkp688NTQYwrRCrar", "safety: authorities from the report (a live freeze authority reads live, with its address)");
   ok(r.holders === null, "safety: holders stays null without Jupiter (no measure is substituted)");
   ok(r.fullReport?.read === true && r.fullReport.needed.join(",") === "token,authorities" && r.fullReport.filled.join(",") === "token,authorities" && r.source.includes("rugcheck-report"), `safety: fullReport names what it filled (${JSON.stringify(r.fullReport)})`);

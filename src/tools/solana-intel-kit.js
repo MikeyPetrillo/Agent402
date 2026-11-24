@@ -7,7 +7,7 @@
 //                                     words are never passed through: the
 //                                     answers list named facts, each computed
 //                                     here from the report's fields, with the
-//                                     on-chain facts notice, src/token-claims.js)
+//                                     token facts notice, src/token-claims.js)
 //   DexScreener api.dexscreener.com   pairs per mint (and the price read from
 //                                     them), search, boosted/new tokens
 //   Jupiter     lite-api.jup.ag       token search/audit (an input to the
@@ -784,7 +784,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Risk facts for any Solana SPL token mint, read from two keyless public sources in parallel: whether the mint authority and the freeze authority are revoked or still set (with their addresses), the share of liquidity pool tokens locked, the largest holders' combined share, dev balance and dev mints, holder count, decimals, the aggregator's verified flag and organic score, and the token program. The answer lists each named fact it found (flags: an id, a description and the measured value), what the sources did not report (unknown, with why), and a fixed notice that these are on-chain facts only and not investment advice. Each flag is computed here from the sources' fields; no outside score, risk level or rating is passed through, and there is no verdict, so no flags is not a statement about the token. The full token report is read only when the aggregator does not index the mint, and fullReport names the fields it filled.",
+      "Risk facts for any Solana SPL token mint, read from two keyless public sources in parallel: whether the mint authority and the freeze authority are revoked or still set (with their addresses), the share of liquidity pool tokens locked, the largest holders' combined share, dev balance and dev mints, holder count, decimals and the token program. The answer lists each named fact it found (flags: an id, a description and the measured value), what the sources did not report (unknown, with why), and a fixed notice that these are facts read from the chain and named public sources and not investment advice. Each flag is computed here from the sources' fields; no outside score, risk level or rating is passed through, and there is no verdict, so no flags is not a statement about the token. The full token report is read only when the aggregator does not index the mint, and fullReport names the fields it filled.",
     tags: ["solana", "token", "authorities", "liquidity", "holders", "spl", "onchain"],
     discovery: {
       bodyType: "json",
@@ -802,7 +802,7 @@ export const SOLANA_INTEL_TOOLS = [
           unknown: [],
           lpLockedPct: 8.98,
           tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-          token: { name: "Jupiter", symbol: "JUP", decimals: 6, holderCount: 835540, isVerified: true, organicScore: 99.3, organicScoreLabel: "high", launchpad: null },
+          token: { name: "Jupiter", symbol: "JUP", decimals: 6, holderCount: 835540, launchpad: null },
           authorities: { mintAuthorityDisabled: true, freezeAuthorityDisabled: true, mintAuthority: null, freezeAuthority: null },
           holders: { topHoldersPct: 15.28, devBalancePct: null, devMints: 1 },
           fullReport: null,
@@ -841,10 +841,10 @@ export const SOLANA_INTEL_TOOLS = [
         }
       }
       const filled = [];
-      let token = jt ? { name: jt.name, symbol: jt.symbol, decimals: jt.decimals, holderCount: jt.holderCount, isVerified: jt.isVerified, organicScore: jt.organicScore, organicScoreLabel: jt.organicScoreLabel, launchpad: jt.launchpad } : null;
+      let token = jt ? { name: jt.name, symbol: jt.symbol, decimals: jt.decimals, holderCount: jt.holderCount, launchpad: jt.launchpad } : null;
       let authorities = jt ? { mintAuthorityDisabled: jt.audit.mintAuthorityDisabled, freezeAuthorityDisabled: jt.audit.freezeAuthorityDisabled, mintAuthority: jt.mintAuthority, freezeAuthority: jt.freezeAuthority } : null;
       if (full && !jt) {
-        // The report's own fields; Jupiter-only facts (organic score) stay null.
+        // The report's own fields.
         token = {
           name: full?.tokenMeta?.name ?? full?.fileMeta?.name ?? null,
           symbol: full?.tokenMeta?.symbol ?? full?.fileMeta?.symbol ?? null,
@@ -852,8 +852,6 @@ export const SOLANA_INTEL_TOOLS = [
           // RugCheck reports 0 when it has not counted (measured on USDC):
           // a zero is "no count", never "no holders".
           holderCount: num(full?.totalHolders) > 0 ? num(full.totalHolders) : null,
-          isVerified: full?.verification ? Boolean(full.verification.jup_verified) : null,
-          organicScore: null, organicScoreLabel: null,
           launchpad: full?.launchpad?.name ?? full?.launchpad?.platform ?? null,
         };
         const m = authorityState(full?.token?.mintAuthority ?? full?.mintAuthority);
@@ -900,7 +898,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.010",
     description:
-      "The facts in a public token report for a Solana token mint, trimmed to what an agent acts on: mint/freeze authority state, metadata mutability and update authority, supply and decimals, creator and creator balance, top 20 holders with percent, owner, insider flag and pool/locker labels, concentration totals, the deepest markets (liquidity, LP locked %), lockers, total market liquidity, LP providers, holder count, insider-network count, launchpad and transfer-fee config. The answer lists each named fact found (flags: an id, a description and the measured value, computed here from the report's fields), what the report did not carry (unknown) and a fixed notice that these are on-chain facts only and not investment advice; the report's own score, risk levels and verdict words are never passed through. One report read, plus at most two bounded reads from our Solana RPC (the 20 largest token accounts, then one batched owner lookup) only when the report carries no holder table; every read runs under a deadline, so a slow upstream answers as a retryable refusal, never a charge. The holders and markets blocks carry returned, matched and complete fields. Blue-chip reports run to megabytes upstream and come back here in a few KB.",
+      "The facts in a public token report for a Solana token mint, trimmed to what an agent acts on: mint/freeze authority state, metadata mutability and update authority, supply and decimals, creator and creator balance, top 20 holders with percent, owner, insider flag and pool/locker labels, concentration totals, the deepest markets (liquidity, LP locked %), lockers, total market liquidity, LP providers, holder count, insider-network count, launchpad and transfer-fee config. The answer lists each named fact found (flags: an id, a description and the measured value, computed here from the report's fields), what the report did not carry (unknown) and a fixed notice that these are facts read from the chain and named public sources and not investment advice; the report's own score, risk levels and verdict words are never passed through. One report read, plus at most two bounded reads from our Solana RPC (the 20 largest token accounts, then one batched owner lookup) only when the report carries no holder table; every read runs under a deadline, so a slow upstream answers as a retryable refusal, never a charge. The holders and markets blocks carry returned, matched and complete fields. Blue-chip reports run to megabytes upstream and come back here in a few KB.",
     tags: ["solana", "token", "report", "holders", "liquidity", "authorities", "spl"],
     discovery: {
       bodyType: "json",
