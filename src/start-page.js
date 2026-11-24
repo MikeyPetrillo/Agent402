@@ -87,7 +87,7 @@ export function walletSetup(baseUrl) {
 export function startPage(baseUrl, catalog = {}, { credits = creditsSalesEnabled(), connector = creditsConnectorOn(), storefront = humanCheckoutEnabled() } = {}) {
   const canonical = `${baseUrl}${START_PATH}`;
   const title = "Start here - add Agent402 to Claude or Cursor";
-  const description = "Add Agent402 to Claude desktop, Claude Code or Cursor in one step, see what runs with no wallet, and pay for paid tools by card or from a wallet holding USDC on Base.";
+  const description = "Add Agent402 to Claude desktop, Claude Code or Cursor in one step. See what runs with no wallet, then pay by card or with USDC on Base.";
   const tools = Object.values(catalog || {}).filter((d) => d && d.slug);
   const powCount = tools.filter(isComputePayable).length;
   const reportRange = storefront ? cardReportPriceRange(HUMAN_PRODUCTS) : null;

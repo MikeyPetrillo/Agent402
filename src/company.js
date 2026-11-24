@@ -41,7 +41,7 @@ export function companyPage(baseUrl) {
   // name finds it; the h1 says the same.
   const title = fitTitle(["Havok Holdings LLC, the company behind Agent402.Tools", "Havok Holdings LLC, the company behind Agent402"]);
   // The wires follow the MPP switch, as the home h1 does (src/positioning.js).
-  const description = `Agent402.Tools is built and operated by Havok Holdings LLC: the payment and trust layer for agentic commerce over ${mppOffered() ? "x402 and MPP" : "x402"}, with per-call tools, reports and monitors.`;
+  const description = `Havok Holdings LLC builds and runs Agent402.Tools, the payment and trust layer for agentic commerce over ${mppOffered() ? "x402 and MPP" : "x402"}, with tools, reports and monitors.`;
   const row = (h, body, links = []) => `
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
   <div class="co-2col" style="display:grid;grid-template-columns:220px 1fr;gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);">
