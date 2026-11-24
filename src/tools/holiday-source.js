@@ -317,18 +317,18 @@ export const OBSERVANCE = Object.freeze({
   // observed the preceding Friday, a Sunday holiday the following Monday
   // (5 U.S.C. 6103(b); Executive Order 11582).
   "us-federal": { source: "https://www.opm.gov/policy-data-oversight/pay-leave/federal-holidays/", rule: "Saturday holiday observed the preceding Friday; Sunday holiday observed the following Monday" },
-  // Federal Reserve Banks' holiday schedule: "For holidays falling on Saturday,
-  // Federal Reserve Banks and Branches will be open the preceding Friday. For
-  // holidays falling on Sunday, ... closed the following Monday."
-  "us-fed": { source: "https://www.frbservices.org/about/holiday-schedules", rule: "Saturday holiday: open the preceding Friday; Sunday holiday: closed the following Monday" },
-  // GOV.UK bank holidays: "If a bank holiday is on a weekend, a 'substitute'
-  // weekday becomes a bank holiday, normally the following Monday."
-  "gb-substitute": { source: "https://www.gov.uk/bank-holidays", rule: "a weekend bank holiday is replaced by the next weekday that is not already a holiday" },
-  // Japan, Act on National Holidays as applied by JPX's published calendar:
-  // "National holidays that fall on a Sunday are observed on the closest
-  // following day that is not a national holiday", and a day between two
-  // national holidays is a holiday (Article 3, paragraph 3).
-  "jp-substitute": { source: "https://www.jpx.co.jp/english/corporate/about-jpx/calendar/index.html", rule: "a Sunday national holiday moves to the next day that is not a national holiday; a weekday between two national holidays is a holiday" },
+  // Federal Reserve holidays (Board of Governors, a U.S. government work):
+  // for a holiday on a Saturday the Reserve Banks are open the preceding
+  // Friday; for one on a Sunday they are closed the following Monday.
+  "us-fed": { source: "https://www.federalreserve.gov/aboutthefed/k8.htm", rule: "Saturday holiday: open the preceding Friday; Sunday holiday: closed the following Monday", credit: "Source: Board of Governors of the Federal Reserve System." },
+  // GOV.UK bank holidays (Open Government Licence v3.0): a bank holiday on a
+  // weekend is replaced by a substitute weekday, normally the next Monday.
+  "gb-substitute": { source: "https://www.gov.uk/bank-holidays", rule: "a weekend bank holiday is replaced by the next weekday that is not already a holiday", credit: "Contains public sector information licensed under the Open Government Licence v3.0." },
+  // Japan, Act on National Holidays (国民の祝日に関する法律), Article 3, as the
+  // Cabinet Office publishes it (Public Data License 1.0): a national holiday
+  // on a Sunday moves to the closest following day that is not a national
+  // holiday, and a day between two national holidays is a holiday.
+  "jp-substitute": { source: "https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html", rule: "a Sunday national holiday moves to the next day that is not a national holiday; a weekday between two national holidays is a holiday", credit: "出典：内閣府「国民の祝日について」（https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html）、PDL1.0" },
 });
 /** The observance rule a country's business days use under `basis`, or null. */
 export function observanceFor(country, basis) {

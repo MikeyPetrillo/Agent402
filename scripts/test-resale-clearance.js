@@ -115,7 +115,7 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
     "device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "food-recalls",
     "earthquakes", "federal-awards", "fema-disasters", "geo-lookup", "vehicle-recalls", "vin-decode",
     "weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality", "place-lookup", "weather-window", "weather-thresholds", "weather-probability", "weather-market-brackets", "weather-market-board", "weather-forecast", "weather-alerts",
-    "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar", "dns", "tls-cert", "ip-info",
+    "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "dns", "tls-cert", "ip-info",
     "stablecoin-peg", "funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health", ...PERPS,
   ];
   ok(new Set(REF_LISTED).size === REF_LISTED.length && AWS_LISTED.length > 0, `the lists read are the ones sold today (/ref ${new Set(REF_LISTED).size}, AWS ${AWS_LISTED.length})`);
@@ -192,6 +192,55 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
   let threw = false;
   try { R.markRefAnswer([{ slug: "z" }], ["z"], (a) => a); } catch { threw = true; }
   ok(threw, "a resale trim that names no raw fields is refused when the kit loads");
+}
+
+// CLASS GUARD, facts compiled from outside sources: reaching no upstream
+// clears a tool for resale only when none of its facts come from an outside
+// source. Every proof-of-work tool's own example is run here, and one whose
+// answer names an outside source (a URL under a source, credit, license or
+// citation key, off this host) must declare its sources (markContentSources),
+// which takes it out of the compute clearance unless it is marked cleared.
+{
+  const CLASS = "[outside facts cleared as compute]";
+  const { readdirSync } = await import("node:fs");
+  const { isComputePayable } = await import("../src/pow.js");
+  const all = new Map(defs);
+  for (const f of readdirSync(new URL("../src/tools/", import.meta.url)).filter((x) => x.endsWith(".js") && !/-worker\.js$/.test(x))) {
+    let mod;
+    try { mod = await import(`../src/tools/${f}`); } catch { continue; }
+    for (const v of Object.values(mod)) if (Array.isArray(v)) for (const d of v) if (d && typeof d === "object" && typeof d.slug === "string" && typeof d.handler === "function" && !all.has(d.slug)) all.set(d.slug, d);
+  }
+  const KEY = /source|credit|licen|citation/i;
+  const urlsIn = (v, acc = [], key = "") => {
+    if (typeof v === "string") { if (KEY.test(key) && /^https?:\/\//.test(v)) acc.push(v); }
+    else if (Array.isArray(v)) for (const x of v) urlsIn(x, acc, key);
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) urlsIn(x, acc, KEY.test(k) ? k : key);
+    return acc;
+  };
+  const compute = [...all.values()].filter((d) => { try { return isComputePayable(d) === true; } catch { return false; } });
+  ok(compute.length >= 100, `the proof-of-work tools are read (${compute.length})`);
+  const undeclared = [];
+  let named = 0;
+  for (const d of compute) {
+    let out;
+    try { out = await Promise.race([Promise.resolve(d.handler(structuredClone(d.discovery?.input ?? {}), { headers: {} })), new Promise((r) => setTimeout(() => r(null), 3000))]); } catch { continue; }
+    const urls = urlsIn(out).filter((u) => !/agent402\.tools/.test(u));
+    if (!urls.length) continue;
+    named++;
+    if (!R.hasContentSources(d)) undeclared.push(`${d.slug} (${urls[0]})`);
+  }
+  ok(named >= 1, `CONTROL: at least one proof-of-work tool names an outside source in its answer (${named})`);
+  ok(undeclared.length === 0, `${CLASS} every proof-of-work tool whose answer names an outside source declares it (${undeclared.join("; ") || "all declared"}; fix: markContentSources beside its handler, src/resale-terms.js)`);
+  const mc = all.get("market-calendar");
+  ok(R.hasContentSources(mc) && mc.contentSources.every((x) => x.url.startsWith("https://") && x.license && typeof x.redistribution === "boolean"), "market-calendar declares each source, its license and whether it allows redistribution");
+  ok(R.resaleClearanceRefusal(mc, { compute: true }) === NOT_CLEARED && referralIneligibility(mc, { compute: true, priceForNetwork: (p) => p }) !== null && awsIneligibility(mc, { compute: true }) === NOT_CLEARED, `${CLASS} market-calendar is not cleared by reaching no upstream (both gates refuse it)`);
+  const redact = all.get("redact");
+  ok(R.resaleClearanceRefusal(redact, { compute: true }) === null, "CONTROL: a compute tool with no outside facts still passes");
+  const sc = all.get("settlement-calendar");
+  ok(R.hasContentSources(sc) && sc.resaleCleared === true && !sc.contentSources.some((x) => /nacha|frbservices|bankofengland|europeanpaymentscouncil|jpx\.co\.jp/.test(x.url)), "settlement-calendar's rule sources are public ones, declared");
+  let threw = false;
+  try { R.markContentSources([{ slug: "z" }], ["z"], [{ name: "x", url: "https://x.example", license: "y" }]); } catch { threw = true; }
+  ok(threw, "a content source must say whether its license allows redistribution");
 }
 
 // The suite seam: clears named slugs for a test boot, never in production.

@@ -15,6 +15,8 @@
 // Held from the first submission until AWS Seller Operations answers:
 // edgar-insider-trades (names people and their securities trades) and
 // fec-candidates (names candidates with their party).
+// Held from the default list: settlement-calendar, until its re-cited rail
+// rules (public sources only) are reviewed for this listing.
 
 const FINANCIAL = "Informational market and public-filing data; not investment, trading, tax or legal advice. No trading, custody or order execution.";
 
@@ -57,9 +59,9 @@ export const AWS_LISTING_GROUPS = Object.freeze([
   },
   {
     id: "calendars",
-    title: "Calendars and settlement",
-    slugs: ["next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar"],
-    notice: "Holiday data from Nager.Date. Settlement dates are expected dates from each rail's published rules; confirm with your bank.",
+    title: "Calendars",
+    slugs: ["next-holidays", "long-weekends", "country-business-days", "business-day-planner"],
+    notice: "Holiday data from Nager.Date.",
   },
   {
     id: "network",
