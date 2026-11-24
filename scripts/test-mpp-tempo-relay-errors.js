@@ -53,7 +53,7 @@ const relay = createServer((req, res) => {
     res.end(JSON.stringify({ error: { code: "api_key_scope_missing", message: `The API key does not grant MPP relay access (realm ${realm})` }, requestId: `r-${hits}` }));
   });
 });
-await new Promise((r) => relay.listen(0, r));
+await new Promise((r) => relay.listen(0, "127.0.0.1", r));
 
 process.env.TEMPO_API_BASE_URL = `http://127.0.0.1:${relay.address().port}`;
 process.env.TEMPO_API_KEY = "test-key";
@@ -119,7 +119,7 @@ ok(!t.error.includes(process.env.TEMPO_API_KEY) && !String(t.relayMessage).inclu
 // elapsed time, not "no relay verdict" as if nothing was ever attempted.
 // Measured live 2026-08-18: a 21,816ms broadcast that ended this way.
 const dead = createServer((req) => { req.on("data", () => {}); req.on("end", () => setTimeout(() => req.socket.destroy(), 30)); });
-await new Promise((r) => dead.listen(0, r));
+await new Promise((r) => dead.listen(0, "127.0.0.1", r));
 process.env.TEMPO_API_BASE_URL = `http://127.0.0.1:${dead.address().port}`;
 const { __testResetMethodCache } = await import("../src/mpp-tempo.js");
 __testResetMethodCache();
@@ -142,7 +142,7 @@ ok(/relay \/v1\/mpp\/validate NETWORK ERROR after \d+ms/.test(e.error), `socket-
       res.end(JSON.stringify({ success: true }));
     });
   });
-  await new Promise((r) => flaky.listen(0, r));
+  await new Promise((r) => flaky.listen(0, "127.0.0.1", r));
   process.env.TEMPO_API_BASE_URL = `http://127.0.0.1:${flaky.address().port}`;
   process.env.TEMPO_RELAY_VALIDATE_ATTEMPTS = "3";
   __testResetMethodCache();
@@ -152,7 +152,7 @@ ok(/relay \/v1\/mpp\/validate NETWORK ERROR after \d+ms/.test(e.error), `socket-
   // Every attempt fails at the transport: bounded, then classified unreachable.
   calls = 0;
   const allDead = createServer((req) => { req.on("data", () => {}); req.on("end", () => { calls++; req.socket.destroy(); }); });
-  await new Promise((r) => allDead.listen(0, r));
+  await new Promise((r) => allDead.listen(0, "127.0.0.1", r));
   process.env.TEMPO_API_BASE_URL = `http://127.0.0.1:${allDead.address().port}`;
   process.env.TEMPO_RELAY_VALIDATE_ATTEMPTS = "2";
   __testResetMethodCache();
@@ -170,7 +170,7 @@ ok(/relay \/v1\/mpp\/validate NETWORK ERROR after \d+ms/.test(e.error), `socket-
       broadcasts++; req.socket.destroy();
     });
   });
-  await new Promise((r) => dropBroadcast.listen(0, r));
+  await new Promise((r) => dropBroadcast.listen(0, "127.0.0.1", r));
   process.env.TEMPO_API_BASE_URL = `http://127.0.0.1:${dropBroadcast.address().port}`;
   __testResetMethodCache();
   const b1 = await broadcastTempoCredential(credentialFor("theta.test"));
@@ -184,7 +184,7 @@ ok(/relay \/v1\/mpp\/validate NETWORK ERROR after \d+ms/.test(e.error), `socket-
   allDead.close(); flaky.close(); dropBroadcast.close();
 
   // ...but a connect-phase failure (nothing reached the relay) is retried once.
-  const closedPort = await new Promise((r) => { const s = createServer(); s.listen(0, () => { const p = s.address().port; s.close(() => r(p)); }); });
+  const closedPort = await new Promise((r) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => r(p)); }); });
   const { __testRelayFetch } = await import("../src/mpp-tempo.js");
   const b2 = await __testRelayFetch(`http://127.0.0.1:${closedPort}/v1/mpp/broadcast`, { method: "POST", body: "{}" });
   ok(b2.error && b2.trace.relayAttempts === 2 && b2.trace.connectPhase === true && /\/v1\/mpp\/broadcast NETWORK ERROR .*ECONNREFUSED \(attempts 2\)/.test(b2.trace.relayError), `broadcast: a refused connection (request never sent) is retried once (${b2.trace.relayError})`);

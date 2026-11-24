@@ -89,7 +89,7 @@ app.post("/monitors/manage-link", express.urlencoded({ extended: false }), creat
   clientIp: (req) => String(req.get("x-test-ip") || "ip0"),
   page: (title, body) => `<h1>${title}</h1>${body}`,
 }));
-const srv = app.listen(0);
+const srv = app.listen(0, "127.0.0.1");
 await new Promise((r) => srv.once("listening", r));
 const base = `http://127.0.0.1:${srv.address().port}`;
 const post = (email, ip, { form = false } = {}) => fetch(`${base}/monitors/manage-link`, {

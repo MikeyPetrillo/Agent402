@@ -13,10 +13,8 @@
 // non-2xx verify and a graceful isValid:false).
 //   node scripts/test-svm-funding-refusal.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { classifySvmFundingRefusal, fundingHint, fundingKeyOf, noteFundingRefusal, fundingHoldOf, clearFundingState, registerSvmFundingHold, catalogPriceText, RETRY_AFTER_S, HOLD_AFTER, POW_SENTENCE, _resetFundingForTest, _setFundingStoreForTest } from "../src/svm-funding-refusal.js";
 import { createMemoryLimits, createRedisLimits } from "../src/shared-limits.js";
 import { displayPrice } from "../src/pages.js";
@@ -265,8 +263,6 @@ const reqs = (amount) => ({ network: SOL, amount: String(amount), extra: { feePa
 }
 
 // ---- the wire ------------------------------------------------------------------------
-const [PORT, FAC_PORT] = [await getFreePort(), await getFreePort()];
-const B = `http://127.0.0.1:${PORT}`;
 const OP = "svm-funding-test-operator-token-0123456789";
 const modes = new Map(); // authority -> "short" | "noacct-throw" | "ok"
 const st = { verifies: 0, verifiesBy: new Map(), settles: 0, evmVerifies: 0 };
@@ -292,14 +288,14 @@ const facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+// Port 0 everywhere, each port read back (scripts/lib/boot-server.js for the server).
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 const HOLD_S = 4;
-const env = { ...process.env };
-delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
-const proc = spawn(process.execPath, ["src/server.js"], {
-  cwd: fileURLToPath(new URL("..", import.meta.url)),
+// offline-stores.js (imported first) already cleared REDIS_URL and STATE_DATABASE_URL.
+const srv = await bootServer({
   env: {
-    ...env, PORT: String(PORT), FREE_MODE: "", NODE_ENV: "",
+    FREE_MODE: "", NODE_ENV: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     PAYMENT_NETWORKS: "base,solana", SOLANA_WALLET_ADDRESS: payTo.address,
     FACILITATOR_URL: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYAI_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
@@ -308,8 +304,10 @@ const proc = spawn(process.execPath, ["src/server.js"], {
     SVM_FUNDING_RETRY_AFTER_S: String(HOLD_S),
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
   },
-  stdio: ["ignore", "pipe", "pipe"],
+  stores: false, readyPath: null, timeoutMs: 60_000,
 });
+const proc = srv.child;
+const B = srv.url;
 const log = [];
 const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 120) log.splice(0, log.length - 120); };
 proc.stdout.on("data", keep); proc.stderr.on("data", keep);

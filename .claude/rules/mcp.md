@@ -56,7 +56,9 @@ Loaded when a connector or front-door file is read.
   eras: read a per-request client capability from the raw body (`declaredCapabilities`), never from `req.params._meta`.
   Our own answers ahead of the SDK (tasks, skills, the deadline cutoff) carry `resultType` on a 2026-07-28 request, and a
   missing client capability there is a 400. `scripts/mcp-client-check.js` reads both (`MCP_CHECK_PROTOCOL=2026-07-28`
-  uses the v2 client); the stdio package still runs SDK v1.
+  uses the v2 client). Neither connector imports SDK v1: `@modelcontextprotocol/sdk` stays a root devDependency only as
+  the 2025-era reference CLIENT the interop suites and `mcp-client-check.js` drive (the v1 client is what most hosts
+  run), and as mppx's optional peer.
 - **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`
   and `server.describe`; the access line names coins and wires from the rails list and the MPP
   config. The unpaid 402 body carries the access line and the `/agents.md` link only with

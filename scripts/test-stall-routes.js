@@ -17,7 +17,6 @@
 //      serve equal a direct read of the ledger.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync as readProcFile, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +26,7 @@ import { createHash } from "node:crypto";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import Database from "better-sqlite3";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { buildRoutePerfFixture } from "./lib/route-perf-fixture.js";
 
 let n = 0;
@@ -693,18 +692,20 @@ if (isMainThread && typeof process.send === "function") {
   });
 }
 `);
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], {
+// PORT=0, the port read back (scripts/lib/boot-server.js); the IPC channel
+// carries the hold probe's readings.
+const booted = await bootServer({
   env: {
-    ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "on", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
+    FREE_MODE: "true", X402_INDEX_CRAWL: "on", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
     ROUTE_INDEX_WARM_DELAY_MS: "0", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", ROUTER_WORKERS: "0",
     AGENT402_OPERATOR_TOKEN: TOKEN, STATS_DB_DIR: dir, LOOP_LAG_TICK_MS: "5", LAZY_DEPS_WARM: "off",
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --import ${JSON.stringify(HOLD_PROBE).slice(1, -1)}`.trim(),
   },
-  stdio: ["ignore", "ignore", "inherit", "ipc"],
+  stores: false, ipc: true, timeoutMs: 120_000,
 });
+const proc = booted.child;
 serverProc = proc;
-const base = `http://127.0.0.1:${port}`;
+const base = booted.url;
 const op = { headers: { authorization: `Bearer ${TOKEN}` } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const serverHold = (cmd) => new Promise((resolve, reject) => {
@@ -715,9 +716,7 @@ const serverHold = (cmd) => new Promise((resolve, reject) => {
   proc.send(cmd);
 });
 try {
-  let up = false;
-  for (let i = 0; i < 240 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
-  ok(up, "server booted");
+  ok((await fetch(`${base}/health`)).ok, "server booted");
   let sellers = 0;
   for (let i = 0; i < 240 && sellers < 5700; i++) {
     try { sellers = (await (await fetch(`${base}/__operator/heap.json`, op)).json()).index?.entries || 0; } catch { /* warming */ }

@@ -25,13 +25,12 @@
 //
 //   node scripts/test-pending-settle.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 // Every store here is a file in this run's own directory: the booted server
 // runs with STATE_DATABASE_URL and REDIS_URL blank, and the books this process
@@ -359,7 +358,7 @@ const PENDING_MSG = "transaction did not confirm in time: context deadline excee
 }
 
 // ============================================================ part 2: booted
-const [PORT, FAC_PORT, RPC_PORT] = await getFreePorts(3);
+let FAC_PORT = 0, RPC_PORT = 0;
 const LATE = join(DIR, "late.json");
 const LEDGER = join(DIR, "sales.db");
 const OP = "op-" + Math.random().toString(36).slice(2);
@@ -422,12 +421,16 @@ const rpcSrv = createServer(async (req, res) => {
   return rpcReply(null);
 });
 stubs = [fac, rpcSrv];
-await new Promise((r) => fac.listen(FAC_PORT, "127.0.0.1", r));
-await new Promise((r) => rpcSrv.listen(RPC_PORT, "127.0.0.1", r));
+// Port 0 everywhere, each port read back (scripts/lib/boot-server.js for the server).
+await new Promise((r) => fac.listen(0, "127.0.0.1", r));
+await new Promise((r) => rpcSrv.listen(0, "127.0.0.1", r));
+FAC_PORT = fac.address().port;
+RPC_PORT = rpcSrv.address().port;
 
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: {
-    ...process.env, PORT: String(PORT), FREE_MODE: "",
+let srv = null;
+try {
+  srv = await bootServer({ stores: false, readyPath: null, timeoutMs: 60_000, env: {
+    FREE_MODE: "",
     WALLET_ADDRESS: PAY_TO, NETWORK: "base", PAYMENT_NETWORKS: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${RPC_PORT}/rpc`,
     EVM_RPC_8453: `http://127.0.0.1:${RPC_PORT}/rpc`, PAYMENT_SETTLE_FALLBACK: "",
@@ -437,13 +440,13 @@ const proc = spawn(process.execPath, ["src/server.js"], {
     AGENT402_OPERATOR_TOKEN: OP,
     REDIS_URL: "", CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+  } });
+} catch (e) { fail(`server did not boot: ${e.message.slice(0, 600)}`); }
+const proc = srv.child;
 procs.push(proc);
 const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) if (line.trim()) serverLog.push(line.slice(0, 400)); if (serverLog.length > 200) serverLog.splice(0, serverLog.length - 200); };
 proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
-const BASE = `http://127.0.0.1:${PORT}`;
+const BASE = srv.url;
 let booted = false;
 for (let i = 0; i < 120 && !booted; i++) { try { booted = (await fetch(`${BASE}/health`)).ok; } catch { /* booting */ } if (!booted) await sleep(500); }
 if (!booted) fail("server did not boot");

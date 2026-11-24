@@ -24,7 +24,7 @@
 //   - tasks/update and tasks/cancel acknowledge with `{resultType:"complete"}`;
 //   - durations are `ttlMs` / `pollIntervalMs` (millisecond-suffixed).
 //
-// The installed @modelcontextprotocol/sdk (1.30.0) implements the EARLIER
+// The MCP SDK's own task helpers implement the EARLIER
 // 2025-11-25 CORE tasks shape instead (`tasks/result` + `tasks/list`, nested
 // `task`, `ttl`/`pollInterval`, per-request `params.task` opt-in). Those wires
 // are mutually incompatible, so this module implements the 2026-07-28 extension

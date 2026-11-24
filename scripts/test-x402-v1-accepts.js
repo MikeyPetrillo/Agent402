@@ -134,7 +134,7 @@ facilitator = createServer((req, res) => {
     res.end(JSON.stringify({ isValid: true, success: true, transaction: `0x${facCalls.settle.toString(16).padStart(64, "0")}`, network: "eip155:8453" }));
   });
 });
-await new Promise((r) => facilitator.listen(0, r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
 const FAC_PORT = facilitator.address().port;
 const booting = bootServer({
   stores: false,
