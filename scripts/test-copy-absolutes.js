@@ -1312,7 +1312,21 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       const list = text.lastIndexOf("recovery: [", m.index);
       const listEnd = list < 0 ? -1 : text.indexOf("\n    ],", list);
       if (list >= 0 && listEnd > m.index && carries(text.slice(list, listEnd))) continue;
-      if (!carries(text.slice(Math.max(0, m.index - 800), end))) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
+      // Markdown: the sentence must sit in the claim's own paragraph (blank
+      // lines bound it), never borrowed from a neighbor's; a table row keeps
+      // the reach to the sentence under its table.
+      let start = Math.max(0, m.index - 800);
+      if (/\.md$/.test(rel)) {
+        const p0 = text.lastIndexOf("\n\n", m.index);
+        start = p0 < 0 ? 0 : p0 + 2;
+        if (!isRow(lineAt(m.index))) {
+          let p1 = text.indexOf("\n\n", m.index);
+          // A claim in a heading is carried by the paragraph the heading opens.
+          if (/^#{1,6}\s/.test(lineAt(m.index)) && p1 >= 0) { const p2 = text.indexOf("\n\n", p1 + 2); p1 = p2; }
+          end = p1 < 0 ? text.length : p1;
+        }
+      }
+      if (!carries(text.slice(start, end))) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
     }
     // Word for word: every copy of the family's words is one of its sentences.
     if (rel !== "src/settle-first-copy.js") {
