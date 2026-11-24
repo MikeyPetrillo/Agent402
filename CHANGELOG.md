@@ -42,8 +42,9 @@ Tools:
 
 ### 2026-11-24 (source terms, neutral names, MCP flagships, package names)
 Tools:
-- fred-series and fred-release-observations are retired and answer 410 naming
-  us-macro-series, which takes the same inputs and gives the same answer; the macro-snapshot skill pack replaces
+- fred-series (us-macro-series) and fred-release-observations
+  (us-macro-series) are retired and answer 410 naming that replacement, which
+  takes the same inputs and gives the same answer; the macro-snapshot skill pack replaces
   fred-snapshot, whose route answers 410 naming it. The tools serving New York Fed rates are not offered for resale
   through a third party, and say why.
 - market-calendar compiles its calendars from public sources (NYSE Rules 7.2
