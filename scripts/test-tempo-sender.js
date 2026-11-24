@@ -283,6 +283,21 @@ const TX_FIRST_USE_OX = await firstUse(oxAgent, oxKeyAuthorization({ address: ox
   const ndParties = tempoPaymentParties(credential(TX_MULTISIG_NEW_DOMAIN));
   ok(msOwners.every((o) => ndParties.includes(o.a)) && ndParties.includes(msAccount), "M: the payment parties screened for a configurable account envelope include every owner whose approval recovers, beside the account");
   ok(!msOwners.some((o) => tempoPaymentParties(credential(TX_MULTISIG_OLD_DOMAIN)).includes(o.a)), "M: approvals under the pre-release domain recover to no owner, so none is named");
+  // A configurable account acting as an access key (TIP-1111): the keychain
+  // envelope's inner signer is the configurable account, and its owners'
+  // approvals sign the access key's payload (the transaction for the user).
+  {
+    const base = TxEnvelopeTempo.from(TX);
+    const user = lc(root.address);
+    const config = { version: 0n, threshold: 2, owners: msOwners.map((o) => ({ owner: o.a, weight: 1 })) };
+    const keyPayload = TxEnvelopeTempo.getSignPayload(base, { from: user });
+    const digest = AccountConfig.getSignPayload({ account: msAccount, config, payload: keyPayload });
+    const inner = SignatureEnvelope.from({ account: msAccount, config, signatures: msOwners.map((o) => SignatureEnvelope.from(Secp256k1.sign({ payload: digest, privateKey: o.k }))) });
+    const raw = TxEnvelopeTempo.serialize(base, { signature: SignatureEnvelope.from({ type: "keychain", userAddress: user, inner, version: "v2" }) });
+    const kc = tempoPaymentParties(credential(raw));
+    ok(TxEnvelopeTempo.deserialize(raw).signature?.inner?.type === "configurable", "M: (fixture) a keychain envelope whose inner signer is a configurable account");
+    ok(kc.includes(user) && kc.includes(msAccount) && msOwners.every((o) => kc.includes(o.a)), `M: the payment parties of a keychain transaction signed by a configurable account include the inner approvals' owners (${msOwners.filter((o) => !kc.includes(o.a)).length} missing)`);
+  }
   ok(inspectTempoSender(credential(TX_PLAIN)).booking === null, "A: control - a verified sender has no separate booking");
   const fsSelf = inspectTempoSender(credential(TX_FEE_SLOT_SELF));
   ok(fsSelf.claimed === attacker && fsSelf.verified === attacker, "A: control - the fee-payer slot naming the real signer is proven by the signature");

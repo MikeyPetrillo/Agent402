@@ -1405,22 +1405,26 @@ export function tempoPaymentParties(authorizationHeader) {
         if (sig) {
           const signPayload = TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx));
           if (PRIMITIVE_ENVELOPES.has(sig.type)) add(SignatureEnvelope.extractAddress({ payload: signPayload, signature: sig }));
-          if (sig.type === "keychain" && sig.inner && PRIMITIVE_ENVELOPES.has(sig.inner.type)) {
-            const keyPayload = sig.version === "v1" ? signPayload : TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx), { from: lcAddress(sig.userAddress) });
-            add(SignatureEnvelope.extractAddress({ payload: keyPayload, signature: sig.inner }));
-          }
-          // A configurable account acting as an access key (TIP-1111) names
-          // its own account inside the keychain envelope.
-          if (sig.type === "keychain" && MULTISIG_ENVELOPES.has(sig.inner?.type)) add(sig.inner.account);
           // Every owner whose approval of a configurable account envelope
-          // recovers under the account's digest is screened too.
-          if (MULTISIG_ENVELOPES.has(sig.type) && sig.config && Array.isArray(sig.signatures) && sig.signatures.length <= AccountConfig.maxSignatures) {
-            const digest = AccountConfig.getSignPayload({ account: sig.account, config: sig.config, payload: signPayload });
-            for (const s of sig.signatures) {
+          // recovers under the account's digest of `payload` is screened.
+          const owners = (env, payload) => {
+            if (!MULTISIG_ENVELOPES.has(env?.type) || !env.config || !Array.isArray(env.signatures) || env.signatures.length > AccountConfig.maxSignatures) return;
+            let digest;
+            try { digest = AccountConfig.getSignPayload({ account: env.account, config: env.config, payload }); } catch { return; }
+            for (const s of env.signatures) {
               if (!s || !PRIMITIVE_ENVELOPES.has(s.type)) continue;
               try { add(SignatureEnvelope.extractAddress({ payload: digest, signature: s })); } catch { /* nothing to add */ }
             }
+          };
+          if (sig.type === "keychain" && sig.inner) {
+            const keyPayload = sig.version === "v1" ? signPayload : TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx), { from: lcAddress(sig.userAddress) });
+            if (PRIMITIVE_ENVELOPES.has(sig.inner.type)) add(SignatureEnvelope.extractAddress({ payload: keyPayload, signature: sig.inner }));
+            // A configurable account acting as an access key (TIP-1111) names
+            // its own account inside the keychain envelope, and its owners'
+            // approvals sign the access key's payload.
+            if (MULTISIG_ENVELOPES.has(sig.inner.type)) { add(sig.inner.account); owners(sig.inner, keyPayload); }
           }
+          owners(sig, signPayload);
         }
       } catch { /* an unrecoverable signer adds nothing; verification refuses it */ }
       if (tx?.feePayerSignature && tx.from) {
