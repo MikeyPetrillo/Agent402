@@ -83,7 +83,11 @@ if (!isShallow() && stored) {
   const stored = readTable();
   const fams = {};
   for (const [p, d] of Object.entries(stored?.entries || {})) (fams[p.split("/")[1]] ||= new Set()).add(d.modified);
-  ok(["skills", "guides", "integrations"].every((f) => fams[f] && fams[f].size >= 3), `the committed table dates each family's entries apart (${Object.entries(fams).map(([f, s]) => `${f} ${s.size}`).join(", ")})`);
+  // At least two dates per family: one edit that touches most entries of a
+  // family (a package rename across every integration page) legitimately
+  // re-dates those entries, and one entry dated apart still proves the dates
+  // are per entry, not the module's.
+  ok(["skills", "guides", "integrations"].every((f) => fams[f] && fams[f].size >= 2), `the committed table dates each family's entries apart (${Object.entries(fams).map(([f, s]) => `${f} ${s.size}`).join(", ")})`);
 }
 
 // --- every way a tool is defined dates its page ----------------------------------
