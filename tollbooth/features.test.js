@@ -572,6 +572,14 @@ ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes 
   ok(run(bots, { ...mockReq({}, "/healthz"), method: "POST" }).status === 402, "bots: a POST to /healthz with no UA is still charged");
   ok(run(bots, mockReq({}, "/healthz/x")).status === 402 && run(bots, mockReq({}, "/x/healthz")).status === 402, "bots: only the exact health paths are exempt");
   ok(run(bots, mockReq({ "user-agent": "GPTBot/1.0" }, "/healthz")).status === 402, "bots: a listed crawler on /healthz still pays");
+  // The exemption reads the raw request path (the one a router matches), so a
+  // dot segment or a percent escape that normalizes to a health path is charged.
+  for (const p of ["/articles/secret/%2e%2e/%2e%2e/healthz", "/articles/secret/../../healthz", "/a/%2E%2E/healthz", "/./healthz", "/%68ealthz", "/healthz%2f", "//healthz", "/healthz/"]) {
+    ok(run(bots, mockReq({}, p)).status === 402, `bots: an empty-UA ${p} is charged (raw path, exact match)`);
+  }
+  ok(run(bots, { ...mockReq({}, "/articles/secret/../../healthz"), url: "/healthz" }).status === 402, "bots: the original URL is read, not a rewritten req.url");
+  ok(run(bots, { ...mockReq({}, "/healthz"), originalUrl: undefined }).nexted === true, "bots: req.url is read when originalUrl is absent");
+  ok(run(bots, mockReq({}, "/healthz?next=/../x")).nexted === true, "bots: the query string is not part of the health path");
   ok(run(createTollbooth({ mode: "strict", powDifficulty: 12 }), mockReq({}, "/healthz")).nexted === true, "strict: an empty-UA /healthz passes free");
   const own = createTollbooth({ powDifficulty: 12, healthPaths: ["/status/live"] });
   ok(run(own, mockReq({}, "/status/live")).nexted === true && run(own, mockReq({}, "/healthz")).status === 402, "healthPaths replaces the default list");

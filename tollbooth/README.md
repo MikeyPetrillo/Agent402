@@ -418,7 +418,9 @@ empty-User-Agent `GET` or `HEAD` of a health path passes free in the `bots`
 and `strict` modes, so a load balancer's probe (HAProxy `option httpchk`, a raw
 HTTP/1.0 check) keeps the backend up. The paths are `healthPaths`, default
 `["/healthz", "/health"]` (`[]` for none; the CLI reads
-`TOLLBOOTH_HEALTH_PATHS`, a comma list or `off`). Upgrading from 0.12 to 0.13:
+`TOLLBOOTH_HEALTH_PATHS`, a comma list or `off`). The match is exact on the
+raw request path, the query string aside: `/healthz/`, `/HEALTHZ`, and any path
+with a `%` escape or a `.` or `..` segment pay. Upgrading from 0.12 to 0.13:
 an empty User-Agent on any other path now pays; a probe on another path is
 exempted with `free: (req) => req.path === "/your-probe"`.
 

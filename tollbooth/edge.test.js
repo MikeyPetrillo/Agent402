@@ -47,6 +47,13 @@ const BOT = "Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)";
   const own = createEdgeTollbooth({ secret: "test-secret", powDifficulty: 8, healthPaths: ["/up"] });
   if (await own(new Request("https://site.test/up")) !== null || (await own(new Request("https://site.test/healthz")))?.status !== 402) fail("healthPaths replaces the default list");
   console.log("0c. an empty-UA health check passes free ✓");
+  for (const p of ["/%68ealthz", "/healthz/", "/healthz%2f", "//healthz"]) {
+    const r = await bots(new Request("https://site.test" + p));
+    if (!r || r.status !== 402) fail(`bots: an empty-UA ${p} must be charged (exact health path only), got ${r && r.status}`);
+  }
+  const q = await bots(new Request("https://site.test/healthz?x=1"));
+  if (q !== null) fail("bots: a query string does not change the health path");
+  console.log("0d. only the exact health path is exempt ✓");
 }
 
 // 1. Human allowed (gate returns null).

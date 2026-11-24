@@ -33,3 +33,17 @@ export function makeBotMatcher(list = AI_BOTS) {
     return needles.some((n) => ua.includes(n));
   };
 }
+
+// Whether a request path is one of the configured health paths, for the
+// empty-User-Agent health-check exemption. Shared by the Node middleware
+// (index.js) and the edge (edge.js). It reads the RAW path a router matches
+// (query stripped) and compares it exactly: a router resolves no dot segment
+// or percent escape the way a URL parser does, so a path holding "%" or a "."
+// or ".." segment is never a health path, even when it normalizes to one.
+export function isHealthPath(rawPath, healthSet) {
+  if (!healthSet || !healthSet.size) return false;
+  const path = String(rawPath == null ? "" : rawPath).split("?")[0].split("#")[0];
+  if (!path.startsWith("/") || path.includes("%") || path.includes("\\")) return false;
+  if (path.split("/").some((seg) => seg === "." || seg === "..")) return false;
+  return healthSet.has(path);
+}

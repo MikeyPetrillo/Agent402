@@ -6,7 +6,7 @@
 //   const blocked = await gate(request);   // Response(402) if must pay, else null
 //
 // See worker.js for a Cloudflare Worker entry, and the README for Next.js.
-import { makeBotMatcher, AI_BOTS } from "./bots.js";
+import { makeBotMatcher, AI_BOTS, isHealthPath } from "./bots.js";
 import { memorySink } from "./sinks.js";
 import { mintEdgeChallenge, translateEdgeCredential, isMppCredential } from "./edge-mpp.js";
 
@@ -213,7 +213,9 @@ export function createEdgeTollbooth(config = {}) {
     if (!healthSet.size || String(request.headers.get("user-agent") || "").trim()) return false;
     const m = String(request.method || "GET").toUpperCase();
     if (m !== "GET" && m !== "HEAD") return false;
-    try { return healthSet.has(new URL(request.url).pathname); } catch { return false; }
+    // A Request URL is already normalized, and the Worker forwards that same
+    // URL to the origin; the shared rule still holds it to the exact path.
+    try { return isHealthPath(new URL(request.url).pathname, healthSet); } catch { return false; }
   };
   const shouldCharge = (request) => {
     try {

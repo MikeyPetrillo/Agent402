@@ -18,7 +18,7 @@ import { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
 import { createPow } from "./pow.js";
 import { CLIENT_TRUST_HEADERS, HOP_BY_HOP_HEADERS } from "./strip-headers.js";
-import { makeBotMatcher, AI_BOTS } from "./bots.js";
+import { makeBotMatcher, AI_BOTS, isHealthPath } from "./bots.js";
 import { memorySink } from "./sinks.js";
 import { challengesFromPaymentRequired, translateCredential, receiptFromPaymentResponse, isMppCredential, DEFAULT_MPP_CHAIN_IDS } from "./mpp.js";
 import { tempoConfig, mintTempoChallenges, parseTempoCredential, checkTempoBinding, tempoRelay, relayInput, broadcastIdempotencyKey, tempoReceiptHeader, tempoProblem, confirmTempoSettlement } from "./tempo.js";
@@ -284,9 +284,9 @@ export function createTollbooth(config = {}) {
     if (!healthSet.size || String(req.headers["user-agent"] || "").trim()) return false;
     const m = String(req.method || "GET").toUpperCase();
     if (m !== "GET" && m !== "HEAD") return false;
-    let path = String(req.originalUrl || req.url || "/");
-    try { path = new URL(path, "http://internal.invalid").pathname; } catch { return false; }
-    return healthSet.has(path);
+    // The raw path the router matches (originalUrl survives a mounted app's
+    // rewrite of req.url), compared exactly: see isHealthPath.
+    return isHealthPath(req.originalUrl || req.url || "/", healthSet);
   };
   const shouldCharge = (req) => {
     try {
