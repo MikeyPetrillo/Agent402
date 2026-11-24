@@ -27,10 +27,10 @@
 //   * read-only - one balance read on the failure path, nothing broadcast,
 //     nothing retried. The happy path never gets here.
 
-const SOLANA_RPCS = [
-  "https://api.mainnet-beta.solana.com",
-  "https://solana-rpc.publicnode.com",
-];
+import { defaultSolanaRpcs } from "./rpc-terms.js";
+
+// Endpoints whose terms permit commercial use (src/rpc-terms.js).
+const SOLANA_RPCS = defaultSolanaRpcs();
 
 // Reasons vague enough that a balance check adds information. Everything else
 // is specific, and specific beats measured-but-unrelated.

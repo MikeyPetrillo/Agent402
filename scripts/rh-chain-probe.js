@@ -15,7 +15,7 @@
 // endpoint (confirms it advertises exact/eip155:4663/USDG); omit to skip that.
 //
 //   ROBINHOOD_FACILITATOR_URL=<facilitator-url> node scripts/rh-chain-probe.js
-const MAIN = { url: "https://rpc.mainnet.chain.robinhood.com", chainId: 4663 };
+const MAIN = { url: process.env.ROBINHOOD_RPC_URL || "https://robinhood-rpc.publicnode.com", chainId: 4663 };
 const TEST = { url: "https://rpc.testnet.chain.robinhood.com", chainId: 46630 };
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 const FACILITATOR_SUPPORTED = String(process.env.ROBINHOOD_FACILITATOR_URL || "").split(",")

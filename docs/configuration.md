@@ -1243,7 +1243,7 @@ holds it.
 | `SOLANA_LB_TX_CONCURRENCY` | Transaction reads in flight per payTo in a Solana board scan (1 to 32). Unset = 2, which keeps the paced public lane's queue short for other readers. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LEADERBOARD` | Solana leaderboard. | `on` | `src/solana-leaderboard.js` |
 | `SOLANA_RPCS` | Solana RPC endpoints. |  | `src/solana-history-rpc.js` |
-| `SOLANA_RPC_URL` | Solana RPC endpoint URL. | `https://api.mainnet-beta.solana.com` | `src/solana-buyer.js`, `src/solana-history-rpc.js`, `src/tools/solana-intel-kit.js` and 1 more |
+| `SOLANA_RPC_URL` | Solana RPC endpoint URL. | `https://solana-rpc.publicnode.com` (or the keyed lane when `ALCHEMY_API_KEY` is set) | `src/solana-buyer.js`, `src/solana-history-rpc.js`, `src/tools/solana-intel-kit.js` and 1 more |
 | `SOLANA_UPSTREAM_BUYER_KEY` | Private key of the Solana spending wallet route-execute buys with (a credential, set on the host). |  | `src/solana-buyer.js` |
 | `SOLANA_UPSTREAM_BUYER_LOW_USD` | Solana upstream buyer low, in USD. | `0.5` | `src/solana-buyer.js` |
 | `SOLANA_WALLET_ADDRESS` | Solana address that receives USDC; without it the Solana option is left out of every 402. |  | `src/own-wallets.js`, `src/payments.js`, `src/server.js` and 1 more |

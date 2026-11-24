@@ -82,7 +82,7 @@ const EVM_NETWORKS = {
   },
   avalanche: {
     usdc: "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
-    rpcs: [...alchemy("avax-mainnet"), "https://api.avax.network/ext/bc/C/rpc", "https://avalanche-c-chain-rpc.publicnode.com"],
+    rpcs: [...alchemy("avax-mainnet"), "https://avalanche-c-chain-rpc.publicnode.com"],
     spanBlocks: 10800, // ~6h at 2s blocks
   },
   sei: {
@@ -93,12 +93,12 @@ const EVM_NETWORKS = {
   },
   optimism: {
     usdc: "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
-    rpcs: [...alchemy("opt-mainnet"), "https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com"],
+    rpcs: [...alchemy("opt-mainnet"), "https://optimism-rpc.publicnode.com"],
     spanBlocks: 10800, // ~6h at 2s blocks
   },
   monad: {
     usdc: "0x754704bc059f8c67012fed69bc8a327a5aafb603",
-    rpcs: [...alchemy("monad-mainnet"), "https://rpc.monad.xyz", "https://rpc2.monad.xyz"],
+    rpcs: [...alchemy("monad-mainnet")],
     spanBlocks: 43000, // ~6h at 0.5s blocks
   },
   celo: {
@@ -118,7 +118,7 @@ const EVM_NETWORKS = {
   robinhood: {
     usdc: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
     token: "USDG",
-    rpcs: [...alchemy("robinhood-mainnet"), "https://rpc.mainnet.chain.robinhood.com"],
+    rpcs: [...alchemy("robinhood-mainnet"), "https://robinhood-rpc.publicnode.com"],
     // Measured ~0.15s blocks (block 4.04M seven days after the 2026-07-01
     // launch) — NOT the 2s Orbit default first assumed. 12k blocks was only
     // ~30 real minutes; the daily canary settle only appeared in the digest

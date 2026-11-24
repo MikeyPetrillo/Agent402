@@ -348,12 +348,12 @@ await new Promise((r) => setTimeout(r, 1500));
 // ---- 9. lane order, env, rollback ------------------------------------------
 {
   const KEY = "https://solana-mainnet.g.alchemy.com/v2/KEYXYZ";
-  const env = { SOLANA_RPCS: `${KEY},https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com` };
+  const env = { SOLANA_RPCS: `${KEY},https://solana-rpc.publicnode.com,https://fallback.example.org/rpc` };
   const order = H.solanaHistoryLanes(env).map((l) => `${H.laneLabel(l.url)}:${l.keyed ? "k" : "p"}`).join(" ");
-  ok(order === "api.mainnet-beta.solana.com:p alchemy:k solana-rpc.publicnode.com:p", `default order: public mainnet, keyed, then the remaining fallback (${order})`);
+  ok(order === "solana-rpc.publicnode.com:p alchemy:k fallback.example.org:p", `default order: the permitted public lane, keyed, then the remaining fallback (${order})`);
   const rb = H.solanaHistoryLanes({ ...env, SOLANA_HISTORY_ALCHEMY_FIRST: "on" }).map((l) => H.laneLabel(l.url)).join(" ");
-  ok(rb === "alchemy api.mainnet-beta.solana.com solana-rpc.publicnode.com", `SOLANA_HISTORY_ALCHEMY_FIRST=on restores keyed-first (${rb})`);
-  const withUrl = H.solanaHistoryLanes({ SOLANA_RPCS: "https://api.mainnet-beta.solana.com", SOLANA_RPC_URL: "https://rpc.example.org/k" });
+  ok(rb === "alchemy solana-rpc.publicnode.com fallback.example.org", `SOLANA_HISTORY_ALCHEMY_FIRST=on restores keyed-first (${rb})`);
+  const withUrl = H.solanaHistoryLanes({ SOLANA_RPCS: "https://solana-rpc.publicnode.com", SOLANA_RPC_URL: "https://rpc.example.org/k" });
   ok(withUrl.length === 2 && withUrl[1].keyed && withUrl[1].url === "https://rpc.example.org/k", "SOLANA_RPC_URL (the board's configured lane) joins as keyed");
   ok(!H.laneLabel(KEY).includes("KEYXYZ"), "a lane label never carries the key");
   const own = H.solanaHistoryLanes({ SOLANA_RPCS: KEY, SOLANA_HISTORY_PUBLIC_RPCS: "" });

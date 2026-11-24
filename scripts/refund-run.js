@@ -71,6 +71,7 @@ import { pathToFileURL } from "node:url";
 import { createHash, createHmac } from "node:crypto";
 import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 import { EVM_RPCS } from "../src/evm-rpcs.js";
+import { alchemyRpcFor } from "../src/rpc-terms.js";
 import { isGatewayWire } from "../src/gateway-wire.js";
 import { ALGORAND_MAINNET_CAIP2, canonicalAvmNetwork } from "../src/avm-network.js";
 import { withoutUrls } from "../src/payment-verify.js";
@@ -175,9 +176,10 @@ export const DEFAULT_TIME_BUDGET_SECONDS = 480;
 const TIME_BUDGET_SECONDS = capUsd(process.env.REFUND_TIME_BUDGET_SECONDS, String(DEFAULT_TIME_BUDGET_SECONDS), "REFUND_TIME_BUDGET_SECONDS");
 
 // Public RPCs for the EVM rails we can refund on (src/evm-rpcs.js, shared
-// with the settle path). Overridable per chain via REFUND_RPC_<id> (e.g.
-// REFUND_RPC_8453). A chain with no RPC entry holds its rows - refusing loudly
-// beats broadcasting through a guessed endpoint.
+// with the settle path), then the keyed Alchemy lane when ALCHEMY_API_KEY is
+// set (src/rpc-terms.js: the only permitted lane for Monad). Overridable per
+// chain via REFUND_RPC_<id> (e.g. REFUND_RPC_8453). A chain with no RPC holds
+// its rows - refusing loudly beats broadcasting through a guessed endpoint.
 export { EVM_RPCS };
 
 /**
@@ -195,7 +197,7 @@ export function proofRpcsFor(network, env = process.env) {
   if (n === TEMPO_NETWORK) return [TEMPO_RPC()];
   if (!n.startsWith("eip155:")) return [];
   const out = [];
-  for (const u of [env[`REFUND_RPC_${n.split(":")[1]}`], EVM_RPCS[n]]) {
+  for (const u of [env[`REFUND_RPC_${n.split(":")[1]}`], EVM_RPCS[n], alchemyRpcFor(n, env)]) {
     const s = typeof u === "string" ? u.trim() : "";
     if (s && !out.includes(s)) out.push(s);
   }
@@ -242,7 +244,7 @@ export const TEMPO_NETWORK = "eip155:4217";
 export const SOLANA_NETWORK = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const TEMPO_RPC = () => (process.env.REFUND_TEMPO_RPC || process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz").trim();
-const SOLANA_RPC = () => (process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
+const SOLANA_RPC = () => (process.env.SOLANA_RPC_URL || "https://solana-rpc.publicnode.com").trim();
 
 export function familyOf(network) {
   const n = String(network || "");
@@ -535,7 +537,7 @@ async function evmClientFor(row) {
   const { createWalletClient, http, publicActions, defineChain } = await import("viem");
   const { privateKeyToAccount } = await import("viem/accounts");
   const id = Number(String(row.network).split(":")[1]);
-  const rpc = (process.env[`REFUND_RPC_${id}`] || EVM_RPCS[row.network] || "").trim();
+  const rpc = (process.env[`REFUND_RPC_${id}`] || EVM_RPCS[row.network] || alchemyRpcFor(row.network) || "").trim();
   if (!rpc) throw new Error(`no RPC for ${row.network}`);
   const account = privateKeyToAccount(process.env.REFUND_EVM_KEY.trim());
   const chain = defineChain({ id, name: row.network, nativeCurrency: { name: "n", symbol: "n", decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });

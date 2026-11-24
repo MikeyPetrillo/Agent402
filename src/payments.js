@@ -1,4 +1,5 @@
 import { usdToBaseUnits } from "./base-units.js";
+import { defaultSolanaRpcs } from "./rpc-terms.js";
 import { handlerInputOf } from "./handler-input.js";
 import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
 import { encodePaymentRequiredHeader, decodePaymentRequiredHeader } from "@x402/core/http";
@@ -5513,7 +5514,7 @@ export function summarizeFacilitatorError(err) {
 const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 function warnIfSolanaTokenAccountMissing(owner) {
   (async () => {
-    const res = await fetch("https://api.mainnet-beta.solana.com", {
+    const res = await fetch(defaultSolanaRpcs()[0], {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

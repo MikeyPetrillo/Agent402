@@ -43,11 +43,13 @@ export const EVM_LOGS_PUBLICS = Object.freeze({
   // maxRange is the provider's per-request block cap and stays in blocks.
   base: [{ url: "https://base-rpc.publicnode.com", maxRange: 9_000, maxDepthSeconds: 18_000 }],
   arbitrum: [{ url: "https://arb1.arbitrum.io/rpc", maxRange: 9_000 }],
-  monad: [{ url: "https://rpc2.monad.xyz", maxRange: 9_000 }, { url: "https://rpc.monad.xyz", maxRange: 100 }],
+  // Monad: no public endpoint whose terms permit commercial use
+  // (src/rpc-terms.js), so its reads go to the configured (keyed) list.
+  monad: [],
   celo: [{ url: "https://forno.celo.org", maxRange: 5_000 }],
-  avalanche: [{ url: "https://api.avax.network/ext/bc/C/rpc", maxRange: 9_000 }, { url: "https://avalanche-c-chain-rpc.publicnode.com", maxRange: 9_000 }],
-  optimism: [{ url: "https://mainnet.optimism.io", maxRange: 9_000 }, { url: "https://optimism-rpc.publicnode.com", maxRange: 9_000 }],
-  robinhood: [{ url: "https://rpc.mainnet.chain.robinhood.com", maxRange: 9_000 }],
+  avalanche: [{ url: "https://avalanche-c-chain-rpc.publicnode.com", maxRange: 9_000 }],
+  optimism: [{ url: "https://optimism-rpc.publicnode.com", maxRange: 9_000 }],
+  robinhood: [{ url: "https://robinhood-rpc.publicnode.com", maxRange: 9_000 }],
   // Refuses 10,000-block ranges; serves 4,900. A rate-limit answer cools it.
   arc: [{ url: "https://rpc.mainnet.arc.io", maxRange: 4_900 }],
   // rpc-qnd serves 10,000-block ranges, rpc-gel 1,000 (both stated in their

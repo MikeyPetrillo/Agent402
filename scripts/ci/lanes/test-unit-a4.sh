@@ -154,8 +154,10 @@ t node scripts/test-referral-legs.js
 t node scripts/test-aws-marketplace-gate.js
 # The AWS Marketplace listing's own surfaces: the 73 default tools served, /aws/start links nowhere past the listing and lists each tool at its catalog price, /aws/openapi.json lists exactly the served tools with examples that validate, no /aws description names a tool or path outside the served set, /terms names AWS purchases (keys made in the test).
 t node scripts/test-aws-start-page.js
-# Resale clearance: /ref and /aws sell only tools whose upstream terms are cleared (marked beside the handler) or that reach no upstream (offline)
+# Resale clearance: /ref and /aws sell only tools whose upstream terms are cleared (marked beside the handler) or that reach no upstream and serve no outside facts (offline)
 t node scripts/test-resale-clearance.js
+# Chain RPC terms: no code default names an endpoint whose terms bar commercial use, and each settlement chain keeps its permitted lanes (offline)
+t node scripts/test-rpc-host-terms.js
 # The referral book's sweep: refused share and spread, dropped records read in turn and given up only on answered reads, charged reads inside the chain budget, one sweep at a time, a failed batch written again change by change (offline).
 t node scripts/test-referral-book-sweep.js
 # A run's ceiling: every tool marked endsAtCeiling ends its upstream work at it, starts none after it, and never answers from a cut read
