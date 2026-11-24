@@ -10,6 +10,9 @@ import { makeBotMatcher, AI_BOTS } from "./bots.js";
 import { memorySink } from "./sinks.js";
 import { mintEdgeChallenge, translateEdgeCredential, isMppCredential } from "./edge-mpp.js";
 
+// The paths an empty-User-Agent health check may read free (healthPaths).
+export const DEFAULT_HEALTH_PATHS = Object.freeze(["/healthz", "/health"]);
+
 export { memorySink, kvStatsSink, httpStatsSink } from "./sinks.js";
 
 const te = new TextEncoder();
@@ -157,6 +160,9 @@ export function createEdgeTollbooth(config = {}) {
     // "strict" (charge anything that isn't a real-browser request). An explicit
     // charge()/free() still wins. Default preserves the original behavior.
     mode = "bots",
+    // Paths a health check reads with no User-Agent: an empty-UA GET or HEAD
+    // of one passes free in "bots" and "strict" modes ([] for none).
+    healthPaths = DEFAULT_HEALTH_PATHS,
     charge,
     free,
     resourceBaseUrl = "",
@@ -202,12 +208,21 @@ export function createEdgeTollbooth(config = {}) {
     const accept = request.headers.get("accept") || "";
     return /mozilla\/5\.0/i.test(ua) && /text\/html/i.test(accept);
   };
+  const healthSet = new Set(Array.isArray(healthPaths) ? healthPaths.map(String) : []);
+  const isHealthCheck = (request) => {
+    if (!healthSet.size || String(request.headers.get("user-agent") || "").trim()) return false;
+    const m = String(request.method || "GET").toUpperCase();
+    if (m !== "GET" && m !== "HEAD") return false;
+    try { return healthSet.has(new URL(request.url).pathname); } catch { return false; }
+  };
   const shouldCharge = (request) => {
     try {
       if (typeof free === "function" && free(request)) return false;
       if (typeof charge === "function") return Boolean(charge(request));
     } catch { return true; /* fail closed: charge on predicate error */ }
     if (mode === "all") return true;
+    // A health check with no User-Agent passes free (healthPaths).
+    if (isHealthCheck(request)) return false;
     // strict: a known AI crawler pays even when it sends a browser-like UA and
     // an HTML Accept; anything else that does not look like a browser pays too.
     if (mode === "strict") return isBot(request.headers.get("user-agent") || "") || !looksHuman(request);

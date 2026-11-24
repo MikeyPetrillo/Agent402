@@ -65,6 +65,8 @@ export interface TollboothConfig {
   botUserAgents?: string[];
   /** Who pays: "bots" (default), "all", or "strict" (listed bots and anything that is not a browser page load). */
   mode?: "bots" | "all" | "strict";
+  /** Paths an empty-User-Agent GET or HEAD reads free in "bots" and "strict" modes (a health check). Default ["/healthz", "/health"]; [] for none. */
+  healthPaths?: string[];
   charge?: (req: TollboothRequest) => boolean;
   free?: (req: TollboothRequest) => boolean;
   /** Legacy verify-only USDC check. */
@@ -113,6 +115,8 @@ export function buildCliX402Middleware(env?: Record<string, string | undefined>)
 export const CLI_NETWORKS: Readonly<Record<string, string>>;
 
 export const AI_BOTS: string[];
+/** The default health paths an empty-User-Agent check reads free. */
+export const DEFAULT_HEALTH_PATHS: readonly string[];
 export function makeBotMatcher(list?: string[]): (userAgent?: string) => boolean;
 export function createPow(opts?: { difficulty?: number; secret?: string; ttlMs?: number; replayStore?: ReplayStore; store?: ReplayStore }): ProofOfWork;
 export function leadingZeroBits(buf: Uint8Array): number;

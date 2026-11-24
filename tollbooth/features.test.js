@@ -564,6 +564,19 @@ ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes 
   ok(run(bots, mockReq({ "user-agent": humanUA })).nexted === true, "bots: a browser UA still passes free");
   ok(run(bots, mockReq({ "user-agent": "curl/8.0" })).nexted === true, "bots: an unlisted non-empty UA still passes in bots mode (unchanged)");
   ok(run(createTollbooth({ mode: "strict", powDifficulty: 12 }), mockReq({ accept: "text/html" })).status === 402, "strict: no User-Agent is charged");
+  // A health check (HAProxy httpchk, a raw HTTP/1.0 probe) sends no User-Agent:
+  // the health paths are exempt from the empty-User-Agent charge.
+  ok(run(bots, mockReq({}, "/healthz")).nexted === true && run(bots, mockReq({}, "/health")).nexted === true, "bots: an empty-UA GET /healthz or /health passes free");
+  ok(run(bots, { ...mockReq({}, "/healthz"), method: "HEAD" }).nexted === true, "bots: an empty-UA HEAD /healthz passes free");
+  ok(run(bots, mockReq({}, "/healthz?x=1")).nexted === true, "bots: a query string does not change the health path");
+  ok(run(bots, { ...mockReq({}, "/healthz"), method: "POST" }).status === 402, "bots: a POST to /healthz with no UA is still charged");
+  ok(run(bots, mockReq({}, "/healthz/x")).status === 402 && run(bots, mockReq({}, "/x/healthz")).status === 402, "bots: only the exact health paths are exempt");
+  ok(run(bots, mockReq({ "user-agent": "GPTBot/1.0" }, "/healthz")).status === 402, "bots: a listed crawler on /healthz still pays");
+  ok(run(createTollbooth({ mode: "strict", powDifficulty: 12 }), mockReq({}, "/healthz")).nexted === true, "strict: an empty-UA /healthz passes free");
+  const own = createTollbooth({ powDifficulty: 12, healthPaths: ["/status/live"] });
+  ok(run(own, mockReq({}, "/status/live")).nexted === true && run(own, mockReq({}, "/healthz")).status === 402, "healthPaths replaces the default list");
+  ok(run(createTollbooth({ powDifficulty: 12, healthPaths: [] }), mockReq({}, "/healthz")).status === 402, "healthPaths: [] exempts nothing");
+  ok(run(createTollbooth({ mode: "all", powDifficulty: 12 }), mockReq({}, "/healthz")).status === 402, "all: every client pays, a health path included (free() exempts one)");
 }
 
 // --- payTo with nothing to settle it warns at start (library) ---

@@ -39,6 +39,14 @@ const BOT = "Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)";
   const blank = await bots(new Request("https://site.test/a", { headers: { "user-agent": " " } }));
   if (!none || none.status !== 402 || !blank || blank.status !== 402) fail(`bots: an empty or absent User-Agent must be charged, got ${none && none.status}, ${blank && blank.status}`);
   console.log("0b. an empty User-Agent is charged in the default mode ✓");
+  const health = await bots(new Request("https://site.test/healthz"));
+  const health2 = await bots(new Request("https://site.test/health", { method: "HEAD" }));
+  const post = await bots(new Request("https://site.test/healthz", { method: "POST" }));
+  const other = await bots(new Request("https://site.test/healthz/x"));
+  if (health !== null || health2 !== null || !post || post.status !== 402 || !other || other.status !== 402) fail(`bots: an empty-UA GET or HEAD of a health path passes free, nothing else does (${health && health.status}, ${health2 && health2.status}, ${post && post.status}, ${other && other.status})`);
+  const own = createEdgeTollbooth({ secret: "test-secret", powDifficulty: 8, healthPaths: ["/up"] });
+  if (await own(new Request("https://site.test/up")) !== null || (await own(new Request("https://site.test/healthz")))?.status !== 402) fail("healthPaths replaces the default list");
+  console.log("0c. an empty-UA health check passes free ✓");
 }
 
 // 1. Human allowed (gate returns null).

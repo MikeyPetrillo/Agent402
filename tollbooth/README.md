@@ -382,6 +382,7 @@ Read by the bundled proxy / Express entry point (`index.js`):
 | `TOLLBOOTH_ASSET` | `"USDC"` | Asset symbol in the quote (`USDG` charges in USDG on Robinhood Chain) |
 | `TOLLBOOTH_POW_BITS` | `18` | Proof-of-work difficulty in leading zero bits |
 | `TOLLBOOTH_MODE` | `"bots"` | Who pays: `bots` · `all` · `strict` |
+| `TOLLBOOTH_HEALTH_PATHS` | `/healthz,/health` | Paths an empty-User-Agent GET or HEAD reads free (a health check); `off` for none |
 | `TOLLBOOTH_ADAPTIVE` | `false` | Raise PoW difficulty as charged-request load climbs |
 | `TOLLBOOTH_ADAPTIVE_PER_BIT` | `300` | +1 difficulty bit per N charged requests/min |
 | `TOLLBOOTH_SECRET` | random | HMAC secret binding PoW challenges (set it to survive restarts / run multiple instances) |
@@ -412,7 +413,14 @@ Google-Extended, GoogleOther, Amazonbot, …; the full list is `AI_BOTS`). Class
 search indexers (Googlebot, Bingbot) are intentionally **not** charged so your
 SEO indexing stays free. A request with no `User-Agent` at all is charged in every mode: no browser
 sends none, so it falls under the same rule as `mode: "strict"` (a request that
-is not a real-browser request pays).
+is not a real-browser request pays). The one exception is a health check: an
+empty-User-Agent `GET` or `HEAD` of a health path passes free in the `bots`
+and `strict` modes, so a load balancer's probe (HAProxy `option httpchk`, a raw
+HTTP/1.0 check) keeps the backend up. The paths are `healthPaths`, default
+`["/healthz", "/health"]` (`[]` for none; the CLI reads
+`TOLLBOOTH_HEALTH_PATHS`, a comma list or `off`). Upgrading from 0.12 to 0.13:
+an empty User-Agent on any other path now pays; a probe on another path is
+exempted with `free: (req) => req.path === "/your-probe"`.
 
 **Don't want to play whack-a-mole with bot detection?** That's the point of the
 other modes - you stop trying to *identify* bots and instead make access *cost

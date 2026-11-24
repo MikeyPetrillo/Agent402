@@ -24,6 +24,8 @@ export interface EdgeTollboothConfig {
   botUserAgents?: string[];
   /** Who pays: "bots" (default), "all", or "strict" (listed bots and anything that is not a browser page load). */
   mode?: "bots" | "all" | "strict";
+  /** Paths an empty-User-Agent GET or HEAD reads free in "bots" and "strict" modes (a health check). Default ["/healthz", "/health"]; [] for none. */
+  healthPaths?: string[];
   charge?: (request: Request) => boolean;
   free?: (request: Request) => boolean;
   resourceBaseUrl?: string;
@@ -52,3 +54,5 @@ export function createEdgePow(opts: { secret: string; difficulty?: number; ttlMs
 export function memorySink(): StatsSink;
 export function kvStatsSink(kv: unknown, opts?: { bucket?: string; ttlSeconds?: number }): StatsSink;
 export function httpStatsSink(url: string, opts?: { token?: string; batchMs?: number; fetchImpl?: typeof fetch; allowInsecure?: boolean }): StatsSink;
+/** The default health paths an empty-User-Agent check reads free. */
+export const DEFAULT_HEALTH_PATHS: readonly string[];

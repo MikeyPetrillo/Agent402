@@ -23,6 +23,9 @@ import { memorySink } from "./sinks.js";
 import { challengesFromPaymentRequired, translateCredential, receiptFromPaymentResponse, isMppCredential, DEFAULT_MPP_CHAIN_IDS } from "./mpp.js";
 import { tempoConfig, mintTempoChallenges, parseTempoCredential, checkTempoBinding, tempoRelay, relayInput, broadcastIdempotencyKey, tempoReceiptHeader, tempoProblem, confirmTempoSettlement } from "./tempo.js";
 
+// The paths an empty-User-Agent health check may read free (healthPaths).
+export const DEFAULT_HEALTH_PATHS = Object.freeze(["/healthz", "/health"]);
+
 export { AI_BOTS, makeBotMatcher } from "./bots.js";
 export { createPow, leadingZeroBits } from "./pow.js";
 export { memorySink, kvStatsSink, httpStatsSink } from "./sinks.js";
@@ -175,6 +178,12 @@ export function createTollbooth(config = {}) {
     //             real-browser request (browser-like UA + an HTML Accept).
     // An explicit charge()/free() still wins over the mode.
     mode = process.env.TOLLBOOTH_MODE || "bots",
+    // Paths a health check reads (HAProxy httpchk and raw HTTP/1.0 probes send
+    // no User-Agent): an empty-UA GET or HEAD of one passes free in "bots" and
+    // "strict" modes. TOLLBOOTH_HEALTH_PATHS (comma list; "off" for none).
+    healthPaths = process.env.TOLLBOOTH_HEALTH_PATHS !== undefined
+      ? (process.env.TOLLBOOTH_HEALTH_PATHS.trim().toLowerCase() === "off" ? [] : process.env.TOLLBOOTH_HEALTH_PATHS.split(",").map((s) => s.trim()).filter(Boolean))
+      : DEFAULT_HEALTH_PATHS,
     charge,
     free,
     verifyX402,
@@ -270,12 +279,23 @@ export function createTollbooth(config = {}) {
     const accept = req.headers["accept"] || "";
     return /mozilla\/5\.0/i.test(ua) && /text\/html/i.test(accept);
   };
+  const healthSet = new Set(Array.isArray(healthPaths) ? healthPaths.map(String) : []);
+  const isHealthCheck = (req) => {
+    if (!healthSet.size || String(req.headers["user-agent"] || "").trim()) return false;
+    const m = String(req.method || "GET").toUpperCase();
+    if (m !== "GET" && m !== "HEAD") return false;
+    let path = String(req.originalUrl || req.url || "/");
+    try { path = new URL(path, "http://internal.invalid").pathname; } catch { return false; }
+    return healthSet.has(path);
+  };
   const shouldCharge = (req) => {
     try {
       if (typeof free === "function" && free(req)) return false;
       if (typeof charge === "function") return Boolean(charge(req));
     } catch { return true; /* fail closed: charge on predicate error */ }
     if (mode === "all") return true;
+    // A health check with no User-Agent passes free (healthPaths).
+    if (isHealthCheck(req)) return false;
     // strict: a known AI crawler pays even when it sends a browser-like UA and
     // an HTML Accept; anything else that does not look like a browser pays too.
     if (mode === "strict") return isBot(req.headers["user-agent"] || "") || !looksHuman(req);
