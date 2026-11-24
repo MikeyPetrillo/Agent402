@@ -68,24 +68,6 @@ updates:
       # dispatch is green on a branch.
       - dependency-name: "better-sqlite3"
         update-types: ["version-update:semver-major"]
-      # tesseract.js major: v6+ REMOVED top-level `data.lines` and moved lines
-      # inside `blocks`, which are off by default. src/tools/ocr-kit.js calls
-      # worker.recognize(buf) and reads data.lines, so on v7 the image-ocr tool
-      # still returns correct `text` and `confidence` but `lineCount: 0` and
-      # `lines: []` — silently dropping the per-line bounding boxes its own
-      # description advertises (measured 2026-07-25: v5.1.1 = 8 lines with
-      # bboxes, v7.0.0 = 0, same image). CI CANNOT CATCH THIS: the full suite
-      # passes 210/0 under v7 and the shape check reports "all clean", because
-      # it verifies documented keys are PRESENT and `lines` is present, just
-      # empty. A green Dependabot PR is not evidence here.
-      # To adopt v7 deliberately: recognize(buf, {}, { blocks: true }), then
-      # data.blocks.flatMap(b => b.paragraphs || []).flatMap(p => p.lines || []),
-      # and .trim() each line (v7 adds a trailing newline v5 did not). Ship it
-      # with a regression test asserting lineCount > 0 and a real bbox.
-      # 5.x is NOT 0.x, so the semver-major qualifier matches correctly here and
-      # still lets 5.x patches through (unlike the @zxing case below).
-      - dependency-name: "tesseract.js"
-        update-types: ["version-update:semver-major"]
       # @zxing/library >=0.23 declares engines node >=24 (the deploy image is
       # node:22-slim) and ships CJS only, which broke the named ESM imports in
       # barcode-kit until they moved to the default export. Revisit after a Node
