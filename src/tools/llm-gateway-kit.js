@@ -25,6 +25,7 @@
 // the stream finishes.) Streamed responses are not idempotency-replayable (the
 // cache hooks res.json only).
 
+import { markAiVoice } from "../ai-voice.js";
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 import { upstreamCosts, upstreamCostsLoaded, rowRateAt, REQUIRED_MODEL_ROWS } from "../upstream-costs.js";
 export { OPENROUTER_ATTRIBUTION };
@@ -5377,6 +5378,10 @@ export const LLM_GATEWAY_TOOLS = [
     handler: speechHandler,
   },
 ];
+
+// The AI-generated voice disclosure (src/ai-voice.js): the speech route, with
+// every named speech model it serves, says so in its description and answers.
+markAiVoice(LLM_GATEWAY_TOOLS, ["v1-audio-speech"]);
 
 // Price by model on the flat chat routes: `tierQuote` makes the x402 price
 // (payments.js) and the Tempo, Stripe and credits gates (server.js

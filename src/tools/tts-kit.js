@@ -48,6 +48,7 @@
 // .length each billed the same 100 "tokens" = 400 chars), so `text.length`
 // counts exactly what OpenRouter bills.
 
+import { markAiVoice } from "../ai-voice.js";
 import { redactSecrets } from "./redact.js";
 import { SPEECH_MODELS, OPENROUTER_ATTRIBUTION } from "./llm-gateway-kit.js";
 // Our data policy on every OpenRouter speech request: data_collection deny,
@@ -671,5 +672,7 @@ export const TTS_TOOLS = [
   },
 ];
 
+// The AI-generated voice disclosure (src/ai-voice.js).
+markAiVoice(TTS_TOOLS, ["tts-lite", "tts", "tts-hd"]);
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(TTS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

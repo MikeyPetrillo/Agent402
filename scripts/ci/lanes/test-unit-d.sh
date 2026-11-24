@@ -176,6 +176,8 @@ t node scripts/test-stt-cap.js
 # TTS lite tier (Kokoro over OpenRouter): contract parity, the margin bound, refusals (offline)
 t node scripts/test-tts-lite.js
 t node scripts/test-tts-elevenlabs.js
+# AI-generated voice disclosure: every speech tool says so before payment and in every answer (field or header) (offline)
+t node scripts/test-ai-voice.js
 # TTS per-request quote: anchors, round-up, floor, the served body, refusals before any spend (offline); the margin at every length against the private rows
 t node scripts/test-tts-quote.js
 t node scripts/test-tts-margins.js
