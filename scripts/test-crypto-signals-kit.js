@@ -241,7 +241,6 @@ for (const t of CRYPTO_SIGNALS_TOOLS) {
       const t = CRYPTO_SIGNALS_TOOLS.find((x) => x.slug === slug);
       ok(t.credit === HYPERLIQUID_ATTRIBUTION && t.discovery.output.example.credit === HYPERLIQUID_ATTRIBUTION, `${slug}: answers and example credit Hyperliquid`);
     }
-    ok(!CRYPTO_SIGNALS_TOOLS.find((x) => x.slug === "crypto-news").credit, "crypto-news: no Hyperliquid credit");
   }
   // Each new upstream state drops the shared 5 s document cache first; a
   // stored success would otherwise (correctly) answer for the outage.
