@@ -125,5 +125,26 @@ ok(seen.length >= 5, `the handlers read the stubbed upstream (${seen.length} rea
   } finally { globalThis.fetch = realFetch2; }
 }
 
+// CoinGecko: the credit is its section 4.3 wording, "Powered by CoinGecko"
+// with the link to its API page, on every surface that prints it; the earlier
+// "Data provided by" wording is kept only in the list of reworded sentences
+// (never printed).
+{
+  const DA = await import("../src/data-attribution.js");
+  const want = "Powered by CoinGecko (https://www.coingecko.com/en/api).";
+  ok(DA.COINGECKO_ATTRIBUTION === want && DA.COINGECKO_CREDIT === want && DA.ATTRIBUTIONS.coingecko === want, `the CoinGecko credit reads "${want}" (got "${DA.COINGECKO_ATTRIBUTION}")`);
+  const { CRYPTO_TOOLS } = await import("../src/tools/crypto-kit.js");
+  const cg = (CRYPTO_TOOLS || []).filter((t) => t?.attribution === "coingecko" || String(t?.description || "").includes("CoinGecko ("));
+  ok(cg.length > 0 && cg.every((t) => String(t.description).endsWith(want)), `each CoinGecko tool's description ends with the Powered by sentence (${cg.length} tools)`);
+  ok(cg.every((t) => !JSON.stringify(t.discovery?.output?.example ?? {}).includes("Data provided by CoinGecko")), "no CoinGecko example prints the earlier wording");
+  const { readFileSync, readdirSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const root = new URL("..", import.meta.url).pathname;
+  const hits = [];
+  const walk = (d) => { for (const n of readdirSync(join(root, d))) { const p = join(d, n); if (statSync(join(root, p)).isDirectory()) { if (n !== "generated") walk(p); } else if (p.endsWith(".js") && p !== "src/changelog.js") { const t = readFileSync(join(root, p), "utf8"); if (/Data provided by CoinGecko/.test(t.replace(/export const REWORDED_ATTRIBUTIONS[^\n]*/, ""))) hits.push(p); } } };
+  walk("src");
+  ok(hits.length === 0, `no module prints "Data provided by CoinGecko" (${hits.join(", ") || "none"})`);
+}
+
 console.log(`\ntest-source-credits: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
