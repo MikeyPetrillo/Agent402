@@ -46,6 +46,9 @@ Gateway:
   agent402:web_fetch and agent402:datetime on /v1/models; the earlier type
   names are still accepted on input. The /v1 tiers are described by their wire
   formats.
+- /v1/models names the web search engine of agent402:web_search and of the
+  grounded tier as agent402-web; a request may name engine "agent402-web",
+  and any other engine is refused as before.
 Payments:
 - A refusal says nothing was charged only on a call answered to its own
   caller; a step inside a charged answer (a skill pack, decide, route-execute

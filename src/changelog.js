@@ -71,6 +71,7 @@ const ENTRIES = [
       "Tools: The professional article report takes a neutral name, and the reports on an issuer carry a line that they are not investment advice.",
       "Gateway: Speech and transcription answers name agent402 in their provider field; the model field still names the model that ran.",
       "Gateway: The pro and premium chat tiers list their server tools as agent402:web_search, agent402:web_fetch and agent402:datetime on /v1/models; the earlier type names are still accepted on input. The /v1 tiers are described by their wire formats.",
+      "Gateway: /v1/models names the web search engine of agent402:web_search and of the grounded tier as agent402-web; a request may name engine \"agent402-web\", and any other engine is refused as before.",
       "Payments: A refusal says nothing was charged only on a call answered to its own caller; a step inside a charged answer (a skill pack, decide, route-execute or a bundle leg) does not print it, and a delivered answer never carries it.",
       "Payments: The Algorand seller catalog builds in the background at boot and refreshes on its own schedule, reading each listing page by page to its total under a page cap; a route-execute call that meets a cold catalog waits only within its payment window, then answers an uncharged 503 with Retry-After.",
       "Payments: A server that sets INK_RELAYER_KEY settles an Ink payment through its own relayer after the listed settlement providers, only after a refusal that moved nothing, under its own caps and minimum.",
