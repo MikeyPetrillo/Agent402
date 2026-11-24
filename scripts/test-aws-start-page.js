@@ -39,8 +39,8 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
   ok(awsPointersIn("Source: data.sec.gov/api/xbrl/frames.", ctx).length === 0, "a path inside another host's address is not a pointer at this server");
   ok(awsDescriptionOf({ slug: "x", name: "X tool", description: "See /api/x." }, ctx) === "X tool", "nothing left: the tool's name");
   const listed = AWS_LISTING_GROUPS.flatMap((g) => g.slugs);
-  ok(listed.length === 73 && new Set(listed).size === 73 && JSON.stringify([...AWS_DEFAULT_SLUGS]) === JSON.stringify(listed), "the default slug list is the 73 listed tools (settlement-calendar held), each once");
-  ok(!listed.includes("settlement-calendar") && !AWS_DEFAULT_SLUGS.includes("settlement-calendar"), "settlement-calendar is held off the AWS default list");
+  ok(listed.length === 74 && new Set(listed).size === 74 && JSON.stringify([...AWS_DEFAULT_SLUGS]) === JSON.stringify(listed), "the default slug list is the 74 listed tools, each once");
+  ok(listed.includes("settlement-calendar") && AWS_DEFAULT_SLUGS.includes("settlement-calendar"), "settlement-calendar, its rail rules cited to public sources, is on the AWS default list");
   ok(!listed.includes("edgar-insider-trades") && !listed.includes("fec-candidates"), "the held slugs are not listed");
 }
 
@@ -64,7 +64,7 @@ try {
   for (let i = 0; i < 50; i++) { page = await fetch(`${srv.url}/aws/start`); if (page.status === 200) break; await new Promise((r) => setTimeout(r, 200)); }
   const op = await (await fetch(`${srv.url}/__operator/aws.json`, { headers: { "x-operator-token": OP } })).json();
   const served = op.routes || [];
-  ok(op.enabled === true && served.length === 73 && (op.notServed || []).length === 0, `defaults: 73 served, none refused (${served.length} served; refused ${JSON.stringify(op.notServed)})`);
+  ok(op.enabled === true && served.length === 74 && (op.notServed || []).length === 0, `defaults: 74 served, none refused (${served.length} served; refused ${JSON.stringify(op.notServed)})`);
 
   const pricing = await (await fetch(`${srv.url}/api/pricing`)).json();
   const tools = Array.isArray(pricing) ? pricing : (pricing.tools || pricing.endpoints || Object.values(pricing).find(Array.isArray));
