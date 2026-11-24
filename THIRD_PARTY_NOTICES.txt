@@ -9,13 +9,11 @@ package manifest). Copyright and licensing of Agent402 itself: see NOTICE.
 Server image (Dockerfile, Dockerfile.worker)
 ============================================
 Installed by npm ci --omit=dev from package-lock.json.
-Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-Clause 7, 0BSD 2, BlueOak-1.0.0 2, MIT-0 2, (BSD-2-Clause OR MIT OR Apache-2.0) 1, (MIT AND Zlib) 1, (MIT OR GPL-3.0-or-later) 1, (MIT OR WTFPL) 1, (Unlicense OR Apache-2.0) 1, CC0-1.0 1, MIT (from its license file; the manifest names none) 1, PSF-2.0 1, Unlicense 1.
+Packages: 524. Licenses: MIT 412, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-Clause 6, 0BSD 2, BlueOak-1.0.0 2, (BSD-2-Clause OR MIT OR Apache-2.0) 1, (MIT AND Zlib) 1, (MIT OR GPL-3.0-or-later) 1, (MIT OR WTFPL) 1, (Unlicense OR Apache-2.0) 1, MIT (from its license file; the manifest names none) 1, PSF-2.0 1, Unlicense 1.
 
   @adraffy/ens-normalize@1.11.1  MIT
   @algorandfoundation/algokit-utils@10.0.0-alpha.46  MIT
   @algorandfoundation/xhd-wallet-api@2.0.0-canary.1  Apache-2.0
-  @asamuzakjp/css-color@7.1.3  MIT
-  @asamuzakjp/dom-selector@10.0.5  MIT
   @aws-sdk/client-kms@3.1175.0  Apache-2.0
   @aws-sdk/core@3.981.1  Apache-2.0
   @aws-sdk/credential-provider-env@3.972.85  Apache-2.0
@@ -34,13 +32,6 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   @aws/fiat-extension-for-x402@1.0.1  Apache-2.0
   @aws/lambda-invoke-store@0.3.0  Apache-2.0
   @borewit/text-codec@0.2.2  MIT
-  @bramus/specificity@2.4.2  MIT
-  @csstools/color-helpers@6.1.2  MIT-0
-  @csstools/css-calc@3.4.3  MIT
-  @csstools/css-color-parser@4.2.6  MIT
-  @csstools/css-parser-algorithms@4.0.2  MIT
-  @csstools/css-syntax-patches-for-csstree@1.1.15  MIT-0
-  @csstools/css-tokenizer@4.0.2  MIT
   @exodus/bytes@1.16.0  MIT
   @graphql-typed-document-node/core@3.2.0  MIT
   @hono/node-server@2.1.6  MIT
@@ -78,16 +69,28 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   @modelcontextprotocol/sdk@1.32.2  MIT  (optional, platform-specific)
   @modelcontextprotocol/server@2.4.0  Apache-2.0
   @mozilla/readability@0.6.0  Apache-2.0
+  @napi-rs/canvas@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas@0.1.80  MIT
+  @napi-rs/canvas-android-arm64@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-android-arm64@0.1.80  MIT  (optional, platform-specific)
+  @napi-rs/canvas-darwin-arm64@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-darwin-arm64@0.1.80  MIT  (optional, platform-specific)
+  @napi-rs/canvas-darwin-x64@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-darwin-x64@0.1.80  MIT  (optional, platform-specific)
+  @napi-rs/canvas-linux-arm-gnueabihf@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-linux-arm-gnueabihf@0.1.80  MIT  (optional, platform-specific)
+  @napi-rs/canvas-linux-arm64-gnu@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-linux-arm64-gnu@0.1.80  MIT  (optional, platform-specific)
+  @napi-rs/canvas-linux-arm64-musl@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-linux-arm64-musl@0.1.80  MIT  (optional, platform-specific)
+  @napi-rs/canvas-linux-riscv64-gnu@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-linux-riscv64-gnu@0.1.80  MIT  (optional, platform-specific)
+  @napi-rs/canvas-linux-x64-gnu@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-linux-x64-gnu@0.1.80  MIT  (optional, platform-specific)
+  @napi-rs/canvas-linux-x64-musl@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-linux-x64-musl@0.1.80  MIT  (optional, platform-specific)
+  @napi-rs/canvas-win32-arm64-msvc@0.1.100  MIT  (optional, platform-specific)
+  @napi-rs/canvas-win32-x64-msvc@0.1.100  MIT  (optional, platform-specific)
   @napi-rs/canvas-win32-x64-msvc@0.1.80  MIT  (optional, platform-specific)
   @noble/ciphers@1.3.0  MIT
   @noble/ciphers@2.2.0  MIT
@@ -208,8 +211,9 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   axios@1.20.0  MIT
   base32.js@0.1.0  MIT
   base64-js@1.5.1  MIT
+  bcp-47@2.1.2  MIT
+  bcp-47-match@2.0.3  MIT
   better-sqlite3@12.11.1  MIT
-  bidi-js@1.1.0  MIT
   bignumber.js@11.1.5  MIT
   bignumber.js@9.3.1  MIT
   bindings@1.5.0  MIT
@@ -245,7 +249,6 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   core-util-is@1.0.3  MIT
   cors@2.8.6  MIT  (optional, platform-specific)
   cross-spawn@7.0.6  MIT  (optional, platform-specific)
-  css-tree@3.2.1  MIT
   data-urls@8.0.0  MIT
   debug@2.6.9  MIT
   debug@4.4.3  MIT
@@ -265,7 +268,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   emoji-regex@8.0.0  MIT
   encodeurl@2.0.0  MIT
   end-of-stream@1.4.5  MIT
-  entities@8.0.0  BSD-2-Clause
+  entities@9.0.0  BSD-2-Clause
   es-define-property@1.0.1  MIT
   es-errors@1.3.0  MIT
   es-object-atoms@1.1.2  MIT
@@ -323,6 +326,9 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   ini@1.3.8  ISC
   ip-address@10.7.4  MIT  (optional, platform-specific)
   ipaddr.js@1.9.1  MIT
+  is-alphabetical@2.0.1  MIT
+  is-alphanumerical@2.0.1  MIT
+  is-decimal@2.0.1  MIT
   is-electron@2.2.2  MIT
   is-fullwidth-code-point@3.0.0  MIT
   is-potential-custom-element-name@1.0.1  MIT
@@ -341,7 +347,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   js-sha3@0.8.0  MIT
   js-sha512@0.8.0  MIT
   js-yaml@5.5.0  MIT
-  jsdom@30.1.3  MIT
+  jsdom@31.0.1  MIT
   json-bigint@1.0.0  MIT
   json-schema-traverse@1.0.0  MIT
   json-schema-typed@8.0.2  BSD-2-Clause  (optional, platform-specific)
@@ -352,7 +358,6 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   lru-cache@11.5.3  BlueOak-1.0.0
   marked@18.1.2  MIT
   math-intrinsics@1.1.0  MIT
-  mdn-data@2.27.1  CC0-1.0
   media-typer@1.1.0  MIT
   media-typer@2.0.0  MIT
   merge-descriptors@2.0.0  MIT
@@ -391,7 +396,8 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   parse-bmfont-ascii@1.0.6  MIT
   parse-bmfont-binary@1.0.6  MIT
   parse-bmfont-xml@1.1.6  MIT
-  parse5@8.0.1  MIT
+  parse5@8.1.1  MIT
+  parse5-parser-stream@8.1.1  MIT
   parseurl@1.3.3  MIT
   path-exists@4.0.0  MIT
   path-key@3.1.1  MIT  (optional, platform-specific)
@@ -461,7 +467,6 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   simple-get@4.0.1  MIT
   simple-xml-to-json@1.2.7  MIT
   smol-toml@1.9.0  BSD-3-Clause
-  source-map-js@1.2.2  BSD-3-Clause
   split2@4.2.0  ISC
   statuses@2.0.2  MIT
   string-width@4.2.3  MIT
@@ -509,7 +514,7 @@ Packages: 519. Licenses: MIT 403, Apache-2.0 62, ISC 25, BSD-2-Clause 7, BSD-3-C
   webidl-conversions@3.0.1  BSD-2-Clause
   webidl-conversions@8.0.1  BSD-2-Clause
   whatwg-mimetype@5.0.0  MIT
-  whatwg-url@17.2.0  MIT
+  whatwg-url@17.3.0  MIT
   whatwg-url@5.0.0  MIT
   which@2.0.2  ISC  (optional, platform-specific)
   which-module@2.0.1  ISC
