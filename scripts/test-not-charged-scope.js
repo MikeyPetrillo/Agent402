@@ -62,6 +62,21 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
   ok(await runAsRouteCall(async () => clean) === clean && chargeSentenceRemovals() === before + 1, "an answer from a call that printed no sentence is returned as the same object, unread");
   const natural = { results: [{ description: "Nothing was charged. A review." }] };
   ok(await runAsRouteCall(async () => natural) === natural, "...including one whose own content holds those words");
+  // A concurrent refusal elsewhere never edits this call's content: a model
+  // answer or a fetched page quoting the sentence is delivered byte-identical,
+  // and the answer's hidden charge figures ride along.
+  {
+    const quoting = { choices: [{ message: { content: `The page says: ${NOT_CHARGED} Then more text.` } }], text: `Quoted:${said}` };
+    Object.defineProperty(quoting, "__meterUpstreamUsd", { value: 0.0012, enumerable: false, configurable: true });
+    const a = runAsRouteCall(async () => { await new Promise((r) => setTimeout(r, 10)); return quoting; });
+    await runAsRouteCall(async () => { try { throw new Error(`bad input.${notChargedHere()}`); } catch { return null; } });
+    const got = await a;
+    ok(got === quoting && JSON.stringify(got) === JSON.stringify(quoting) && got.__meterUpstreamUsd === 0.0012, "a concurrent refusal leaves another call's content byte-identical (a model answer or a page that quotes the sentence)");
+    const mixed = runAsRouteCall(async () => { await new Promise((r) => setTimeout(r, 10)); const o = { content: `A seller wrote:${said}`, legs: [{ error: `Leg down.${said}` }] }; Object.defineProperty(o, "__actualChargeUsd", { value: 0.5, enumerable: false, configurable: true }); return o; });
+    await runAsRouteCall(async () => notChargedHere());
+    const m = await mixed;
+    ok(m.content === `A seller wrote:${said}` && m.legs[0].error === "Leg down." && m.__actualChargeUsd === 0.5, `only a leg-error field loses the sentence; content keeps it and the charge figure is kept (${JSON.stringify(m)})`);
+  }
   const frozen = Object.freeze({ error: `Busy.${said}`, keep: Object.freeze(["same"]) });
   const r = withoutChargeSentence(frozen);
   ok(r.removed === 1 && r.value.error === "Busy." && r.value !== frozen && r.value.keep === frozen.keep && frozen.error === `Busy.${said}`, "the answer is copied along the changed path only, never changed in place");

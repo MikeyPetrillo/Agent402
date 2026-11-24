@@ -38,13 +38,18 @@
 // of several searches failed) or throws it as the whole call's refusal (every
 // search failed), so the leg cannot know which it will be. The route call
 // knows: when a call that printed the sentence returns, runAsRouteCall removes
-// the sentence from the strings of the returned object (copied, never changed
-// in place); when it throws, the refusal goes out as written. A leg can also
+// the sentence from the returned object's leg-error fields only (a failed
+// leg's `error`, `errors`, a `note` or `reason` about it, and what is under
+// them: LEG_ERROR_KEY_RE), copied, never changed in place, and the copy keeps
+// the answer's charge figures (src/answer-charges.js). Content (a page's
+// text, a model's answer, a seller's body) is never edited, whatever it
+// quotes. When it throws, the refusal goes out as written. A leg can also
 // receive an error another call printed (a shared in-flight read rejects every
 // waiter with the error built in its starter's scope), so a call during which
-// any call printed the sentence is read the same way; an answer from a call
-// during which none was printed is returned unread. A streamed body is not
-// read: a stream writes no leg error into a delivered answer.
+// any call printed the sentence has its leg-error fields read the same way;
+// an answer from a call during which none was printed is returned unread. A
+// streamed body is not read: a stream writes no leg error into a delivered
+// answer.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { keepAnswerCharges } from "./answer-charges.js";
 
@@ -56,32 +61,39 @@ const kindOf = (store) => (store && typeof store === "object" ? store.kind : sto
 
 const SENTENCE_RE = / ?Nothing was charged\./g;
 const WALK_MAX_DEPTH = 12, WALK_MAX_NODES = 200_000;
+// The fields a leg's error text is put in by our own composites (a failed
+// leg's `error`, a step's `errors`, a `note` or `reason` about a leg). A
+// string is read only inside one of these: content (a page's text, a model's
+// answer, a seller's body) is never edited, whatever it quotes.
+export const LEG_ERROR_KEY_RE = /^(?:errors?|reasons?|details?|notes?|warnings?|failures?|failed|skipped|refusal)$/i;
 const isPlain = (v) => { if (!v || typeof v !== "object") return false; const p = Object.getPrototypeOf(v); return p === Object.prototype || p === null; };
-/** `value` with the charge sentence removed from every string of a plain
- *  object or array (copied along the changed paths only, never in place), and
- *  how many strings changed. Anything else is returned as it is. */
+/** `value` with the charge sentence removed from the strings in its leg-error
+ *  fields (LEG_ERROR_KEY_RE, at any depth, and everything under one), copied
+ *  along the changed paths only, never in place, and how many strings
+ *  changed. A string outside those fields is never read. Anything that is not
+ *  a plain object or array is returned as it is. */
 export function withoutChargeSentence(value) {
   let removed = 0, nodes = 0;
-  const walk = (v, depth) => {
+  const walk = (v, depth, inLegError) => {
     if (typeof v === "string") {
-      if (!v.includes(NOT_CHARGED)) return v;
+      if (!inLegError || !v.includes(NOT_CHARGED)) return v;
       removed++;
       return v.replace(SENTENCE_RE, "").trimStart();
     }
     if (depth >= WALK_MAX_DEPTH || ++nodes > WALK_MAX_NODES) return v;
     if (Array.isArray(v)) {
       let out = null;
-      for (let i = 0; i < v.length; i++) { const n = walk(v[i], depth + 1); if (n !== v[i]) { out ??= v.slice(); out[i] = n; } }
+      for (let i = 0; i < v.length; i++) { const n = walk(v[i], depth + 1, inLegError); if (n !== v[i]) { out ??= v.slice(); out[i] = n; } }
       return out || v;
     }
     if (isPlain(v)) {
       let out = null;
-      for (const k of Object.keys(v)) { const n = walk(v[k], depth + 1); if (n !== v[k]) { out ??= { ...v }; out[k] = n; } }
+      for (const k of Object.keys(v)) { const n = walk(v[k], depth + 1, inLegError || LEG_ERROR_KEY_RE.test(k)); if (n !== v[k]) { out ??= keepAnswerCharges(v, { ...v }); out[k] = n; } }
       return out || v;
     }
     return v;
   };
-  const out = Array.isArray(value) || isPlain(value) ? walk(value, 0) : value;
+  const out = Array.isArray(value) || isPlain(value) ? walk(value, 0, false) : value;
   return { value: out, removed };
 }
 

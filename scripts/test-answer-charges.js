@@ -49,6 +49,20 @@ ok(keepAnswerCharges(null, 5) === 5 && keepAnswerCharges({}, null) === null, "a 
 kept(withAiGenerated(charged({ text: "x" })), "withAiGenerated (JSON field)");
 kept(withAiGenerated(charged({ __binary: Buffer.from([1, 2, 3]), contentType: "application/octet-stream" })), "withAiGenerated (byte answer)");
 kept(withAiGenerated(charged({ image: "aGVsbG8=", text: "x" })), "withAiGenerated (image inside JSON)");
+{
+  // The images wire: the mark is written into each generated file
+  // (data[].b64_json, a copy of the answer), the field is not added.
+  const { Jimp } = await import("jimp");
+  const png = (await new Jimp({ width: 2, height: 2, color: 0x3366ccff }).getBuffer("image/png")).toString("base64");
+  const src = charged({ created: 1, data: [{ b64_json: png }] });
+  const out = withAiGenerated(src, { wire: true });
+  ok(out !== src && out.data[0].b64_json !== png, "the images wire answer is a copy with the mark in the file");
+  kept(out, "withAiGenerated (images wire, data[].b64_json marked)");
+  const img = charged({ image: png });
+  const outImg = withAiGenerated(img);
+  ok(outImg.image !== png, "an image tool's `image` is marked in the file");
+  kept(outImg, "withAiGenerated (image tool, `image` marked)");
+}
 kept(withAiVoice(charged({ text: "x" })), "withAiVoice (JSON)");
 kept(withAiVoice(charged({ __binary: Buffer.from([1]), contentType: "audio/mpeg" })), "withAiVoice (byte answer)");
 kept(withCredit(charged({ a: 1 }), "Credit line."), "withCredit (added)");
