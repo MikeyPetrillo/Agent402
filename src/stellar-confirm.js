@@ -31,6 +31,7 @@
 
 import { base64BytesOf } from "./base64-bytes.js";
 import { shortPayer } from "./verify-failure-log.js";
+import { isComplianceSettleRefusal } from "./settle-compliance.js";
 
 const DEFAULT_HORIZON = "https://horizon.stellar.org";
 
@@ -482,8 +483,10 @@ export async function settleWithStellarFallback({ primary, fallback = null, conf
   //    payment; a hash the facilitator named is a candidate, not proof.
   let found = await confirm({ payer, txHash });
   if (found) return honour(primaryRes, found, primaryErr ? `settle threw (${String(primaryErr?.message || primaryErr).slice(0, 120)})` : `facilitator said ${JSON.stringify(primaryRes?.errorReason || "failed")}`);
-  // 2. Not on chain: same signed envelope through the fallback facilitator.
-  if (typeof fallback === "function") {
+  // 2. Not on chain: same signed envelope through the fallback facilitator,
+  //    unless the primary refused on compliance grounds, which is final
+  //    (src/settle-compliance.js).
+  if (typeof fallback === "function" && !isComplianceSettleRefusal(failure)) {
     log(`[stellar] primary facilitator failed (${JSON.stringify(primaryRes?.errorReason || primaryErr?.message || "failed").slice(0, 120)}) and no transfer is on-chain - re-submitting the same payload via the fallback facilitator`);
     let fbRes = null, fbErr = null;
     try { fbRes = await fallback(); } catch (e) { fbErr = e; }

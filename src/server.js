@@ -619,6 +619,7 @@ import { addBoardRefreshQuietCheck, boardRefreshStatus } from "./board-refresh-s
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
+import { settleComplianceView } from "./settle-compliance.js";
 import { relayPayerScreenView } from "./payer-screen-rails.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
@@ -4701,7 +4702,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // missing, while either is on. One word publicly; counts and the last
     // load time for the operator.
     ...(sanctionsScreenStarted()
-      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView(), tempoRelay: relayPayerScreenView(), ...(_mppSubs ? { mppSubscriptions: _mppSubs.payerScreenView() } : {}) } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
+      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView(), tempoRelay: relayPayerScreenView(), settleCompliance: settleComplianceView(), ...(_mppSubs ? { mppSubscriptions: _mppSubs.payerScreenView() } : {}) } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
       : {}),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),

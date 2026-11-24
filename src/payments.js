@@ -58,6 +58,8 @@ import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf, noteSettleAsked } from "./settle-demotion.js";
+import { screenOwnSettlerPayer } from "./own-settler-screen.js";
+import { isComplianceSettleRefusal, isOwnScreenRefusal, noteComplianceRefusal, complianceRefusedResult, OWN_SETTLER_SCREEN_REFUSED, OWN_SETTLER_SCREEN_REFUSED_TEXT } from "./settle-compliance.js";
 import { withSettleDeadline, noteSettleContext, settleDeadlineStopOf, noteCappedRequest } from "./settle-deadlines.js";
 import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
@@ -2093,6 +2095,14 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // be confirmed by the same transaction.
       const holder = `stellar-settle:${randomUUID()}`;
       const claimTx = async (tx) => !(await txServedElsewhere(network, tx, holder));
+      // The payer screen before any submission (src/own-settler-screen.js):
+      // the primary may be our own facilitator. A listed payer is refused
+      // with nothing sent, final (src/settle-compliance.js).
+      const signedPayer = (await stellarSignedPaymentOf(paymentPayload, { ...paymentRequirements, payTo }).catch(() => null))?.payer;
+      if (signedPayer && (await screenOwnSettlerPayer(signedPayer).catch(() => "unscreened")) === "listed") {
+        noteComplianceRefusal({ network, via: "stellar settle", kind: "own-screen" });
+        return { success: false, errorReason: OWN_SETTLER_SCREEN_REFUSED, errorMessage: OWN_SETTLER_SCREEN_REFUSED_TEXT, transaction: "", network, payer: signedPayer };
+      }
       const res = await settleWithStellarFallback({
         primary: () => super.settle(paymentPayload, paymentRequirements),
         fallback: stellarFallbackClient ? () => stellarFallbackClient.settle(paymentPayload, paymentRequirements) : null,
@@ -4520,6 +4530,12 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // (server.js) and the log line below.
     const via = settleFacilitatorOf(ctx);
     noteSettleFacilitator(ctx, via);
+    // A refusal on compliance grounds (a sanctioned, blocked or flagged payer
+    // or payee, a failed AML screen; or our own settler's sanctions screen) is
+    // final: no fallback, no outage read, no relayer, no requote that steers
+    // the next attempt to another facilitator, nothing booked
+    // (src/settle-compliance.js). The 402 says so and charges nothing.
+    { const o = complianceStop(ctx, ctx?.error, ctx?.error?.__a402Facilitator || via); if (o) return o; }
     // A Solana settle refused before broadcast (no transaction named): the
     // next quote for this request avoids that facilitator (the split).
     await noteSvmStaleBlockhash(ctx);
@@ -4662,6 +4678,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // lets the chain continue; any other failed result ends the chain and
         // the primary's refusal stands (never "recovered" with a failure).
         if (result?.success !== true) {
+          { const o = complianceStop(ctx, result, name); if (o) return o; }
           if (isFundsRefusal(result)) { try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: name, reason: String(result?.errorReason || result?.errorMessage || "") }); } catch { /* bookkeeping only */ } }
           console.warn(
             `[payments] ${name} settle fallback REJECTED on ${ctx?.requirements?.network}: ` +
@@ -4709,6 +4726,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         );
         return { recovered: true, result };
       } catch (err) {
+        { const o = complianceStop(ctx, err, name); if (o) return o; }
         if (isFundsRefusal(`${err?.errorReason || ""} ${summarizeFacilitatorError(err)}`)) { try { toolFailureMonitor().noteFacilitatorRefusal({ network: ctx?.requirements?.network, facilitator: name, reason: summarizeFacilitatorError(err) }); } catch { /* bookkeeping only */ } }
         console.warn(
           `[payments] ${name} settle fallback ALSO failed on ${ctx?.requirements?.network}: ` +
@@ -4744,6 +4762,22 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     if (passedOn && passedOn.err !== ctx?.error) await markUnconfirmedStop(ctx, passedOn.err, passedOn.via);
     return undefined;
   });
+}
+
+/**
+ * The end of a settle whose refusal is on compliance grounds
+ * (isComplianceSettleRefusal): counted (our own settler counts its own
+ * screen), and answered a failed result that names no transaction, so the
+ * buyer's 402 says the settlement provider's compliance check refused it and
+ * nothing was charged. Undefined for any other refusal.
+ */
+function complianceStop(ctx, refusal, via) {
+  if (!isComplianceSettleRefusal(refusal)) return undefined;
+  const own = isOwnScreenRefusal(refusal);
+  const network = ctx?.requirements?.network;
+  if (!own) noteComplianceRefusal({ network, via });
+  const payer = typeof refusal?.payer === "string" ? refusal.payer : ctx?.paymentPayload?.payload?.authorization?.from;
+  return { recovered: true, result: complianceRefusedResult({ network, payer, own }) };
 }
 
 /**
@@ -5334,6 +5368,8 @@ export function gracefulRefusalOf(payload) {
 
 /** May this settle refusal go to the next facilitator on `network`? */
 export function isRetryableSettleRefusal(err, network) {
+  // A compliance refusal goes to no other settler (src/settle-compliance.js).
+  if (isComplianceSettleRefusal(err)) return false;
   if (isPreBroadcastSettleRejection(err)) return true;
   return REVERT_RETRY_NETWORKS.has(String(network || "")) && (isRevertedAuthorizationTransfer(err) || isNothingSentNodeRefusal(err));
 }
@@ -5358,6 +5394,7 @@ export function isListedPassOnRefusal(err, network) {
   if (err.name === "AbortError" || err.name === "TimeoutError" || err.code || err.cause) return false;
   const reason = String(err.errorReason || "").trim();
   if (!reason) return false;
+  if (isComplianceSettleRefusal(err)) return false;
   if (isRetryableSettleRefusal(err, network)) return false;
   // A used or canceled authorization goes to no other settler, whatever its
   // spelling; the outage read finds the transfer on chain.
