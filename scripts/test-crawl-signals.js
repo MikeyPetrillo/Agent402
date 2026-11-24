@@ -174,9 +174,20 @@ try {
   for (const p of ["/proof", "/compare", "/pay-per-call-api", "/paid-mcp-tools"]) ok(sm.has(p) && pagesSub.has(p), `${p} is in both sitemaps`);
   const docsDated = docs.filter((p) => sm.get(p));
   ok(docsDated.length === docs.length, `every /docs page carries its wiki file's date (${docsDated.length} of ${docs.length})`);
+  // Each page carries its own date (src/page-dates.js pageLastmod: the
+  // page's own entry in src/generated/page-dates.json, or its own module),
+  // never only its family module's: every page of a family with an entry of
+  // its own is listed in the entries. A batch that edits every page of a
+  // family dates them all the same day, and that is each page's own date.
+  const { pageLastmod } = await import("../src/page-dates.js");
+  const { readFileSync: rfs } = await import("node:fs");
+  const PD = JSON.parse(rfs(new URL("../src/generated/page-dates.json", import.meta.url), "utf8"));
   for (const fam of ["/skills/", "/guides/", "/integrations/"]) {
-    const dates = [...sm].filter(([p]) => p.startsWith(fam)).map(([, d]) => d);
-    ok(dates.length > 3 && dates.every(Boolean) && new Set(dates).size >= 3, `${fam} pages are dated one by one (${new Set(dates).size} distinct dates over ${dates.length})`);
+    const rows = [...sm].filter(([p]) => p.startsWith(fam));
+    const dates = rows.map(([, d]) => d);
+    const own = rows.filter(([p, d]) => d === pageLastmod(p));
+    const entries = rows.filter(([p]) => PD.entries?.[p]);
+    ok(dates.length > 3 && dates.every(Boolean) && own.length === rows.length && entries.length >= rows.length - 3, `${fam} pages are dated one by one (${new Set(dates).size} distinct dates over ${dates.length}; ${own.length} carry their own date, ${entries.length} from their own entry)`);
   }
   ok(["/reports/insider", "/reports/fund", "/reports/dossier"].every((p) => sm.get(p)), "the report hubs are dated");
 
