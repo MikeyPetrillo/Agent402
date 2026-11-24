@@ -64,5 +64,30 @@ const sumBefore = before.reduce((a, [, n]) => a + n, 0);
 const sumAfter = Object.values(mergeNetworkCounters(before)).reduce((a, n) => a + n, 0);
 ok(sumBefore === sumAfter, `merging conserves the total (${sumBefore} -> ${sumAfter})`);
 
+// 5. Pages and answers show each chain's official name (src/rails.js), while
+//    the snapshot's rail label, the counters and the URLs keep their keys.
+{
+  const { revenuePage, publicRevenueSnapshot, liveScanRailLabels } = await import("../src/revenue-live.js");
+  const { RAILS, chainDisplayName } = await import("../src/rails.js");
+  const labels = liveScanRailLabels();
+  const snap = {
+    asOf: "2026-11-24T00:00:00.000Z",
+    rails: labels.map((rail) => ({ rail, asset: "USDC", wallet: "0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0", recent: [] })),
+    allTime: { allTimeInboundCount: 0, allTimeExternalCount: 0, allTimeExternalUsd: 0, perChain: {} },
+    standing: {},
+  };
+  const html = revenuePage("https://example.test", snap);
+  const x402Rows = html.slice(html.indexOf('data-rv-live="rails"'), html.indexOf("</tbody>", html.indexOf('data-rv-live="rails"')));
+  const cells = [...x402Rows.matchAll(/<td><strong>([^<]+)<\/strong> <span/g)].map((m) => m[1]);
+  const official = new Set(RAILS.map((r) => r.name));
+  ok(cells.length === labels.length && cells.every((c) => official.has(c)), `every /revenue chain row shows its official name (${cells.filter((c) => !official.has(c)).join(", ") || "all"})`);
+  for (const n of ["OP Mainnet", "Arbitrum One", "Avalanche C-Chain", "Robinhood Chain"]) ok(cells.includes(n), `/revenue names ${n}`);
+  ok(!cells.some((c) => /^(Optimism|Arbitrum|Avalanche)$/.test(c)), "/revenue shows no short chain name as a display name");
+  const pub = publicRevenueSnapshot(snap);
+  ok(pub.rails.every((r, i) => r.rail === labels[i]), "/api/revenue keeps each rail's label unchanged (a join key)");
+  ok(pub.rails.every((r) => official.has(r.name)), `/api/revenue gives each rail its official name (${pub.rails.filter((r) => !official.has(r.name)).map((r) => r.rail).join(", ") || "all"})`);
+  ok(pub.rails.find((r) => r.rail === "Optimism")?.name === "OP Mainnet" && chainDisplayName("optimism") === "OP Mainnet", "OP Mainnet is read from the one name source");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
