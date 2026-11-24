@@ -128,6 +128,26 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
   ok(["whois", "github-repo", "onchain-sql-schema"].every((s) => !REF_LISTED.includes(s) && !AWS_LISTED.includes(s) && defs.get(s)?.resaleCleared !== true), "whois, github-repo and onchain-sql-schema are on neither list and stay uncleared");
 }
 
+// A cleared tool whose answer carries a source's raw figures sells a trimmed
+// answer through a third party (markRefAnswer): the clearance above holds
+// only with the trim, so the trim is asserted here, not only in its kit's
+// suite. token-diligence: no market block, no supply counts (only
+// circulatingShare), and the market-cap ranking without its values.
+{
+  const TRIMMED = ["token-diligence", "exchange-spread", "dex-pool-health", "funding-screener", "stablecoin-peg"];
+  const undeclared = TRIMMED.filter((s) => typeof defs.get(s)?.refAnswer !== "function");
+  ok(undeclared.length === 0, `each cleared tool that trims its resold answer declares the trim (${undeclared.join(",") || TRIMMED.length})`);
+  const td = defs.get("token-diligence");
+  const pub = td?.discovery?.output?.example;
+  const before = JSON.stringify(pub);
+  const ref = R.refAnswerOf(td, pub);
+  ok(pub && Array.isArray(pub.rows) && pub.rows.length > 0 && pub.rows.some((r) => r && r.market) && pub.comparison?.byMarketCap?.some((x) => "value" in x), "CONTROL: token-diligence's published answer carries the market block and the market-cap values");
+  ok(Array.isArray(ref?.rows) && ref.rows.length === pub.rows.length && ref.rows.every((r) => !("market" in r)), "token-diligence resold: no row carries the market block");
+  ok(ref.rows.every((r) => r.supply === undefined || Object.keys(r.supply).join() === "circulatingShare"), `token-diligence resold: supply keeps only circulatingShare (${ref.rows.map((r) => Object.keys(r.supply || {}).join("+")).join(",")})`);
+  ok(Array.isArray(ref.comparison?.byMarketCap) && ref.comparison.byMarketCap.length > 0 && ref.comparison.byMarketCap.every((x) => !("value" in x) && x.id), "token-diligence resold: the market-cap ranking keeps the order, never the market cap");
+  ok(JSON.stringify(pub) === before, "the trim leaves the public answer untouched");
+}
+
 // The suite seam: clears named slugs for a test boot, never in production.
 {
   const d = { slug: "zz-seam", handler: () => ({}) };
