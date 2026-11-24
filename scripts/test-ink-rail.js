@@ -94,7 +94,7 @@ async function boot({ inkUrls = (p) => `http://127.0.0.1:${p.INK1},http://127.0.
   // bootServer merges process.env: these are held out of it while the child
   // spawns (synchronously, inside the call) and put back for this process.
   const held = {};
-  for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "INK_FACILITATOR_URL", "NETWORK_PRICE_FLOORS", "FACILITATOR_PUBLIC_INDEX_CHAINS"]) if (k in process.env) { held[k] = process.env[k]; delete process.env[k]; }
+  for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "INK_RELAYER_KEY", "INK_FACILITATOR_URL", "NETWORK_PRICE_FLOORS", "FACILITATOR_PUBLIC_INDEX_CHAINS"]) if (k in process.env) { held[k] = process.env[k]; delete process.env[k]; }
   const booting = bootServer({ stores: "ink-rail", args: ["--import", "./scripts/lib/loopback-only-preload.js"], timeoutMs: 80_000, env: { FREE_MODE: "", NODE_ENV: "test",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: networks,
