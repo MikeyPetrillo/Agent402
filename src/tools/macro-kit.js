@@ -26,7 +26,7 @@ import { attribute, creditAnswers, ECB_ATTRIBUTION, US_AGENCIES_ATTRIBUTION, BLS
 import { notChargedOn, notChargedHere } from "../not-charged.js";
 import { useHeldTreasuryYields, usMacroSeries, unsupportedSeriesError, SUPPORTED_IDS as US_MACRO_SUPPORTED_IDS, SUPPORTED_FREQ as US_MACRO_SUPPORTED_FREQ, TERMS as US_MACRO_TERMS } from "./us-macro-series.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable, ecbRateBasis } from "./frankfurter.js";
-import { markResaleCleared } from "../resale-terms.js";
+import { markResaleCleared, markResaleBarred, NYFED_PASS_ON_RESALE_REASON } from "../resale-terms.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
 // weather-kit.js too, not just here) — re-exported so this file's own
@@ -1092,6 +1092,11 @@ export function carryCalendarDays(daily, days) {
 // run's ceiling when one is set (src/run-ceiling.js): a caller that stops
 // waiting at a deadline of its own can serve them.
 markEndsAtCeiling(MACRO_TOOLS, ["treasury-avg-rates", "treasury-debt", "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread"]);
+
+// The New York Fed's pass-on rule (https://www.newyorkfed.org/privacy/termsofuse):
+// the tools that serve its rates (fed-funds; us-macro-series' SOFR, EFFR and
+// OBFR) are never sold through a third party's marketplace.
+markResaleBarred(MACRO_TOOLS, ["fed-funds", "us-macro-series"], NYFED_PASS_ON_RESALE_REASON);
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
 markResaleCleared(MACRO_TOOLS, ["treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "treasury-debt", "treasury-avg-rates"], "US Treasury public data");

@@ -238,6 +238,8 @@ ok(present.every((s) => R.resaleClearanceRefusal(defs.get(s)) === NOT_CLEARED), 
   ok(R.resaleClearanceRefusal(redact, { compute: true }) === null, "CONTROL: a compute tool with no outside facts still passes");
   const sc = all.get("settlement-calendar");
   ok(R.hasContentSources(sc) && sc.resaleCleared === true && !sc.contentSources.some((x) => /nacha|frbservices|bankofengland|europeanpaymentscouncil|jpx\.co\.jp/.test(x.url)), "settlement-calendar's rule sources are public ones, declared");
+  const nyfed = ["fed-funds", "us-macro-series"].map((x) => all.get(x));
+  ok(nyfed.every((d) => d && R.resaleBarredReason(d) === R.NYFED_PASS_ON_RESALE_REASON && awsIneligibility(d, {}) === R.NYFED_PASS_ON_RESALE_REASON), "the tools serving New York Fed rates are barred from resale, with the pass-on reason");
   let threw = false;
   try { R.markContentSources([{ slug: "z" }], ["z"], [{ name: "x", url: "https://x.example", license: "y" }]); } catch { threw = true; }
   ok(threw, "a content source must say whether its license allows redistribution");

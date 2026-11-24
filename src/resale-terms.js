@@ -42,6 +42,11 @@ export const MARKET_DATA_RESALE_REASON = "raw pass-through of a data source whos
 /** The Wikimedia Foundation's API usage guidelines bar sublicensing,
  *  leasing or white-labeling access to its APIs (search-suggest). */
 export const WIKIMEDIA_API_RESALE_REASON = "a relay of a Wikimedia Foundation API, whose usage guidelines bar sublicensing access to it";
+/** The New York Fed's terms of use ask that its content be made available
+ *  with the same permissions, conditions and restrictions and no more
+ *  restrictive terms; a third party's marketplace adds its own terms, so the
+ *  tools that serve its rates are not sold through one. */
+export const NYFED_PASS_ON_RESALE_REASON = "serves New York Fed rates, whose terms bar passing them on under more restrictive terms than its own";
 /** The holiday source's terms (cited in src/tools/holiday-source.js) forbid
  *  operating a holiday portal or republishing its dataset. */
 export const HOLIDAY_PORTAL_RESALE_REASON = "a whole-year holiday list from a source whose terms bar a holiday portal";
