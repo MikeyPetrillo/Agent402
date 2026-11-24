@@ -93,7 +93,7 @@ ok(distinct.length === 1, `every adapter README's OpenAI example names one model
   }
   ok(!/AGENT402_MAX_USD_PER_DAY[^.|]{0,80}\bby default\b/.test(readme.replace(/No daily budget is written or applied by default/g, "")), "mcp/README.md never calls a daily cap a default");
   const { SETUP_DAY_CAP_SENTENCE, startPage } = await import("../src/start-page.js");
-  ok(/^No daily budget is written or applied by default/.test(SETUP_DAY_CAP_SENTENCE) && /\$5/.test(SETUP_DAY_CAP_SENTENCE) && startPage("https://agent402.tools", {}).includes("No daily budget is written or applied by default"), `/start says so: "${SETUP_DAY_CAP_SENTENCE}"`);
+  ok(/^No daily budget is written or applied by default/.test(SETUP_DAY_CAP_SENTENCE) && /AGENT402_MAX_PER_CALL/.test(SETUP_DAY_CAP_SENTENCE) && startPage("https://agent402.tools", {}).includes("No daily budget is written or applied by default"), `/start says so: "${SETUP_DAY_CAP_SENTENCE}"`);
 }
 
 console.log(`\ntest-package-readme-claims: ${pass} passed, ${fail} failed`);
