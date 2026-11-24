@@ -28,6 +28,7 @@
 // BASELINE holds the findings each file has today. A file over its count
 // fails (a new typed number); a file under it fails too until its count is
 // lowered here, so the baseline only shrinks.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
