@@ -2905,7 +2905,7 @@ export async function pruneSalesBefore(cutoffMs, { apply = false } = {}) {
     for (const h of [db, fileDb]) if (h) { try { h.prepare("DELETE FROM sale_feedback WHERE sale_id IN (SELECT id FROM sales WHERE ts < ?)").run(cut); h.prepare("DELETE FROM sales WHERE ts < ?").run(cut); } catch { /* the table is the record */ } }
     return { due, removed: r.rowCount };
   }
-  const due = Number(db.prepare("SELECT count(*) AS n FROM sales WHERE ts < ?").get(cut).n);
+  const due = Number(db.prepare("SELECT count(*) AS n FROM sales WHERE ts < ? /* retention-view: every row past its period, whatever its rail */").get(cut).n);
   if (!apply || !due) return { due, removed: 0 };
   db.prepare("DELETE FROM sale_feedback WHERE sale_id IN (SELECT id FROM sales WHERE ts < ?)").run(cut);
   const removed = db.prepare("DELETE FROM sales WHERE ts < ?").run(cut).changes;

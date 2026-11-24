@@ -94,12 +94,11 @@ ok(sumBefore === sumAfter, `merging conserves the total (${sumBefore} -> ${sumAf
 }
 
 // 6. Tool descriptions, the curated Bazaar listings and the flagship list name
-//    chains officially. A param's value list keeps its keys (lowercase), and
-//    the GoPlus tools wait on an owner decision.
+//    chains officially. A param's value list keeps its keys (lowercase).
 {
   const { readFileSync, readdirSync } = await import("node:fs");
   const SHORT = /\b(Optimism\b(?!:)|Arbitrum\b(?! One| Orbit| Sepolia)|Avalanche\b(?! C-Chain| Fuji)|Robinhood\b(?! Chain))/;
-  const files = [...readdirSync(new URL("../src/tools/", import.meta.url)).filter((f) => f.endsWith(".js") && f !== "token-safety-kit.js").map((f) => `src/tools/${f}`), "src/mpp-flagship.js"];
+  const files = [...readdirSync(new URL("../src/tools/", import.meta.url)).filter((f) => f.endsWith(".js")).map((f) => `src/tools/${f}`), "src/mpp-flagship.js"];
   const hits = [];
   for (const f of files) {
     readFileSync(new URL(`../${f}`, import.meta.url), "utf8").split("\n").forEach((line, i) => {

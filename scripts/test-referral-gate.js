@@ -2735,10 +2735,11 @@ try {
     const echoRow = usage.bySlug.find((r) => r.slug === "echo");
     const grossSum = receipts.rows.reduce((a, r) => a + r.amountUsd, 0);
     ok(usage.totals.calls === receipts.rows.length && Math.abs(usage.totals.paidUsd - +grossSum.toFixed(4)) < 1e-9 && echoRow && Math.abs(echoRow.usd / echoRow.calls - 0.03) < 1e-9 && usage.recent.every((r) => r.priceUsd !== 0.026298), `the buyer's usage totals are the gross too (${usage.totals.calls} calls, $${usage.totals.paidUsd})`);
-    // Every statement that reads the sales table states which rails it reads.
+    // Every statement that reads the sales table states which rails it reads
+    // (a retention count reads every row past its period, and says so).
     const src = readFileSync(fileURLToPath(new URL("../src/sales-ledger.js", import.meta.url)), "utf8");
     const statements = [...src.matchAll(/(?:db\.prepare\(|const [A-Z_]+ = )\s*(`[^`]*`|"[^"]*")/g)].map((m) => m[1]).filter((q) => /\bFROM sales\b/i.test(q) && /^SELECT\b/i.test(q.replace(/^[`"]\s*/, "")));
-    const unmarked = statements.filter((q) => !/PAYING_RAILS_SQL|COUNTED_RAILS_SQL|PUBLIC_RAIL_SQL|BUYER_RAILS_SQL|buyer-view|private-rail|\bwire (?:IN|=)|rail IN \('card'|rail = 'card'|WINDOW_PAGE|SCORECARD_ROWS|MIN\(id\)|MAX\(id\)/.test(q));
+    const unmarked = statements.filter((q) => !/PAYING_RAILS_SQL|COUNTED_RAILS_SQL|PUBLIC_RAIL_SQL|BUYER_RAILS_SQL|buyer-view|private-rail|retention-view|\bwire (?:IN|=)|rail IN \('card'|rail = 'card'|WINDOW_PAGE|SCORECARD_ROWS|MIN\(id\)|MAX\(id\)/.test(q));
     ok(statements.length >= 40 && unmarked.length === 0, `every SELECT on the sales table reads paying rails, the counted rails, a wire of its own, the public rails, or is a marked buyer or private-rail view (${statements.length} statements${unmarked.length ? `; unmarked: ${unmarked.map((q) => q.replace(/\s+/g, " ").slice(0, 90)).join(" | ")}` : ""})`);
     const pages = [...src.matchAll(/\$\{(WINDOW_PAGE|SCORECARD_ROWS)\}([^`]*)`/g)].filter((m) => m[1] === "WINDOW_PAGE" && !/PAYING_RAILS_SQL|COUNTED_RAILS_SQL|PUBLIC_RAIL_SQL/.test(m[2]));
     ok(pages.length === 0 && /SCORECARD_ROWS = `[^`]*COUNTED_RAILS_SQL/.test(src), "and every paged window read names its rails too");

@@ -40,7 +40,7 @@ export const RESALE_COMPUTED = "computed";
  *  resale or syndication of its data through a third party. */
 export const MARKET_DATA_RESALE_REASON = "raw pass-through of a data source whose terms bar resale or syndication through a third party";
 /** The Wikimedia Foundation's API usage guidelines bar sublicensing,
- *  leasing or white-labeling access to its APIs (search-suggest). */
+ *  leasing or rebranding access to its APIs (search-suggest). */
 export const WIKIMEDIA_API_RESALE_REASON = "a relay of a Wikimedia Foundation API, whose usage guidelines bar sublicensing access to it";
 /** The New York Fed's terms of use ask that its content be made available
  *  with the same permissions, conditions and restrictions and no more
