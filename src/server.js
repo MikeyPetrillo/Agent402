@@ -11143,7 +11143,8 @@ app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(ledgerCatalogPage
 app.get("/tools.md", (_req, res) => res.type("text/markdown").set("Cache-Control", "public, max-age=3600").send(categoriesMarkdownIndex(BASE_URL, CATALOG)));
 app.get(/^\/tools\/([a-z0-9-]+)\.md$/, (req, res) => {
   const md = categoryMarkdown(BASE_URL, CATALOG, req.params[0]);
-  if (!md) return res.status(404).type("text/plain").send(`No category "${req.params[0]}". The list: ${BASE_URL}/tools.md\n`);
+  // The 404 names no part of the request: a caller-chosen value is never echoed.
+  if (!md) return res.status(404).type("text/plain").send(`No such category. The list: ${BASE_URL}/tools.md\n`);
   res.type("text/markdown").set("Cache-Control", "public, max-age=3600").send(md);
 });
 // The task-indexed shop page retired into the catalog; /api/find answers a task.

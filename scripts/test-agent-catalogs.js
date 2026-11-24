@@ -104,6 +104,13 @@ try {
   }
   ok(worst > 0 && worst <= CATEGORY_MD_BUDGET_BYTES, `every category file is within its ${CATEGORY_MD_BUDGET_BYTES}-byte budget (largest ${worst})`);
   ok((await fetch(`${BASE}/tools/no-such-category.md`)).status === 404, "an unknown category file is a 404");
+  {
+    // A hostile name in the slug alphabet is answered as plain text that echoes no part of it.
+    const hostile = "zz-script-alert-1-onerror";
+    const r = await fetch(`${BASE}/tools/${hostile}.md`);
+    const body = await r.text();
+    ok(r.status === 404 && /^text\/plain/.test(r.headers.get("content-type") || "") && r.headers.get("x-content-type-options") === "nosniff" && !body.includes(hostile), "an unknown category file answers plain text that does not echo the requested name");
+  }
   ok((await fetch(`${BASE}/tools/hash`)).status === 200, "a tool page still answers at /tools/<slug>");
 } catch (e) {
   ok(false, e.stack || e.message);

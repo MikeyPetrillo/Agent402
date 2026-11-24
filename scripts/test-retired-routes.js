@@ -125,6 +125,15 @@ ok(retiredEntryFor("/api/market-open") === null, "a pack slug under /api/ is not
 ok(retiredEntryFor("/api/nope-nope") === null && retiredEntryFor("/v1/options-chain") === null, "unknown and off-prefix paths resolve to nothing");
 // A retired route outside /api is matched on its whole path (the /v1 judge previews).
 ok(retiredEntryFor("/v1/judge/vision")?.slug === "judge-vision" && retiredEntryFor("/V1/Judge/Locate/")?.slug === "judge-locate" && retiredEntryFor("/v1/judge/long?x=1")?.slug === "judge-long", "a retired /v1 route resolves by its whole path, case and a trailing slash aside");
+{
+  // A long run of interior slashes is read in linear time (no end-anchored regex backtracking).
+  const hostile = `/v1${"/".repeat(100000)}x`;
+  const t0 = process.hrtime.bigint();
+  const got = retiredEntryFor(hostile);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  ok(got === null && ms < 200, `a path with 100k interior slashes resolves fast (${ms.toFixed(1)} ms)`);
+  ok(retiredEntryFor(`/v1/judge/vision${"/".repeat(50000)}`)?.slug === "judge-vision", "a long trailing-slash run still resolves the retired route");
+}
 ok(retiredEntryFor("/v1/judge") === null && retiredEntryFor("/v1/judge/visionary") === null && retiredEntryFor("/v1/judge/vision/x") === null, "control: the live /v1/judge and other /v1 paths resolve to nothing");
 ok(retiredEntryForSlug("judge-vision")?.route === "/v1/judge/vision" && retiredEntryForSlug("solana-rpc")?.route === "/api/solana-rpc", "a retired /v1 slug carries its own route; an /api one its /api route");
 

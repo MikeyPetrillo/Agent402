@@ -228,13 +228,21 @@ export function retirementHeaders(retiredAt, successorUrl = null) {
   return headers;
 }
 
+/** `s` without its trailing slashes, read from the end in one pass (a
+ *  regex anchored at the end backtracks on a long run of interior slashes). */
+function trimTrailingSlashes(s) {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) end -= 1;
+  return s.slice(0, end);
+}
+
 /** The retired entry a request path names, or null. Reads the first path
  *  segment after /api/ (or /api/skill/), so a trailing segment or query does
  *  not turn a retired route back into a 404. */
 export function retiredEntryFor(path) {
   // A retired route outside /api (the /v1 judge previews) is matched whole,
   // a trailing slash and the case aside.
-  const whole = String(path || "").split("?")[0].replace(/\/+$/, "").toLowerCase();
+  const whole = trimTrailingSlashes(String(path || "").split("?")[0]).toLowerCase();
   if (Object.hasOwn(RETIRED_ROUTE_SLUGS, whole)) {
     const slug = RETIRED_ROUTE_SLUGS[whole];
     return { kind: "tool", slug, ...RETIRED_TOOLS[slug] };
