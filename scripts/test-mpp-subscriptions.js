@@ -358,6 +358,24 @@ async function signCredential(challenge, { account, accessKey } = {}) {
   let wrongErr = null;
   try { await engine.activateFromCredential(wrongDelegation.header); } catch (e) { wrongErr = e; }
   ok(wrongErr?.statusCode === 402 && /key authorization did not verify/.test(wrongErr.message) && calls.activate === beforeWrong, "a key authorization delegating to an access key we do not hold is refused, and nothing settles");
+
+  // The high-s twin of a valid key authorization signature: the same signer
+  // over the same authorization, which Tempo refuses on chain, so the
+  // subscription could never be charged. mppx 0.21.2 refuses it at verify.
+  const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+  const lowS = await signCredential(good);
+  const lowCred = Credential.deserialize(lowS.header);
+  const ka = KeyAuthorization.deserialize(lowCred.payload.signature);
+  const sig = ka.signature.signature || ka.signature;
+  const twin = { r: sig.r, s: SECP256K1_N - sig.s, yParity: sig.yParity ? 0 : 1 };
+  const highKa = { ...ka, signature: ka.signature.signature ? { ...ka.signature, signature: twin } : { ...ka.signature, ...twin } };
+  const highCred = Credential.from({ challenge: good, payload: { type: "keyAuthorization", signature: KeyAuthorization.serialize(highKa) } });
+  const highHeader = `Payment ${Credential.serialize(highCred).replace(/^Payment\s+/i, "")}`;
+  ok(KeyAuthorization.serialize(highKa) !== lowCred.payload.signature, "(fixture) the high-s twin serializes to different bytes");
+  const beforeHigh = calls.activate;
+  let highErr = null;
+  try { await engine.activateFromCredential(highHeader); } catch (e) { highErr = e; }
+  ok(highErr?.statusCode === 402 && /key authorization did not verify/.test(highErr.message) && calls.activate === beforeHigh, `a key authorization whose signature is the high-s twin is refused, and nothing settles (${highErr?.message})`);
 }
 
 // ---------------------------------------------------------------------------
