@@ -7,7 +7,7 @@ import { securityHeaders, answerClientError, addApiHeaderPrefix } from "./securi
 import { operatorRoutesOf } from "./operator-routes.js";
 import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAID_LIMITS as LARGE_BODY_UNPAID_LIMITS } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
-import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
+import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT, goneSuggestions } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { createFunnel, funnelEventOf, emptyFunnelRow, ARRIVALS as FUNNEL_ARRIVALS } from "./funnel.js";
 import { createDiscoveryTrail, discoveryDocOf, noPaymentReasonsOf, conversionBySource } from "./funnel-sources.js";
@@ -14973,12 +14973,18 @@ app.use((req, res) => {
     const retiredV1 = req.path.startsWith("/v1/") ? retiredEntryFor(req.path) : null;
     if (retiredV1 || (req.path.startsWith("/api/") && !req.path.startsWith("/api/convert/"))) {
       const slug = (retiredV1 ? retiredV1.slug : req.path.replace(/^\/api\/(skill\/)?/, "").split("/")[0]).replace(/[-_]+/g, " ").slice(0, 80);
-      let suggestions = [];
-      try { suggestions = (findTools(CATALOG, slug, { k: 3, baseUrl: BASE_URL, powSlugs: POW_SLUGS }).results || []).map((r) => ({ slug: r.slug, route: r.route, price: r.price, name: r.name })); } catch { suggestions = []; }
       // A route we RETIRED is gone on purpose: 410, dated, with the
       // replacement (src/retired-tools.js). A 404 here read to outside probes
       // as a broken seller rather than a retired route.
       const gone = retiredV1 || retiredEntryFor(req.path);
+      // Suggestions by meaning (goneSuggestions): the declared replacement
+      // first; a retirement with none, only the tools its note names; word
+      // matching only for an unknown path, held to one category.
+      let suggestions = [];
+      try {
+        const matches = gone && !gone.replacement ? [] : (findTools(CATALOG, slug, { k: 10, baseUrl: BASE_URL, powSlugs: POW_SLUGS }).results || []);
+        suggestions = goneSuggestions({ gone, defs: Object.values(CATALOG), matches });
+      } catch { suggestions = []; }
       if (gone) {
         const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
         const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}`, price: rep.price } : null;
@@ -14986,7 +14992,7 @@ app.use((req, res) => {
         res.set(retirementHeaders(gone.retiredAt, replacement?.url));
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
-          hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}${!replacement && gone.note ? ` ${gone.note}` : ""}`,
+          hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : suggestions.length ? " There is no direct replacement; the live tools its note names are listed, or ask /api/find?q=<task>." : " There is no direct replacement; ask /api/find?q=<task>."}${!replacement && gone.note ? ` ${gone.note}` : ""}`,
           find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions, ...errorCodeField(410),
         });
       }

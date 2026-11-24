@@ -267,6 +267,41 @@ export function retiredEntryForSlug(slug) {
   return null;
 }
 
+/**
+ * The live tools a 410 or 404 suggests, by meaning rather than word overlap
+ * (at most `k`, each { slug, route, price, name }):
+ *   - a retired route with a live replacement: the replacement first, then
+ *     matched tools in the replacement's category;
+ *   - a retired route with none: only the live tools its note names (a
+ *     hyphenated slug in the note's text, in its order), never a matched
+ *     word, since the retirement already says nothing live answers it;
+ *   - an unknown path (`gone` null): the matches, held to the category of the
+ *     best one, so a shared word never pulls in an unrelated tool.
+ * `defs` is the live catalog's definitions; `matches` the word matches for
+ * the path, best first (each with a `slug`).
+ */
+export function goneSuggestions({ gone, defs, matches = [], k = 3 }) {
+  const bySlug = new Map();
+  for (const d of defs || []) if (d?.slug && !bySlug.has(d.slug)) bySlug.set(d.slug, d);
+  const shape = (d) => ({ slug: d.slug, route: d.route, price: d.price, name: d.name });
+  const live = (xs) => xs.map((m) => bySlug.get(m?.slug)).filter(Boolean);
+  const take = (list) => {
+    const seen = new Set();
+    const out = [];
+    for (const d of list) { if (seen.has(d.slug)) continue; seen.add(d.slug); out.push(shape(d)); if (out.length >= k) break; }
+    return out;
+  };
+  if (gone) {
+    const rep = gone.replacement ? bySlug.get(gone.replacement) : null;
+    if (rep) return take([rep, ...live(matches).filter((d) => d.category === rep.category)]);
+    const named = String(gone.note || "").toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)+/g) || [];
+    return take(named.map((s) => bySlug.get(s)).filter(Boolean));
+  }
+  const found = live(matches);
+  if (!found.length) return [];
+  return take(found.filter((d) => d.category === found[0].category));
+}
+
 /** Boot guard. `liveSlugs` is the set of catalog slugs (packs as `skill-<slug>`). */
 export function assertRetiredRegistryConsistent(liveSlugs) {
   const live = liveSlugs instanceof Set ? liveSlugs : new Set(liveSlugs || []);
