@@ -76,19 +76,24 @@ const distinct = [...new Set(models.values())];
 ok(models.size >= 3, `the adapter READMEs' OpenAI examples are found (${models.size}): zero would mean the scan is blind`);
 ok(distinct.length === 1, `every adapter README's OpenAI example names one model (${distinct.join(", ")})${distinct.length > 1 ? `: ${[...models.keys()].join(", ")}` : ""}`);
 
-// 4. agent402-mcp's suggested daily cap (SUGGESTED_DAY_CAP_USD in
-// mcp/spend-ledger.js), written only into the config a new setup prints, is
-// the amount the README and /start state, and both say a config without it
-// has no daily cap.
+// 4. agent402-mcp applies no daily budget by default, new setup or existing:
+// the code declares no suggested cap and writes none into the printed config,
+// and the README, the wiki and /start say exactly that.
 {
-  const m = /^export const SUGGESTED_DAY_CAP_USD = (\d+(?:\.\d+)?);$/m.exec(read("mcp/spend-ledger.js"));
-  const day = m ? Number(m[1]) : NaN;
-  ok(day > 0, `agent402-mcp's suggested daily cap is read ($${day})`);
-  const readme = read("mcp/README.md");
-  ok(readme.includes(`\`AGENT402_MAX_USD_PER_DAY\` set to \`${day}\``) && readme.includes(`sets \`AGENT402_MAX_USD_PER_DAY\` to a suggested \`${day}\``) && /has no daily cap/.test(readme), "mcp/README.md states the suggested daily cap a new setup writes, and no cap otherwise");
-  ok(!/AGENT402_MAX_USD_PER_DAY[^.|]{0,80}\bby default\b/.test(readme), "mcp/README.md never calls the daily cap a default");
+  const ledger = read("mcp/spend-ledger.js"), setup = read("mcp/setup.js"), walletNew = read("mcp/wallet-new.js");
+  ok(!/SUGGESTED_DAY_CAP/.test(ledger + setup + walletNew + read("mcp/index.js")), "agent402-mcp declares no suggested daily cap");
+  const { configSnippets } = await import("../mcp/setup.js");
+  const sn = configSnippets("9.9.9");
+  ok(!/MAX_USD_PER_DAY/.test(JSON.stringify(sn)), `the config setup and wallet new print writes no daily cap (${sn.claudeCode})`);
+  const { DAY_CAP_HOW } = await import("../mcp/spend-ledger.js");
+  ok(/AGENT402_MAX_USD_PER_DAY=/.test(DAY_CAP_HOW) && /No daily spending cap is set/.test(DAY_CAP_HOW) && /say\(DAY_CAP_HOW\)/.test(setup) && /say\(DAY_CAP_HOW\)/.test(walletNew), "setup and wallet new print one line showing how to set a daily cap");
+  const readme = read("mcp/README.md"), wiki = read("wiki/MCP-Connector.md");
+  for (const [name, text] of [["mcp/README.md", readme], ["wiki/MCP-Connector.md", wiki]]) {
+    ok(/No daily budget is written or applied by default|no daily budget is written or applied by default/.test(text) && !/suggested daily cap|suggested `20`|set to `20`/.test(text), `${name} says no daily budget is written or applied by default`);
+  }
+  ok(!/AGENT402_MAX_USD_PER_DAY[^.|]{0,80}\bby default\b/.test(readme.replace(/No daily budget is written or applied by default/g, "")), "mcp/README.md never calls a daily cap a default");
   const { SETUP_DAY_CAP_SENTENCE, startPage } = await import("../src/start-page.js");
-  ok(SETUP_DAY_CAP_SENTENCE.includes(`AGENT402_MAX_USD_PER_DAY to ${day}, a suggested cap of ${day} USD`) && /remove the line for no daily cap/.test(SETUP_DAY_CAP_SENTENCE) && startPage("https://agent402.tools", {}).includes("a suggested cap of"), `/start states the suggested daily cap: "${SETUP_DAY_CAP_SENTENCE}"`);
+  ok(/^No daily budget is written or applied by default/.test(SETUP_DAY_CAP_SENTENCE) && /\$5/.test(SETUP_DAY_CAP_SENTENCE) && startPage("https://agent402.tools", {}).includes("No daily budget is written or applied by default"), `/start says so: "${SETUP_DAY_CAP_SENTENCE}"`);
 }
 
 console.log(`\ntest-package-readme-claims: ${pass} passed, ${fail} failed`);

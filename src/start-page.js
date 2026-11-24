@@ -58,11 +58,10 @@ export function startApps(baseUrl, { connector = false } = {}) {
   ];
 }
 
-// What the config printed by `setup` and `wallet new` holds beyond the
-// server line: a suggested daily cap (mcp/spend-ledger.js
-// SUGGESTED_DAY_CAP_USD, which scripts/test-package-readme-claims.js holds
-// this sentence to). A config without it has no daily cap.
-export const SETUP_DAY_CAP_SENTENCE = "The config it prints also sets AGENT402_MAX_USD_PER_DAY to 20, a suggested cap of 20 USD per UTC day that holds across restarts: change the number, or remove the line for no daily cap.";
+// The daily budget the npm server applies: none by default, for a new setup
+// or an existing one (mcp/spend-ledger.js DAY_CAP_HOW, which
+// scripts/test-package-readme-claims.js holds this sentence to).
+export const SETUP_DAY_CAP_SENTENCE = "No daily budget is written or applied by default; setup prints one line showing how to set AGENT402_MAX_USD_PER_DAY if you want one, and each call stays capped at $5.";
 
 /** The wallet path: the npm server, set up once from a terminal (it keeps the key in the OS keychain), then one config per app. */
 export function walletSetup(baseUrl) {

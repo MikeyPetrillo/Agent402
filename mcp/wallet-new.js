@@ -6,7 +6,7 @@
 // the wallet it opens may hold funds.
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { configDir } from "./config-dir.js";
-import { SUGGESTED_DAY_CAP_USD } from "./spend-ledger.js";
+import { DAY_CAP_HOW } from "./spend-ledger.js";
 import { evmKeyOrNull } from "./wallet-key.js";
 import { keyStoreKind, storeKey, readStoredKey, removeKeyFile, runCommand } from "./key-store.js";
 import { configSnippets } from "./setup.js";
@@ -52,6 +52,7 @@ export async function runWalletNew({ output = process.stdout, env = process.env,
   say("Claude Desktop (claude_desktop_config.json) or Cursor (~/.cursor/mcp.json), add:");
   say(s.claudeDesktop.split("\n").map((l) => `  ${l}`).join("\n"));
   say("");
-  say(`Restart the client. The server reads the stored key whenever AGENT_KEY is not set. The config above caps spending at $${SUGGESTED_DAY_CAP_USD} a UTC day, kept across restarts (AGENT402_MAX_USD_PER_DAY: change the number, or remove it for no daily cap); each call is also capped at $5 unless AGENT402_MAX_PER_CALL says otherwise, and AGENT402_MAX_USD_PER_MONTH adds a monthly cap.`);
+  say("Restart the client. The server reads the stored key whenever AGENT_KEY is not set. Each call is capped at $5 unless AGENT402_MAX_PER_CALL says otherwise.");
+  say(DAY_CAP_HOW);
   return 0;
 }

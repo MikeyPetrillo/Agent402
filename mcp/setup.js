@@ -4,7 +4,7 @@
 // printed, logged or passed on a command line.
 import { readFileSync } from "node:fs";
 import { configDir } from "./config-dir.js";
-import { SUGGESTED_DAY_CAP_USD } from "./spend-ledger.js";
+import { DAY_CAP_HOW } from "./spend-ledger.js";
 import { evmKeyOrNull, EVM_KEY_FORM } from "./wallet-key.js";
 import { keyStoreKind, storeKey, removeKeyFile, runCommand } from "./key-store.js";
 
@@ -43,12 +43,12 @@ export function readHiddenLine(input, output, prompt) {
 }
 
 /** The config snippets for each client, pinned to this version. */
-// A new install's config carries a suggested daily cap
-// (SUGGESTED_DAY_CAP_USD), visible in the config and editable there.
-export function configSnippets(version = VERSION, dayCap = SUGGESTED_DAY_CAP_USD) {
-  const json = JSON.stringify({ mcpServers: { agent402: { command: "npx", args: ["-y", `agent402-mcp@${version}`], env: { AGENT402_MAX_USD_PER_DAY: String(dayCap) } } } }, null, 2);
+// The config carries no spending cap: none is written by default
+// (DAY_CAP_HOW, printed after it, says how to add one).
+export function configSnippets(version = VERSION) {
+  const json = JSON.stringify({ mcpServers: { agent402: { command: "npx", args: ["-y", `agent402-mcp@${version}`] } } }, null, 2);
   return {
-    claudeCode: `claude mcp add agent402 -s user -e AGENT402_MAX_USD_PER_DAY=${dayCap} -- npx -y agent402-mcp@${version}`,
+    claudeCode: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${version}`,
     claudeDesktop: json,
     cursor: json,
   };
@@ -102,6 +102,7 @@ export async function runSetup({ input = process.stdin, output = process.stdout,
   say("Claude Desktop (claude_desktop_config.json) or Cursor (~/.cursor/mcp.json), add:");
   say(s.claudeDesktop.split("\n").map((l) => `  ${l}`).join("\n"));
   say("");
-  say(`Restart the client. The server reads the stored key whenever AGENT_KEY is not set. The config above caps spending at $${SUGGESTED_DAY_CAP_USD} a UTC day, kept across restarts (AGENT402_MAX_USD_PER_DAY: change the number, or remove it for no daily cap); each call is also capped at $5 unless AGENT402_MAX_PER_CALL says otherwise, and AGENT402_MAX_USD_PER_MONTH adds a monthly cap.`);
+  say("Restart the client. The server reads the stored key whenever AGENT_KEY is not set. Each call is capped at $5 unless AGENT402_MAX_PER_CALL says otherwise.");
+  say(DAY_CAP_HOW);
   return 0;
 }

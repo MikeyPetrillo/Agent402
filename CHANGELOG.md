@@ -87,10 +87,10 @@ Packages:
 - agent402-client 0.12.1, agent402-tollbooth 0.12.2 and agent402-openclaw
   0.6.2 publish their READMEs with the lead sentence that scopes signed
   receipts to successful direct calls.
-- agent402-mcp 0.17.0: the config `setup` and `wallet new` print sets a
-  suggested daily cap, `AGENT402_MAX_USD_PER_DAY` of 20 (change or remove
-  it); a config without one keeps no daily cap, and the server says so in
-  one line at start.
+- agent402-mcp 0.17.0: no daily budget is written or applied by default, for
+  a new setup or an existing one; `setup` and `wallet new` print one line
+  showing how to set `AGENT402_MAX_USD_PER_DAY`, and a server with no daily
+  cap says so in one line at start. The $5 per-call cap is unchanged.
 - agent402-langchain 0.2.13, agent402-ai-sdk 0.2.14, agent402-openai-agents
   0.1.14 and agent402-google-adk 0.1.14 refuse a paid call listed above $5 by
   default (`maxPerCallUsd`; `0` or `off` turns it off), take an opt-in
