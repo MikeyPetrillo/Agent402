@@ -24,13 +24,14 @@ try {
     const p = await open("/pricing");
     const r = await p.evaluate(() => {
       const label = [...document.querySelectorAll("div")].find((d) => /^PAID · STABLECOIN OVER x402 OR MPP$/.test(d.textContent.trim()));
-      const badge = label && [...label.parentElement.children].find((d) => d.textContent.trim() === "x402" && getComputedStyle(d).position === "absolute");
+      const badge = label && [...label.parentElement.children].find((d) => d.textContent.trim() === "x402");
       const box = (e) => { if (!e) return null; const b = e.getBoundingClientRect(); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom }; };
       // The label's text, not its box: a range over the words.
       const rng = label && document.createRange(); if (rng) rng.selectNodeContents(label);
       return { label: rng ? [...rng.getClientRects()].map((b) => ({ left: b.left, right: b.right, top: b.top, bottom: b.bottom })) : [], badge: box(badge) };
     });
     ok(r.badge && r.label.length > 0 && !r.label.some((l) => overlap(l, r.badge)), "/pricing at 375 px: the x402 badge does not overlap the paid card's label");
+    ok(new Set(r.label.map((l) => Math.round(l.top))).size === 1, `/pricing at 375 px: the paid card's label sits on one line (${r.label.length} box(es))`);
     await p.close();
   }
   {
