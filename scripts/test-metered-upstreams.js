@@ -68,6 +68,9 @@ const ALLOWED = {
   // Builds the facilitator URL and auth headers only; @x402/core issues the
   // verify and settle calls, one per paid request.
   "cdp-facilitator.js": { why: "builds the CDP facilitator URL and auth headers; makes no request itself", noRequest: true },
+  // Builds the keyed lane's URL for the readers that already declare their
+  // bounds (evm-rpcs, payment-verify, solana-history-rpc); makes no request.
+  "rpc-terms.js": { why: "builds the keyed RPC lane's URL; makes no request itself", noRequest: true },
 };
 
 // What "issues a request" looks like in this tree. Kept narrow on purpose: a

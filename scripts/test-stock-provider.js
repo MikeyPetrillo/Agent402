@@ -114,14 +114,14 @@ ok(ALL_SKILL_PACKS.every((p) => !STOCK_TRIMMED_PACK_SLUGS.has(p.slug) || packWit
   const seen = [];
   const stub = (slug, out) => (input) => { seen.push(slug); return out(input); };
   const inline = Object.fromEntries(["stats-summary", "moving-average", "linear-regression", "outliers", "correlation", "forecast-eval", "forecast-naive", "forecast-ses", "forecast-holt", "forecast-holt-winters"].map((s) => [s, stub(s, () => ({ rmse: 1 }))]));
-  inline["fred-series"] = stub("fred-series", () => ({ observations: values.map((v, i) => ({ date: String(i), value: v })) }));
+  inline["us-macro-series"] = stub("us-macro-series", () => ({ observations: values.map((v, i) => ({ date: String(i), value: v })) }));
   for (const st of SP.STOCK_SLUGS) inline[st] = stub(st, () => { throw new Error("a stock step ran"); });
   const packIndex = new Map(SKILL_PACKS.map((p) => [p.slug, p]));
   for (const slug of ["trend-analysis", "forecasting-bake-off"]) {
     seen.length = 0;
     const r = await __test.runPack(slug, { series: "UNRATE", horizon: "12" }, { packIndex, catalog: {}, inlineHandlers: inline });
-    ok(!r.steps.some((st) => SP.STOCK_SLUGS.has(st.slug)) && !seen.some((s) => SP.STOCK_SLUGS.has(s)) && r.steps.find((st) => st.slug === "fred-series")?.ok === true && r.steps.every((st) => st.ok),
-      `${slug} with no provider: fred-series serves the series and every step answers (${r.summary})`);
+    ok(!r.steps.some((st) => SP.STOCK_SLUGS.has(st.slug)) && !seen.some((s) => SP.STOCK_SLUGS.has(s)) && r.steps.find((st) => st.slug === "us-macro-series")?.ok === true && r.steps.every((st) => st.ok),
+      `${slug} with no provider: us-macro-series serves the series and every step answers (${r.summary})`);
   }
 }
 const { RETIRED_TOOLS } = await import("../src/retired-tools.js");

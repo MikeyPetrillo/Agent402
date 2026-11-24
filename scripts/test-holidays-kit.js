@@ -597,7 +597,15 @@ const check = async (country, date, extra = {}) => (await call("country-business
   for (const k of ["ach", "fedwire", "sepa-sct", "sepa-instant", "chaps"]) {
     const r = await call("settlement-calendar", { rail: k, date: "2026-11-18" });
     ok(Array.isArray(r.sources) && r.sources.every((u) => /^https:\/\//.test(u)) && r.method.length > 40, `${k} answers with its rule and official sources`);
+    // Rules are cited to public sources whose terms allow reuse; the pages of
+    // operators and associations that bar commercial reuse are not cited or quoted.
+    ok(r.sources.every((u) => /^https:\/\/(www\.opm\.gov|www\.federalreserve\.gov|www\.ecb\.europa\.eu|eur-lex\.europa\.eu|www\.gov\.uk)\//.test(u)) && !/Nacha|Bank of England|EPC/.test(r.method), `${k}: sources are public ones only (${r.sources.join(" ")})`);
+    ok(typeof r.credit === "string" && r.credit.length > 10, `${k}: the answer carries its sources' credit`);
   }
+  ok((await call("settlement-calendar", { rail: "chaps", date: "2026-11-18" })).credit.includes("Open Government Licence v3.0") && !("hours" in chaps), "CHAPS: the OGL acknowledgement, and no operator hours");
+  ok(/available free of charge at ecb\.europa\.eu/.test(sct.credit), "SEPA SCT: the ECB's free-availability notice rides the answer");
+  const gbObs = await call("country-business-days", { country: "GB", subdivision: "GB-ENG", op: "check", date: "2026-12-28" });
+  ok(gbObs.observance?.credit?.includes("Open Government Licence v3.0"), "the GOV.UK substitute rule carries the OGL acknowledgement wherever it is used");
 }
 
 // ── exchange calendars ───────────────────────────────────────────────────────
@@ -629,6 +637,26 @@ const check = async (country, date, extra = {}) => (await call("country-business
   ok(beyond.nextOpen === null && typeof beyond.coverageNote === "string", "past the published coverage the next open is not guessed");
   ok(await status("market-calendar", { exchange: "NASDAQ" }) === 400 && await status("market-calendar", { exchange: "NYSE", at: "yesterday" }) === 400, "unknown exchange or instant is a 400");
   ok(FREE_TIER_SLUGS.has("market-calendar"), "market-calendar (pure CPU) is on the free tier");
+  // Sources: public holiday lists and the Apache-2.0 exchange_calendars rules,
+  // never an exchange's own pages; every answer credits them and disclaims.
+  for (const ex of ["NYSE", "LSE", "XETRA", "JPX", "HKEX"]) {
+    const a = await at(ex, "2026-11-18T12:00:00Z");
+    const d = await call("market-calendar", { exchange: ex, date: "2026-11-18" });
+    for (const r of [a, d]) {
+      ok(r.sources.length >= 1 && r.credits.length >= 2 && r.sources.every((u) => !/nyse\.com|ice\.com|londonstockexchange|deutsche-boerse|jpx\.co\.jp|hkex\.com|gov\.hk\/en/.test(u)), `${ex}: no exchange page among the sources (${r.sources.join(" ")})`);
+      ok(Array.isArray(r.credits) && r.credits.some((c) => /exchange_calendars \(Apache-2\.0/.test(c)) && /not exchange data, and not affiliated/.test(r.disclaimer), `${ex}: credits and the disclaimer ride every answer`);
+    }
+  }
+  ok((await at("LSE", "2026-11-18T12:00:00Z")).credits.includes("Contains public sector information licensed under the Open Government Licence v3.0."), "LSE: the OGL acknowledgement");
+  ok((await at("JPX", "2026-11-18T03:00:00Z")).credits.some((c) => c.includes("PDL1.0") && c.includes("内閣府")), "JPX: the Cabinet Office PDL 1.0 credit");
+  ok((await at("HKEX", "2026-11-18T03:00:00Z")).credits.some((c) => /DATA\.GOV\.HK/.test(c)), "HKEX: the DATA.GOV.HK attribution");
+  ok((await at("NYSE", "2026-11-27T17:30:00Z")).earlyCloseBasis === "rule", "NYSE early closes are marked as rule-based");
+  const hkLunch = await at("HKEX", "2026-11-18T04:30:00Z"); // 12:30 HKT
+  ok(!hkLunch.isOpen && hkLunch.nextOpen === "2026-11-18T05:00:00.000Z", "HKEX lunch break 12:00 to 13:00 (exchange_calendars XHKG)");
+  // NYSE closures follow Rule 7.2 as computed: New Year's Day on a Saturday
+  // (2028-01-01) closes nothing, a Saturday holiday closes the Friday before.
+  ok(daySchedule(EXCHANGES.NYSE, "2027-12-31").tradingDay === true && daySchedule(EXCHANGES.NYSE, "2027-12-24").reason === "holiday", "NYSE Rule 7.2: 2027-12-31 open (New Year on a Saturday), 2027-12-24 closed (Christmas observed)");
+  ok(daySchedule(EXCHANGES.XETRA, "2031-12-31").reason === "holiday" && daySchedule(EXCHANGES.XETRA, "2031-05-01").reason === "holiday" && daySchedule(EXCHANGES.XETRA, "2031-10-03").tradingDay === true, "Xetra: the fixed closure rule");
   ok(["bank-holidays", "next-holidays", "country-business-days", "business-day-planner", "settlement-calendar"].every((s) => !FREE_TIER_SLUGS.has(s)), "tools that read the holiday source stay wallet-only");
 }
 

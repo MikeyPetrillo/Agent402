@@ -22,7 +22,11 @@
 //   markResaleCleared(tools, slugs, "the source")   resaleCleared: true and
 //                       resaleClearedBy, the source it was cleared for.
 // A tool that reaches no upstream (the server's compute reading) has nothing
-// to clear. Every other tool is refused at boot with RESALE_NOT_CLEARED_REASON
+// to clear, unless its answer serves facts compiled from outside sources (a
+// calendar, a rule table): such a tool declares each source beside its
+// handler (markContentSources: the source, its license and whether that
+// license allows passing the facts on), and is sold through a third party
+// only when it also carries a clearance mark. Every other tool is refused at boot with RESALE_NOT_CLEARED_REASON
 // (resaleClearanceRefusal), so a new tool, or one whose source is not cleared,
 // cannot be listed by a setting alone (scripts/test-resale-clearance.js).
 //
@@ -35,6 +39,14 @@ export const RESALE_COMPUTED = "computed";
 /** The market-data source's terms (cited in src/tools/coingecko-rate.js) bar
  *  resale or syndication of its data through a third party. */
 export const MARKET_DATA_RESALE_REASON = "raw pass-through of a data source whose terms bar resale or syndication through a third party";
+/** The Wikimedia Foundation's API usage guidelines bar sublicensing,
+ *  leasing or white-labeling access to its APIs (search-suggest). */
+export const WIKIMEDIA_API_RESALE_REASON = "a relay of a Wikimedia Foundation API, whose usage guidelines bar sublicensing access to it";
+/** The New York Fed's terms of use ask that its content be made available
+ *  with the same permissions, conditions and restrictions and no more
+ *  restrictive terms; a third party's marketplace adds its own terms, so the
+ *  tools that serve its rates are not sold through one. */
+export const NYFED_PASS_ON_RESALE_REASON = "serves New York Fed rates, whose terms bar passing them on under more restrictive terms than its own";
 /** The holiday source's terms (cited in src/tools/holiday-source.js) forbid
  *  operating a holiday portal or republishing its dataset. */
 export const HOLIDAY_PORTAL_RESALE_REASON = "a whole-year holiday list from a source whose terms bar a holiday portal";
@@ -78,10 +90,32 @@ export function resaleClearanceRefusal(def, { compute = false, env = process.env
   const barred = resaleBarredReason(def);
   if (barred) return barred;
   if (!def || typeof def !== "object") return RESALE_NOT_CLEARED_REASON;
-  if (def.resaleCleared === true || compute === true) return null;
+  if (def.resaleCleared === true) return null;
+  // Reaching no upstream clears a tool only when none of its facts come from
+  // an outside source (markContentSources).
+  if (compute === true && !hasContentSources(def)) return null;
   const seam = testSeam("RESALE_CLEARED_FOR_TEST", env);
   if (seam && seam.split(",").map((x) => x.trim()).includes(def.slug)) return null;
   return RESALE_NOT_CLEARED_REASON;
+}
+
+/** Mark `slugs` of `tools` as serving facts compiled from outside sources,
+ *  each `{ name, url, license, redistribution, credit? }` (`redistribution`:
+ *  whether that license allows the facts to be passed on, true or false;
+ *  `credit`: the line it asks a user to keep, if any). A tool so
+ *  marked is never cleared for resale by reaching no upstream alone
+ *  (resaleClearanceRefusal). */
+export function markContentSources(tools, slugs, sources) {
+  const list = Array.isArray(sources) ? sources : [];
+  if (!list.length || !list.every((x) => x && typeof x.name === "string" && x.name.trim() && /^https:\/\//.test(String(x.url || "")) && typeof x.license === "string" && x.license.trim() && typeof x.redistribution === "boolean")) {
+    throw new Error("resale terms: each content source names itself, its https URL, its license and whether it allows redistribution");
+  }
+  return mark(tools, slugs, { contentSources: Object.freeze(list.map((x) => Object.freeze({ name: x.name, url: x.url, license: x.license, redistribution: x.redistribution, ...(typeof x.credit === "string" && x.credit ? { credit: x.credit } : {}) }))) });
+}
+
+/** Does `def` serve facts compiled from outside sources? */
+export function hasContentSources(def) {
+  return Array.isArray(def?.contentSources) && def.contentSources.length > 0;
 }
 
 /** Mark `slugs` of `tools` as computing their answer from such a source. */

@@ -229,7 +229,6 @@ const NO_OUTCOME = Symbol.for("agent402.noOutcome");
 
 const FIXED_UPSTREAMS = [
   [/(^|\.)databento\.com$/, "databento"],
-  [/(^|\.)stlouisfed\.org$/, "fred"],
   [/(^|\.)hyperliquid\.xyz$/, "hyperliquid"],
   [/(^|\.)rugcheck\.xyz$/, "rugcheck"],
   [/(^|\.)sec\.gov$/, "edgar"],

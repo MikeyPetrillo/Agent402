@@ -146,12 +146,12 @@ export const EVM = {
     // Monad L1, chain 143. Native Circle USDC. Fast blocks (~0.5s), so a wide
     // span keeps the daily canary settle inside the "recent inbound" window;
     // Alchemy natively serves Monad (monad-mainnet.g.alchemy.com) for the
-    // balance read + getAssetTransfers, with the public RPC as fallback.
+    // balance read + getAssetTransfers. Monad's public RPC is not used (its
+    // terms are personal, non-commercial: src/rpc-terms.js).
     label: "Monad", asset: "USDC", span: 200000,
     token: "0x754704bc059f8c67012fed69bc8a327a5aafb603",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://monad-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://rpc.monad.xyz", "https://rpc2.monad.xyz",
     ],
     explorer: (a) => `https://monadscan.com/address/${a}#tokentxns`,
     tx: (h) => `https://monadscan.com/tx/${h}`,
@@ -176,7 +176,7 @@ export const EVM = {
     token: "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://avax-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://api.avax.network/ext/bc/C/rpc", "https://avalanche-c-chain-rpc.publicnode.com",
+      "https://avalanche-c-chain-rpc.publicnode.com",
     ],
     explorer: (a) => `https://snowtrace.io/address/${a}`,
     tx: (h) => `https://snowtrace.io/tx/${h}`,
@@ -210,11 +210,11 @@ export const EVM = {
     label: "Optimism", asset: "USDC", span: 10800,
     token: "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
     // Alchemy first (reliable getLogs, same rule as Polygon/Arbitrum);
-    // publicnode archive-gates getLogs outright and mainnet.optimism.io
-    // rate-limits datacenter egress.
+    // publicnode archive-gates historical getLogs; the OP Mainnet public RPC
+    // is not used (its terms are personal, non-commercial: src/rpc-terms.js).
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://opt-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com",
+      "https://optimism-rpc.publicnode.com",
     ],
     explorer: (a) => `https://optimistic.etherscan.io/address/${a}#tokentxns`,
     tx: (h) => `https://optimistic.etherscan.io/tx/${h}`,
@@ -269,7 +269,7 @@ export const EVM = {
     token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://robinhood-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://rpc.mainnet.chain.robinhood.com",
+      "https://robinhood-rpc.publicnode.com",
     ],
     explorer: (a) => `https://robinhoodchain.blockscout.com/address/${a}?tab=token_transfers`,
     tx: (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,

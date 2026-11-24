@@ -48,7 +48,7 @@ const SIG_LIMIT = Math.min(parseInt(process.env.SIG_LIMIT || "100", 10), 1000);
 // Circle's canonical USDC mint on Solana mainnet.
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const RPCS = (process.env.SOLANA_RPCS || [
-  "https://api.mainnet-beta.solana.com",
+  ...(process.env.ALCHEMY_API_KEY ? [`https://solana-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
   "https://solana-rpc.publicnode.com",
 ].join(",")).split(",").map((s) => s.trim()).filter(Boolean);
 // SOLANA_RPCS is operator-supplied and may carry a keyed provider URL (Helius

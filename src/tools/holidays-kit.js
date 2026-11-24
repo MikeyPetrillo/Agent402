@@ -14,17 +14,17 @@
 // tools answer one question per call and serve no browsable listing.
 import { markEndsAtCeiling } from "../run-ceiling.js";
 import { attribute } from "../data-attribution.js";
-import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON, markResaleCleared } from "../resale-terms.js";
+import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON, markResaleCleared, markContentSources } from "../resale-terms.js";
 import {
   bad, parseCountry, parseYear, parseSubdivision, parseTypes, parseIsoDate, parseWeekend,
   holidaysForYear, nextHolidays, appliesIn, hasAnyType, regionCalendar, yearsFor, HOLIDAY_HOSTS,
   toDay, fromDay, weekdayOf, DAY_NAMES, OBSERVANCE,
 } from "./holiday-source.js";
-import { parseExchange, exchangeStatus, daySchedule } from "./exchange-calendars.js";
+import { parseExchange, exchangeStatus, daySchedule, marketCalendarSourceFields, MARKET_CALENDAR_SOURCES } from "./exchange-calendars.js";
 
 const rowOut = (r) => ({ date: r.date, name: r.name, nationalHoliday: r.nationalHoliday, subdivisionCodes: r.subdivisionCodes, holidayTypes: r.holidayTypes });
 const staleMark = (stale) => (stale ? { stale: true } : {});
-const ruleOut = (rule) => (rule ? { id: rule, rule: OBSERVANCE[rule].rule, source: OBSERVANCE[rule].source } : null);
+const ruleOut = (rule) => (rule ? { id: rule, rule: OBSERVANCE[rule].rule, source: OBSERVANCE[rule].source, ...(OBSERVANCE[rule].credit ? { credit: OBSERVANCE[rule].credit } : {}) } : null);
 
 function parseBasis(v) {
   if (v === undefined || v === null || v === "") return "public";
@@ -106,33 +106,52 @@ export function t2Closed(d) {
   return null;
 }
 
+// Each rail's operating-day rule is stated as a fact and cited to a public
+// source whose terms allow reuse: U.S. federal holidays (5 U.S.C. 6103, as
+// OPM publishes them) with the Federal Reserve's observance (Board of
+// Governors), the ECB's T2 calendar (cited with the ECB as its source),
+// EU law on EUR-Lex, and GOV.UK's bank holidays (Open Government Licence).
+const OPM = "https://www.opm.gov/policy-data-oversight/pay-leave/federal-holidays/";
+const FED_BOARD = "https://www.federalreserve.gov/aboutthefed/k8.htm";
+const US_RAIL_CREDIT = "Federal holidays by 5 U.S.C. 6103 (OPM); observance by the Board of Governors of the Federal Reserve System.";
 const RAILS = {
   ach: {
     name: "ACH (FedACH)", region: ["US", null], basis: "bank",
-    method: "Settlement days are Federal Reserve business days: Monday to Friday except the Federal Reserve holidays (the U.S. Bank-type national holidays from the holiday source, with the Federal Reserve's rule: a Saturday holiday leaves the preceding Friday open, a Sunday holiday closes the following Monday). Same-day ACH settles on the first such day on or after the send date; next-day ACH on the business day after it.",
-    sources: ["https://www.frbservices.org/about/holiday-schedules", "https://www.nacha.org/"],
+    method: "Settlement days are Federal Reserve business days: Monday to Friday except the U.S. federal holidays (5 U.S.C. 6103), observed as the Federal Reserve observes them: a Saturday holiday leaves the preceding Friday open, a Sunday holiday closes the following Monday. Same-day ACH settles on the first such day on or after the send date; next-day ACH on the business day after it.",
+    sources: [FED_BOARD], credit: US_RAIL_CREDIT,
   },
   fedwire: {
     name: "Fedwire Funds", region: ["US", null], basis: "bank",
-    method: "Real-time gross settlement on Federal Reserve business days: Monday to Friday except the Federal Reserve holidays (U.S. Bank-type national holidays, Saturday holidays not moved, Sunday holidays closing the following Monday). A payment sent on a closed day settles on the next business day.",
-    sources: ["https://www.frbservices.org/about/holiday-schedules"],
+    method: "Real-time gross settlement on Federal Reserve business days: Monday to Friday except the U.S. federal holidays (5 U.S.C. 6103), Saturday holidays not moved, Sunday holidays closing the following Monday. A payment sent on a closed day settles on the next business day.",
+    sources: [FED_BOARD], credit: US_RAIL_CREDIT,
   },
   "sepa-sct": {
     name: "SEPA Credit Transfer", t2: true,
-    method: "Euro interbank settlement runs on T2 days: Monday to Friday except 1 January, Good Friday, Easter Monday, 1 May, 25 and 26 December (ECB). The payer's provider must credit the payee's provider by the end of the following business day (Directive (EU) 2015/2366, Article 83(1)).",
+    method: "Euro interbank settlement runs on T2 days: Monday to Friday except 1 January, Good Friday, Easter Monday, 1 May, 25 and 26 December. The payer's provider must credit the payee's provider by the end of the following business day (Directive (EU) 2015/2366, Article 83(1)).",
     sources: ["https://www.ecb.europa.eu/paym/target/t2/html/index.en.html", "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32015L2366"],
+    credit: "T2 closing days: source European Central Bank; the T2 calendar is available free of charge at ecb.europa.eu. Directive (EU) 2015/2366: source EUR-Lex, https://eur-lex.europa.eu.",
   },
   "sepa-instant": {
     name: "SEPA Instant Credit Transfer", always: true,
-    method: "Available 24 hours a day on all calendar days of the year, with funds made available within ten seconds (EPC SCT Inst scheme; providers may announce short planned maintenance windows).",
-    sources: ["https://www.europeanpaymentscouncil.eu/what-we-do/sepa-instant-credit-transfer"],
+    method: "Available 24 hours a day on every calendar day, with funds made available to the payee within ten seconds (Regulation (EU) No 260/2012, Article 5a, as amended by Regulation (EU) 2024/886). A provider may announce short planned maintenance windows.",
+    sources: ["https://eur-lex.europa.eu/eli/reg/2024/886/oj"],
+    credit: "Source: EUR-Lex, https://eur-lex.europa.eu.",
   },
   chaps: {
     name: "CHAPS", region: ["GB", "GB-ENG"], basis: "public",
-    method: "The CHAPS system is open 6am to 6pm, Monday to Friday, excluding bank or public holidays in England and Wales (Bank of England); customer payments must be submitted by 5.40pm. England and Wales holidays come from the holiday source with GOV.UK's substitute-day rule for a holiday on a weekend.",
-    sources: ["https://www.bankofengland.co.uk/payments/chaps", "https://www.gov.uk/bank-holidays"],
+    method: "Settles on England and Wales business days: Monday to Friday excluding the bank holidays in England and Wales, with GOV.UK's substitute-day rule for a holiday on a weekend. A payment sent on a closed day settles on the next business day. Intraday operating hours and cutoffs are set by the operator and not stated here; confirm them with your bank.",
+    sources: ["https://www.gov.uk/bank-holidays"],
+    credit: "Contains public sector information licensed under the Open Government Licence v3.0.",
   },
 };
+/** The public sources settlement-calendar's rail rules are cited to. */
+export const SETTLEMENT_RULE_SOURCES = Object.freeze([
+  { name: "OPM federal holidays (5 U.S.C. 6103)", url: OPM, license: "U.S. government work", redistribution: true },
+  { name: "Board of Governors of the Federal Reserve System, holidays observed", url: FED_BOARD, license: "U.S. government work", redistribution: true },
+  { name: "European Central Bank, T2", url: "https://www.ecb.europa.eu/paym/target/t2/html/index.en.html", license: "ECB reuse terms (cite the ECB)", redistribution: true },
+  { name: "EUR-Lex", url: "https://eur-lex.europa.eu/eli/reg/2024/886/oj", license: "EUR-Lex reuse notice (acknowledge the source)", redistribution: true },
+  { name: "GOV.UK bank holidays", url: "https://www.gov.uk/bank-holidays", license: "Open Government Licence v3.0", redistribution: true },
+]);
 export const RAIL_IDS = Object.keys(RAILS);
 const RAIL_ALIASES = { ach: "ach", fedach: "ach", fedwire: "fedwire", wire: "fedwire", sepa: "sepa-sct", "sepa-sct": "sepa-sct", sct: "sepa-sct", "sepa-instant": "sepa-instant", "sct-inst": "sepa-instant", "sepa-inst": "sepa-instant", chaps: "chaps" };
 
@@ -361,7 +380,7 @@ export const HOLIDAY_TOOLS = [
   },
   {
     route: "GET /api/settlement-calendar", name: "Payment settlement calendar", slug: "settlement-calendar", upstreamHosts: HOLIDAY_HOSTS, category: "time", price: "$0.002",
-    description: "Expected settlement date for a payment sent on a given date over ACH, Fedwire, SEPA Credit Transfer, SEPA Instant or CHAPS, from each rail's published operating days and the bank holidays that close it, with the rule and its official source in the answer. ?rail=ach&date=2026-12-24.",
+    description: "Expected settlement date for a payment sent on a given date over ACH, Fedwire, SEPA Credit Transfer, SEPA Instant or CHAPS, from each rail's operating-day rule in public sources and the holidays that close it, with the rule and its official sources in the answer. ?rail=ach&date=2026-12-24.",
     tags: ["settlement", "payments", "ach", "fedwire", "sepa", "chaps", "business-days", "finance"],
     discovery: {
       input: { rail: "ach", date: "2026-12-24" },
@@ -372,7 +391,7 @@ export const HOLIDAY_TOOLS = [
         },
         required: ["rail", "date"],
       },
-      output: { example: { rail: "ach", name: "ACH (FedACH)", sendDate: "2026-12-24", operatingDay: true, settlementDate: "2026-12-24", nextDaySettlementDate: "2026-12-28", closedDays: [{ date: "2026-12-25", reason: "holiday", name: "Christmas Day" }, { date: "2026-12-26", reason: "weekend" }, { date: "2026-12-27", reason: "weekend" }], sources: ["https://www.frbservices.org/about/holiday-schedules", "https://www.nacha.org/"] } },
+      output: { example: { rail: "ach", name: "ACH (FedACH)", sendDate: "2026-12-24", operatingDay: true, settlementDate: "2026-12-24", nextDaySettlementDate: "2026-12-28", closedDays: [{ date: "2026-12-25", reason: "holiday", name: "Christmas Day" }, { date: "2026-12-26", reason: "weekend" }, { date: "2026-12-27", reason: "weekend" }], sources: [FED_BOARD] } },
     },
     handler: async (i) => {
       const key = RAIL_ALIASES[String(i.rail ?? "").trim().toLowerCase()];
@@ -381,7 +400,7 @@ export const HOLIDAY_TOOLS = [
       const sendDate = parseIsoDate(i.date);
       const d0 = toDay(sendDate);
       const base = { rail: key, name: rail.name, sendDate };
-      if (rail.always) return { ...base, operatingDay: true, settlementDate: sendDate, method: rail.method, sources: rail.sources };
+      if (rail.always) return { ...base, operatingDay: true, settlementDate: sendDate, method: rail.method, sources: rail.sources, credit: rail.credit };
       let closedAt, stale = false, observance = null;
       if (rail.t2) {
         closedAt = (d) => (weekdayOf(d) === 0 || weekdayOf(d) === 6 ? { reason: "weekend" } : t2Closed(d) ? { reason: "holiday", name: t2Closed(d) } : null);
@@ -401,13 +420,12 @@ export const HOLIDAY_TOOLS = [
       if (key === "ach") Object.assign(out, { nextDaySettlementDate: fromDay(next) });
       if (key === "sepa-sct") Object.assign(out, { latestCreditDate: fromDay(next) });
       out.closedDays = [...closedDays, ...((key === "ach" || key === "sepa-sct") ? after : [])];
-      if (key === "chaps") Object.assign(out, { hours: { open: "06:00", close: "18:00", customerCutoff: "17:40", timezone: "Europe/London" } });
-      return { ...out, ...(observance ? { observance } : {}), method: rail.method, sources: rail.sources, ...staleMark(stale) };
+      return { ...out, ...(observance ? { observance } : {}), method: rail.method, sources: rail.sources, credit: rail.credit, ...staleMark(stale) };
     },
   },
   {
     route: "GET /api/market-calendar", name: "Exchange trading calendar", slug: "market-calendar", category: "time", price: "$0.001",
-    description: "Is an exchange open at a given moment, and when does it next open and close: NYSE, London Stock Exchange, Xetra, JPX (Tokyo) or HKEX, from each exchange's own published holidays, early closes and session hours, with the day's sessions in local time and UTC and the closures in the next month. Calendar facts only, no market data. ?exchange=NYSE&at=2026-11-27T17:30:00Z.",
+    description: "Is an exchange open at a given moment, and when does it next open and close: NYSE, London Stock Exchange, Xetra, JPX (Tokyo) or HKEX, from official public holiday calendars and published session rules, with the day's sessions in local time and UTC and the closures in the next month. Not exchange data; not affiliated with any exchange. ?exchange=NYSE&at=2026-11-27T17:30:00Z.",
     tags: ["market-hours", "trading-calendar", "exchange", "stock-market", "holidays", "finance"],
     discovery: {
       input: { exchange: "NYSE", at: "2026-11-27T17:30:00Z" },
@@ -426,7 +444,7 @@ export const HOLIDAY_TOOLS = [
       if (i.date !== undefined && i.date !== null && i.date !== "") {
         const date = parseIsoDate(i.date);
         const day = daySchedule(ex, date);
-        return { exchange: ex.id, name: ex.name, timezone: ex.timezone, ...day, ...(day.covered ? {} : { coverage: { from: ex.coverage[0], to: ex.coverage[1] } }), sources: ex.sources };
+        return { exchange: ex.id, name: ex.name, timezone: ex.timezone, ...day, ...(day.covered ? {} : { coverage: { from: ex.coverage[0], to: ex.coverage[1] } }), ...(ex.earlyCloseBasis ? { earlyCloseBasis: ex.earlyCloseBasis } : {}), ...marketCalendarSourceFields(ex) };
       }
       let t = Date.now();
       if (i.at !== undefined && i.at !== null && i.at !== "") {
@@ -449,5 +467,14 @@ for (const t of HOLIDAY_TOOLS) if (t.slug !== "market-calendar") attribute(t, "n
 markResaleBarred(HOLIDAY_TOOLS, ["bank-holidays", "school-holidays"], HOLIDAY_PORTAL_RESALE_REASON);
 markEndsAtCeiling(HOLIDAY_TOOLS, ["bank-holidays", "school-holidays", "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar", "market-calendar"]);
 
+// market-calendar reaches no upstream, but its facts are compiled from outside
+// sources (src/tools/exchange-calendars.js): each is declared with its license,
+// so reaching no upstream alone never clears it for resale.
+{
+  markContentSources(HOLIDAY_TOOLS, ["market-calendar"], Object.values(MARKET_CALENDAR_SOURCES).map(({ name, url, license, redistribution, credit }) => ({ name, url, license, redistribution, credit })));
+  markContentSources(HOLIDAY_TOOLS, ["settlement-calendar"], SETTLEMENT_RULE_SOURCES);
+}
+
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
-markResaleCleared(HOLIDAY_TOOLS, ["next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar"], "Nager.Date commercial sponsorship");
+markResaleCleared(HOLIDAY_TOOLS, ["next-holidays", "long-weekends", "country-business-days", "business-day-planner"], "Nager.Date commercial sponsorship");
+markResaleCleared(HOLIDAY_TOOLS, ["settlement-calendar"], "Nager.Date commercial sponsorship; rail rules cited to public sources (SETTLEMENT_RULE_SOURCES)");

@@ -48,6 +48,7 @@
 // .length each billed the same 100 "tokens" = 400 chars), so `text.length`
 // counts exactly what OpenRouter bills.
 
+import { markAiVoice } from "../ai-voice.js";
 import { redactSecrets } from "./redact.js";
 import { SPEECH_MODELS, OPENROUTER_ATTRIBUTION } from "./llm-gateway-kit.js";
 // Our data policy on every OpenRouter speech request: data_collection deny,
@@ -577,7 +578,7 @@ export const TTS_TOOLS = [
     category: "ai",
     price: TTS_LITE_PRICE,
     description:
-      "Convert text to speech with Kokoro-82M, a fraction of the price of /api/tts. Returns base64-encoded mp3 or pcm. The same request shape and the same ten voice names as /api/tts, mapped to Kokoro's own voices; the voice is synthetic-sounding where the /api/tts and /api/tts-hd tiers are not, which is the whole trade. Use this for high-volume narration, notifications and agent speech where the cost per call matters more than the timbre; use /api/tts or /api/tts-hd when it does not. No API key needed; pay per call via x402. Text capped at 800 chars.",
+      "Convert text to speech with Kokoro-82M, a fraction of the price of /api/tts. Returns base64-encoded mp3 or pcm. The same request shape and the same ten voice names as /api/tts, mapped to Kokoro's own voices; the voice is synthetic-sounding where the /api/tts and /api/tts-hd tiers are not, which is the whole trade. Use it for high-volume narration and notifications where cost matters more than timbre. No API key needed; pay per call via x402. Text capped at 800 chars.",
     tags: [...SHARED_TAGS, "kokoro", "cheap", "lite"],
     discovery: {
       bodyType: "json",
@@ -643,7 +644,7 @@ export const TTS_TOOLS = [
     category: "ai",
     ...quotedFields("tts-hd"),
     description:
-      `Convert text to speech with the eleven-v4 model, priced per request from the length of the text. It is the most expressive speech tier, and the quote is ${ttsQuoteFormula("tts-hd")}. Inline audio tags such as [whispering] are read as delivery cues. Returns base64-encoded audio. Same interface, voices, formats and backups as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at ${TIERS["tts-hd"].maxChars} chars. Model-backed.`,
+      `Convert text to speech with the eleven-v4 model, priced per request from the length of the text. The most expressive speech tier; the quote is ${ttsQuoteFormula("tts-hd")}. Inline audio tags such as [whispering] are read as delivery cues. Returns base64-encoded audio. Same interface, voices, formats and backups as /api/tts. No API key needed; pay per call via x402 or MPP. Text capped at ${TIERS["tts-hd"].maxChars} chars. Model-backed.`,
     tags: [...SHARED_TAGS, "eleven-v4", "hd"],
     discovery: {
       bodyType: "json",
@@ -671,5 +672,7 @@ export const TTS_TOOLS = [
   },
 ];
 
+// The AI-generated voice disclosure (src/ai-voice.js).
+markAiVoice(TTS_TOOLS, ["tts-lite", "tts", "tts-hd"]);
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(TTS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

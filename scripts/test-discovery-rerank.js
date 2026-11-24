@@ -61,7 +61,7 @@ ok(classify({ choice: NO_MATCH, confidence: 0.93 }, "skill-brand-protection").ki
   "measured: 'idempotency replay protection' at 0.93 reads as a gap");
 ok(classify({ choice: "action-gate", confidence: 0.40 }, "skill-brand-protection").kind === "unclear",
   "measured: 'mcp prompt injection protection' at 0.40 does NOT act");
-ok(classify({ choice: "fred-series", confidence: 0.55 }, "cpi-yoy").kind === "unclear",
+ok(classify({ choice: "us-macro-series", confidence: 0.55 }, "cpi-yoy").kind === "unclear",
   "measured: 'bureau of labor statistics cpi' at 0.55 does NOT override a correct answer");
 
 // --- the no-match option must be offered -------------------------------------

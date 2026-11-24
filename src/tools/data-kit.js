@@ -17,8 +17,8 @@
 import { readFileSync } from "node:fs";
 import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
-import { ratesUrl, latestShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
-import { attribute, OPEN_FOOD_FACTS_SOURCE, OPEN_FOOD_FACTS_LICENSE, openFoodFactsProductUrl, COUNTRIES_ODBL_NOTICE, countriesDatabaseUrl } from "../data-attribution.js";
+import { ratesUrl, latestShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable, ecbRateBasis } from "./frankfurter.js";
+import { attribute, creditAnswers, ECB_ATTRIBUTION, OPEN_FOOD_FACTS_SOURCE, OPEN_FOOD_FACTS_LICENSE, openFoodFactsProductUrl, COUNTRIES_ODBL_NOTICE, countriesDatabaseUrl } from "../data-attribution.js";
 import { DATA_UA } from "../user-agents.js";
 import { notChargedOn } from "../not-charged.js";
 import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON, markResaleCleared } from "../resale-terms.js";
@@ -162,7 +162,7 @@ export const DATA_TOOLS = [
   {
     route: "GET /api/fx-rate", name: "Currency exchange rate", slug: "fx-rate", category: "data", attribution: "ecb", price: "$0.001",
     description:
-      "Live currency conversion using European Central Bank reference rates. Converts an amount between two currencies and returns the rate, its date and its source. ?from=USD&to=EUR&amount=100. Source: European Central Bank.",
+      "Live currency conversion using European Central Bank reference rates. Converts an amount between two currencies and returns the rate, its date, its source and its basis. ?from=USD&to=EUR&amount=100.",
     tags: ["currency", "forex", "fx", "exchange-rate", "convert", "ecb"],
     discovery: {
       input: { from: "USD", to: "EUR", amount: 100 },
@@ -174,7 +174,7 @@ export const DATA_TOOLS = [
         },
         required: ["from", "to"],
       },
-      output: { example: { from: "USD", to: "EUR", amount: 100, rate: 0.923, result: 92.3, date: "2026-06-13", source: "European Central Bank euro foreign exchange reference rates (via Frankfurter)" } },
+      output: { example: { from: "USD", to: "EUR", amount: 100, rate: 0.923, result: 92.3, date: "2026-06-13", source: "European Central Bank euro foreign exchange reference rates (via Frankfurter)", rateBasis: "inverse of the ECB euro reference rate, computed" } },
     },
     handler: async (i) => {
       const from = String(i.from ?? "").trim().toUpperCase();
@@ -191,7 +191,7 @@ export const DATA_TOOLS = [
         if (from === to) {
           const jId = latestShape(await getJson(ratesUrl({ base: "USD", quotes: ["EUR"] })), "USD");
           if (!jId) throw bad("Frankfurter returned no USD/EUR reference rate", 502);
-          return { from, to, amount, rate: 1, result: amount, date: jId.date, source: ECB_FX_SOURCE };
+          return { from, to, amount, rate: 1, result: amount, date: jId.date, source: ECB_FX_SOURCE, rateBasis: ecbRateBasis(from, to) };
         }
         // v2 has no amount parameter: convert here at full precision
         // (src/tools/frankfurter.js).
@@ -199,7 +199,7 @@ export const DATA_TOOLS = [
         const r = j?.rates?.[to];
         if (j == null) throw unknownPair();
         if (typeof r !== "number" || !(r > 0)) throw bad(`unsupported currency pair ${from}/${to}`, 502);
-        return { from, to, amount, rate: Number(r.toFixed(6)), result: Number((amount * r).toFixed(6)), date: j.date, source: ECB_FX_SOURCE };
+        return { from, to, amount, rate: Number(r.toFixed(6)), result: Number((amount * r).toFixed(6)), date: j.date, source: ECB_FX_SOURCE, rateBasis: ecbRateBasis(from, to) };
       } catch (e) {
         // The ECB reference rates are the one source. An input 4xx keeps its
         // meaning: an unknown code (v2 answers 422, v1 answered 404) is named
@@ -373,6 +373,8 @@ markEndsAtCeiling(DATA_TOOLS, ["fx-rate", "public-holidays", "weather-forecast"]
 // Resale terms (src/resale-terms.js): a whole year's list is not resold through a third party.
 markResaleBarred(DATA_TOOLS, ["public-holidays"], HOLIDAY_PORTAL_RESALE_REASON);
 attribute(DATA_TOOLS.find((t) => t.slug === "public-holidays"), "nager");
+// The ECB sentence ends the description (read before payment) and rides every answer.
+for (const t of DATA_TOOLS) if (t.attribution === "ecb") { attribute(t, "ecb"); creditAnswers(t, ECB_ATTRIBUTION); }
 
 // Resale clearance (src/resale-terms.js): cleared for resale through a third party.
 markResaleCleared(DATA_TOOLS, ["weather-forecast"], "National Weather Service");

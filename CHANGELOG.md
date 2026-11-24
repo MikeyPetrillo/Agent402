@@ -6,6 +6,32 @@ carries its own version on npm.
 
 ## v2.16.0 - 2026-11-24
 
+### 2026-11-24 (source terms: calendars, FX notices, us-macro-series)
+Tools:
+- fred-series and fred-release-observations are retired and answer 410 naming
+  us-macro-series and us-macro-series. us-macro-series takes the same inputs
+  and gives the same answer; the macro-snapshot skill pack replaces
+  fred-snapshot, whose route answers 410 naming it.
+- market-calendar compiles its calendars from public sources (NYSE Rules 7.2
+  and 7.34 as filed with the SEC, GOV.UK bank holidays, the Cabinet Office
+  national holidays, DATA.GOV.HK and the exchange_calendars rules) and every
+  answer names them, carries their credits and says the facts are not exchange
+  data. The HKEX day has its 12:00 to 13:00 break.
+- fx-rate, fx-historical, fx-timeseries and fx-dashboard say before payment
+  and in every answer that the ECB reference rates are available free of
+  charge at ecb.europa.eu, and each answer says whether its rate is the ECB's
+  own or computed from it (`rateBasis`).
+- settlement-calendar cites each rail's rule to public sources and carries
+  their credits; CHAPS answers no longer state operating hours.
+- search-suggest keeps each prefix's suggestions for a day, so a repeated
+  prefix is answered without a new read, and every answer carries the license
+  link and says it is not affiliated with the Wikimedia Foundation.
+- tts, tts-lite, tts-hd, v1-audio-speech and dub say before payment and in
+  every answer that the voice is AI-generated (`aiGeneratedVoice`, or the
+  X-AI-Generated header on audio bytes).
+- earthquakes, the openFDA tools and geo-lookup answers carry the credit line
+  their sources ask for.
+
 ### 2026-11-24 (plain connector names, Algorand catalog, Ink relayer, dependency moves)
 Tools:
 - rwa-markets says why a reference rate is missing (referenceStatus read,
@@ -162,8 +188,8 @@ Site:
 ### 2026-11-24 (thirty retired tools)
 Tools:
 - onchain-sql-week, onchain-sql-range and fred-release-observations are
-  retired and answer 410 naming onchain-sql, onchain-sql and fred-series. A
-  partial onchain-sql walk no longer lists longer routes.
+  retired and answer 410 naming onchain-sql, onchain-sql and us-macro-series.
+  A partial onchain-sql walk no longer lists longer routes.
 - solana-rpc, x-post-counts, x-trends, fc-cast-search, fc-cast-metrics,
   fc-channel-feed, fc-trending, fc-user-casts, fc-cast, fc-cast-replies,
   fc-channel, fc-user-search, farcaster-profile, farcaster-by-address,

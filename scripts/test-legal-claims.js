@@ -109,7 +109,7 @@ ok(/payerBalanceBucket/.test(posthog) && /coarse balance bucket/.test(privacy), 
   const accepted = [...Object.values(CHAIN_PAGES).map((c) => c.caip2), rr.TEMPO_NETWORK];
   const uncovered = accepted.filter((n) => {
     const fam = rr.familyOf(rr.normalizeNetwork(n));
-    return !senders.includes(fam) || (fam === "evm" && !rr.EVM_RPCS[n]);
+    return !senders.includes(fam) || (fam === "evm" && !rr.proofRpcsFor(n, { ALCHEMY_API_KEY: "k" }).length);
   });
   ok(accepted.length > 10 && !uncovered.length, `every chain we accept (${accepted.length}, Tempo included) has a refund sender, and every EVM one an RPC (uncovered: ${uncovered.join(", ") || "none"})`);
   ok(rr.familyOf(rr.normalizeNetwork("tempo")) === "tempo", "control: a Tempo debt (booked as \"tempo\") plans on the Tempo sender");

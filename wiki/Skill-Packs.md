@@ -89,7 +89,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**fixed-income-desk**](https://agent402.tools/skills/fixed-income-desk) | $0.013 | Read the rate environment and price a bond in one workflow: live Treasury curve, the 2s10s and 3M-10Y spreads, inflation context, then bond price and yield at current rates. |
 | [**inflation-check**](https://agent402.tools/skills/inflation-check) | $0.018 | Four dated US series in one call: CPI, fed funds, unemployment and the Sahm Rule recession indicator. |
 | [**fx-monitor**](https://agent402.tools/skills/fx-monitor) | $0.008 | Major currency snapshot: EUR/USD, GBP/USD, JPY/USD plus the full FX dashboard. |
-| [**fred-snapshot**](https://agent402.tools/skills/fred-snapshot) | $0.001 | Key Fed indicators - fed funds rate, unemployment, and CPI - in one call. |
+| [**macro-snapshot**](https://agent402.tools/skills/macro-snapshot) | $0.001 | Key Fed indicators - fed funds rate, unemployment, and CPI - in one call. |
 | [**world-data**](https://agent402.tools/skills/world-data) | $0.005 | GDP and population for a country - two key World Bank indicators. |
 | [**macro-dashboard**](https://agent402.tools/skills/macro-dashboard) | $0.042 | The full macro plus crypto dashboard in one call: 4 BLS and New York Fed indicators, 5 Treasury reads, the curve spread, crypto market/trending/global, and live gas. |
 

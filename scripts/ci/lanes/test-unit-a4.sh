@@ -106,6 +106,8 @@ t node scripts/test-chain-block-time.js
 t node scripts/test-payai-credit-watch.js
 # Heartbeat security advisory triage check: script vs a stub GitHub API, and the step's shell with gh stubbed (offline)
 t node scripts/test-advisory-triage.js
+# The heartbeat's holiday source sponsorship read: active, not active and unreadable, the token never echoed, the workflow step wired (offline)
+t node scripts/test-holiday-sponsorship-check.js
 # Heartbeat 7-day MPP reconciliation window step, run with curl/gh stubbed (offline)
 t node scripts/test-heartbeat-mpp-window.js
 t node scripts/test-revenue-fresh-recent.js
@@ -152,10 +154,12 @@ t node scripts/test-referral-gate.js
 t node scripts/test-referral-legs.js
 # The AWS Marketplace front door (/aws/<slug>): one aws:base offer, a signed quote that an altered price breaks, one sale per payment id, replayed or expired tokens refused unbooked, off answers as an unknown path, direct 402s byte-identical (stub payment-service keys, keys made in the test).
 t node scripts/test-aws-marketplace-gate.js
-# The AWS Marketplace listing's own surfaces: the 74 default tools served, /aws/start links nowhere past the listing and lists each tool at its catalog price, /aws/openapi.json lists exactly the served tools with examples that validate, no /aws description names a tool or path outside the served set, /terms names AWS purchases (keys made in the test).
+# The AWS Marketplace listing's own surfaces: the 73 default tools served, /aws/start links nowhere past the listing and lists each tool at its catalog price, /aws/openapi.json lists exactly the served tools with examples that validate, no /aws description names a tool or path outside the served set, /terms names AWS purchases (keys made in the test).
 t node scripts/test-aws-start-page.js
-# Resale clearance: /ref and /aws sell only tools whose upstream terms are cleared (marked beside the handler) or that reach no upstream (offline)
+# Resale clearance: /ref and /aws sell only tools whose upstream terms are cleared (marked beside the handler) or that reach no upstream and serve no outside facts (offline)
 t node scripts/test-resale-clearance.js
+# Chain RPC terms: no code default names an endpoint whose terms bar commercial use, and each settlement chain keeps its permitted lanes (offline)
+t node scripts/test-rpc-host-terms.js
 # The referral book's sweep: refused share and spread, dropped records read in turn and given up only on answered reads, charged reads inside the chain budget, one sweep at a time, a failed batch written again change by change (offline).
 t node scripts/test-referral-book-sweep.js
 # A run's ceiling: every tool marked endsAtCeiling ends its upstream work at it, starts none after it, and never answers from a cut read

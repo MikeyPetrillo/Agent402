@@ -1,8 +1,8 @@
-// fred-series reads each supported FRED series ID from the agency that
+// us-macro-series reads each supported FRED series ID from the agency that
 // publishes it (src/tools/us-macro-series.js) and never from FRED. Offline:
 // fetch is stubbed per host.
 //   1. no request goes to a FRED host, for any supported ID or any other;
-//   2. each ID reaches its publisher's API and answers fred-series' shape,
+//   2. each ID reaches its publisher's API and answers us-macro-series' shape,
 //      with the credit that publisher's terms ask for;
 //   3. an ID that is not served is a 404 naming every supported ID;
 //   4. units and frequency are computed here and the answer says so
@@ -20,20 +20,40 @@ import { METERED_SLUGS } from "../src/metered-slugs.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const tool = MACRO_TOOLS.find((t) => t.slug === "fred-series");
+const tool = MACRO_TOOLS.find((t) => t.slug === "us-macro-series");
 const run = (input) => tool.handler(input);
 const caught = async (p) => { try { await p; return null; } catch (e) { return e; } };
 
 // --- the tool definition --------------------------------------------------------
-ok(tool.attribution === "us-agencies" && ATTRIBUTIONS["us-agencies"] === US_AGENCIES_ATTRIBUTION && tool.description.endsWith(US_AGENCIES_ATTRIBUTION), "fred-series credits the agencies and its description ends with that sentence");
-ok(!/FRED\(R\) API|St\. Louis|stlouisfed/.test(tool.description) && /bea\.gov/.test(tool.discovery.output.example.terms), "fred-series makes no FRED API claim, and its example links the publisher's terms, not FRED's");
+ok(tool.attribution === "us-agencies" && ATTRIBUTIONS["us-agencies"] === US_AGENCIES_ATTRIBUTION && tool.description.endsWith(US_AGENCIES_ATTRIBUTION), "us-macro-series credits the agencies and its description ends with that sentence");
+ok(!/FRED\(R\) API|St\. Louis|stlouisfed/.test(tool.description) && /bea\.gov/.test(tool.discovery.output.example.terms), "us-macro-series makes no FRED API claim, and its example links the publisher's terms, not FRED's");
 const PUBLISHER_HOSTS = ["api.bls.gov", "markets.newyorkfed.org", "api.fiscaldata.treasury.gov", "home.treasury.gov", "www.federalreserve.gov", "apps.bea.gov"];
-ok(JSON.stringify(tool.upstreamHosts) === JSON.stringify(PUBLISHER_HOSTS), "fred-series declares the hosts it reads through its source module");
+ok(JSON.stringify(tool.upstreamHosts) === JSON.stringify(PUBLISHER_HOSTS), "us-macro-series declares the hosts it reads through its source module");
 // The series current buyers ask for most are served: Treasury constant
 // maturities and their spreads, the money stock, GDP.
 for (const id of ["DGS1MO", "DGS3MO", "DGS6MO", "DGS1", "DGS2", "DGS3", "DGS5", "DGS7", "DGS10", "DGS20", "DGS30", "T10Y2Y", "T10Y3M", "M1SL", "M2SL", "M1NS", "M2NS", "GDP", "GDPC1"]) ok(SUPPORTED_IDS.includes(id), `${id} is served`);
 ok(tool.discovery.input.seriesId === "GDPC1", "the published example is GDPC1 again, the example buyers had");
-ok(!METERED_SLUGS.has("fred-series"), "fred-series is keyless, so the catalog sweeps drive it");
+ok(!METERED_SLUGS.has("us-macro-series"), "us-macro-series is keyless, so the catalog sweeps drive it");
+// The Board retires its Data Download Program packages on 2027-03-31: the
+// H.6, H.10 and H.15 reads all use them, and must move to each release's own
+// files first. From FED_DDP_MOVE_BY this fails while any package read remains.
+{
+  const M = await import("../src/tools/us-macro-series.js");
+  ok(M.FED_DDP_PACKAGES_RETIRE_ON === "2027-03-31" && JSON.stringify([...M.FED_DDP_PACKAGE_READS].sort()) === JSON.stringify(["H10", "H15", "H6"].filter((r) => M.FED_DDP_PACKAGE_READS.includes(r)).sort()), `the dated note names the package reads it covers (${M.FED_DDP_PACKAGE_READS.join(", ") || "none left"})`);
+  const today = new Date().toISOString().slice(0, 10);
+  ok(today < M.FED_DDP_MOVE_BY || M.FED_DDP_PACKAGE_READS.length === 0, `REMINDER: move ${M.FED_DDP_PACKAGE_READS.join(", ")} off the Data Download Program packages before ${M.FED_DDP_PACKAGES_RETIRE_ON} (src/tools/us-macro-series.js)`);
+}
+// The route carries no third party's mark: renamed from fred-series, which
+// answers 410 naming it; the snapshot pack moved with it.
+{
+  const { RETIRED_TOOLS, RETIRED_PACKS } = await import("../src/retired-tools.js");
+  ok(tool.route === "GET /api/us-macro-series" && !/\bfred\b/i.test(`${tool.name} ${tool.description} ${tool.tags.join(" ")} ${tool.discovery.inputSchema.properties.seriesId.description}`), `the route, name, description, tags and input text carry no FRED mark (${tool.name})`);
+  ok(RETIRED_TOOLS["fred-series"]?.replacement === "us-macro-series" && RETIRED_TOOLS["fred-release-observations"]?.replacement === "us-macro-series", "fred-series and fred-release-observations answer 410 naming us-macro-series");
+  ok(RETIRED_PACKS["fred-snapshot"]?.replacement === "skill-macro-snapshot", "the fred-snapshot pack answers 410 naming macro-snapshot");
+  const { SKILL_PACKS } = await import("../src/skills.js");
+  const offenders = SKILL_PACKS.filter((p) => /\bfred\b/i.test(JSON.stringify(p)));
+  ok(offenders.length === 0, `no skill pack names FRED (${offenders.map((p) => p.slug).join(",") || "none"})`);
+}
 ok(SERIES[tool.discovery.input.seriesId], `the published example's series (${tool.discovery.input.seriesId}) is served`);
 for (const id of ["UNRATE", "CPIAUCSL", "FEDFUNDS", "DFF"]) ok(SUPPORTED_IDS.includes(id), `${id}, which the description, packs and corpus name, is served`);
 
@@ -137,7 +157,7 @@ try {
   // 1-2: BLS
   _resetUsMacroForTest();
   const a = await run({ seriesId: "unrate", startDate: "2024-01-01", endDate: "2024-12-31" });
-  ok(a.seriesId === "UNRATE" && a.units === "lin" && a.count === 12 && a.observations[0].date === "2024-01-01" && a.observations[11].date === "2024-12-01", `UNRATE answers fred-series' shape, one row a month (${a.count})`);
+  ok(a.seriesId === "UNRATE" && a.units === "lin" && a.count === 12 && a.observations[0].date === "2024-01-01" && a.observations[11].date === "2024-12-01", `UNRATE answers us-macro-series' shape, one row a month (${a.count})`);
   ok(a.source === "U.S. Bureau of Labor Statistics" && a.sourceSeries === "LNS14000000" && a.credit === BLS_VOUCH && /^\d{4}-\d{2}-\d{2}T/.test(a.retrievedAt) && /termsOfService/.test(a.terms) && !a.derived, "UNRATE credits BLS, its series, the retrieval date and the statement the BLS terms require");
   ok(blsBodies.length === 1 && blsBodies[0].seriesid[0] === "LNS14000000" && blsBodies[0].startyear === "2020" && blsBodies[0].endyear === "2029" && !("registrationkey" in blsBodies[0]), "BLS is read one calendar decade per query, keyless without BLS_API_KEY");
   await run({ seriesId: "UNRATE", startDate: "2021-01-01", endDate: "2022-12-31" });
@@ -253,12 +273,12 @@ try {
     for (const f of files) {
       if (!existsSync(root + f)) continue;
       readFileSync(root + f, "utf8").split("\n").forEach((line, n) => {
-        for (const m of line.matchAll(/\b(\d+) (?:common )?FRED series/g)) typed.push({ at: `${f}:${n + 1}`, n: Number(m[1]) });
+        for (const m of line.matchAll(/\b(\d+) (?:common (?:FRED )?series|FRED series)/g)) typed.push({ at: `${f}:${n + 1}`, n: Number(m[1]) });
       });
     }
     ok(typed.length >= 2, `the typed series counts are found (${typed.map((t) => t.at).join(", ")})`);
     const wrong = typed.filter((t) => t.n !== SUPPORTED_IDS.length);
-    ok(wrong.length === 0, `every typed FRED series count is the supported list's length, ${SUPPORTED_IDS.length} (${wrong.map((t) => `${t.at} says ${t.n}`).join("; ") || "all match"})`);
+    ok(wrong.length === 0, `every typed series count is the supported list's length, ${SUPPORTED_IDS.length} (${wrong.map((t) => `${t.at} says ${t.n}`).join("; ") || "all match"})`);
   }
 
   // 3: not served

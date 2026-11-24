@@ -53,9 +53,11 @@ export const DATA_UA = `${DATA_TOKEN}/1.0 (${DATA_CONTACT}; +${INFO_URL})`;
 
 /** The search-suggest tool's read of Wikipedia's opensearch API
  *  (src/tools/wikipedia-suggest.js), in the form Wikimedia's User-Agent
- *  policy asks for: a bot name, the /crawler link and a contact address. */
+ *  policy asks for, `<client>/<version> (<contact information>)
+ *  <library/framework>/<version>`: a bot name, the /crawler link and a
+ *  contact address, then the component with its version. */
 export const SUGGEST_TOKEN = "Agent402SuggestBot";
-export const SUGGEST_UA = `${SUGGEST_TOKEN}/1.0 (${INFO_URL}; ${DATA_CONTACT}) search-suggest`;
+export const SUGGEST_UA = `${SUGGEST_TOKEN}/1.0 (${INFO_URL}; ${DATA_CONTACT}) search-suggest/1.0`;
 
 /** The string we retired; no component sends it bare. */
 export const RETIRED_BARE_UA = "Agent402/1.0";

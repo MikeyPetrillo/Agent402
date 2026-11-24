@@ -1372,12 +1372,12 @@
       }
     },
     {
-      "slug": "skill-fred-snapshot",
+      "slug": "skill-macro-snapshot",
       "name": "default run",
       "input": {},
       "expect": {
         "equals": {
-          "pack": "fred-snapshot"
+          "pack": "macro-snapshot"
         },
         "matches": {
           "summary": "^[1-9]"

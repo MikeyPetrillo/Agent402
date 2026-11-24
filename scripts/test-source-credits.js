@@ -103,6 +103,27 @@ try {
   undoDns();
 }
 ok(seen.length >= 5, `the handlers read the stubbed upstream (${seen.length} reads)`);
+// 3. The government credit lines: USGS on earthquakes, the FDA on every
+// openFDA tool, and the Census Bureau's statement on a geo-lookup answer the
+// Census geocoder served (an answer from another agency is not credited to it).
+{
+  const { USGS_CREDIT, CENSUS_CREDIT, OPENFDA_CREDIT } = await import("../src/data-attribution.js");
+  const gt = (slug) => GOV_TOOLS.find((t) => t.slug === slug);
+  ok(gt("earthquakes").credit === USGS_CREDIT && gt("earthquakes").discovery.output.example.credit === USGS_CREDIT && USGS_CREDIT === "Credit: U.S. Geological Survey.", "earthquakes: every answer and the example credit USGS");
+  const fda = ["drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "device-510k", "device-adverse-events", "device-recalls", "food-recalls"];
+  ok(fda.every((s) => gt(s)?.credit === OPENFDA_CREDIT), `the openFDA tools credit the FDA (${fda.filter((s) => gt(s)?.credit !== OPENFDA_CREDIT).join(",") || "all"})`);
+  ok(/not endorsed or certified by the Census Bureau/.test(CENSUS_CREDIT) && gt("geo-lookup").discovery.output.example.credit === CENSUS_CREDIT, "geo-lookup: the Census statement rides the example the Census geocoder served");
+  const realFetch2 = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (/census\.gov/.test(u)) return new Response(JSON.stringify({ result: { geographies: { "2020 Census Blocks": [{ GEOID: "060372074001024", STATE: "06", COUNTY: "037" }], Counties: [{ NAME: "Los Angeles County", STATE: "06" }], States: [{ STUSAB: "CA", NAME: "California" }] } } }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response("{}", { status: 500 });
+    };
+    let a; try { a = await gt("geo-lookup").handler({ lat: 34.0522, lon: -118.2437 }); } catch (e) { a = { error: e.message }; }
+    ok(!/census\.gov/.test(String(a.source || "")) || a.credit === CENSUS_CREDIT, `a Census-served geo-lookup answer carries the statement (${JSON.stringify(a).slice(0, 160)})`);
+  } finally { globalThis.fetch = realFetch2; }
+}
 
 console.log(`\ntest-source-credits: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

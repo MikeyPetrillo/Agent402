@@ -39,15 +39,15 @@ const EXPECTED_MISSES = {
 };
 // With an active stock data provider these two packs take a stock ticker, and
 // a ticker is legitimately not a FRED series id. With none they run without
-// the stock step on a FRED series id, so fred-series is the data step: a key
+// the stock step on a FRED series id, so us-macro-series is the data step: a key
 // or upstream failure is classified below like any other, a code failure
 // fails. The server's own catalog says which state it is in.
 const STOCK_ON = (await (await fetch(`${BASE}/api/pricing`)).json().catch(() => ({}))).endpoints?.some?.((e) => e.slug === "stock-quote") === true;
 if (STOCK_ON) {
-  EXPECTED_MISSES["trend-analysis"] = ["fred-series"];
-  EXPECTED_MISSES["forecasting-bake-off"] = ["fred-series"];
+  EXPECTED_MISSES["trend-analysis"] = ["us-macro-series"];
+  EXPECTED_MISSES["forecasting-bake-off"] = ["us-macro-series"];
 }
-console.log(`stock data provider ${STOCK_ON ? "on: fred-series misses excused for the ticker-fed packs" : "off: fred-series is judged on every pack"}`);
+console.log(`stock data provider ${STOCK_ON ? "on: us-macro-series misses excused for the ticker-fed packs" : "off: us-macro-series is judged on every pack"}`);
 
 // Not our defect and never fatal: a missing third-party key on this deployment,
 // an upstream refusing or rate-limiting us. Same doctrine as probe-classify.js -

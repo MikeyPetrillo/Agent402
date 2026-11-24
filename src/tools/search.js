@@ -20,7 +20,8 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET
 import { settleBeforeUpstreamHolding } from "../settle-first.js";
 import { hardCapHold } from "../upstream-hard-caps.js";
 import { wikipediaSuggestions } from "./wikipedia-suggest.js";
-import { attribute, creditAnswers, WIKIPEDIA_CREDIT } from "../data-attribution.js";
+import { attribute, creditAnswers, licensedAnswers, WIKIPEDIA_CREDIT, WIKIPEDIA_LICENSE_FIELDS } from "../data-attribution.js";
+import { markResaleBarred, WIKIMEDIA_API_RESALE_REASON } from "../resale-terms.js";
 
 // THE SETTLE POINT (src/settle-first.js): a run the server armed has its
 // payment settled here, after the handler's input checks and our key check,
@@ -829,4 +830,9 @@ underBudgetAll(SEARCH_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
   const suggest = SEARCH_TOOLS.find((t) => t.slug === "search-suggest");
   attribute(suggest, "wikipedia");
   creditAnswers(suggest, WIKIPEDIA_CREDIT);
+  licensedAnswers(suggest, WIKIPEDIA_LICENSE_FIELDS);
 }
+// A relay of a Wikimedia Foundation API: its usage guidelines bar
+// sublicensing or leasing access to it, so it is never sold through a third
+// party (src/resale-terms.js; scripts/test-resale-clearance.js).
+markResaleBarred(SEARCH_TOOLS, ["search-suggest"], WIKIMEDIA_API_RESALE_REASON);

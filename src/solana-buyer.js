@@ -15,6 +15,7 @@
 // account, read from the chain, failing CLOSED on any RPC error. A seller
 // nobody pays is not routable, whatever a registry says.
 
+import { defaultSolanaRpcs } from "./rpc-terms.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { OUR_SOLANA_WALLETS } from "./revenue-live.js";
@@ -30,7 +31,8 @@ export const SOLANA_NETWORK_LABELS = new Set([
   "solana-mainnet-beta",
 ]);
 
-const RPC_URL = () => (process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
+// The keyed lane when set, else PublicNode (src/rpc-terms.js).
+const RPC_URL = () => (process.env.SOLANA_RPC_URL || defaultSolanaRpcs()[0]).trim();
 
 const bad = (msg, statusCode) => Object.assign(new Error(msg), { statusCode });
 

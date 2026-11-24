@@ -31,6 +31,7 @@
 // translation and what served in the X-Dub-Translation header (base64 JSON).
 // `json: 1` or `format: "json"` answers JSON instead, the audio base64 in it.
 
+import { markAiVoice } from "../ai-voice.js";
 import { LLM_GATEWAY_TOOLS, TIERS as GATEWAY_TIERS } from "./llm-gateway-kit.js";
 import { SETTLE_FIRST_SENTENCE } from "../settle-first-copy.js";
 import { TTS_TOOLS, VOICES, FORMATS, FORMAT_CONTENT_TYPES, ELEVENLABS_VOICES, validateInput as validateTtsInput, makeTtsHandler, ttsQuoteUsd } from "./tts-kit.js";
@@ -264,6 +265,8 @@ export const DUB_TOOLS = [
   },
 ];
 
+// The AI-generated voice disclosure (src/ai-voice.js).
+markAiVoice(DUB_TOOLS, ["dub"]);
 // The whole call, both steps, runs under the speech tiers' window
 // (src/upstream-deadline.js); the speech step's reads spend what is left.
 underBudgetAll(DUB_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
