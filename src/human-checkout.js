@@ -84,6 +84,7 @@ import { priceUsdFor as agentPriceUsdFor } from "./report-tiers.js";
 import { randomBytes } from "node:crypto";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
 import { cleanSaleSource } from "./sale-source.js";
+import { createWithConsent, REPORT_REFUND_LINE, FOLLOWUPS_FIELD, followupsOptedOut } from "./checkout-consent.js";
 import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
 
 // ---- Public reports -------------------------------------------------------
@@ -717,8 +718,13 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     const input = String(inputValue ?? "").trim();
     if (!input) { const e = new Error(`Please provide ${p.inputLabel}.`); e.statusCode = 400; throw e; }
     if (input.length > 2000) { const e = new Error("Input is too long."); e.statusCode = 400; throw e; }
-    const session = await stripe.checkout.sessions.create({
+    // The buyer accepts the terms (checkbox, naming arbitration and the class
+    // waiver), sees the refund rule above the pay button, and may turn the
+    // follow-up emails off (src/checkout-consent.js).
+    const session = await createWithConsent(stripe, {
       mode: "payment",
+      custom_text: { submit: { message: REPORT_REFUND_LINE } },
+      custom_fields: [FOLLOWUPS_FIELD],
       // Promotion codes are created in the Stripe dashboard (a first-report
       // code, a partner code); the one-shot flow accepted none until 2026-08-28.
       allow_promotion_codes: true,
@@ -739,7 +745,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       cancel_url: `${baseUrl}/reports?canceled=1`,
       // No customer account created; a one-off charge.
       payment_intent_data: { description: `Agent402 ${p.label}` },
-    });
+    }, baseUrl);
     return { id: session.id, url: session.url };
   }
 
@@ -1060,7 +1066,9 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl, receipt: typeof receipt === "string" && receipt ? receipt : null }).catch(() => {});
     // Post-purchase sequence (src/followups.js): the only moment the buyer's
     // address is in hand next to what they bought. Never stored on the record.
-    if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input }); } catch { /* follow-ups never break delivery */ } }
+    // A buyer who chose "No follow-up emails" at checkout is passed as such,
+    // and the sequence is never started for them.
+    if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input, followupsOptOut: followupsOptedOut(session) }); } catch { /* follow-ups never break delivery */ } }
     // Book what Stripe actually collected (a promotion code lowers it), never the list price.
     const paidUsd = Number.isFinite(Number(session.amount_total)) ? Number(session.amount_total) / 100 : p.price / 100;
     try { onSale?.({ sessionId, product: p.slug, priceUsd: paidUsd, listPriceUsd: p.price / 100, paymentIntent: typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null, source: cleanSaleSource(session.metadata?.source) }); } catch { /* accounting never breaks delivery */ }

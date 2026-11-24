@@ -22,6 +22,7 @@ import { rugcheckEnabled } from "./rugcheck-switch.js";
 import { cleanSaleSource } from "./sale-source.js";
 import { appendPeriodReceipt } from "./receipt-signing.js";
 import { shared } from "./shared-limits.js";
+import { createWithConsent, autoRenewField, monitorRenewalStatement, consentRecordOf } from "./checkout-consent.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).
@@ -401,8 +402,13 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       // unauthenticated. Only a message we minted ourselves (buyerSafe) passes.
       catch (err) { const e = new Error(err?.buyerSafe ? String(err.message).slice(0, 200) : `We could not validate ${p.inputLabel}. Check it and try again.`); e.statusCode = err?.statusCode && err.statusCode < 500 ? err.statusCode : 400; throw e; }
     }
-    const session = await stripe.checkout.sessions.create({
+    // Consent (src/checkout-consent.js): the Terms checkbox, and a separate,
+    // required automatic-renewal consent naming the monthly price and the
+    // price after any promotional first month; both are kept on the
+    // subscription's record when it is provisioned.
+    const session = await createWithConsent(stripe, {
       mode: "subscription",
+      custom_fields: [autoRenewField(p.price)],
       ...(String(process.env.STRIPE_AUTOMATIC_TAX || "").toLowerCase() === "true" ? { automatic_tax: { enabled: true } } : {}),
       line_items: [{
         quantity: 1,
@@ -419,9 +425,12 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       subscription_data: { metadata: { product: productKey, target: target.slice(0, 180), ...(from ? { source: from } : {}) } },
       success_url: `${baseUrl}/monitors/thanks?session={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/monitors?canceled=1`,
+      // A promotion code may discount the first month. One that makes it free
+      // is a free trial: the subscriber is emailed before the first full
+      // charge (src/monitor-scheduler.js trialEndNotices).
       allow_promotion_codes: true,
-      custom_text: { submit: { message: renewalCheckoutMessage(baseUrl).slice(0, 1200) } },
-    });
+      custom_text: { submit: { message: `${monitorRenewalStatement(p.price, baseUrl)} ${renewalCheckoutMessage(baseUrl)}`.slice(0, 1200) } },
+    }, baseUrl);
     return { id: session.id, url: session.url };
   }
 
@@ -473,6 +482,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     // was read, else the stored one, else (first provisioning) active.
     await upsert(subId, (cur) => ({
       ...keepPromo(cur, promo),
+      consent: cur?.consent || consentRecordOf(session, { priceCents: MONITOR_PRODUCTS_ALL[session.metadata?.product]?.price ?? null }),
       customer: session.customer || cur?.customer || null,
       status: live || cur?.status || "active",
       ...(live ? { statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, readAt) } : {}),
@@ -559,6 +569,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
             // never overwrite a status the subscription lifecycle already set.
             stored = stored && await upsert(id, (cur) => ({
               ...keepPromo(cur, promo),
+              consent: cur?.consent || consentRecordOf(s, { priceCents: MONITOR_PRODUCTS_ALL[s.metadata?.product]?.price ?? null }),
               customer: s.customer || cur?.customer || null, status: cur?.status || "active",
               product: s.metadata?.product || cur?.product || null, target: s.metadata?.target || cur?.target || null,
               email: s.customer_details?.email || s.customer_email || cur?.email || null,

@@ -698,6 +698,35 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
       finally { await releaseLock(); }
     } finally { ticking = false; }
   }
+  // A first month a promotion code made free is a free trial: the subscriber
+  // is emailed before the first full charge, once, between TRIAL_NOTICE_LEAD_MS
+  // (7 days) and TRIAL_NOTICE_MIN_MS (3 days) before the period ends (the
+  // period end Stripe reported, else 28 days from the start). A notice that
+  // would land under three days before the charge is still sent, and logged.
+  const TRIAL_NOTICE_LEAD_MS = 7 * 86_400_000;
+  const TRIAL_NOTICE_MIN_MS = 3 * 86_400_000;
+  async function trialEndNotices(active) {
+    let sent = 0;
+    for (const rec of active) {
+      if (Number(rec?.firstPeriodCents) !== 0 || rec?.firstPeriodCents == null || !rec.email) continue;
+      const st = stateOf(rec.subId);
+      if (st.trialNoticeAt) continue;
+      const endMs = Number(rec.currentPeriodEnd) > 0 ? Number(rec.currentPeriodEnd) * 1000 : (Date.parse(rec.createdAt) || 0) + 28 * 86_400_000;
+      if (!(endMs > 0) || now() < endMs - TRIAL_NOTICE_LEAD_MS || now() >= endMs) continue;
+      const p = MONITOR_PRODUCTS[rec.product];
+      if (!p) continue;
+      if (endMs - now() < TRIAL_NOTICE_MIN_MS) log(`[monitors] trial-end notice for ${String(rec.subId).slice(0, 14)} sent under three days before the first charge`);
+      try {
+        const delivered = await notify({ to: rec.email, reason: "trial-ending", label: p.label, target: rec.target, renewsOn: new Date(endMs).toISOString().slice(0, 10), reportUrl: st.lastReportId ? `${baseUrl}/m/${st.lastReportId}` : `${baseUrl}/monitors`, ...billingOf(rec, st.lastReportId), priceCents: p.price, ...promoOf(rec) });
+        // The email sender answers false when the mail did not go out: tried again next tick.
+        if (delivered === false) throw new Error("the email was not sent");
+        st.trialNoticeAt = now();
+        sent++;
+      } catch (e) { log(`[monitors] trial-end notice not sent (${errMsg(e)}); retried next tick`); }
+    }
+    return sent;
+  }
+
   async function runTick({ force, subId }) {
     const started = now();
     const summary = { full: 0, alert: 0, checked: 0, skip: 0, error: 0, deferred: 0, active: 0 };
@@ -714,6 +743,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     }
     const active = listed.filter((r) => typeof r?.subId === "string" && r.subId && (!subId || r.subId === subId));
     summary.active = active.length;
+    if (!subId) summary.trialNotices = await trialEndNotices(active);
     for (const rec of active) {
       // Fencing: a tick whose lease was lost stops here; the next holder
       // picks up the subscriptions not yet run.

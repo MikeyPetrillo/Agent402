@@ -5927,7 +5927,8 @@ if (humanCheckoutEnabled()) {
       signDelivery: (d) => (receiptsServed() ? createCheckoutReceipt({ iss: BASE_URL, ...d }) : null),
       // A returning buyer's older sequence stops (never re-sold what they already
       // buy); the new purchase starts its own two-step sequence.
-      onDelivered: ({ sessionId, email, product, kind, label, input }) => { _followups.markRepeat(email); _followups.enqueue({ sessionId, email, product, kind, label, input }); },
+      // A buyer who turned the follow-up emails off at checkout gets none.
+      onDelivered: ({ sessionId, email, product, kind, label, input, followupsOptOut }) => { _followups.markRepeat(email); if (followupsOptOut !== true) _followups.enqueue({ sessionId, email, product, kind, label, input }); },
       onFailed: ({ email, label, refunded }) => { _followups.sendFailed({ email, label, refunded }).catch(() => {}); },
     });
   } catch (e) { console.warn("[human-checkout] init failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); _humanCheckout = null; }
