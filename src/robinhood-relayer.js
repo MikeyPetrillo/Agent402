@@ -36,7 +36,8 @@
 // Success is only a mined receipt with status 1 and the token Transfer the
 // authorization names (the package checks the event).
 
-import { createPublicClient, http, keccak256, encodeFunctionData, getAddress, isAddressEqual, parseAbi, verifyTypedData as verifyTypedDataLocal } from "viem";
+import { createPublicClient, http, keccak256, encodeFunctionData, getAddress, isAddressEqual, parseAbi, serializeTransaction, verifyTypedData as verifyTypedDataLocal } from "viem";
+import { paysL1DataFee, readL1Fee } from "./op-stack-l1-fee.js";
 const AUTH_STATE_ABI = parseAbi(["function authorizationState(address authorizer, bytes32 nonce) view returns (bool)"]);
 import { privateKeyToAccount } from "viem/accounts";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
@@ -220,7 +221,14 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
         const maxFeePerGas = gasPrice * 2n < cap ? gasPrice * 2n : cap;
         const tip = gasPrice / 10n;
         const maxPriorityFeePerGas = tip < maxFeePerGas ? tip : maxFeePerGas;
-        if (balance < gas * maxFeePerGas) throw Object.assign(new Error("own relayer balance cannot pay this settlement's gas"), { relayerRefusal: true, relayerFunds: true });
+        // On an OP Stack chain (Ink) the sender also pays the transaction's
+        // L1 data fee from its balance, priced by the chain's GasPriceOracle
+        // on the unsigned transaction; a fee that cannot be read sends nothing.
+        let l1Fee = 0n;
+        if (paysL1DataFee(network)) {
+          try { l1Fee = await readL1Fee(pub, serializeTransaction({ type: "eip1559", chainId, to: token, data, value: 0n, nonce, gas, maxFeePerGas, maxPriorityFeePerGas })); } catch (e) { throw Object.assign(new Error(`the L1 data fee could not be read (${String(e?.shortMessage || e?.message || e).slice(0, 80)}); nothing sent`), { relayerRefusal: true }); }
+        }
+        if (balance < gas * maxFeePerGas + l1Fee) throw Object.assign(new Error("own relayer balance cannot pay this settlement's gas"), { relayerRefusal: true, relayerFunds: true });
         if (!ctx.stillHeld()) throw Object.assign(new Error("relayer lock lost before signing"), { relayerRefusal: true });
         const raw = await account.signTransaction({ type: "eip1559", chainId, to: token, data, value: 0n, nonce, gas, maxFeePerGas, maxPriorityFeePerGas });
         const hash = keccak256(raw);

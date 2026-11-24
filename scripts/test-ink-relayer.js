@@ -85,6 +85,9 @@ console.log("own Ink relayer");
 const { st, server } = stubEip3009Chain({ chainId: CHAIN_ID, token: TOKEN, domain: DOMAIN });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const RPC = `http://127.0.0.1:${server.address().port}`;
+// Ink is an OP Stack chain: every transaction pays an L1 data fee too.
+const L1_FEE = 20_000_000n * 50_000n;
+st.l1Fee = L1_FEE;
 const relayerKey = generatePrivateKey();
 const relayer = privateKeyToAccount(relayerKey);
 st.ethBalance.set(relayer.address.toLowerCase(), 10n ** 16n);
@@ -289,6 +292,58 @@ await check("our relayer's nothing-sent refusal (empty wallet, under the minimum
   assert.equal(below.r, undefined);
   assert.equal(below.ownAttempts, 0);
   assert.ok(!below.ctx.__a402UnconfirmedStop);
+});
+
+await check("the L1 data fee: a balance that pays the L2 gas but not the L1 fee sends nothing; an unread fee sends nothing", async () => {
+  const p = await signedPayment(buyer);
+  const sends = st.sends.length;
+  const attempts = st.sendAttempts;
+  const saved = st.ethBalance.get(relayer.address.toLowerCase());
+  const reads = st.l1FeeReads;
+  // Enough for the relayer's own L2 bound (gas x 1.25 x maxFee = 2 x gas price) and short of the L1 fee on top.
+  st.ethBalance.set(relayer.address.toLowerCase(), (90_000n * 5n / 4n) * (st.gasPrice * 2n) + L1_FEE / 2n);
+  try {
+    const r = await mk().settle(p.payload, p.requirements);
+    assert.equal(r.success, false, JSON.stringify(r));
+    assert.equal(r.nothingSent, true, "nothing sent");
+    assert.equal(st.sendAttempts, attempts, "no transaction reached the node (the relayer refused before signing)");
+    assert.ok(st.l1FeeReads > reads, "the oracle was read");
+  } finally { st.ethBalance.set(relayer.address.toLowerCase(), saved); }
+  st.failL1Fee = true;
+  try {
+    const r = await mk().settle(p.payload, p.requirements);
+    assert.equal(r.success, false);
+    assert.equal(r.nothingSent, true);
+    assert.equal(st.sendAttempts, attempts, "an unread L1 fee sends nothing");
+    assert.equal(st.sends.length, sends);
+  } finally { st.failL1Fee = false; }
+  const ok = await mk().settle(p.payload, p.requirements);
+  assert.equal(ok.success, true, `CONTROL: with the fee read and the balance enough, the same payment settles (${JSON.stringify(ok)})`);
+});
+
+await check("the gas check counts the L1 data fee in Ink's runway and in the settlement's gas against the floor", async () => {
+  const { createRelayerGasCheck, createFloorGasCheck, runwayOf } = await import("../src/facilitator-gas.js");
+  const settings = { minRunway: 500, gasPerSettlement: 100_000, failAfter: 3, intervalMs: 60_000 };
+  const bal = st.ethBalance.get(relayer.address.toLowerCase());
+  const floorCheck = createFloorGasCheck({ network: INK, floorUsd: () => 0.001, readEthUsd: async () => 5000, settings: { share: 0.5, gasUnits: 100_000, priceTtlMs: 60_000, priceMaxAgeMs: 120_000, clearMargin: 0.2 }, log: () => {} });
+  const g = createRelayerGasCheck({ urls: [], network: INK, rpcUrl: RPC, settings, floorCheck, ownSigners: [{ label: "own relayer", signer: relayer.address, coversLowestPrice: () => true }], log: () => {} });
+  const rows = await g.check();
+  const own = rows.find((r) => r.own);
+  assert.equal(own.runway, runwayOf(bal, st.gasPrice, 100_000, L1_FEE), "the runway divides by L2 gas plus the L1 fee");
+  assert.ok(own.runway < runwayOf(bal, st.gasPrice, 100_000), "and is shorter than the L2 gas alone");
+  const floor = rows.find((r) => r.facilitator === "price floor");
+  const want = (Number(st.gasPrice * 100_000n + L1_FEE) / 1e18) * 5000;
+  assert.ok(Math.abs(floor.gasUsd - want) < 1e-6, `the floor row prices L2 gas plus the L1 fee (${floor.gasUsd} vs ${want})`);
+  st.failL1Fee = true;
+  try {
+    const g2 = createRelayerGasCheck({ urls: [], network: INK, rpcUrl: RPC, settings: { ...settings, failAfter: 1 }, ownSigners: [{ label: "own relayer", signer: relayer.address }], log: () => {} });
+    const r2 = (await g2.check()).find((r) => r.own);
+    assert.equal(r2.status, "unread", "an unread L1 fee leaves the runway unknown, never the L2 figure alone");
+  } finally { st.failL1Fee = false; }
+  // Robinhood (Arbitrum-style, no OP Stack fee) never reads the oracle.
+  const reads = st.l1FeeReads;
+  await createRelayerGasCheck({ urls: [], network: "eip155:4663", rpcUrl: RPC, settings, ownSigners: [{ label: "own relayer", signer: relayer.address }], log: () => {} }).check();
+  assert.equal(st.l1FeeReads, reads, "no oracle read off an OP Stack chain");
 });
 
 // ---------------------------------------------------------------- gas and keys

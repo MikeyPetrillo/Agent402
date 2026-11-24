@@ -30,6 +30,8 @@ const MULTI_ABI = parseAbi(["function tryAggregate(bool requireSuccess, (address
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** The stub chain for `chainId`, whose token is `token` with EIP-712 `domain`. */
+const ORACLE = "0x420000000000000000000000000000000000000F";
+const ORACLE_ABI = parseAbi(["function getL1Fee(bytes _data) view returns (uint256)", "function getL1FeeUpperBound(uint256 _unsignedTxSize) view returns (uint256)"]);
 export function stubEip3009Chain({ chainId, token, domain }) {
   const CHAIN_ID = chainId, TOKEN = getAddress(token), DOMAIN = domain, OTHER = STUB_OTHER;
   const st = {
@@ -46,6 +48,12 @@ export function stubEip3009Chain({ chainId, token, domain }) {
     refuseSendWith: null,
     // A direct authorizationState read fails with an RPC error.
     failAuthState: false,
+    // An OP Stack chain's L1 data fee per transaction (GasPriceOracle
+    // getL1Fee and getL1FeeUpperBound answer it; a send pays it from the
+    // sender's balance). null: no oracle on this chain (a read reverts).
+    l1Fee: null,
+    failL1Fee: false,
+    l1FeeReads: 0,
   };
   const lc = (a) => String(a).toLowerCase();
   const bal = (a) => st.balances.get(lc(a)) || 0n;
@@ -108,6 +116,12 @@ export function stubEip3009Chain({ chainId, token, domain }) {
       case "eth_call": {
         const { to, data } = params[0];
         if (st.failAuthState && isAddressEqual(to, TOKEN) && decodeFunctionData({ abi: TOKEN_ABI, data }).functionName === "authorizationState") throw Object.assign(new Error("upstream unavailable"), { rpcCode: -32603 });
+        if (isAddressEqual(to, ORACLE)) {
+          st.l1FeeReads++;
+          if (st.failL1Fee || st.l1Fee === null) throw Object.assign(new Error("execution reverted"), { rpcCode: 3 });
+          const { functionName } = decodeFunctionData({ abi: ORACLE_ABI, data });
+          return encodeFunctionResult({ abi: ORACLE_ABI, functionName, result: st.l1Fee });
+        }
         if (isAddressEqual(to, MULTICALL3)) {
           const { args } = decodeFunctionData({ abi: MULTI_ABI, data });
           const out = [];
@@ -129,7 +143,7 @@ export function stubEip3009Chain({ chainId, token, domain }) {
         const expected = st.nonces.get(lc(from)) || 0;
         if (tx.chainId !== CHAIN_ID) throw Object.assign(new Error("invalid chain id"), { rpcCode: -32000 });
         if (tx.nonce !== expected) { st.refusedSends++; throw Object.assign(new Error(tx.nonce < expected ? "nonce too low" : "nonce too high"), { rpcCode: -32000 }); }
-        const gasCost = tx.gas * tx.maxFeePerGas;
+        const gasCost = tx.gas * tx.maxFeePerGas + (st.l1Fee || 0n);
         if ((st.ethBalance.get(lc(from)) || 0n) < gasCost) throw Object.assign(new Error("insufficient funds for gas * price + value"), { rpcCode: -32000 });
         st.nonces.set(lc(from), expected + 1);
         st.sends.push({ hash, nonce: tx.nonce, from });
