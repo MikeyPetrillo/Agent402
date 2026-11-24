@@ -236,6 +236,8 @@ t node scripts/test-sync-count-floor.js
 t node scripts/test-typed-counts.js
 # Class guard, tests that miss a mutation: each mutation a review found (survived or caught) is applied in an export copy and its suite must fail there; each suite first passes unmutated (about 40 s, offline)
 t node scripts/mutation-smoke.js
+# mutation-smoke's verdict: a catch is a numeric non-zero exit with a failing check; a timeout, a kill or a crash with none is not (offline)
+t node scripts/test-mutation-smoke-verdict.js
 # Self-check semantic invariants are meaningful (good passes, broken fails)
 t node scripts/test-invariants.js
 # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)

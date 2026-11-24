@@ -29,7 +29,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync, realpathSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -59,6 +59,8 @@ export const MUTATIONS = [
     find: 'ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0), ', replace: 'ok(Object.entries(counts).every(([k, n]) => k === "fred" ? n === 0 : n > 0) && counts.coingecko >= 24, ', suite: "test-typed-counts.js" },
   { id: "new-unscoped-absolute", origin: "batch 8 (the class of batches 6 and 7: a claim broader than the code)", file: "wiki/FAQ.md",
     find: "so they are never charged.", replace: "so they are never charged. A refund always arrives within a day.", suite: "test-claim-registry.js" },
+  { id: "code-mail-refusal-keeps-counts", origin: "batch 8 devil (a refused ask kept its counts)", file: "src/mcp-oauth.js",
+    find: "add(n, k, -1, w)", replace: "add(n, k, 0, w)", suite: "test-limiter-identity.js" },
   { id: "unregistered-limiter", origin: "batch 8 (a new limiter with no identity named)", file: "src/answer-share.js",
     find: 'createLimiter("answer-share-card"', replace: 'createLimiter("answer-share-thumb"', suite: "test-limiter-identity.js" },
   { id: "bea-non-endorsement", origin: "batch 7, caught", file: "src/tools/us-macro-series.js",
@@ -67,6 +69,34 @@ export const MUTATIONS = [
     find: "reported by Stripe. ${FRAUD_WARNING_RULE}`} One buyer", replace: "reported by Stripe.`} One buyer", suite: "test-credits-terms.js" },
 ];
 
+// A suite's run: its exit status (null when it was killed, a timeout among
+// them), whether it timed out, and its failing checks (FAIL, ASSERT FAIL or not ok lines,
+// or an uncaught assertion).
+export function runSuite(suite, { cwd, timeoutMs = 300_000 } = {}) {
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, [join("scripts", suite)], { cwd, encoding: "utf8", timeout: timeoutMs, env: { ...process.env, CI: process.env.CI || "" } });
+  const out = `${r.stdout || ""}${r.stderr || ""}`;
+  const timedOut = r.error?.code === "ETIMEDOUT" || (r.status === null && r.signal === "SIGTERM" && Date.now() - t0 >= timeoutMs);
+  return { status: r.status, signal: r.signal || null, timedOut, ms: Date.now() - t0, fails: out.split("\n").filter((l) => /^\s*(?:ASSERT\s+)?(?:FAIL|not ok)\b|^\s*AssertionError\b|\bERR_ASSERTION\b/.test(l)).length };
+}
+
+/**
+ * Whether a suite's run under a mutation caught it: only a numeric non-zero
+ * exit with at least one failing check. A timeout, a kill (status null) or a
+ * crash that names no failing check is its own failure, never a catch.
+ */
+export function mutationVerdict(r) {
+  if (r.timedOut) return { caught: false, why: `the suite timed out after ${Math.round(r.ms / 1000)} s: a timeout is not a catch` };
+  if (typeof r.status !== "number") return { caught: false, why: `the suite was killed (${r.signal || "no exit status"}): a kill is not a catch` };
+  if (r.status === 0) return { caught: false, why: "the suite misses it" };
+  if (!(r.fails > 0)) return { caught: false, why: `the suite exited ${r.status} with no failing check: a crash is not a catch` };
+  return { caught: true, why: "" };
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+if (isMain) main();
+
+function main() {
 const args = process.argv.slice(2);
 const only = args.flatMap((a, i) => (a === "--only" ? [args[i + 1]] : []));
 if (args.includes("--list")) { for (const m of MUTATIONS) console.log(`${m.id}\t${m.file}\t${m.suite}\t${m.origin}`); process.exit(0); }
@@ -91,17 +121,11 @@ const git = (...a) => execFileSync("git", a, { cwd: COPY, stdio: "ignore", env: 
 git("init", "-q"); git("add", "-A"); git("commit", "-q", "--no-verify", "--no-gpg-sign", "-m", "export");
 console.log(`export copy: ${tracked.length} tracked files`);
 
-const runSuite = (suite) => {
-  const t0 = Date.now();
-  const r = spawnSync(process.execPath, [join("scripts", suite)], { cwd: COPY, encoding: "utf8", timeout: 300_000, env: { ...process.env, CI: process.env.CI || "" } });
-  const out = `${r.stdout || ""}${r.stderr || ""}`;
-  return { status: r.status, ms: Date.now() - t0, fails: out.split("\n").filter((l) => /^\s*(FAIL|not ok)\b/.test(l)).length };
-};
 
 // Controls: every suite passes in the copy before anything is mutated.
 const controls = new Map();
 for (const suite of [...new Set(picked.map((m) => m.suite))]) {
-  const r = runSuite(suite);
+  const r = runSuite(suite, { cwd: COPY });
   controls.set(suite, r.status === 0);
   ok(r.status === 0, `control: ${suite} passes unmutated in the copy (exit ${r.status}, ${Math.round(r.ms / 1000)} s)`);
 }
@@ -114,10 +138,12 @@ for (const m of picked) {
   if (count !== 1 || !controls.get(m.suite)) continue;
   writeFileSync(p, before.replace(m.find, m.replace));
   try {
-    const r = runSuite(m.suite);
-    ok(r.status !== 0, `${m.id}: ${m.suite} fails under the mutation (exit ${r.status}, ${r.fails} failing checks, ${Math.round(r.ms / 1000)} s; ${m.origin})${r.status === 0 ? `: the suite misses it; add the assert that catches it to ${m.suite}` : ""}`);
+    const r = runSuite(m.suite, { cwd: COPY });
+    const v = mutationVerdict(r);
+    ok(v.caught, `${m.id}: ${m.suite} fails under the mutation (exit ${r.status}, ${r.fails} failing checks, ${Math.round(r.ms / 1000)} s; ${m.origin})${v.caught ? "" : `: ${v.why}${r.status === 0 ? `; add the assert that catches it to ${m.suite}` : ""}`}`);
   } finally { writeFileSync(p, before); }
 }
 
 console.log(`\nmutation-smoke: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+}
