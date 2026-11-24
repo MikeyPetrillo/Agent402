@@ -109,6 +109,65 @@ export function plainToolName(name) {
   return resolveListedName(plain) === name ? plain : name;
 }
 
+// A listed dotted name standing as its own token in text: not inside a
+// longer dotted word, a host name or a path (a "/mcp#web.search" listing id).
+const DOTTED_IN_TEXT = new RegExp(
+  `(?<![A-Za-z0-9_./#-])(${[...LISTED_DOTTED].sort((a, b) => b.length - a.length).map((n) => n.replace(/\./g, "\\.")).join("|")})(?!\\.?[A-Za-z0-9_])`,
+  "g",
+);
+
+/**
+ * Text (or any JSON value's strings) with every listed dotted tool name it
+ * names put in its plain spelling (plainToolName), for the answers a
+ * plain-names listing (?tool_names=underscore) gives: a host that registered
+ * catalog_call is never told to call catalog.call. Object keys are kept.
+ */
+export function plainToolText(value, depth = 0) {
+  if (typeof value === "string") return value.includes(".") ? value.replace(DOTTED_IN_TEXT, (m) => plainToolName(m)) : value;
+  if (depth > 32 || !value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((v) => plainToolText(v, depth + 1));
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) out[k] = plainToolText(v, depth + 1);
+  return out;
+}
+
+/** The listed tools whose own answers are guidance (not a tool's data): their text is renamed in a plain listing. */
+export const GUIDANCE_TOOL_NAMES = new Set([...Object.values(META_MCP_NAMES), "decide.feedback", "decide.plan"].filter((n) => n !== "catalog.call"));
+
+const proseBlocks = (r) => ({ ...r, content: r.content.map((b) => (b?.type === "text" && typeof b.text === "string" && !/^\s*[{[]/.test(b.text) ? { ...b, text: plainToolText(b.text) } : b)) });
+function plainCallResult(req, r) {
+  if (!r || typeof r !== "object") return r;
+  if (GUIDANCE_TOOL_NAMES.has(resolveListedName(req?.params?.name))) {
+    const { _meta, ...rest } = r;
+    return { ...plainToolText(rest), ...(_meta !== undefined ? { _meta } : {}) };
+  }
+  return r.isError && Array.isArray(r.content) ? proseBlocks(r) : r;
+}
+
+/**
+ * A request handler for a plain-names listing (?tool_names=underscore): every
+ * tool is named in its plain spelling everywhere it answers (the listing's
+ * names, titles, descriptions and schemas, the prompts, a thrown error's
+ * message, and the text of the tools whose answers are guidance). A tool's own
+ * data (a catalog.call result, a flagship's answer) is returned as the tool
+ * gave it, and a payment offer is never touched: _meta, an error's data and a
+ * JSON text block of a refusal (the x402 PaymentRequired a client signs
+ * against) stay as built.
+ */
+export function plainNamesHandler(method, handler) {
+  return async (req, ctx) => {
+    try {
+      const r = await handler(req, ctx);
+      return method === "tools/call" ? plainCallResult(req, r) : plainToolText(r);
+    } catch (e) {
+      if (e && typeof e.message === "string") e.message = plainToolText(e.message);
+      throw e;
+    }
+  };
+}
+
 /**
  * Resolve any CallTool name to the canonical listed dotted name: a prior
  * public alias (MCP_CALL_ALIASES), or the snake form of a listed dotted name

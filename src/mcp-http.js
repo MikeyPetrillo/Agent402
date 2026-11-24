@@ -134,6 +134,8 @@ import {
   MCP_CALL_ALIASES,
   resolveListedName,
   plainToolName,
+  plainToolText,
+  plainNamesHandler,
   PLAIN_TOOL_NAMES_VALUE,
   FLAGSHIP_OPEN_WORLD,
   FLAGSHIP_WRITERS,
@@ -747,12 +749,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   }
 
   function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false, grant = null, plainNames = false } = {}) {
+    const plainText = (t) => (plainNames ? plainToolText(t) : t);
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
         version: VERSION,
         title: "Agent402",
-        description: mcpServerDescription({ mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed(), stock: stockDataEnabled() }),
+        description: plainText(mcpServerDescription({ mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed(), stock: stockDataEnabled() })),
         websiteUrl: baseUrl || MCP_SERVER_WEBSITE,
       },
       {
@@ -774,9 +777,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // paid call here cannot be settled at all.
           ...(mppLoopback ? { experimental: { payment: { methods: mcpPaymentMethods() } } } : {}),
         },
-        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], stock: flagshipSet.has("stock-quote"), mpp: payMpp, x402: payX402, mppOffered: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed() }),
+        instructions: plainText(profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], stock: flagshipSet.has("stock-quote"), mpp: payMpp, x402: payX402, mppOffered: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed() })),
       },
     );
+    // A plain-names listing (?tool_names=underscore) names every tool in its
+    // plain spelling everywhere it answers (plainNamesHandler).
+    if (plainNames) {
+      const set = server.setRequestHandler.bind(server);
+      server.setRequestHandler = (method, handler) => set(method, plainNamesHandler(method, handler));
+    }
 
     // Skill packs are exposed as MCP prompts: each pack becomes a discoverable
     // prompt the client can render in a slash menu (Claude Desktop, Cursor,

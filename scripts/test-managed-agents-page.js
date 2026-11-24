@@ -21,7 +21,7 @@ import { PLATFORM_INTEGRATIONS, listedPlatformIntegrations } from "../src/platfo
 import { integrationSlugs } from "../src/integration-pages.js";
 import { pageLastmod, PAGE_SOURCES } from "../src/page-dates.js";
 import { MAX_CALLS_PER_BURST, MAX_CALLS_PER_WINDOW } from "../src/rate-limit.js";
-import { plainToolName, resolveListedName, PLAIN_TOOL_NAMES_VALUE } from "../src/mcp-flagship.js";
+import { plainToolName, resolveListedName, PLAIN_TOOL_NAMES_VALUE, plainNamesHandler } from "../src/mcp-flagship.js";
 
 let pass = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); pass++; };
@@ -124,6 +124,21 @@ async function listings(srv) {
   return { get, page, index, sitemaps, llms };
 }
 
+// The plain-names handler in process: a thrown error's message is renamed and
+// its data kept; a refusal keeps its _meta and a JSON text block (a payment
+// offer) as built; a tool's own data is never renamed.
+{
+  const offer = JSON.stringify({ x402Version: 2, resource: { description: "web.search via catalog.call" } });
+  const thrown = await plainNamesHandler("tools/call", async () => { const e = new Error("Payment Required: see payment.info"); e.data = { note: "payment.info" }; throw e; })({ params: { name: "catalog_call" } }).catch((e) => e);
+  ok(thrown.message === "Payment Required: see payment_info" && thrown.data.note === "payment.info", `a thrown error's message is renamed, its data kept (${thrown.message})`);
+  const refusal = await plainNamesHandler("tools/call", async () => ({ isError: true, content: [{ type: "text", text: offer }, { type: "text", text: "Pay it; see payment.info." }], _meta: { m: "catalog.call" } }))({ params: { name: "catalog_call" } });
+  ok(refusal.content[0].text === offer && refusal.content[1].text === "Pay it; see payment_info." && refusal._meta.m === "catalog.call", "a refusal: prose renamed, the JSON offer and _meta kept");
+  const data = await plainNamesHandler("tools/call", async () => ({ content: [{ type: "text", text: "page text naming web.search" }] }))({ params: { name: "catalog_call" } });
+  ok(data.content[0].text === "page text naming web.search", "a tool's own data is returned as the tool gave it");
+  const guide = await plainNamesHandler("tools/call", async () => ({ content: [{ type: "text", text: "{\"usage\": \"catalog.call\"}" }], structuredContent: { usage: "catalog.call" }, _meta: { m: "catalog.call" } }))({ params: { name: "catalog_search" } });
+  ok(guide.content[0].text.includes("catalog_call") && guide.structuredContent.usage === "catalog_call" && guide._meta.m === "catalog.call", "a guidance tool's text and structured answer are renamed, _meta kept");
+}
+
 const srv = await bootServer({ stores: "managed-agents-page", env: { ...BOOT_ENV, MANAGED_AGENTS_PAGE: "" } });
 try {
   const { get, page, index, sitemaps, llms } = await listings(srv);
@@ -142,8 +157,35 @@ try {
     return r.json();
   };
   const init = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "managed-agents-test", version: "0" } };
-  await rpc("/mcp?tool_names=underscore", "initialize", init);
-  const plain = (await rpc("/mcp?tool_names=underscore", "tools/list", {}, 2)).result.tools.map((x) => x.name);
+  const initPlain = await rpc("/mcp?tool_names=underscore", "initialize", init);
+  const initDotted = await rpc("/mcp", "initialize", init);
+  const plainTools = (await rpc("/mcp?tool_names=underscore", "tools/list", {}, 2)).result.tools;
+  const dottedTools = (await rpc("/mcp", "tools/list", {}, 2)).result.tools;
+  const plain = plainTools.map((x) => x.name);
+  // Every dotted tool name the default listing lists, found as its own token
+  // (not inside a host name or a longer dotted word).
+  const dottedNames = dottedTools.map((x) => x.name).filter((n) => n.includes("."));
+  const tokenOf = (n) => new RegExp(`(?<![A-Za-z0-9_./#-])${n.replace(/\./g, "\\.")}(?!\\.?[A-Za-z0-9_])`, "g");
+  const namedIn = (v) => { const t = typeof v === "string" ? v : JSON.stringify(v); return dottedNames.filter((n) => tokenOf(n).test(t)); };
+  ok(dottedNames.length >= 10 && namedIn(dottedTools.map(({ name, ...rest }) => rest)).length > 0, `the default listing's text names dotted tools (${namedIn(dottedTools.map(({ name, ...rest }) => rest)).join(", ")})`);
+  for (const t of plainTools) { const left = namedIn(t); ok(left.length === 0, `plain listing: ${t.name} (name, title, description, schemas) names no dotted tool (${left.join(", ") || "none"})`); }
+  // The plain listing is the default one with each dotted tool name in its plain spelling, nothing else changed.
+  const swapped = JSON.parse(dottedNames.reduce((t, n) => t.replace(tokenOf(n), n.replace(/\./g, "_")), JSON.stringify(dottedTools)));
+  assert.deepEqual(plainTools, swapped, "the plain listing differs from the default only in the tool names"); pass++;
+  ok(namedIn(initPlain.result).length === 0 && namedIn(initDotted.result).length > 0, `initialize instructions: plain names under the query (${namedIn(initPlain.result).join(", ") || "none"}), dotted without it`);
+  const plainAnswers = {
+    "server_describe": await rpc("/mcp?tool_names=underscore", "tools/call", { name: "server_describe", arguments: {} }, 20),
+    "payment_info": await rpc("/mcp?tool_names=underscore", "tools/call", { name: "payment_info", arguments: {} }, 21),
+    "catalog_search": await rpc("/mcp?tool_names=underscore", "tools/call", { name: "catalog_search", arguments: { query: "hash" } }, 22),
+    "catalog_search (no query)": await rpc("/mcp?tool_names=underscore", "tools/call", { name: "catalog_search", arguments: {} }, 23),
+    "catalog_call (unknown slug)": await rpc("/mcp?tool_names=underscore", "tools/call", { name: "catalog_call", arguments: { slug: "no-such-tool-xyz" } }, 24),
+    "unknown tool": await rpc("/mcp?tool_names=underscore", "tools/call", { name: "no_such_tool", arguments: {} }, 25),
+    "catalog_call (a paid tool, unpaid)": await rpc("/mcp?tool_names=underscore", "tools/call", { name: "catalog_call", arguments: { slug: "search", params: { q: "x" } } }, 27),
+  };
+
+  for (const [what, r] of Object.entries(plainAnswers)) { const left = namedIn(r); ok(left.length === 0 && (r.result || r.error), `plain answer ${what} names no dotted tool (${left.join(", ") || "none"})`); }
+  const dottedDescribe = await rpc("/mcp", "tools/call", { name: "server.describe", arguments: {} }, 26);
+  ok(namedIn(dottedDescribe.result).length > 0, `CONTROL: server.describe without the query names dotted tools (${namedIn(dottedDescribe.result).slice(0, 4).join(", ")})`);
   ok(plain.length > 0 && plain.every((n) => PLAIN.test(n)), `?tool_names=underscore lists every tool under a plain name (${plain.filter((n) => !PLAIN.test(n)).join(", ") || "all plain"})`);
   ok(DISCOVERY_TOOLS.every((d) => plain.includes(plainToolName(d))) && plain.includes("catalog_call"), "the names the page enables are listed");
   const dotted = (await rpc("/mcp", "tools/list", {}, 3)).result.tools.map((x) => x.name);
