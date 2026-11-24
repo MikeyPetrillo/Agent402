@@ -150,6 +150,7 @@ ok(g1.status === "generating", "a paid session starts generating");
 await hc.fulfill("cs_paid"); // a concurrent poll must not double-generate
 const finalPaid = await settle("cs_paid");
 ok(finalPaid.status === "done" && /REPORT/.test(finalPaid.report), "the paid report completes and is stored");
+ok(finalPaid.consent && typeof finalPaid.consent === "object" && "terms" in finalPaid.consent && typeof finalPaid.consent.at === "string" && /^cs_/.test(finalPaid.consent.session || ""), `the report record keeps the consent its checkout recorded (${JSON.stringify(finalPaid.consent)})`);
 ok(genCalls === 1, "generate ran exactly ONCE despite two fulfill calls (idempotent)");
 ok(finalPaid._ctx === undefined && sales.length === 1 && sales[0].product === "dossier" && sales[0].priceUsd === HUMAN_PRODUCTS["dossier"].price / 100 && sales[0].paymentIntent === "pi_ok", "a delivered report fires onSale once (accounting) and the record carries no generator context");
 await hc.fulfill("cs_paid");

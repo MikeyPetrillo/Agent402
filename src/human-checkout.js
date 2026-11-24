@@ -84,7 +84,7 @@ import { priceUsdFor as agentPriceUsdFor } from "./report-tiers.js";
 import { randomBytes } from "node:crypto";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
 import { cleanSaleSource } from "./sale-source.js";
-import { createWithConsent, REPORT_REFUND_LINE, FOLLOWUPS_FIELD, START_NOW_FIELD, followupsOptedOut, startNowAgreed } from "./checkout-consent.js";
+import { createWithConsent, REPORT_REFUND_LINE, FOLLOWUPS_FIELD, START_NOW_FIELD, followupsOptedOut, startNowAgreed, consentRecordOf } from "./checkout-consent.js";
 import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
 
 // ---- Public reports -------------------------------------------------------
@@ -1126,6 +1126,9 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
             ...(typeof bundle.disclaimer === "string" && bundle.disclaimer ? { disclaimer: bundle.disclaimer } : {}),
             // The grounding check's sentence (src/report-grounding.js), when it has one.
             ...(typeof bundle.groundingNote === "string" && bundle.groundingNote ? { groundingNote: bundle.groundingNote } : {}),
+            // The consent the checkout recorded (terms accepted, start at
+            // once), kept with the purchase record as /privacy says.
+            consent: consentRecordOf(session),
             at: new Date(now()).toISOString(),
           };
           // A paid purchase gets a signed receipt over the checkout and the
