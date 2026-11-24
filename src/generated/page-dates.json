@@ -38,7 +38,7 @@
     "src/programmatic-seeds.js": "2026-08-22",
     "src/proof.js": "2026-11-18",
     "src/quickstart.js": "2026-11-23",
-    "src/revenue-live.js": "2026-11-23",
+    "src/revenue-live.js": "2026-11-24",
     "src/scorecard.js": "2026-11-18",
     "src/sdk-playground.js": "2026-11-18",
     "src/search-landings.js": "2026-11-23",
@@ -47,7 +47,7 @@
     "src/seo.js": "2026-11-24",
     "src/server.js": "2026-11-24",
     "src/skill-md.js": "2026-11-23",
-    "src/skills.js": "2026-11-23",
+    "src/skills.js": "2026-11-24",
     "src/speech-page.js": "2026-11-22",
     "src/stable-error-code.js": "2026-11-20",
     "src/start-page.js": "2026-11-23",
@@ -85,7 +85,7 @@
     "src/tools/crypto-screens-kit.js": "2026-11-24",
     "src/tools/crypto-signals-kit.js": "2026-11-23",
     "src/tools/cve-kit.js": "2026-11-24",
-    "src/tools/data-kit.js": "2026-11-23",
+    "src/tools/data-kit.js": "2026-11-24",
     "src/tools/databento.js": "2026-11-18",
     "src/tools/date-time-kit.js": "2026-11-09",
     "src/tools/decide-kit.js": "2026-11-24",
@@ -105,7 +105,7 @@
     "src/tools/email-guard-mime.js": "2026-11-23",
     "src/tools/embed-kit.js": "2026-11-21",
     "src/tools/enrich-kit.js": "2026-11-23",
-    "src/tools/exchange-calendars.js": "2026-11-18",
+    "src/tools/exchange-calendars.js": "2026-11-24",
     "src/tools/extract.js": "2026-11-23",
     "src/tools/feedback-kit.js": "2026-11-24",
     "src/tools/fetch-guard.js": "2026-11-24",
@@ -119,8 +119,8 @@
     "src/tools/fund-report-kit.js": "2026-11-24",
     "src/tools/gov-kit.js": "2026-11-24",
     "src/tools/hidden-content.js": "2026-10-19",
-    "src/tools/holiday-source.js": "2026-11-22",
-    "src/tools/holidays-kit.js": "2026-11-23",
+    "src/tools/holiday-source.js": "2026-11-24",
+    "src/tools/holidays-kit.js": "2026-11-24",
     "src/tools/html-kit.js": "2026-11-21",
     "src/tools/html-parse-ops.js": "2026-10-19",
     "src/tools/html-pool.js": "2026-11-22",
@@ -144,7 +144,7 @@
     "src/tools/lending-rates-kit.js": "2026-11-21",
     "src/tools/linkedin-article-kit.js": "2026-11-24",
     "src/tools/llm-context-kit.js": "2026-11-21",
-    "src/tools/llm-gateway-kit.js": "2026-11-23",
+    "src/tools/llm-gateway-kit.js": "2026-11-24",
     "src/tools/llm-gemini-kit.js": "2026-11-21",
     "src/tools/llm-images-fast-kit.js": "2026-11-24",
     "src/tools/llm-kit.js": "2026-11-17",
@@ -157,6 +157,7 @@
     "src/tools/markdown-pool.js": "2026-11-24",
     "src/tools/markdown-render.js": "2026-11-09",
     "src/tools/markdown-worker.js": "2026-11-10",
+    "src/tools/market-calendar-data.js": "2026-11-24",
     "src/tools/mcp-package-kit.js": "2026-11-23",
     "src/tools/media-kit.js": "2026-11-23",
     "src/tools/memory.js": "2026-11-13",
@@ -200,7 +201,7 @@
     "src/tools/safe-regex.js": "2026-10-21",
     "src/tools/sanctions-core.js": "2026-11-12",
     "src/tools/sanctions-kit.js": "2026-11-24",
-    "src/tools/search.js": "2026-11-23",
+    "src/tools/search.js": "2026-11-24",
     "src/tools/seller-dossier.js": "2026-11-21",
     "src/tools/seller-payability-kit.js": "2026-11-24",
     "src/tools/seller-trust.js": "2026-11-22",
@@ -242,7 +243,7 @@
     "src/what-is-mpp.js": "2026-11-23",
     "src/what-is-x402.js": "2026-11-23",
     "src/wholesale-page.js": "2026-11-23",
-    "src/wholesale.js": "2026-11-20",
+    "src/wholesale.js": "2026-11-24",
     "src/workflows.js": "2026-11-18",
     "src/x402-101.js": "2026-11-23",
     "src/x402-test-page.js": "2026-11-23",
@@ -286,13 +287,13 @@
     "wiki/Self-Hosting.md": "2026-11-23",
     "wiki/Seller-Reputation.md": "2026-11-21",
     "wiki/Sessions-and-Channels.md": "2026-11-22",
-    "wiki/Skill-Packs.md": "2026-11-23",
+    "wiki/Skill-Packs.md": "2026-11-24",
     "wiki/Solana.md": "2026-11-23",
     "wiki/Stellar.md": "2026-11-23",
     "wiki/TTS.md": "2026-11-23",
     "wiki/Tempo.md": "2026-11-23",
     "wiki/Tollbooth-for-Agencies.md": "2026-10-15",
-    "wiki/Tool-Catalog.md": "2026-11-23",
+    "wiki/Tool-Catalog.md": "2026-11-24",
     "wiki/Troubleshooting.md": "2026-11-23",
     "wiki/Upgrading.md": "2026-11-23",
     "wiki/Why-Pay-Here.md": "2026-11-23",
@@ -601,7 +602,7 @@
     },
     "/skills/financial-research": {
       "published": "2026-06-19",
-      "modified": "2026-10-14"
+      "modified": "2026-11-24"
     },
     "/skills/fixed-income-desk": {
       "published": "2026-07-06",
@@ -609,14 +610,10 @@
     },
     "/skills/forecasting-bake-off": {
       "published": "2026-06-21",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/skills/fraud-signals": {
       "published": "2026-06-21",
-      "modified": "2026-11-23"
-    },
-    "/skills/fred-snapshot": {
-      "published": "2026-07-04",
       "modified": "2026-11-23"
     },
     "/skills/fx-monitor": {
@@ -673,6 +670,10 @@
     },
     "/skills/macro-economics": {
       "published": "2026-06-19",
+      "modified": "2026-11-24"
+    },
+    "/skills/macro-snapshot": {
+      "published": "2026-11-24",
       "modified": "2026-11-24"
     },
     "/skills/markdown-convert": {
@@ -733,7 +734,7 @@
     },
     "/skills/search-and-cite": {
       "published": "2026-06-21",
-      "modified": "2026-11-08"
+      "modified": "2026-11-24"
     },
     "/skills/sec-filings-deep-dive": {
       "published": "2026-06-20",
@@ -777,7 +778,7 @@
     },
     "/skills/trend-analysis": {
       "published": "2026-06-20",
-      "modified": "2026-11-23"
+      "modified": "2026-11-24"
     },
     "/skills/trip-planner": {
       "published": "2026-06-21",
@@ -1009,7 +1010,6 @@
     "forecast-holt-winters": "src/tools/forecast-kit.js",
     "forecast-naive": "src/tools/forecast-kit.js",
     "forecast-ses": "src/tools/forecast-kit.js",
-    "fred-series": "src/tools/macro-kit.js",
     "fund-report": "src/tools/fund-report-kit.js",
     "fund-report-max": "src/tools/fund-report-kit.js",
     "funding-screener": "src/tools/crypto-screens-kit.js",
@@ -1296,6 +1296,7 @@
     "unshorten-url": "src/tools/web-kit.js",
     "url-code": "src/tools/kit.js",
     "url-parse": "src/tools/kit.js",
+    "us-macro-series": "src/tools/macro-kit.js",
     "usdc-balance": "src/tools/x402-kit.js",
     "user-agent": "src/tools/kit.js",
     "uuid": "src/tools/kit.js",
@@ -1400,7 +1401,6 @@
     "fixed-income-desk": "src/skills.js",
     "forecasting-bake-off": "src/skills.js",
     "fraud-signals": "src/skills.js",
-    "fred-snapshot": "src/skills.js",
     "fx-monitor": "src/skills.js",
     "gas-optimizer": "src/skills.js",
     "inflation-check": "src/skills.js",
@@ -1415,6 +1415,7 @@
     "macro-context": "src/skills.js",
     "macro-dashboard": "src/skills.js",
     "macro-economics": "src/skills.js",
+    "macro-snapshot": "src/skills.js",
     "markdown-convert": "src/skills.js",
     "market-brief": "src/skills.js",
     "media-pipeline": "src/skills.js",

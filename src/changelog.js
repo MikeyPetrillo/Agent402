@@ -63,6 +63,9 @@ const ENTRIES = [
       "Tools: market-calendar compiles its calendars from public sources (NYSE Rules 7.2 and 7.34 as filed with the SEC, GOV.UK bank holidays, the Cabinet Office national holidays, DATA.GOV.HK and the exchange_calendars rules) and every answer names them, carries their credits and says the facts are not exchange data. The HKEX day has its 12:00 to 13:00 break.",
       "Tools: fx-rate, fx-historical, fx-timeseries and fx-dashboard say before payment and in every answer that the ECB reference rates are available free of charge at ecb.europa.eu, and each answer says whether its rate is the ECB's own or computed from it (`rateBasis`).",
       "Tools: settlement-calendar cites each rail's rule to public sources and carries their credits; CHAPS answers no longer state operating hours.",
+      "Tools: search-suggest keeps each prefix's suggestions for a day, so a repeated prefix is answered without a new read, and every answer carries the license link and says it is not affiliated with the Wikimedia Foundation.",
+      "Tools: tts, tts-lite, tts-hd, v1-audio-speech and dub say before payment and in every answer that the voice is AI-generated (`aiGeneratedVoice`, or the X-AI-Generated header on audio bytes).",
+      "Tools: earthquakes, the openFDA tools and geo-lookup answers carry the credit line their sources ask for.",
     ],
   },
   {
