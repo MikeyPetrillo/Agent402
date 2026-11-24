@@ -24,7 +24,7 @@ import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
 import { ALGORAND_MAINNET_CAIP2 } from "./avm-network.js";
 import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
-import { confirmStellarPayment, settlePayerOf, settleTxOf, settleWithStellarFallback, stellarSignedPaymentOf } from "./stellar-confirm.js";
+import { confirmStellarPayment, settlePayerOf, settleTxOf, settleWithStellarFallback, stellarAddressCredentialsOf, stellarSignedPaymentOf } from "./stellar-confirm.js";
 import { clarifySvmSettleFailure } from "./svm-clarify.js";
 import {
   bazaarResourceServerExtension,
@@ -4957,16 +4957,21 @@ async function stellarAuthExpiryLedgerOf(payload) {
     const xdr = payload?.payload?.transaction;
     if (typeof xdr !== "string" || !xdr || xdr.length > 40_000) return null;
     const sdk = await import("@stellar/stellar-sdk");
-    const env = sdk.xdr.TransactionEnvelope.fromXDR(xdr, "base64");
-    const kind = env.switch().name;
-    const tx = kind === "envelopeTypeTx" ? env.v1().tx() : kind === "envelopeTypeTxFeeBump" ? env.feeBump().tx().innerTx().v1().tx() : null;
+    // Node's base64 reader, as stellar-sdk 16 decoded it (17 refuses a
+    // character outside the alphabet; the other Stellar readers decode the same way).
+    const bytes = Buffer.from(xdr, "base64");
+    if (!bytes.length) return null;
+    const env = sdk.xdr.TransactionEnvelope.fromXdr(bytes);
+    const kind = env.type;
+    const inner = kind === "envelopeTypeTxFeeBump" ? env.feeBump.tx.innerTx : null;
+    const tx = kind === "envelopeTypeTx" ? env.v1.tx : inner?.type === "envelopeTypeTx" ? inner.v1.tx : null;
     let max = 0;
-    for (const op of tx ? tx.operations() : []) {
-      if (op.body().switch().name !== "invokeHostFunction") continue;
-      for (const entry of op.body().invokeHostFunctionOp().auth()) {
-        const cred = entry.credentials();
-        if (cred.switch().name !== "sorobanCredentialsAddress") continue;
-        const n = Number(cred.address().signatureExpirationLedger());
+    for (const op of tx ? tx.operations : []) {
+      if (op.body.type !== "invokeHostFunction") continue;
+      for (const entry of op.body.invokeHostFunctionOp.auth) {
+        const a = stellarAddressCredentialsOf(entry);
+        if (!a) continue;
+        const n = Number(a.signatureExpirationLedger);
         if (Number.isSafeInteger(n) && n > max) max = n;
       }
     }

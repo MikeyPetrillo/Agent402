@@ -22,25 +22,25 @@ import { rpc, xdr } from "@stellar/stellar-sdk";
 let installed = false;
 
 // A single OperationResult decodes through up to three levels: the outer
-// switch is either "opInner" (the operation ran and has a real per-type
+// arm is either "opInner" (the operation ran and has a real per-type
 // result) or a direct op-level error (opBadAuth, opNoAccount, ... - the
-// operation never ran at all). For "opInner", .tr() gives a second union
+// operation never ran at all). For "opInner", `.tr` gives a second union
 // keyed by operation TYPE (payment, invokeHostFunction, ...), and that
-// union's own type-specific getter (e.g. invokeHostFunctionResult()) gives
-// the actual reason. Verified against real, self-encoded XDR for both an
-// "opInner" case and (implicitly) the direct-error case, which needs no
-// further unwrapping - its own .switch().name IS the reason.
+// union's own type-named arm (e.g. invokeHostFunctionResult) gives the
+// actual reason. stellar-sdk 17 names every union arm in `.type` (a string)
+// and carries its payload as a property; there is no `.switch()`.
+// Pinned against frozen result XDR for an "opInner" case and a direct
+// op-level error (test.js), which needs no further unwrapping - its own
+// `.type` IS the reason.
 function decodeOperationResult(opResult) {
   try {
-    const outer = opResult.switch().name;
+    const outer = opResult.type;
+    if (typeof outer !== "string") return "unknown";
     if (outer !== "opInner") return outer;
-    const tr = opResult.tr();
-    const opType = tr.switch().name;
-    const getterName = `${opType}Result`;
-    if (typeof tr[getterName] === "function") {
-      const inner = tr[getterName]();
-      if (inner && typeof inner.switch === "function") return `${opType}:${inner.switch().name}`;
-    }
+    const tr = opResult.tr;
+    const opType = tr.type;
+    const inner = tr[`${opType}Result`];
+    if (inner && typeof inner.type === "string") return `${opType}:${inner.type}`;
     return opType;
   } catch {
     return "unknown";
@@ -50,13 +50,14 @@ function decodeOperationResult(opResult) {
 export function decodeErrorResultXdr(errorResultXdr) {
   if (!errorResultXdr) return null;
   try {
-    const result = typeof errorResultXdr === "string" ? xdr.TransactionResult.fromXDR(errorResultXdr, "base64") : errorResultXdr;
-    const code = result.result().switch().name;
+    const result = typeof errorResultXdr === "string" ? xdr.TransactionResult.fromXdr(errorResultXdr, "base64") : errorResultXdr;
+    const code = result.result.type;
+    if (typeof code !== "string") throw new TypeError("not a TransactionResult");
     // txFailed carries a richer, per-operation breakdown - the actual
     // reason a transaction that got as far as fee/sequence checks then
     // failed (e.g. a bad Soroban invocation, insufficient trustline).
     if (code === "txFailed") {
-      const opCodes = result.result().results().map(decodeOperationResult);
+      const opCodes = result.result.results.map(decodeOperationResult);
       return { code, opCodes };
     }
     return { code };
@@ -71,7 +72,7 @@ export function decodeErrorResultXdr(errorResultXdr) {
  *  this decoder reading the old field. Accept both. Exported for tests. */
 export function decodeErrorResult(result) {
   const obj = result?.errorResult;
-  if (obj && typeof obj === "object" && typeof obj.result === "function") return decodeErrorResultXdr(obj);
+  if (obj instanceof xdr.TransactionResult) return decodeErrorResultXdr(obj);
   if (typeof obj === "string") return decodeErrorResultXdr(obj);
   return decodeErrorResultXdr(result?.errorResultXdr);
 }

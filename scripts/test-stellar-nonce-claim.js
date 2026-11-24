@@ -164,7 +164,7 @@ const landedOf = (payloadXdr) => {
   const t = new sdk.TransactionBuilder(new sdk.Account(ch.publicKey(), "7"), { fee: "100", networkPassphrase: NET })
     .addOperation(sdk.Operation.invokeHostFunction({ func: op.func, auth: op.auth })).setTimeout(60).build();
   t.sign(ch);
-  return { hash: t.hash().toString("hex"), envelope_xdr: t.toXDR() };
+  return { hash: Buffer.from(t.hash()).toString("hex"), envelope_xdr: t.toXDR() };
 };
 
 // One request's settle as src/payments.js wires it: a per-settle holder, the

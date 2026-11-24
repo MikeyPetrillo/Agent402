@@ -27,10 +27,10 @@ updates:
       # Payment libraries — the settlement path is audit-locked to a coordinated
       # @x402 version set. NEVER auto-bump these; adopt a new line deliberately
       # (express+core+evm+fetch+svm+stellar+avm together) with a paid-canary run.
-      # One exception: @x402/stellar 2.32 needs @stellar/stellar-sdk 17, whose
-      # XDR accessors our Stellar payer and confirm reads do not use yet, so it
-      # stays on 2.30 (its own core copy, read for money utils only) and moves
-      # with the SDK major.
+      # @x402/stellar also moves with the @stellar/stellar-sdk major it needs
+      # (17 since @x402/stellar 2.32): our Stellar payer, confirm and
+      # facilitator reads use that SDK's XDR accessors directly
+      # (scripts/test-stellar-xdr-fixtures.js pins them to recorded XDR).
       - dependency-name: "@x402/*"
       # @solana-program/token and compute-budget are imported by our Solana buyer
       # but their versions are dictated by @x402/svm (^0.9.0 / ^0.11.0) and by

@@ -187,6 +187,8 @@ t node scripts/test-redact-chat-kit.js
 t node scripts/test-stellar-confirm.js
 # Stellar one payment, one answer: the signed entry claimed before settle, a re-encoded copy refused, the success-path tx claim, the replay key (offline)
 t node scripts/test-stellar-nonce-claim.js
+# Stellar readers on XDR the previous SDK wrote: payer, screen list, signed payment, nonces, expiry and confirm answer as 16.4.1 did; the V2 credential arm read (offline)
+t node scripts/test-stellar-xdr-fixtures.js
 # SVM settle-reason clarity (a measured empty wallet becomes "insufficient_funds"; specific reasons and funded wallets never rewritten — offline)
 t node scripts/test-svm-clarify.js
 # Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)

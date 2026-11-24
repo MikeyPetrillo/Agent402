@@ -18,7 +18,7 @@
 // hedged reads, which call the method it captured, pass this check too. A
 // refusal is not a transport failure, so it is never retried elsewhere.
 // Calls with no settle context (verify, health) are untouched.
-import { Address, Networks, rpc, scValToNative, Transaction } from "@stellar/stellar-sdk";
+import { Address, Networks, rpc, scValToNative, Transaction, xdr } from "@stellar/stellar-sdk";
 import { TimeoutError, withTimeout } from "./timeout.js";
 
 export const PRE_SUBMIT_METHODS = ["simulateTransaction", "getLatestLedger", "getAccount", "getLedgerEntries", "sendTransaction"];
@@ -49,7 +49,12 @@ export function installSettleDeadline(getContext, {
       // submission still in flight at the deadline may land, so the
       // timed-out answer names it and the caller confirms it on chain.
       if (ctx && name === "sendTransaction") {
-        try { ctx.sentHash = args[0].hash().toString("hex"); } catch { /* not a Transaction: nothing to name */ }
+        // stellar-sdk 17 returns the hash as a plain Uint8Array (no
+        // Buffer.toString("hex")), so it is hex-encoded through Buffer.
+        try {
+          const h = args[0].hash();
+          if (h instanceof Uint8Array && h.length === 32) ctx.sentHash = Buffer.from(h).toString("hex");
+        } catch { /* not a Transaction: nothing to name */ }
       }
       return original.apply(this, args);
     };
@@ -101,14 +106,16 @@ export function payerOfPayload(paymentPayload, paymentRequirements) {
     const passphrase = PASSPHRASES[paymentRequirements?.network];
     const xdrB64 = paymentPayload?.payload?.transaction;
     if (!passphrase || typeof xdrB64 !== "string") return null;
-    const ops = new Transaction(xdrB64, passphrase).operations;
+    // Node's base64 reader, as stellar-sdk 16 decoded the string (17 refuses
+    // a character outside the alphabet).
+    const ops = new Transaction(xdr.TransactionEnvelope.fromXdr(Buffer.from(xdrB64, "base64")), passphrase).operations;
     if (ops.length !== 1 || ops[0].type !== "invokeHostFunction") return null;
     const fn = ops[0].func;
-    if (fn?.switch().name !== "hostFunctionTypeInvokeContract") return null;
-    const call = fn.invokeContract();
-    if (Address.fromScAddress(call.contractAddress()).toString() !== paymentRequirements.asset) return null;
-    const args = call.args();
-    if (call.functionName().toString() !== "transfer" || args.length !== 3) return null;
+    if (fn?.type !== "hostFunctionTypeInvokeContract") return null;
+    const call = fn.invokeContract;
+    if (Address.fromScAddress(call.contractAddress).toString() !== paymentRequirements.asset) return null;
+    const args = call.args;
+    if (call.functionName.toString() !== "transfer" || args.length !== 3) return null;
     const from = scValToNative(args[0]);
     return typeof from === "string" && from.trim() ? from.trim() : null;
   } catch {
