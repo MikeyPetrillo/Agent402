@@ -343,6 +343,7 @@ function curlExample(baseUrl, tool) {
  *  as keep the text within 80 characters (the first is always given); the rest
  *  are counted ("and 2 more"), three short words a narrow cell keeps together
  *  on its last line, where a name cut mid-word left one fragment alone. */
+const LONE_NAME_CHARS = 12;
 export function objectFieldsSample(v, max = 80) {
   const keys = Object.keys(v);
   const head = `${keys.length} field${keys.length === 1 ? "" : "s"}`;
@@ -350,6 +351,9 @@ export function objectFieldsSample(v, max = 80) {
   const tail = (shown) => (shown < keys.length ? ` and ${keys.length - shown} more` : "");
   let shown = 1;
   while (shown < Math.min(keys.length, 6) && `${head}: ${keys.slice(0, shown + 1).join(", ")}${tail(shown + 1)}`.length <= max) shown += 1;
+  // A whole list that would end on one long name leaves that name alone on a
+  // narrow cell's last line: count it instead, so the line ends "and 1 more".
+  if (shown === keys.length && shown >= 2 && keys[shown - 1].length >= LONE_NAME_CHARS) shown -= 1;
   return `${head}: ${keys.slice(0, shown).join(", ")}${tail(shown)}`;
 }
 

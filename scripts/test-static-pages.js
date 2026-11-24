@@ -54,7 +54,7 @@ const PAGES = [
   { path: "/celo",        titleSubstr: "Celo" },
   { path: "/avalanche",   titleSubstr: "Avalanche" },
   { path: "/sei",         titleSubstr: "Sei" },
-  { path: "/optimism",    titleSubstr: "Optimism" },
+  { path: "/optimism",    titleSubstr: "OP Mainnet" },
   { path: "/revenue",     titleSubstr: "Transactions" },
   { path: "/what-is-mpp", titleSubstr: "MPP" },
   { path: "/how-to-pay",  titleSubstr: "How to pay" },
