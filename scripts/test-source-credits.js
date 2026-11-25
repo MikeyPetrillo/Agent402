@@ -139,7 +139,8 @@ ok(seen.length >= 5, `the handlers read the stubbed upstream (${seen.length} rea
   ok(cg.every((t) => !JSON.stringify(t.discovery?.output?.example ?? {}).includes("Data provided by CoinGecko")), "no CoinGecko example prints the earlier wording");
   const { readFileSync, readdirSync, statSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const root = new URL("..", import.meta.url).pathname;
+  const { fileURLToPath } = await import("node:url");
+  const root = fileURLToPath(new URL("..", import.meta.url));
   const hits = [];
   const walk = (d) => { for (const n of readdirSync(join(root, d))) { const p = join(d, n); if (statSync(join(root, p)).isDirectory()) { if (n !== "generated") walk(p); } else if (p.endsWith(".js") && p !== "src/changelog.js") { const t = readFileSync(join(root, p), "utf8"); if (/Data provided by CoinGecko/.test(t.replace(/export const REWORDED_ATTRIBUTIONS[^\n]*/, ""))) hits.push(p); } } };
   walk("src");
