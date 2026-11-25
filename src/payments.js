@@ -4876,7 +4876,11 @@ function complianceStop(ctx, refusal, via) {
   const own = isOwnScreenRefusal(refusal);
   const network = ctx?.requirements?.network;
   if (!own) noteComplianceRefusal({ network, via });
-  const payer = typeof refusal?.payer === "string" ? refusal.payer : ctx?.paymentPayload?.payload?.authorization?.from;
+  // The signed payer: a Permit2 payment is signed by its Permit2 signer, and
+  // an `authorization` block beside it is covered by no signature.
+  const inner = ctx?.paymentPayload?.payload;
+  const signedFrom = inner?.permit2Authorization ? inner.permit2Authorization.from : inner?.authorization?.from;
+  const payer = typeof refusal?.payer === "string" ? refusal.payer : signedFrom;
   // Kept in full for the records rule and the rejected-transaction report
   // (src/sanctions-events.js); never awaited.
   try {

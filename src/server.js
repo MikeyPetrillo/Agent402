@@ -8216,7 +8216,7 @@ app.post("/__operator/sanctions-events", express.json({ limit: "16kb" }), async 
   res.set("Cache-Control", "private, no-store");
   const b = req.body || {};
   if (!["blocked-refund", "payout-refused"].includes(b.kind)) return res.status(400).json({ error: 'kind must be "blocked-refund" or "payout-refused"' });
-  const row = await recordSanctionsEvent({ kind: b.kind, address: b.address, network: b.network, amountUsd: b.amountUsd, refundId: b.refundId, route: b.route, rail: b.rail, detail: b.detail, via: "refund-run" });
+  const row = await recordSanctionsEvent({ kind: b.kind, address: b.address, network: b.network, amountUsd: b.amountUsd, refundId: b.refundId, route: b.route, rail: b.rail, detail: b.detail, via: "refund-run" }, { limit: false });
   if (!row) return res.status(503).json({ error: "the sanctions events store did not take the event" });
   res.json({ ok: true, id: row.id, dueBy: row.dueBy });
 });

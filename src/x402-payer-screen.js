@@ -68,8 +68,19 @@
 // names (WALLET_BLOCKLIST, src/payments.js blockedPayerFromPayload); the
 // direct routes apply that list at settlement instead.
 //
+// RECORDS. A refusal is kept in the sanctions events store
+// (src/sanctions-events.js, under its write limits) only for a listed address
+// the payment's own signature proves (src/x402-signed-payers.js): EIP-3009
+// `authorization.from` or Permit2 `permit2Authorization.from` recovered
+// locally, and on the direct routes (after verification) a Solana, Stellar or
+// Algorand signer. A listed address seen only in a field no signature covers
+// (the channel fields, an unsigned block, anything on the strict screen,
+// which runs before verification, that the signature does not recover to) is
+// refused exactly the same and counted as `refusedUnrecorded`, never recorded.
+//
 // COST. Decoding the header the middleware already decoded once, and one Set
-// lookup per address. No network call.
+// lookup per address. No network call; a refusal alone adds local signature
+// recoveries (at most five) before its record is written.
 import { paymentHeaderOf } from "./payer.js";
 import { screenAddresses, maskAddress } from "./sanctions-screen.js";
 import { nonEvmScreenAddressesFromRequest } from "./non-evm-payer.js";
@@ -77,6 +88,7 @@ import { screenAddressForPayment } from "./tools/sanctions-kit.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { recordSanctionsEvent } from "./sanctions-events.js";
 import { sanctionsScreenOperatorView } from "./sanctions-screen.js";
+import { x402SignedPayers } from "./x402-signed-payers.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -141,7 +153,21 @@ export function x402ScreenedAddressesOf(req) {
   return x402ScreenedPaymentOf(req)?.addresses || [];
 }
 
-const counts = { screened: 0, refused: 0, servedUnscreened: 0, unreadablePayer: 0, refusedUnscreened: 0, blocked: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
+const counts = { screened: 0, refused: 0, refusedUnrecorded: 0, servedUnscreened: 0, unreadablePayer: 0, refusedUnscreened: 0, blocked: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
+
+/** The listed address a refusal may RECORD, or null. An EVM payment: a listed
+ *  address among those its own signature proves (src/x402-signed-payers.js).
+ *  A Solana, Stellar or Algorand payment: its signers are read from the signed
+ *  transaction, recorded only where the screen runs after the facilitator
+ *  verified that transaction (not the strict screen, which runs before). */
+async function recordableListedOf(v, payload, { strict }) {
+  if (v.nonEvm) return strict ? null : v.address;
+  const signed = await x402SignedPayers(payload);
+  if (!signed.length) return null;
+  let w;
+  try { w = screenAddresses(signed); } catch { return null; }
+  return w && w.ok === false && w.reason === "listed" ? w.address : null;
+}
 let unscreenedLoggedAt = 0;
 let unreadableLoggedAt = 0;
 let strictLoggedAt = 0;
@@ -151,6 +177,9 @@ export function x402PayerScreenView() {
   return {
     screened: counts.screened,
     refused: counts.refused,
+    // Of those, refused on an address the payment's signature does not prove:
+    // refused all the same, not recorded in the sanctions events store.
+    refusedUnrecorded: counts.refusedUnrecorded,
     servedUnscreened: counts.servedUnscreened,
     // Of those, EVM payments none of whose payer fields could be read.
     unreadablePayer: counts.unreadablePayer,
@@ -176,7 +205,7 @@ async function screenNonEvmPayer(req, addressesOf) {
   for (const address of addresses) {
     try {
       const hit = await screenAddressForPayment(address);
-      if (hit) return { ok: false, reason: "listed", address };
+      if (hit) return { ok: false, reason: "listed", address, nonEvm: true };
       screened++;
     } catch (e) {
       if (!/unreadable address/.test(String(e?.message || e))) unavailable = true;
@@ -222,12 +251,20 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
     counts.lastRefusedAt = Date.now();
     log(`[sanctions-screen] x402 payer ${maskAddress(v.address)} refused before the handler (${req.method} ${req.path}); nothing settles`);
     // The rejected transaction, in full, for the records rule and its report
-    // (src/sanctions-events.js). Never awaited: the refusal does not wait on it.
+    // (src/sanctions-events.js), only for an address the payment's own
+    // signature proves (recordableListedOf); one the request merely names is
+    // refused above and counted, never recorded. Never awaited: the refusal
+    // does not wait on it.
     try {
-      const acc = (() => { const p = x402ScreenedPaymentOf(req)?.payload; return p?.accepted || p || {}; })();
-      let listDate = null;
-      try { listDate = sanctionsScreenOperatorView().publishDate || null; } catch { /* no list view */ }
-      recordSanctionsEvent({ kind: "screen-hit", address: v.address, rail: "x402", network: acc.network ?? null, amount: acc.amount ?? acc.maxAmountRequired ?? null, asset: acc.asset ?? null, route: `${req.method} ${req.path}`, ip: req.ip, listPublishDate: listDate }).catch(() => {});
+      const payload = x402ScreenedPaymentOf(req)?.payload;
+      const acc = payload?.accepted || payload || {};
+      const route = `${req.method} ${req.path}`, ip = req.ip;
+      recordableListedOf(v, payload, { strict }).then((address) => {
+        if (!address) { counts.refusedUnrecorded++; return; }
+        let listDate = null;
+        try { listDate = sanctionsScreenOperatorView().publishDate || null; } catch { /* no list view */ }
+        return recordSanctionsEvent({ kind: "screen-hit", address, rail: "x402", network: acc.network ?? null, amount: acc.amount ?? acc.maxAmountRequired ?? null, asset: acc.asset ?? null, route, ip, listPublishDate: listDate });
+      }).catch(() => {});
     } catch { /* recording never breaks the refusal */ }
     res.status(403);
     res.setHeader("Cache-Control", "no-store");
@@ -270,6 +307,6 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
 
 /** Test seam. */
 export function __resetX402PayerScreenForTests() {
-  counts.screened = 0; counts.refused = 0; counts.servedUnscreened = 0; counts.unreadablePayer = 0; counts.refusedUnscreened = 0; counts.blocked = 0; counts.lastRefusedAt = 0; counts.lastUnscreenedAt = 0;
+  counts.screened = 0; counts.refused = 0; counts.refusedUnrecorded = 0; counts.servedUnscreened = 0; counts.unreadablePayer = 0; counts.refusedUnscreened = 0; counts.blocked = 0; counts.lastRefusedAt = 0; counts.lastUnscreenedAt = 0;
   unscreenedLoggedAt = 0; unreadableLoggedAt = 0; strictLoggedAt = 0;
 }
