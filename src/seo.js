@@ -802,7 +802,8 @@ export function llmsTxt(baseUrl, catalog) {
   // list and shortlinks in the guide.
   const shortChains = (text) => text.replace(/(\nPrices by chain: [^\n]*?\.) \/api\/pricing lists [^\n]*\./, "$1");
   const shortAdapters = (text) => text.split("\n").map((l) => l.replace(/^(- \[[^\]]+\]\([^)\s]+\)): ([^:]+): .+$/, "$1: $2")).join("\n");
-  const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "");
+  // The npm server's own Claude Code line is in /llms-full.txt (the hosted one-liner above stays).
+  const shortHosts = (text) => text.replace(/Every host, verified config blocks \([^)]*\): /, "Every host, verified config blocks: ").replace(/ Shortlinks: agent402\.sh\/claude(?:, \/\w+)*\./, "").replace(/(\(https:\/\/www\.npmjs\.com\/package\/agent402-mcp\)[^\n]*\)\.) Claude Code: `[^`\n]*`/, "$1");
   const platformLinks = new Set(listedPlatformIntegrations().map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug})`));
   const shortPlatforms = (text) => text.split("\n").map((l) => { const head = l.slice(0, l.indexOf("): ") + 1); return platformLinks.has(head) ? head : l; }).join("\n");
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
@@ -816,6 +817,8 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): live web search (title, URL, snippet)`],
     [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): cited answer grounded in live web search results`],
     [`- [/api/route](`, `- [/api/route](${baseUrl}/api/route): Smart Order Router: rank tools across every crawled x402 seller`],
+    [`- [/api/find](`, `- [/api/find](${baseUrl}/api/find): resolve a task to matching tools (route, price, schema, example)`],
+    [`- [/.well-known/x402](`, `- [/.well-known/x402](${baseUrl}/.well-known/x402): one-fetch service manifest`],
     [`- [/api/index](`, `- [/api/index](${baseUrl}/api/index): the crawled x402 seller index, one page per call; one origin with \`?seller=<host>\``],
     // Each depth's price stays here (from the decide configuration), and so
     // does the execute route's payment sentence: it is paid from a wallet only
@@ -823,18 +826,18 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/api/decide](`, (line) => {
       const depth = (line.match(/ Depth quick \$[\d.]+ \/ plan \$[\d.]+ \/ full \$[\d.]+\./) || [""])[0];
       const execute = (line.match(/ The fee returns as a [^.]*`POST \/api\/decide\/execute`, which runs the plan [^.]*\./) || [""])[0];
-      return `- [/api/decide](${baseUrl}/api/decide): a paid decision: describe a job, get a call-ready plan over this catalog and outside x402 sellers${depth ? `.${depth.replace(/\.$/, "")}` : ""}${execute ? `.${execute}` : ""}`;
+      return `- [/api/decide](${baseUrl}/api/decide): a paid decision: a call-ready plan for a job over this catalog and outside x402 sellers${depth ? `.${depth.replace(/\.$/, "")}` : ""}${execute ? `.${execute}` : ""}`;
     }],
     // The tier prices stay here (each tier's route and price, from the catalog).
     [`- [/api/route/execute](`, (line) => {
       const tiers = (line.match(/ Proportional tiers: .* naming the tier that fits/) || [""])[0];
-      return `- [/api/route/execute](${baseUrl}/api/route/execute): the SOR that also PAYS: buys the best-matching tool's answer from any proven seller over x402 and resells it with a receipt${tiers ? `.${tiers}` : ""}`;
+      return `- [/api/route/execute](${baseUrl}/api/route/execute): the SOR that also PAYS: buys the best tool's answer from a proven x402 seller and resells it with a receipt${tiers ? `.${tiers}` : ""}`;
     }],
     [`- [/api/scorecard](`, `- [/api/scorecard](${baseUrl}/api/scorecard): monthly buyer scorecard`],
     [`- [/mcp/server-card](`, `- [/mcp/server-card](${baseUrl}/mcp/server-card): MCP server card`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments`],
     // The counting method, the filters and the SDK and MCP readers are in /llms-full.txt.
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`), the top 25 (\`?top=N\`, \`?sort=usd|calls\`); also the SDK's \`topSellers()\` and MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`)`],
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`), top 25 (\`?top=N\`, \`?sort=usd|calls\`); SDK \`topSellers()\`, MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`)`],
   ];
   const surfaceBrief = (line) => {
     const hit = brief.find(([prefix]) => line.startsWith(prefix));
@@ -880,7 +883,7 @@ ${[
     mppMethodsSummary().enabled ? mppOfferGateSentence() : "",
     visaCliMppSentence(),
     // Each price beside its route says where it comes from.
-    mppFlagshipLlmsBlock(catalog, { compact: true }).replace(" Prices are the catalog's; what each answers", " What each answers"),
+    mppFlagshipLlmsBlock(catalog, { compact: true }).replace(" Prices are the catalog's; what each answers is in /llms-full.txt, and the list", " The list"),
     gatewayNanopaymentsLine(),
     paymentChannelsLine(),
     ...sections,
