@@ -57,6 +57,15 @@ const FAILS = [
   "A strong buy signal.",
   "This is a safe token for a small position.",
 ];
+// Denials of a guarantee are the caveats the report prompts ask for
+// (token-risk-kit's "not a guarantee"): never withheld for them.
+for (const t of [
+  "On-chain facts only; this is not a guarantee of anything.",
+  "There is no guarantee the lock holds after its end date.",
+  "No on-chain read can guarantee the deployer's intent.",
+  "The audit does not guarantee the contract is free of faults.",
+  "Liquidity is locked, without any guarantee past its end date.",
+]) ok(tokenClaimViolations(t).length === 0, `a denied guarantee passes: "${t}" (${JSON.stringify(tokenClaimViolations(t))})`);
 for (const t of PASSES) ok(tokenClaimViolations(t).length === 0, `passes: "${t}" (${JSON.stringify(tokenClaimViolations(t))})`);
 for (const t of FAILS) ok(tokenClaimViolations(t).length > 0, `fails: "${t}"`);
 ok(tokenClaimViolations("SafeCoin (SAFE) has a live mint authority.", { names: ["SafeCoin", "SAFE"] }).length === 0 && tokenClaimViolations("Safe (SAFE) has a live mint authority.").length > 0, "the token's own name and symbol are not a claim; the same words otherwise are");
@@ -67,6 +76,8 @@ for (const [nm, brief] of [
   ["is safe", "Mint is safe (is safe) has a revoked mint authority."],
   ["not a scam", "The token, not a scam, has a live freeze authority."],
   ["guaranteed", "Holders of this token are guaranteed returns."],
+  ["guarantee", "The team guarantees the liquidity stays locked."],
+  ["a guaranteed outcome", "This is a guaranteed winner for holders."],
   ["Safe", "Safe (SAFE) is safe to buy."],
 ]) ok(tokenClaimViolations(brief, { names: [nm, "X"] }).length > 0, `a token named ${JSON.stringify(nm)} cannot erase its judgment from "${brief}"`);
 ok(tokenClaimViolations("Safe (SAFE) has a live mint authority and 12 pairs.", { names: ["Safe", "SAFE"] }).length === 0, "a token named \"Safe\" with a neutral brief passes");

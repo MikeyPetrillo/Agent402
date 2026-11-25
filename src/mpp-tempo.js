@@ -1438,13 +1438,15 @@ export function tempoPaymentParties(authorizationHeader) {
           // Every owner whose approval of a configurable account envelope
           // recovers under the account's digest of `payload` is screened.
           const owners = (env, payload) => {
-            if (!MULTISIG_ENVELOPES.has(env?.type) || !env.config || !Array.isArray(env.signatures) || env.signatures.length > AccountConfig.maxSignatures) return;
+            if (!MULTISIG_ENVELOPES.has(env?.type) || !env.config || !Array.isArray(env.signatures) || env.signatures.length > AccountConfig.maxSignatures) return 0;
             let digest;
-            try { digest = AccountConfig.getSignPayload({ account: env.account, config: env.config, payload }); } catch { return; }
+            try { digest = AccountConfig.getSignPayload({ account: env.account, config: env.config, payload }); } catch { return 0; }
+            let n = 0;
             for (const s of env.signatures) {
               if (!s || !PRIMITIVE_ENVELOPES.has(s.type)) continue;
-              try { add(SignatureEnvelope.extractAddress({ payload: digest, signature: s })); } catch { /* nothing to add */ }
+              try { add(SignatureEnvelope.extractAddress({ payload: digest, signature: s })); n++; } catch { /* nothing to add */ }
             }
+            return n;
           };
           if (sig.type === "keychain" && sig.inner) {
             const keyPayload = sig.version === "v1" ? signPayload : TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx), { from: lcAddress(sig.userAddress) });
@@ -1454,7 +1456,9 @@ export function tempoPaymentParties(authorizationHeader) {
             // approvals sign the access key's payload.
             if (MULTISIG_ENVELOPES.has(sig.inner.type)) { add(sig.inner.account); owners(sig.inner, keyPayload); }
           }
-          owners(sig, signPayload);
+          // The account a configurable envelope acts for is screened once an
+          // owner's approval recovers (as before the records redesign).
+          if (owners(sig, signPayload) && sig.account) add(sig.account);
         }
       } catch { /* an unrecoverable signer adds nothing; verification refuses it */ }
       if (tx?.feePayerSignature && tx.from) {

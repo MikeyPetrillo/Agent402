@@ -283,6 +283,10 @@ const TX_FIRST_USE_OX = await firstUse(oxAgent, oxKeyAuthorization({ address: ox
   const ndParties = tempoPaymentParties(credential(TX_MULTISIG_NEW_DOMAIN));
   ok(msOwners.every((o) => ndParties.includes(o.a)) && ndParties.includes(msAccount), "M: the payment parties screened for a configurable account envelope include every owner whose approval recovers, beside the account");
   ok(!msOwners.some((o) => tempoPaymentParties(credential(TX_MULTISIG_OLD_DOMAIN)).includes(o.a)), "M: approvals under the pre-release domain recover to no owner, so none is named");
+  // The account a configurable envelope acts for is screened once an owner's
+  // approval recovers (the screen refuses it; records come only from a
+  // verified payment, src/sanctions-events.js).
+  ok(tempoPaymentParties(credential(TX_MULTISIG_REAL)).includes(msAccount), "M: the account a configurable envelope acts for is screened once an owner's approval recovers");
   // A configurable account acting as an access key (TIP-1111): the keychain
   // envelope's inner signer is the configurable account, and its owners'
   // approvals sign the access key's payload (the transaction for the user).

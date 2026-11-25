@@ -51,8 +51,10 @@ const FIXED = [
     re: /\b(?:we|i)\s+(?:strongly\s+)?(?:recommend|advise|suggest)(?:s|ed)?\s+(?:against\s+)?(?:buying|selling|avoiding|holding|investing|exiting)\b/i },
   { rule: "tells the reader to buy, sell, hold or avoid",
     re: /(?:^|[.!?:;\n]\s*|\b(?:do not|don't|never)\s+)(?:buy|sell|avoid|hold)\s+(?:this|the|these)\s+(?:token|coin|tokens|coins|project)\b/i },
+  // A promise, never its denial: "not a guarantee", "no guarantee", "cannot
+  // guarantee" are the caveats the report prompts themselves ask for.
   { rule: "promises an outcome",
-    re: /\bguaranteed?\b/i },
+    re: /(?<!\b(?:not|no|never|cannot|can't|can not|without|nor)\s+(?:[\w'-]+\s+){0,3})\bguarantee[ds]?\b/i },
   { rule: "tells the reader to buy, sell, hold or avoid",
     re: /\b(?:strong\s+)?(?:buy|sell|avoid|hold)\s+(?:rating|signal|recommendation)\b|\bstrong\s+(?:buy|sell)\b/i },
 ];

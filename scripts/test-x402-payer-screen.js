@@ -687,6 +687,20 @@ try {
   facilitator.close(); upstream.close();
   rmSync(TMP, { recursive: true, force: true });
 }
+// The facilitator's own payer is what a verified non-EVM payment records:
+// the stash keeps it from the verify answer, and only a valid verify sets it.
+{
+  const { registerVerifiedPaymentStash } = await import("../src/payments.js");
+  const { verifiedPayerOf } = await import("../src/verified-payment.js");
+  let hook = null;
+  registerVerifiedPaymentStash({ onAfterVerify: (f) => { hook = f; } });
+  const sol = "So1anaPayer11111111111111111111111111111111";
+  const ctxFor = (req, isValid) => ({ result: { isValid, payer: sol }, paymentPayload: { payload: {} }, requirements: { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, transportContext: { request: { adapter: { req } } } });
+  const r1 = {}; hook(ctxFor(r1, true));
+  ok(verifiedPayerOf(r1) === sol, "a verified non-EVM payment keeps the facilitator's payer exactly (its record names it)");
+  const r2 = {}; hook(ctxFor(r2, false));
+  ok(verifiedPayerOf(r2) === null, "a verify that did not pass keeps no payer");
+}
 if (fail) for (const l of serverLog().slice(-30)) console.error("  server:", l);
 console.log(`\ntest-x402-payer-screen: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
