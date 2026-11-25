@@ -252,7 +252,7 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
     mw(req, res, () => { out.next = true; resolve(out); });
   });
   const settle = () => new Promise((r) => setTimeout(r, 60));
-  const rows = async () => (await EV.sanctionsEventsOperatorView()).recent;
+  const rows = async () => (await EV.sanctionsEventsOperatorView({ recent: 1000 })).recent;
   const listedAcct = privateKeyToAccount(generatePrivateKey());
   const listedP2 = privateKeyToAccount(generatePrivateKey());
   const throwaway = privateKeyToAccount(generatePrivateKey());
