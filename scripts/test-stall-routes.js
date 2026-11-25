@@ -615,8 +615,9 @@ const mp = await import("../src/market-page.js");
   rows.length = 0;
   cache.clear();
   const builds0 = x._indexSnapshotBuildsForTest();
-  let turns = 0, shared = true, readerWorst = 0, readerWorstWall = 0, inLine = 0;
-  gaps = []; last = performance.now();
+  let turns = 0, shared = true, readerWorst = 0, readerWorstWall = 0, inLine = 0, readerWorstGc = 0, readerWorstBuilt = 0;
+  const windows = [];
+  gaps = []; last = performance.now(); gcPauses.length = 0;
   const warming = x.loadPersistedIndexCacheAsync(ndjson);
   // Each turn of the warm start: the nav strip, the page and a second page
   // read the snapshot, as three HTML requests landing in one turn would.
@@ -628,14 +629,25 @@ const mp = await import("../src/market-page.js");
     // A build that finishes inside the readers' turn is an in-line build; the
     // sliced rebuild only starts here and finishes over later turns.
     if (x._indexSnapshotBuildsForTest() - before > 1) inLine++;
-    // Ours, as blockOf reads a gap (the wall time is printed).
-    readerWorst = Math.max(readerWorst, Math.min(performance.now() - t, oursMs() - c0));
-    readerWorstWall = Math.max(readerWorstWall, performance.now() - t);
+    // Ours, as blockOf reads a gap (the wall time is printed); a collector
+    // pause inside the window is taken off below, as blockOf does.
+    const t1 = performance.now();
+    windows.push([t, t1, Math.min(t1 - t, oursMs() - c0), x._indexSnapshotBuildsForTest() - before]);
+    readerWorstWall = Math.max(readerWorstWall, t1 - t);
     turns++;
     await new Promise((r) => setImmediate(r));
   }
   const loaded = await warming;
-  await new Promise((r) => setTimeout(r, 5));
+  // The observer delivers gc entries on a later task: wait for them first.
+  await new Promise((r) => setTimeout(r, 50));
+  // A full collection inside a reader's window is the collector's, not the
+  // readers' (the rule blockOf applies): what is left is the readers' own.
+  for (const [w0, w1, ours, built] of windows) {
+    let inGc = 0;
+    for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(w1, e0) - Math.max(w0, s0));
+    const own = Math.max(0, ours - inGc);
+    if (own > readerWorst) { readerWorst = own; readerWorstGc = inGc; readerWorstBuilt = built; }
+  }
   const warmWorst = Math.round(Math.max(0, ...gaps.map(([g0, g1]) => g1 - g0)));
   gaps = null;
   const builds = x._indexSnapshotBuildsForTest() - builds0;
@@ -644,7 +656,7 @@ const mp = await import("../src/market-page.js");
   ok(builds < turns, `the readers of ${turns} turns shared ${builds} snapshot builds (each reader used to build its own: ${turns * 3})`);
   // The loop's own worst block over the warm start is printed, not bounded:
   // it is mostly the loader's batches, which this file does not pin.
-  ok(heldUnder(readerWorst, GAP_MS), `...and the readers' longest turn was ${Math.round(readerWorst)} ms ours (${GAP.note}; ${Math.round(readerWorstWall)} ms of wall time; the loop's longest block over the warm start, loader batches included: ${warmWorst} ms)`);
+  ok(heldUnder(readerWorst, GAP_MS), `...and the readers' longest turn was ${Math.round(readerWorst)} ms ours less the collector (${GAP.note}; that turn built ${readerWorstBuilt} snapshot(s) and the collector ran ${Math.round(readerWorstGc)} ms in it; ${Math.round(readerWorstWall)} ms of wall time at most; the loop's longest block over the warm start, loader batches included: ${warmWorst} ms)`);
   ok(isDeepStrictEqual(x.warmStartSnapshot(ctx).sellers.length, x.indexSnapshot(ctx).sellers.length), "after the warm start a reader builds from the whole cache");
 }
 
