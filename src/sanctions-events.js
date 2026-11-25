@@ -63,7 +63,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { stateDbEnabled, stateDbSchema, stateQuery, records } from "./state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery } from "./state-db.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 
 export const SANCTIONS_EVENTS_COLLECTION = "sanctions-events";
@@ -128,7 +128,21 @@ function keep(row, { onDisk = true } = {}) {
   let id = null, j = null;
   try { j = journal(); id = j.add("sanctions-row", JSON.parse(JSON.stringify(row)), { pending: true }); } catch { id = null; }
   if (id == null) console.error(`[sanctions-events] a change to ${row.id} could not be kept in the journal; it is held in memory until written`);
-  else m.ids.push({ id, v: m.v, j });
+  else {
+    const v = m.v;
+    m.ids.push({ id, v, j });
+    // The journal holds the newest copy of each row only: once this copy is
+    // durable, the older ones are removed (the replay takes maxima, so the
+    // newest copy covers them). The journal is bounded by rows, not attempts.
+    const dropOlder = () => {
+      const older = m.ids.filter((x) => x.v < v);
+      m.ids = m.ids.filter((x) => x.v >= v);
+      for (const x of older) { try { Promise.resolve(x.j.remove(x.id)).catch(() => {}); } catch { /* replayed again: idempotent */ } }
+    };
+    // A local journal wrote the line already; a shared one says when it is durable.
+    if (j.kind !== "redis") dropOlder();
+    else Promise.resolve(j.durable(id)).then((where) => { if (where) dropOlder(); }, () => {});
+  }
   markDirty(row);
 }
 /** The write of version `v` of `row` committed: drop the journal entries it covers. */
@@ -180,12 +194,15 @@ export async function flushSanctionsEvents() {
     const failed = (r, e) => { pending.add(r); unlanded(r); counts.flushFailures++; console.error(`[sanctions-events] a change to ${r.id} was not written yet (${String(e?.message || e).slice(0, 120)}); retrying`); };
     if (useDb()) {
       for (const row of rows) {
-        try { await records.put(SANCTIONS_EVENTS_COLLECTION, row.id, JSON.parse(JSON.stringify(row))); n++; landed(row, version.get(row)); }
+        try { if (storeHook) await storeHook("flush", row); await upsertMaxRow(JSON.parse(JSON.stringify(row))); n++; landed(row, version.get(row)); }
         catch (e) { failed(row, e); }
       }
     } else {
+      let hookError = null;
+      try { if (storeHook) await storeHook("flush", rows[0]); } catch (e) { hookError = e; }
       loadFile();
-      if (rows.some((r) => meta.get(r.id)?.onDisk !== false)) {
+      if (hookError) for (const r of rows) failed(r, hookError);
+      else if (rows.some((r) => meta.get(r.id)?.onDisk !== false)) {
         // A change to a stored row: one rewrite, which holds every row in memory.
         try { saveFile(); n = rows.length; for (const r of rows) landed(r, version.get(r)); }
         catch (e) { for (const r of rows) failed(r, e); }
@@ -221,13 +238,36 @@ function mergedRow(stored, snap) {
   if (typeof snap.lastSeenAt === "string" && (!stored.lastSeenAt || snap.lastSeenAt > stored.lastSeenAt)) { out.lastSeenAt = snap.lastSeenAt; changed = true; }
   return changed ? out : null;
 }
+// One statement, so no other write can land between its read and its write:
+// a new row is inserted whole; a stored row that is not filed takes the
+// maximum of each counter (attempts, count, each reason's count) and the later
+// last-seen time, and keeps every other field; a filed row is never touched.
+// The flush and the replay both write through it (database mode), so a write
+// from an older copy can never lower what a newer one stored.
+async function upsertMaxRow(row) {
+  const t = `${stateDbSchema()}.records`;
+  await stateQuery(
+    `INSERT INTO ${t} (collection, id, body) VALUES ($1, $2, $3::jsonb)
+     ON CONFLICT (collection, id) DO UPDATE SET body = ${t}.body || jsonb_strip_nulls(jsonb_build_object(
+       'attempts', GREATEST((${t}.body->>'attempts')::numeric, (EXCLUDED.body->>'attempts')::numeric),
+       'count', GREATEST((${t}.body->>'count')::numeric, (EXCLUDED.body->>'count')::numeric),
+       'lastSeenAt', GREATEST(${t}.body->>'lastSeenAt', EXCLUDED.body->>'lastSeenAt'),
+       'byReason', CASE WHEN ${t}.body ? 'byReason' OR EXCLUDED.body ? 'byReason' THEN (
+         SELECT COALESCE(jsonb_object_agg(k, GREATEST(COALESCE((${t}.body->'byReason'->>k)::numeric, 0), COALESCE((EXCLUDED.body->'byReason'->>k)::numeric, 0))), '{}'::jsonb)
+         FROM (SELECT jsonb_object_keys(COALESCE(${t}.body->'byReason', '{}'::jsonb)) AS k UNION SELECT jsonb_object_keys(COALESCE(EXCLUDED.body->'byReason', '{}'::jsonb))) keys
+       ) END
+     )), updated_at = now()
+     WHERE ${t}.body->>'filedAt' IS NULL`,
+    [SANCTIONS_EVENTS_COLLECTION, row.id, JSON.stringify(row)],
+  );
+}
+
+// File mode: one process owns the file, and the merge below reads and writes
+// the in-memory rows in one synchronous step (no await between), so neither a
+// flush nor another replay can land between its read and its write.
 async function mergeIntoStore(snap) {
-  if (useDb()) {
-    const stored = await records.get(SANCTIONS_EVENTS_COLLECTION, snap.id);
-    const row = mergedRow(stored, snap);
-    if (row) await records.put(SANCTIONS_EVENTS_COLLECTION, snap.id, row);
-    return;
-  }
+  if (storeHook) await storeHook("replay", snap);
+  if (useDb()) { await upsertMaxRow(snap); return; }
   const rows = loadFile();
   const i = rows.findIndex((r) => r.id === snap.id);
   const row = mergedRow(i >= 0 ? rows[i] : null, snap);
@@ -530,10 +570,16 @@ export async function markSanctionsEventsFiled({ ids = null, all = false, refere
   await flushSanctionsEvents();
   if (useDb()) {
     const list = await dbUnfiled();
+    const t = `${stateDbSchema()}.records`;
     for (const r of list) {
       if (want && !want.has(r.id)) continue;
-      await records.put(SANCTIONS_EVENTS_COLLECTION, r.id, { ...r, filedAt, filedRef: ref });
-      marked.push(r.id);
+      // Only the two filing fields change, in one statement: an attempt merged
+      // meanwhile is kept, and a row already filed keeps its first filing.
+      const u = await stateQuery(
+        `UPDATE ${t} SET body = body || jsonb_build_object('filedAt', $3::text, 'filedRef', $4::text), updated_at = now() WHERE collection = $1 AND id = $2 AND body->>'filedAt' IS NULL`,
+        [SANCTIONS_EVENTS_COLLECTION, r.id, filedAt, ref],
+      );
+      if (u.rowCount) marked.push(r.id);
     }
     await refreshSanctionsEvents();
   } else {
@@ -580,6 +626,9 @@ export async function pruneSanctionsEvents({ apply = false, now = Date.now(), ye
 
 /** Tests: forget the file view and the database cache. */
 export function __resetSanctionsEventsForTests() { fileRows = null; dbCache = { at: 0, unfiled: null, error: null }; }
+// Tests: awaited before each store write ("flush" or "replay"); it may delay or throw.
+let storeHook = null;
+export function __setSanctionsStoreHookForTests(fn = null) { storeHook = typeof fn === "function" ? fn : null; }
 /** Tests: forget the dedupe keys, the aggregates, pending changes, the journal handle and counts. */
 export function __resetSanctionsEventLimitsForTests() {
   seenKeys.clear(); aggregates.clear(); pending.clear(); meta.clear(); journalImpl = null; journalAt = "";

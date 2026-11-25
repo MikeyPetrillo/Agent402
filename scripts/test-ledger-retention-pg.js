@@ -72,13 +72,18 @@ try {
   await sanc.flushSanctionsEvents();
   const filedBody = await bodyOf(h1.id);
   ok(filedBody?.filedRef === "RS-2" && filedBody.attempts === 2 && h4 && h4.id !== h1.id && (await bodyOf(h4.id))?.attempts === 1, "after filing, the filed row keeps its count and reference; the next attempt opens a new row");
+  // The store's race, journal bound and filed-row cases, on the database.
+  {
+    const { runSanctionsStoreCases } = await import("./lib/sanctions-store-cases.js");
+    await runSanctionsStoreCases({ EV: sanc, sdb, ok, label: "database" });
+  }
   // A hard kill on the database: the next process reads every attempt and the count row.
   {
     const { runRestartCase } = await import("./lib/sanctions-restart.js");
     const addr = "0x" + "4d".repeat(20);
     const res = runRestartCase({ env: { STATE_DATABASE_URL: process.env.STATE_DATABASE_URL, SANCTIONS_EVENTS_FILE: join(DIR, "restart-events.jsonl") }, address: addr });
     const hitBody = (await sdb.stateQuery(`SELECT body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND body->>'address' = $2`, [sanc.SANCTIONS_EVENTS_COLLECTION, addr])).rows.map((r) => r.body);
-    const counted = (await sdb.stateQuery(`SELECT body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND body->>'aggregate' = 'true' AND body->>'routeClass' = 'ref'`, [sanc.SANCTIONS_EVENTS_COLLECTION])).rows.map((r) => r.body);
+    const counted = (await sdb.stateQuery(`SELECT body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND body->>'aggregate' = 'true' AND body->>'routeClass' = 'ref' AND body->>'rail' = 'x402'`, [sanc.SANCTIONS_EVENTS_COLLECTION])).rows.map((r) => r.body);
     ok(res.killedBy === "SIGKILL" && hitBody.length === 1 && hitBody[0].attempts === 4 && res.rows?.find((x) => x.address === addr)?.attempts === 4 && counted.reduce((t, x) => t + x.count, 0) === 1 + 5, `after a SIGKILL the next process lands every attempt and the count row in the database (killed by ${res.killedBy}; attempts ${hitBody[0]?.attempts}; counts ${JSON.stringify(counted.map((x) => [x.rail, x.count]))}; ${res.rows ? "" : res.readerErr || res.writerErr})`);
   }
 
