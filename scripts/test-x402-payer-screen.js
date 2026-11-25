@@ -213,9 +213,9 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
 // 1d. What a refusal RECORDS (src/sanctions-events.js). The screen refuses on
 //     every address a payment names, but keeps a permanent record only of a
 //     listed address the payment's own signature proves
-//     (src/x402-signed-payers.js), under the store's write limits: one row per
-//     (address, route class) a day, at most SANCTIONS_EVENT_CLIENT_WINDOW_MAX
-//     rows per client address and SANCTIONS_EVENT_WINDOW_MAX in all an hour.
+//     (src/x402-signed-payers.js): one row per (address, route class) a day,
+//     every repeat an attempt on it, with no cap; a refusal on an unproven
+//     address is counted in the hour's aggregate row, never with the address.
 {
   const SS = await import("../src/sanctions-screen.js");
   const EV = await import("../src/sanctions-events.js");
@@ -252,12 +252,14 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
     mw(req, res, () => { out.next = true; resolve(out); });
   });
   const settle = () => new Promise((r) => setTimeout(r, 60));
-  const rows = async () => (await EV.sanctionsEventsOperatorView({ recent: 1000 })).recent;
+  const allRows = async () => (await EV.sanctionsEventsOperatorView({ recent: 1000 })).recent;
+  const rows = async () => (await allRows()).filter((r) => !r.aggregate);
+  const aggs = async () => (await allRows()).filter((r) => r.aggregate);
   const listedAcct = privateKeyToAccount(generatePrivateKey());
   const listedP2 = privateKeyToAccount(generatePrivateKey());
   const throwaway = privateKeyToAccount(generatePrivateKey());
   const cleanAcct = privateKeyToAccount(generatePrivateKey());
-  const flood = Array.from({ length: EV.SANCTIONS_EVENT_WINDOW_MAX + 40 }, () => privateKeyToAccount(generatePrivateKey()));
+  const flood = Array.from({ length: 140 }, () => privateKeyToAccount(generatePrivateKey()));
   const LISTED_SIGNER = listedAcct.address.toLowerCase();
   const strict = createX402PayerScreen({ log: () => {}, noList: "refuse" });
   const lenient = createX402PayerScreen({ log: () => {} });
@@ -289,8 +291,11 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
     const forged = await run(strict, await signed3009(throwaway, { from: listedAcct.address }));
     ok(!forged.next && forged.code === 403, "a listed `from` the signature does not recover to: refused 403");
     await settle();
-    ok((await rows()).length === 0 && x402PayerScreenView().refusedUnrecorded === 4 && x402PayerScreenView().refused === 4, `...and none of those refusals is recorded; each counted as refused, not recorded (${(await rows()).length} rows, ${x402PayerScreenView().refusedUnrecorded} unrecorded)`);
-    ok(EV.sanctionsReportStatus() === "clear", "the report word stays clear");
+    ok((await rows()).length === 0 && x402PayerScreenView().refusedUnrecorded === 4 && x402PayerScreenView().refused === 4, `...and none of those refusals gets a row of its own (${(await rows()).length} rows, ${x402PayerScreenView().refusedUnrecorded} unrecorded)`);
+    let ag = await aggs();
+    ok(ag.length === 1 && ag[0].kind === "unproven-refusal" && ag[0].count === 4 && ag[0].byReason?.["unsigned-field"] === 3 && ag[0].byReason?.["unproven-signer"] === 1 && ag[0].address === null && ag[0].routeClass === "ref" && ag[0].report === null && typeof ag[0].hourStart === "string", `...but all four are counted in the hour's unproven-refusal aggregate row (${JSON.stringify(ag[0] && { count: ag[0].count, byReason: ag[0].byReason })})`);
+    ok(!JSON.stringify(ag).toLowerCase().includes(LISTED_SIGNER.slice(2)), "the aggregate row keeps no address the caller chose");
+    ok(EV.sanctionsReportStatus() === "clear", "the report word stays clear (the aggregate is a record, not a report)");
 
     // (b) The listed wallet signs: refused and recorded once, naming the signer.
     const real = await run(strict, await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" }));
@@ -307,32 +312,86 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
     await settle();
     ok(!p2.next && p2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === listedP2.address.toLowerCase()), "a listed Permit2 signer is refused and recorded");
 
-    // (c) Repeats inside the window write nothing more.
+    // (c) Repeats inside the window add attempts to the row, never a second row, never dropped.
     const before = (await rows()).length;
     for (let i = 0; i < 5; i++) { const r = await run(strict, await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" })); if (r.code !== 403) ok(false, "a repeat is still refused"); }
     await settle();
-    ok((await rows()).length === before && EV.sanctionsEventWriteLimits().repeats >= 5, `five more refused payments from the same listed signer on the same route class write no new row (${(await rows()).length - before} new, ${EV.sanctionsEventWriteLimits().repeats} repeats counted)`);
-    // Another direct route is the same route class: nothing more.
+    const refRow = (await rows()).find((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /ref/hash");
+    ok((await rows()).length === before && refRow?.attempts === 6 && Date.parse(refRow.lastSeenAt) >= Date.parse(refRow.at), `five more refused payments from the same listed signer on /ref add five attempts to its row (${(await rows()).length - before} new rows, attempts ${refRow?.attempts})`);
+    // Another direct route is the same route class: an attempt on the direct row.
     await run(lenient, await signed3009(listedAcct), { path: "/api/other" });
     await settle();
-    ok((await rows()).length === before, "the direct routes are one route class: a second direct route writes nothing more for that signer");
+    const directRow = (await rows()).find((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /api/hash");
+    ok((await rows()).length === before && directRow?.attempts === 2, `the direct routes are one route class: a second direct route is an attempt on the direct row (attempts ${directRow?.attempts})`);
+    ok(readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(`"attempts":6`), "the attempt count is in the stored file, not only in memory");
+    // Filed: the row takes no more attempts; the next one opens a new row.
+    await EV.markSanctionsEventsFiled({ ids: [refRow.id], reference: "RS-TEST" });
+    await run(strict, await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" }));
+    await settle();
+    const refRows = (await rows()).filter((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /ref/hash");
+    ok(refRows.length === 2 && refRows.find((x) => x.id === refRow.id)?.attempts === 6 && refRows.find((x) => x.id !== refRow.id)?.attempts === 1, "a filed row keeps the count it was filed with; the next attempt opens a new row");
 
-    // (d) The caps hold under a flood of distinct listed signers.
+    // (d) No cap: a flood of distinct listed signers is recorded in full, one row each.
     EV.__resetSanctionsEventsForTests(); EV.__resetSanctionsEventLimitsForTests();
     rmSync(process.env.SANCTIONS_EVENTS_FILE, { force: true });
     EV.__resetSanctionsEventsForTests();
     const one = await Promise.all(flood.slice(0, 30).map(async (a) => run(strict, await signed3009(a, { primaryType: "ReceiveWithAuthorization" }), { ip: "198.51.100.1" })));
-    await settle();
-    ok(one.every((r) => r.code === 403) && (await rows()).length === EV.SANCTIONS_EVENT_CLIENT_WINDOW_MAX && EV.sanctionsEventWriteLimits().clientCapped === 30 - EV.SANCTIONS_EVENT_CLIENT_WINDOW_MAX, `30 listed signers from one client address: all refused, ${EV.SANCTIONS_EVENT_CLIENT_WINDOW_MAX} recorded (${(await rows()).length})`);
     const many = await Promise.all(flood.slice(30).map(async (a, i) => run(strict, await signed3009(a, { primaryType: "ReceiveWithAuthorization" }), { ip: `198.51.${101 + Math.floor(i / 5)}.${i % 5}` })));
     await settle();
-    ok(many.every((r) => r.code === 403) && (await rows()).length === EV.SANCTIONS_EVENT_WINDOW_MAX && EV.sanctionsEventWriteLimits().capped > 0, `${flood.length} listed signers from many addresses: all refused, at most ${EV.SANCTIONS_EVENT_WINDOW_MAX} rows written in the window (${(await rows()).length}, ${EV.sanctionsEventWriteLimits().capped} capped)`);
-    ok(EV.sanctionsReportStatus() === "due" && (await EV.sanctionsEventsOperatorView()).writeLimits?.windowMax === EV.SANCTIONS_EVENT_WINDOW_MAX, "the word still reads due and the operator view names the limits");
-    // A new window writes again; an operator's own record is never held back.
-    const later = Date.now() + EV.SANCTIONS_EVENT_WINDOW_MS + 1000;
-    ok(await EV.recordSanctionsEvent({ kind: "screen-hit", address: "0x" + "ab".repeat(20), rail: "x402", route: "POST /api/hash" }, { now: later }) !== null, "the next window writes again");
-    for (let i = 0; i < EV.SANCTIONS_EVENT_WINDOW_MAX; i++) await EV.recordSanctionsEvent({ kind: "payout-refused", address: `0x${i.toString(16).padStart(40, "e")}` }, { now: later + 1 });
-    ok(await EV.recordSanctionsEvent({ kind: "blocked-refund", address: "0x" + "cd".repeat(20), refundId: 7 }, { now: later + 2, limit: false }) !== null, "past the cap, an operator's own record (limit: false) is still written");
+    const flooded = await rows();
+    ok(flood.length === 140 && [...one, ...many].every((r) => r.code === 403) && flooded.length === flood.length && new Set(flooded.map((x) => x.address.toLowerCase())).size === flood.length, `${flood.length} listed signers, 30 of them from one client address: all refused, every one recorded (${flooded.length} rows)`);
+    // Sent again: every attempt counted, no row added.
+    await Promise.all(flood.slice(0, 30).map(async (a) => run(strict, await signed3009(a, { primaryType: "ReceiveWithAuthorization" }), { ip: "198.51.100.1" })));
+    await settle();
+    const again = await rows();
+    ok(again.length === flood.length && again.filter((x) => x.attempts === 2).length === 30 && again.reduce((t, x) => t + x.attempts, 0) === flood.length + 30, `the same 30 again add one attempt each (${again.reduce((t, x) => t + x.attempts, 0)} attempts in ${again.length} rows)`);
+    ok(EV.sanctionsReportStatus() === "due" && (await EV.sanctionsEventsOperatorView()).writeLimits?.repeats === 30, "the word reads due and the operator view counts the repeats");
+    // Unproven refusals in a flood: one aggregate row per hour, its count exact.
+    const before2 = (await aggs()).reduce((t, x) => t + x.count, 0);
+    await Promise.all(Array.from({ length: 200 }, async () => run(strict, await signed3009(throwaway, { from: flood[0].address }))));
+    await settle();
+    const ag2 = (await aggs()).filter((x) => x.routeClass === "ref");
+    ok(ag2.length === 1 && ag2[0].count - before2 === 200, `200 refusals on an unproven address: counted in one aggregate row (${ag2.length} rows, count ${ag2[0]?.count})`);
+    ok(readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(`"count":${ag2[0].count}`), "the aggregate count is in the stored file");
+
+    // (f) A contract wallet's signature (EIP-1271 / EIP-6492: no local recovery). After the
+    //     facilitator verified it (the direct routes) its signer is recorded; before it (/ref)
+    //     it is refused, never a row, and counted in the aggregate as an unproven signer.
+    const smart = privateKeyToAccount(generatePrivateKey());
+    writeFileSync(process.env.SANCTIONS_SCREEN_FILE, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [smart.address.toLowerCase()] }));
+    SS.__resetSanctionsScreenForTests();
+    await SS.loadStoredSanctionsScreen();
+    const t6492 = Math.floor(Date.now() / 1000);
+    const contractSig = { "payment-signature": b64({ x402Version: 2, accepted, payload: { signature: "0x" + "ab".repeat(400), authorization: { from: smart.address, to: PAY_TO, value: "10000", validAfter: String(t6492 - 60), validBefore: String(t6492 + 300), nonce: nonce() } } }) };
+    const unprovenBefore = ((await aggs()).find((x) => x.routeClass === "ref")?.byReason?.["unproven-signer"]) || 0;
+    const sw1 = await run(strict, contractSig);
+    await settle();
+    ok(!sw1.next && sw1.code === 403 && !(await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase()) && (await aggs()).find((x) => x.routeClass === "ref")?.byReason?.["unproven-signer"] === unprovenBefore + 1, "/ref: a listed contract-wallet signer is refused, gets no row (not verified yet), and is counted in the aggregate as an unproven signer");
+    const sw2 = await run(lenient, contractSig, { path: "/api/hash" });
+    await settle();
+    ok(!sw2.next && sw2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase() && x.route === "POST /api/hash"), "direct routes (after verify): the same listed contract-wallet signer is refused and recorded");
+
+    // (g) A write that fails is retried, and the attempts it gathered meanwhile are kept.
+    const blocker = join(dir, "not-a-dir");
+    writeFileSync(blocker, "x");
+    const goodFile = process.env.SANCTIONS_EVENTS_FILE;
+    const failAcct = privateKeyToAccount(generatePrivateKey());
+    const failAddr = "0x" + "fa".repeat(20);
+    try {
+      process.env.SANCTIONS_EVENTS_FILE = join(blocker, "events.jsonl");
+      const first = await EV.recordSanctionsEvent({ kind: "screen-hit", address: failAddr, rail: "x402", route: "POST /api/hash" });
+      ok(first === null, "setup: the store refuses the first write (its directory is a file)");
+      const second = await EV.recordSanctionsEvent({ kind: "screen-hit", address: failAddr, rail: "x402", route: "POST /api/hash" });
+      ok(second?.attempts === 2, `the next refusal of the same payer is an attempt on the unwritten row, not a dropped repeat (attempts ${second?.attempts})`);
+      rmSync(blocker, { force: true });
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(blocker, { recursive: true });
+      await EV.flushSanctionsEvents();
+      const stored = readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((x) => x.address === failAddr);
+      ok(stored?.attempts === 2 && EV.sanctionsEventWriteLimits().pending === 0, `once the store recovers, the row is written with both attempts (${stored?.attempts})`);
+      const third = await EV.recordSanctionsEvent({ kind: "screen-hit", address: failAcct.address, rail: "x402", route: "POST /api/hash" });
+      ok(third && readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(failAcct.address), "and a new refusal after the recovery writes its row at once");
+    } finally { process.env.SANCTIONS_EVENTS_FILE = goodFile; EV.__resetSanctionsEventsForTests(); }
 
     // (e) Live control: a clean signed payment passes and records nothing.
     const n = (await rows()).length;

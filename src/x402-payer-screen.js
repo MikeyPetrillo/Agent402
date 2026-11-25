@@ -72,11 +72,13 @@
 // (src/sanctions-events.js, under its write limits) only for a listed address
 // the payment's own signature proves (src/x402-signed-payers.js): EIP-3009
 // `authorization.from` or Permit2 `permit2Authorization.from` recovered
-// locally, and on the direct routes (after verification) a Solana, Stellar or
-// Algorand signer. A listed address seen only in a field no signature covers
+// locally, and on the direct routes (after verification) the payment's own
+// signer field as the facilitator verified it (a contract wallet's EIP-1271 or
+// EIP-6492 signature included) and a Solana, Stellar or Algorand signer. A listed address seen only in a field no signature covers
 // (the channel fields, an unsigned block, anything on the strict screen,
 // which runs before verification, that the signature does not recover to) is
-// refused exactly the same and counted as `refusedUnrecorded`, never recorded.
+// refused exactly the same and counted as `refusedUnrecorded`, and in the
+// hour's `unproven-refusal` aggregate row (a count, never the address).
 //
 // COST. Decoding the header the middleware already decoded once, and one Set
 // lookup per address. No network call; a refusal alone adds local signature
@@ -86,7 +88,7 @@ import { screenAddresses, maskAddress } from "./sanctions-screen.js";
 import { nonEvmScreenAddressesFromRequest } from "./non-evm-payer.js";
 import { screenAddressForPayment } from "./tools/sanctions-kit.js";
 import { decodePaymentHeader } from "./payment-header.js";
-import { recordSanctionsEvent } from "./sanctions-events.js";
+import { recordSanctionsEvent, recordSanctionsAggregate } from "./sanctions-events.js";
 import { sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { x402SignedPayers } from "./x402-signed-payers.js";
 
@@ -162,11 +164,28 @@ const counts = { screened: 0, refused: 0, refusedUnrecorded: 0, servedUnscreened
  *  verified that transaction (not the strict screen, which runs before). */
 async function recordableListedOf(v, payload, { strict }) {
   if (v.nonEvm) return strict ? null : v.address;
-  const signed = await x402SignedPayers(payload);
-  if (!signed.length) return null;
+  const signed = new Set(await x402SignedPayers(payload));
+  // After verification (every screen but the strict one) the facilitator has
+  // checked the payment's own signer field, a contract wallet's signature
+  // (EIP-1271, EIP-6492) included, which no local recovery can prove.
+  if (!strict) {
+    const inner = payload?.payload;
+    const from = inner?.permit2Authorization ? inner.permit2Authorization.from : inner?.authorization?.from;
+    if (typeof from === "string" && EVM_RE.test(from)) signed.add(from.toLowerCase());
+  }
+  if (!signed.size) return null;
   let w;
-  try { w = screenAddresses(signed); } catch { return null; }
+  try { w = screenAddresses([...signed]); } catch { return null; }
   return w && w.ok === false && w.reason === "listed" ? w.address : null;
+}
+/** The aggregate's reason word for a refusal that is not recorded: the
+ *  payment's own signer field whose signature this server cannot prove
+ *  (before verification), or a field no signature covers. */
+function unrecordedReasonOf(v, payload) {
+  if (v.nonEvm) return "signer-before-verify";
+  const inner = payload?.payload;
+  const from = inner?.permit2Authorization ? inner.permit2Authorization.from : inner?.authorization?.from;
+  return typeof from === "string" && from.toLowerCase() === String(v.address).toLowerCase() ? "unproven-signer" : "unsigned-field";
 }
 let unscreenedLoggedAt = 0;
 let unreadableLoggedAt = 0;
@@ -178,7 +197,7 @@ export function x402PayerScreenView() {
     screened: counts.screened,
     refused: counts.refused,
     // Of those, refused on an address the payment's signature does not prove:
-    // refused all the same, not recorded in the sanctions events store.
+    // refused all the same, counted in the store's hourly aggregate row only.
     refusedUnrecorded: counts.refusedUnrecorded,
     servedUnscreened: counts.servedUnscreened,
     // Of those, EVM payments none of whose payer fields could be read.
@@ -253,14 +272,19 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
     // The rejected transaction, in full, for the records rule and its report
     // (src/sanctions-events.js), only for an address the payment's own
     // signature proves (recordableListedOf); one the request merely names is
-    // refused above and counted, never recorded. Never awaited: the refusal
+    // refused above and counted in the hourly aggregate. Never awaited: the refusal
     // does not wait on it.
     try {
       const payload = x402ScreenedPaymentOf(req)?.payload;
       const acc = payload?.accepted || payload || {};
       const route = `${req.method} ${req.path}`, ip = req.ip;
       recordableListedOf(v, payload, { strict }).then((address) => {
-        if (!address) { counts.refusedUnrecorded++; return; }
+        if (!address) {
+          // No row of its own (the address is the caller's to choose): counted
+          // in the hour's aggregate row, with no address.
+          counts.refusedUnrecorded++;
+          return recordSanctionsAggregate({ kind: "unproven-refusal", reason: unrecordedReasonOf(v, payload), rail: "x402", route });
+        }
         let listDate = null;
         try { listDate = sanctionsScreenOperatorView().publishDate || null; } catch { /* no list view */ }
         return recordSanctionsEvent({ kind: "screen-hit", address, rail: "x402", network: acc.network ?? null, amount: acc.amount ?? acc.maxAmountRequired ?? null, asset: acc.asset ?? null, route, ip, listPublishDate: listDate });

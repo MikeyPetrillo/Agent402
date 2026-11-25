@@ -3,7 +3,8 @@
 // payment names (src/x402-payer-screen.js), signed or not, but the sanctions
 // events store (src/sanctions-events.js) keeps a permanent record, so it
 // records only an address this module proves signed the payment. An address
-// a request merely states (a block no signature covers) is never recorded.
+// a request merely states (a block no signature covers) never gets a row of
+// its own; the store counts its refusal in an hourly aggregate row instead.
 //
 // PROVEN HERE:
 //   - `authorization.from`, when `payload.signature` recovers to it over the
@@ -14,7 +15,7 @@
 //   - `permit2Authorization.from`, when `payload.signature` recovers to it
 //     over Permit2's PermitWitnessTransferFrom (the exact witness, or the upto
 //     witness that names a facilitator).
-// NOT PROVEN (refused by the screen, never recorded): the payment channel
+// NOT PROVEN (refused by the screen, counted in the aggregate): the payment channel
 // fields (`channelConfig.payer`, `channelConfig.payerAuthorizer`, a channel
 // deposit's funder), any address in a payload whose signature does not
 // recover to it, and every address of a payload that names no EVM network.

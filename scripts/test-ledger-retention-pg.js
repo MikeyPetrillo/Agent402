@@ -2,7 +2,8 @@
 // it): runLedgerRetention with LEDGER_RETENTION=apply removes only resolved
 // refunds (paid, void) past their period; an owed, sending or blocked row of
 // any age stays, as does an unfiled reportable sanctions event; a resolved
-// row inside the period stays too.
+// row inside the period stays too. The sanctions events store keeps repeats as
+// attempts and aggregates as counts on its rows, on the database.
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-ledger-retention-pg.js
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
@@ -49,6 +50,28 @@ try {
   const unfiled = await sanc.recordSanctionsEvent({ kind: "blocked-refund", address: "0xabc", amountUsd: 0.01 }, { now: ancient });
   const filed = await sanc.recordSanctionsEvent({ kind: "screen-hit", address: "0xdef" }, { now: ancient + 1000 });
   await sanc.markSanctionsEventsFiled({ ids: [filed.id], reference: "RS-1" });
+
+  // Repeats and aggregates on the database: an attempt adds to the row, an
+  // aggregate counts in one row, and a filed row keeps the count it was filed with.
+  const bodyOf = async (id) => (await sdb.stateQuery(`SELECT body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND id = $2`, [sanc.SANCTIONS_EVENTS_COLLECTION, id])).rows[0]?.body;
+  const hitAddr = "0x" + "5f".repeat(20);
+  const h1 = await sanc.recordSanctionsEvent({ kind: "screen-hit", address: hitAddr, rail: "x402", route: "POST /api/hash" });
+  const h2 = await sanc.recordSanctionsEvent({ kind: "screen-hit", address: hitAddr.toUpperCase().replace("0X", "0x"), rail: "x402", route: "POST /api/other" });
+  const h3 = await sanc.recordSanctionsEvent({ kind: "screen-hit", address: hitAddr, rail: "x402", route: "POST /ref/hash" });
+  await sanc.flushSanctionsEvents();
+  ok(h1 && h2?.id === h1.id && h3 && h3.id !== h1.id && (await bodyOf(h1.id))?.attempts === 2 && (await bodyOf(h3.id))?.attempts === 1, `a repeat on the same route class is an attempt on the row in the database (${(await bodyOf(h1.id))?.attempts}); /ref is its own row`);
+  const a1 = await sanc.recordSanctionsAggregate({ kind: "unproven-refusal", reason: "unsigned-field", rail: "x402", route: "POST /ref/hash" });
+  for (let i = 0; i < 4; i++) await sanc.recordSanctionsAggregate({ kind: "unproven-refusal", reason: i % 2 ? "unproven-signer" : "unsigned-field", rail: "x402", route: "POST /ref/hash" });
+  await sanc.flushSanctionsEvents();
+  const ab = await bodyOf(a1.id);
+  ok(ab?.count === 5 && ab.byReason["unsigned-field"] === 3 && ab.byReason["unproven-signer"] === 2 && ab.address === null && ab.report === null, `an aggregate is one database row with its count (${ab?.count}, ${JSON.stringify(ab?.byReason)})`);
+  const view = await sanc.sanctionsEventsOperatorView({ recent: 1000 });
+  ok(view.recent.find((r) => r.id === h1.id)?.attempts === 2 && view.unfiled.some((r) => r.id === h1.id) && !view.unfiled.some((r) => r.id === a1.id), "the operator view reads the attempts; the record-only aggregate is not a report due");
+  await sanc.markSanctionsEventsFiled({ ids: [h1.id], reference: "RS-2" });
+  const h4 = await sanc.recordSanctionsEvent({ kind: "screen-hit", address: hitAddr, rail: "x402", route: "POST /api/hash" });
+  await sanc.flushSanctionsEvents();
+  const filedBody = await bodyOf(h1.id);
+  ok(filedBody?.filedRef === "RS-2" && filedBody.attempts === 2 && h4 && h4.id !== h1.id && (await bodyOf(h4.id))?.attempts === 1, "after filing, the filed row keeps its count and reference; the next attempt opens a new row");
 
   const dry = await R.runLedgerRetention({ now, env: { LEDGER_RETENTION: "" }, log: () => {} });
   ok((await present()).length === rows.length, `a dry run removes nothing (${JSON.stringify(dry?.refunds ?? dry)})`);

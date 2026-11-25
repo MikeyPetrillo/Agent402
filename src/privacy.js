@@ -537,7 +537,8 @@ on-chain${gatewayBatched ? " (for a Circle Gateway batched payment, it keeps Gat
 ledgers (wallet address, amount, chain, transaction id, tool, response digest${referralOn ? ", and for a referral payment the split its transaction shows" : ""}) are kept for seven years after
 the sale, the period our accounting and tax records must cover. A record of a payment refused or held under sanctions
 screening${geoBlockOn ? ", or refused because it came from a region under U.S. sanctions" : ""} (the address, rail, network, amount, route, time, the IP
-address the request came from, the list entry${geoBlockOn ? ", and for a refusal by location the sanctioned country or region code" : ""}), is
+address the request came from, the list entry, the number of attempts within a day${geoBlockOn ? ", and for a refusal by location the sanctioned country or region code" : ""}), and an
+hourly count of refusals that name no proven address (no address is kept with it), are
 kept privately for ten years, as US sanctions rules require. The consent a card checkout records (that you accepted
 the terms, asked us to start at once and, for a monitor, agreed to the automatic renewal at the price shown, with the
 time and the checkout session id) is kept with the purchase or subscription record for as long as that record is kept. A feedback verdict and its reason are kept with the sale they rate${awsOn ? `; an AWS payment that bought no answer is kept ${AWS_UNANSWERED_KEEP_DAYS} days` : ""}.
