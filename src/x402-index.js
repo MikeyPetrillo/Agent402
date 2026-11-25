@@ -324,7 +324,7 @@ export { sellerDocsUrlFor, SELLER_DOCS_URL_MAX, SELLER_DOCS_URL_LEGEND };
 import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
-import { noteTurn } from "./active-jobs.js";
+import { noteTurn, timeSpan, runAsJob } from "./active-jobs.js";
 import { sellerText, firstSellerText, resourceUrlText, malformedRoute } from "./seller-text.js";
 // A seller's host for a span name (bounded; the origin itself when it does not parse).
 const hostOfOriginForSpan = (origin) => { try { return new URL(origin).host.slice(0, 60); } catch { return String(origin || "").slice(0, 60); } };
@@ -3049,8 +3049,12 @@ function crawlLanePump() {
 // one iteration for about 100 ms. Through the lane an iteration parses one.
 async function parseInCrawlLane(text) {
   await crawlLaneTurn();
-  return JSON.parse(text);
+  return laneSpan("crawl-parse", () => JSON.parse(text));
 }
+// A crawl's synchronous stretch, timed under its name for the [loop-lag]
+// line (src/active-jobs.js): a stall inside a crawl continuation named
+// nothing, since only the spans and contained turns are recorded.
+const laneSpan = (name, fn) => timeSpan(name, fn);
 async function runCrawlLaneAsync(gen, sliceMs = CRAWL_SLICE_MS, onSlice = null) {
   await crawlLaneTurn();
   let from = performance.now();
@@ -6774,17 +6778,25 @@ async function probeDoc(originUrl, path, opts, prevParsed) {
 // the origin can answer 304 (it sent a validator): then the body is kept
 // gzip-packed (`manifestBody`) and parsed again only on that 304, so the
 // derivation runs on exactly the document it ran on before.
-const gzipAsync = promisify(gzip), gunzipAsync = promisify(gunzip);
+const gzipAsyncRaw = promisify(gzip), gunzipAsyncRaw = promisify(gunzip);
+// Each call starts in a crawl-lane turn: starting a zlib stream (its state and
+// buffers, the input copied in) runs on this thread, and every crawl whose
+// read landed in one poll phase started theirs in that one iteration.
+const gunzipAsync = async (buf) => { await crawlLaneTurn(); return gunzipAsyncRaw(buf); };
 async function packManifestBody(body) {
   if (typeof body !== "string" || !body) return null;
-  try { return await gzipAsync(Buffer.from(body, "utf8")); } catch { return null; }
+  await crawlLaneTurn();
+  try { return await gzipAsyncRaw(Buffer.from(body, "utf8")); } catch { return null; }
 }
 // The same for an OpenAPI seller's derived rows: the next crawl needs them
 // only when /openapi.json answers 304, so between crawls they are one packed
 // buffer per seller instead of every row as heap objects.
 async function packOpenapiRows(tools, routes) {
   if (!Array.isArray(tools)) return null;
-  try { return await gzipAsync(Buffer.from(JSON.stringify({ tools, routes: Array.isArray(routes) ? routes : [] }), "utf8")); } catch { return null; }
+  // Serialised in a crawl-lane turn (see parseInCrawlLane): concurrent crawls'
+  // rows are not stringified back to back in one loop iteration.
+  await crawlLaneTurn();
+  try { return await gzipAsyncRaw(Buffer.from(laneSpan("crawl-pack-rows", () => JSON.stringify({ tools, routes: Array.isArray(routes) ? routes : [] })), "utf8")); } catch { return null; }
 }
 /** The previous crawl's OpenAPI rows, for a 304: unpacked from the entry, or
  *  the arrays an entry seeded by a test still holds; null when there are none
@@ -6793,7 +6805,7 @@ async function previousOpenapiRows(prev) {
   if (Array.isArray(prev?.openapiTools)) return { tools: prev.openapiTools, routes: prev.openapiRoutes || [] };
   if (!Buffer.isBuffer(prev?.openapiPacked)) return null;
   try {
-    const { tools, routes } = JSON.parse((await gunzipAsync(prev.openapiPacked)).toString("utf8"));
+    const { tools, routes } = await parseInCrawlLane((await gunzipAsync(prev.openapiPacked)).toString("utf8"));
     return Array.isArray(tools) ? { tools, routes: Array.isArray(routes) ? routes : [] } : null;
   } catch { return null; }
 }
@@ -6804,7 +6816,7 @@ async function previousManifestDoc(prev) {
   const m = prev?.manifest;
   if (m && typeof m === "object" && !m.slimmed) return m;
   if (Buffer.isBuffer(prev?.manifestBody)) {
-    try { return JSON.parse((await gunzipAsync(prev.manifestBody)).toString("utf8")); } catch { return null; }
+    try { return await parseInCrawlLane((await gunzipAsync(prev.manifestBody)).toString("utf8")); } catch { return null; }
   }
   return null;
 }
@@ -6967,14 +6979,21 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // a manifest, because their openapi covered 2 of the 9 routes the Bazaar
     // had settled. Openapi metadata still wins per-route; Bazaar rows without
     // an openapi match pass through.
-    // The merge passes below run in one synchronous stretch per seller; it is
-    // timed as a span for the [loop-lag] line (src/active-jobs.js noteTurn),
-    // named with the seller's host, so a stall at a repeatable position in a
-    // crawl names the document it was reading.
-    const manifestPassAt = Date.now(), manifestPassT0 = performance.now();
-    tools = mergeOpenapiIntoBazaar(tools, bazaarToolsByOrigin.get(originUrl) || [], {
+    // The merge passes below are this seller's synchronous derivation. Run as
+    // the crawl's continuation they shared a loop iteration with every other
+    // crawl whose read landed in the same poll (up to CRAWL_CONCURRENCY at
+    // once), so the iteration held the loop for all of them, with no single
+    // span long enough to be named. Each pass now takes a turn of the crawl lane, so an
+    // iteration runs at most one crawl's pass, and each is timed as a span
+    // named with the seller's host for the [loop-lag] line (src/active-jobs.js).
+    const passSpan = `crawl-manifest-passes ${hostOfOriginForSpan(originUrl)}`;
+    const manifestPass = async (fn) => { await crawlLaneTurn(); return laneSpan(passSpan, fn); };
+    // The registry's rows as they stand now: every pass reads this one list,
+    // as it did when the passes ran in one turn.
+    const registryRows = bazaarToolsByOrigin.get(originUrl) || [];
+    tools = await manifestPass(() => mergeOpenapiIntoBazaar(tools, registryRows, {
       allRoutes: openapiRoutes || [],
-    });
+    }));
     // The manifest is folded in LAST and by pathname, so it can only add
     // endpoints nobody else reported or enrich ones already known. It can
     // never add a second row for an endpoint we already list — see
@@ -6983,23 +7002,28 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // probes only: a local Map, never on a row or the cache entry, dropped when
     // this crawl returns (src/probe-example.js). Manifest first, then OpenAPI.
     const probeExamples = new Map();
-    tools = mergeManifestIntoTools(normaliseManifestTools(manifest, originUrl, { examples: probeExamples }), tools);
+    const manifestRows = await manifestPass(() => normaliseManifestTools(manifest, originUrl, { examples: probeExamples }));
+    tools = await manifestPass(() => mergeManifestIntoTools(manifestRows, tools));
     // Kept per origin in memory only, for the next 304 and a re-price.
     probeExampleMemo.set(originUrl, "manifest", probeExamples);
     mergeProbeExamples(probeExamples, openapiExamples);
     probeExampleMemo.set(originUrl, "openapi", openapiExamples);
-    tools = dropDeclaredFreeEndpoints(tools, manifest);
-    tools = dropUnvouchedNonProductRoutes(tools, (bazaarToolsByOrigin.get(originUrl) || []).map((t) => t.route));
+    tools = await manifestPass(() => dropUnvouchedNonProductRoutes(dropDeclaredFreeEndpoints(tools, manifest), registryRows.map((t) => t.route)));
     // Which routes the seller's own documents name; the rest must prove
     // themselves live (see stampDeclared / needsLiveProof).
-    stampDeclared(tools, [...normaliseManifestTools(manifest, originUrl), ...(openapiRoutes || []), ...(openapiTools || [])]);
-    noteTurn(`crawl-manifest-passes ${hostOfOriginForSpan(originUrl)}`, manifestPassAt, performance.now() - manifestPassT0);
+    const declaredRows = await manifestPass(() => normaliseManifestTools(manifest, originUrl));
+    await manifestPass(() => stampDeclared(tools, [...declaredRows, ...(openapiRoutes || []), ...(openapiTools || [])]));
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
-    tools = carryForwardLearnedQuotes(tools, prev);
+    tools = await manifestPass(() => carryForwardLearnedQuotes(tools, prev));
     tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples, gated: scheduled });
-
-    cache.set(originUrl, {
+    // Not this seller's turn: carry the last reading forward rather than
+    // dropping it — null must mean "never probed", not "not probed today".
+    const paywall = await paywallForCrawl(prev, tools, { redirectedTo, force: forcePaywall, pastDeadline, gated: scheduled });
+    // The store (the cap, the cleaning, the route index's queue) in a lane
+    // turn of its own, like the passes above.
+    await crawlLaneTurn();
+    laneSpan(passSpan, () => cache.set(originUrl, {
       // Derivation is done: the entry keeps the slim keys its readers use,
       // and the packed document for a 304.
       manifest: slimManifestForMemory(manifest),
@@ -7022,10 +7046,8 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       // and a seller cannot fix a gap they cannot see — see discoveryNote().
       discoveryPath: WELL_KNOWN_PATH,
       fallbackErrors: undefined,
-      // Not this seller's turn: carry the last reading forward rather than
-      // dropping it — null must mean "never probed", not "not probed today".
-      paywall: await paywallForCrawl(prev, tools, { redirectedTo, force: forcePaywall, pastDeadline, gated: scheduled }),
-    });
+      paywall,
+    }));
     // The revisit back-off (src/seller-load.js): the same manifest and OpenAPI
     // as the last read doubles the wait before the next crawl; a change resets it.
     // The seller's own cadence hint (`revisitAfterSeconds` in its manifest)
@@ -7173,6 +7195,10 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       ? registryRowsUnderCap(bazaarTools, originUrl, prev, meter)
       : null;
     let tools;
+    // A short list's passes run in one turn, a crawl-lane turn: as the
+    // crawl's continuation they shared an iteration with every other crawl
+    // whose read landed in the same poll.
+    if (!laned && !underCap) await crawlLaneTurn();
     if (underCap) {
       tools = await runCrawlLaneAsync(underCap.fill([]), CRAWL_SLICE_MS, meter.slice);
     } else {
@@ -7223,6 +7249,9 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       if (passTurn) await passTurn();
       // Registry rows alone, and a read of ours did not complete: no verdict.
       if (!openapiTools.length && holdOnOurs()) return;
+      const paywall = await paywallForCrawl(prev, tools, { redirectedTo: prev?.redirectedTo ?? null, force: forcePaywall, pastDeadline, gated: scheduled });
+      // The store in a crawl-lane turn of its own (see the manifest path).
+      await crawlLaneTurn();
       cache.set(originUrl, {
         // A fresh tool list: the total is read from it, not the old entry
         // (a seller that shrank from 77,000 tools to 6,000 reads 6,000).
@@ -7274,7 +7303,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         // while never having responded — and the marketplace rendered them
         // "healthy". A crawl completing is not a seller answering.
         originResponded: openapiTools.length > 0,
-        paywall: await paywallForCrawl(prev, tools, { redirectedTo: prev?.redirectedTo ?? null, force: forcePaywall, pastDeadline, gated: scheduled }),
+        paywall,
       });
       return;
     }
@@ -9710,6 +9739,9 @@ function _loadPersistedIndexCache(file = INDEX_CACHE_FILE) {
   } catch { return 0; }
 }
 
+// The cycle's save runs after the crawl's lease is released, so a stall in it
+// named no job: it is a job of its own on the [loop-lag] line.
+const persistCacheAsJob = () => runAsJob("x402-index-persist", () => persistIndexCacheAsync());
 const ROUTE_INDEX_WARM_DELAY_MS = Number(process.env.ROUTE_INDEX_WARM_DELAY_MS || 30_000);
 export function startCrawler(opts = {}) {
   if (crawlerTimer) return;
@@ -9769,7 +9801,7 @@ export function startCrawler(opts = {}) {
   // contained (src/contained-turn.js): a throw is counted, never fatal.
   firstCrawlTimer = setTimeout(contained("index-first-crawl", () => {
     firstCrawlTimer = null;
-    runDiscoveryLeased(selfOrigin).then(() => runCrawlLeased()).then(() => persistIndexCacheAsync()).catch(() => {});
+    runDiscoveryLeased(selfOrigin).then(() => runCrawlLeased()).then(() => persistCacheAsJob()).catch(() => {});
   }), Math.max(0, firstDelayMs));
   if (typeof firstCrawlTimer.unref === "function") firstCrawlTimer.unref();
   crawlerTimer = setInterval(contained("index-crawl-cycle", () => {
@@ -9782,7 +9814,7 @@ export function startCrawler(opts = {}) {
       // `replaces` recorded anything is invisible to reverify, which only ever
       // re-checks what is already in the map.
       .then(() => discoverSuccessions().catch(() => {}))
-      .then(() => persistIndexCacheAsync())
+      .then(() => persistCacheAsJob())
       .catch(() => {});
   }), CRAWL_INTERVAL_MS);
   discoveryTimer = setInterval(contained("index-discovery", () => runDiscoveryLeased(selfOrigin)), DISCOVERY_INTERVAL_MS);
@@ -10886,7 +10918,7 @@ function newDecorationFold(v) {
 function foldDecorationContext(f, until = Infinity) {
   const n = f.tools.length + f.bazaar.length;
   for (; f.j < n; f.j++) {
-    if ((f.j & 255) === 0 && until !== Infinity && f.j > 0 && performance.now() >= until) return false;
+    if ((f.j & 15) === 0 && until !== Infinity && f.j > 0 && performance.now() >= until) return false;
     const t = f.j < f.tools.length ? f.tools[f.j] : f.bazaar[f.j - f.tools.length];
     const nets = t.networks || [];
     if (Array.isArray(nets)) for (const net of nets) f.nets.add(net); else f.nets.add(nets); // flatMap's one level
@@ -10951,7 +10983,7 @@ function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
     }
     const tools = v.tools || [];
     for (; p.i < tools.length; p.i++) {
-      if ((p.i & 255) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;
+      if ((p.i & 15) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;
       const t = tools[p.i];
       // paid:false = the seller's own doc says this operation is free.
       // It lists on the marketplace, but it is never a BUY candidate:
@@ -11464,7 +11496,10 @@ function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infi
   if (!pool) return from; // decoration ran out of time: resume here next slice
   const { postings } = target;
   for (let pos = from; pos < pool.length; pos++) {
-    if (pos > from && (pos & 63) === 0 && until !== Infinity && performance.now() >= until) return pos;
+    // A clock read per tool (it costs far less than one tool's statics): with
+    // 64 tools between reads, tools of long seller-written text let a 12 ms
+    // slice run several times its length.
+    if (pos > from && until !== Infinity && performance.now() >= until) return pos;
     const t = pool[pos];
     const st = toolStatics(t, origin);
     if (st.broken) { brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
@@ -11512,7 +11547,7 @@ let shadowFinishFaultForTest = null;
 export function _setShadowFinishFaultForTest(err) { shadowFinishFaultForTest = err || null; }
 function routeIndexStartShadow() {
   if (routeIdx.shadow) return;
-  const shadow = { ...newRouteIndexShard(), entries: [...cache].filter(([, v]) => v && typeof v === "object"), i: 0, late: [], cur: null };
+  const shadow = { ...newRouteIndexShard(), entries: [...cache].filter(([, v]) => v && typeof v === "object"), i: 0, late: [], li: 0, cur: null };
   routeIdx.shadow = shadow;
   // Each slice runs contained (a throw an entry's step did not catch is
   // counted under route-index-shadow, that entry is dropped and the build
@@ -11524,9 +11559,14 @@ function routeIndexStartShadow() {
     try {
       while (performance.now() < until) {
         if (!shadow.cur) {
-          if (shadow.i >= shadow.entries.length) break;
-          const [origin, v] = shadow.entries[shadow.i++];
-          if (cache.get(origin) !== v || isBrokenEntry(v)) continue;
+          // The snapshot first, then the entries the live index took while
+          // the shadow was filling (`late`), each in slices: carried over in
+          // the finish's one turn they held the loop for all of them at once.
+          let origin, v;
+          if (shadow.i < shadow.entries.length) [origin, v] = shadow.entries[shadow.i++];
+          else if (shadow.li < shadow.late.length) [origin, v] = shadow.late[shadow.li++];
+          else break;
+          if (cache.get(origin) !== v || shadow.indexed.has(v) || isBrokenEntry(v)) continue;
           shadow.cur = { origin, v, pos: 0 };
         }
         let next;
@@ -11541,7 +11581,7 @@ function routeIndexStartShadow() {
         if (routeIdx.shadow === shadow) setImmediate(step);
       }
     }
-    if (shadow.cur || shadow.i < shadow.entries.length) { setImmediate(step); return; }
+    if (shadow.cur || shadow.i < shadow.entries.length || shadow.li < shadow.late.length) { setImmediate(step); return; }
     // The finish. A throw here abandons this build (the live index keeps
     // answering) and clears routeIdx.shadow, which gates every later rebuild:
     // left set, no rebuild would ever start again. contained() counts it.
