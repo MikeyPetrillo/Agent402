@@ -150,6 +150,7 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   }
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/const x402PayerScreen = createX402PayerScreen\(\);/.test(server), "server.js mounts the screen with its real signer reader");
+  ok(/function flushStateQueues[\s\S]{0,200}const flushes = \[[^\]]*\bflushSanctionsEvents\b/.test(server) && /\bstartSanctionsJournalReplay\(\)/.test(server), "server.js writes pending sanctions changes on a graceful shutdown and replays the journal at boot");
   __resetX402PayerScreenForTests();
 }
 
