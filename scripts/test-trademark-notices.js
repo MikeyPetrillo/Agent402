@@ -7,12 +7,13 @@
 //   node scripts/test-trademark-notices.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { pageText } from "./lib/html-text.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
 const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
 const flat = (f) => read(f).replace(/\s+/g, " ");
-const text = (html) => String(html).replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ").replace(/&#39;|&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
+const text = pageText;
 
 const GENERAL = "All other product and company names are trademarks of their respective owners.";
 const { AWS_MARK_NOTICE, EDGAR_MARK_NOTICE, CLAUDE_MARK_NOTICE } = await import("../src/mark-notices.js");

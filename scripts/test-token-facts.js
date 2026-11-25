@@ -12,6 +12,9 @@ import {
 } from "../src/tools/token-facts.js";
 import { isNonCommercialRpc } from "../src/rpc-terms.js";
 
+// A URL whose host is `domain` or a subdomain of it (never a substring match).
+const hostIs = (url, domain) => { try { const h = new URL(url).hostname; return h === domain || h.endsWith(`.${domain}`); } catch { return false; } };
+
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
@@ -284,7 +287,7 @@ const reason = (f, field) => f.limits.find((l) => l.field === field)?.reason || 
     const lanes = tokenRpcLanes(c, {});
     ok(lanes.length >= 1 && lanes.every((l) => !isNonCommercialRpc(l)), `${c}: a permitted lane with no key set (${lanes.join(", ")})`);
   }
-  ok(tokenRpcLanes("base", { ALCHEMY_API_KEY: "k" }).at(-1).includes("alchemy.com") && tokenRpcLanes("base", {})[0].includes("publicnode"), "the public lanes are tried first and the keyed lane last");
+  ok(hostIs(tokenRpcLanes("base", { ALCHEMY_API_KEY: "k" }).at(-1), "alchemy.com") && hostIs(tokenRpcLanes("base", {})[0], "publicnode.com"), "the public lanes are tried first and the keyed lane last");
   const st = { lanes: ["https://rpc.test/a"], requests: 0, deadline: Date.now() + 10_000 };
   globalThis.fetch = async () => { throw new TypeError("fetch failed"); };
   const s0 = await simulateTrade(st, { token: TOKEN, pool: POOL, poolBal: 100n, why: null }).finally(() => { globalThis.fetch = realFetch; });
