@@ -538,7 +538,7 @@ ledgers (wallet address, amount, chain, transaction id, tool, response digest${r
 the sale, the period our accounting and tax records must cover. A record of a payment refused or held under sanctions
 screening${geoBlockOn ? ", or refused because it came from a region under U.S. sanctions" : ""} (the address, rail, network, amount, route, time, the IP
 address the request came from, the list entry, the number of attempts within a day${geoBlockOn ? ", and for a refusal by location the sanctioned country or region code" : ""}), and an
-hourly count of refusals that name no proven address (no address is kept with it), are
+hourly count of refusals that name no proven address${geoBlockOn ? ", and of refusals by location past the per-caller and hourly bounds" : ""} (no address is kept with it${geoBlockOn ? "; a count of refusals by location keeps the country or region code" : ""}), are
 kept privately for ten years, as US sanctions rules require. The consent a card checkout records (that you accepted
 the terms, asked us to start at once and, for a monitor, agreed to the automatic renewal at the price shown, with the
 time and the checkout session id) is kept with the purchase or subscription record for as long as that record is kept. A feedback verdict and its reason are kept with the sale they rate${awsOn ? `; an AWS payment that bought no answer is kept ${AWS_UNANSWERED_KEEP_DAYS} days` : ""}.
