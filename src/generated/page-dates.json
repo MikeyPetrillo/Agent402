@@ -420,7 +420,7 @@
     },
     "/integrations/eliza": {
       "published": "2026-09-24",
-      "modified": "2026-11-25"
+      "modified": "2026-11-24"
     },
     "/integrations/google-adk": {
       "published": "2026-09-24",
@@ -432,7 +432,7 @@
     },
     "/integrations/langchain-python": {
       "published": "2026-09-24",
-      "modified": "2026-11-25"
+      "modified": "2026-11-24"
     },
     "/integrations/llamaindex": {
       "published": "2026-09-24",
