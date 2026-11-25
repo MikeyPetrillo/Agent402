@@ -16,15 +16,23 @@
 // scam", "you should buy") fails wherever it appears. A judgment WORD on its
 // own ("scam", "rug", "fraud") is allowed only inside a clause that says what
 // the data cannot detect ("on-chain data cannot detect off-chain fraud"),
-// because that caveat is required and names no token. The token's own name
-// and symbol are removed first: a token called "Safe" is not a claim.
+// because that caveat is required and names no token.
+//
+// The token's name and symbol are chosen by whoever minted it, so they never
+// excuse a FIXED phrase: a token named "is safe" whose report echoes the name
+// still reads "is safe" to the buyer. Only the bare-word pass removes them (a
+// token called "Safe" is not a claim), by exact match on token boundaries, and
+// never a name that is itself a judgment phrase. tokenLabel() is the one
+// normalization a name or symbol gets before it reaches a prompt, a delivered
+// header or this check.
 import { notChargedHere } from "./not-charged.js";
+import { stripHiddenCharacters } from "./hidden-chars.js";
 
 export const TOKEN_FACTS_NOTICE = "These are facts read from the chain and named public sources. No flags does not mean a token is legitimate; off-chain fraud cannot be detected here. Not investment advice.";
 
 // The wording rule the report prompts carry, so the model is told the same
 // rule the checker enforces.
-export const TOKEN_CLAIM_RULE = "Never describe this token (or any token) as safe, unsafe, legitimate, legit, trustworthy, low-risk, risk-free, a scam, not a scam, a rug, a rug pull or fraudulent, and never tell the reader to buy, sell, hold or avoid it. Do not use those words at all except in one caveat sentence of the form \"on-chain data cannot detect off-chain fraud\". Report each fact and what it shows; the reader draws the conclusion.";
+export const TOKEN_CLAIM_RULE = "Never describe this token (or any token) as safe, unsafe, legitimate, legit, trustworthy, low-risk, risk-free, a scam, not a scam, a rug, a rug pull or fraudulent, never call any outcome guaranteed, and never tell the reader to buy, sell, hold or avoid it. Do not use those words at all except in one caveat sentence of the form \"on-chain data cannot detect off-chain fraud\". Report each fact and what it shows; the reader draws the conclusion.";
 
 const JUDGE = "(?:safe|unsafe|legitimate|legit|trustworthy|low[- ]risk|risk[- ]free|scam|scams|scammy|rug|rugs|rugged|rugpull|rug[- ]pull|fraud|fraudulent|ponzi)";
 // Phrases that are a judgment wherever they appear.
@@ -43,6 +51,8 @@ const FIXED = [
     re: /\b(?:we|i)\s+(?:strongly\s+)?(?:recommend|advise|suggest)(?:s|ed)?\s+(?:against\s+)?(?:buying|selling|avoiding|holding|investing|exiting)\b/i },
   { rule: "tells the reader to buy, sell, hold or avoid",
     re: /(?:^|[.!?:;\n]\s*|\b(?:do not|don't|never)\s+)(?:buy|sell|avoid|hold)\s+(?:this|the|these)\s+(?:token|coin|tokens|coins|project)\b/i },
+  { rule: "promises an outcome",
+    re: /\bguaranteed?\b/i },
   { rule: "tells the reader to buy, sell, hold or avoid",
     re: /\b(?:strong\s+)?(?:buy|sell|avoid|hold)\s+(?:rating|signal|recommendation)\b|\bstrong\s+(?:buy|sell)\b/i },
 ];
@@ -66,13 +76,41 @@ function firstCaveatEnd(clause) {
 
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+export const TOKEN_NAME_MAX = 64;
+export const TOKEN_SYMBOL_MAX = 16;
+
+/** A minter-chosen token name or symbol as data: hidden characters (TAG text,
+ *  zero-width, bidi), control and format characters removed, whitespace
+ *  collapsed to one space, capped at `max` characters. null when nothing is
+ *  left. */
+export function tokenLabel(value, max = TOKEN_NAME_MAX) {
+  if (value == null) return null;
+  const s = stripHiddenCharacters(String(value)).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  const cps = [...s];
+  return cps.length > max ? cps.slice(0, max).join("").trim() : s;
+}
+
+/** A name or symbol inside a prompt's evidence: a JSON string literal, so a
+ *  quote or bracket in it cannot read on as our own words. */
+export function quotedTokenLabel(value, max = TOKEN_NAME_MAX) {
+  const s = tokenLabel(value, max);
+  return s == null ? "unknown" : JSON.stringify(s);
+}
+
+const isJudgmentPhrase = (s) => FIXED.some(({ re }) => re.test(s));
+
 /** Every judgment the text makes about a token: [{ phrase, rule }], [] when
- *  none. `names` are the token's own name and symbol, removed first. */
+ *  none. `names` are the token's own name and symbol: never removed before
+ *  the fixed phrases, removed (exactly, on token boundaries) only before the
+ *  bare-word pass, and never when the name is itself a judgment phrase. */
 export function tokenClaimViolations(text, { names = [] } = {}) {
-  let t = String(text || "").replace(PROPER, " ");
+  const t = String(text || "").replace(PROPER, " ");
+  let bare = t;
   for (const n of names) {
-    const s = String(n || "").trim();
-    if (s.length >= 2) t = t.replace(new RegExp(`(?<![\\w$])${escapeRe(s)}(?![\\w])`, "gi"), " ");
+    const s = tokenLabel(n, TOKEN_NAME_MAX);
+    if (!s || s.length < 2 || isJudgmentPhrase(s)) continue;
+    bare = bare.replace(new RegExp(`(?<![\\p{L}\\p{N}_$])${escapeRe(s)}(?![\\p{L}\\p{N}_])`, "gu"), " ");
   }
   const out = [];
   const seen = new Set();
@@ -89,7 +127,7 @@ export function tokenClaimViolations(text, { names = [] } = {}) {
   // caveat ends before it; the caveat's earliest end is found once per clause
   // (a judgment word starts on a word boundary, so a caveat that ends before
   // it reads the same in the prefix as in the whole clause).
-  for (const clause of t.split(/[.;!?\n]+/)) {
+  for (const clause of bare.split(/[.;!?\n]+/)) {
     WORD.lastIndex = 0;
     let caveatEnd;
     for (const m of clause.matchAll(WORD)) {

@@ -45,7 +45,7 @@ import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { testSeamOn } from "../test-seams.js";
 import { notChargedHere } from "../not-charged.js";
-import { TOKEN_FACTS_NOTICE, TOKEN_CLAIM_RULE, checkedTokenProse } from "../token-claims.js";
+import { TOKEN_FACTS_NOTICE, TOKEN_CLAIM_RULE, TOKEN_NAME_MAX, TOKEN_SYMBOL_MAX, checkedTokenProse, quotedTokenLabel, tokenLabel } from "../token-claims.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -218,8 +218,12 @@ function makeTokenBriefHandlerInner(tierSlug) {
     //    (c) substance - no market AND no holder data: a brief with neither is
     //        not a due-diligence brief, it is a paid shrug (the "token OR
     //        holders" rule from token-risk).
-    const name = report?.token?.name ?? jup?.name ?? safety?.token?.name ?? null;
-    const symbol = report?.token?.symbol ?? jup?.symbol ?? safety?.token?.symbol ?? null;
+    // The name and symbol are the minter's own text: normalized and capped once
+    // here (src/token-claims.js tokenLabel), so the prompt, the delivered
+    // header, the claim check and the evidence all read the same value.
+    const name = tokenLabel(report?.token?.name ?? jup?.name ?? safety?.token?.name, TOKEN_NAME_MAX);
+    const symbol = tokenLabel(report?.token?.symbol ?? jup?.symbol ?? safety?.token?.symbol, TOKEN_SYMBOL_MAX);
+    const pairSymbol = (v) => tokenLabel(v, TOKEN_SYMBOL_MAX) || "?";
     if (!report && !safety && !jup) {
       throw bad(`Could not resolve Solana mint "${mint}" on RugCheck, Jupiter or DexScreener (report: ${String(reportR.error || "").slice(0, 80)}). Confirm it is an SPL token mint address, not a wallet or a pair address.${notChargedHere()}`, 422);
     }
@@ -261,7 +265,7 @@ function makeTokenBriefHandlerInner(tierSlug) {
     //    probe failure. A failed leg NEVER becomes a silent zero.
     const identityBlock = [
       `Mint ${mint}`,
-      `Name ${name || "unknown"} (${symbol || "unknown"}), decimals ${report?.token?.decimals ?? jup?.decimals ?? "unknown"}`,
+      `Name ${quotedTokenLabel(name, TOKEN_NAME_MAX)} (symbol ${quotedTokenLabel(symbol, TOKEN_SYMBOL_MAX)}; both chosen by the minter, quoted as data), decimals ${report?.token?.decimals ?? jup?.decimals ?? "unknown"}`,
       `Supply ${report?.token?.supply ?? jup?.totalSupply ?? "unknown"} (circulating ${jup?.circulatingSupply ?? "unknown"})`,
       `Holder count ${report?.totalHolders ?? jup?.holderCount ?? "unknown"}`,
       `Launchpad ${report?.launchpad ?? jup?.launchpad ?? "none reported"}; first detected ${report?.detectedAt || "unknown"}; first pool ${jup?.firstPool?.id || "unknown"} created ${jup?.firstPool?.createdAt || "unknown"}`,
@@ -281,7 +285,7 @@ function makeTokenBriefHandlerInner(tierSlug) {
     ].join("\n");
 
     const marketLines = marketRows.slice(0, t.markets).map((m, i) => `${i + 1}. ${m.type || "?"} pool ${m.pool || "?"} - liquidity ${usd(m.liquidityUsd)}, LP locked ${pct(m.lpLockedPct)} (${usd(m.lpLockedUsd)}), LP providers ${m.lpProviders ?? "?"}`).join("\n");
-    const pairLines = pairRows.slice(0, t.pairs).map((p, i) => `${i + 1}. ${p.dex || "?"} ${p.base?.symbol || "?"}/${p.quote?.symbol || "?"} ${p.pairAddress || "?"} - liquidity ${usd(p.liquidityUsd)}, volume 24h ${usd(p.volume?.h24)} / 6h ${usd(p.volume?.h6)} / 1h ${usd(p.volume?.h1)}, price change 24h ${p.priceChangePct?.h24 ?? "?"}% / 1h ${p.priceChangePct?.h1 ?? "?"}%, buys/sells 24h ${p.txns24h?.buys ?? "?"}/${p.txns24h?.sells ?? "?"}, 6h ${p.txns6h?.buys ?? "?"}/${p.txns6h?.sells ?? "?"}, 1h ${p.txns1h?.buys ?? "?"}/${p.txns1h?.sells ?? "?"}, age ${p.ageHours ?? "?"}h, profile ${p.hasProfile ? "yes" : "no"}`).join("\n");
+    const pairLines = pairRows.slice(0, t.pairs).map((p, i) => `${i + 1}. ${p.dex || "?"} ${pairSymbol(p.base?.symbol)}/${pairSymbol(p.quote?.symbol)} ${p.pairAddress || "?"} - liquidity ${usd(p.liquidityUsd)}, volume 24h ${usd(p.volume?.h24)} / 6h ${usd(p.volume?.h6)} / 1h ${usd(p.volume?.h1)}, price change 24h ${p.priceChangePct?.h24 ?? "?"}% / 1h ${p.priceChangePct?.h1 ?? "?"}%, buys/sells 24h ${p.txns24h?.buys ?? "?"}/${p.txns24h?.sells ?? "?"}, 6h ${p.txns6h?.buys ?? "?"}/${p.txns6h?.sells ?? "?"}, 1h ${p.txns1h?.buys ?? "?"}/${p.txns1h?.sells ?? "?"}, age ${p.ageHours ?? "?"}h, profile ${p.hasProfile ? "yes" : "no"}`).join("\n");
     const jupFlow = (label, st) => (st ? `Jupiter ${label}: buy ${usd(st.buyVolumeUsd)} (organic ${usd(st.buyOrganicVolumeUsd)}), sell ${usd(st.sellVolumeUsd)} (organic ${usd(st.sellOrganicVolumeUsd)}), ${st.numBuys ?? "?"} buys / ${st.numSells ?? "?"} sells, ${st.numTraders ?? "?"} traders (${st.numOrganicBuyers ?? "?"} organic buyers), net buyers ${st.numNetBuyers ?? "?"}, price ${st.priceChangePct ?? "?"}%, holders ${st.holderChangePct ?? "?"}%, liquidity ${st.liquidityChangePct ?? "?"}%, volume ${st.volumeChangePct ?? "?"}%` : "");
     const lockerRows = Array.isArray(report?.lockers?.rows) ? report.lockers.rows.slice(0, t.lockers) : [];
     const lockerLines = lockerRows.map((l, i) => `${i + 1}. ${l.type || "?"} ${l.account || "?"} - ${usd(l.usdLocked)} locked until ${l.unlockDate || "unknown"}`).join("\n") + (report?.lockers?.total > lockerRows.length ? `\n(${lockerRows.length} of ${report.lockers.total} lockers shown)` : "");
@@ -297,7 +301,7 @@ function makeTokenBriefHandlerInner(tierSlug) {
       jup?.stats24h && jup.stats24h.buyVolumeUsd != null && jup.stats24h.buyOrganicVolumeUsd != null && jup.stats24h.buyVolumeUsd > 0 ? `Organic share of 24h buy volume (Jupiter's wash-trade signal): ${Math.round((jup.stats24h.buyOrganicVolumeUsd / jup.stats24h.buyVolumeUsd) * 100)}% - a low share means most volume is not from organic buyers.` : "",
     ].filter(Boolean).join("\n");
 
-    const holderLines = holderRows.slice(0, t.holders).map((h, i) => `${i + 1}. owner ${h.owner || "?"} (account ${h.tokenAccount || "?"}) - ${pct(h.pct)}${h.label ? ` [${h.label.type || "labelled"}: ${h.label.name || ""}]` : " [unlabelled wallet]"}${h.insider ? " [INSIDER-FLAGGED]" : ""}`).join("\n");
+    const holderLines = holderRows.slice(0, t.holders).map((h, i) => `${i + 1}. owner ${h.owner || "?"} (account ${h.tokenAccount || "?"}) - ${pct(h.pct)}${h.label ? ` [${h.label.type || "labelled"}: ${tokenLabel(h.label.name, TOKEN_NAME_MAX) || ""}]` : " [unlabelled wallet]"}${h.insider ? " [INSIDER-FLAGGED]" : ""}`).join("\n");
     const holderBlock = holderRows.length
       ? `${holderLines}\nConcentration: top 1 ${pct(conc?.top1Pct)}, top 5 ${pct(conc?.top5Pct)}, top 10 ${pct(conc?.top10Pct)}, top 20 ${pct(conc?.top20Pct)}; top 10 EXCLUDING labelled pool/locker accounts ${pct(conc?.top10PctExcludingPools)} [bucket: ${buckets.topHolders}]. Insider-flagged holders ${conc?.insiderHolders ?? "unknown"}; labelled pool/locker accounts in the top 20 ${conc?.labeledPoolOrLockerAccounts ?? "unknown"}. Jupiter's own top-holder share: ${pct(jup?.audit?.topHoldersPct)}.`
       : `No holder rows available (${probes.report ? "RugCheck returned none" : `RugCheck report probe FAILED: ${String(reportR.error).slice(0, 120)}`}).${n(jup?.audit?.topHoldersPct) != null ? ` Jupiter reports a top-holder share of ${pct(jup.audit.topHoldersPct)}.` : ""}`;
@@ -322,7 +326,7 @@ function makeTokenBriefHandlerInner(tierSlug) {
     const sourceMenu = numbered.map((s) => `[${s.n}] ${s.title}`).join("\n");
 
     // 6) SYNTHESIZE - grounding-strict, one call.
-    const synthPrompt = `You are a crypto analyst writing a SOLANA TOKEN DUE-DILIGENCE BRIEF on mint ${mint}${symbol ? ` (${symbol})` : ""} that will be SOLD to a paying customer. Accuracy is the product: a single invented number, holder, pool or risk flag fails the whole brief.
+    const synthPrompt = `You are a crypto analyst writing a SOLANA TOKEN DUE-DILIGENCE BRIEF on mint ${mint}${symbol ? ` (symbol ${quotedTokenLabel(symbol, TOKEN_SYMBOL_MAX)})` : ""} that will be SOLD to a paying customer. Accuracy is the product: a single invented number, holder, pool or risk flag fails the whole brief.
 
 === ABSOLUTE GROUNDING RULES ===
 1. Use ONLY the EVIDENCE below (RugCheck, DexScreener and Jupiter public data, fetched moments ago). Treat it as your only knowledge of this token. NEVER add a price, a holder, a pool, a date, a partnership, a team fact or a statistic from memory. If the evidence does not say it, it is not in the brief.
@@ -381,12 +385,12 @@ ${riskBlock}`;
     if (holderRows.length) tables.push({
       name: "holders", label: "Top holders",
       columns: ["Rank", "Owner", "Token account", "Share of supply", "Type", "Insider flag"],
-      rows: holderRows.map((h, i) => [String(i + 1), h.owner || "", h.tokenAccount || "", pct(h.pct), h.label ? `${h.label.type || "labelled"}: ${h.label.name || ""}` : "unlabelled wallet", h.insider ? "yes" : "no"]),
+      rows: holderRows.map((h, i) => [String(i + 1), h.owner || "", h.tokenAccount || "", pct(h.pct), h.label ? `${h.label.type || "labelled"}: ${tokenLabel(h.label.name, TOKEN_NAME_MAX) || ""}` : "unlabelled wallet", h.insider ? "yes" : "no"]),
     });
     if (pairRows.length) tables.push({
       name: "pairs", label: "DEX pairs",
       columns: ["DEX", "Pair", "Address", "Liquidity USD", "24h volume USD", "24h change %", "24h buys", "24h sells", "Age hours"],
-      rows: pairRows.map((p) => [p.dex || "", `${p.base?.symbol || "?"}/${p.quote?.symbol || "?"}`, p.pairAddress || "", String(p.liquidityUsd ?? ""), String(p.volume?.h24 ?? ""), String(p.priceChangePct?.h24 ?? ""), String(p.txns24h?.buys ?? ""), String(p.txns24h?.sells ?? ""), String(p.ageHours ?? "")]),
+      rows: pairRows.map((p) => [p.dex || "", `${pairSymbol(p.base?.symbol)}/${pairSymbol(p.quote?.symbol)}`, p.pairAddress || "", String(p.liquidityUsd ?? ""), String(p.volume?.h24 ?? ""), String(p.priceChangePct?.h24 ?? ""), String(p.txns24h?.buys ?? ""), String(p.txns24h?.sells ?? ""), String(p.ageHours ?? "")]),
     });
     if (marketRows.length) tables.push({
       name: "markets", label: "Pools (RugCheck)",
