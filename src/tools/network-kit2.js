@@ -595,6 +595,8 @@ export const NETWORK_TOOLS2 = [
     name: "Certificate transparency search",
     slug: "cert-transparency", aliases: ["certificate-transparency-search", "certificate-transparency"],
     category: "network",
+    // The keyless log it reads (the second, keyed search never re-reads).
+    upstreamHosts: ["crt.sh"],
     price: "$0.005",
     description:
       "Search public Certificate Transparency logs for every cert issued to a domain. A public CT search service is queried first; a second, independent one is asked only where this deployment holds its key and only if the first is slow or fails, and `source` names the one that answered (their coverage windows differ). Returns the cert list plus a deduped subdomain set extracted from the SANs - the fastest way to enumerate subdomains for a security audit. No key required.",

@@ -72,8 +72,13 @@ const UPSTREAM_SHAPES = [
   [502, /^Source URL's host returned HTTP 5\d\d\b/],
   [504, /^Source URL did not respond within our \d+ s limit/],
   [504, /^Could not connect to source URL: /],
+  // cert-transparency reads its log with its own GET (src/tools/network-kit2.js)
+  // and answers the log's deadline and 5xx or 429 in its own words, as a 502.
+  [502, /^The upstream cert transparency logs? did not respond within \d+ s\b/],
+  [502, /^crt\.sh returned HTTP (?:5\d\d|429)\b/],
 ];
-/** True for the shared fetch helper's upstream-failure answers only. */
+/** True for the shared fetch helper's upstream-failure answers, and the few
+ *  tools' own words for the same failure listed above. */
 export function isUpstreamErrorShape(status, body) {
   const msg = String(body?.error || "");
   return UPSTREAM_SHAPES.some(([st, re]) => st === status && re.test(msg));

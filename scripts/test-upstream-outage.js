@@ -44,6 +44,24 @@ try {
   ok(!isUpstreamErrorShape(500, relayed) && !isUpstreamErrorShape(500, { error: "Internal error" }), "our 500 is never an upstream-error answer");
   ok(!isUpstreamErrorShape(502, { error: "Upstream returned non-JSON" }) && !isUpstreamErrorShape(503, { error: "Weather data is temporarily unavailable because of a service problem on our side" }), "our parse 502 and our own 503 are never upstream-error answers");
   ok(!isUpstreamErrorShape(200, { alerts: [] }) && !isUpstreamErrorShape(502, null), "a 200 or an empty body is not one");
+  // cert-transparency's own words for its log's deadline and 5xx or 429.
+  const ctLate = { error: "The upstream cert transparency log did not respond within 10 s; try again later" };
+  ok(isUpstreamErrorShape(502, ctLate) && isUpstreamErrorShape(502, { error: "crt.sh returned HTTP 503" }) && isUpstreamErrorShape(502, { error: "crt.sh returned HTTP 429" }), "cert-transparency's log deadline and 5xx/429 answers (502) are upstream-error answers");
+  ok(!isUpstreamErrorShape(502, { error: "crt.sh returned HTTP 404" }) && !isUpstreamErrorShape(502, { error: "crt.sh returned non-JSON - try again later" }) && !isUpstreamErrorShape(422, { error: "crt.sh returned HTTP 400" }), "control: its mislabelled 404, its parse failure and a 4xx it relays are not");
+  ok(JSON.stringify([...upstreamHostsForSlug("cert-transparency")]) === JSON.stringify(["crt.sh"]), `cert-transparency declares the keyless log it reads (${[...upstreamHostsForSlug("cert-transparency")].join(", ")})`);
+  {
+    const ctLog = join(work, "ct-failures.jsonl");
+    const ctUrl = "https://crt.sh/?q=%25.example.com&output=json&exclude=expired";
+    writeFileSync(ctLog, `${JSON.stringify({ t: 1000, host: "crt.sh", url: ctUrl, method: "GET", keyed: false, error: "AbortError" })}\n`);
+    const ct = (o) => upstreamOutageVerdict({ slug: "cert-transparency", status: 502, body: ctLate, t0: 900, t1: 1100, logPath: ctLog, ...o });
+    let readUrl = null;
+    const v1 = await ct({ readFails: async (u) => { readUrl = u; return true; } });
+    ok(v1.verdict === "upstream" && readUrl === ctUrl, `cert-transparency's log deadline, recorded in the call and refused to the runner's direct read of the same request: excused (${v1.evidence || v1.reason})`);
+    const v2 = await ct({ readFails: async () => false });
+    ok(v2.verdict === "fail", `control: the same answer while crt.sh answers the runner's direct read FAILS (${v2.reason})`);
+    const v3 = await ct({ t0: 1200, t1: 1300, readFails: async () => true });
+    ok(v3.verdict === "fail", "control: no crt.sh failure recorded during the call excuses nothing");
+  }
 
   // ---- keyed requests are never re-read
   ok(isKeyedRequest(new URL("https://h.example/x?api_key=1"), {}) && isKeyedRequest(new URL("https://h.example/x?token=1"), {}), "a key-like query parameter marks the request keyed");
