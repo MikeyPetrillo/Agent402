@@ -327,6 +327,8 @@ const run = (mw, r) => new Promise((resolve) => {
   ok(lines.length === 0, "CONTROL: no warning with both set");
   const server = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/\bwarnGeoBlockProvenance\(\);/.test(server) && /sanctionsReportWord\(sanctionsReportStatus\(\)\)/.test(server), "server.js warns at boot and publishes the word through sanctionsReportWord");
+  const mount = server.slice(server.indexOf("app.use(sanctionedRegionsMiddleware({"), server.indexOf("app.use(sanctionedRegionsMiddleware({") + 4000);
+  ok(mount.length > 100 && !/^\s*verify:/m.test(mount.slice(0, mount.indexOf("pushSender:"))) && !/verifiedGeoPayer/.test(server), "server.js mounts the regional block with no x402 verify: a payment refused before verification names no address");
 }
 
 // ---- varying the subdivision header of a whole blocked country opens no new aggregate row
