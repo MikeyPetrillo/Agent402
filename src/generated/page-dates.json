@@ -396,7 +396,7 @@
     },
     "/guides/x402-in-5-minutes": {
       "published": "2026-06-13",
-      "modified": "2026-11-24"
+      "modified": "2026-11-25"
     },
     "/guides/x402-payments-toolkit": {
       "published": "2026-06-14",
@@ -420,7 +420,7 @@
     },
     "/integrations/eliza": {
       "published": "2026-09-24",
-      "modified": "2026-11-24"
+      "modified": "2026-11-25"
     },
     "/integrations/google-adk": {
       "published": "2026-09-24",
@@ -432,7 +432,7 @@
     },
     "/integrations/langchain-python": {
       "published": "2026-09-24",
-      "modified": "2026-11-24"
+      "modified": "2026-11-25"
     },
     "/integrations/llamaindex": {
       "published": "2026-09-24",
