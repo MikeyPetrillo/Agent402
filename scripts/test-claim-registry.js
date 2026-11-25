@@ -174,7 +174,7 @@ const BASELINE = {
   "src/guides.js": 10,
   "src/how-to-pay.js": 3,
   "src/pages.js": 4,
-  "src/privacy.js": 8,
+  "src/privacy.js": 7,
   "src/refund-terms-doc.js": 1,
   "src/security-page.js": 1,
   "src/seo.js": 3,
