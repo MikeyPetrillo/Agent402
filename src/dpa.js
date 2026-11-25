@@ -8,9 +8,10 @@
 // trustSubprocessors), so the two pages cannot list different processors;
 // the mailbox that receives requests is added here. Outside sellers the
 // router buys from and the data sources a lookup reads are recipients the
-// caller's own call names, listed apart from the sub-processors. The change
-// notice and the retention figures are constants below, read by the page and
-// pinned by scripts/test-dpa-page.js.
+// caller's own call names, listed apart from the sub-processors. The lead time
+// of a sub-processor authorization request and the retention figures are
+// constants below, read by the page and pinned by scripts/test-dpa-page.js.
+// Unlisted while it is offered on request: the page carries noindex.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { trustSubprocessors } from "./trust-page.js";
 import { backupKeepDays } from "./backup.js";
@@ -20,13 +21,13 @@ import { companyPostalLine } from "./email.js";
 import { OP_SESSION_TTL_MS, opSessionIdleMs, durationWords } from "./operator-session-limits.js";
 
 export const DPA_DATE = "2026-11-25";
-export const DPA_SUBPROCESSOR_NOTICE_DAYS = 30;
+export const DPA_SUBPROCESSOR_REQUEST_DAYS = 30;
 export const DPA_MAILBOX_ROW = Object.freeze({ category: "Mailbox", name: "Zoho Mail", gets: "Messages you send us, including data and rights requests" });
 
 export function dpaPage(baseUrl) {
   const canonical = `${baseUrl}/dpa`;
   const title = "Data Processing Addendum - Agent402";
-  const description = "Agent402's Data Processing Addendum for business customers, on request: roles, processing, transfer clauses, sub-processors and breach notice.";
+  const description = "Agent402's Data Processing Addendum for business customers, on request: roles, processing, transfer clauses, sub-processors and personal data breaches.";
   const mail = COMPANY_MAILBOXES.operator;
   const postal = companyPostalLine();
   const subs = [...trustSubprocessors(), DPA_MAILBOX_ROW];
@@ -94,23 +95,21 @@ records, logs, rate limits, analytics), we are an independent controller, as the
   <li>We help you answer requests from data subjects (access, erasure, portability) for data we hold for you,
   and with impact assessments and consultations, as far as the service's records allow.</li>
   <li>We notify a personal data breach affecting your data without undue delay after becoming aware of it, to
-  the customers we can identify and reach: by email to the contact you gave when you asked for this addendum,
-  with what we know then and updates as we learn more. Where we cannot identify who was affected, we post the
-  notice on <a href="/status">/status</a>.</li>
+  the customers we can identify and reach.</li>
   <li>When you stop using the service, the data we hold for you is deleted on the schedules above; ask and we
   delete what remains sooner, except what the law requires us to keep.</li>
   <li>We make available what you need to verify these commitments: the server is open source, and we answer
-  reasonable written questions. An audit beyond that is at your cost, on 30 days' notice, once a year.</li>
+  reasonable written questions. An audit beyond that is at your cost, once a year, at a time we agree in writing.</li>
 </ol>
 
 <h2>4. Sub-processors</h2>
 <p>You authorize the sub-processors below. Each processes your data under the data processing terms it offers
 its customers, which we accept as written; we choose providers whose terms commit them to confidentiality,
 security and processing only on our instructions, as Article 28(3) of the GDPR requires, and we remain
-responsible to you for them. We announce a new or replaced sub-processor on the
-<a href="/changelog">changelog</a> at least ${DPA_SUBPROCESSOR_NOTICE_DAYS} days before it receives your data; you may
-object in that time, and if we cannot meet the objection you may stop using the service for the affected
-processing.</p>
+responsible to you for them. A new or replaced sub-processor receives your data only with your specific prior
+authorization: we ask for it in writing at least ${DPA_SUBPROCESSOR_REQUEST_DAYS} days before the engagement. A sub-processor
+you do not authorize does not receive your data, and where the service cannot run without it, you may stop using
+the service for the affected processing.</p>
 <div style="overflow-x:auto;margin:0 0 14px;"><table class="dp-table">
 <thead><tr><th scope="col">Purpose</th><th scope="col">Sub-processor</th><th scope="col">What it receives</th></tr></thead>
 <tbody>${subs.map((s) => `<tr><td>${esc(s.category)}</td><td>${esc(s.name)}</td><td>${esc(s.gets)}</td></tr>`).join("")}</tbody>
@@ -135,7 +134,7 @@ personal data to them under this addendum.</p>
 the <b>Standard Contractual Clauses</b> adopted by the European Commission in Implementing Decision (EU)
 2021/914 are incorporated by reference: <b>Module Two</b> (controller to processor) where you are a controller,
 and <b>Module Three</b> (processor to processor) where you are a processor. In them: clause 7 (docking) applies;
-clause 9 option 2 (general authorization, with the notice in section 4); the optional wording in clause 11 does
+clause 9 option 1 (specific prior authorization, asked for as section 4 states, at least ${DPA_SUBPROCESSOR_REQUEST_DAYS} days ahead); the optional wording in clause 11 does
 not apply; clause 13, the competent supervisory authority is the one clause 13(a) names where you are
 established in the European Union, and otherwise the one clause 13 names for your case; clause 17 option 1, the
 law of Ireland; clause 18, the courts of Ireland. Annex I is sections 1 and 2 of this addendum, Annex II is
@@ -166,5 +165,5 @@ the competent authority.</p>
 </section>
 </div>
 ${ledgerFooterCompact()}`;
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/dpa", extraCss, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/dpa", extraCss, body, robots: "noindex" });
 }

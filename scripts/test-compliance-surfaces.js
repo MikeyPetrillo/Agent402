@@ -165,10 +165,10 @@ ok(/shared answer page deletes it, so it cannot be restored/.test(cr) && /for ma
 const subsTerms = termsText.slice(termsText.indexOf("Monitors renew automatically"));
 ok(/POST request to the cancel link/.test(subsTerms) && /revoking the authorization/.test(subsTerms) && /stays active until the end of the period you already paid for and is not renewed/.test(subsTerms) && /no partial refund for the remaining days/.test(subsTerms), "terms: each rail's cancel path and what canceling does");
 ok(/renews automatically at the price shown when you subscribed until you cancel/.test(subsTerms) && /Cancel anytime online/.test(subsTerms) && /price of an active subscription does not change/.test(subsTerms) && !/email you the new price/.test(subsTerms), "terms: automatic renewal, its price, online cancel; no price-change notice the code has no path for");
-ok(/separate, required consent to the automatic renewal/.test(subsTerms) && /before the first full charge/.test(subsTerms), "terms: the renewal consent and the free-month notice");
+ok(/separate, required consent to the automatic renewal/.test(subsTerms) && /first full charge is the price shown when you subscribed, made when that month ends/.test(subsTerms) && !/we email you before/.test(subsTerms), "terms: the renewal consent and the free month's first charge, with no email promise");
 ok(/We do not serve requests from Cuba, Iran and North Korea or from the Crimea, Sevastopol, Donetsk and Luhansk regions of Ukraine \(where the request carries region data\), which are under comprehensive U\.S\. sanctions\. As a business choice we also do not serve requests from Syria\./.test(termsText) && !/Syria[^.]*comprehensive/.test(termsText), "terms: the refused regions are named, Syria apart from the sanctioned ones");
 ok(/refused before its payment is verified or settled/.test(termsText) && !/before any payment is read/.test(termsText), "terms: the refusal's timing is worded as the code runs it");
-ok(/No part of a run's budget is kept as a credit/.test(termsText) && /execution credit, part of its fee, usable only toward running that decision's plan[^.]*until the expiry its answer states; it has no cash value/.test(termsText) && !/service credit/.test(termsText), "terms: decide-execute keeps no run budget as credit; the decision-fee credit is scoped (execute only, expiry, no cash value)");
+ok(/No part of a run's budget is kept as a credit/.test(termsText) && /A decision paid with a wallet, when its answer includes a plan, comes with an execution credit worth its fee, usable only toward running that decision's plan[^.]*until the expiry its answer states; it has no cash value/.test(termsText) && !/service credit/.test(termsText), "terms: decide-execute keeps no run budget as credit; the decision-fee credit is scoped (a plan, its fee as configured, execute only, expiry, no cash value)");
 ok(/does not apply to\s+a claim by a consumer/.test(termsText) && !/permanently barred/.test(termsText), "terms: the one-year limit yields to consumer law");
 ok(/The token tools report facts read from the chain and named public sources; they are not an assessment of any token's legitimacy and must not be relied on for trading or investment decisions\./.test(termsText.replace(/&#39;|&rsquo;/g, "'")), "terms: the token tools are facts, not an assessment");
 ok(/required choice, to request that we start at once/.test(termsText), "terms: the withdrawal sentence names the checkout choice");
@@ -181,6 +181,54 @@ ok(/required choice, to request that we start at once/.test(termsText), "terms: 
   ok(/Export Administration Regulations/.test(termsText) && /comprehensive U\.S\. sanctions/.test(termsText), "terms: export controls and sanctioned regions");
   ok(/keep the attribution and license notice with it/.test(termsText), "terms: open data licenses travel with the data");
   ok(/right of withdrawal/.test(termsText) && /id="withdrawal"/.test(terms) && /id="refunds"/.test(terms) && /id="arbitration"/.test(terms) && /href="\/accessibility"/.test(terms), "terms: the withdrawal clause and the anchors checkout links to; the accessibility statement is linked");
+}
+// No notice or email promise on a legal page (owner rule): a sentence on
+// /terms, /privacy or /dpa that speaks of notice, notifying or email is
+// either a legally required duty, a notice someone else gives, or an action
+// on the reader's own request, each listed here with why; anything else fails.
+{
+  const { dpaPage } = await import("../src/dpa.js");
+  const legalText = (h) => h.replace(/<(script|style)[\s\S]*?<\/\1>/g, " ").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ");
+  const NOTICE_RE = /\b\d+\s+days?'?\s+(?:of\s+)?notice\b|\bdays'?\s+notice\b|\bby e-?mail\b|\bnotif(?:y|ies|ied|ying|ication)\b|\bnotices?\b|\bwe(?:'ll| will)? (?:e-?mail|tell|inform|alert|write to) you\b/i;
+  const ALLOWED = [
+    [/keep the attribution and license notice with it/, "a data license's own notice, the reader's duty"],
+    [/with or without notice/, "disclaims notice"],
+    [/how to have a service removed - by email or by disallowing/, "the site owner writes to us"],
+    [/a notice may concern that content too/, "a copyright notice someone sends us"],
+    [/send a notice to our designated agent/, "the DMCA notice a complainant sends (17 U.S.C. 512(c)(3))"],
+    [/take reasonable steps to notify the person who provided it, where we can identify them/, "the DMCA duty to notify the provider (17 U.S.C. 512(g)(2)(A))"],
+    [/send a counter-notice to the same agent/, "the DMCA counter-notice a provider sends (17 U.S.C. 512(g)(3))"],
+    [/We forward the counter-notice to that person/, "the DMCA duty to forward the counter-notice (17 U.S.C. 512(g)(2)(B))"],
+    [/It starts only after you confirm by email/, "the reader confirms"],
+    [/enter your checkout email under "Already subscribed\?" on \/monitors and we email you a new link/, "an answer to the reader's own request"],
+    [/Legal notices to us go to/, "notices to us"],
+    [/follow-up emails about that purchase/, "describes processing the reader can turn off"],
+    [/from the day we confirm it by email/, "how the addendum is formed"],
+    [/We notify a personal data breach affecting your data without undue delay after becoming aware of it, to the customers we can identify and reach\./, "GDPR Art. 33(2): a processor notifies its controller without undue delay"],
+  ];
+  const offenders = [];
+  for (const [page, h] of [["/terms", terms], ["/privacy", privacy], ["/dpa", dpaPage(BASE)]]) {
+    for (const sentence of legalText(h).split(/(?<=[.!?])\s+(?=[A-Z("])/)) {
+      if (NOTICE_RE.test(sentence) && !ALLOWED.some(([re]) => re.test(sentence))) offenders.push(`${page}: ${sentence.slice(0, 160)}`);
+    }
+  }
+  ok(offenders.length === 0, `legal pages: no notice or email promise outside the listed duties (${offenders.join(" | ") || "none"})`);
+  // The pattern sees the promises it exists for.
+  const control = ["We will give at least 30 days' notice of a change on this site and by email.", "We give 30 days notice before the service stops.", "We will notify you before a change.", "We'll email you before the first full charge.", "We post the notice on /status."];
+  ok(control.every((c) => NOTICE_RE.test(c) && !ALLOWED.some(([re]) => re.test(c))), "control: the pattern catches each phrasing of a notice promise");
+}
+// The region block's sentences follow its switch on both pages, by content.
+{
+  const geoPrivacy = /we read only the country and the region, in memory, to refuse requests from the countries and regions we do not serve \(see the terms\) and, for the analytics choice above, the country, and we do not store or log any of them, with one exception: a request refused from a region under U\.S\. sanctions that carried a payment whose signature proves the paying wallet, or that named a transfer already sent whose sender the chain shows, keeps the country or region code as the reason it was refused/;
+  ok(geoPrivacy.test(privacyText) && /or refused because it came from a region under U\.S\. sanctions/.test(privacyText), "privacy: the location sentence and the retention clause, as worded, while the block is on");
+  ok(/a transfer that a payment credential says was already sent is not claimed for it/.test(termsText), "terms: a push transfer from a refused region is not claimed");
+  const prior = process.env.SANCTIONS_GEO_BLOCK;
+  process.env.SANCTIONS_GEO_BLOCK = "off";
+  try {
+    const t = strip(termsPage(BASE)), p = strip(privacyPage(BASE));
+    ok(!/We do not serve requests from/.test(t) && !/comprehensive U\.S\. sanctions/.test(t) && !/refused before its payment is verified or settled/.test(t), "terms (block off): no region sentence");
+    ok(!/countries and regions we do not serve/.test(p) && !/region under U\.S\. sanctions/.test(p) && /we read only the country, in memory, for the analytics choice above, and we do not store or log it/.test(p), "privacy (block off): no region sentence; the country is read only for the analytics choice");
+  } finally { if (prior === undefined) delete process.env.SANCTIONS_GEO_BLOCK; else process.env.SANCTIONS_GEO_BLOCK = prior; }
 }
 ok(/under penalty of perjury/.test(cr) && /physical or electronic signature/.test(cr), "terms: the notice elements");
 delete process.env.COMPANY_POSTAL_ADDRESS;

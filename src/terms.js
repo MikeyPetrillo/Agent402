@@ -21,6 +21,7 @@ import { COMPANY_PHONE } from "./company.js";
 import { LEGAL_ENTITY_NAME, LEGAL_ENTITY_SENTENCE } from "./legal-entity.js";
 import { companyPostalLine } from "./email.js";
 import { lowBalanceWords, signInLifeWords } from "./credits-figures.js";
+import { decideConfig } from "./decide/config.js";
 import { sanctionedCountries, SANCTIONED_UA_REGION_CODES, NON_PROGRAM_COUNTRIES, sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 // Where a fraud-warning refund goes (src/credits.js fraudWarning and
 // approveFraudRefund): to the warned payment's own card when it can take the
@@ -45,8 +46,10 @@ export function refusedRegionsText(env = process.env) {
   const ua = SANCTIONED_UA_REGION_CODES.map((c) => UA_REGION_NAMES[c] || `UA-${c}`);
   const sanctioned = `${program.length ? `${list(program)} or from ` : ""}the ${list(ua)} regions of Ukraine (where the request carries region data)`;
   const ownText = own.length ? ` As a business choice we also do not serve requests from ${list(own)}.` : "";
-  return `We do not serve requests from ${sanctioned}, which are under comprehensive U.S. sanctions.${ownText} Such a request is refused before its payment is verified or settled.`;
+  return `We do not serve requests from ${sanctioned}, which are under comprehensive U.S. sanctions.${ownText} Such a request is refused before its payment is verified or settled, and a transfer that a payment credential says was already sent is not claimed for it.`;
 }
+// The decide execution credit's share of the fee (src/decide/config.js).
+const decideCreditShare = () => { const p = Number(decideConfig()?.credit?.percentOfFee); return p === 100 ? "its fee" : `${Number.isFinite(p) ? p : 0}% of its fee`; };
 const FRAUD_WARNING_RULE = `A key whose payment the card network reports as possibly fraudulent is frozen, and its unspent balance is refunded ${FRAUD_WARNING_REFUND}.`;
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.
@@ -297,7 +300,7 @@ not investment, trading, legal or tax advice.</p>
 Agent402 buys that result from the seller for its own account, with its own funds, and sells it to you;
 your payment is a payment to Agent402 for the result, at the price shown before you pay. Agent402 does not
 send, hold or exchange funds for you on these routes, and you have no account with the seller through us.
-On <code>/api/decide/execute</code> you pay only for what a run spent: on an x402 <code>upto</code> payment the budget you sign is a ceiling and only the amount spent is settled; on an <code>exact</code> payment any part of the price the run does not spend is owed back to the paying wallet and repaid on chain under these refund terms. No part of a run's budget is kept as a credit. A decision paid with a wallet comes with an execution credit, part of its fee, usable only toward running that decision's plan on <code>/api/decide/execute</code> until the expiry its answer states; it has no cash value, is not transferable and is not paid out if unused.</p>
+On <code>/api/decide/execute</code> you pay only for what a run spent: on an x402 <code>upto</code> payment the budget you sign is a ceiling and only the amount spent is settled; on an <code>exact</code> payment any part of the price the run does not spend is owed back to the paying wallet and repaid on chain under these refund terms. No part of a run's budget is kept as a credit. A decision paid with a wallet, when its answer includes a plan, comes with an execution credit worth ${decideCreditShare()}, usable only toward running that decision's plan on <code>/api/decide/execute</code> until the expiry its answer states; it has no cash value, is not transferable and is not paid out if unused.</p>
 <h2 id="refunds">Refunds</h2>
 <p><b>Refunds on-chain.</b> ${clause("ordinary-failure")} ${clause("charged-but-failed")}
 ${clause("repayment-process")} ${clause("repayment-proof")}
@@ -341,10 +344,9 @@ delivers a report, and a monitor's welcome email, confirm that choice. A monitor
 <a href="#subscriptions">Subscriptions and automatic renewal</a>.</p>
 <p><b>If the service stops.</b> A prepaid credits balance is a prepayment for services we have not yet
 delivered, and it should not depend on us being here forever. If we decide to stop operating the hosted
-service, we will give at least 30 days notice on this site and by email to the address on each purchase,
-keep the paid routes serving through the notice period so a balance can be spent, and refund any unspent
-balance to the card that bought it, or, where that card can no longer be credited, by another method we
-agree with you through the email on the purchase. The same applies to an unused monitor period. Nothing here waives a right you have by law,
+service, any unspent prepaid balance is refunded to the card that bought it, or, where that card can no
+longer be credited, by another method we agree with you, and any amount we owe you is repaid as the
+<a href="#refunds">refund terms</a> describe. The same applies to an unused monitor period. Nothing here waives a right you have by law,
 and it does not apply to a balance disabled for a refund or dispute.</p>
 <p><b>Free email alerts.</b> A free alert watches one subject with the same daily check a monitor uses and emails you when something changes, at most once a day. It is free, best-effort and not a monitor: no report is generated, delivery is not guaranteed, and we may pause or discontinue alerts at any time. It starts only after you confirm by email and ends the moment you use the unsubscribe link in any alert.</p>
 <h2 id="subscriptions">Subscriptions and automatic renewal</h2>
@@ -353,7 +355,7 @@ month, or over MPP on Tempo each 30 days from an authorization you sign, and <b>
 when you subscribed until you cancel</b>. The price and the renewal terms are stated beside the Subscribe button and
 again before you pay, and a card checkout takes a separate, required consent to the automatic renewal that names the
 monthly price; the welcome email repeats the terms with how to cancel. If a promotion code makes the first month free,
-we email you before the first full charge with its amount, its date and how to cancel. The price of an active
+the first full charge is the price shown when you subscribed, made when that month ends. The price of an active
 subscription does not change: it renews at the price you subscribed at, and a new price applies only to a new
 subscription; an MPP subscription never pulls more than the amount you signed. <b>Cancel anytime online.</b> Cancel a card subscription any
 time in the Stripe Customer Portal, opened by the manage link in your monitor emails; if you no longer have those

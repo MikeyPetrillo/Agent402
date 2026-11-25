@@ -4,7 +4,8 @@
 //   - its sub-processor table is the /trust table plus the mailbox, row for row;
 //   - offered on request (binds once confirmed by email), breach notice to the
 //     customers we can reach, outside sellers and data sources named as
-//     recipients; the change notice is the constant;
+//     recipients; a sub-processor change needs specific prior authorization,
+//     asked for at least the constant's days ahead; noindex while unlisted;
 //   - every figure it prints is read from the module that runs it;
 //   - unlisted: served at /dpa, but not linked from /privacy or the footer and
 //     not in the sitemap or llms.txt; /privacy says it is available on request
@@ -38,7 +39,9 @@ ok(!/no less protective than these/.test(text) && /Article 28\(3\)/.test(text), 
 ok(/Recipients that are not our sub-processors/.test(text) && /Outside sellers/.test(text) && /decide\/execute/.test(text) && /Data sources/.test(text) && /blockchain node provider/.test(text), "outside sellers and data sources are named as recipients");
 ok(/clause 13/.test(text), "an SCC clause 13 supervisory authority is chosen");
 ok(!/Cardhavok LLC/.test(readFileSync(new URL("../src/dpa.js", import.meta.url), "utf8")), "the entity name is read from src/legal-entity.js, never typed");
-ok(text.includes(`at least ${D.DPA_SUBPROCESSOR_NOTICE_DAYS} days`) && /changelog/.test(text), "sub-processor changes are announced ahead on the changelog");
+ok(text.includes(`at least ${D.DPA_SUBPROCESSOR_REQUEST_DAYS} days`) && /specific prior authorization/.test(text) && /clause 9 option 1/.test(text) && !/option 2|general authorization|changelog/.test(text), "sub-processor changes need the customer's specific prior authorization (SCC clause 9 option 1), consistently");
+ok(/<meta name="robots" content="noindex">/.test(html), "the unlisted page carries noindex");
+ok(!/href="\/status"/.test(html.slice(html.indexOf("Our commitments"), html.indexOf("Sub-processors</h2>"))) && !/post the notice/.test(text), "the breach commitment names no status-page notice");
 ok(text.includes(`after ${backupKeepDays()} days`), "the backup period is read from src/backup.js");
 {
   const rows = [...doc.querySelectorAll(".dp-table tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent));
