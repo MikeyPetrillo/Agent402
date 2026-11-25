@@ -210,6 +210,147 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
 }
 
 // ---------------------------------------------------------------------------
+// 1d. What a refusal RECORDS (src/sanctions-events.js). The screen refuses on
+//     every address a payment names, but keeps a permanent record only of a
+//     listed address the payment's own signature proves
+//     (src/x402-signed-payers.js), under the store's write limits: one row per
+//     (address, route class) a day, at most SANCTIONS_EVENT_CLIENT_WINDOW_MAX
+//     rows per client address and SANCTIONS_EVENT_WINDOW_MAX in all an hour.
+{
+  const SS = await import("../src/sanctions-screen.js");
+  const EV = await import("../src/sanctions-events.js");
+  const { createX402PayerScreen, __resetX402PayerScreenForTests, x402PayerScreenView } = await import("../src/x402-payer-screen.js");
+  const { x402SignedPayers } = await import("../src/x402-signed-payers.js");
+  const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
+  const { PERMIT2_ADDRESS, permit2WitnessTypes, x402ExactPermit2ProxyAddress } = await import("@x402/evm");
+  const dir = mkdtempSync(join(tmpdir(), "x402-screen-records-"));
+  const outerEvents = process.env.SANCTIONS_EVENTS_FILE;
+  process.env.SANCTIONS_EVENTS_FILE = join(dir, "events.jsonl");
+  const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const PAY_TO = "0x000000000000000000000000000000000000dEaD";
+  const accepted = { scheme: "exact", network: "eip155:8453", amount: "10000", asset: USDC, payTo: PAY_TO, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const AUTH = [{ name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" }];
+  const nonce = () => `0x${Buffer.from(globalThis.crypto.getRandomValues(new Uint8Array(32))).toString("hex")}`;
+  // An EIP-3009 payment signed by `account` (Transfer, or Receive as /ref takes it), with `extra` merged into the payload.
+  const signed3009 = async (account, { primaryType = "TransferWithAuthorization", extra = {}, from = account.address } = {}) => {
+    const t = Math.floor(Date.now() / 1000);
+    const authorization = { from, to: PAY_TO, value: "10000", validAfter: String(t - 60), validBefore: String(t + 300), nonce: nonce() };
+    const signature = await account.signTypedData({ domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: USDC }, types: { [primaryType]: AUTH }, primaryType, message: { ...authorization, value: 10000n, validAfter: BigInt(authorization.validAfter), validBefore: BigInt(authorization.validBefore) } });
+    return { "payment-signature": b64({ x402Version: 2, accepted, payload: { signature, authorization, ...extra } }) };
+  };
+  const signedPermit2 = async (account) => {
+    const t = Math.floor(Date.now() / 1000);
+    const permit2Authorization = { from: account.address, permitted: { token: USDC, amount: "10000" }, spender: x402ExactPermit2ProxyAddress, nonce: String(BigInt(nonce()) >> 8n), deadline: String(t + 300), witness: { to: PAY_TO, validAfter: String(t - 60) } };
+    const signature = await account.signTypedData({ domain: { name: "Permit2", chainId: 8453, verifyingContract: PERMIT2_ADDRESS }, types: permit2WitnessTypes, primaryType: "PermitWitnessTransferFrom",
+      message: { permitted: { token: USDC, amount: 10000n }, spender: x402ExactPermit2ProxyAddress, nonce: BigInt(permit2Authorization.nonce), deadline: BigInt(permit2Authorization.deadline), witness: { to: PAY_TO, validAfter: BigInt(permit2Authorization.witness.validAfter) } } });
+    return { "payment-signature": b64({ x402Version: 2, accepted, payload: { signature, permit2Authorization } }) };
+  };
+  const run = (mw, headers, { path = "/ref/hash", ip = "203.0.113.20" } = {}) => new Promise((resolve) => {
+    const out = { next: false, code: null, body: null };
+    const req = { method: "POST", path, ip, header: (k) => headers[String(k).toLowerCase()] ?? null, headers };
+    const res = { setHeader() {}, status(c) { out.code = c; return res; }, json(b) { out.body = b; resolve(out); return res; } };
+    mw(req, res, () => { out.next = true; resolve(out); });
+  });
+  const settle = () => new Promise((r) => setTimeout(r, 60));
+  const rows = async () => (await EV.sanctionsEventsOperatorView({ recent: 1000 })).recent;
+  const listedAcct = privateKeyToAccount(generatePrivateKey());
+  const listedP2 = privateKeyToAccount(generatePrivateKey());
+  const throwaway = privateKeyToAccount(generatePrivateKey());
+  const cleanAcct = privateKeyToAccount(generatePrivateKey());
+  const flood = Array.from({ length: EV.SANCTIONS_EVENT_WINDOW_MAX + 40 }, () => privateKeyToAccount(generatePrivateKey()));
+  const LISTED_SIGNER = listedAcct.address.toLowerCase();
+  const strict = createX402PayerScreen({ log: () => {}, noList: "refuse" });
+  const lenient = createX402PayerScreen({ log: () => {} });
+  try {
+    process.env.SANCTIONS_SCREEN_FILE = join(dir, "screen.json");
+    writeFileSync(process.env.SANCTIONS_SCREEN_FILE, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [LISTED_SIGNER, listedP2.address.toLowerCase(), ...flood.map((a) => a.address.toLowerCase())] }));
+    SS.__resetSanctionsScreenForTests();
+    ok(await SS.loadStoredSanctionsScreen(), "setup: the list loads");
+    EV.__resetSanctionsEventsForTests(); EV.__resetSanctionsEventLimitsForTests(); __resetX402PayerScreenForTests();
+
+    // The signer reader itself.
+    const t1 = await signed3009(listedAcct);
+    const decode = (h) => JSON.parse(Buffer.from(h["payment-signature"], "base64").toString("utf8"));
+    ok((await x402SignedPayers(decode(t1))).join() === LISTED_SIGNER, "the signer reader proves an EIP-3009 TransferWithAuthorization signer");
+    ok((await x402SignedPayers(decode(await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" })))).join() === LISTED_SIGNER, "...and a ReceiveWithAuthorization signer (the /ref shape)");
+    ok((await x402SignedPayers(decode(await signedPermit2(listedP2)))).join() === listedP2.address.toLowerCase(), "...and a Permit2 signer");
+    ok((await x402SignedPayers(decode(await signed3009(throwaway, { from: listedAcct.address })))).length === 0, "a signature that does not recover to the stated `from` proves nothing");
+
+    // (a) A throwaway wallet signs; the listed address sits in fields no signature covers.
+    const unsignedFields = [
+      ["channelConfig.payer", { channelConfig: { payer: listedAcct.address, payerAuthorizer: "0x" + "00".repeat(20) } }],
+      ["channelConfig.payerAuthorizer", { channelConfig: { payer: throwaway.address, payerAuthorizer: listedAcct.address } }],
+      ["a channel deposit's funder", { deposit: { amount: "1", authorization: { permit2Authorization: { from: listedAcct.address } } } }],
+    ];
+    for (const [label, extra] of unsignedFields) {
+      const r = await run(strict, await signed3009(throwaway, { primaryType: "ReceiveWithAuthorization", extra }));
+      ok(!r.next && r.code === 403 && r.body?.reason === "payer-not-accepted", `${label} names a listed address beside a throwaway's signature: still refused 403 on the strict screen (${r.code})`);
+    }
+    const forged = await run(strict, await signed3009(throwaway, { from: listedAcct.address }));
+    ok(!forged.next && forged.code === 403, "a listed `from` the signature does not recover to: refused 403");
+    await settle();
+    ok((await rows()).length === 0 && x402PayerScreenView().refusedUnrecorded === 4 && x402PayerScreenView().refused === 4, `...and none of those refusals is recorded; each counted as refused, not recorded (${(await rows()).length} rows, ${x402PayerScreenView().refusedUnrecorded} unrecorded)`);
+    ok(EV.sanctionsReportStatus() === "clear", "the report word stays clear");
+
+    // (b) The listed wallet signs: refused and recorded once, naming the signer.
+    const real = await run(strict, await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" }));
+    await settle();
+    let r1 = await rows();
+    ok(!real.next && real.code === 403 && r1.length === 1 && r1[0].address.toLowerCase() === LISTED_SIGNER && r1[0].kind === "screen-hit" && r1[0].route === "POST /ref/hash" && EV.sanctionsReportStatus() === "due", `a listed signer is refused and recorded once, naming the signer; the word reads due (${real.code}, ${r1.length} row)`);
+    // A listed signer beside an unsigned block naming another listed address: the record names the
+    // signer (on the direct routes, another route class than /ref, so it is not a repeat).
+    const both = await run(lenient, await signed3009(listedAcct, { extra: { channelConfig: { payer: listedP2.address } } }), { path: "/api/hash" });
+    await settle();
+    r1 = await rows();
+    ok(!both.next && both.code === 403 && r1.length === 2 && r1[0].address.toLowerCase() === LISTED_SIGNER && r1.every((x) => x.address.toLowerCase() !== listedP2.address.toLowerCase()), "with a listed signer and another listed address in an unsigned field, only the signer is recorded");
+    const p2 = await run(lenient, await signedPermit2(listedP2), { path: "/api/hash" });
+    await settle();
+    ok(!p2.next && p2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === listedP2.address.toLowerCase()), "a listed Permit2 signer is refused and recorded");
+
+    // (c) Repeats inside the window write nothing more.
+    const before = (await rows()).length;
+    for (let i = 0; i < 5; i++) { const r = await run(strict, await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" })); if (r.code !== 403) ok(false, "a repeat is still refused"); }
+    await settle();
+    ok((await rows()).length === before && EV.sanctionsEventWriteLimits().repeats >= 5, `five more refused payments from the same listed signer on the same route class write no new row (${(await rows()).length - before} new, ${EV.sanctionsEventWriteLimits().repeats} repeats counted)`);
+    // Another direct route is the same route class: nothing more.
+    await run(lenient, await signed3009(listedAcct), { path: "/api/other" });
+    await settle();
+    ok((await rows()).length === before, "the direct routes are one route class: a second direct route writes nothing more for that signer");
+
+    // (d) The caps hold under a flood of distinct listed signers.
+    EV.__resetSanctionsEventsForTests(); EV.__resetSanctionsEventLimitsForTests();
+    rmSync(process.env.SANCTIONS_EVENTS_FILE, { force: true });
+    EV.__resetSanctionsEventsForTests();
+    const one = await Promise.all(flood.slice(0, 30).map(async (a) => run(strict, await signed3009(a, { primaryType: "ReceiveWithAuthorization" }), { ip: "198.51.100.1" })));
+    await settle();
+    ok(one.every((r) => r.code === 403) && (await rows()).length === EV.SANCTIONS_EVENT_CLIENT_WINDOW_MAX && EV.sanctionsEventWriteLimits().clientCapped === 30 - EV.SANCTIONS_EVENT_CLIENT_WINDOW_MAX, `30 listed signers from one client address: all refused, ${EV.SANCTIONS_EVENT_CLIENT_WINDOW_MAX} recorded (${(await rows()).length})`);
+    const many = await Promise.all(flood.slice(30).map(async (a, i) => run(strict, await signed3009(a, { primaryType: "ReceiveWithAuthorization" }), { ip: `198.51.${101 + Math.floor(i / 5)}.${i % 5}` })));
+    await settle();
+    ok(many.every((r) => r.code === 403) && (await rows()).length === EV.SANCTIONS_EVENT_WINDOW_MAX && EV.sanctionsEventWriteLimits().capped > 0, `${flood.length} listed signers from many addresses: all refused, at most ${EV.SANCTIONS_EVENT_WINDOW_MAX} rows written in the window (${(await rows()).length}, ${EV.sanctionsEventWriteLimits().capped} capped)`);
+    ok(EV.sanctionsReportStatus() === "due" && (await EV.sanctionsEventsOperatorView()).writeLimits?.windowMax === EV.SANCTIONS_EVENT_WINDOW_MAX, "the word still reads due and the operator view names the limits");
+    // A new window writes again; an operator's own record is never held back.
+    const later = Date.now() + EV.SANCTIONS_EVENT_WINDOW_MS + 1000;
+    ok(await EV.recordSanctionsEvent({ kind: "screen-hit", address: "0x" + "ab".repeat(20), rail: "x402", route: "POST /api/hash" }, { now: later }) !== null, "the next window writes again");
+    for (let i = 0; i < EV.SANCTIONS_EVENT_WINDOW_MAX; i++) await EV.recordSanctionsEvent({ kind: "payout-refused", address: `0x${i.toString(16).padStart(40, "e")}` }, { now: later + 1 });
+    ok(await EV.recordSanctionsEvent({ kind: "blocked-refund", address: "0x" + "cd".repeat(20), refundId: 7 }, { now: later + 2, limit: false }) !== null, "past the cap, an operator's own record (limit: false) is still written");
+
+    // (e) Live control: a clean signed payment passes and records nothing.
+    const n = (await rows()).length;
+    const clean = await run(strict, await signed3009(cleanAcct, { primaryType: "ReceiveWithAuthorization" }));
+    const cleanDirect = await run(lenient, await signed3009(cleanAcct), { path: "/api/hash" });
+    await settle();
+    ok(clean.next && clean.code === null && cleanDirect.next && (await rows()).length === n, "CONTROL: a clean signed payment passes both screens and records nothing");
+  } finally {
+    delete process.env.SANCTIONS_SCREEN_FILE;
+    if (outerEvents === undefined) delete process.env.SANCTIONS_EVENTS_FILE; else process.env.SANCTIONS_EVENTS_FILE = outerEvents;
+    SS.__resetSanctionsScreenForTests();
+    EV.__resetSanctionsEventsForTests(); EV.__resetSanctionsEventLimitsForTests();
+    __resetX402PayerScreenForTests();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 2. The real paid server.
 const TMP = mkdtempSync(join(tmpdir(), "x402-payer-screen-"));
 let proc = null;

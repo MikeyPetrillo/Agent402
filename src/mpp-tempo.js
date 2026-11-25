@@ -1416,9 +1416,15 @@ function amountOfCredential(authorizationHeader) {
  *  call's target and every address-shaped word in each call's data (a
  *  transfer's recipient among them). A value that does not decode adds
  *  nothing. Never throws. Exported for tests. */
-export function tempoPaymentParties(authorizationHeader) {
+export function tempoPaymentParties(authorizationHeader, { signedOnly = false } = {}) {
   const out = new Set();
-  const add = (a) => { const v = lcAddress(a); if (v) out.add(v); };
+  // `signedOnly`: only the addresses a signature in the credential is
+  // recovered to (the sender's key, an access key and, for its version 2
+  // payload, the account it acts for, a configurable account's owners and the
+  // account their approvals name, a fee payer). The sanctions events store
+  // records only these; every other party is screened and never recorded.
+  const addSigned = (a) => { const v = lcAddress(a); if (v) out.add(v); };
+  const add = signedOnly ? () => {} : addSigned;
   let credential;
   try { credential = Credential.deserialize(authorizationHeader); } catch { return []; }
   const m = /^did:pkh:eip155:\d+:(0x[0-9a-fA-F]{40})$/.exec(String(credential?.source || ""));
@@ -1434,31 +1440,37 @@ export function tempoPaymentParties(authorizationHeader) {
       try {
         if (sig) {
           const signPayload = TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx));
-          if (PRIMITIVE_ENVELOPES.has(sig.type)) add(SignatureEnvelope.extractAddress({ payload: signPayload, signature: sig }));
+          if (PRIMITIVE_ENVELOPES.has(sig.type)) addSigned(SignatureEnvelope.extractAddress({ payload: signPayload, signature: sig }));
           // Every owner whose approval of a configurable account envelope
           // recovers under the account's digest of `payload` is screened.
           const owners = (env, payload) => {
-            if (!MULTISIG_ENVELOPES.has(env?.type) || !env.config || !Array.isArray(env.signatures) || env.signatures.length > AccountConfig.maxSignatures) return;
+            if (!MULTISIG_ENVELOPES.has(env?.type) || !env.config || !Array.isArray(env.signatures) || env.signatures.length > AccountConfig.maxSignatures) return 0;
             let digest;
-            try { digest = AccountConfig.getSignPayload({ account: env.account, config: env.config, payload }); } catch { return; }
+            try { digest = AccountConfig.getSignPayload({ account: env.account, config: env.config, payload }); } catch { return 0; }
+            let n = 0;
             for (const s of env.signatures) {
               if (!s || !PRIMITIVE_ENVELOPES.has(s.type)) continue;
-              try { add(SignatureEnvelope.extractAddress({ payload: digest, signature: s })); } catch { /* nothing to add */ }
+              try { addSigned(SignatureEnvelope.extractAddress({ payload: digest, signature: s })); n++; } catch { /* nothing to add */ }
             }
+            return n;
           };
           if (sig.type === "keychain" && sig.inner) {
             const keyPayload = sig.version === "v1" ? signPayload : TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx), { from: lcAddress(sig.userAddress) });
-            if (PRIMITIVE_ENVELOPES.has(sig.inner.type)) add(SignatureEnvelope.extractAddress({ payload: keyPayload, signature: sig.inner }));
+            if (PRIMITIVE_ENVELOPES.has(sig.inner.type)) {
+              addSigned(SignatureEnvelope.extractAddress({ payload: keyPayload, signature: sig.inner }));
+              // A version 2 key payload names the account, so its signature covers it.
+              if (sig.version !== "v1") addSigned(sig.userAddress);
+            }
             // A configurable account acting as an access key (TIP-1111) names
             // its own account inside the keychain envelope, and its owners'
             // approvals sign the access key's payload.
-            if (MULTISIG_ENVELOPES.has(sig.inner.type)) { add(sig.inner.account); owners(sig.inner, keyPayload); }
+            if (MULTISIG_ENVELOPES.has(sig.inner.type)) { add(sig.inner.account); if (owners(sig.inner, keyPayload)) addSigned(sig.inner.account); }
           }
-          owners(sig, signPayload);
+          if (owners(sig, signPayload) && sig.account) addSigned(sig.account);
         }
       } catch { /* an unrecoverable signer adds nothing; verification refuses it */ }
       if (tx?.feePayerSignature && tx.from) {
-        try { add(Secp256k1.recoverAddress({ payload: TxEnvelopeTempo.getFeePayerSignPayload(tx, { sender: tx.from }), signature: tx.feePayerSignature })); } catch { /* nothing to add */ }
+        try { addSigned(Secp256k1.recoverAddress({ payload: TxEnvelopeTempo.getFeePayerSignPayload(tx, { sender: tx.from }), signature: tx.feePayerSignature })); } catch { /* nothing to add */ }
       }
       for (const c of Array.isArray(tx?.calls) ? tx.calls : []) {
         add(c?.to);
@@ -1508,7 +1520,14 @@ function screenTempoParties(authorizationHeader, phase, extra = []) {
   const v = screenAddresses(parties);
   if (v.ok) return null;
   if (v.reason === "listed") {
-    try { recordSanctionsEvent({ kind: "screen-hit", address: v.address, rail: "tempo", detail: `Tempo payment party, ${phase}` }).catch(() => {}); } catch { /* never changes the refusal */ }
+    // Recorded only for a listed address a signature proves (or the sender the
+    // relay or chain settled on, `extra`); a party the credential merely names
+    // is refused all the same and never recorded.
+    try {
+      const signed = [...tempoPaymentParties(authorizationHeader, { signedOnly: true }), ...extra.map(lcAddress).filter(Boolean)];
+      const w = signed.length ? screenAddresses(signed) : null;
+      if (w && w.ok === false && w.reason === "listed") recordSanctionsEvent({ kind: "screen-hit", address: w.address, rail: "tempo", detail: `Tempo payment party, ${phase}` }).catch(() => {});
+    } catch { /* never changes the refusal */ }
     return { ok: false, cls: "screen-rejected", error: `screen ${phase}: party ${maskOne(v.address)} is on the OFAC SDN list (${parties.length} parties screened)`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };
   }
   return { ok: false, cls: "screen-unavailable", error: `screen ${phase}: no list loaded (status ${sanctionsScreenStatus()})`, reason: "payment-party screening unavailable", requestId: null, relayMessage: null };
@@ -1523,7 +1542,13 @@ async function screenTempoFunding(authorizationHeader, phase, extra = []) {
   let v;
   try { v = await screenFunding(payers); } catch { v = { ok: true }; }
   if (v.ok) return null;
-  try { recordSanctionsEvent({ kind: "screen-hit", address: v.payer || null, rail: "tempo", detail: `Tempo payer funded by a listed address${v.funder ? ` ${v.funder}` : ""}, ${phase}` }).catch(() => {}); } catch { /* never changes the refusal */ }
+  // Recorded only when the payer it names is one a signature proves (or the
+  // settled sender in `extra`); a stated payer is refused and never recorded.
+  try {
+    const signed = new Set([...tempoPaymentParties(authorizationHeader, { signedOnly: true }), ...extra.map(lcAddress).filter(Boolean)]);
+    const payer = lcAddress(v.payer);
+    if (payer && signed.has(payer)) recordSanctionsEvent({ kind: "screen-hit", address: v.payer, rail: "tempo", detail: `Tempo payer funded by a listed address${v.funder ? ` ${v.funder}` : ""}, ${phase}` }).catch(() => {});
+  } catch { /* never changes the refusal */ }
   const amount = Number.isFinite(v.listedUsd) ? ` $${v.listedUsd.toFixed(6)} in ${v.count} transfer(s), ${(v.share * 100).toFixed(2)}% of inflows read` : "";
   return { ok: false, cls: "screen-rejected", error: `screen ${phase}: funded by a listed address (payer ${maskOne(v.payer)}, funder ${v.funder ? maskOne(v.funder) : "cached verdict"}${amount})`, reason: "a payment address is on the OFAC SDN list", requestId: null, relayMessage: null };
 }

@@ -22,6 +22,18 @@
 // skipped; a federal holiday only moves the true deadline later) and an
 // overdue count.
 //
+// WRITE LIMITS. A screen refuses before the payment settles, and some refuse
+// before it verifies, so a caller can make an event happen at will. The store
+// therefore writes at most one row per (kind, address, route class, and for a
+// location refusal its country or region) in SANCTIONS_EVENT_DEDUPE_MS, at
+// most SANCTIONS_EVENT_CLIENT_WINDOW_MAX rows per client address and
+// SANCTIONS_EVENT_WINDOW_MAX rows in all per SANCTIONS_EVENT_WINDOW_MS. An
+// event past a limit is not written: it is counted on the operator view
+// (`writeLimits`) and logged once a minute with no address. The rows already
+// written keep the report word `due`, so a flood never reads `clear`. The
+// operator's own records (a blocked refund from the refund run) pass with
+// `{ limit: false }`. Per process (one replica).
+//
 // RETENTION. pruneSanctionsEvents removes events older than ten years
 // (SANCTIONS_EVENTS_RETENTION_YEARS, never less than 10), dry run by default;
 // an unfiled reportable event is never removed.
@@ -44,6 +56,14 @@ export const SANCTIONS_EVENT_KINDS = Object.freeze({
   "geo-payment": "rejected",       // a paid request from a sanctioned region, refused before verification
 });
 
+/** One row per key in this window (24 hours). */
+export const SANCTIONS_EVENT_DEDUPE_MS = 24 * 60 * 60 * 1000;
+/** The write window, and the rows written in it: in all, and per client address. */
+export const SANCTIONS_EVENT_WINDOW_MS = 60 * 60 * 1000;
+export const SANCTIONS_EVENT_WINDOW_MAX = 100;
+export const SANCTIONS_EVENT_CLIENT_WINDOW_MAX = 10;
+const DEDUPE_KEYS_MAX = 10_000;
+
 const useDb = () => stateDbEnabled();
 const fileOf = (env = process.env) => env.SANCTIONS_EVENTS_FILE || join(existsSync("/data") ? "/data" : "/tmp", "agent402-sanctions-events.jsonl");
 
@@ -55,6 +75,50 @@ const clip = (v, n) => (v == null ? null : String(v).slice(0, n));
 // A location code is kept only in its code form; anything else is dropped.
 const codeOf = (v, re) => { const s = v == null ? "" : String(v).trim().toUpperCase(); return re.test(s) ? s : null; };
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+
+const limits = { recorded: 0, repeats: 0, capped: 0, clientCapped: 0 };
+const seenKeys = new Map();     // dedupe key -> time written
+let windowAt = 0, windowN = 0;  // the fixed write window, all writers
+const clientWindow = new Map(); // client -> rows written in this window
+let limitLoggedAt = 0;
+
+// The route class: the referral copies apart from the direct routes.
+const routeClassOf = (route) => {
+  const path = String(route ?? "").replace(/^[A-Z]+\s+/, "");
+  if (!path) return "-";
+  return /^(?:https?:\/\/[^/]+)?\/ref\//.test(path) ? "ref" : "direct";
+};
+// An EVM address is one key whatever its case; any other is kept exactly.
+const addressKeyOf = (a) => (a == null ? "-" : /^0x[0-9a-fA-F]{40}$/.test(String(a)) ? String(a).toLowerCase() : String(a));
+
+/** The write limits' verdict for one event: null (write it) or the reason it is not written. */
+function limitVerdict(ev, kind, now) {
+  const key = [kind, addressKeyOf(ev.address), routeClassOf(ev.route), String(ev.country ?? ""), String(ev.region ?? ""), ev.address == null ? String(ev.ip ?? "") : ""].join("|");
+  const at = seenKeys.get(key);
+  if (at != null && now - at < SANCTIONS_EVENT_DEDUPE_MS && now >= at) { limits.repeats++; return "repeat"; }
+  if (now - windowAt >= SANCTIONS_EVENT_WINDOW_MS || now < windowAt) { windowAt = now; windowN = 0; clientWindow.clear(); }
+  if (windowN >= SANCTIONS_EVENT_WINDOW_MAX) { limits.capped++; return "capped"; }
+  const client = ev.ip == null || ev.ip === "" ? null : String(ev.ip).slice(0, 64);
+  if (client) {
+    const n = clientWindow.get(client) || 0;
+    if (n >= SANCTIONS_EVENT_CLIENT_WINDOW_MAX) { limits.clientCapped++; return "client-capped"; }
+    clientWindow.set(client, n + 1);
+    while (clientWindow.size > DEDUPE_KEYS_MAX) clientWindow.delete(clientWindow.keys().next().value);
+  }
+  windowN++;
+  seenKeys.delete(key); seenKeys.set(key, now);
+  while (seenKeys.size > DEDUPE_KEYS_MAX) seenKeys.delete(seenKeys.keys().next().value);
+  return null;
+}
+
+/** The write limits for the operator view: counts and settings, never an address. */
+export function sanctionsEventWriteLimits() {
+  return {
+    recorded: limits.recorded, repeats: limits.repeats, capped: limits.capped, clientCapped: limits.clientCapped,
+    dedupeMs: SANCTIONS_EVENT_DEDUPE_MS, windowMs: SANCTIONS_EVENT_WINDOW_MS,
+    windowMax: SANCTIONS_EVENT_WINDOW_MAX, clientWindowMax: SANCTIONS_EVENT_CLIENT_WINDOW_MAX,
+  };
+}
 
 function newId(now) {
   return `se_${String(now).padStart(14, "0")}_${randomBytes(5).toString("hex")}`;
@@ -103,7 +167,9 @@ export function addBusinessDays(ms, days = REPORT_BUSINESS_DAYS) {
 
 /**
  * Record one event. Never throws into a serving path: resolves the stored
- * row, or null when the store did not take it (logged).
+ * row, or null when the store did not take it (logged) or a write limit held
+ * it back (counted; see WRITE LIMITS above; `limit: false` for an operator's
+ * own record).
  * Fields: kind (required, a SANCTIONS_EVENT_KINDS key), address, rail,
  * network, amount (atomic units or USD as `amountUsd`), asset, route,
  * ip, country, region, listPublishDate, via, refundId, detail. A geo-payment
@@ -111,10 +177,20 @@ export function addBusinessDays(ms, days = REPORT_BUSINESS_DAYS) {
  * 3166-2) code that was the refusal's reason, so a report can state it; no
  * other location value (city, coordinates, a header's own text) is stored.
  */
-export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
+export async function recordSanctionsEvent(ev = {}, { now = Date.now(), limit = true } = {}) {
   try {
     const kind = String(ev.kind || "");
     if (!Object.prototype.hasOwnProperty.call(SANCTIONS_EVENT_KINDS, kind)) throw new Error(`unknown kind ${kind}`);
+    if (limit !== false) {
+      const held = limitVerdict(ev, kind, now);
+      if (held) {
+        if (held !== "repeat" && Date.now() - limitLoggedAt >= 60_000) {
+          limitLoggedAt = Date.now();
+          console.warn(`[sanctions-events] write limit reached (${held}); further ${kind} events in this window are counted, not written`);
+        }
+        return null;
+      }
+    }
     const row = {
       id: newId(now),
       at: new Date(now).toISOString(),
@@ -145,6 +221,7 @@ export async function recordSanctionsEvent(ev = {}, { now = Date.now() } = {}) {
       loadFile().push(row);
       appendFileRow(row);
     }
+    limits.recorded++;
     console.warn(`[sanctions-events] recorded ${kind}${row.report ? ` (a ${row.report === "blocked" ? "blocked-property" : "rejected-transaction"} report is due by ${row.dueBy.slice(0, 10)})` : ""}`);
     return row;
   } catch (e) {
@@ -206,6 +283,7 @@ export async function sanctionsEventsOperatorView({ now = Date.now(), recent = 1
     overdue,
     recent: latest,
     rule: { reportBusinessDays: REPORT_BUSINESS_DAYS, retentionYears: sanctionsRetentionYears() },
+    writeLimits: sanctionsEventWriteLimits(),
   };
 }
 
@@ -272,3 +350,8 @@ export async function pruneSanctionsEvents({ apply = false, now = Date.now(), ye
 
 /** Tests: forget the file view and the database cache. */
 export function __resetSanctionsEventsForTests() { fileRows = null; dbCache = { at: 0, unfiled: null, error: null }; }
+/** Tests: forget the write limits' state and counts. */
+export function __resetSanctionsEventLimitsForTests() {
+  seenKeys.clear(); clientWindow.clear(); windowAt = 0; windowN = 0; limitLoggedAt = 0;
+  limits.recorded = 0; limits.repeats = 0; limits.capped = 0; limits.clientCapped = 0;
+}
