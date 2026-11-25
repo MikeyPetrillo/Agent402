@@ -101,17 +101,25 @@ export async function runSanctionsStoreCases({ EV, sdb = null, ok, label }) {
     EV.__resetSanctionsEventLimitsForTests();
     const before = journalEntries(journalFile());
     EV.__setSanctionsStoreHookForTests?.(async (source) => { if (source === "flush") throw new Error("case: store away"); });
-    let mid = 0, row = null;
+    let mid = 0, unsettledMid = 0, row = null;
     const N = 20_000;
     try {
       for (let i = 0; i < N; i++) {
         row = await EV.recordSanctionsAggregate({ kind: "unproven-refusal", reason: "unsigned-field", rail: "bounded", route: "POST /ref/hash" });
-        if (i === N / 2) mid = journalEntries(journalFile()) - before;
+        if (i === N / 2) {
+          // Unsettled: a shared journal drops a row's older copy only once
+          // the newer one is durable, so a few copies may still be waiting:
+          // never one per refusal.
+          unsettledMid = journalEntries(journalFile()) - before;
+          await EV.__sanctionsJournalSettledForTests?.();
+          mid = journalEntries(journalFile()) - before;
+        }
       }
+      await EV.__sanctionsJournalSettledForTests?.();
       await sleep(20);
     } finally { EV.__setSanctionsStoreHookForTests?.(null); }
     const held = journalEntries(journalFile()) - before;
-    ok(row?.count === N && mid <= 2 && held <= 2, `${label}: ${N} refusals on one row during an outage leave ${held} journal entr${held === 1 ? "y" : "ies"} (${mid} midway), not one per refusal`);
+    ok(row?.count === N && unsettledMid <= 256 && mid <= 2 && held <= 2, `${label}: ${N} refusals on one row during an outage leave ${held} journal entr${held === 1 ? "y" : "ies"} (${mid} midway once durable, ${unsettledMid} before), not one per refusal`);
     // A restart: memory is gone; the replay alone lands the final count.
     EV.__resetSanctionsEventLimitsForTests();
     EV.__resetSanctionsEventsForTests();

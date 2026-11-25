@@ -121,6 +121,10 @@ function journal() {
   return journalImpl;
 }
 /** Keep a change: a snapshot of `row` in the journal first, then the row pending for its write. */
+// A shared journal's durability answers still on their way (each one drops the
+// older copies of its row when it lands); tests wait on them before counting.
+const acksInFlight = new Set();
+export async function __sanctionsJournalSettledForTests() { while (acksInFlight.size) await Promise.all([...acksInFlight]); }
 function keep(row, { onDisk = true } = {}) {
   let m = meta.get(row.id);
   if (!m) { m = { v: 0, onDisk, ids: [] }; meta.set(row.id, m); }
@@ -141,7 +145,11 @@ function keep(row, { onDisk = true } = {}) {
     };
     // A local journal wrote the line already; a shared one says when it is durable.
     if (j.kind !== "redis") dropOlder();
-    else Promise.resolve(j.durable(id)).then((where) => { if (where) dropOlder(); }, () => {});
+    else {
+      const ack = Promise.resolve(j.durable(id)).then((where) => { if (where) dropOlder(); }, () => {});
+      acksInFlight.add(ack);
+      ack.finally(() => acksInFlight.delete(ack));
+    }
   }
   markDirty(row);
 }
