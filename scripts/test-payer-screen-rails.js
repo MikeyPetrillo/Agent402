@@ -212,7 +212,7 @@ const tempoHeader = (source) => {
   await loadList([LISTED]);
   ok(P.relayPayerScreen([undefined, LISTED, null], "after validate", { log: () => {} })?.cls === "screen-rejected" && P.relayPayerScreen([CLEAN, null], "after validate") === null && P.relayPayerScreen([], "after validate") === null, "the settled sender is screened; nothing readable passes");
   const mpp = readFileSync(new URL("../src/mpp-tempo.js", import.meta.url), "utf8");
-  ok(/relayPayerScreen\(\[validation\?\.details\?\.sender, validation\?\.receipt\?\.from, validation\?\.payer\], "after validate"\)/.test(mpp), "validateTempoCredential screens the relay's settled sender in relay mode");
+  ok(/const settled = \[validation\?\.details\?\.sender, validation\?\.receipt\?\.from, validation\?\.payer\];\s*const refused = relayPayerScreen\(settled, "after validate"\)/.test(mpp), "validateTempoCredential screens the relay's settled sender in relay mode");
 }
 
 // ---- MPP Tempo direct mode: fails closed (documented) ----
