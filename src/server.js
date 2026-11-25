@@ -627,7 +627,7 @@ import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMo
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
 import { settleComplianceView } from "./settle-compliance.js";
-import { sanctionedRegionsMiddleware, sanctionedRegionsView, verifiedGeoPayer } from "./sanctioned-regions.js";
+import { sanctionedRegionsMiddleware, sanctionedRegionsView, verifiedGeoPayer, sanctionsReportWord, geoBlockProvenance, warnGeoBlockProvenance } from "./sanctioned-regions.js";
 import { applyActualCharge } from "./actual-charge.js";
 import { startLedgerRetention, ledgerRetentionStatus } from "./ledger-retention.js";
 import { recordSanctionsEvent, recordSanctionsAggregate, flushSanctionsEvents, startSanctionsJournalReplay, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
@@ -3108,6 +3108,10 @@ app.use(paidNoStoreMiddleware());
 // email-link routes under /followups and /alerts are registered early; the
 // PostHog proxy sets its own nosniff as well).
 app.use(securityHeaders());
+// The block reads location only from a request proven to come through the
+// CDN: on with no way to prove that, it never fires, so say so at boot (the
+// sanctionsReport word reads attention too, sanctionsReportWord).
+warnGeoBlockProvenance();
 // Comprehensively sanctioned regions (src/sanctioned-regions.js): answered 451
 // here, before every payment gate, the idempotency cache and the async-job
 // replay, so a payment from one is never verified or settled. The location is
@@ -4802,7 +4806,8 @@ app.get("/api/gateway-status", async (req, res) => {
     // Sanctions reports (src/sanctions-events.js): `due` while a rejected or
     // blocked-property report is unfiled; the operator view adds the regional
     // block's counts. The events themselves are /__operator/sanctions-events.json.
-    sanctionsReport: (() => { try { const status = sanctionsReportStatus(); return full ? { status, geo: sanctionedRegionsView() } : { status }; } catch { return { status: "unknown" }; } })(),
+    // attention: the regional block is on and cannot fire (no CDN provenance; sanctionsReportWord).
+    sanctionsReport: (() => { try { const status = sanctionsReportWord(sanctionsReportStatus()); return full ? { status, geo: sanctionedRegionsView(), geoBlock: geoBlockProvenance() } : { status }; } catch { return { status: "unknown" }; } })(),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
     // Daily MPP reconciliation (src/mpp-reconcile.js): status words + counts,
@@ -8210,7 +8215,7 @@ app.post("/__operator/sanctions-events/filed", express.json({ limit: "16kb" }), 
   if (operatorLedgerLimited(req, res)) return;
   res.set("Cache-Control", "private, no-store");
   const { ids, all, reference } = req.body || {};
-  try { res.json({ ok: true, ...(await markSanctionsEventsFiled({ ids, all: all === true, reference })), status: sanctionsReportStatus() }); }
+  try { res.json({ ok: true, ...(await markSanctionsEventsFiled({ ids, all: all === true, reference })), status: sanctionsReportWord(sanctionsReportStatus()) }); }
   catch (e) { res.status(e?.statusCode === 400 ? 400 : 503).json({ error: redactSecrets(String(e?.message || e)).slice(0, 200) }); }
 });
 // Record an event the refund runner found (a refund owed to a listed wallet,

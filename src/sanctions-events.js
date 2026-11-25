@@ -34,7 +34,9 @@
 //     day's rows are bounded by the list and the dedupe.
 //   - recordSanctionsAggregate keeps what has no address worth keeping: one
 //     row per (kind, rail, route class, country, region) per clock hour with a
-//     `count` and a count per reason (`byReason`), never an address. Kind
+//     `count` and a count per reason (`byReason`), never an address; at most
+//     SANCTIONS_AGGREGATE_KEYS_PER_HOUR such rows an hour, every further key
+//     counted in the hour's one overflow row per kind (`overflow: true`). Kind
 //     `unproven-refusal` (a record, no report): a refusal on an address no
 //     signature proves, so the attacker-chosen address is never stored; and a
 //     `geo-payment` aggregate (a report) for the proven paid requests from a
@@ -47,7 +49,7 @@
 //     fallback), the journal the money ledgers use. The row is then written
 //     behind, within SANCTIONS_EVENT_FLUSH_MS, and at once before any operator
 //     read, filing, prune or a graceful shutdown (flushStateQueues); a write
-//     that fails stays pending and its snapshots are freed for the replay. A
+//     that fails stays pending here, its snapshots held until it lands. A
 //     journal entry is removed only after the row write that covers it
 //     committed. At boot, and on every operator read, replaySanctionsJournal
 //     lands what a killed process left: a snapshot is merged into the stored
@@ -85,6 +87,8 @@ export const SANCTIONS_EVENT_KINDS = Object.freeze({
 export const SANCTIONS_EVENT_DEDUPE_MS = 24 * 60 * 60 * 1000;
 /** An aggregate row covers one clock hour. */
 export const SANCTIONS_AGGREGATE_MS = 60 * 60 * 1000;
+/** New aggregate rows per clock hour; past it, the hour's one overflow row. */
+export const SANCTIONS_AGGREGATE_KEYS_PER_HOUR = 200;
 /** Increments reach the store within this time. */
 export const SANCTIONS_EVENT_FLUSH_MS = 2_000;
 const DEDUPE_KEYS_MAX = 10_000;
@@ -105,6 +109,7 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 const counts = { recorded: 0, repeats: 0, aggregated: 0, flushFailures: 0 };
 const seenKeys = new Map();  // dedupe key -> { row, at }
 const aggregates = new Map(); // aggregate key -> row (this hour's)
+let aggregateHour = 0, aggregateKeysThisHour = 0;
 const pending = new Set();    // rows changed since the last write
 let flushTimer = null;
 let flushing = null;
@@ -163,12 +168,12 @@ function landed(row, v) {
   for (const x of done) { try { Promise.resolve(x.j.remove(x.id)).catch(() => {}); } catch { /* replayed again: the merge is idempotent */ } }
   if (!m.ids.length && m.v === v && !pending.has(row)) meta.delete(row.id);
 }
-/** The write failed: free the row's journal entries for the replay (the row stays pending here too). */
-function unlanded(row) {
-  const m = meta.get(row.id);
-  if (!m) return;
-  for (const x of m.ids) { try { x.j.release(x.id); } catch { /* the entry stays */ } }
-}
+// A write that fails leaves the row pending here, and its journal entries
+// held by this process (never released to the replay): this process writes it
+// on a later flush and then removes them; if the process dies first, its hold
+// ends with it (a shared journal's lease lapses, a local one's is in memory)
+// and the next replay lands them. Releasing them too would let a shared
+// journal forget where an entry landed, so the later removal could miss it.
 
 // The route class: the referral copies apart from the direct routes.
 const routeClassOf = (route) => {
@@ -189,8 +194,7 @@ function markDirty(row) { pending.add(row); scheduleFlush(); }
 
 /** Write every row changed since the last write (new rows, repeats,
  *  aggregates, a failed write). Resolves the number written; a row whose
- *  write fails stays pending (and its journal entries are freed for the
- *  replay). Never throws. */
+ *  write fails stays pending, its journal entries kept. Never throws. */
 export async function flushSanctionsEvents() {
   while (flushing) await flushing;
   if (!pending.size) return 0;
@@ -199,7 +203,7 @@ export async function flushSanctionsEvents() {
     pending.clear();
     const version = new Map(rows.map((r) => [r, meta.get(r.id)?.v ?? 0]));
     let n = 0;
-    const failed = (r, e) => { pending.add(r); unlanded(r); counts.flushFailures++; console.error(`[sanctions-events] a change to ${r.id} was not written yet (${String(e?.message || e).slice(0, 120)}); retrying`); };
+    const failed = (r, e) => { pending.add(r); counts.flushFailures++; console.error(`[sanctions-events] a change to ${r.id} was not written yet (${String(e?.message || e).slice(0, 120)}); retrying`); };
     if (useDb()) {
       for (const row of rows) {
         try { if (storeHook) await storeHook("flush", row); await upsertMaxRow(JSON.parse(JSON.stringify(row))); n++; landed(row, version.get(row)); }
@@ -469,7 +473,15 @@ export async function recordSanctionsAggregate(ev = {}, { now = Date.now() } = {
     const hourStart = Math.floor(now / SANCTIONS_AGGREGATE_MS) * SANCTIONS_AGGREGATE_MS;
     const rail = clip(ev.rail, 32), routeClass = routeClassOf(ev.route);
     const country = codeOf(ev.country, COUNTRY_RE), region = codeOf(ev.region, REGION_RE);
-    const key = [kind, rail || "", routeClass, country || "", region || "", hourStart].join("|");
+    let key = [kind, rail || "", routeClass, country || "", region || "", hourStart].join("|");
+    // A bounded number of new rows per hour: past it, every new key of the
+    // hour is counted in one overflow row per kind (no rail, route or place).
+    if (!aggregates.has(key)) {
+      if (aggregateHour !== hourStart) { aggregateHour = hourStart; aggregateKeysThisHour = 0; }
+      if (aggregateKeysThisHour >= SANCTIONS_AGGREGATE_KEYS_PER_HOUR) key = [kind, "overflow", hourStart].join("|");
+      else aggregateKeysThisHour++;
+    }
+    const overflow = key === [kind, "overflow", hourStart].join("|");
     let row = aggregates.get(key);
     if (row && !row.filedAt) {
       row.count += 1;
@@ -479,11 +491,12 @@ export async function recordSanctionsAggregate(ev = {}, { now = Date.now() } = {
       keep(row);
       return row;
     }
-    if (aggregates.size > 1000) for (const [k, r] of aggregates) if (Date.parse(r.hourStart) < hourStart) aggregates.delete(k);
+    if (aggregates.size > SANCTIONS_AGGREGATE_KEYS_PER_HOUR) for (const [k, r] of aggregates) if (Date.parse(r.hourStart) < hourStart) aggregates.delete(k);
     const report = SANCTIONS_EVENT_KINDS[kind];
     row = {
-      id: newId(now), at: new Date(now).toISOString(), kind, report, aggregate: true,
-      hourStart: new Date(hourStart).toISOString(), address: null, rail, routeClass, country, region,
+      id: newId(now), at: new Date(now).toISOString(), kind, report, aggregate: true, ...(overflow ? { overflow: true } : {}),
+      hourStart: new Date(hourStart).toISOString(), address: null,
+      rail: overflow ? null : rail, routeClass: overflow ? null : routeClass, country: overflow ? null : country, region: overflow ? null : region,
       count: 1, byReason: { [reason]: 1 }, lastSeenAt: new Date(now).toISOString(),
       dueBy: report ? new Date(addBusinessDays(now)).toISOString() : null, filedAt: null, filedRef: null,
     };
@@ -639,7 +652,7 @@ let storeHook = null;
 export function __setSanctionsStoreHookForTests(fn = null) { storeHook = typeof fn === "function" ? fn : null; }
 /** Tests: forget the dedupe keys, the aggregates, pending changes, the journal handle and counts. */
 export function __resetSanctionsEventLimitsForTests() {
-  seenKeys.clear(); aggregates.clear(); pending.clear(); meta.clear(); journalImpl = null; journalAt = "";
+  seenKeys.clear(); aggregates.clear(); pending.clear(); meta.clear(); journalImpl = null; journalAt = ""; aggregateHour = 0; aggregateKeysThisHour = 0;
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   counts.recorded = 0; counts.repeats = 0; counts.aggregated = 0; counts.flushFailures = 0;
 }

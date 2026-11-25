@@ -82,9 +82,12 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   const SOLANA = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
   const svmHeader = b64({ x402Version: 2, accepted: { scheme: "exact", network: SOLANA, extra: { feePayer: feePayer.address } }, payload: { transaction: tx } });
   const mw = createX402PayerScreen({ log: () => {} });
-  const run = (headers) => new Promise((resolve) => {
+  const { stashVerifiedPayment } = await import("../src/verified-payment.js");
+  const EVs = await import("../src/sanctions-events.js");
+  const run = (headers, { verified = false } = {}) => new Promise((resolve) => {
     const out = { next: false, code: null, body: null };
     const req = { method: "POST", path: "/api/hash", header: (k) => headers[String(k).toLowerCase()] ?? null, headers };
+    if (verified) stashVerifiedPayment(req, { paymentPayload: JSON.parse(Buffer.from(headers["payment-signature"], "base64").toString("utf8")) });
     const res = { setHeader() {}, status(c) { out.code = c; return res; }, json(b) { out.body = b; resolve(out); return res; } };
     mw(req, res, () => { out.next = true; resolve(out); });
   });
@@ -102,6 +105,18 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   ok(noList.next && x402PayerScreenView().servedUnscreened === 1, "no payout list loaded: served unscreened and counted, as the EVM path does");
   const none = await run({});
   ok(none.next && x402PayerScreenView().screened === 2, "no payment header: passes without a screen");
+  {
+    // The signers are read from a transaction nothing verified yet (no stash): no row; once the
+    // middleware verified the payment on the request, the signer is recorded.
+    K.__seedPayoutListForTests([{ address: buyer.address, asset: "SOL", entity: "TEST FIXTURE", sdnId: "7" }]);
+    await new Promise((r) => setTimeout(r, 50));
+    const solRows = async () => (await EVs.sanctionsEventsOperatorView({ recent: 1000 })).recent.filter((x) => !x.aggregate && x.address === buyer.address);
+    ok((await solRows()).length === 0 && (await EVs.sanctionsEventsOperatorView({ recent: 1000 })).recent.some((x) => x.aggregate && x.byReason?.["signer-before-verify"] >= 1), "a listed Solana signer on a request with no verified payment gets no row; it is counted");
+    const again = await run({ "payment-signature": svmHeader }, { verified: true });
+    await new Promise((r) => setTimeout(r, 50));
+    ok(again.code === 403 && (await solRows()).length === 1, "with the payment verified on the request, the listed Solana signer is recorded");
+    K.__resetPayoutListForTests();
+  }
   // AN SPL MULTISIG IN A LOOKUP TABLE. The listed wallet X is the multisig's
   // signing member; the transfer's authority M is a lookup-table entry, so no
   // single payer reads from it. Every required signer except the fee payer is
@@ -246,9 +261,12 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
       message: { permitted: { token: USDC, amount: 10000n }, spender: x402ExactPermit2ProxyAddress, nonce: BigInt(permit2Authorization.nonce), deadline: BigInt(permit2Authorization.deadline), witness: { to: PAY_TO, validAfter: BigInt(permit2Authorization.witness.validAfter) } } });
     return { "payment-signature": b64({ x402Version: 2, accepted, payload: { signature, permit2Authorization } }) };
   };
-  const run = (mw, headers, { path = "/ref/hash", ip = "203.0.113.20" } = {}) => new Promise((resolve) => {
+  const { stashVerifiedPayment } = await import("../src/verified-payment.js");
+  // `verified`: the x402 middleware verified this request's payment (its stash, src/verified-payment.js).
+  const run = (mw, headers, { path = "/ref/hash", ip = "203.0.113.20", verified = false } = {}) => new Promise((resolve) => {
     const out = { next: false, code: null, body: null };
     const req = { method: "POST", path, ip, header: (k) => headers[String(k).toLowerCase()] ?? null, headers };
+    if (verified) stashVerifiedPayment(req, { paymentPayload: JSON.parse(Buffer.from(headers["payment-signature"], "base64").toString("utf8")) });
     const res = { setHeader() {}, status(c) { out.code = c; return res; }, json(b) { out.body = b; resolve(out); return res; } };
     mw(req, res, () => { out.next = true; resolve(out); });
   });
@@ -368,9 +386,14 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
     const sw1 = await run(strict, contractSig);
     await settle();
     ok(!sw1.next && sw1.code === 403 && !(await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase()) && (await aggs()).find((x) => x.routeClass === "ref")?.byReason?.["unproven-signer"] === unprovenBefore + 1, "/ref: a listed contract-wallet signer is refused, gets no row (not verified yet), and is counted in the aggregate as an unproven signer");
-    const sw2 = await run(lenient, contractSig, { path: "/api/hash" });
+    // A route with no price: the x402 middleware calls the screen without verifying anything.
+    const unprovenDirect = ((await aggs()).find((x) => x.routeClass === "direct")?.byReason?.["unproven-signer"]) || 0;
+    const sw0 = await run(lenient, contractSig, { path: "/api/free-tool" });
     await settle();
-    ok(!sw2.next && sw2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase() && x.route === "POST /api/hash"), "direct routes (after verify): the same listed contract-wallet signer is refused and recorded");
+    ok(!sw0.next && sw0.code === 403 && !(await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase()) && (await aggs()).find((x) => x.routeClass === "direct")?.byReason?.["unproven-signer"] === unprovenDirect + 1, "a route with no price (nothing verified): a header naming a listed address with a bogus signature is refused as before, gets no row, and is counted");
+    const sw2 = await run(lenient, contractSig, { path: "/api/hash", verified: true });
+    await settle();
+    ok(!sw2.next && sw2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase() && x.route === "POST /api/hash"), "direct routes, payment verified on the request: the same listed contract-wallet signer is refused and recorded");
 
     // (g1) ONE write that fails, with no repeat after it, still lands once the store recovers.
     {

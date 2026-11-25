@@ -131,6 +131,23 @@ export async function runSanctionsStoreCases({ EV, sdb = null, ok, label }) {
     ok(took < 1000, `${label}: the bounded journal's replay is short (${took} ms)`);
   }
 
+  // ---- keys: at most SANCTIONS_AGGREGATE_KEYS_PER_HOUR aggregate rows an hour; the rest in one overflow row
+  {
+    EV.__resetSanctionsEventLimitsForTests();
+    const hour = Date.UTC(2031, 0, 6, 10, 30); // one clock hour of its own
+    const cap = EV.SANCTIONS_AGGREGATE_KEYS_PER_HOUR;
+    const made = [];
+    for (let i = 0; i < cap + 50; i++) made.push(await EV.recordSanctionsAggregate({ kind: "unproven-refusal", reason: "unsigned-field", rail: `k${i}`, route: "POST /api/keys" }, { now: hour + i }));
+    for (let i = 0; i < 10; i++) await EV.recordSanctionsAggregate({ kind: "unproven-refusal", reason: "unproven-signer", rail: `k${cap + 100 + i}`, route: "POST /api/keys" }, { now: hour + 1000 + i });
+    await EV.flushSanctionsEvents();
+    const ids = new Set(made.map((r) => r?.id));
+    const over = made[made.length - 1];
+    const so = await stored(over.id);
+    ok(ids.size === cap + 1 && over.overflow === true && so?.count === 60 && so.byReason?.["unsigned-field"] === 50 && so.byReason?.["unproven-signer"] === 10 && so.rail === null && so.country === null, `${label}: ${cap + 60} distinct aggregate keys in one hour open ${ids.size - 1} rows and one overflow row counting the other ${so?.count}`);
+    const next = await EV.recordSanctionsAggregate({ kind: "unproven-refusal", reason: "unsigned-field", rail: "k-next", route: "POST /api/keys" }, { now: hour + 3_600_000 });
+    ok(next && !next.overflow && next.rail === "k-next", `${label}: the next hour opens rows again`);
+  }
+
   // ---- filed
   {
     EV.__resetSanctionsEventLimitsForTests();

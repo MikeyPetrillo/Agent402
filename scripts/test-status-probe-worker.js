@@ -968,7 +968,7 @@ for (const [name, over, detail] of failCases) {
       ["Scheduled check needs review: credits-guards", "creditsGuards", ["attention"], ["ok"]],
       ["Scheduled check needs review: cost-table", "upstreamCosts", ["missing", "partial"], ["ok"]],
       // A sanctions event that needs a report and is not marked filed (src/sanctions-events.js).
-      ["Scheduled check needs review: sanctions-report", "sanctionsReport", ["due"], ["clear"]],
+      ["Scheduled check needs review: sanctions-report", "sanctionsReport", ["due", "attention"], ["clear"]],
       // A paying buyer refused by the settle breaker (src/gateway-settle-breaker.js).
       ["Scheduled check needs review: buyer-refusals", "buyerRefusals", ["refusing"], ["ok"]],
       // Distinct buyers' /v1 payments failing to settle (an alarm only, src/gateway-settle-breaker.js).

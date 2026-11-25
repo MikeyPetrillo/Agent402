@@ -628,14 +628,18 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
   {
     // A sanctions event that needs a report (sanctionsReport on
     // /api/gateway-status, src/sanctions-events.js): due pages until an
-    // operator marks it filed; clear closes; unknown or absent does neither.
+    // operator marks it filed, and attention (the regional block is on and
+    // cannot fire) pages until the CDN settings are set; clear closes;
+    // unknown or absent does neither.
     title: "Scheduled check needs review: sanctions-report",
     verdict: ({ gateway: b }) => {
       const w = b.sanctionsReport?.status;
-      if (w === "due") return "bad";
+      if (w === "due" || w === "attention") return "bad";
       return w === "clear" ? "good" : "quiet";
     },
-    body: () => "/api/gateway-status reports sanctionsReport.status=due: an event in the private sanctions store needs a report within ten business days. Read /__operator/sanctions-events.json, file it as the private procedure says, then mark it filed (POST /__operator/sanctions-events/filed). Auto-closes when the word reads clear.",
+    body: ({ gateway: b }) => (b.sanctionsReport?.status === "attention"
+      ? "/api/gateway-status reports sanctionsReport.status=attention: the regional sanctions block is on but cannot prove a request came through the CDN, so it refuses nothing. Set CDN_PROXY and CDN_ORIGIN_SECRET (the boot log names it). Auto-closes when the word reads clear."
+      : "/api/gateway-status reports sanctionsReport.status=due: an event in the private sanctions store needs a report within ten business days. Read /__operator/sanctions-events.json, file it as the private procedure says, then mark it filed (POST /__operator/sanctions-events/filed). Auto-closes when the word reads clear."),
   },
   {
     // Money we owe a buyer (refundsOwed on /api/gateway-status). The refund

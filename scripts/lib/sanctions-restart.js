@@ -21,8 +21,8 @@ setInterval(() => {}, 1000);
 const READER = `
 const EV = await import(${JSON.stringify(STORE)});
 const view = await EV.sanctionsEventsOperatorView({ recent: 1000 });
-process.stdout.write("ROWS " + JSON.stringify(view.recent) + "\\n");
-process.exit(0);
+// A pipe takes a large write asynchronously: exit only once it is flushed.
+process.stdout.write("ROWS " + JSON.stringify(view.recent) + "\\n", () => process.exit(0));
 `;
 
 export function runRestartCase({ env, address }) {
@@ -30,7 +30,7 @@ export function runRestartCase({ env, address }) {
   for (const k of ["REDIS_URL", "LEDGER_JOURNAL_REDIS"]) delete base[k];
   if (!env.STATE_DATABASE_URL) delete base.STATE_DATABASE_URL;
   const w = spawnSync(process.execPath, ["--input-type=module", "-e", WRITER], { env: base, encoding: "utf8", timeout: 60_000 });
-  const r = spawnSync(process.execPath, ["--input-type=module", "-e", READER], { env: base, encoding: "utf8", timeout: 60_000 });
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", READER], { env: base, encoding: "utf8", timeout: 60_000, maxBuffer: 64 * 1024 * 1024 });
   const line = String(r.stdout || "").split("\n").find((l) => l.startsWith("ROWS "));
   let rows = null;
   try { rows = line ? JSON.parse(line.slice(5)) : null; } catch { rows = null; }

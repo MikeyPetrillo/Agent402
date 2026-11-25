@@ -72,8 +72,9 @@
 // (src/sanctions-events.js, under its write limits) only for a listed address
 // the payment's own signature proves (src/x402-signed-payers.js): EIP-3009
 // `authorization.from` or Permit2 `permit2Authorization.from` recovered
-// locally, and on the direct routes (after verification) the payment's own
-// signer field as the facilitator verified it (a contract wallet's EIP-1271 or
+// locally, and, only for a payment the facilitator verified on this request
+// (the stash src/verified-payment.js keeps; a route with no price verifies
+// nothing), the verified signer field (a contract wallet's EIP-1271 or
 // EIP-6492 signature included) and a Solana, Stellar or Algorand signer. A listed address seen only in a field no signature covers
 // (the channel fields, an unsigned block, anything on the strict screen,
 // which runs before verification, that the signature does not recover to) is
@@ -91,6 +92,7 @@ import { decodePaymentHeader } from "./payment-header.js";
 import { recordSanctionsEvent, recordSanctionsAggregate } from "./sanctions-events.js";
 import { sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { x402SignedPayers } from "./x402-signed-payers.js";
+import { verifiedPaymentOf, verifiedEvmPayerOf } from "./verified-payment.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -162,17 +164,18 @@ const counts = { screened: 0, refused: 0, refusedUnrecorded: 0, servedUnscreened
  *  A Solana, Stellar or Algorand payment: its signers are read from the signed
  *  transaction, recorded only where the screen runs after the facilitator
  *  verified that transaction (not the strict screen, which runs before). */
-async function recordableListedOf(v, payload, { strict }) {
-  if (v.nonEvm) return strict ? null : v.address;
+async function recordableListedOf(v, payload, { strict, req }) {
+  // The x402 middleware also calls this screen on a route with no price,
+  // where nothing was verified: only a payment the facilitator verified on
+  // THIS request (the stash src/verified-payment.js keeps) vouches for a
+  // signer no local recovery can prove.
+  const verified = strict ? null : verifiedPaymentOf(req);
+  if (v.nonEvm) return verified ? v.address : null;
   const signed = new Set(await x402SignedPayers(payload));
-  // After verification (every screen but the strict one) the facilitator has
-  // checked the payment's own signer field, a contract wallet's signature
-  // (EIP-1271, EIP-6492) included, which no local recovery can prove.
-  if (!strict) {
-    const inner = payload?.payload;
-    const from = inner?.permit2Authorization ? inner.permit2Authorization.from : inner?.authorization?.from;
-    if (typeof from === "string" && EVM_RE.test(from)) signed.add(from.toLowerCase());
-  }
+  // A contract wallet's signature (EIP-1271, EIP-6492): the verified payer
+  // field, as the facilitator checked it.
+  const verifiedPayer = verified ? verifiedEvmPayerOf(req) : null;
+  if (verifiedPayer) signed.add(verifiedPayer);
   if (!signed.size) return null;
   let w;
   try { w = screenAddresses([...signed]); } catch { return null; }
@@ -278,7 +281,7 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
       const payload = x402ScreenedPaymentOf(req)?.payload;
       const acc = payload?.accepted || payload || {};
       const route = `${req.method} ${req.path}`, ip = req.ip;
-      recordableListedOf(v, payload, { strict }).then((address) => {
+      recordableListedOf(v, payload, { strict, req }).then((address) => {
         if (!address) {
           // No row of its own (the address is the caller's to choose): counted
           // in the hour's aggregate row, with no address.

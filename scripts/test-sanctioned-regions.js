@@ -50,7 +50,8 @@ ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "RU", "cf-region": "Crimea" })
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "RU", "cf-region": "Republic of Crimea" }), { trusted: true })?.region === "UA-43", "a region found by name is recorded as its code, never the header's text");
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "UA", "cf-region-code": "14" }), { trusted: true })?.region === "UA-14", "a Ukraine region is its ISO 3166-2 code");
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR", "cf-region-code": "<script>" }), { trusted: true })?.region === null, "a region header that is not a code is dropped");
-ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR", "cf-region-code": "23" }), { trusted: true })?.region === "IR-23", "a country refusal keeps its subdivision code");
+// A whole country: only the country is kept; a subdivision header (the caller's network to vary) is not.
+for (const code of ["23", "THR", "IR-07", "ZZ9"]) ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "IR", "cf-region-code": code }), { trusted: true })?.region === null, `a country refusal keeps no subdivision (${code})`);
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "RU", "cf-region": "Moscow" }), { trusted: true }) === null, "the rest of Russia is not blocked here (not a comprehensive program)");
 ok(geo.sanctionedLocationOf(req({ "cf-ipcountry": "CU" }), { trusted: true, countries: geo.sanctionedCountries({ SANCTIONS_GEO_COUNTRIES: "IR" }) }) === null, "SANCTIONS_GEO_COUNTRIES replaces the country set");
 
@@ -290,6 +291,38 @@ const run = (mw, r) => new Promise((resolve) => {
   ok(fileLines.length === (await rowsOf()).length && fileLines.some((l) => l.aggregate && l.count === 500) && fileLines.some((l) => l.attempts === 4), "file mode holds one line per row, with the attempt and aggregate counts");
   process.env.SANCTIONS_EVENTS_FILE = outerFile;
   ev.__resetSanctionsEventsForTests();
+}
+
+// ---- the block's provenance: on with no way to prove a request came through the CDN, it never
+// fires; the boot says so and the public word reads attention (never under FREE_MODE).
+{
+  const SECRET16 = "a".repeat(16);
+  ok(geo.geoBlockProvenance({}) === "unproven" && geo.geoBlockProvenance({ CDN_PROXY: "on" }) === "unproven" && geo.geoBlockProvenance({ CDN_ORIGIN_SECRET: SECRET16 }) === "unproven", "the block on with CDN_PROXY or CDN_ORIGIN_SECRET unset cannot fire");
+  ok(geo.geoBlockProvenance({ CDN_PROXY: "on", CDN_ORIGIN_SECRET: SECRET16 }) === "ok" && geo.geoBlockProvenance({ SANCTIONS_GEO_BLOCK: "off" }) === "off", "with both set it can; with the block off it is off");
+  ok(geo.sanctionsReportWord("clear", {}) === "attention" && geo.sanctionsReportWord("unknown", {}) === "attention", "the public word reads attention while the block cannot fire");
+  ok(geo.sanctionsReportWord("due", {}) === "due", "a report due still reads due");
+  ok(geo.sanctionsReportWord("clear", { CDN_PROXY: "on", CDN_ORIGIN_SECRET: SECRET16 }) === "clear" && geo.sanctionsReportWord("clear", { SANCTIONS_GEO_BLOCK: "off" }) === "clear", "CONTROL: with provenance, or the block off, the word is the store's");
+  ok(geo.sanctionsReportWord("clear", { FREE_MODE: "true" }) === "clear", "a FREE_MODE instance (no payments) is not paged for it");
+  const lines = [];
+  ok(geo.warnGeoBlockProvenance({ env: {}, log: (l) => lines.push(l) }) === "unproven" && lines.length === 1 && /CDN_PROXY or CDN_ORIGIN_SECRET is unset/.test(lines[0]), "the boot logs one warning naming the two settings");
+  lines.length = 0;
+  geo.warnGeoBlockProvenance({ env: { CDN_PROXY: "on", CDN_ORIGIN_SECRET: SECRET16 }, log: (l) => lines.push(l) });
+  ok(lines.length === 0, "CONTROL: no warning with both set");
+  const server = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/\bwarnGeoBlockProvenance\(\);/.test(server) && /sanctionsReportWord\(sanctionsReportStatus\(\)\)/.test(server), "server.js warns at boot and publishes the word through sanctionsReportWord");
+}
+
+// ---- varying the subdivision header of a whole blocked country opens no new aggregate row
+{
+  ev.__resetSanctionsEventLimitsForTests();
+  const before = (await ev.sanctionsEventsOperatorView({ recent: 1000 })).recent.filter((r) => r.aggregate).length;
+  const mw2 = geo.sanctionedRegionsMiddleware({ env: {}, log: () => {}, verify: async () => null,
+    record: ({ req: r, country, region, aggregate, kind, reason }) => (aggregate ? ev.recordSanctionsAggregate({ kind, reason, rail: "x402", route: `${r.method} ${r.path}`, country, region }) : null) });
+  for (let i = 0; i < 60; i++) await run(mw2, { ...req({ "cf-ipcountry": "IR", "cf-region-code": String(i).padStart(2, "0"), "payment-signature": "e30=" }), viaCdn: true });
+  await new Promise((r) => setTimeout(r, 50));
+  const aggRows = (await ev.sanctionsEventsOperatorView({ recent: 1000 })).recent.filter((r) => r.aggregate);
+  const ir = aggRows.filter((r) => r.country === "IR");
+  ok(aggRows.length - before === 1 && ir.length >= 1 && ir.some((r) => r.region === null && r.count >= 60), `60 refusals from Iran with 60 different subdivision headers: one aggregate row, no subdivision (${aggRows.length - before} new)`);
 }
 
 // ---- unit: the store
