@@ -26,6 +26,14 @@ ok(B.BARRED_UPSTREAMS.length >= 1 && B.BARRED_UPSTREAMS.every((u) => u.name && u
 // ---- 3. controls first, so a pattern that matches nothing cannot pass -------
 for (const s of ["https://api.gopluslabs.io/api/v1/token_security/1", "api.gopluslabs.io", "GoPlus token_security", "Powered by Go Plus", "go-plus", "GOPLUSLABS.IO"]) ok(re.test(s), `CONTROL: the pattern catches "${s}"`);
 for (const s of ["algoplus", "goplusx", "notgopluslabs.io.example", "go plusher", "plus go"]) ok(!re.test(s), `CONTROL: the pattern passes "${s}"`);
+{
+  // Each host is read as literal text: a backslash or a metacharacter in a
+  // host matches only itself.
+  const lit = B.barredMentionPattern(["a\\d.example", "x+y.example"], ["nomatchname"]);
+  ok(lit.test("a\\d.example") && !lit.test("a1.example") && !lit.test("a\\dxexample"), "CONTROL: a backslash in a host is matched literally, not as a class or escape");
+  ok(lit.test("x+y.example") && !lit.test("xxy.example"), "CONTROL: a quantifier character in a host is matched literally");
+  ok(B.barredMentionPattern().source === re.source, "the default lists are this file's own");
+}
 ok(B.isBarredUpstream("https://api.gopluslabs.io/x") && B.isBarredUpstream("gopluslabs.io") && !B.isBarredUpstream("https://evilgopluslabs.io") && !B.isBarredUpstream("not a url"), "the host check reads a URL's host and its subdomains only");
 
 // ---- 1. the tracked tree ------------------------------------------------------
