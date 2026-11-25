@@ -269,7 +269,7 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
       limits: Array.isArray(facts.limits) ? facts.limits : [],
       synthesis_model: SYNTH,
       claim_check: { passed: true, rewrites },
-      disclaimer: "On-chain facts only. Not financial advice, not a guarantee, not exhaustive. On-chain analysis cannot detect off-chain fraud.",
+      disclaimer: TOKEN_FACTS_NOTICE,
     };
     const out = { report, address, chain, sources, tables, meta, grounding, notice: TOKEN_FACTS_NOTICE };
     if (testSeamOn("RESEARCH_DEBUG")) out._debug = { infoBlock, verifyBlock, holderBlock, scanBlock, webBlock, controlBlock, liquidityBlock };
@@ -383,7 +383,7 @@ const OUT_EXAMPLE = {
     ],
     "synthesis_model": "anthropic/claude-opus-5",
     "claim_check": { "passed": true, "rewrites": 0 },
-    "disclaimer": "On-chain facts only. Not financial advice, not a guarantee, not exhaustive. On-chain analysis cannot detect off-chain fraud."
+    "disclaimer": TOKEN_FACTS_NOTICE
   },
   "notice": TOKEN_FACTS_NOTICE
 };

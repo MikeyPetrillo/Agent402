@@ -1,4 +1,5 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 import { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } from "./mpp-subscription-retention.js";
 import { READBACK_FIRST_MS, READBACK_INTERVAL_MS, READBACK_PENDING_INTERVAL_MS } from "./card-refund-readback.js";
 import { DEFAULT_WITHHELD_USER_AGENT_PREFIXES, mppOfferGateEnabled } from "./mpp-offer-gate.js";
@@ -56,6 +57,24 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 // the same item to a server that sets the switch).
 const ENTRIES = [
   {
+    date: "2026-11-25",
+    title: "Region block",
+    shownWhen: sanctionsGeoBlockEnabled,
+    items: [
+      "Payments: A request from a region under comprehensive U.S. sanctions, or from a country this service does not serve, is answered 451 with reason `unavailable_in_region` before any payment is verified or settled (SANCTIONS_GEO_BLOCK, on by default). An x402 payment's answer says nothing was charged (`charged: false`); a Tempo push credential's answer says the transfer it names was not claimed (`transferClaimed: false`). /health and the legal pages answer from anywhere.",
+    ],
+  },
+  {
+    date: "2026-11-25",
+    title: "Terms, AI marks, Solana fields, refund lookup",
+    items: [
+      "Site: /terms and /privacy are dated 2026-11-25. A change to the terms applies to calls and purchases made on or after the date it is posted with, never to a dispute that arose before it, and an active subscription keeps the price it was bought at. If the hosted service stops, an unspent prepaid balance is refunded to the card that bought it and any amount owed is repaid under the refund terms.",
+      "Tools: A generated image or MP3 file carries the AI-generated mark inside the file: XMP with the IPTC digital source type in PNG, JPEG and WebP, and an ID3 tag on an MP3 that has none. A file that already carries content credentials or its own XMP is passed through unchanged.",
+      "Tools: The Solana token tools and the token brief no longer return the token index's own verified flag or organic score (token.isVerified, organicScore, organicScoreLabel) or a report's verification block, and sol-token-search's fallback mints no longer carry isVerified.",
+      "Payments: The refund lookup answers `held` for a refund that is recorded and held for review and has not been paid, where it answered none before.",
+    ],
+  },
+  {
     date: "2026-11-24",
     title: "Computed market screens",
     items: [
@@ -75,7 +94,7 @@ const ENTRIES = [
       "Tools: market-calendar compiles its calendars from public sources (NYSE Rules 7.2 and 7.34 as filed with the SEC, GOV.UK bank holidays, the Cabinet Office national holidays, DATA.GOV.HK and the exchange_calendars rules) and every answer names them, carries their credits and says the facts are not exchange data. The HKEX day has its 12:00 to 13:00 break.",
       "Tools: settlement-calendar cites each rail's rule to public sources and carries their credits; CHAPS answers no longer state operating hours.",
       "Tools: token-safety, token-risk and token-risk-pro compute every token fact here: supply, owner and proxy from chain reads, buy and sell tax and the honeypot reading from a simulated buy and sell that sends nothing, privileged functions from the Sourcify ABI, and holders from the Transfer history where it is small enough. A fact not computed is null with its reason in limits, and every answer lists its sources. Celo joins the report chains, and an unsupported chain answers 422 naming the supported ones.",
-      "Tools: token-safety no longer returns a verdict: its verdict, because, blocking and warnings fields are removed. Each answer lists the named facts found (flags, each an id, a description and the measured value), what could not be checked and why (unknown), its sources and limits, and a notice that these are on-chain facts only and not investment advice. token-risk and token-risk-pro carry the same notice, and a report that judges the token is written once more and then withheld. The Solana token tools and the token brief list named facts computed from their sources' fields and never pass through a source's score, risk levels or verdict words.",
+      "Tools: token-safety no longer returns a verdict: its verdict, because, blocking and warnings fields are removed. Each answer lists the named facts found (flags, each an id, a description and the measured value), what could not be checked and why (unknown), its sources and limits, and a notice that these are facts read from the chain and named public sources and not investment advice. token-risk and token-risk-pro carry the same notice, and a report that judges the token is written once more and then withheld. The Solana token tools and the token brief list named facts computed from their sources' fields and never pass through a source's score, risk levels or verdict words.",
       "Tools: fx-rate, fx-historical, fx-timeseries and fx-dashboard say before payment and in every answer that the ECB reference rates are available free of charge at ecb.europa.eu, and each answer says whether its rate is the ECB's own or computed from it (`rateBasis`).",
       "Tools: search-suggest keeps each prefix's suggestions for a day, so a repeated prefix is answered without a new read, and every answer carries the license link and says it is not affiliated with the Wikimedia Foundation.",
       "Tools: tts, tts-lite, tts-hd, v1-audio-speech and dub say before payment and in every answer that the voice is AI-generated (`aiGeneratedVoice`, or the X-AI-Generated header on audio bytes).",

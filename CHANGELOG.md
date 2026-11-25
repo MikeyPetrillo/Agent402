@@ -4,7 +4,38 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
-## v2.16.0 - 2026-11-24
+## v2.16.0 - 2026-11-25
+
+### 2026-11-25 (region block)
+Payments:
+- A request from a region under comprehensive U.S. sanctions, or from a
+  country this service does not serve, is answered 451 with reason
+  `unavailable_in_region` before any payment is verified or settled
+  (SANCTIONS_GEO_BLOCK, on by default). An x402 payment's answer says nothing
+  was charged (`charged: false`); a Tempo push credential's answer says the
+  transfer it names was not claimed (`transferClaimed: false`). /health and
+  the legal pages answer from anywhere.
+
+### 2026-11-25 (terms, AI marks, Solana fields, refund lookup)
+Site:
+- /terms and /privacy are dated 2026-11-25. A change to the terms applies to
+  calls and purchases made on or after the date it is posted with, never to a
+  dispute that arose before it, and an active subscription keeps the price it
+  was bought at. If the hosted service stops, an unspent prepaid balance is
+  refunded to the card that bought it and any amount owed is repaid under the
+  refund terms.
+Tools:
+- A generated image or MP3 file carries the AI-generated mark inside the file:
+  XMP with the IPTC digital source type in PNG, JPEG and WebP, and an ID3 tag
+  on an MP3 that has none. A file that already carries content credentials or
+  its own XMP is passed through unchanged.
+- The Solana token tools and the token brief no longer return the token
+  index's own verified flag or organic score (token.isVerified, organicScore,
+  organicScoreLabel) or a report's verification block, and sol-token-search's
+  fallback mints no longer carry isVerified.
+Payments:
+- The refund lookup answers `held` for a refund that is recorded and held for
+  review and has not been paid, where it answered none before.
 
 ### 2026-11-24 (computed market screens)
 Tools:
@@ -65,7 +96,7 @@ Tools:
   warnings fields are removed. Each answer lists the named facts found (flags,
   each an id, a description and the measured value), what could not be checked
   and why (unknown), its sources and limits, and a notice that these are
-  on-chain facts only and not investment advice. token-risk and token-risk-pro
+  facts read from the chain and named public sources and not investment advice. token-risk and token-risk-pro
   carry the same notice, and a report that judges the token is written once
   more and then withheld. The Solana token tools and the token brief list
   named facts computed from their sources' fields and never pass through a

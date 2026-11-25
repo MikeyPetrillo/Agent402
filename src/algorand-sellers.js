@@ -2,8 +2,8 @@
 //
 // The Base external path discovers candidates in our own x402 index and gates
 // them on PROVEN settled volume from the leaderboard (CDP/Base on-chain data).
-// Algorand sellers appear in neither — their catalog AND settlement history
-// live with the GoPlausible facilitator — so this module is both halves for
+// Algorand sellers appear in neither: their catalog AND settlement history
+// live with the GoPlausible facilitator, so this module is both halves for
 // the AVM chain, from two facilitator surfaces:
 //   /discovery/merchants   merchantId -> totalVerifications
 //   /discovery/resources   merchantId -> { resourceUrl, method, description,
@@ -14,7 +14,7 @@
 // run before any spend.
 //
 // Cached ~30 min (the economy-snapshot convention), single-flighted, and
-// rebuilt on schedule only while the router reads it (IDLE below); NEVER throws — a facilitator outage yields an empty catalog, which simply
+// rebuilt on schedule only while the router reads it (IDLE below); NEVER throws: a facilitator outage yields an empty catalog, which simply
 // gates external Algorand routing closed until the next successful refresh.
 //
 // OUR OWN CRAWL IS A SECOND SOURCE (2026-09-18). Until today this catalog was
