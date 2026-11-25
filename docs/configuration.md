@@ -474,7 +474,7 @@ holds it.
 | --- | --- | --- | --- |
 | `FREE_ALERTS` | Free alerts. |  | `src/server.js` |
 | `FREE_ALERTS_SECRET` | Free alerts secret (a credential, set on the host). |  | `src/server.js` |
-| `FREE_MODE` | true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer. |  | `src/aws-marketplace-gate.js`, `src/connector-pay.js`, `src/managed-agents-page.js` and 10 more |
+| `FREE_MODE` | true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer. |  | `src/aws-marketplace-gate.js`, `src/connector-pay.js`, `src/managed-agents-page.js` and 11 more |
 
 ## FUNNEL
 
