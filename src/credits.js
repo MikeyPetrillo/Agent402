@@ -1919,6 +1919,14 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const e = badKeys.get(limiterKey(String(client || "?")));
     return Boolean(e && e.until > at && e.n >= badKeyMax());
   }
+  /** Seconds until a held client's failed-key window ends, for Retry-After:
+   *  this process's own window when it holds the client, else the whole window
+   *  (a hold read from the shared store started at most that long ago). */
+  function badKeyRetryAfter(client, at = now()) {
+    const e = badKeys.get(limiterKey(String(client || "?")));
+    const ms = e && e.until > at && e.n >= badKeyMax() ? e.until - at : badKeyWindowMs();
+    return Math.max(1, Math.ceil(ms / 1000));
+  }
   async function badKeyHeld(client, at = now()) {
     if (!badKeyBound()) return false;
     if (badKeyHeldHere(client, at)) return true;
@@ -1987,7 +1995,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
         if (failedLookup(a) && !grantOf?.(req)) {
           const busy = heldShared || badKeyHeldHere(req.ip);
           noteBadKey(req.ip);
-          if (busy) { res.setHeader("X-Credits-Error", "rate_limited"); return res.status(429).json(BAD_KEY_BUSY); }
+          if (busy) { res.setHeader("X-Credits-Error", "rate_limited"); res.setHeader("Retry-After", String(badKeyRetryAfter(req.ip))); return res.status(429).json(BAD_KEY_BUSY); }
         }
         res.setHeader("X-Credits-Error", a.reason);
         // Under a connector grant the app is never told the balance (the
@@ -2475,5 +2483,5 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { authorizeGrant, grantSpentToday, sessionOwner, refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, fraudWarning, approveFraudRefund, fraudReviews, disputeClosed, disputeLostByPaymentIntent, disputesToReview, resolveDispute, revokeByKey, revokeFor, setLimits, notePaymentFailed, sourceTag, badKeyHeld, failedLookup, _internals: { boughtInDayCents, refuseAndRefund, refuseSession, purchasesIn }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { authorizeGrant, grantSpentToday, sessionOwner, refundsOwedWord, createCheckout, createTopupCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, balancesForEmail, historyFor, requestRefundFor, issueNewKey, setLowNotice, fraudWarning, approveFraudRefund, fraudReviews, disputeClosed, disputeLostByPaymentIntent, disputesToReview, resolveDispute, revokeByKey, revokeFor, setLimits, notePaymentFailed, sourceTag, badKeyHeld, badKeyRetryAfter, failedLookup, _internals: { boughtInDayCents, refuseAndRefund, refuseSession, purchasesIn }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }

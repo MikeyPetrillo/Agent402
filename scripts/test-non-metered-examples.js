@@ -1300,7 +1300,10 @@ async function main() {
     }
 
     const err = r.threw || (r.body && r.body.error) || `HTTP ${r.status}`;
-    const msg = `${t.method.toUpperCase()} ${t.path} (${t.slug}) → ${r.status || "threw"} ${String(typeof err === "object" ? JSON.stringify(err) : err).slice(0, 160)}`;
+    // The verdict's reason rides the failure, as the live path's does, so a
+    // refusal the sweep did not excuse says why (no recorded upstream failure,
+    // the runner's own read answered, a URL the definition does not build).
+    const msg = `${t.method.toUpperCase()} ${t.path} (${t.slug}) → ${r.status || "threw"} ${String(typeof err === "object" ? JSON.stringify(err) : err).slice(0, 160)} [not excused: ${outage.reason}]`;
     liveFails.push(msg);
   });
   process.stdout.write("\n");
