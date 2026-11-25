@@ -397,14 +397,15 @@ try {
   ok(/relevance order/.test(r.note), "search: relevance-order note when no fallback ran");
 
   // The ticker is busy on other chains: the search holds no Solana pair, so the
-  // mints come from the token index (verified first) and pairs are read by mint.
+  // mints come from the token index (in its own search order; its verified
+  // flag neither ranks nor is passed through) and pairs are read by mint.
   {
     const WIF = "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm";
     const KWIF = "6Rwcmkz9yiYVM5EzyMcr4JsQPGEAWhcUvLvfBperYnUt";
     const SWORD = "5tCju6YNxHq5zrA6tGndr6F7TK42mpUFmeE31cSFpump";
     const BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
     const tok = (id, symbol, name, isVerified) => ({ ...JUP_TOKEN, id, symbol, name, isVerified, tags: isVerified ? ["verified"] : ["unknown"] });
-    const JUP_WIF = [tok(SWORD, "swordcat", "cat wif sword", undefined), tok(WIF, "$WIF", "dogwifhat", true), tok(KWIF, "KWIF", "Kitten Wif Hat", true), { id: "not a mint" }];
+    const JUP_WIF = [tok(WIF, "$WIF", "dogwifhat", true), tok(KWIF, "KWIF", "Kitten Wif Hat", true), { id: "not a mint" }, tok(SWORD, "swordcat", "cat wif sword", undefined)];
     const base = (addr, symbol, name) => ({ baseToken: { address: addr, symbol, name }, quoteToken: { address: SOL, name: "Wrapped SOL", symbol: "SOL" } });
     const OTHER_CHAINS = [DS_PAIR({ chainId: "robinhood", pairAddress: "rh", ...base("0xrh", "WIF", "dogwifhat") }), DS_PAIR({ chainId: "ethereum", pairAddress: "eth", ...base("0xeth", "WIF", "WIF") })];
     const TOP = [DS_PAIR({ pairAddress: "w1", liquidity: { usd: 100 }, ...base(WIF, "$WIF", "dogwifhat") }), DS_PAIR({ pairAddress: "k1", liquidity: { usd: 9e9 }, ...base(KWIF, "KWIF", "Kitten Wif Hat") }), DS_PAIR({ pairAddress: "s1", ...base(SWORD, "swordcat", "cat wif sword") })];
@@ -425,6 +426,12 @@ try {
     ok(r.fallback.mints.map((m) => m.mint).join(",") === [WIF, KWIF, SWORD].join(",") && !("isVerified" in r.fallback.mints[0]) && r.fallback.mints[0].symbol === "$WIF", "search fallback: listed mints first, invalid ids dropped, no outside verified flag");
     ok(calls.some((c) => c.url === `https://api.dexscreener.com/tokens/v1/solana/${WIF},${KWIF},${SWORD}`) && calls.some((c) => c.url === `https://api.dexscreener.com/token-pairs/v1/solana/${WIF}`), "search fallback: pairs read by mint for Solana");
     ok(calls.length === 4 && /token index/.test(r.note), "search fallback: four reads, and the note explains the order");
+    // The index's verified flag never reorders its mints: an unflagged mint the
+    // index ranks first stays first.
+    stub(route({ jup: () => Promise.resolve(jsonRes([tok(SWORD, "swordcat", "cat wif sword", undefined), tok(WIF, "$WIF", "dogwifhat", true), tok(KWIF, "KWIF", "Kitten Wif Hat", true)])) }));
+    r = await h("sol-token-search")({ query: "wif", limit: 10 });
+    ok(r.fallback.mints.map((m) => m.mint).join(",") === [SWORD, WIF, KWIF].join(",") && !JSON.stringify(r).includes("isVerified"), `search fallback: mints keep the token index's own order, never ranked by its verified flag (got ${r.fallback.mints.map((m) => m.symbol).join(",")})`);
+    ok(!/verified/i.test(SOLANA_INTEL_TOOLS.find((x) => x.slug === "sol-token-search").description), "the listing never says the index's mints are verified");
 
     // Solana rows that do not match the query: they follow the mints' pairs.
     stub(route({ search: [...OTHER_CHAINS, DS_PAIR({ pairAddress: "d1", ...base(BONK, "DOGE", "not it") }), DS_PAIR({ pairAddress: "w2", ...base(WIF, "XYZ", "relabeled") })] }));

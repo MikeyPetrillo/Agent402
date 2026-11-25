@@ -555,8 +555,9 @@ const byLiquidity = (a, b) => (b.liquidityUsd || 0) - (a.liquidityUsd || 0);
 
 // sol-token-search fallback. The pair index's search answers its top 30 pairs
 // across every chain, so a ticker busy elsewhere can leave Solana with no row.
-// The fallback asks a Solana token index for the query's mints (verified
-// first, at most SEARCH_FALLBACK_MINTS), then reads their pairs from the pair
+// The fallback asks a Solana token index for the query's mints (in that
+// index's own search order, at most SEARCH_FALLBACK_MINTS; its verified flag
+// neither ranks nor is passed through), then reads their pairs from the pair
 // index by mint, in parallel: each listed mint's top pair in one read, and
 // the first mint's full pair list in another.
 const SEARCH_FALLBACK_MINTS = 5;
@@ -599,10 +600,8 @@ async function searchFallback(query, budget) {
   }
   const mints = (Array.isArray(list) ? list : [])
     .filter((t) => typeof t?.id === "string" && BASE58_RE.test(t.id))
-    .map((t, rank) => ({ t, rank, verified: t.isVerified === true || (Array.isArray(t.tags) && t.tags.includes("verified")) }))
-    .sort((a, b) => (b.verified - a.verified) || (a.rank - b.rank))
     .slice(0, SEARCH_FALLBACK_MINTS)
-    .map(({ t }) => ({ mint: t.id, symbol: t.symbol ?? null, name: t.name ?? null }));
+    .map((t) => ({ mint: t.id, symbol: t.symbol ?? null, name: t.name ?? null }));
   if (!mints.length) return { status: "nothing-found", mints, pairs: [], unavailable: null, error: null };
   if (budget && budget.remaining() < OPTIONAL_READ_FLOOR_MS) {
     return { status: "unavailable", mints, pairs: [], unavailable: { upstream: "DexScreener", step: "pairs by mint", reason: "budget" }, error: null };
@@ -1134,7 +1133,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order. When that search holds no matching Solana pair (a ticker busy on other chains), the mints come from a Solana token index, verified first, and their pairs are read by mint. Each row: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not), with computed signals per row (liquidity and age bands, 24h buy share, turnover, flags). When several mints answer to the query's ticker, the answer names the one with the most liquidity and marks every other one's rows tickerShadow. Resolve a ticker to a mint here before calling sol-token-pairs or sol-price, which take mint addresses, not tickers. Keyless.",
+      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order. When that search holds no matching Solana pair (a ticker busy on other chains), the mints come from a Solana token index, in that index's own search order, and their pairs are read by mint. Each row: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not), with computed signals per row (liquidity and age bands, 24h buy share, turnover, flags). When several mints answer to the query's ticker, the answer names the one with the most liquidity and marks every other one's rows tickerShadow. Resolve a ticker to a mint here before calling sol-token-pairs or sol-price, which take mint addresses, not tickers. Keyless.",
     tags: ["solana", "search", "token", "ticker", "dex", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
