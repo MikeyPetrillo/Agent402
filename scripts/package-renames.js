@@ -128,8 +128,20 @@ export function runClaim({ run = false, npm = realNpm, log = console.log, err = 
     }
     const trustArgs = ["trust", "github", r.name, "--file", WORKFLOW, "--repo", REPO, "--env", ENVIRONMENT, "--allow-publish", "-y"];
     if (!run && state === "missing") { log(`  ${shown(trustArgs)}`); continue; }
+    // A name this run just created has no trusted publisher yet: add it without
+    // a list call (npm trust list can need an interactive 2FA step). A name that
+    // already existed is checked by list; when list cannot run, an owner who has
+    // seen the publisher listed names it in CLAIM_TRUST_DONE (comma list).
+    const trustDone = String(process.env.CLAIM_TRUST_DONE || "").split(",").map((x) => x.trim()).filter(Boolean);
+    if (trustDone.includes(r.name)) { log(`${r.name}: trusted publisher confirmed by the owner (CLAIM_TRUST_DONE); trust skipped`); continue; }
+    if (run && state === "missing") {
+      log(`  ${shown(trustArgs)}`);
+      const res = npm(trustArgs, { stdio: "inherit" });
+      if (res.status !== 0) return stop(r.name, `npm trust failed (exit ${res.status})`, [shown(trustArgs), CLAIM_RERUN]);
+      continue;
+    }
     const listed = npm(["trust", "list", r.name, "--json"]);
-    if (listed.status !== 0) return stop(r.name, `npm trust list failed (exit ${listed.status}): ${String(listed.stderr || "").trim().split("\n").pop() || "no output"}`, [`npm trust list ${r.name} --json`, CLAIM_RERUN]);
+    if (listed.status !== 0) return stop(r.name, `npm trust list failed (exit ${listed.status}): ${String(listed.stderr || "").trim().split("\n").pop() || "no output"}`, [`npm trust list ${r.name}`, `CLAIM_TRUST_DONE=${r.name} ${CLAIM_RERUN}   (only after the list shows the ${WORKFLOW} publisher)`]);
     const t = trustState(parseTrustList(listed.stdout));
     if (t.state === "present") { log(`${r.name}: trusted publisher present (${WORKFLOW}, ${ENVIRONMENT}); trust skipped`); continue; }
     if (t.state === "no-publish") {
