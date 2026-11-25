@@ -189,7 +189,7 @@ ok(/required choice, to request that we start at once/.test(termsText), "terms: 
 {
   const { dpaPage } = await import("../src/dpa.js");
   const legalText = (h) => h.replace(/<(script|style)[\s\S]*?<\/\1>/g, " ").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ");
-  const NOTICE_RE = /\b\d+\s+days?'?\s+(?:of\s+)?notice\b|\bdays'?\s+notice\b|\bby e-?mail\b|\bnotif(?:y|ies|ied|ying|ication)\b|\bnotices?\b|\bwe(?:'ll| will)? (?:e-?mail|tell|inform|alert|write to) you\b/i;
+  const NOTICE_RE = /\b\d+\s+days?'?\s+(?:of\s+)?notice\b|\bdays'?\s+notice\b|\bby e-?mail\b|\bin writing\b|\bnotif(?:y|ies|ied|ying|ication)\b|\bnotices?\b|\bwe(?:'ll| will)? (?:e-?mail|tell|inform|alert|write to) you\b/i;
   const ALLOWED = [
     [/keep the attribution and license notice with it/, "a data license's own notice, the reader's duty"],
     [/with or without notice/, "disclaims notice"],
@@ -205,14 +205,32 @@ ok(/required choice, to request that we start at once/.test(termsText), "terms: 
     [/follow-up emails about that purchase/, "describes processing the reader can turn off"],
     [/from the day we confirm it by email/, "how the addendum is formed"],
     [/We notify a personal data breach affecting your data without undue delay after becoming aware of it, to the customers we can identify and reach\./, "GDPR Art. 33(2): a processor notifies its controller without undue delay"],
+    [/we ask for it in writing at least \d+ days before the engagement/, "SCC clause 9(a) option 1: specific prior authorization, requested in writing ahead of the engagement"],
+    [/at a time we agree in writing/, "an audit's time, agreed with the customer who asks for it"],
+    [/We email a receipt for each purchase and top-up, and a notice once each time a balance drops under .+ unless you turn that notice off/, "the credits code's own sends (src/credits.js receipt, src/credits-account.js low-balance email), shown only while credit sales are on"],
+    [/We email a receipt for each purchase and top-up, and a notice once each time a balance drops under .+, and a notice when a call is refused by a daily spending limit you set \(at most once a day\); both can be turned off/, "privacy: the same sends plus the spend-limit email (src/credits-account.js buildSpendLimitEmail), shown only while credit sales are on"],
+    [/signed in at \/credits\/account with your email: a link we email you, valid once for/, "a sign-in link sent on the reader's own request"],
+    [/bought and managed signed in by email at \/credits\/account/, "sign-in by email, on the reader's own request"],
   ];
   const offenders = [];
-  for (const [page, h] of [["/terms", terms], ["/privacy", privacy], ["/dpa", dpaPage(BASE)]]) {
-    for (const sentence of legalText(h).split(/(?<=[.!?])\s+(?=[A-Z("])/)) {
-      if (NOTICE_RE.test(sentence) && !ALLOWED.some(([re]) => re.test(sentence))) offenders.push(`${page}: ${sentence.slice(0, 160)}`);
+  const used = new Set();
+  // Every page is read with credit sales off and on: the on branch adds its
+  // own sentences (src/terms.js, src/privacy.js).
+  const priorSales = process.env.CREDITS_SALES;
+  try {
+    for (const sales of ["off", "on"]) {
+      if (sales === "on") process.env.CREDITS_SALES = "on"; else delete process.env.CREDITS_SALES;
+      for (const [page, h] of [["/terms", termsPage(BASE)], ["/privacy", privacyPage(BASE)], ["/dpa", dpaPage(BASE)]]) {
+        for (const sentence of legalText(h).split(/(?<=[.!?])\s+(?=[A-Z("])/)) {
+          if (!NOTICE_RE.test(sentence)) continue;
+          const hit = ALLOWED.find(([re]) => re.test(sentence));
+          if (hit) used.add(hit[0].source); else offenders.push(`${page} (credit sales ${sales}): ${sentence.slice(0, 160)}`);
+        }
+      }
     }
-  }
-  ok(offenders.length === 0, `legal pages: no notice or email promise outside the listed duties (${offenders.join(" | ") || "none"})`);
+  } finally { if (priorSales === undefined) delete process.env.CREDITS_SALES; else process.env.CREDITS_SALES = priorSales; }
+  ok(offenders.length === 0, `legal pages (credit sales off and on): no notice or email promise outside the listed duties (${offenders.join(" | ") || "none"})`);
+  ok(used.has(String.raw`We email a receipt for each purchase and top-up, and a notice once each time a balance drops under .+ unless you turn that notice off`) && used.has(String.raw`we ask for it in writing at least \d+ days before the engagement`), "the credits receipt sentence and the DPA's written request are read (the on render and the in-writing pattern reach them)");
   // The pattern sees the promises it exists for.
   const control = ["We will give at least 30 days' notice of a change on this site and by email.", "We give 30 days notice before the service stops.", "We will notify you before a change.", "We'll email you before the first full charge.", "We post the notice on /status."];
   ok(control.every((c) => NOTICE_RE.test(c) && !ALLOWED.some(([re]) => re.test(c))), "control: the pattern catches each phrasing of a notice promise");
