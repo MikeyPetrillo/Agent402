@@ -84,10 +84,11 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   const mw = createX402PayerScreen({ log: () => {} });
   const { stashVerifiedPayment } = await import("../src/verified-payment.js");
   const EVs = await import("../src/sanctions-events.js");
-  const run = (headers, { verified = false } = {}) => new Promise((resolve) => {
+  // `verified`: the payer the facilitator's verify answered for this request (src/verified-payment.js).
+  const run = (headers, { verified = null } = {}) => new Promise((resolve) => {
     const out = { next: false, code: null, body: null };
     const req = { method: "POST", path: "/api/hash", header: (k) => headers[String(k).toLowerCase()] ?? null, headers };
-    if (verified) stashVerifiedPayment(req, { paymentPayload: JSON.parse(Buffer.from(headers["payment-signature"], "base64").toString("utf8")) });
+    if (verified) stashVerifiedPayment(req, { paymentPayload: JSON.parse(Buffer.from(headers["payment-signature"], "base64").toString("utf8")), payer: verified });
     const res = { setHeader() {}, status(c) { out.code = c; return res; }, json(b) { out.body = b; resolve(out); return res; } };
     mw(req, res, () => { out.next = true; resolve(out); });
   });
@@ -106,15 +107,23 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   const none = await run({});
   ok(none.next && x402PayerScreenView().screened === 2, "no payment header: passes without a screen");
   {
-    // The signers are read from a transaction nothing verified yet (no stash): no row; once the
-    // middleware verified the payment on the request, the signer is recorded.
+    // The signers are read from a transaction nothing verified yet (no marker): no row; once the
+    // facilitator verified the payment on the request, its verified payer is recorded, and a listed
+    // address the transaction names that is not the verified payer never is.
     K.__seedPayoutListForTests([{ address: buyer.address, asset: "SOL", entity: "TEST FIXTURE", sdnId: "7" }]);
     await new Promise((r) => setTimeout(r, 50));
     const solRows = async () => (await EVs.sanctionsEventsOperatorView({ recent: 1000 })).recent.filter((x) => !x.aggregate && x.address === buyer.address);
-    ok((await solRows()).length === 0 && (await EVs.sanctionsEventsOperatorView({ recent: 1000 })).recent.some((x) => x.aggregate && x.byReason?.["signer-before-verify"] >= 1), "a listed Solana signer on a request with no verified payment gets no row; it is counted");
-    const again = await run({ "payment-signature": svmHeader }, { verified: true });
+    const countOf = async (reason) => (await EVs.sanctionsEventsOperatorView({ recent: 1000 })).recent.filter((x) => x.aggregate && x.rail === "x402").reduce((t, x) => t + (x.byReason?.[reason] || 0), 0);
+    const pre = await countOf("before-verify");
+    const r0 = await run({ "payment-signature": svmHeader });
     await new Promise((r) => setTimeout(r, 50));
-    ok(again.code === 403 && (await solRows()).length === 1, "with the payment verified on the request, the listed Solana signer is recorded");
+    ok(r0.code === 403 && (await solRows()).length === 0 && await countOf("before-verify") === pre + 1, "Solana, before verification: a listed signer is refused, gets no row, and is counted");
+    const other = await run({ "payment-signature": svmHeader }, { verified: feePayer.address });
+    await new Promise((r) => setTimeout(r, 50));
+    ok(other.code === 403 && (await solRows()).length === 0 && await countOf("not-the-payer") >= 1, "Solana, verified: a listed address the transaction names that is not the verified payer gets no row");
+    const again = await run({ "payment-signature": svmHeader }, { verified: buyer.address });
+    await new Promise((r) => setTimeout(r, 50));
+    ok(again.code === 403 && (await solRows()).length === 1, "Solana, verified: the listed verified payer is recorded");
     K.__resetPayoutListForTests();
   }
   // AN SPL MULTISIG IN A LOOKUP TABLE. The listed wallet X is the multisig's
@@ -227,16 +236,16 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
 
 // ---------------------------------------------------------------------------
 // 1d. What a refusal RECORDS (src/sanctions-events.js). The screen refuses on
-//     every address a payment names, but keeps a permanent record only of a
-//     listed address the payment's own signature proves
-//     (src/x402-signed-payers.js): one row per (address, route class) a day,
-//     every repeat an attempt on it, with no cap; a refusal on an unproven
-//     address is counted in the hour's aggregate row, never with the address.
+//     every address a payment names, but a row names an address only for a
+//     payment the facilitator verified on this request (the marker
+//     src/verified-payment.js keeps), and then only its verified payer: one row
+//     per (address, route class) a day, every repeat an attempt on it, with no
+//     cap. Every refusal before verification, or on an address that is not the
+//     verified payer, is counted in the hour's address-free aggregate row.
 {
   const SS = await import("../src/sanctions-screen.js");
   const EV = await import("../src/sanctions-events.js");
   const { createX402PayerScreen, __resetX402PayerScreenForTests, x402PayerScreenView } = await import("../src/x402-payer-screen.js");
-  const { x402SignedPayers } = await import("../src/x402-signed-payers.js");
   const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
   const { PERMIT2_ADDRESS, permit2WitnessTypes, x402ExactPermit2ProxyAddress } = await import("@x402/evm");
   const dir = mkdtempSync(join(tmpdir(), "x402-screen-records-"));
@@ -244,29 +253,31 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   process.env.SANCTIONS_EVENTS_FILE = join(dir, "events.jsonl");
   const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
   const PAY_TO = "0x000000000000000000000000000000000000dEaD";
+  const OTHER_PAY_TO = "0x00000000000000000000000000000000000beef0";
   const accepted = { scheme: "exact", network: "eip155:8453", amount: "10000", asset: USDC, payTo: PAY_TO, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
   const AUTH = [{ name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" }];
   const nonce = () => `0x${Buffer.from(globalThis.crypto.getRandomValues(new Uint8Array(32))).toString("hex")}`;
-  // An EIP-3009 payment signed by `account` (Transfer, or Receive as /ref takes it), with `extra` merged into the payload.
-  const signed3009 = async (account, { primaryType = "TransferWithAuthorization", extra = {}, from = account.address } = {}) => {
+  // An EIP-3009 payment signed by `account` (to `to`, our payTo by default), with `extra` merged into the payload.
+  const signed3009 = async (account, { primaryType = "TransferWithAuthorization", extra = {}, from = account.address, to = PAY_TO } = {}) => {
     const t = Math.floor(Date.now() / 1000);
-    const authorization = { from, to: PAY_TO, value: "10000", validAfter: String(t - 60), validBefore: String(t + 300), nonce: nonce() };
+    const authorization = { from, to, value: "10000", validAfter: String(t - 60), validBefore: String(t + 300), nonce: nonce() };
     const signature = await account.signTypedData({ domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: USDC }, types: { [primaryType]: AUTH }, primaryType, message: { ...authorization, value: 10000n, validAfter: BigInt(authorization.validAfter), validBefore: BigInt(authorization.validBefore) } });
-    return { "payment-signature": b64({ x402Version: 2, accepted, payload: { signature, authorization, ...extra } }) };
+    return { "payment-signature": b64({ x402Version: 2, accepted: { ...accepted, payTo: to }, payload: { signature, authorization, ...extra } }) };
   };
-  const signedPermit2 = async (account) => {
+  const signedPermit2 = async (account, { to = PAY_TO } = {}) => {
     const t = Math.floor(Date.now() / 1000);
-    const permit2Authorization = { from: account.address, permitted: { token: USDC, amount: "10000" }, spender: x402ExactPermit2ProxyAddress, nonce: String(BigInt(nonce()) >> 8n), deadline: String(t + 300), witness: { to: PAY_TO, validAfter: String(t - 60) } };
+    const permit2Authorization = { from: account.address, permitted: { token: USDC, amount: "10000" }, spender: x402ExactPermit2ProxyAddress, nonce: String(BigInt(nonce()) >> 8n), deadline: String(t + 300), witness: { to, validAfter: String(t - 60) } };
     const signature = await account.signTypedData({ domain: { name: "Permit2", chainId: 8453, verifyingContract: PERMIT2_ADDRESS }, types: permit2WitnessTypes, primaryType: "PermitWitnessTransferFrom",
-      message: { permitted: { token: USDC, amount: 10000n }, spender: x402ExactPermit2ProxyAddress, nonce: BigInt(permit2Authorization.nonce), deadline: BigInt(permit2Authorization.deadline), witness: { to: PAY_TO, validAfter: BigInt(permit2Authorization.witness.validAfter) } } });
-    return { "payment-signature": b64({ x402Version: 2, accepted, payload: { signature, permit2Authorization } }) };
+      message: { permitted: { token: USDC, amount: 10000n }, spender: x402ExactPermit2ProxyAddress, nonce: BigInt(permit2Authorization.nonce), deadline: BigInt(permit2Authorization.deadline), witness: { to, validAfter: BigInt(permit2Authorization.witness.validAfter) } } });
+    return { "payment-signature": b64({ x402Version: 2, accepted: { ...accepted, payTo: to }, payload: { signature, permit2Authorization } }) };
   };
   const { stashVerifiedPayment } = await import("../src/verified-payment.js");
-  // `verified`: the x402 middleware verified this request's payment (its stash, src/verified-payment.js).
+  // `verified`: the facilitator verified this request's payment (the marker src/verified-payment.js
+  // keeps). true: its payer is the payload's signer field; a string: the payer its verify answered.
   const run = (mw, headers, { path = "/ref/hash", ip = "203.0.113.20", verified = false } = {}) => new Promise((resolve) => {
     const out = { next: false, code: null, body: null };
     const req = { method: "POST", path, ip, header: (k) => headers[String(k).toLowerCase()] ?? null, headers };
-    if (verified) stashVerifiedPayment(req, { paymentPayload: JSON.parse(Buffer.from(headers["payment-signature"], "base64").toString("utf8")) });
+    if (verified) stashVerifiedPayment(req, { paymentPayload: JSON.parse(Buffer.from(headers["payment-signature"], "base64").toString("utf8")), payer: typeof verified === "string" ? verified : null });
     const res = { setHeader() {}, status(c) { out.code = c; return res; }, json(b) { out.body = b; resolve(out); return res; } };
     mw(req, res, () => { out.next = true; resolve(out); });
   });
@@ -274,6 +285,7 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   const allRows = async () => (await EV.sanctionsEventsOperatorView({ recent: 1000 })).recent;
   const rows = async () => (await allRows()).filter((r) => !r.aggregate);
   const aggs = async () => (await allRows()).filter((r) => r.aggregate);
+  const counted = async (reason, routeClass) => (await aggs()).filter((x) => !routeClass || x.routeClass === routeClass).reduce((t, x) => t + (x.byReason?.[reason] || 0), 0);
   const listedAcct = privateKeyToAccount(generatePrivateKey());
   const listedP2 = privateKeyToAccount(generatePrivateKey());
   const throwaway = privateKeyToAccount(generatePrivateKey());
@@ -289,111 +301,101 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
     ok(await SS.loadStoredSanctionsScreen(), "setup: the list loads");
     EV.__resetSanctionsEventsForTests(); EV.__resetSanctionsEventLimitsForTests(); __resetX402PayerScreenForTests();
 
-    // The signer reader itself.
-    const t1 = await signed3009(listedAcct);
-    const decode = (h) => JSON.parse(Buffer.from(h["payment-signature"], "base64").toString("utf8"));
-    ok((await x402SignedPayers(decode(t1))).join() === LISTED_SIGNER, "the signer reader proves an EIP-3009 TransferWithAuthorization signer");
-    ok((await x402SignedPayers(decode(await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" })))).join() === LISTED_SIGNER, "...and a ReceiveWithAuthorization signer (the /ref shape)");
-    ok((await x402SignedPayers(decode(await signedPermit2(listedP2)))).join() === listedP2.address.toLowerCase(), "...and a Permit2 signer");
-    ok((await x402SignedPayers(decode(await signed3009(throwaway, { from: listedAcct.address })))).length === 0, "a signature that does not recover to the stated `from` proves nothing");
-
-    // (a) A throwaway wallet signs; the listed address sits in fields no signature covers.
-    const unsignedFields = [
-      ["channelConfig.payer", { channelConfig: { payer: listedAcct.address, payerAuthorizer: "0x" + "00".repeat(20) } }],
-      ["channelConfig.payerAuthorizer", { channelConfig: { payer: throwaway.address, payerAuthorizer: listedAcct.address } }],
-      ["a channel deposit's funder", { deposit: { amount: "1", authorization: { permit2Authorization: { from: listedAcct.address } } } }],
+    // (a) Before verification, on every shape: refused exactly as before, NO row naming an
+    //     address, one count each. The strict screen (/ref) and a route with no price (the
+    //     middleware passes it here unverified) alike, a real signature by the listed address
+    //     included, and one it gave a DIFFERENT payTo.
+    const pre = [
+      ["EVM exact signed by the listed address (/ref)", strict, () => signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" }), "/ref/hash"],
+      ["EVM exact signed by the listed address (a route with no price)", lenient, () => signed3009(listedAcct), "/api/free-tool"],
+      ["Permit2 signed by the listed address (a route with no price)", lenient, () => signedPermit2(listedP2), "/api/free-tool"],
+      ["an authorization the listed address signed for a different payTo", lenient, () => signed3009(listedAcct, { to: OTHER_PAY_TO }), "/api/free-tool"],
+      ["a Permit2 the listed address signed for a different payTo", lenient, () => signedPermit2(listedP2, { to: OTHER_PAY_TO }), "/api/free-tool"],
+      ["channelConfig.payer beside a throwaway's signature", strict, () => signed3009(throwaway, { primaryType: "ReceiveWithAuthorization", extra: { channelConfig: { payer: listedAcct.address, payerAuthorizer: "0x" + "00".repeat(20) } } }), "/ref/hash"],
+      ["a forged `from` naming the listed address", strict, () => signed3009(throwaway, { from: listedAcct.address }), "/ref/hash"],
     ];
-    for (const [label, extra] of unsignedFields) {
-      const r = await run(strict, await signed3009(throwaway, { primaryType: "ReceiveWithAuthorization", extra }));
-      ok(!r.next && r.code === 403 && r.body?.reason === "payer-not-accepted", `${label} names a listed address beside a throwaway's signature: still refused 403 on the strict screen (${r.code})`);
+    let preN = 0;
+    for (const [label, mw, make, path] of pre) {
+      const r = await run(mw, await make(), { path });
+      ok(!r.next && r.code === 403 && r.body?.reason === "payer-not-accepted", `${label}: refused 403 as before (${r.code})`);
+      preN++;
     }
-    const forged = await run(strict, await signed3009(throwaway, { from: listedAcct.address }));
-    ok(!forged.next && forged.code === 403, "a listed `from` the signature does not recover to: refused 403");
     await settle();
-    ok((await rows()).length === 0 && x402PayerScreenView().refusedUnrecorded === 4 && x402PayerScreenView().refused === 4, `...and none of those refusals gets a row of its own (${(await rows()).length} rows, ${x402PayerScreenView().refusedUnrecorded} unrecorded)`);
-    let ag = await aggs();
-    ok(ag.length === 1 && ag[0].kind === "unproven-refusal" && ag[0].count === 4 && ag[0].byReason?.["unsigned-field"] === 3 && ag[0].byReason?.["unproven-signer"] === 1 && ag[0].address === null && ag[0].routeClass === "ref" && ag[0].report === null && typeof ag[0].hourStart === "string", `...but all four are counted in the hour's unproven-refusal aggregate row (${JSON.stringify(ag[0] && { count: ag[0].count, byReason: ag[0].byReason })})`);
-    ok(!JSON.stringify(ag).toLowerCase().includes(LISTED_SIGNER.slice(2)), "the aggregate row keeps no address the caller chose");
-    ok(EV.sanctionsReportStatus() === "clear", "the report word stays clear (the aggregate is a record, not a report)");
+    ok((await rows()).length === 0 && x402PayerScreenView().refusedUnrecorded === preN && await counted("before-verify") === preN, `...and none of the ${preN} gets a row naming an address; each is counted before verification (${(await rows()).length} rows, ${await counted("before-verify")} counted)`);
+    const ag = await aggs();
+    ok(ag.every((x) => x.kind === "unproven-refusal" && x.address === null && x.report === null) && !JSON.stringify(ag).toLowerCase().includes(LISTED_SIGNER.slice(2)), "the count rows keep no address and are records, not reports");
+    ok(EV.sanctionsReportStatus() === "clear", "the report word stays clear");
 
-    // (b) The listed wallet signs: refused and recorded once, naming the signer.
-    const real = await run(strict, await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" }));
+    // (b) Verified on the request: the verified payer, listed, is recorded.
+    const real = await run(lenient, await signed3009(listedAcct), { path: "/api/hash", verified: true });
     await settle();
     let r1 = await rows();
-    ok(!real.next && real.code === 403 && r1.length === 1 && r1[0].address.toLowerCase() === LISTED_SIGNER && r1[0].kind === "screen-hit" && r1[0].route === "POST /ref/hash" && EV.sanctionsReportStatus() === "due", `a listed signer is refused and recorded once, naming the signer; the word reads due (${real.code}, ${r1.length} row)`);
-    // A listed signer beside an unsigned block naming another listed address: the record names the
-    // signer (on the direct routes, another route class than /ref, so it is not a repeat).
-    const both = await run(lenient, await signed3009(listedAcct, { extra: { channelConfig: { payer: listedP2.address } } }), { path: "/api/hash" });
+    ok(!real.next && real.code === 403 && r1.length === 1 && r1[0].address.toLowerCase() === LISTED_SIGNER && r1[0].kind === "screen-hit" && r1[0].route === "POST /api/hash" && EV.sanctionsReportStatus() === "due", `EVM exact, verified: the listed payer is refused and recorded once; the word reads due (${real.code}, ${r1.length} row)`);
+    const p2 = await run(lenient, await signedPermit2(listedP2), { path: "/api/hash", verified: true });
     await settle();
-    r1 = await rows();
-    ok(!both.next && both.code === 403 && r1.length === 2 && r1[0].address.toLowerCase() === LISTED_SIGNER && r1.every((x) => x.address.toLowerCase() !== listedP2.address.toLowerCase()), "with a listed signer and another listed address in an unsigned field, only the signer is recorded");
-    const p2 = await run(lenient, await signedPermit2(listedP2), { path: "/api/hash" });
+    ok(!p2.next && p2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === listedP2.address.toLowerCase()), "Permit2, verified: the listed payer is refused and recorded");
+    // Verified, but the listed address is not the verified payer: no row, counted.
+    const notPayer = await run(lenient, await signed3009(cleanAcct, { extra: { channelConfig: { payer: listedAcct.address } } }), { path: "/api/hash", verified: true });
     await settle();
-    ok(!p2.next && p2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === listedP2.address.toLowerCase()), "a listed Permit2 signer is refused and recorded");
+    ok(!notPayer.next && notPayer.code === 403 && (await rows()).length === 2 && await counted("not-the-payer") === 1, "verified, with the listed address in a field that is not the verified payer: refused, no row, counted");
+    // The facilitator's own payer wins over the payload's field.
+    const fac = await run(lenient, await signed3009(listedAcct), { path: "/api/hash", verified: cleanAcct.address });
+    await settle();
+    ok(fac.code === 403 && (await rows()).length === 2 && await counted("not-the-payer") === 2, "verified, with the facilitator naming another payer: the payload's listed `from` gets no row");
 
     // (c) Repeats inside the window add attempts to the row, never a second row, never dropped.
     const before = (await rows()).length;
-    for (let i = 0; i < 5; i++) { const r = await run(strict, await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" })); if (r.code !== 403) ok(false, "a repeat is still refused"); }
+    for (let i = 0; i < 5; i++) { const r = await run(lenient, await signed3009(listedAcct), { path: "/api/hash", verified: true }); if (r.code !== 403) ok(false, "a repeat is still refused"); }
     await settle();
-    const refRow = (await rows()).find((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /ref/hash");
-    ok((await rows()).length === before && refRow?.attempts === 6 && Date.parse(refRow.lastSeenAt) >= Date.parse(refRow.at), `five more refused payments from the same listed signer on /ref add five attempts to its row (${(await rows()).length - before} new rows, attempts ${refRow?.attempts})`);
-    // Another direct route is the same route class: an attempt on the direct row.
-    await run(lenient, await signed3009(listedAcct), { path: "/api/other" });
+    const dRow = (await rows()).find((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /api/hash");
+    ok((await rows()).length === before && dRow?.attempts === 6 && Date.parse(dRow.lastSeenAt) >= Date.parse(dRow.at), `five more verified refusals of the same listed payer add five attempts to its row (${(await rows()).length - before} new rows, attempts ${dRow?.attempts})`);
+    await run(lenient, await signed3009(listedAcct), { path: "/api/other", verified: true });
     await settle();
-    const directRow = (await rows()).find((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /api/hash");
-    ok((await rows()).length === before && directRow?.attempts === 2, `the direct routes are one route class: a second direct route is an attempt on the direct row (attempts ${directRow?.attempts})`);
-    ok(readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(`"attempts":6`), "the attempt count is in the stored file, not only in memory");
-    // Filed: the row takes no more attempts; the next one opens a new row.
-    await EV.markSanctionsEventsFiled({ ids: [refRow.id], reference: "RS-TEST" });
-    await run(strict, await signed3009(listedAcct, { primaryType: "ReceiveWithAuthorization" }));
+    ok((await rows()).length === before && (await rows()).find((x) => x.id === dRow.id)?.attempts === 7, "the direct routes are one route class: another direct route is an attempt on the same row");
+    ok(readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(`"attempts":7`), "the attempt count is in the stored file, not only in memory");
+    await EV.markSanctionsEventsFiled({ ids: [dRow.id], reference: "RS-TEST" });
+    await run(lenient, await signed3009(listedAcct), { path: "/api/hash", verified: true });
     await settle();
-    const refRows = (await rows()).filter((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /ref/hash");
-    ok(refRows.length === 2 && refRows.find((x) => x.id === refRow.id)?.attempts === 6 && refRows.find((x) => x.id !== refRow.id)?.attempts === 1, "a filed row keeps the count it was filed with; the next attempt opens a new row");
+    const dRows = (await rows()).filter((x) => x.address.toLowerCase() === LISTED_SIGNER && x.route === "POST /api/hash");
+    ok(dRows.length === 2 && dRows.find((x) => x.id === dRow.id)?.attempts === 7 && dRows.find((x) => x.id !== dRow.id)?.attempts === 1, "a filed row keeps the count it was filed with; the next attempt opens a new row");
 
-    // (d) No cap: a flood of distinct listed signers is recorded in full, one row each.
+    // (d) No cap: a flood of distinct verified listed payers is recorded in full, one row each.
     EV.__resetSanctionsEventsForTests(); EV.__resetSanctionsEventLimitsForTests();
     rmSync(process.env.SANCTIONS_EVENTS_FILE, { force: true });
     EV.__resetSanctionsEventsForTests();
-    const one = await Promise.all(flood.slice(0, 30).map(async (a) => run(strict, await signed3009(a, { primaryType: "ReceiveWithAuthorization" }), { ip: "198.51.100.1" })));
-    const many = await Promise.all(flood.slice(30).map(async (a, i) => run(strict, await signed3009(a, { primaryType: "ReceiveWithAuthorization" }), { ip: `198.51.${101 + Math.floor(i / 5)}.${i % 5}` })));
+    const one = await Promise.all(flood.slice(0, 30).map(async (a) => run(lenient, await signed3009(a), { path: "/api/hash", ip: "198.51.100.1", verified: true })));
+    const many = await Promise.all(flood.slice(30).map(async (a, i) => run(lenient, await signed3009(a), { path: "/api/hash", ip: `198.51.${101 + Math.floor(i / 5)}.${i % 5}`, verified: true })));
     await settle();
     const flooded = await rows();
-    ok(flood.length === 140 && [...one, ...many].every((r) => r.code === 403) && flooded.length === flood.length && new Set(flooded.map((x) => x.address.toLowerCase())).size === flood.length, `${flood.length} listed signers, 30 of them from one client address: all refused, every one recorded (${flooded.length} rows)`);
-    // Sent again: every attempt counted, no row added.
-    await Promise.all(flood.slice(0, 30).map(async (a) => run(strict, await signed3009(a, { primaryType: "ReceiveWithAuthorization" }), { ip: "198.51.100.1" })));
+    ok(flood.length === 140 && [...one, ...many].every((r) => r.code === 403) && flooded.length === flood.length && new Set(flooded.map((x) => x.address.toLowerCase())).size === flood.length, `${flood.length} verified listed payers, 30 of them from one client address: all refused, every one recorded (${flooded.length} rows)`);
+    await Promise.all(flood.slice(0, 30).map(async (a) => run(lenient, await signed3009(a), { path: "/api/hash", ip: "198.51.100.1", verified: true })));
     await settle();
     const again = await rows();
     ok(again.length === flood.length && again.filter((x) => x.attempts === 2).length === 30 && again.reduce((t, x) => t + x.attempts, 0) === flood.length + 30, `the same 30 again add one attempt each (${again.reduce((t, x) => t + x.attempts, 0)} attempts in ${again.length} rows)`);
     ok(EV.sanctionsReportStatus() === "due" && (await EV.sanctionsEventsOperatorView()).writeLimits?.repeats === 30, "the word reads due and the operator view counts the repeats");
-    // Unproven refusals in a flood: one aggregate row per hour, its count exact.
     const before2 = (await aggs()).reduce((t, x) => t + x.count, 0);
-    await Promise.all(Array.from({ length: 200 }, async () => run(strict, await signed3009(throwaway, { from: flood[0].address }))));
+    await Promise.all(Array.from({ length: 200 }, async () => run(strict, await signed3009(flood[0], { primaryType: "ReceiveWithAuthorization" }))));
     await settle();
     const ag2 = (await aggs()).filter((x) => x.routeClass === "ref");
-    ok(ag2.length === 1 && ag2[0].count - before2 === 200, `200 refusals on an unproven address: counted in one aggregate row (${ag2.length} rows, count ${ag2[0]?.count})`);
+    ok(ag2.length === 1 && ag2[0].count - before2 === 200, `200 refusals before verification: counted in one aggregate row (${ag2.length} rows, count ${ag2[0]?.count})`);
     ok(readFileSync(process.env.SANCTIONS_EVENTS_FILE, "utf8").includes(`"count":${ag2[0].count}`), "the aggregate count is in the stored file");
 
-    // (f) A contract wallet's signature (EIP-1271 / EIP-6492: no local recovery). After the
-    //     facilitator verified it (the direct routes) its signer is recorded; before it (/ref)
-    //     it is refused, never a row, and counted in the aggregate as an unproven signer.
+    // (f) A contract wallet's signature (EIP-1271 / EIP-6492): before verification never a row;
+    //     verified on the request, its payer is recorded.
     const smart = privateKeyToAccount(generatePrivateKey());
     writeFileSync(process.env.SANCTIONS_SCREEN_FILE, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [smart.address.toLowerCase()] }));
     SS.__resetSanctionsScreenForTests();
     await SS.loadStoredSanctionsScreen();
     const t6492 = Math.floor(Date.now() / 1000);
     const contractSig = { "payment-signature": b64({ x402Version: 2, accepted, payload: { signature: "0x" + "ab".repeat(400), authorization: { from: smart.address, to: PAY_TO, value: "10000", validAfter: String(t6492 - 60), validBefore: String(t6492 + 300), nonce: nonce() } } }) };
-    const unprovenBefore = ((await aggs()).find((x) => x.routeClass === "ref")?.byReason?.["unproven-signer"]) || 0;
+    const preRef = await counted("before-verify", "ref"), preDirect = await counted("before-verify", "direct");
     const sw1 = await run(strict, contractSig);
-    await settle();
-    ok(!sw1.next && sw1.code === 403 && !(await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase()) && (await aggs()).find((x) => x.routeClass === "ref")?.byReason?.["unproven-signer"] === unprovenBefore + 1, "/ref: a listed contract-wallet signer is refused, gets no row (not verified yet), and is counted in the aggregate as an unproven signer");
-    // A route with no price: the x402 middleware calls the screen without verifying anything.
-    const unprovenDirect = ((await aggs()).find((x) => x.routeClass === "direct")?.byReason?.["unproven-signer"]) || 0;
     const sw0 = await run(lenient, contractSig, { path: "/api/free-tool" });
     await settle();
-    ok(!sw0.next && sw0.code === 403 && !(await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase()) && (await aggs()).find((x) => x.routeClass === "direct")?.byReason?.["unproven-signer"] === unprovenDirect + 1, "a route with no price (nothing verified): a header naming a listed address with a bogus signature is refused as before, gets no row, and is counted");
+    ok(!sw1.next && sw1.code === 403 && !sw0.next && sw0.code === 403 && !(await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase()) && await counted("before-verify", "ref") === preRef + 1 && await counted("before-verify", "direct") === preDirect + 1, "a listed contract-wallet signer before verification (/ref, a route with no price): refused, no row, counted");
     const sw2 = await run(lenient, contractSig, { path: "/api/hash", verified: true });
     await settle();
-    ok(!sw2.next && sw2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase() && x.route === "POST /api/hash"), "direct routes, payment verified on the request: the same listed contract-wallet signer is refused and recorded");
+    ok(!sw2.next && sw2.code === 403 && (await rows()).some((x) => x.address.toLowerCase() === smart.address.toLowerCase() && x.route === "POST /api/hash"), "verified on the request: the same listed contract-wallet payer is refused and recorded");
 
     // (g1) ONE write that fails, with no repeat after it, still lands once the store recovers.
     {

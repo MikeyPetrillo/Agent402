@@ -75,7 +75,7 @@ const run = (mw, r) => new Promise((resolve) => {
   ok(recorded.length === 0, "a blocked request with no payment is counted, not stored");
   await run(mw, { ...req({ "cf-ipcountry": "IR", "payment-signature": "e30=" }), viaCdn: true });
   await new Promise((r) => setTimeout(r, 20));
-  ok(recorded.length === 1 && recorded[0].aggregate === true && recorded[0].kind === "unproven-refusal" && recorded[0].reason === "unverified-payment" && !("payer" in recorded[0]), "a blocked request whose payment proves no payer is passed on as an aggregate count, with no address");
+  ok(recorded.length === 1 && recorded[0].aggregate === true && recorded[0].kind === "unproven-refusal" && recorded[0].reason === "before-verify" && !("payer" in recorded[0]), "a blocked request whose payment proves no payer is passed on as an aggregate count, with no address");
   recorded.length = 0;
   // Paid route classes are never exempt; the legal pages' own assets are.
   for (const p of ["/mcp", "/v1/chat/completions", "/api/uuid", "/api/decide/execute", "/ref/whois", "/aws/uuid", "/fonts/../server.js", "/fonts/x.js", "/terms/x", "/health/x"]) {
@@ -207,18 +207,15 @@ const run = (mw, r) => new Promise((resolve) => {
   } finally { if (prior === undefined) delete process.env.SANCTIONS_GEO_BLOCK; else process.env.SANCTIONS_GEO_BLOCK = prior; }
 }
 
-// ---- the geo-payment gate: only a payment whose signature proves its payer is reportable
+// ---- the geo-payment gate. As the server mounts it (no `verify`: the 451 comes before any payment
+// is verified), an x402 payment, signed or not, names no address: it is counted. The gate's bounds
+// apply to the one payment this layer proves (a Tempo push transfer the chain shows), exercised
+// below with a stand-in for that chain read.
 {
   const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
   const PAY_TO = "0x000000000000000000000000000000000000dEaD";
   const accept = { scheme: "exact", network: "eip155:8453", amount: "10000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: PAY_TO, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
   const TYPES = { TransferWithAuthorization: [{ name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" }] };
-  const signed = async (account, nonce = `0x${randomBytes(32).toString("hex")}`) => {
-    const t = Math.floor(Date.now() / 1000);
-    const authorization = { from: account.address, to: PAY_TO, value: "10000", validAfter: String(t - 60), validBefore: String(t + 300), nonce };
-    const signature = await account.signTypedData({ domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: accept.asset }, types: TYPES, primaryType: "TransferWithAuthorization", message: { ...authorization, value: 10000n, validAfter: BigInt(authorization.validAfter), validBefore: BigInt(authorization.validBefore) } });
-    return Buffer.from(JSON.stringify({ x402Version: 2, accepted: accept, payload: { signature, authorization } })).toString("base64");
-  };
   const outerFile = process.env.SANCTIONS_EVENTS_FILE;
   process.env.SANCTIONS_EVENTS_FILE = join(mkdtempSync(join(tmpdir(), "geo-gate-")), "events.jsonl");
   ev.__resetSanctionsEventsForTests();
@@ -228,7 +225,12 @@ const run = (mw, r) => new Promise((resolve) => {
     ? ev.recordSanctionsAggregate({ kind, reason, rail: "x402", route: `${r.method} ${r.path}`, country, region })
     : ev.recordSanctionsEvent({ kind: "geo-payment", address: payer, rail: "x402", route: `${r.method} ${r.path}`, ip: r.ip, country, region }));
   ev.__resetSanctionsEventLimitsForTests();
-  const mw = geo.sanctionedRegionsMiddleware({ env: {}, log: () => {}, verify: (r) => geo.verifiedGeoPayer(r, { payTo: PAY_TO }), record: recordGeo });
+  // The chain read stand-in: a header registered here is a transfer the chain shows.
+  const proven = new Map();
+  const signed = async (account) => { const h = `proof-${randomBytes(12).toString("hex")}`; proven.set(h, { payer: account.address, nonce: h }); return h; };
+  const mw = geo.sanctionedRegionsMiddleware({ env: {}, log: () => {}, verify: async (r) => proven.get(r.headers?.["payment-signature"]) ?? null, record: recordGeo });
+  // As the server mounts it: no verify.
+  const prodMw = geo.sanctionedRegionsMiddleware({ env: {}, log: () => {}, record: recordGeo });
   const rowsOf = async () => (await ev.sanctionsEventsOperatorView({ recent: 1000 })).recent;
   const own = async () => (await rowsOf()).filter((r) => !r.aggregate);
   const aggOf = async (kind) => (await rowsOf()).filter((r) => r.aggregate && r.kind === kind);
@@ -242,13 +244,28 @@ const run = (mw, r) => new Promise((resolve) => {
   await new Promise((r) => setTimeout(r, 50));
   const un = await aggOf("unproven-refusal");
   ok(ev.sanctionsReportStatus() === "clear" && (await own()).length === 0 && un.length === 1 && un[0].count === 500 && un[0].country === "IR" && un[0].address === null && !JSON.stringify(un).includes(victim.address.slice(2, 12)), `500 forged payments from a blocked region: no row naming an address, all 500 in the hour's unproven aggregate (${un[0]?.count}); the word stays clear`);
+  // A payment genuinely signed by its payer, as the server sees it: before verification, so no row.
+  {
+    const { privateKeyToAccount: pk, generatePrivateKey: gk } = await import("viem/accounts");
+    const realBuyer = pk(gk());
+    const TYPES = { TransferWithAuthorization: [{ name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" }] };
+    const t = Math.floor(Date.now() / 1000);
+    const authorization = { from: realBuyer.address, to: PAY_TO, value: "10000", validAfter: String(t - 60), validBefore: String(t + 300), nonce: `0x${randomBytes(32).toString("hex")}` };
+    const signature = await realBuyer.signTypedData({ domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: accept.asset }, types: TYPES, primaryType: "TransferWithAuthorization", message: { ...authorization, value: 10000n, validAfter: BigInt(authorization.validAfter), validBefore: BigInt(authorization.validBefore) } });
+    const realHdr = Buffer.from(JSON.stringify({ x402Version: 2, accepted: accept, payload: { signature, authorization } })).toString("base64");
+    const before = un[0].count;
+    const r = await run(prodMw, { ...req({ "cf-ipcountry": "IR", "payment-signature": realHdr }), ip: "203.0.113.30", viaCdn: true });
+    await new Promise((res) => setTimeout(res, 50));
+    const un2 = await aggOf("unproven-refusal");
+    ok(r.status === 451 && (await own()).length === 0 && un2[0].count === before + 1 && un2[0].byReason["before-verify"] >= 1, "a genuinely signed x402 payment from a blocked region, as the server mounts the gate: refused 451, no row naming its signer, counted");
+  }
   // One genuinely signed payment: one event, naming the signer.
   const buyer = privateKeyToAccount(generatePrivateKey());
   const hdr = await signed(buyer);
   await run(mw, { ...req({ "cf-ipcountry": "IR", "payment-signature": hdr }), ip: "203.0.113.10", viaCdn: true });
   await new Promise((r) => setTimeout(r, 50));
   let rows = await own();
-  ok(rows.length === 1 && rows[0].address?.toLowerCase() === buyer.address.toLowerCase() && rows[0].country === "IR" && rows[0].attempts === 1 && ev.sanctionsReportStatus() === "due", "a payment whose signature verifies is recorded once, naming its signer; the word reads due");
+  ok(rows.length === 1 && rows[0].address?.toLowerCase() === buyer.address.toLowerCase() && rows[0].country === "IR" && rows[0].attempts === 1 && ev.sanctionsReportStatus() === "due", "a payment the chain proves (the stand-in) is recorded once, naming its sender; the word reads due");
   // The same payment again: an attempt on its row, never a second row, never dropped.
   for (let i = 0; i < 3; i++) await run(mw, { ...req({ "cf-ipcountry": "IR", "payment-signature": hdr }), ip: "203.0.113.10", viaCdn: true });
   await new Promise((r) => setTimeout(r, 50));
@@ -288,7 +305,7 @@ const run = (mw, r) => new Promise((resolve) => {
   // File mode appends one line per event (never rewrites the file for a new one).
   const { readFileSync: rf } = await import("node:fs");
   const fileLines = rf(process.env.SANCTIONS_EVENTS_FILE, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-  ok(fileLines.length === (await rowsOf()).length && fileLines.some((l) => l.aggregate && l.count === 500) && fileLines.some((l) => l.attempts === 4), "file mode holds one line per row, with the attempt and aggregate counts");
+  ok(fileLines.length === (await rowsOf()).length && fileLines.some((l) => l.aggregate && l.count === 501) && fileLines.some((l) => l.attempts === 4), "file mode holds one line per row, with the attempt and aggregate counts");
   process.env.SANCTIONS_EVENTS_FILE = outerFile;
   ev.__resetSanctionsEventsForTests();
 }
@@ -310,6 +327,8 @@ const run = (mw, r) => new Promise((resolve) => {
   ok(lines.length === 0, "CONTROL: no warning with both set");
   const server = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/\bwarnGeoBlockProvenance\(\);/.test(server) && /sanctionsReportWord\(sanctionsReportStatus\(\)\)/.test(server), "server.js warns at boot and publishes the word through sanctionsReportWord");
+  const mount = server.slice(server.indexOf("app.use(sanctionedRegionsMiddleware({"), server.indexOf("app.use(sanctionedRegionsMiddleware({") + 4000);
+  ok(mount.length > 100 && !/^\s*verify:/m.test(mount.slice(0, mount.indexOf("pushSender:"))) && !/verifiedGeoPayer/.test(server), "server.js mounts the regional block with no x402 verify: a payment refused before verification names no address");
 }
 
 // ---- varying the subdivision header of a whole blocked country opens no new aggregate row
@@ -433,19 +452,16 @@ try {
 
   await new Promise((r) => setTimeout(r, 100));
   const status = await (await fetch(`${B}/api/gateway-status`)).json();
-  ok(status.sanctionsReport?.status === "due" && Object.keys(status.sanctionsReport).length === 1, "the public status reads one word: due");
+  // Every refusal here came before any payment was verified: counted, never a row naming an address.
+  ok(status.sanctionsReport?.status === "clear" && Object.keys(status.sanctionsReport).length === 1, `the public status reads one word, clear: nothing refused before verification is a report (${status.sanctionsReport?.status})`);
   const opView = await (await fetch(`${B}/__operator/sanctions-events.json`, { headers: { "X-Operator-Token": OP } })).json();
-  ok(opView.unfiled.length === 2 && opView.unfiled.every((e) => e.kind === "geo-payment" && e.address?.toLowerCase() === buyer.address.toLowerCase() && e.network === "eip155:8453"), "the operator view holds both verified refused payments in full, naming the signer");
-  const byCountry = Object.fromEntries(opView.unfiled.map((e) => [e.country, e.region]));
-  ok(byCountry.IR === null && byCountry.UA === "UA-43", `each event keeps the refusal's country or region code (got ${JSON.stringify(byCountry)})`);
-  ok(opView.unfiled.every((e) => !JSON.stringify(e).includes("Crimea") && !("city" in e) && !("latitude" in e)), "no other location value is stored with an event");
-  ok(opView.geo.refusedWithPayment === 22 && opView.geo.eventsRecorded === 2 && opView.geo.aggregated.unverified === 20, `the operator view counts the refused payments, recorded and aggregated (${JSON.stringify(opView.geo.aggregated)})`);
+  ok(opView.unfiled.length === 0 && !opView.recent.some((e) => !e.aggregate), "no row names an address: not the signed payments' signer, not the forged ones' stated address");
   const unAgg = opView.recent.filter((e) => e.aggregate && e.kind === "unproven-refusal");
-  ok(unAgg.length === 1 && unAgg[0].count === 20 && unAgg[0].address === null, `the 20 forged payments are one aggregate row with their count (${unAgg[0]?.count})`);
+  const byPlace = Object.fromEntries(unAgg.map((e) => [`${e.country}|${e.region}`, e.count]));
+  ok(byPlace["IR|null"] === 21 && byPlace["UA|UA-43"] === 1 && unAgg.every((e) => e.address === null), `the refused payments are counted per country or region code, with no address (${JSON.stringify(byPlace)})`);
+  ok(opView.recent.every((e) => !JSON.stringify(e).includes("Crimea") && !("city" in e) && !("latitude" in e)), "no other location value is stored");
+  ok(opView.geo.refusedWithPayment === 22 && opView.geo.eventsRecorded === 0 && opView.geo.aggregated.unverified === 22, `the operator view counts the 22 refused payments as counted only (${JSON.stringify(opView.geo.aggregated)})`);
   ok((await fetch(`${B}/__operator/sanctions-events.json`)).status === 404, "the events are not readable without the token");
-  const filed = await fetch(`${B}/__operator/sanctions-events/filed`, { method: "POST", headers: { "Content-Type": "application/json", "X-Operator-Token": OP }, body: JSON.stringify({ all: true, reference: "RS-TEST-1" }) });
-  ok(filed.status === 200 && (await filed.json()).marked === 2, "an operator marks them filed");
-  ok((await (await fetch(`${B}/api/gateway-status`)).json()).sanctionsReport.status === "clear", "the word reads clear after filing");
   ok(settles === 0, "nothing was settled in this run");
 } finally {
   await srv?.stop();

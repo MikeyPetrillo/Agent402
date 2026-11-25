@@ -130,6 +130,14 @@ function journal() {
 // older copies of its row when it lands); tests wait on them before counting.
 const acksInFlight = new Set();
 export async function __sanctionsJournalSettledForTests() { while (acksInFlight.size) await Promise.all([...acksInFlight]); }
+/** Tests: what a process's death does to its journal holds (a shared
+ *  journal's leases lapse, a local one's live in memory): every entry this
+ *  process holds is freed for the next replay. */
+export function __dropSanctionsJournalHoldsForTests() {
+  for (const m of meta.values()) for (const x of m.ids) { try { x.j.release(x.id); } catch { /* stays held */ } }
+}
+/** Tests: every row copy the journal holds now (a shared journal's and its local fallback's). */
+export async function __sanctionsJournalEntriesForTests() { return (await journal().entries()).filter((e) => e?.kind === "sanctions-row"); }
 function keep(row, { onDisk = true } = {}) {
   let m = meta.get(row.id);
   if (!m) { m = { v: 0, onDisk, ids: [] }; meta.set(row.id, m); }

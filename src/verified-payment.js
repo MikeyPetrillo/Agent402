@@ -22,12 +22,18 @@ export function verifiedPaymentOf(req) {
   return v && typeof v === "object" ? v : null;
 }
 
-/** The lowercased EVM signer field of the verified payment (Permit2's signer
- *  when the payload is a Permit2 one, else the EIP-3009 `authorization.from`),
- *  or null when nothing verified on this request or it names no EVM address. */
-export function verifiedEvmPayerOf(req) {
-  const inner = verifiedPaymentOf(req)?.paymentPayload?.payload;
+/** The payer the verification on this request vouches for, or null when no
+ *  payment verified here: the facilitator's own `payer` from its verify
+ *  answer (an EVM address lowercased; any other kept exactly), else, for an
+ *  EVM payload, the verified signer field (Permit2's signer for a Permit2
+ *  payload, else the EIP-3009 `authorization.from`). */
+export function verifiedPayerOf(req) {
+  const v = verifiedPaymentOf(req);
+  if (!v) return null;
+  const EVM = /^0x[0-9a-fA-F]{40}$/;
+  if (typeof v.payer === "string" && v.payer) return EVM.test(v.payer) ? v.payer.toLowerCase() : v.payer.slice(0, 128);
+  const inner = v.paymentPayload?.payload;
   if (!inner || typeof inner !== "object") return null;
   const from = inner.permit2Authorization ? inner.permit2Authorization.from : inner.authorization?.from;
-  return typeof from === "string" && /^0x[0-9a-fA-F]{40}$/.test(from) ? from.toLowerCase() : null;
+  return typeof from === "string" && EVM.test(from) ? from.toLowerCase() : null;
 }
