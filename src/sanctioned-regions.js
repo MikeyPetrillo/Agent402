@@ -21,26 +21,23 @@
 // SANCTIONS_GEO_COUNTRIES (a comma list replacing the default country set).
 // The exempt paths (/health and the legal pages) answer from anywhere.
 //
-// RECORDS. Every refusal is counted in memory (operator view, by country). A
-// refused request that carried a payment is recorded in the sanctions events
-// store (src/sanctions-events.js) as a rejected transaction only when its
-// payment proves its payer: the caller's `verify(req)` recovers the signer
-// (an x402 exact authorization to our own payTo, inside its validity window)
-// and the event names that signer, never an address the request merely
-// states. The payer is the signer's to choose and a client address is cheap
-// to change, so a proven payment opens its own row only within
-// GEO_EVENTS_PER_CLIENT_DAY new payments per client (an IPv6 address by its
-// /64, an IPv4-mapped address as IPv4) a day and
-// GEO_EVENTS_PER_HOUR in all; past either it is counted in the hour's
+// RECORDS. Every refusal is counted in memory (operator view, by country).
+// The 451 comes before any payment is verified, so a refused x402 (or any
+// other) payment names no address in the sanctions events store
+// (src/sanctions-events.js): it is counted in the hour's unproven-refusal
+// aggregate row for its country or region (no address). The one payment this
+// layer can prove is a Tempo PUSH credential (payload type "hash"): it names
+// a transfer the buyer already broadcast, the 451 then neither says nothing
+// was charged nor carries `charged: false`, says the transfer was not claimed
+// for the request, and the event names the transfer's sender as the chain
+// shows it (the caller's `pushSender(req)`, a bounded receipt read of a
+// transfer to our payTo under a challenge we issued), deduped on the
+// transaction hash; a sender the chain does not show is a count. A proven
+// sender opens its own row only within GEO_EVENTS_PER_CLIENT_DAY new payments
+// per client (an IPv6 address by its /64, an IPv4-mapped address as IPv4) a
+// day and GEO_EVENTS_PER_HOUR in all; past either it is counted in the hour's
 // geo-payment aggregate row for its country or region (a report, no address).
-// The same payment re-sent adds an attempt to its row. A payment nothing here
-// can verify (another rail, a forged or expired signature) is counted in the
-// hour's unproven-refusal aggregate row (no address). Nothing is dropped. A Tempo PUSH credential (payload type "hash") names a transfer the
-// buyer already broadcast: the 451 then neither says nothing was charged nor
-// carries `charged: false`, says the transfer was not claimed for the request,
-// and the event names the transfer's sender as the chain shows it (the
-// caller's `pushSender(req)`, a bounded receipt read), deduped on the
-// transaction hash; a sender the chain does not show is a count. A refusal whose only reason is a country our own choice blocks
+// The same transfer re-sent adds an attempt to its row. Nothing is dropped. A refusal whose only reason is a country our own choice blocks
 // rather than a sanctions program (NON_PROGRAM_COUNTRIES: Syria, whose
 // program was revoked) is counted only, never recorded as a report. An event
 // keeps the country or region code that is the refusal's reason (a report
@@ -49,7 +46,6 @@
 // postal code, coordinates, time zone) are never read, and the log line names
 // no location.
 import { paymentHeaderOf } from "./payer.js";
-import { provenX402Signer } from "./gateway-cache-scope.js";
 import { NOT_CHARGED } from "./not-charged.js";
 import { limiterKey } from "./rate-limit.js";
 import { cdnProxyEnabled, cdnOriginSecret } from "./cdn-client-ip.js";
@@ -84,21 +80,6 @@ export function sanctionsExemptPath(path) {
   return SANCTIONS_EXEMPT_PATHS.has(p) || EXEMPT_PREFIX_RE.test(p);
 }
 
-/** The payer a payment's own signature proves: an x402 v2 exact
- *  authorization to `payTo`, recovered (src/gateway-cache-scope.js), with
- *  its nonce; null for anything else (another rail, a forged or expired
- *  signature). Never throws. */
-export async function verifiedGeoPayer(req, { payTo } = {}) {
-  try {
-    const header = paymentHeaderOf(req);
-    if (!header || !payTo) return null;
-    const payer = await provenX402Signer(header, { payTo });
-    if (!payer) return null;
-    let nonce = null;
-    try { nonce = JSON.parse(Buffer.from(String(header), "base64").toString("utf8"))?.payload?.authorization?.nonce ?? null; } catch { nonce = null; }
-    return { payer, nonce };
-  } catch { return null; }
-}
 
 export const SANCTIONED_REGION_TEXT = `This service is not available in your region. ${NOT_CHARGED}`;
 // A push credential's money moved before the request arrived, so the refusal
@@ -217,7 +198,7 @@ export function createGeoPaymentGate({ verify, perClientDay = GEO_EVENTS_PER_CLI
     if (country && NON_PROGRAM_COUNTRIES.has(country)) { counts.nonProgram++; return null; }
     let proof = null;
     try { proof = typeof verify === "function" ? await verify(req) : null; } catch { proof = null; }
-    if (!proof || typeof proof.payer !== "string" || !proof.payer) { counts.paymentUnverified++; return aggregate("unproven-refusal", "unverified-payment", country, region); }
+    if (!proof || typeof proof.payer !== "string" || !proof.payer) { counts.paymentUnverified++; return aggregate("unproven-refusal", "before-verify", country, region); }
     const t = now();
     const key = `${proof.payer.toLowerCase()}|${String(proof.nonce ?? "")}`;
     const event = { payer: proof.payer, country, region, ...(proof.amount != null ? { amount: String(proof.amount) } : {}), ...(proof.asset ? { asset: String(proof.asset) } : {}) };

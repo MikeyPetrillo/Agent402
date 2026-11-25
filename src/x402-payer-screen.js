@@ -68,18 +68,16 @@
 // names (WALLET_BLOCKLIST, src/payments.js blockedPayerFromPayload); the
 // direct routes apply that list at settlement instead.
 //
-// RECORDS. A refusal is kept in the sanctions events store
-// (src/sanctions-events.js, under its write limits) only for a listed address
-// the payment's own signature proves (src/x402-signed-payers.js): EIP-3009
-// `authorization.from` or Permit2 `permit2Authorization.from` recovered
-// locally, and, only for a payment the facilitator verified on this request
-// (the stash src/verified-payment.js keeps; a route with no price verifies
-// nothing), the verified signer field (a contract wallet's EIP-1271 or
-// EIP-6492 signature included) and a Solana, Stellar or Algorand signer. A listed address seen only in a field no signature covers
-// (the channel fields, an unsigned block, anything on the strict screen,
-// which runs before verification, that the signature does not recover to) is
-// refused exactly the same and counted as `refusedUnrecorded`, and in the
-// hour's `unproven-refusal` aggregate row (a count, never the address).
+// RECORDS. A refusal names an address in the sanctions events store
+// (src/sanctions-events.js) only for a payment the facilitator verified on
+// THIS request (the marker src/verified-payment.js keeps: verify answered
+// isValid for our own requirements), and then only the payer that verify
+// vouches for (its `payer`, else the verified payload's signer field) when
+// that payer is listed. Every other refusal, before verification (the strict
+// screen on /ref, a route with no price, which the middleware passes here
+// unverified) or on a listed address that is not the verified payer, is
+// refused exactly the same, counted as `refusedUnrecorded`, and counted in
+// the hour's `unproven-refusal` aggregate row (a count, never the address).
 //
 // COST. Decoding the header the middleware already decoded once, and one Set
 // lookup per address. No network call; a refusal alone adds local signature
@@ -91,8 +89,7 @@ import { screenAddressForPayment } from "./tools/sanctions-kit.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { recordSanctionsEvent, recordSanctionsAggregate } from "./sanctions-events.js";
 import { sanctionsScreenOperatorView } from "./sanctions-screen.js";
-import { x402SignedPayers } from "./x402-signed-payers.js";
-import { verifiedPaymentOf, verifiedEvmPayerOf } from "./verified-payment.js";
+import { verifiedPayerOf } from "./verified-payment.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -159,36 +156,21 @@ export function x402ScreenedAddressesOf(req) {
 
 const counts = { screened: 0, refused: 0, refusedUnrecorded: 0, servedUnscreened: 0, unreadablePayer: 0, refusedUnscreened: 0, blocked: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
 
-/** The listed address a refusal may RECORD, or null. An EVM payment: a listed
- *  address among those its own signature proves (src/x402-signed-payers.js).
- *  A Solana, Stellar or Algorand payment: its signers are read from the signed
- *  transaction, recorded only where the screen runs after the facilitator
- *  verified that transaction (not the strict screen, which runs before). */
-async function recordableListedOf(v, payload, { strict, req }) {
-  // The x402 middleware also calls this screen on a route with no price,
-  // where nothing was verified: only a payment the facilitator verified on
-  // THIS request (the stash src/verified-payment.js keeps) vouches for a
-  // signer no local recovery can prove.
-  const verified = strict ? null : verifiedPaymentOf(req);
-  if (v.nonEvm) return verified ? v.address : null;
-  const signed = new Set(await x402SignedPayers(payload));
-  // A contract wallet's signature (EIP-1271, EIP-6492): the verified payer
-  // field, as the facilitator checked it.
-  const verifiedPayer = verified ? verifiedEvmPayerOf(req) : null;
-  if (verifiedPayer) signed.add(verifiedPayer);
-  if (!signed.size) return null;
-  let w;
-  try { w = screenAddresses([...signed]); } catch { return null; }
-  return w && w.ok === false && w.reason === "listed" ? w.address : null;
-}
-/** The aggregate's reason word for a refusal that is not recorded: the
- *  payment's own signer field whose signature this server cannot prove
- *  (before verification), or a field no signature covers. */
-function unrecordedReasonOf(v, payload) {
-  if (v.nonEvm) return "signer-before-verify";
-  const inner = payload?.payload;
-  const from = inner?.permit2Authorization ? inner.permit2Authorization.from : inner?.authorization?.from;
-  return typeof from === "string" && from.toLowerCase() === String(v.address).toLowerCase() ? "unproven-signer" : "unsigned-field";
+/** What a refusal records: { address } (the verified payer, listed) or
+ *  { reason } (counted only: "before-verify" when no payment verified on this
+ *  request, "not-the-payer" when the verified payer is not listed). Never
+ *  throws. */
+async function recordVerdictOf(req, { strict }) {
+  const payer = strict ? null : verifiedPayerOf(req);
+  if (!payer) return { reason: "before-verify" };
+  try {
+    if (EVM_RE.test(payer)) {
+      const w = screenAddresses([payer]);
+      return w && w.ok === false && w.reason === "listed" ? { address: w.address } : { reason: "not-the-payer" };
+    }
+    const bare = payer.replace(/^(svm|avm|stellar):/, "");
+    return (await screenAddressForPayment(bare)) ? { address: bare } : { reason: "not-the-payer" };
+  } catch { return { reason: "not-the-payer" }; }
 }
 let unscreenedLoggedAt = 0;
 let unreadableLoggedAt = 0;
@@ -273,20 +255,17 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
     counts.lastRefusedAt = Date.now();
     log(`[sanctions-screen] x402 payer ${maskAddress(v.address)} refused before the handler (${req.method} ${req.path}); nothing settles`);
     // The rejected transaction, in full, for the records rule and its report
-    // (src/sanctions-events.js), only for an address the payment's own
-    // signature proves (recordableListedOf); one the request merely names is
-    // refused above and counted in the hourly aggregate. Never awaited: the refusal
-    // does not wait on it.
+    // (src/sanctions-events.js), only for the payer a verification on this
+    // request vouches for (recordVerdictOf); every other refusal is counted in
+    // the hourly aggregate. Never awaited: the refusal does not wait on it.
     try {
       const payload = x402ScreenedPaymentOf(req)?.payload;
       const acc = payload?.accepted || payload || {};
       const route = `${req.method} ${req.path}`, ip = req.ip;
-      recordableListedOf(v, payload, { strict, req }).then((address) => {
+      recordVerdictOf(req, { strict }).then(({ address, reason }) => {
         if (!address) {
-          // No row of its own (the address is the caller's to choose): counted
-          // in the hour's aggregate row, with no address.
           counts.refusedUnrecorded++;
-          return recordSanctionsAggregate({ kind: "unproven-refusal", reason: unrecordedReasonOf(v, payload), rail: "x402", route });
+          return recordSanctionsAggregate({ kind: "unproven-refusal", reason, rail: "x402", route });
         }
         let listDate = null;
         try { listDate = sanctionsScreenOperatorView().publishDate || null; } catch { /* no list view */ }

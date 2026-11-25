@@ -627,7 +627,7 @@ import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMo
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
 import { settleComplianceView } from "./settle-compliance.js";
-import { sanctionedRegionsMiddleware, sanctionedRegionsView, verifiedGeoPayer, sanctionsReportWord, geoBlockProvenance, warnGeoBlockProvenance } from "./sanctioned-regions.js";
+import { sanctionedRegionsMiddleware, sanctionedRegionsView, sanctionsReportWord, geoBlockProvenance, warnGeoBlockProvenance } from "./sanctioned-regions.js";
 import { applyActualCharge } from "./actual-charge.js";
 import { startLedgerRetention, ledgerRetentionStatus } from "./ledger-retention.js";
 import { recordSanctionsEvent, recordSanctionsAggregate, flushSanctionsEvents, startSanctionsJournalReplay, sanctionsReportStatus, sanctionsEventsOperatorView, markSanctionsEventsFiled, refreshSanctionsEvents } from "./sanctions-events.js";
@@ -3119,11 +3119,8 @@ warnGeoBlockProvenance();
 // proved came through Cloudflare (req.viaCdn). A refused request that carried
 // a payment is kept in the sanctions events store as a rejected transaction.
 app.use(sanctionedRegionsMiddleware({
-  // A payment is recorded as a reportable event only when its signature
-  // proves its payer: an x402 exact authorization to our payTo, its signer
-  // recovered (verifiedGeoPayer). Anything else is counted in the hour's
-  // aggregate row, with no address.
-  verify: (req) => verifiedGeoPayer(req, { payTo: WALLET_ADDRESS }),
+  // No `verify`: the 451 comes before any payment is verified, so an x402
+  // payment is counted in the hour's aggregate row with no address.
   // A Tempo push credential names a transfer already sent. It is recorded
   // only when it paid THIS server: a challenge we issued (the Tempo gate's own
   // HMAC, realm, currency and recipient check) and a transfer the chain shows

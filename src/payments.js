@@ -3443,7 +3443,7 @@ export function registerVerifiedPaymentStash(server) {
       if (ctx?.result?.isValid !== true || !ctx.paymentPayload || !ctx.requirements) return;
       const req = ctx?.transportContext?.request?.adapter?.req;
       if (!req || typeof req !== "object") return;
-      stashVerifiedPayment(req, { paymentPayload: ctx.paymentPayload, requirements: ctx.requirements, declaredExtensions: ctx.declaredExtensions, request: ctx.transportContext.request });
+      stashVerifiedPayment(req, { paymentPayload: ctx.paymentPayload, requirements: ctx.requirements, declaredExtensions: ctx.declaredExtensions, request: ctx.transportContext.request, payer: typeof ctx.result.payer === "string" ? ctx.result.payer : null });
     } catch { /* nothing kept: the run settles after its handler */ }
   });
   return server;

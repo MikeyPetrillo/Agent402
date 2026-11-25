@@ -131,6 +131,33 @@ export async function runSanctionsStoreCases({ EV, sdb = null, ok, label }) {
     ok(took < 1000, `${label}: the bounded journal's replay is short (${took} ms)`);
   }
 
+  // ---- held: a write that fails keeps the row's journal entry (in a shared journal too) until the
+  //      row lands; a replay meanwhile does not take it from this process; once it lands the journal
+  //      holds nothing more for it.
+  {
+    EV.__resetSanctionsEventLimitsForTests();
+    const addr = "0x" + "a7".repeat(20);
+    const mine = async () => (await EV.__sanctionsJournalEntriesForTests()).filter((e) => e.payload?.address === addr);
+    let away = true;
+    EV.__setSanctionsStoreHookForTests?.(async (source) => { if (away && source === "flush") throw new Error("case: store away"); });
+    try {
+      const first = await EV.recordSanctionsEvent({ kind: "screen-hit", address: addr, rail: "x402", route: "POST /api/held" });
+      await EV.recordSanctionsEvent({ kind: "screen-hit", address: addr, rail: "x402", route: "POST /api/held" });
+      await EV.flushSanctionsEvents();
+      await EV.__sanctionsJournalSettledForTests?.();
+      const held = await mine();
+      ok(first === null && held.length === 1 && held[0].payload.attempts === 2, `${label}: a write that fails leaves the row's newest copy in the journal (${held.length} entr${held.length === 1 ? "y" : "ies"}, attempts ${held[0]?.payload?.attempts})`);
+      await EV.replaySanctionsJournal();
+      ok((await mine()).length === 1 && !(await stored(held[0].payload.id)), `${label}: a replay meanwhile leaves the entry held by this process (it writes it itself)`);
+      away = false;
+      await EV.flushSanctionsEvents();
+      await EV.__sanctionsJournalSettledForTests?.();
+      await sleep(50);
+      const s = await stored(held[0].payload.id);
+      ok(s?.attempts === 2 && (await mine()).length === 0 && EV.sanctionsEventWriteLimits().pending === 0, `${label}: once the store takes it, the row lands with both attempts and the journal holds nothing for it (${(await mine()).length} left)`);
+    } finally { EV.__setSanctionsStoreHookForTests?.(null); }
+  }
+
   // ---- keys: at most SANCTIONS_AGGREGATE_KEYS_PER_HOUR aggregate rows an hour; the rest in one overflow row
   {
     EV.__resetSanctionsEventLimitsForTests();

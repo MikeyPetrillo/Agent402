@@ -274,8 +274,8 @@ so every claim below is verifiable in code.</p>
   (country, region, city and approximate coordinates); we read only ${geoBlockOn ? `the country and the region, in memory, to
   refuse requests from the countries and regions we do not serve (see the terms) and, for the analytics choice
   above, the country, and we do not store or log any of them, with one exception: a request refused from a region
-  under U.S. sanctions that carried a payment whose signature proves the paying wallet, or that named a transfer
-  already sent whose sender the chain shows, keeps the country or region code as the reason it was refused (see
+  under U.S. sanctions that carried a payment keeps the country or region code as the reason it was refused, in an
+  hourly count, or, when it named a transfer already sent whose sender the chain shows, with that sender (see
   Retention).` : `the country, in memory, for the analytics choice above, and we do not store or log it.`}
   The tollbooth waitlist form is closed, and every record it collected has been deleted from our
   database; those records were never part of our offsite backups.</li>
@@ -538,7 +538,7 @@ ledgers (wallet address, amount, chain, transaction id, tool, response digest${r
 the sale, the period our accounting and tax records must cover. A record of a payment refused or held under sanctions
 screening${geoBlockOn ? ", or refused because it came from a region under U.S. sanctions" : ""} (the address, rail, network, amount, route, time, the IP
 address the request came from, the list entry, the number of attempts within a day${geoBlockOn ? ", and for a refusal by location the sanctioned country or region code" : ""}), and an
-hourly count of refusals that name no proven address${geoBlockOn ? ", and of refusals by location past the per-caller and hourly bounds" : ""} (no address is kept with it${geoBlockOn ? "; a count of refusals by location keeps the country or region code" : ""}), are
+hourly count of refusals made before a payment was verified, or that name an address other than the verified payer${geoBlockOn ? ", and of refusals by location past the per-caller and hourly bounds" : ""} (no address is kept with it${geoBlockOn ? "; a count of refusals by location keeps the country or region code" : ""}), are
 kept privately for ten years, as US sanctions rules require. The consent a card checkout records (that you accepted
 the terms, asked us to start at once and, for a monitor, agreed to the automatic renewal at the price shown, with the
 time and the checkout session id) is kept with the purchase or subscription record for as long as that record is kept. A feedback verdict and its reason are kept with the sale they rate${awsOn ? `; an AWS payment that bought no answer is kept ${AWS_UNANSWERED_KEEP_DAYS} days` : ""}.
