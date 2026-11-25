@@ -886,6 +886,7 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   const ch = credential?.challenge;
   const notOurs = tempoChallengeNotOurs(ch, { secretKey, realm, now });
   if (notOurs) return bad(notOurs);
+  const exp = Date.parse(ch.expires);
   const r = ch.request || {};
   const item = typeof priceFor === "function" ? priceFor(method, path, req) : null;
   const priceUsd = Number(item?.priceUsd);
