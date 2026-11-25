@@ -4,8 +4,9 @@
 // no RPC, no facilitator, nothing spent.
 //
 // What this pins:
-//  - the payment-required result: isError, structuredContent = the object,
-//    content[0].text = JSON.stringify of it, an optional sentence after it, and
+//  - the payment-required result: isError, structuredContent = the object
+//    exactly when it validates against the tool's listed outputSchema (or the
+//    tool lists none), content[0].text = JSON.stringify of it, an optional sentence after it, and
 //    an MPP challenge _meta carried unchanged (same reference, same bytes);
 //  - the reader: absent -> unpaid, a v2 payload -> a detached copy, anything
 //    else -> a 400-shaped refusal (never a throw): non-objects, arrays, wrong
@@ -99,7 +100,20 @@ const MPP_META = {
 {
   const r = buildPaymentRequiredResult(REQUIRED, { message: "This tool costs $0.01 in USDC." });
   ok(r && r.isError === true, "payment-required: isError is true");
-  ok(!("structuredContent" in r) && same(paymentRequiredOfResult(r), REQUIRED), "payment-required: no structuredContent (a listed outputSchema would be checked against it); the object reads back from the first text block");
+  ok(same(r.structuredContent, REQUIRED) && r.structuredContent !== REQUIRED && same(paymentRequiredOfResult(r), REQUIRED), "payment-required, no listed outputSchema: structuredContent is a copy of the object, which also reads back from the first text block");
+  const OPEN = { type: "object", properties: { markdown: { type: "string" } }, additionalProperties: true };
+  const CLOSED = { type: "object", properties: { markdown: { type: "string" } }, required: ["markdown"] };
+  ok(same(buildPaymentRequiredResult(REQUIRED, { outputSchema: OPEN }).structuredContent, REQUIRED), "payment-required: a listed outputSchema the object validates against keeps structuredContent");
+  ok(!("structuredContent" in buildPaymentRequiredResult(REQUIRED, { outputSchema: CLOSED })) && same(paymentRequiredOfResult(buildPaymentRequiredResult(REQUIRED, { outputSchema: CLOSED })), REQUIRED), "payment-required: a listed outputSchema the object fails (a required field) omits structuredContent; the text block still carries it");
+  ok(!("structuredContent" in buildPaymentRequiredResult(REQUIRED, { outputSchema: { type: "object", properties: { error: { type: "integer" } } } })), "payment-required: a listed outputSchema that types one of its fields otherwise omits structuredContent");
+  ok(!("structuredContent" in buildPaymentRequiredResult(REQUIRED, { outputSchema: { type: "nonsense-type" } })) && !("structuredContent" in buildPaymentRequiredResult(REQUIRED, { outputSchema: "x" })), "payment-required: a schema that does not compile, or is not an object, omits structuredContent");
+  ok(same(buildPaymentRequiredResult(REQUIRED, { outputSchema: null }).structuredContent, REQUIRED), "payment-required: outputSchema null (the tool lists none) keeps structuredContent");
+  const inv = buildInvalidPaymentResult(REQUIRED, { reason: "bad_sig", outputSchema: OPEN });
+  ok(same(inv.structuredContent, paymentRequiredOfResult(inv)) && inv.structuredContent.error === "bad_sig", "invalid-payment: structuredContent is the same PaymentRequired the text block carries, its reason included");
+  ok(!("structuredContent" in buildInvalidPaymentResult(REQUIRED, { reason: "bad_sig", outputSchema: CLOSED })), "invalid-payment: omitted where it does not validate");
+  const sf = buildSettlementFailedResult(REQUIRED, { reason: "insufficient_funds", outputSchema: OPEN });
+  ok(same(sf.structuredContent, paymentRequiredOfResult(sf)) && /^Payment settlement failed/.test(sf.structuredContent.error), "settlement-failed: structuredContent is the same PaymentRequired the text block carries");
+  ok(!("structuredContent" in buildSettlementFailedResult(REQUIRED, { reason: "x", outputSchema: CLOSED })), "settlement-failed: omitted where it does not validate");
   ok(r.content[0].type === "text" && r.content[0].text === JSON.stringify(REQUIRED), "payment-required: content[0].text is JSON.stringify of the same object");
   ok(r.content[1]?.text === "This tool costs $0.01 in USDC.", "payment-required: the readable sentence follows the JSON block");
   ok(r._meta === undefined, "payment-required: no _meta when no MPP challenge is given");
@@ -110,7 +124,7 @@ const MPP_META = {
   ok(Object.keys(MPP_META).every((k) => both._meta[k] === MPP_META[k]), "MPP merge: each value is the same reference");
   ok(Object.keys(MPP_META).every((k) => JSON.stringify(both._meta[k]) === JSON.stringify(MPP_META[k])), "MPP merge: each value serializes byte for byte");
   ok(JSON.stringify(both._meta) === JSON.stringify(MPP_META), "MPP merge: the whole _meta serializes byte for byte");
-  ok(!("structuredContent" in both) && same(paymentRequiredOfResult(both), REQUIRED), "MPP merge: the x402 body is unchanged beside it");
+  ok(same(both.structuredContent, REQUIRED) && same(paymentRequiredOfResult(both), REQUIRED), "MPP merge: the x402 body is unchanged beside it");
   const poisoned = JSON.parse('{"__proto__":{"polluted":1},"k":1}');
   const p = buildPaymentRequiredResult(REQUIRED, { mppMeta: poisoned });
   ok(p._meta.k === 1 && !Object.hasOwn(p._meta, "__proto__") && ({}).polluted === undefined && Object.getPrototypeOf(p._meta) === Object.prototype, "MPP merge: a __proto__ key is skipped and pollutes nothing");
@@ -276,11 +290,13 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const read = readPaymentFromMeta(req.params._meta);
     seen.push({ name: req.params.name, read });
-    if (!read.ok) return buildInvalidPaymentResult(REQUIRED, { reason: read.reason, mppMeta: MPP_META });
-    if (!read.payment) return buildPaymentRequiredResult(REQUIRED, { message: "Pay to run this tool.", mppMeta: MPP_META });
+    // The schema the called tool lists, as the connector passes it.
+    const outputSchema = req.params.name === "paid.echo" ? ECHO_SCHEMA : null;
+    if (!read.ok) return buildInvalidPaymentResult(REQUIRED, { reason: read.reason, mppMeta: MPP_META, outputSchema });
+    if (!read.payment) return buildPaymentRequiredResult(REQUIRED, { message: "Pay to run this tool.", mppMeta: MPP_META, outputSchema });
     // paid.retry: the route's verify refuses the first payment it sees.
-    if (req.params.name === "paid.retry" && seen.filter((s) => s.name === "paid.retry" && s.read.payment).length === 1) return buildInvalidPaymentResult(REQUIRED, { reason: "invalid_exact_evm_payload_signature", mppMeta: MPP_META });
-    if (req.params.name === "paid.fails") return buildSettlementFailedResult(REQUIRED, { reason: "insufficient_funds" });
+    if (req.params.name === "paid.retry" && seen.filter((s) => s.name === "paid.retry" && s.read.payment).length === 1) return buildInvalidPaymentResult(REQUIRED, { reason: "invalid_exact_evm_payload_signature", mppMeta: MPP_META, outputSchema });
+    if (req.params.name === "paid.fails") return buildSettlementFailedResult(REQUIRED, { reason: "insufficient_funds", outputSchema });
     const decoded = decodePaymentSignatureHeader(paymentSignatureHeader(read.payment));
     const settle = { success: true, transaction: "0x" + "34".repeat(32), network: decoded.accepted.network, payer: decoded.payload.authorization.from };
     return withPaymentResponse({ content: [{ type: "text", text: JSON.stringify({ echoed: req.params.arguments }) }], structuredContent: { echoed: req.params.arguments } }, encodePaymentResponseHeader(settle));
@@ -306,9 +322,9 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
     second.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: "paid.echo", inputSchema: { type: "object" }, outputSchema: ECHO_SCHEMA }] }));
     second.setRequestHandler(CallToolRequestSchema, async (req) => (req.params.arguments?.pending
       ? buildSettlementPendingResult({ refusal: { retry: "same-payment" } })
-      : req.params.arguments?.invalid ? buildInvalidPaymentResult(REQUIRED, { reason: "nope" })
-        : req.params.arguments?.failed ? buildSettlementFailedResult(REQUIRED, { reason: "insufficient_funds" })
-          : buildPaymentRequiredResult(REQUIRED, { message: "Pay to run this tool.", mppMeta: MPP_META })));
+      : req.params.arguments?.invalid ? buildInvalidPaymentResult(REQUIRED, { reason: "nope", outputSchema: ECHO_SCHEMA })
+        : req.params.arguments?.failed ? buildSettlementFailedResult(REQUIRED, { reason: "insufficient_funds", outputSchema: ECHO_SCHEMA })
+          : buildPaymentRequiredResult(REQUIRED, { message: "Pay to run this tool.", mppMeta: MPP_META, outputSchema: ECHO_SCHEMA })));
     await second.connect(pst);
     const plainClient = new Client({ name: "reference-sdk-client", version: "0.0.0" });
     await plainClient.connect(pct);
@@ -344,7 +360,9 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
 
   // A payment our reader refuses comes back as an offer, not a bare error.
   const raw = await client.client.callTool({ name: "paid.echo", arguments: {}, _meta: { [X402_PAYMENT_META]: { ...PAYLOAD, x402Version: 1 } } });
-  ok(raw?.isError === true && !("structuredContent" in raw) && paymentRequiredOfResult(raw)?.error === "unsupported_version" && same(paymentRequiredOfResult(raw).accepts, REQUIRED.accepts), "reader refusal: the result is the PaymentRequired object with the reason");
+  ok(raw?.isError === true && !("structuredContent" in raw) && paymentRequiredOfResult(raw)?.error === "unsupported_version" && same(paymentRequiredOfResult(raw).accepts, REQUIRED.accepts), "reader refusal: the result is the PaymentRequired object with the reason (no structuredContent: paid.echo's closed schema does not admit it, and the SDK client reads the result)");
+  const rawRetry = await client.client.callTool({ name: "paid.retry", arguments: {}, _meta: { [X402_PAYMENT_META]: { ...PAYLOAD, x402Version: 1 } } });
+  ok(rawRetry?.isError === true && same(rawRetry.structuredContent, paymentRequiredOfResult(rawRetry)) && rawRetry.structuredContent.error === "unsupported_version", "reader refusal on a tool that lists no outputSchema: structuredContent is the PaymentRequired with the reason");
   await client.close();
 }
 

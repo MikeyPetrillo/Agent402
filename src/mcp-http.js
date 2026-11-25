@@ -595,6 +595,23 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     return { ...def, route: `${method} ${mcpX402PathOf(def.slug)}` };
   };
 
+  /** The outputSchema tools/list gives a flagship: the hand-written one,
+   *  else the one inferred from its published example (made once). */
+  const inferredOutputSchemas = new Map();
+  const flagshipOutputSchemaOf = (def) => {
+    if (FLAGSHIP_OUTPUT_SCHEMAS[def.slug]) return FLAGSHIP_OUTPUT_SCHEMAS[def.slug];
+    if (!inferredOutputSchemas.has(def.slug)) inferredOutputSchemas.set(def.slug, outputSchemaFromExample(def.discovery?.output?.example));
+    return inferredOutputSchemas.get(def.slug);
+  };
+  /** The outputSchema a payment-required result for this call is held to
+   *  (src/mcp-x402.js fitsListedOutputSchema): a listed flagship's own,
+   *  catalog.call's envelope, or none for a name that is not listed (a former
+   *  flagship), which no client holds to a schema. */
+  const listedOutputSchemaOf = (def, isNamed) => {
+    if (!isNamed) return META_OUTPUT_SCHEMAS["catalog.call"];
+    return flagshipSet.has(def.slug) ? flagshipOutputSchemaOf(def) : null;
+  };
+
   const schemaOf = (def) => {
     const s = def.discovery?.inputSchema;
     return s ? { type: "object", ...s } : { type: "object" };
@@ -941,8 +958,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           const walletNote = free
             ? ""
             : ` This hosted connector holds no wallet: ${inCallWires ? `pay it here, in the call, over ${inCallWires}, or ` : ""}run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key${creditsKeyQualifier()} (AGENT402_CREDITS_KEY), or any x402 client.`;
-          const outSchema = FLAGSHIP_OUTPUT_SCHEMAS[slug]
-            || outputSchemaFromExample(def.discovery?.output?.example);
+          const outSchema = flagshipOutputSchemaOf(def);
           return {
             name: mcpNameOf(slug),
             title: def.name,
@@ -1226,7 +1242,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       if (!read.ok) {
         // The payment cannot be used: nothing was sent to any paywall.
         const offer = await x402Offer(target, params, ip, signal);
-        return (offer && buildInvalidPaymentResult(offer, { reason: read.reason, message: read.message }))
+        return (offer && buildInvalidPaymentResult(offer, { reason: read.reason, message: read.message, outputSchema: listedOutputSchemaOf(def, isNamed) }))
           || { content: [{ type: "text", text: `Agent402 (${def.slug}): ${read.message} - not charged.` }], isError: true };
       }
       const paymentSignature = paymentSignatureHeader(read.payment);
@@ -1310,7 +1326,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (failedSettle) return failedSettle;
         const offer = paymentRequiredFromHeader(r.headers.get("payment-required")) || await x402Offer(target, params, ip, signal);
         const why = [offer?.error, body.error, body.hint].find((v) => typeof v === "string" && v.trim() && !/^payment required$/i.test(v.trim()));
-        const out = offer && buildInvalidPaymentResult(offer, { reason: why || "Payment verification failed" });
+        const out = offer && buildInvalidPaymentResult(offer, { reason: why || "Payment verification failed", outputSchema: listedOutputSchemaOf(def, isNamed) });
         return out || { content: [{ type: "text", text: `Agent402 (${def.slug}): the payment was refused${why ? ` (${String(why).slice(0, 200)})` : ""} - not charged.` }], isError: true };
       }
       if (r.status >= 500) {
@@ -1385,7 +1401,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // No MPP challenge on the 402 (gates not minting for this route):
           // the x402 offer alone when there is one, else the paid-access
           // instructions rather than an empty ask.
-          const x402Only = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true, mpp: false }) }) : null;
+          const x402Only = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true, mpp: false }), outputSchema: listedOutputSchemaOf(entry.def, isNamed) }) : null;
           return x402Only || { content: [{ type: "text", text: walletRequiredText(entry.def, { mpp: false }) }], isError: true };
         }
         const problem = problemOf(r.json);
@@ -1408,9 +1424,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (!presented && softAsk) {
           const mppMeta = { [MCP_PAYMENT_REQUIRED_META]: { httpStatus: 402, challenges, ...(problem ? { problem } : {}) } };
           // Both wires on one result: the x402 PaymentRequired as JSON in the
-          // first text block (never structuredContent), the MPP challenges
+          // first text block (and as structuredContent where it validates
+          // against the tool's listed outputSchema), the MPP challenges
           // unchanged in _meta, the readable text after.
-          const both = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true }), mppMeta }) : null;
+          const both = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true }), mppMeta, outputSchema: listedOutputSchemaOf(entry.def, isNamed) }) : null;
           if (both) return both;
           return {
             content: [{ type: "text", text: walletRequiredText(entry.def) }],
@@ -2026,7 +2043,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             // No MPP gates: the x402 offer alone, when this boot has a paywall.
             // A long call gets the text alone (its HTTP route, as a job).
             const offer = isLongCall(entry.def) ? null : await x402Offer(x402TargetOf(entry.def, isNamed), paidParamsOf(args, isNamed), ip, signal);
-            return (offer && buildPaymentRequiredResult(offer, { message: walletRequiredText(entry.def, { x402: true }) }))
+            return (offer && buildPaymentRequiredResult(offer, { message: walletRequiredText(entry.def, { x402: true }), outputSchema: listedOutputSchemaOf(entry.def, isNamed) }))
               || { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
           }
           return await payOverMpp(entry, req.params, args, isNamed, ip, signal, ctx?.mcpReq?.envelope?.[CLIENT_CAPABILITIES_META]);
@@ -2038,7 +2055,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // route's), so a client that can pay is served now: it pays in
           // _meta["x402/payment"] and the call skips this limiter.
           const offer = isLongCall(entry.def) ? null : await x402Offer(entry.def, paidParamsOf(args, isNamed), ip, signal, { reuse: true });
-          return (offer && buildPaymentRequiredResult(offer, { message: `${limitText} To be served now, pay this call over x402: sign one of the accepts in this result's PaymentRequired and call again with the payment in _meta["x402/payment"] (an x402 MCP client does this automatically). Or pay per call from the npm server: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }))
+          return (offer && buildPaymentRequiredResult(offer, { message: `${limitText} To be served now, pay this call over x402: sign one of the accepts in this result's PaymentRequired and call again with the payment in _meta["x402/payment"] (an x402 MCP client does this automatically). Or pay per call from the npm server: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt`, outputSchema: listedOutputSchemaOf(entry.def, isNamed) }))
             || { content: [{ type: "text", text: `${limitText} For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }], isError: true };
         }
         // Flagship tools called by name: args IS the params (no envelope).

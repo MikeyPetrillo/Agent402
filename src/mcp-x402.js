@@ -4,12 +4,16 @@
 // Wire:
 //   - payment required: a tool RESULT with isError: true whose
 //     content[0].text is JSON.stringify of the PaymentRequired object (the
-//     form the transport requires, and the one its client falls back to). It
-//     carries NO structuredContent: the transport's copy there is optional,
-//     and a tool that lists an outputSchema has every structuredContent it
-//     returns validated against that schema by the MCP SDK client, error
-//     results included, so a PaymentRequired there fails the whole call
-//     (-32602) for a client that only wanted to read the ask;
+//     form the transport requires, and the one its client falls back to),
+//     and whose structuredContent is the same PaymentRequired object (the
+//     transport's structured copy, which discovery readers take as the ask)
+//     exactly when that object validates against the outputSchema the called
+//     tool lists, or the tool lists none (`outputSchema` below). The MCP SDK
+//     client validates every structuredContent against the listed schema,
+//     error results included, so a copy that does not validate would fail
+//     the whole call (-32602) for a client that only wanted to read the ask;
+//     there the result carries the text block alone. The invalid-payment and
+//     settlement-failed shapes follow the same rule;
 //   - the client retries with the PaymentPayload object in
 //     tools/call params._meta["x402/payment"];
 //   - a settled result carries the SettleResponse in
@@ -29,6 +33,7 @@ import {
   encodePaymentSignatureHeader,
 } from "@x402/core/http";
 import { parsePaymentPayload, parsePaymentRequired } from "@x402/core/schemas";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { RETRY_SAME_PAYMENT, RETRY_WATCH_TRANSACTION, UNDECIDED_RETRY_VERBS } from "./payment-reject.js";
 
 export const X402_PAYMENT_META = "x402/payment";
@@ -224,10 +229,47 @@ function mergeMeta(into, extra) {
   return into;
 }
 
-function requiredShape(paymentRequired, { message, meta, settleReceipt } = {}) {
+// The listed outputSchema's check, made by the MCP SDK's own default validator
+// (ajv, as the SDK clients configure it). Compiled once per distinct schema
+// text; past SCHEMA_CHECKS_MAX distinct schemas the engine is replaced, so
+// neither this map nor the engine's own compile cache grows without bound.
+const SCHEMA_CHECKS_MAX = 64;
+let schemaEngine = null;
+const schemaChecks = new Map();
+function schemaCheckOf(schema) {
+  let key;
+  try { key = JSON.stringify(schema); } catch { return null; }
+  if (typeof key !== "string") return null;
+  const hit = schemaChecks.get(key);
+  if (hit !== undefined) return hit;
+  if (!schemaEngine || schemaChecks.size >= SCHEMA_CHECKS_MAX) { schemaEngine = new AjvJsonSchemaValidator(); schemaChecks.clear(); }
+  let check = null;
+  try { check = schemaEngine.getValidator(schema); } catch { check = null; }
+  schemaChecks.set(key, check);
+  return check;
+}
+
+/**
+ * True when `value` may ride as the structuredContent of a result for a tool
+ * that lists `outputSchema`: the tool lists none (undefined or null), or the
+ * value validates against it. A schema that does not compile, or a check that
+ * throws, is false. Never throws.
+ */
+export function fitsListedOutputSchema(value, outputSchema) {
+  if (outputSchema === undefined || outputSchema === null) return true;
+  if (!isPlainObject(outputSchema)) return false;
+  const check = schemaCheckOf(outputSchema);
+  if (!check) return false;
+  try { return check(value)?.valid === true; } catch { return false; }
+}
+
+function requiredShape(paymentRequired, { message, meta, settleReceipt, outputSchema } = {}) {
   const content = [{ type: "text", text: JSON.stringify(paymentRequired) }];
   if (typeof message === "string" && message.trim()) content.push({ type: "text", text: message.trim() });
   const result = { isError: true, content };
+  // The structured copy is a separate JSON copy of the same object, so a
+  // caller that edits one never edits the other.
+  if (fitsListedOutputSchema(paymentRequired, outputSchema)) result.structuredContent = JSON.parse(content[0].text);
   const merged = mergeMeta({}, meta);
   if (settleReceipt) merged[X402_PAYMENT_RESPONSE_META] = settleReceipt;
   if (Object.keys(merged).length) result._meta = merged;
@@ -240,11 +282,14 @@ function requiredShape(paymentRequired, { message, meta, settleReceipt } = {}) {
  * readable sentence after the JSON block. `mppMeta` is the `_meta` object an
  * MPP challenge result carries (for example {"org.paymentauth/payment-required": ...});
  * its entries ride along unchanged, so one result offers both wires.
+ * `outputSchema` is the one the called tool lists (undefined or null: none);
+ * the PaymentRequired rides as structuredContent too exactly when it
+ * validates against it (fitsListedOutputSchema).
  * null when `paymentRequired` is not a valid v2 PaymentRequired. Never throws.
  */
-export function buildPaymentRequiredResult(paymentRequired, { message, mppMeta } = {}) {
+export function buildPaymentRequiredResult(paymentRequired, { message, mppMeta, outputSchema } = {}) {
   if (!isPaymentRequiredV2(paymentRequired)) return null;
-  return requiredShape(paymentRequired, { message, meta: mppMeta });
+  return requiredShape(paymentRequired, { message, meta: mppMeta, outputSchema });
 }
 
 /**
@@ -252,9 +297,10 @@ export function buildPaymentRequiredResult(paymentRequired, { message, mppMeta }
  * shape again (its `error` names the failure) and none of the tool's output.
  * `settleResponse`, when given and marked success: false, rides in
  * _meta["x402/payment-response"] so the client can read the failure reason.
+ * `outputSchema` as in buildPaymentRequiredResult.
  * null when `paymentRequired` is not a valid v2 PaymentRequired. Never throws.
  */
-export function buildSettlementFailedResult(paymentRequired, { reason, message, settleResponse, mppMeta } = {}) {
+export function buildSettlementFailedResult(paymentRequired, { reason, message, settleResponse, mppMeta, outputSchema } = {}) {
   if (!isPaymentRequiredV2(paymentRequired)) return null;
   const why = typeof reason === "string" && reason.trim() ? reason.trim().slice(0, 200) : "";
   const body = { ...paymentRequired, error: why ? `Payment settlement failed: ${why}` : "Payment settlement failed" };
@@ -263,7 +309,7 @@ export function buildSettlementFailedResult(paymentRequired, { reason, message, 
     const { copy } = jsonCopy(settleResponse, X402_PAYMENT_MAX_BYTES);
     if (copy && copy.success === false) settleReceipt = copy;
   }
-  return requiredShape(body, { message, meta: mppMeta, settleReceipt });
+  return requiredShape(body, { message, meta: mppMeta, settleReceipt, outputSchema });
 }
 
 /**
@@ -271,12 +317,13 @@ export function buildSettlementFailedResult(paymentRequired, { reason, message, 
  * route's verify did): the payment-required shape again, its `error` naming
  * the reason, so a client can sign a fresh payment and retry, as the
  * transport spec and the official server do. No settle receipt rides on it.
+ * `outputSchema` as in buildPaymentRequiredResult.
  * null when `paymentRequired` is not a valid v2 PaymentRequired. Never throws.
  */
-export function buildInvalidPaymentResult(paymentRequired, { reason, message, mppMeta } = {}) {
+export function buildInvalidPaymentResult(paymentRequired, { reason, message, mppMeta, outputSchema } = {}) {
   if (!isPaymentRequiredV2(paymentRequired)) return null;
   const why = typeof reason === "string" && reason.trim() ? reason.trim().slice(0, 200) : "Payment verification failed";
-  return requiredShape({ ...paymentRequired, error: why }, { message, meta: mppMeta });
+  return requiredShape({ ...paymentRequired, error: why }, { message, meta: mppMeta, outputSchema });
 }
 
 // A transaction id as each rail writes it (src/payment-reject.js railTxOf): an
@@ -324,7 +371,8 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
     hint,
   };
   const resend = retry === RETRY_SAME_PAYMENT ? ` Resend this call with the same _meta["${X402_PAYMENT_META}"]${wait ? ` after about ${wait} s` : ""}.` : "";
-  // The fields ride in _meta, never structuredContent (see the wire note above).
+  // The fields ride in _meta, never structuredContent: they are no
+  // PaymentRequired and match no tool's listed outputSchema (see the wire note).
   const result = { isError: true, content: [{ type: "text", text: `${label}: ${hint}${where}${resend}` }], _meta: { [SETTLEMENT_PENDING_META]: structured } };
   if (isPlainObject(settleResponse) && settleResponse.success === false) {
     const { copy } = jsonCopy(settleResponse, X402_PAYMENT_MAX_BYTES);

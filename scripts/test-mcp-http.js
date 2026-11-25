@@ -259,13 +259,18 @@ function paidRefusalKind(resp) {
 }
 /** The bypass check: no tool output came back, whatever the shape. The x402
  *  offer's own block is left out: its discovery extension carries an example
- *  output, which is a description of the tool, not a run of it. */
+ *  output, which is a description of the tool, not a run of it. So is a
+ *  structuredContent that is that same offer (the transport's structured
+ *  copy); any other structuredContent is tool output. */
 function ranForFree(resp) {
   const texts = (resp?.result?.content || []).map((c) => (c && typeof c.text === "string" ? c.text : ""));
   let first = null;
   try { first = JSON.parse(texts[0] || ""); } catch { first = null; }
-  const all = (first?.x402Version === 2 && Array.isArray(first.accepts) ? texts.slice(1) : texts).join("\n");
-  return Boolean(resp?.result?.structuredContent) || all.includes("<html") || /"results"\s*:/.test(all);
+  const offer = first?.x402Version === 2 && Array.isArray(first.accepts);
+  const all = (offer ? texts.slice(1) : texts).join("\n");
+  const sc = resp?.result?.structuredContent;
+  const scIsOffer = offer && sc !== undefined && JSON.stringify(sc) === texts[0];
+  return (Boolean(sc) && !scIsOffer) || all.includes("<html") || /"results"\s*:/.test(all);
 }
 const paid = await rpc("tools/call", { name: "pdf.markdown", arguments: { url: "https://example.com/a.pdf" } });
 const paidKind = paidRefusalKind(paid);

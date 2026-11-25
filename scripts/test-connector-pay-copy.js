@@ -207,7 +207,9 @@ for (const boot of BOOTS) {
     const ask = await client.callTool({ name: "memory.read", arguments: {} });
     const offer = paymentRequiredOfResult(ask);
     const hasOffer = ask.isError === true && Array.isArray(offer?.accepts);
-    ok(ask.isError !== true || !("structuredContent" in ask), `${boot.label}: the ask carries no structuredContent, so a client that checks the tool's output schema reads it`);
+    // The client lists tools first (its output check is armed), so reaching
+    // here means it read the ask; a structuredContent there is the offer itself.
+    ok(ask.isError !== true || !("structuredContent" in ask) || (offer && JSON.stringify(ask.structuredContent) === JSON.stringify(offer)), `${boot.label}: the ask's structuredContent, when present, is the x402 offer itself, read by a client that checks the tool's output schema`);
     const askText = (ask.content || []).map((c) => c.text || "").join("\n");
     ok(!/structuredContent/.test(askText) && (boot.x402 ? /the JSON in its first text block/.test(askText) : true), `${boot.label}: the ask's text points at where the offer rides`);
     const hasMpp = Array.isArray(ask._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges);

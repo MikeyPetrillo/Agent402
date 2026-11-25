@@ -21,9 +21,12 @@ Loaded when a connector or front-door file is read.
   invalid-payment and settlement-failed results, `x402/payment-response` out), pure.
   `/mcp` wires both (`x402Loopback`, off in FREE_MODE): a flagship called by its listed name with a twin
   is asked and paid on the twin, `catalog.call` (and a flagship without a twin) on the slug's own HTTP
-  route; the first ask carries the x402 PaymentRequired (JSON in the first text block, never
-  `structuredContent`: every paid tool lists an `outputSchema`, and the SDK client checks any
-  structuredContent against it, error results included) beside the MPP `_meta` challenges; a
+  route; the first ask carries the x402 PaymentRequired (JSON in the first text block, and the same
+  object as `structuredContent` exactly when it validates against the called tool's listed `outputSchema`,
+  or the tool lists none: the SDK client checks any structuredContent against that schema, error results
+  included; `fitsListedOutputSchema`, the SDK's own ajv validator; the flagship schemas name no `required`
+  field so every flagship's ask carries it, catalog.call's envelope does not) beside the MPP `_meta`
+  challenges (`scripts/test-mcp-x402-structured.js`); a
   settlement-pending result carries its fields in `_meta["org.agent402/settlement-pending"]`; a fixed-price
   unpaid offer (a twin's first ask, a free tool's at its limit) is read once per route and reused for 30 s
   (bounded, `offerCacheMax`), a route priced per request every time; MPP wins when
