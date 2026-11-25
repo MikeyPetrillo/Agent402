@@ -170,5 +170,95 @@ ok(extra.length === 0, `every handler wrapper in src/ is one this suite reads ($
   ok(/withCredit\(a, CENSUS_CREDIT\)/.test(gov), "geo-lookup's census credit goes through withCredit (which keeps them)");
 }
 
+// ---- the class: every composer in src/tools/ is named here ----
+// A tool whose handler runs ANOTHER tool's handler (a call, or the handler
+// taken as a step) and answers a newly built object drops whatever charge
+// figures the inner answer carried, unless the copy goes through
+// keepAnswerCharges. Each file's count of handler reads is pinned with how it
+// stands with that rule, so a new composer fails here until it is read:
+//   keeps     - the rebuilt answer goes through keepAnswerCharges (checked);
+//   wrapper   - a handler wrapper pinned in WRAPPERS above (rule held there);
+//   dataLegs  - every leg comes from the listed kits (checked against the
+//               file's own tool-array imports), and none of those kits ever
+//               sets a charge figure (checked), so there is nothing to carry;
+//   ownsCharge- the route prices its own run and discards the inner figure on
+//               purpose (the pattern is checked);
+//   fixedSum  - the route's price is a fixed sum over legs of which at most one
+//               reports a figure: carried alone, that one leg's figure would
+//               settle an upto buyer under the other legs' share, so the
+//               answer carries none and the buyer settles the listed price.
+// The route binders and gates in src/ (server.js, mcp-http, referral and
+// marketplace gates) call the handler AS the route and are not composers.
+const SETS_FIGURE = /\bsetMeterSentinel\b|\bsetActualCharge\b|__meterUpstreamUsd|__actualChargeUsd/;
+const COMPOSERS = {
+  "src/tools/llm-gemini-kit.js": { n: 1, keeps: true },               // the Gemini wire over the chat tiers
+  "src/tools/hyperliquid-shared.js": { n: 1, keeps: true },           // staleness label (also a wrapper)
+  "src/tools/coingecko-rate.js": { n: 1, wrapper: true },             // cgScoped
+  "src/tools/gov-kit.js": { n: 2, wrapper: true },                    // geo-lookup's census credit (the inner handler, its toString)
+  "src/tools/solana-intel-kit.js": { n: 1, wrapper: true }, "src/tools/x-data-kit.js": { n: 1, wrapper: true }, "src/tools/crawl-kit.js": { n: 1, wrapper: true }, // markUntrusted
+  "src/tools/html-kit.js": { n: 1, dataLegs: ["src/tools/html-kit.js"] }, // the worker's handler map, its own kit
+  "src/tools/cdp-kit.js": { n: 1, dataLegs: ["src/tools/cdp-kit.js"] },   // ownSqlQuery: the server's own read
+  "src/tools/bundle-kit.js": { n: 1, dataLegs: ["src/tools/weather-kit.js", "src/tools/weather-plan-kit.js", "src/tools/weather-probability-kit.js", "src/tools/edgar-kit.js", "src/tools/crypto-markets-kit.js"] },
+  "src/tools/dossier-kit.js": { n: 1, dataLegs: ["src/tools/edgar-kit.js", "src/tools/finance-kit.js"] },
+  "src/tools/domain-audit-kit.js": { n: 1, dataLegs: ["src/tools/kit.js", "src/tools/network-kit.js", "src/tools/network-kit2.js"] },
+  "src/tools/ipo-report-kit.js": { n: 1, dataLegs: ["src/tools/edgar-kit.js"] },
+  "src/tools/recall-report-kit.js": { n: 1, dataLegs: ["src/tools/gov-kit.js"] },
+  "src/tools/token-brief-kit.js": { n: 1, dataLegs: ["src/tools/solana-intel-kit.js"] },
+  "src/tools/token-risk-kit.js": { n: 1, dataLegs: ["src/tools/contract-kit.js"] },
+  "src/tools/decide-kit.js": { n: 2, ownsCharge: /return setActualCharge\(answer, chargedUsd, req\)/ },   // settles the run's own spend
+  "src/tools/route-execute.js": { n: 1, ownsCharge: /delete result\.__meterUpstreamUsd/ },                 // resale price over the underlying list price
+  "src/tools/redact-chat-kit.js": { n: 2, fixedSum: "/api/redact plus the v1-chat tier" },
+  "src/tools/pdf-summarize-kit.js": { n: 1, fixedSum: "the PDF read plus the v1-chat tier" },
+  "src/tools/dub-kit.js": { n: 1, fixedSum: "the translate tier plus the speech tier's quote (speech reports a figure only under METERED_MEDIA)" },
+  "src/tools/skill-runner.js": { n: 1, fixedSum: "a pack's generated price over its steps (scripts/pack-prices.js)" },
+};
+{
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
+  // A handler read: `x.handler(` or `x.handler` taken as a value, never a
+  // `typeof` test or an assignment to it.
+  const READ = /(?<!typeof\s+[\w$.?[\]]*)\.handler\b(?=\s*(?:\(|[;,)\]}]|$))/gm;
+  const reads = {};
+  for (const f of files.filter((p) => p.startsWith("src/tools/"))) {
+    const n = (strip(readFileSync(join(root, f), "utf8")).match(READ) || []).length;
+    if (n) reads[f] = n;
+  }
+  const unread = Object.entries(reads).filter(([f, n]) => (COMPOSERS[f]?.n || 0) < n);
+  ok(unread.length === 0, `every tool that runs another tool's handler is one this suite reads (${unread.map(([f, n]) => `${f}: ${n}`).join(", ") || "none new"})`);
+  for (const [f, c] of Object.entries(COMPOSERS)) {
+    const src = readFileSync(join(root, f), "utf8");
+    if (c.keeps) ok(/import \{[^}]*\bkeepAnswerCharges\b[^}]*\} from "\.\.\/answer-charges\.js"/.test(src) && /keepAnswerCharges\(/.test(strip(src)), `${f}: the rebuilt answer goes through keepAnswerCharges`);
+    else if (c.wrapper) ok((WRAPPERS[f] || 0) >= 1, `${f}: a handler wrapper pinned above`);
+    else if (c.dataLegs) {
+      const own = new Set([f]);
+      const imported = [...strip(src).matchAll(/import \{([^}]*)\} from "\.\/([\w-]+\.js)"/g)]
+        .filter(([, names]) => /\b(?:[A-Z][A-Z0-9_]*_TOOLS\d*|KIT\d*)\b/.test(names)).map(([, , p]) => `src/tools/${p}`);
+      const outside = imported.filter((p) => !c.dataLegs.includes(p) && !own.has(p));
+      const setters = c.dataLegs.filter((p) => SETS_FIGURE.test(readFileSync(join(root, p), "utf8")));
+      ok(outside.length === 0 && setters.length === 0, `${f}: every leg comes from a kit that sets no charge figure (outside the list: ${outside.join(", ") || "none"}; setting one: ${setters.join(", ") || "none"})`);
+    } else if (c.ownsCharge) ok(c.ownsCharge.test(src), `${f}: prices its own run and discards the inner figure`);
+    else ok(typeof c.fixedSum === "string" && c.fixedSum.length > 0, `${f}: a fixed-sum composite (${c.fixedSum}); carries no single leg's figure`);
+  }
+  // fixedSum, as served: a charged chat step leaves redact-chat's answer
+  // with no figure, so an upto buyer settles the listed sum.
+  const { REDACT_CHAT_TOOLS, __setChatForTest } = await import("../src/tools/redact-chat-kit.js");
+  __setChatForTest(async () => charged({ model: "m", choices: [{ message: { role: "assistant", content: "Fine." }, finish_reason: "stop" }] }));
+  try {
+    const out = await REDACT_CHAT_TOOLS[0].handler({ text: "mail ada@example.com", instruction: "Reply." });
+    ok(out.answer === "Fine." && out.__meterUpstreamUsd === undefined && out.__actualChargeUsd === undefined, "redact-chat (a fixed sum) answers no single leg's figure");
+  } finally { __setChatForTest(null); }
+  // keeps, as served: the Gemini wire carries the chat tier's figures.
+  const { LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
+  const { LLM_GEMINI_TOOLS } = await import("../src/tools/llm-gemini-kit.js");
+  const chat = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-metered");
+  const gem = LLM_GEMINI_TOOLS.find((t) => t.route.endsWith("/v1/metered/gemini"));
+  const realChat = chat.handler;
+  chat.handler = async () => charged({ model: "m", choices: [{ index: 0, message: { role: "assistant", content: "Hi." }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } });
+  try {
+    const out = await gem.handler({ contents: [{ role: "user", parts: [{ text: "Hi" }] }] }, {});
+    ok(out.candidates?.[0]?.content?.parts?.[0]?.text === "Hi.", "the Gemini wire answered in its own shape");
+    kept(out, "/v1/metered/gemini (the chat answer rebuilt in Google's shape)");
+  } finally { chat.handler = realChat; }
+}
+
 console.log(`\ntest-answer-charges: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

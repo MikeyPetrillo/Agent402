@@ -33,6 +33,7 @@ import {
   TIERS, canonicalModel, substitutedFrom, bad, meteredQuoteForProbe, validateRequest, LLM_GATEWAY_TOOLS,
   isFlatTier, flatTierQuoteUsd, meteredInputSizeRefusal,
 } from "./llm-gateway-kit.js";
+import { keepAnswerCharges } from "../answer-charges.js";
 
 /** Tier slug -> the fixed catalog path for that tier's Gemini route.
  *  The Google-shaped URL (/v1beta/models/<model>:generateContent) is an ALIAS
@@ -357,7 +358,9 @@ export function makeGeminiHandler(tierSlug) {
       const retired = raw && !TIERS[tierSlug].lockedModel && !TIERS[tierSlug].router ? substitutedFrom(raw) : null;
       if (retired) out.agent402_model_substituted = { requested: retired, served: model, reason: "the requested model is retired upstream; its named successor served instead" };
     }
-    return out;
+    // The answer is rebuilt in Google's shape: carry the charge figures the
+    // chat handler put on `data`, so an upto buyer settles what was used.
+    return keepAnswerCharges(data, out);
   };
 }
 

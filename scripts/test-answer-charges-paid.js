@@ -7,6 +7,9 @@
 // runAsRouteCall exactly as served. An upto payment the SDK client signs
 // settles the metered amount (under the ceiling it signed), and the answer
 // carries the AI mark; an exact payment settles its fixed price.
+// /v1/metered/gemini (the Gemini wire over the metered chat tier, the model
+// aggregator answered by the same preload under STUB_OPENROUTER_CHAT): an upto
+// payment settles the metered amount, under its quote, and nothing is owed.
 //
 //   node scripts/test-answer-charges-paid.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -49,7 +52,7 @@ try {
       FACILITATOR_URL: FAC, PAYMENT_SETTLE_FALLBACK: "", CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "", CIRCLE_FACILITATOR_API_KEY: "",
       MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
       X402_UPTO_NETWORKS: BASE, GATEWAY_METERED_BILLING: "on", METERED_MEDIA: "on",
-      OPENAI_API_KEY: "test-key-never-used", OPENROUTER_API_KEY: "",
+      OPENAI_API_KEY: "test-key-never-used", OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", STUB_OPENROUTER_CHAT: "on", REFUND_OWED_NOTICE_MINUTES: "0",
       FIRST_CALL_ALLOWANCE: "", TRIAL_MODE: "", FACILITATOR_GAS_CHECK: "off",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATS_ALLOW_EPHEMERAL: "true",
       UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url)),
@@ -85,6 +88,32 @@ try {
   const e = await call("exact");
   const exact = (pr.accepts || []).find((a) => a.scheme === "exact");
   ok(e.status === 200 && settled.at(-1)?.scheme === "exact" && settled.at(-1)?.amount === exact?.amount, `an exact call settles its fixed price (${settled.at(-1)?.amount} vs ${exact?.amount})`);
+
+  // The Gemini wire over the metered chat tier: the answer is rebuilt in
+  // Google's shape and still settles what the chat run used.
+  {
+    const path = "/v1/metered/gemini";
+    // A quote above the floor (a long prompt, a large output budget), so the
+    // metered amount can land under it.
+    const gbody = JSON.stringify({ contents: [{ role: "user", parts: [{ text: `Summarize x402 in one sentence. ${"Context line about paying per request. ".repeat(400)}` }] }], generationConfig: { maxOutputTokens: 4096 } });
+    const goffer = await fetch(`${B}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: gbody });
+    const gpr = JSON.parse(Buffer.from(goffer.headers.get("payment-required") || "", "base64").toString("utf8") || "{}");
+    const gupto = (gpr.accepts || []).find((a) => a.scheme === "upto");
+    ok(goffer.status === 402 && gupto, `${path} offers upto on Base (${(gpr.accepts || []).map((a) => a.scheme).join(",")})`);
+    const client = new x402Client((_v, accepts) => accepts.find((a) => a.scheme === "upto" && a.network === BASE) || accepts[0]);
+    client.register(BASE, new UptoEvmScheme(signer));
+    const before = settled.length;
+    const g = await wrapFetchWithPayment(fetch, client)(`${B}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: gbody });
+    const gj = await g.json().catch(() => ({}));
+    const gm = Number(g.headers.get("x-metered-usd"));
+    const gl = settled.at(-1);
+    ok(g.status === 200 && Array.isArray(gj.candidates), `${path}: an upto call is served in Google's shape (${g.status}${g.status === 200 ? "" : `: ${String(gj.error || "").slice(0, 120)}`})`);
+    ok(settled.length === before + 1 && gl?.scheme === "upto" && Number.isFinite(gm) && gm > 0 && Number(gl.amount) === Math.round(gm * 1e6) && Number(gl.amount) < Number(gupto?.amount),
+      `${path}: settles the metered amount, under its quote (settled ${gl?.amount} atomic, metered ${gm}, quote ${gupto?.amount})`);
+    ok(!JSON.stringify(gj).includes("__meter"), `${path}: no internal cost figure reaches the buyer`);
+    const st = await fetch(`${B}/api/gateway-status`).then((r) => r.json()).catch(() => ({}));
+    ok(gj.charged === undefined && !gj.refundStatusUrl && st.refundsOwed?.status !== "owed" && st.refundsOwed?.status !== "unknown", `${path}: nothing is owed after the metered settlement (refundsOwed ${st.refundsOwed?.status ?? "absent"})`);
+  }
 } catch (err) {
   fail++;
   console.error(`FAIL - threw: ${err?.stack || err}`);
