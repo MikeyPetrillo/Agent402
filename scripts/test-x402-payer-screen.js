@@ -429,6 +429,13 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
       ok(first?.attempts === 4 && again.rows?.filter((x) => x.aggregate).reduce((t, x) => t + x.count, 0) === 2, `a second kill and replay never counts the first one twice (attempts ${first?.attempts})`);
     }
 
+    // (i) The store's race, journal bound and filed-row cases, in file mode.
+    {
+      const { runSanctionsStoreCases } = await import("./lib/sanctions-store-cases.js");
+      await runSanctionsStoreCases({ EV, ok, label: "file mode" });
+      EV.__resetSanctionsEventLimitsForTests(); EV.__resetSanctionsEventsForTests();
+    }
+
     // (e) Live control: a clean signed payment passes and records nothing.
     const n = (await rows()).length;
     const clean = await run(strict, await signed3009(cleanAcct, { primaryType: "ReceiveWithAuthorization" }));
