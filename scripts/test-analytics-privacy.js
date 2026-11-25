@@ -27,9 +27,10 @@ const { ledgerFooterCompact, analyticsSnippets } = await import("../src/ledger-c
 
 // A page with the shell's islands and footer. `region` is what the server's
 // /api/consent-region answers ({asksFirst}), "fail" for a request that errors.
-function page({ url = "https://agent402.tools/monitors", gpc = false, tz = "America/New_York", stored = null, webdriver = false, region = { asksFirst: false, source: "country" }, ga = true, ph = true } = {}) {
+function page({ url = "https://agent402.tools/monitors", gpc = false, tz = "America/New_York", stored = null, webdriver = false, region = { asksFirst: false, source: "country" }, ga = true, ph = true, phHost = "https://agent402.tools/e" } = {}) {
+  const island = JSON.stringify({ key: "phc_test", cfg: { api_host: phHost, persistence: "memory" } }).replace(/</g, "\\u003c");
   const html = `<!doctype html><html><head><script id="unused"></script></head><body>
-${ph ? '<script type="application/json" id="posthog-config">{"key":"phc_test","cfg":{"api_host":"https://agent402.tools/e","persistence":"memory"}}</script>' : ""}
+${ph ? `<script type="application/json" id="posthog-config">${island}</script>` : ""}
 ${ga ? '<script type="application/json" id="ga-config">{"id":"G-TEST1234"}</script>' : ""}
 <main>page</main>${ledgerFooterCompact()}</body></html>`;
   const dom = new JSDOM(html, { url, runScripts: "outside-only" });
@@ -130,6 +131,16 @@ for (const [label, opts] of [
 {
   const w = await run(page({ tz: "America/Chicago" }), { consent: false });
   ok(nothingLoaded(w), "no consent module on the page (an older cached page): nothing loads");
+}
+
+// --- PostHog library host: the page's own origin, never text from the page ---
+{
+  const own = await run(page({ stored: "granted" }));
+  ok(scriptSrcs(own).includes("https://agent402.tools/e/static/array.js") && posthogInit(own)?.[1].api_host === "https://agent402.tools/e", "the library loads from the page's own /e proxy");
+  for (const host of ["https://evil.example/e", "javascript:alert(1)//", "\"><img src=x onerror=alert(1)>"]) {
+    const w = await run(page({ stored: "granted", phHost: host, ga: false }));
+    ok(!scriptSrcs(w).some((s) => !s.startsWith("https://agent402.tools/")) && scriptSrcs(w).includes("https://agent402.tools/e/static/array.js") && posthogInit(w)?.[1].api_host === "https://agent402.tools/e", `an island naming another api_host (${host.slice(0, 24)}) still loads only from the page's own origin`);
+  }
 }
 
 // --- PostHog URL sanitizer ---------------------------------------------------

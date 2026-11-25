@@ -21,7 +21,7 @@ import { PLATFORM_INTEGRATIONS, listedPlatformIntegrations } from "../src/platfo
 import { integrationSlugs } from "../src/integration-pages.js";
 import { pageLastmod, PAGE_SOURCES } from "../src/page-dates.js";
 import { MAX_CALLS_PER_BURST, MAX_CALLS_PER_WINDOW } from "../src/rate-limit.js";
-import { plainToolName, resolveListedName, PLAIN_TOOL_NAMES_VALUE, plainNamesHandler } from "../src/mcp-flagship.js";
+import { plainToolName, resolveListedName, PLAIN_TOOL_NAMES_VALUE, plainNamesHandler, dottedNamesPattern } from "../src/mcp-flagship.js";
 
 let pass = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); pass++; };
@@ -102,6 +102,14 @@ const PLAIN = /^[a-zA-Z0-9_-]{1,113}$/; // the tool name rule Claude Managed Age
   eq(plainToolName("decide.feedback"), "decide_feedback", "decide.feedback -> decide_feedback");
   eq(plainToolName("hash"), "hash", "a dotless name is unchanged");
   eq(resolveListedName("decide_feedback"), "decide.feedback", "decide_feedback resolves");
+  // Each name is read as literal text: a metacharacter or a backslash in a name
+  // matches only itself.
+  {
+    const lit = (names, s) => [...s.matchAll(dottedNamesPattern(names))].map((m) => m[1]).join(" ");
+    eq(lit(["a\\b.c"], "call a\\b.c now; not ab.c"), "a\\b.c", "a backslash in a name is matched literally");
+    eq(lit(["x+.y"], "x+.y and xx.y"), "x+.y", "a quantifier character in a name is matched literally");
+    eq(lit(["web.search"], "web.search webXsearch /mcp#web.search"), "web.search", "the dot matches only a dot, and a listing id is not a token");
+  }
 }
 
 // --- Part 2 -----------------------------------------------------------------
@@ -165,7 +173,7 @@ try {
   // Every dotted tool name the default listing lists, found as its own token
   // (not inside a host name or a longer dotted word).
   const dottedNames = dottedTools.map((x) => x.name).filter((n) => n.includes("."));
-  const tokenOf = (n) => new RegExp(`(?<![A-Za-z0-9_./#-])${n.replace(/\./g, "\\.")}(?!\\.?[A-Za-z0-9_])`, "g");
+  const tokenOf = (n) => dottedNamesPattern([n]);
   const namedIn = (v) => { const t = typeof v === "string" ? v : JSON.stringify(v); return dottedNames.filter((n) => tokenOf(n).test(t)); };
   ok(dottedNames.length >= 10 && namedIn(dottedTools.map(({ name, ...rest }) => rest)).length > 0, `the default listing's text names dotted tools (${namedIn(dottedTools.map(({ name, ...rest }) => rest)).join(", ")})`);
   for (const t of plainTools) { const left = namedIn(t); ok(left.length === 0, `plain listing: ${t.name} (name, title, description, schemas) names no dotted tool (${left.join(", ") || "none"})`); }

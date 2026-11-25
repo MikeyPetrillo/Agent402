@@ -31,10 +31,18 @@ export function isBarredUpstream(url) {
   return BARRED_UPSTREAM_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
 }
 
+/** `s` as literal text inside a RegExp: every metacharacter, the backslash
+ *  included, is escaped. */
+function literal(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** A pattern that finds a barred source in text: one of its hosts (any
- *  subdomain) or its name as a word. */
-export function barredMentionPattern() {
-  const hosts = BARRED_UPSTREAM_HOSTS.map((h) => h.replace(/[.]/g, "\\."));
-  const names = BARRED_UPSTREAMS.map((u) => u.mention);
+ *  subdomain, each host read as literal text) or its name as a word (each
+ *  `mention` is a pattern written in this file). The lists default to this
+ *  file's own; a test passes its own. */
+export function barredMentionPattern(hostList = BARRED_UPSTREAM_HOSTS, mentions = BARRED_UPSTREAMS.map((u) => u.mention)) {
+  const hosts = hostList.map(literal);
+  const names = [...mentions];
   return new RegExp(`(?:(?<![a-z0-9-])(?:[a-z0-9-]+\\.)*(?:${hosts.join("|")})(?![a-z0-9-]))|(?:(?<![a-z0-9])(?:${names.join("|")})(?![a-z0-9]))`, "i");
 }

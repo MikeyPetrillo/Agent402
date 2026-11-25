@@ -129,12 +129,21 @@ export function plainToolName(name) {
   return resolveListedName(plain) === name ? plain : name;
 }
 
-// A listed dotted name standing as its own token in text: not inside a
-// longer dotted word, a host name or a path (a "/mcp#web.search" listing id).
-const DOTTED_IN_TEXT = new RegExp(
-  `(?<![A-Za-z0-9_./#-])(${[...LISTED_DOTTED].sort((a, b) => b.length - a.length).map((n) => n.replace(/\./g, "\\.")).join("|")})(?!\\.?[A-Za-z0-9_])`,
-  "g",
-);
+/**
+ * A pattern that finds each of `names` standing as its own token in text: not
+ * inside a longer dotted word, a host name or a path (a "/mcp#web.search"
+ * listing id). Each name is read as literal text (every metacharacter, the
+ * backslash included, escaped); the longest name is tried first.
+ */
+export function dottedNamesPattern(names) {
+  const literal = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `(?<![A-Za-z0-9_./#-])(${[...names].sort((a, b) => b.length - a.length).map(literal).join("|")})(?!\\.?[A-Za-z0-9_])`,
+    "g",
+  );
+}
+
+const DOTTED_IN_TEXT = dottedNamesPattern(LISTED_DOTTED);
 
 /**
  * Text (or any JSON value's strings) with every listed dotted tool name it

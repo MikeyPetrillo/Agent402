@@ -9,7 +9,12 @@
   if (!cfgEl) return;
   var data;
   try { data = JSON.parse(cfgEl.textContent); } catch (e) { return; }
-  if (!data || !data.key) return;
+  if (!data || !data.key || !data.cfg || typeof data.cfg !== "object") return;
+  // The library loads from, and reports to, this page's own origin only (the
+  // first-party /e proxy; CSP keeps connect-src and script-src at 'self'). The
+  // island's api_host is never written into a script src: it is replaced by
+  // the page's own origin, so text read from the DOM cannot name the host.
+  data.cfg.api_host = location.origin + "/e";
   // Consent: assets/js/analytics-consent.js decides (window.a402Consent).
   // Nothing below runs (no stub, no library request, nothing kept) until
   // consent is granted: a visitor in the EU, the EEA, the UK or Switzerland is

@@ -21,6 +21,7 @@ import { generateKeyPairSync } from "node:crypto";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { bootPaidServer } from "./lib/paid-boot.js";
+import { pageText } from "./lib/html-text.js";
 
 const { AWS_DEFAULT_SLUGS } = await import("../src/aws-marketplace-gate.js");
 const { AWS_LISTING_GROUPS, awsDescriptionOf, awsPointersIn, sentencesOf } = await import("../src/aws-listing.js");
@@ -170,7 +171,7 @@ try {
   // printed by /aws/start and word for word in /terms.
   {
     const { ELIGIBILITY_SENTENCE } = await import("../src/eligibility-copy.js");
-    const flat = (s) => s.replace(/<style>[\s\S]*?<\/style>/g, "").replace(/<script[\s\S]*?<\/script>/g, "").replace(/<[^>]+>/g, " ").replace(/&#39;|&#x27;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+    const flat = pageText;
     ok(/sanctions list/.test(ELIGIBILITY_SENTENCE) && /embargoed jurisdiction/.test(ELIGIBILITY_SENTENCE), "the eligibility sentence names the sanctions list and embargoed jurisdictions");
     ok(flat(termsHtml).includes(ELIGIBILITY_SENTENCE), "/terms prints the eligibility sentence word for word");
     ok(flat(html).includes(ELIGIBILITY_SENTENCE) && /<h2 id="eligibility">/.test(html), "/aws/start prints the same eligibility and sanctions sentence under its own heading");

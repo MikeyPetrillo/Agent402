@@ -17,6 +17,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { textNamesUrl } from "./lib/url-host.js";
+import { stripScripts, stripTags } from "./lib/html-text.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -188,7 +189,7 @@ ok(/required choice, to request that we start at once/.test(termsText), "terms: 
 // on the reader's own request, each listed here with why; anything else fails.
 {
   const { dpaPage } = await import("../src/dpa.js");
-  const legalText = (h) => h.replace(/<(script|style)[\s\S]*?<\/\1>/g, " ").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ");
+  const legalText = (h) => stripTags(stripScripts(h)).replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
   const NOTICE_RE = /\b\d+\s+days?'?\s+(?:of\s+)?notice\b|\bdays'?\s+notice\b|\bby e-?mail\b|\bin writing\b|\bnotif(?:y|ies|ied|ying|ication)\b|\bnotices?\b|\bwe(?:'ll| will)? (?:e-?mail|tell|inform|alert|write to) you\b/i;
   const ALLOWED = [
     [/keep the attribution and license notice with it/, "a data license's own notice, the reader's duty"],

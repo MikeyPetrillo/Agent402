@@ -15,6 +15,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { escapeRegex } from "../src/tools/safe-regex.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -36,7 +37,7 @@ ok(T.isNonCommercialRpc("https://api.mainnet-beta.solana.com") && T.isNonCommerc
     // The Robinhood Chain guide shows a reader the chain's own published endpoint; the server never reads it.
     ["src/guides.js", "a guide page quoting the chain's published endpoint to a reader"],
   ]);
-  const re = new RegExp(`https?://(?:${T.NON_COMMERCIAL_RPC_HOSTS.map((h) => h.replace(/\./g, "\\.")).join("|")})(?![a-z0-9.-])`, "i");
+  const re = new RegExp(`https?://(?:${T.NON_COMMERCIAL_RPC_HOSTS.map(escapeRegex).join("|")})(?![a-z0-9.-])`, "i");
   const found = [];
   let scanned = 0;
   for (const f of files) {
@@ -87,7 +88,7 @@ ok(T.isNonCommercialRpc("https://api.mainnet-beta.solana.com") && T.isNonCommerc
   ok(!T.permittedRpcSource("https://rpc.monad.xyz") && !T.permittedRpcSource("https://evil-publicnode.com.example") && T.permittedRpcSource("https://sei-evm-rpc.publicnode.com"), "CONTROL: the permitted-source check reads the host, not a substring");
   ok(chains.every((n) => counts[n] >= 1 && evmRpcLanesFor(n, env).every((u) => !T.isNonCommercialRpc(u))), "every chain has at least one lane, all permitted");
   ok(evmRpcFor("eip155:143", env) === "https://monad-mainnet.g.alchemy.com/v2/k" && evmRpcFor("eip155:143", {}) === T.ONFINALITY_RPCS.monad, "Monad reads the keyed lane first, and with no key its cited backup");
-  ok(evmRpcFor("eip155:1329", env) === "https://evm-rpc.sei-apis.com" && evmRpcLanesFor("eip155:1329", env).includes("https://sei-mainnet.g.alchemy.com/v2/k") && evmRpcLanesFor("eip155:1329", {}).includes(T.PUBLICNODE_RPCS.sei), "Sei keeps its default first, with the keyed lane and PublicNode behind it");
+  ok(evmRpcFor("eip155:1329", env) === "https://evm-rpc.sei-apis.com" && evmRpcLanesFor("eip155:1329", env).some((u) => u === "https://sei-mainnet.g.alchemy.com/v2/k") && evmRpcLanesFor("eip155:1329", {}).some((u) => u === T.PUBLICNODE_RPCS.sei), "Sei keeps its default first, with the keyed lane and PublicNode behind it");
   ok(evmRpcFor("eip155:999999", env) === null, "a chain with no lane has none (refused loudly, never a guessed endpoint)");
   ok(evmRpcFor("eip155:10", {}) === T.PUBLICNODE_RPCS.optimism && evmRpcFor("eip155:4663", {}) === T.PUBLICNODE_RPCS.robinhood && evmRpcFor("eip155:43114", {}) === T.PUBLICNODE_RPCS.avalanche, "OP Mainnet, Robinhood Chain and Avalanche read PublicNode by default");
   ok(evmRpcFor("eip155:10", { EVM_RPC_10: "https://op.example/rpc" }) === "https://op.example/rpc", "an operator override still wins");

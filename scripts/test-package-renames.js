@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { load } from "js-yaml";
 import { PACKAGE_RENAMES, shimDir, forwardRange, renameNotice } from "./lib/package-renames.js";
 import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
+import { escapeRegex } from "../src/tools/safe-regex.js";
 import { runClaim, trustState, parseTrustList, isSpamRefusal, WORKFLOW, REPO, ENVIRONMENT, CLAIM_RERUN } from "./package-renames.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -98,7 +99,7 @@ for (const r of PACKAGE_RENAMES) {
 {
   const KEEP = new Set(["CHANGELOG.md", "src/changelog.js", "scripts/lib/package-renames.js", "scripts/test-package-renames.js", "src/sale-path.js", "workers/status-probe/src/previous-issue-titles.js"]);
   const olds = [...new Set(PACKAGE_RENAMES.map((r) => r.old))];
-  const re = new RegExp(`(?<![\\w-])(${olds.map((o) => o.replace(/[-]/g, "\\-")).join("|")}|agent402_langchain)(?![\\w-])`);
+  const re = new RegExp(`(?<![\\w-])(${olds.map(escapeRegex).join("|")}|agent402_langchain)(?![\\w-])`);
   const files = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" }).split("\n").filter((f) => f && !KEEP.has(f) && !f.startsWith("renamed/") && !/\.(png|jpe?g|gif|ico|woff2?|ttf|otf|pdf)$/.test(f));
   const bad = [];
   for (const f of files) {
