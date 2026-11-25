@@ -52,6 +52,7 @@ import { paymentHeaderOf } from "./payer.js";
 import { provenX402Signer } from "./gateway-cache-scope.js";
 import { NOT_CHARGED } from "./not-charged.js";
 import { limiterKey } from "./rate-limit.js";
+import { cdnProxyEnabled, cdnOriginSecret } from "./cdn-client-ip.js";
 
 export const DEFAULT_SANCTIONED_COUNTRIES = Object.freeze(["CU", "IR", "KP", "SY"]);
 // Countries in the block list by our own choice, not under a sanctions
@@ -70,8 +71,6 @@ const SANCTIONED_REGION_NAME_RE = /\b(crimea|krym|sevastopol|donetsk|luhansk|lug
 // The ISO 3166-2 code each region name stands for, so a refusal records a code
 // and never the header's own text.
 const REGION_CODE_BY_NAME = Object.freeze({ crimea: "UA-43", krym: "UA-43", sevastopol: "UA-40", donetsk: "UA-14", luhansk: "UA-09", lugansk: "UA-09" });
-// A first-level subdivision code as Cloudflare sends it ("43", "UA-43", "THR").
-const SUBDIVISION_CODE_RE = /^(?:[A-Z]{2}-)?[A-Z0-9]{1,3}$/;
 
 /** Paths that answer from anywhere: the health probe, the legal pages and
  *  the assets those pages load (the self-hosted fonts, the logo, the icon).
@@ -122,6 +121,36 @@ export function pushCredentialHashOf(req) {
   } catch { return null; }
 }
 
+/**
+ * Whether the block can fire: it reads location only from a request the CDN
+ * resolver proved came through Cloudflare, which needs CDN_PROXY and
+ * CDN_ORIGIN_SECRET. "ok", "off" (the block is off), or "unproven" (on, with
+ * no way to prove a request came through the CDN: it never refuses).
+ */
+export function geoBlockProvenance(env = process.env) {
+  if (!sanctionsGeoBlockEnabled(env)) return "off";
+  return cdnProxyEnabled(env) && cdnOriginSecret(env) ? "ok" : "unproven";
+}
+
+/**
+ * The public sanctionsReport word: `due` while a report is due; otherwise
+ * `attention` while the block is on and cannot fire (geoBlockProvenance
+ * unproven) on an instance that takes payments (never under FREE_MODE);
+ * otherwise the store's word (clear, unknown).
+ */
+export function sanctionsReportWord(storeWord, env = process.env) {
+  if (storeWord === "due") return "due";
+  if (env.FREE_MODE !== "true" && geoBlockProvenance(env) === "unproven") return "attention";
+  return storeWord;
+}
+
+/** Boot: one warning when the block is on and cannot fire. Returns the provenance. */
+export function warnGeoBlockProvenance({ env = process.env, log = console.warn } = {}) {
+  const p = geoBlockProvenance(env);
+  if (p === "unproven") log("[sanctions-geo] SANCTIONS_GEO_BLOCK is on but CDN_PROXY or CDN_ORIGIN_SECRET is unset: no request can be proven to come through the CDN, so the regional block never refuses; set both (or SANCTIONS_GEO_BLOCK=off)");
+  return p;
+}
+
 export function sanctionsGeoBlockEnabled(env = process.env) {
   return String(env.SANCTIONS_GEO_BLOCK ?? "").trim().toLowerCase() !== "off";
 }
@@ -141,7 +170,8 @@ const header = (req, name) => {
 /**
  * The block verdict for a request: null (serve it) or { country, region }.
  * `country` is an ISO 3166-1 alpha-2 code (or null); `region` an ISO 3166-2
- * code ("UA-43") or null, never a name, city or coordinate.
+ * code from the fixed list of blocked subdivisions ("UA-43"), null for a
+ * whole blocked country; never a name, city or coordinate.
  * Reads the Cloudflare headers only when `trusted` is true. Pure.
  */
 export function sanctionedLocationOf(req, { trusted = false, countries = sanctionedCountries() } = {}) {
@@ -149,10 +179,11 @@ export function sanctionedLocationOf(req, { trusted = false, countries = sanctio
   const country = header(req, "cf-ipcountry").toUpperCase();
   const regionCode = header(req, "cf-region-code").toUpperCase();
   const regionName = header(req, "cf-region");
-  if (/^[A-Z]{2}$/.test(country) && countries.has(country)) {
-    const sub = SUBDIVISION_CODE_RE.test(regionCode) ? regionCode.replace(/^[A-Z]{2}-/, "") : "";
-    return { country, region: sub ? `${country}-${sub}` : null };
-  }
+  // A whole country: the country is the reason, so it is all that is kept.
+  // A subdivision header is the caller's network to vary, and would open a
+  // new row and aggregate key per value; only the fixed subdivision list
+  // below keeps a region code.
+  if (/^[A-Z]{2}$/.test(country) && countries.has(country)) return { country, region: null };
   // The region code arrives as the subdivision suffix ("43"); a full code
   // ("UA-43") is read the same way.
   const code = regionCode.replace(/^UA-/, "");

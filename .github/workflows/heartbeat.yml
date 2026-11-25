@@ -1494,8 +1494,10 @@ jobs:
 
       # Sanctions reports (src/sanctions-events.js): one word on
       # /api/gateway-status. due (a sanctions event needs a report and is not
-      # marked filed) pages; clear closes; unknown does neither. The status
-      # Worker runs the same check under the same title.
+      # marked filed) and attention (the regional block is on and cannot fire,
+      # src/sanctioned-regions.js sanctionsReportWord) page; clear closes;
+      # unknown does neither. The status Worker runs the same check under the
+      # same title.
       - name: Sanctions report check (alarm while a report is due)
         if: always()
         continue-on-error: true
@@ -1505,7 +1507,7 @@ jobs:
           TITLE="Scheduled check needs review: sanctions-report"
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
-            due)
+            due|attention)
               if [ -z "$OPEN" ]; then
                 gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else

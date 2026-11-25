@@ -1,4 +1,5 @@
 import { usdToBaseUnits } from "./base-units.js";
+import { stashVerifiedPayment, verifiedPaymentOf } from "./verified-payment.js";
 import { defaultSolanaRpcs } from "./rpc-terms.js";
 import { handlerInputOf } from "./handler-input.js";
 import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
@@ -3431,9 +3432,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
 // A handler answer of 400 or above after such a settlement is not settled by
 // the vendor either way; the receipt the server put on the response at the
 // settlement stays on it, and the charge is booked as owed (server.js).
-const VERIFIED_PAYMENT = Symbol("a402.verifiedPayment");
-/** Keep a payment that verified on its request (own, non-enumerable), for the
- *  settle point. Same request path as the client-gone hook
+/** Keep a payment that verified on its request (own, non-enumerable,
+ *  src/verified-payment.js), for the settle point and the payer screen's
+ *  records rule. Same request path as the client-gone hook
  *  (transportContext.request.adapter.req): if a vendor bump moves it, nothing
  *  is kept and every run settles after its handler, as before. */
 export function registerVerifiedPaymentStash(server) {
@@ -3442,17 +3443,10 @@ export function registerVerifiedPaymentStash(server) {
       if (ctx?.result?.isValid !== true || !ctx.paymentPayload || !ctx.requirements) return;
       const req = ctx?.transportContext?.request?.adapter?.req;
       if (!req || typeof req !== "object") return;
-      Object.defineProperty(req, VERIFIED_PAYMENT, {
-        value: { paymentPayload: ctx.paymentPayload, requirements: ctx.requirements, declaredExtensions: ctx.declaredExtensions, request: ctx.transportContext.request },
-        enumerable: false, configurable: true,
-      });
+      stashVerifiedPayment(req, { paymentPayload: ctx.paymentPayload, requirements: ctx.requirements, declaredExtensions: ctx.declaredExtensions, request: ctx.transportContext.request });
     } catch { /* nothing kept: the run settles after its handler */ }
   });
   return server;
-}
-function verifiedPaymentOf(req) {
-  const v = req && typeof req === "object" && Object.hasOwn(req, VERIFIED_PAYMENT) ? req[VERIFIED_PAYMENT] : null;
-  return v && typeof v === "object" ? v : null;
 }
 /** The namespaces of the networks a payment may settle first on: the x402
  *  `exact` rails, where the settled amount is the signed amount. */
