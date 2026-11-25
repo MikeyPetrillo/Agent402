@@ -145,6 +145,11 @@ function header({ source = CLEAN, signature = "0x76" + "00".repeat(60), type = "
   };
   const parties = T.tempoPaymentParties(header({ source: null, signature: sign(LISTED_2) }));
   ok(parties.includes(signer) && parties.includes(LISTED_2) && parties.includes(TREASURY.toLowerCase()) && parties.includes(PATH_USD.toLowerCase()), `parties: signer, transfer recipient, challenge recipient, call target (${parties.length})`);
+  // The sanctions events store records only a signed party: the signer, never the stated source,
+  // the challenge recipient, a call target or calldata.
+  const signedOnly = T.tempoPaymentParties(header({ source: LISTED_1, signature: sign(LISTED_2) }), { signedOnly: true });
+  ok(signedOnly.join() === signer, `signed parties: the recovered signer alone (${signedOnly.length})`);
+  ok(T.tempoPaymentParties(header({ source: LISTED_1 }), { signedOnly: true }).length === 0, "a credential with only a stated source names no signed party");
   calls.length = 0;
   const v2 = await T.validateTempoCredential(header({ source: null, signature: sign(LISTED_2) }));
   ok(v2.cls === "screen-rejected" && calls.length === 0, "a signed transaction paying a listed address is refused before any network call");
