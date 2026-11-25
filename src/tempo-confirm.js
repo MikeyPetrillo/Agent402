@@ -182,10 +182,23 @@ export async function confirmTempoSettlement(authorizationHeader, {
  *  ledger and a refund-owed row name it, or name nobody. One read, bounded by
  *  `timeoutMs`. Returns the lowercased address, or null on any uncertainty.
  *  Never throws. */
-export async function tempoPushSender(authorizationHeader, {
+export async function tempoPushSender(authorizationHeader, opts = {}) {
+  const t = await tempoPushTransfer(authorizationHeader, opts);
+  return t ? t.from : null;
+}
+
+/** The transfer behind tempoPushSender's answer: { from, value, currency },
+ *  `value` the log's own amount in base units (a string), `currency` the
+ *  token that emitted it. `recipient` and `currencies`, when given, must also
+ *  match (the address that has to be paid, the tokens that count), so a
+ *  caller can hold the transfer to its own payTo rather than to whatever the
+ *  credential's challenge names. Null on any uncertainty. Never throws. */
+export async function tempoPushTransfer(authorizationHeader, {
   rpcUrl = process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz",
   fetchImpl = fetch,
   timeoutMs = 3000,
+  recipient: mustPay = null,
+  currencies: mustCurrencies = null,
 } = {}) {
   try {
     const credential = Credential.deserialize(authorizationHeader);
@@ -200,6 +213,8 @@ export async function tempoPushSender(authorizationHeader, {
     let minAmount;
     try { minAmount = BigInt(String(r.amount)); } catch { return null; }
     if (!currency.startsWith("0x") || !recipient.startsWith("0x") || !(minAmount > 0n)) return null;
+    if (mustPay != null && recipient !== String(mustPay).toLowerCase()) return null;
+    if (mustCurrencies != null && !(Array.isArray(mustCurrencies) ? mustCurrencies : [mustCurrencies]).map((c) => String(c).toLowerCase()).includes(currency)) return null;
     const bounded = (url, init) => fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
     const receipt = await rpcCall(bounded, rpcUrl, "eth_getTransactionReceipt", [hash]);
     if (!receipt || receipt.status !== "0x1") return null;
@@ -213,7 +228,7 @@ export async function tempoPushSender(authorizationHeader, {
       try { value = BigInt(log.data); } catch { continue; }
       if (value < minAmount) continue;
       const from = `0x${String(topics[1] || "").slice(-40)}`.toLowerCase();
-      return /^0x[0-9a-f]{40}$/.test(from) && from !== "0x0000000000000000000000000000000000000000" ? from : null;
+      return /^0x[0-9a-f]{40}$/.test(from) && from !== "0x0000000000000000000000000000000000000000" ? { from, value: value.toString(), currency } : null;
     }
     return null;
   } catch {

@@ -661,11 +661,11 @@ import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { isSettlementUnconfirmedReceipt } from "./payment-reject.js";
 import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
-import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches } from "./mpp-tempo.js";
+import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches, ourTempoPushTransfer } from "./mpp-tempo.js";
 import { tempoGasSponsorshipReport } from "./tempo-charge-sponsor.js";
 import { createLateWatchLedger, startLateWatchSweep } from "./tempo-late-watches.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader, unconfirmedCaptureDebt } from "./mpp-stripe.js";
-import { confirmTempoSettlement, tempoPushSender } from "./tempo-confirm.js";
+import { confirmTempoSettlement } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
 import { redactSecrets } from "./tools/redact.js";
 import { warmLazyDeps } from "./tools/lazy-deps.js";
@@ -3118,21 +3118,19 @@ app.use(sanctionedRegionsMiddleware({
   // proves its payer: an x402 exact authorization to our payTo, its signer
   // recovered (verifiedGeoPayer). Anything else is counted only.
   verify: (req) => verifiedGeoPayer(req, { payTo: WALLET_ADDRESS }),
-  // A Tempo push credential names a transfer already sent: the event names
-  // its sender as the chain receipt shows it (a bounded read, null on any
-  // doubt), never the credential's own `source`.
-  pushSender: (req) => tempoPushSender(String(req.headers?.authorization || "")),
+  // A Tempo push credential names a transfer already sent. It is recorded
+  // only when it paid THIS server: a challenge we issued (the Tempo gate's own
+  // HMAC, realm, currency and recipient check) and a transfer the chain shows
+  // to our Tempo payTo in our currency (a bounded read, null on any doubt).
+  // The event names the chain's sender and value, never the credential's own
+  // `source` or amount; anything else is counted only.
+  pushSender: (req) => ourTempoPushTransfer(String(req.headers?.authorization || ""), { secretKey: process.env.MPP_SECRET_KEY || "", realm: new URL(BASE_URL).host }),
   // The location headers are read in memory; the event keeps only the
   // sanctioned country or region code that is the refusal's reason.
-  record: ({ req, payer, country, region, pushHash }) => {
+  record: ({ req, payer, country, region, pushHash, amount: pushAmount = null, asset: pushAsset = null }) => {
     let network = null, amount = null, asset = null;
     if (pushHash) {
-      let r = {};
-      try {
-        const q = JSON.parse(Buffer.from(String(req.headers.authorization).trim().slice(8), "base64url").toString("utf8"))?.challenge?.request;
-        r = (typeof q === "string" ? JSON.parse(Buffer.from(q, "base64url").toString("utf8")) : q) || {};
-      } catch { r = {}; }
-      return recordSanctionsEvent({ kind: "geo-payment", address: payer, rail: "tempo", network: "tempo", amount: r.amount ?? null, asset: r.currency ?? null, route: `${req.method} ${req.path}`, ip: req.ip, country, region, detail: `push transfer ${pushHash}, not claimed for the request` });
+      return recordSanctionsEvent({ kind: "geo-payment", address: payer, rail: "tempo", network: "tempo", amount: pushAmount, asset: pushAsset, route: `${req.method} ${req.path}`, ip: req.ip, country, region, detail: `push transfer ${pushHash}, not claimed for the request` });
     }
     try {
       const p = decodePaymentHeader(paymentHeaderOf(req));

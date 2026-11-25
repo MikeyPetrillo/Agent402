@@ -46,7 +46,7 @@ import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, AccountConfig } f
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { Abis, Addresses } from "viem/tempo";
 import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
-import { tempoPushSender } from "./tempo-confirm.js";
+import { tempoPushSender, tempoPushTransfer } from "./tempo-confirm.js";
 import { syncWindowRefusalOf } from "./slow-sync-window.js";
 import { sharedClaimRequired } from "./replay-topology.js";
 import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
@@ -814,6 +814,45 @@ export function isTempoCredential(authorizationHeader) {
   }
 }
 
+/** Why a Tempo challenge is not one this server issued for its own payTo, or
+ *  null when it is: a tempo/charge challenge whose id HMAC-verifies against
+ *  MPP_SECRET_KEY, in our realm, unexpired, naming a currency we offer, our
+ *  Tempo payTo as recipient, and Tempo mainnet. The gate's binding check and
+ *  the region block's push reader share it. Pure, never throws. */
+export function tempoChallengeNotOurs(ch, { secretKey, realm, now = Date.now() } = {}) {
+  if (!ch || ch.method !== "tempo" || (ch.intent || "charge") !== "charge") return "not a tempo/charge challenge";
+  if (!secretKey) return "server has no MPP_SECRET_KEY - cannot verify the challenge binding";
+  let verified = false;
+  try { verified = Challenge.verify(ch, { secretKey }); } catch { verified = false; }
+  if (!verified) return "challenge id does not HMAC-verify - not minted by this server";
+  if (realm && ch.realm !== realm) return `challenge realm ${JSON.stringify(ch.realm)} is not ours`;
+  const exp = Date.parse(ch.expires);
+  if (!Number.isFinite(exp) || exp <= now) return "challenge expired";
+  const r = ch.request || {};
+  const currencies = envCurrencies().map((c) => c.toLowerCase());
+  if (!currencies.includes(String(r.currency || "").toLowerCase())) return "challenge currency is not one this server offers";
+  if (!envRecipient() || String(r.recipient || "").toLowerCase() !== String(envRecipient()).toLowerCase()) return "challenge recipient is not this server's payTo";
+  const chainId = Number(r.methodDetails?.chainId ?? r.chainId);
+  if (chainId !== TEMPO_MAINNET_CHAIN_ID) return `challenge chainId ${chainId} is not Tempo mainnet`;
+  return null;
+}
+
+/** The transfer a PUSH credential names, only when it paid THIS server: the
+ *  challenge is one we issued (tempoChallengeNotOurs), and the chain shows a
+ *  TransferWithMemo to our Tempo payTo, in a currency we offer, bound to that
+ *  challenge. Returns { from, value, currency } with the on-chain value (base
+ *  units, a string), or null on anything else. Never throws. */
+export async function ourTempoPushTransfer(authorizationHeader, { secretKey, realm, now = Date.now(), read = tempoPushTransfer, ...readOpts } = {}) {
+  try {
+    const ch = Credential.deserialize(authorizationHeader)?.challenge;
+    if (tempoChallengeNotOurs(ch, { secretKey, realm, now })) return null;
+    const t = await read(authorizationHeader, { ...readOpts, recipient: envRecipient(), currencies: envCurrencies() });
+    return t && typeof t.from === "string" ? t : null;
+  } catch {
+    return null;
+  }
+}
+
 /** INBOUND BINDING - the check mppx's own docs say the host must perform
  *  ("validateCredential does not prove that the challenge was issued by a
  *  particular server; hosts that issue challenges must verify that binding
@@ -845,20 +884,9 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   let credential;
   try { credential = Credential.deserialize(authorizationHeader); } catch { return bad("credential does not deserialize"); }
   const ch = credential?.challenge;
-  if (!ch || ch.method !== "tempo" || (ch.intent || "charge") !== "charge") return bad("not a tempo/charge challenge");
-  if (!secretKey) return bad("server has no MPP_SECRET_KEY - cannot verify the challenge binding");
-  let verified = false;
-  try { verified = Challenge.verify(ch, { secretKey }); } catch { verified = false; }
-  if (!verified) return bad("challenge id does not HMAC-verify - not minted by this server");
-  if (realm && ch.realm !== realm) return bad(`challenge realm ${JSON.stringify(ch.realm)} is not ours`);
-  const exp = Date.parse(ch.expires);
-  if (!Number.isFinite(exp) || exp <= now) return bad("challenge expired");
+  const notOurs = tempoChallengeNotOurs(ch, { secretKey, realm, now });
+  if (notOurs) return bad(notOurs);
   const r = ch.request || {};
-  const currencies = envCurrencies().map((c) => c.toLowerCase());
-  if (!currencies.includes(String(r.currency || "").toLowerCase())) return bad("challenge currency is not one this server offers");
-  if (String(r.recipient || "").toLowerCase() !== String(envRecipient()).toLowerCase()) return bad("challenge recipient is not this server's payTo");
-  const chainId = Number(r.methodDetails?.chainId ?? r.chainId);
-  if (chainId !== TEMPO_MAINNET_CHAIN_ID) return bad(`challenge chainId ${chainId} is not Tempo mainnet`);
   const item = typeof priceFor === "function" ? priceFor(method, path, req) : null;
   const priceUsd = Number(item?.priceUsd);
   if (!(priceUsd > 0)) return badRoute("route has no price - a tempo credential buys nothing here");

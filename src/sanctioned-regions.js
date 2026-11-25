@@ -185,7 +185,7 @@ export function createGeoPaymentGate({ verify, perClientDay = GEO_EVENTS_PER_CLI
     seen.delete(key); seen.set(key, t);
     trim(seen); trim(byClient);
     counts.eventsRecorded++;
-    return { payer: proof.payer, country, region };
+    return { payer: proof.payer, country, region, ...(proof.amount != null ? { amount: String(proof.amount) } : {}), ...(proof.asset ? { asset: String(proof.asset) } : {}) };
   };
 }
 
@@ -234,8 +234,14 @@ export function sanctionedRegionsMiddleware({ env = process.env, trustedOf = (re
     verify: async (req) => {
       const hash = pushCredentialHashOf(req);
       if (!hash || typeof pushSender !== "function") return null;
+      // The reader answers the sender (a string), or the transfer as the
+      // chain shows it ({ from, value, currency }): only then does the event
+      // carry an amount and asset, and they are the chain's, never the
+      // credential's own claim.
       const sender = await pushSender(req);
-      return typeof sender === "string" && sender ? { payer: sender, nonce: hash } : null;
+      if (typeof sender === "string") return sender ? { payer: sender, nonce: hash } : null;
+      if (!sender || typeof sender.from !== "string" || !sender.from) return null;
+      return { payer: sender.from, nonce: hash, amount: sender.value ?? null, asset: sender.currency ?? null };
     },
   });
   let loggedAt = 0;

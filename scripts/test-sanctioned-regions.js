@@ -118,6 +118,75 @@ const run = (mw, r) => new Promise((resolve) => {
   ok(x.body.charged === false && x.body.error.includes(NOT_CHARGED), "an x402 payment's 451 still says nothing was charged");
 }
 
+// ---- the server's own push reader: only a transfer that paid THIS server
+// (a challenge we issued, the chain's transfer to our Tempo payTo in our
+// currency) is recorded, with the chain's sender and value. A credential that
+// names a transfer to anyone else, or a challenge we did not issue, is
+// counted only (the probe: a stranger's transfer named from a blocked region).
+{
+  const { Credential, Challenge } = await import("mppx");
+  const { keccak256, toBytes } = await import("viem");
+  const { ourTempoPushTransfer } = await import("../src/mpp-tempo.js");
+  const { TRANSFER_WITH_MEMO_TOPIC } = await import("../src/tempo-confirm.js");
+  const SECRET = "geo-push-test-secret", REALM = "geo.test";
+  const OURS = "0x00000000000000000000000000000000000a11ce", STRANGER = "0x00000000000000000000000000000000000beef0";
+  const TOKEN = "0x20c0000000000000000000000000000000000000", OTHER_TOKEN = "0x20c0000000000000000000000000000000000009";
+  const VICTIM = "0x7777777777777777777777777777777777777777", BUYER = "0x2222222222222222222222222222222222222222";
+  const saved = { r: process.env.TEMPO_RECIPIENT_ADDRESS, c: process.env.TEMPO_CURRENCY };
+  process.env.TEMPO_RECIPIENT_ADDRESS = OURS; delete process.env.TEMPO_CURRENCY;
+  const pad = (a) => `0x${a.slice(2).padStart(64, "0")}`;
+  const memoFor = (id) => `0x${keccak256(toBytes("mpp")).slice(2, 10)}01${"0".repeat(40)}${keccak256(toBytes(id)).slice(2, 16)}`;
+  const minted = (recipient = OURS, currency = TOKEN, amount = "10000") => Challenge.from({ realm: REALM, method: "tempo", intent: "charge", expires: new Date(Date.now() + 300_000).toISOString(), request: { amount, currency, recipient, decimals: 6, methodDetails: { chainId: 4217 } }, secretKey: SECRET });
+  const forged = (recipient = STRANGER) => ({ id: "attacker-known-challenge", realm: REALM, method: "tempo", intent: "charge", expires: new Date(Date.now() + 300_000).toISOString(), request: { amount: "10000", currency: TOKEN, recipient, methodDetails: { chainId: 4217 } } });
+  const credOf = (challenge, hash) => Credential.serialize({ challenge, payload: { type: "hash", hash } });
+  // The chain, by hash: each receipt holds one TransferWithMemo log.
+  const chain = new Map();
+  const onChain = (hash, { token = TOKEN, from, to, id, value }) => chain.set(hash, { status: "0x1", logs: [{ address: token, topics: [TRANSFER_WITH_MEMO_TOPIC, pad(from), pad(to), memoFor(id)], data: `0x${BigInt(value).toString(16).padStart(64, "0")}` }] });
+  const reads = [];
+  const fetchImpl = async (_u, init) => { const h = JSON.parse(init.body).params[0]; reads.push(h); return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: chain.get(h) ?? null })); };
+  const reader = (r) => ourTempoPushTransfer(String(r.headers.authorization), { secretKey: SECRET, realm: REALM, rpcUrl: "http://stub", fetchImpl });
+  const recorded = [];
+  const mw = geo.sanctionedRegionsMiddleware({ env: {}, record: (e) => recorded.push(e), pushSender: reader, log: () => {} });
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+  const send = async (auth) => { const a = await run(mw, { ...req({ "cf-ipcountry": "IR", authorization: auth }), viaCdn: true }); await settle(); return a; };
+
+  // The probe: a forged challenge naming a stranger's transfer is never recorded.
+  const P = `0x${"ab".repeat(32)}`;
+  onChain(P, { from: VICTIM, to: STRANGER, id: "attacker-known-challenge", value: 10000 });
+  const pr = await send(credOf(forged(), P));
+  ok(pr.status === 451 && pr.body.transferClaimed === false && recorded.length === 0, "a push credential naming a transfer to someone else (a challenge we did not issue) is refused and never recorded");
+  ok(reads.length === 0, "a challenge we did not issue is refused before any chain read");
+  // A forged challenge that names OUR payTo (HMAC fails) is not recorded either.
+  const F = `0x${"ac".repeat(32)}`;
+  onChain(F, { from: VICTIM, to: OURS, id: "attacker-known-challenge", value: 10000 });
+  await send(credOf(forged(OURS), F));
+  ok(recorded.length === 0, "a challenge naming our payTo whose id does not HMAC-verify is never recorded");
+  // A challenge we minted for a stranger's address (never happens, but the
+  // recipient check is its own) is not recorded.
+  const S = `0x${"ad".repeat(32)}`;
+  const chS = minted(STRANGER);
+  onChain(S, { from: VICTIM, to: STRANGER, id: chS.id, value: 10000 });
+  await send(credOf(chS, S));
+  ok(recorded.length === 0, "a challenge whose recipient is not our Tempo payTo is never recorded");
+  // Our challenge, but the chain's transfer paid someone else or another token.
+  const W = `0x${"ae".repeat(32)}`, T = `0x${"af".repeat(32)}`;
+  const chW = minted(), chT = minted(OURS, OTHER_TOKEN);
+  onChain(W, { from: VICTIM, to: STRANGER, id: chW.id, value: 10000 });
+  onChain(T, { token: OTHER_TOKEN, from: VICTIM, to: OURS, id: chT.id, value: 10000 });
+  await send(credOf(chW, W)); await send(credOf(chT, T));
+  ok(recorded.length === 0, "our challenge with a transfer to someone else, or in a currency we do not offer, is never recorded");
+  // The live control: our challenge, a transfer to our payTo in our currency.
+  // The event carries the chain's sender and value (more than the challenge
+  // asked), never the credential's own amount.
+  const G = `0x${"b0".repeat(32)}`;
+  const chG = minted();
+  onChain(G, { from: BUYER, to: OURS, id: chG.id, value: 12345 });
+  await send(credOf(chG, G));
+  ok(recorded.length === 1 && recorded[0].payer === BUYER && recorded[0].pushHash === G && recorded[0].amount === "12345" && recorded[0].asset === TOKEN, `a transfer that paid this server is recorded with the chain's sender and value (${JSON.stringify(recorded[0] ? { payer: recorded[0].payer, amount: recorded[0].amount, asset: recorded[0].asset } : null)})`);
+  if (saved.r === undefined) delete process.env.TEMPO_RECIPIENT_ADDRESS; else process.env.TEMPO_RECIPIENT_ADDRESS = saved.r;
+  if (saved.c !== undefined) process.env.TEMPO_CURRENCY = saved.c;
+}
+
 // ---- the agent surfaces document the 451 while the block is on, and only then
 {
   const { openapiSpec } = await import("../src/pages.js");
