@@ -71,6 +71,29 @@ export async function runSanctionsStoreCases({ EV, sdb = null, ok, label }) {
     await EV.flushSanctionsEvents();
     const s = await stored(row.id);
     ok(s?.attempts === 4 && EV.sanctionsEventWriteLimits().pending === 0, `${label}: a replay whose write lands after a newer flush never lowers the row (stored attempts ${s?.attempts} of 4)`);
+
+    // An OLDER copy left in the journal by another process (a deploy overlap, a
+    // kill), replayed while this process writes a newer one: the replay's write
+    // lands last and must not lower the row.
+    EV.__resetSanctionsEventLimitsForTests();
+    const ev2 = { kind: "screen-hit", address: "0x" + "e8".repeat(20), rail: "x402", route: "POST /api/race" };
+    const row2 = await EV.recordSanctionsEvent(ev2);
+    for (let i = 0; i < 3; i++) await EV.recordSanctionsEvent(ev2); // 4 attempts, the last 3 not written yet
+    const older = { ...row2, attempts: 2, lastSeenAt: row2.at };
+    appendFileSync(journalFile(), JSON.stringify({ id: `case-older-${Date.now()}`, kind: "sanctions-row", payload: older, at: Date.now() }) + "\n");
+    EV.__setSanctionsStoreHookForTests?.(async (source) => { if (source === "replay") await sleep(150); });
+    if (recs) recs.get = async (...a) => { const r = await origGet.apply(recs, a); if (a[0] === EV.SANCTIONS_EVENTS_COLLECTION) await sleep(150); return r; };
+    try {
+      const rp = EV.replaySanctionsJournal();
+      await sleep(20);
+      await EV.flushSanctionsEvents();
+      await rp;
+    } finally {
+      EV.__setSanctionsStoreHookForTests?.(null);
+      if (recs) recs.get = origGet;
+    }
+    const s2 = await stored(row2.id);
+    ok(s2?.attempts === 4, `${label}: an older journaled copy replayed after a newer write never lowers the row (stored attempts ${s2?.attempts} of 4)`);
   }
 
   // ---- bounded
