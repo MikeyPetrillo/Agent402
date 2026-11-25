@@ -19,6 +19,7 @@ import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
+import { sanctionsGeoBlockEnabled } from "./sanctioned-regions.js";
 import { captureNote } from "./tool-output-examples.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
 import { getWalletHtml } from "./get-a-wallet.js";
@@ -868,6 +869,9 @@ ${ledgerFooterCompact()}`;
 const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
 // The 429 every catalog operation can answer: the unpaid-request limits, and
 // the in-flight coverage check on paid calls (src/inflight-cover.js).
+// The region refusal (src/sanctioned-regions.js), on every paid operation
+// while the block is on: answered before any payment is verified or settled.
+const OPENAPI_451 = Object.freeze({ description: "Unavailable in the caller's region (reason unavailable_in_region), before any payment is verified or settled: charged false on x402; a Tempo push transfer is not claimed." });
 const OPENAPI_429 = Object.freeze({ description: "Refused before the tool runs: one of the documented limits, such as a rate limit or a wallet whose balance does not cover its paid calls in flight. Not charged on x402; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof. Retry after Retry-After when present." });
 
 // Inlined, not a $ref: naive dereferencers that crawl this document resolve
@@ -973,6 +977,7 @@ const SKILL_PACK_PROMPT_SCHEMA = Object.freeze({
 });
 
 export function openapiSpec(baseUrl, catalog) {
+  const geoBlockOn = sanctionsGeoBlockEnabled();
   const paths = {};
   // MPP start-here set (src/mpp-flagship.js), already filtered to routes the
   // 402 offers tempo on. Marked per operation and indexed at the top level.
@@ -1026,6 +1031,7 @@ export function openapiSpec(baseUrl, catalog) {
         400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, and a JSON body, or form parts for a multipart tool), with the other method under alternate where it is served; a call over 1024 bytes carries only method and url" },
         // One shared object (the description is the same on every route).
         429: OPENAPI_429,
+        ...(geoBlockOn ? { 451: OPENAPI_451 } : {}),
       },
       "x-price": tool.price,
       ...(mppFlagshipBySlug.has(tool.slug) ? { "x-mpp-flagship": { order: mppFlagshipBySlug.get(tool.slug).order, why: mppFlagshipBySlug.get(tool.slug).why } } : {}),

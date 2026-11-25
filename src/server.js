@@ -665,7 +665,7 @@ import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader
 import { tempoGasSponsorshipReport } from "./tempo-charge-sponsor.js";
 import { createLateWatchLedger, startLateWatchSweep } from "./tempo-late-watches.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader, unconfirmedCaptureDebt } from "./mpp-stripe.js";
-import { confirmTempoSettlement } from "./tempo-confirm.js";
+import { confirmTempoSettlement, tempoPushSender } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
 import { redactSecrets } from "./tools/redact.js";
 import { warmLazyDeps } from "./tools/lazy-deps.js";
@@ -3118,10 +3118,22 @@ app.use(sanctionedRegionsMiddleware({
   // proves its payer: an x402 exact authorization to our payTo, its signer
   // recovered (verifiedGeoPayer). Anything else is counted only.
   verify: (req) => verifiedGeoPayer(req, { payTo: WALLET_ADDRESS }),
+  // A Tempo push credential names a transfer already sent: the event names
+  // its sender as the chain receipt shows it (a bounded read, null on any
+  // doubt), never the credential's own `source`.
+  pushSender: (req) => tempoPushSender(String(req.headers?.authorization || "")),
   // The location headers are read in memory; the event keeps only the
   // sanctioned country or region code that is the refusal's reason.
-  record: ({ req, payer, country, region }) => {
+  record: ({ req, payer, country, region, pushHash }) => {
     let network = null, amount = null, asset = null;
+    if (pushHash) {
+      let r = {};
+      try {
+        const q = JSON.parse(Buffer.from(String(req.headers.authorization).trim().slice(8), "base64url").toString("utf8"))?.challenge?.request;
+        r = (typeof q === "string" ? JSON.parse(Buffer.from(q, "base64url").toString("utf8")) : q) || {};
+      } catch { r = {}; }
+      return recordSanctionsEvent({ kind: "geo-payment", address: payer, rail: "tempo", network: "tempo", amount: r.amount ?? null, asset: r.currency ?? null, route: `${req.method} ${req.path}`, ip: req.ip, country, region, detail: `push transfer ${pushHash}, not claimed for the request` });
+    }
     try {
       const p = decodePaymentHeader(paymentHeaderOf(req));
       const acc = p?.accepted || p;
@@ -5295,12 +5307,13 @@ app.get("/api/reports/public/:publicId", async (req, res) => {
   if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
   const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return res.status(404).json({ status: "not_found" });
-  res.set("Cache-Control", res.locals.publicReportNegotiated ? "private, max-age=300" : "public, max-age=300, stale-while-revalidate=900").json(r);
+  // A report a model wrote carries the AI mark here as on the buyer's own link.
+  res.set("Cache-Control", res.locals.publicReportNegotiated ? "private, max-age=300" : "public, max-age=300, stale-while-revalidate=900").json(withReportAiMark(res, r));
 });
 app.get("/api/reports/sample/:product", (req, res) => {
   const j = sampleJson(String(req.params.product || ""));
   if (!j) return res.status(404).json({ status: "not_found" });
-  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=900").json(j);
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=900").json(withReportAiMark(res, j));
 });
 // /markets - one-call front door for the keyless market-data tools (prices read from CATALOG).
 app.get("/markets", (_req, res) => htmlCache(res, 300, 900).send(marketsPage(BASE_URL, CATALOG)));
@@ -12846,10 +12859,14 @@ app.use(createIdempotency({
       } };
     }
     console.warn(`[hangup] resend of a refunded payment not served (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id} ${row.status})`);
+    // A row held as blocked reads `held`, as the refund lookup names it.
+    const held = row.status === "blocked";
     return { serve: false, status: 402, body: {
       error: "payment_refunded",
-      hint: "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
-      refund: { status: ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
+      hint: held
+        ? "The payment this request carries no longer pays for a request: its first answer was never delivered, and a refund of it is recorded and held for review; it has not been paid. Request the resource again with a fresh payment."
+        : "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
+      refund: { status: held ? "held" : ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
     } };
   },
   // The same payment sent again after its settle was cut at the network's

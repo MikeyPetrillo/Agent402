@@ -79,6 +79,14 @@ if (ONLY.includes("1")) {
     const paid = resendSpentBody({ status: "paid", tx, baseUrl: "" });
     await ok(paid.charged === true && paid.refundOwed === false && paid.refund.status === "paid" && /was refunded to the paying wallet/.test(paid.hint) && !/owed/.test(paid.hint),
       `a paid refund's resend answer says it was refunded, refundOwed false, and never that it is owed (${paid.hint})`);
+    const held = resendSpentBody({ status: "blocked", tx, baseUrl: "" });
+    ok(held.refund.status === "held" && held.refundOwed === false && held.charged === true && /held for review; it has not been paid/.test(held.hint) && !/blocked|sanction/i.test(JSON.stringify(held)), "a resend past the bound whose refund is held reads held, unpaid, with no reason named");
+    {
+      const { readFileSync } = await import("node:fs");
+      const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+      const at = server.indexOf('error: "payment_refunded"');
+      ok(at > 0 && /const held = row\.status === "blocked";/.test(server.slice(at - 400, at)) && /status: held \? "held"/.test(server.slice(at, at + 900)), "a resend of a payment whose refund is held reads held on payment_refunded too");
+    }
     const junk = resendSpentBody({ status: "weird", tx, baseUrl: "" });
     await ok(junk.refund.status === "owed" && junk.refundOwed === true, "an unknown refund status reads as owed");
   }

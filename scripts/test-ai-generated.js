@@ -31,6 +31,15 @@ const G = await import("../src/ai-generated.js");
   if (codeKind) { const h3 = {}; const c = { status: "done", kind: codeKind, report: "x" }; ok(G.withReportAiMark({ setHeader: (k, v) => { h3[k] = v; } }, c) === c && !h3["X-AI-Generated"], `a report our code wrote (${codeKind}) is not marked`); }
   const server = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/json\(withReportAiMark\(res, await _humanCheckout\.fulfill\(/.test(server) && /res\.json\(v \? withReportAiMark\(res, v\)/.test(server), "both report routes send their body through withReportAiMark");
+  ok(/\.json\(withReportAiMark\(res, r\)\);\n\}\);\napp\.get\("\/api\/reports\/sample\/:product"/.test(server) && /\.json\(withReportAiMark\(res, j\)\);\n\}\);\n\/\/ \/markets/.test(server), "the shared report and the sample report routes send their body through withReportAiMark");
+  {
+    const { sampleJson, SAMPLE_PRODUCTS } = await import("../src/sample-reports.js");
+    const { reportIsModelWritten } = await import("../src/report-disclosure.js");
+    const modelSample = SAMPLE_PRODUCTS.find((p) => reportIsModelWritten(sampleJson(p)?.kind));
+    const h4 = {};
+    const marked = modelSample ? G.withReportAiMark({ setHeader: (k, v) => { h4[k] = v; } }, sampleJson(modelSample)) : null;
+    ok(modelSample && marked.aiGenerated === true && h4["X-AI-Generated"] === "true", `a model-written sample report (${modelSample}) is marked by the same call`);
+  }
 }
 const { AI_VOICE_HEADER } = await import("../src/ai-voice.js");
 ok(G.AI_GENERATED_HEADER === AI_VOICE_HEADER && G.AI_GENERATED_HEADER === "X-AI-Generated", "one header name for every model-backed answer, the one speech already sends");

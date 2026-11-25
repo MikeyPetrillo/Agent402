@@ -30,7 +30,12 @@
 // states. A payment nothing here can verify (another rail, a forged or
 // expired signature) is counted only. One event per payer and nonce, and at
 // most GEO_EVENTS_PER_CLIENT_DAY per client address a day; past either, a
-// count. A refusal whose only reason is a country our own choice blocks
+// count. A Tempo PUSH credential (payload type "hash") names a transfer the
+// buyer already broadcast: the 451 then neither says nothing was charged nor
+// carries `charged: false`, says the transfer was not claimed for the request,
+// and the event names the transfer's sender as the chain shows it (the
+// caller's `pushSender(req)`, a bounded receipt read), deduped on the
+// transaction hash; a sender the chain does not show is a count. A refusal whose only reason is a country our own choice blocks
 // rather than a sanctions program (NON_PROGRAM_COUNTRIES: Syria, whose
 // program was revoked) is counted only, never recorded as a report. An event
 // keeps the country or region code that is the refusal's reason (a report
@@ -88,6 +93,25 @@ export async function verifiedGeoPayer(req, { payTo } = {}) {
 }
 
 export const SANCTIONED_REGION_TEXT = `This service is not available in your region. ${NOT_CHARGED}`;
+// A push credential's money moved before the request arrived, so the refusal
+// cannot say nothing was charged: it says what this server did with it.
+export const SANCTIONED_REGION_PUSH_TEXT = "This service is not available in your region. The transfer this payment credential names was not claimed for this request.";
+
+/** The transaction a Tempo PUSH credential (`Authorization: Payment <b64url
+ *  JSON>`, payload type "hash") names, lowercased; null for anything else.
+ *  Reads the credential's own words only; never throws. */
+export function pushCredentialHashOf(req) {
+  try {
+    const auth = String(req?.headers?.authorization ?? "");
+    const m = /^Payment\s+([A-Za-z0-9_\-+/=]{1,8192})$/.exec(auth.trim());
+    if (!m) return null;
+    const cred = JSON.parse(Buffer.from(m[1], "base64url").toString("utf8"));
+    const p = cred?.payload;
+    if (cred?.challenge?.method !== "tempo" || p?.type !== "hash") return null;
+    const h = String(p.hash || "").toLowerCase();
+    return /^0x[0-9a-f]{64}$/.test(h) ? h : null;
+  } catch { return null; }
+}
 
 export function sanctionsGeoBlockEnabled(env = process.env) {
   return String(env.SANCTIONS_GEO_BLOCK ?? "").trim().toLowerCase() !== "off";
@@ -201,10 +225,19 @@ export function __resetSanctionedRegionsForTests() {
  * proves its payer (else null); `record(event)` keeps a refused paid request
  * the gate passed, with its proven payer (best effort, never awaited).
  */
-export function sanctionedRegionsMiddleware({ env = process.env, trustedOf = (req) => req.viaCdn === true, verify = null, record = null, log = console.warn, gate = null } = {}) {
+export function sanctionedRegionsMiddleware({ env = process.env, trustedOf = (req) => req.viaCdn === true, verify = null, pushSender = null, record = null, log = console.warn, gate = null, pushGate = null } = {}) {
   if (!sanctionsGeoBlockEnabled(env)) return function sanctionedRegionsOff(_req, _res, next) { next(); };
   const countries = sanctionedCountries(env);
   const passes = gate || createGeoPaymentGate({ verify });
+  // A push transfer's event: the sender the chain shows, keyed on the hash.
+  const pushPasses = pushGate || createGeoPaymentGate({
+    verify: async (req) => {
+      const hash = pushCredentialHashOf(req);
+      if (!hash || typeof pushSender !== "function") return null;
+      const sender = await pushSender(req);
+      return typeof sender === "string" && sender ? { payer: sender, nonce: hash } : null;
+    },
+  });
   let loggedAt = 0;
   return function sanctionedRegions(req, res, next) {
     let trusted = false;
@@ -221,12 +254,13 @@ export function sanctionedRegionsMiddleware({ env = process.env, trustedOf = (re
     counts.byCountry[key] = (counts.byCountry[key] || 0) + 1;
     counts.lastAt = new Date().toISOString();
     const withPayment = Boolean(paymentHeaderOf(req) || req.headers?.authorization?.toString?.().startsWith?.("Payment "));
+    const pushHash = withPayment ? pushCredentialHashOf(req) : null;
     if (withPayment) {
       counts.refusedWithPayment++;
       if (typeof record === "function") {
         try {
-          Promise.resolve(passes({ req, country: hit.country, region: hit.region }))
-            .then((ev) => (ev ? record({ req, ...ev }) : null))
+          Promise.resolve((pushHash ? pushPasses : passes)({ req, country: hit.country, region: hit.region }))
+            .then((ev) => (ev ? record({ req, ...ev, ...(pushHash ? { pushHash } : {}) }) : null))
             .catch(() => {});
         } catch { /* never breaks the answer */ }
       }
@@ -237,6 +271,7 @@ export function sanctionedRegionsMiddleware({ env = process.env, trustedOf = (re
     }
     res.status(451);
     res.setHeader("Cache-Control", "no-store");
+    if (pushHash) return res.json({ error: SANCTIONED_REGION_PUSH_TEXT, reason: "unavailable_in_region", transferClaimed: false });
     return res.json({ error: SANCTIONED_REGION_TEXT, reason: "unavailable_in_region", charged: false });
   };
 }

@@ -29,6 +29,7 @@ delete process.env.SANCTIONS_GEO_BLOCK;
 delete process.env.SANCTIONS_GEO_COUNTRIES;
 
 const geo = await import("../src/sanctioned-regions.js");
+const { NOT_CHARGED } = await import("../src/not-charged.js");
 const ev = await import("../src/sanctions-events.js");
 
 let pass = 0;
@@ -86,6 +87,52 @@ const run = (mw, r) => new Promise((resolve) => {
   const v = geo.sanctionedRegionsView({});
   ok(v.refused >= 2 && v.refusedWithPayment === 1 && v.countedOnly.unverified === 1 && v.eventsRecorded === 0 && v.byCountry.KP >= 1 && v.regionHeaders === "absent", "the operator view counts refusals, the unverified payment as counted only, and says region headers are absent");
   ok(!/sanction|IR|KP|UA-/.test(logged.join(" ").replace(/\[sanctions-geo\]/g, "")), `the refusal log line names no location (${logged[0] || "none"})`);
+}
+
+// ---- a Tempo push credential: the money moved before the request arrived
+{
+  const { Credential } = await import("mppx");
+  const push = (hash) => Credential.serialize({ challenge: { id: "c1", realm: "r", method: "tempo", intent: "charge", request: { amount: "10000", currency: "0x20c0000000000000000000000000000000000000", recipient: "0x000000000000000000000000000000000000dead" } }, payload: { type: "hash", hash } });
+  const H1 = `0x${"ab".repeat(32)}`, H2 = `0x${"cd".repeat(32)}`;
+  ok(geo.pushCredentialHashOf({ headers: { authorization: push(H1) } }) === H1, "a push credential's transaction hash is read");
+  ok(geo.pushCredentialHashOf({ headers: { authorization: "Payment x" } }) === null && geo.pushCredentialHashOf({ headers: {} }) === null, "anything else names no push transaction");
+  const recorded = [];
+  const senders = { [H1]: "0x1111111111111111111111111111111111111111", [H2]: null };
+  const mw = geo.sanctionedRegionsMiddleware({ env: {}, record: (e) => recorded.push(e), pushSender: async (r) => senders[geo.pushCredentialHashOf(r)] ?? null, log: () => {} });
+  const a = await run(mw, { ...req({ "cf-ipcountry": "IR", authorization: push(H1) }), viaCdn: true });
+  ok(a.status === 451 && a.body.charged === undefined && a.body.transferClaimed === false && a.body.reason === "unavailable_in_region", "a push credential's 451 carries transferClaimed:false and no charged:false");
+  ok(!a.body.error.includes(NOT_CHARGED) && /not claimed/.test(a.body.error), `the push 451 does not say nothing was charged (${a.body.error})`);
+  await new Promise((r) => setTimeout(r, 20));
+  ok(recorded.length === 1 && recorded[0].payer === senders[H1] && recorded[0].pushHash === H1 && recorded[0].country === "IR", "the push transfer is recorded with the sender the chain shows, keyed on its hash");
+  await run(mw, { ...req({ "cf-ipcountry": "IR", authorization: push(H1) }), viaCdn: true });
+  await new Promise((r) => setTimeout(r, 20));
+  ok(recorded.length === 1, "the same push transfer sent again is not recorded twice");
+  await run(mw, { ...req({ "cf-ipcountry": "IR", authorization: push(H2) }), viaCdn: true });
+  await new Promise((r) => setTimeout(r, 20));
+  ok(recorded.length === 1, "a push transfer whose sender the chain does not show is counted only");
+  const sy = await run(mw, { ...req({ "cf-ipcountry": "SY", authorization: push(`0x${"ef".repeat(32)}`) }), viaCdn: true });
+  await new Promise((r) => setTimeout(r, 20));
+  ok(sy.status === 451 && sy.body.transferClaimed === false && recorded.length === 1, "a push transfer from a country blocked by choice (SY) is refused the same way and never recorded as a report");
+  // The x402 payment's 451 is unchanged.
+  const x = await run(mw, { ...req({ "cf-ipcountry": "IR", "payment-signature": "e30=" }), viaCdn: true });
+  ok(x.body.charged === false && x.body.error.includes(NOT_CHARGED), "an x402 payment's 451 still says nothing was charged");
+}
+
+// ---- the agent surfaces document the 451 while the block is on, and only then
+{
+  const { openapiSpec } = await import("../src/pages.js");
+  const { llmsTxt } = await import("../src/seo.js");
+  const { KIT } = await import("../src/tools/kit.js");
+  const t = KIT.find((x) => x.slug === "uuid") || KIT[0];
+  const opOf = () => openapiSpec("https://example.test", { [t.route]: t }).paths[t.route.split(" ")[1]]?.[t.route.split(" ")[0].toLowerCase()];
+  const on451 = opOf()?.responses?.["451"]?.description || "";
+  ok(/unavailable_in_region/.test(on451) && /before any payment is verified or settled/.test(on451), `/openapi.json: a paid operation documents the 451 (${t.slug})`);
+  ok(/- Regions: a request from a region this service does not serve is answered `451` \(reason `unavailable_in_region`\)/.test(llmsTxt("https://example.test", {})), "/llms.txt names the 451 and its reason");
+  const prior = process.env.SANCTIONS_GEO_BLOCK;
+  process.env.SANCTIONS_GEO_BLOCK = "off";
+  try {
+    ok(!opOf()?.responses?.["451"] && !/unavailable_in_region/.test(llmsTxt("https://example.test", {})), "with the block off, neither surface names the 451");
+  } finally { if (prior === undefined) delete process.env.SANCTIONS_GEO_BLOCK; else process.env.SANCTIONS_GEO_BLOCK = prior; }
 }
 
 // ---- the geo-payment gate: only a payment whose signature proves its payer is reportable
