@@ -717,5 +717,23 @@ for (const slug of ["sol-token-safety", "sol-token-report", "sol-token-holders"]
   ok(SOLANA_INTEL_TOOLS.find((x) => x.slug === slug).discovery.output.example.credit === RUGCHECK_ATTRIBUTION, `${slug}: published example carries the RugCheck credit`);
 }
 
+// A tool listed whatever RUGCHECK_TOOLS says never points a buyer at one the
+// switch unlists (src/rugcheck-switch.js): its description, its example and
+// every note string in the kit's source name only tools that are always listed.
+{
+  const { RUGCHECK_SLUGS } = await import("../src/rugcheck-switch.js");
+  const { readFileSync } = await import("node:fs");
+  const names = [...RUGCHECK_SLUGS];
+  const named = (text) => names.filter((n) => new RegExp(`\\b${n}\\b`).test(text));
+  for (const t of SOLANA_INTEL_TOOLS.filter((x) => !RUGCHECK_SLUGS.has(x.slug))) {
+    const hits = named(`${t.description} ${JSON.stringify(t.discovery || {})}`);
+    ok(hits.length === 0, `${t.slug}: names no switched-off tool (${hits.join(", ") || "none"})`);
+  }
+  const src = readFileSync(new URL("../src/tools/solana-intel-kit.js", import.meta.url), "utf8");
+  const notes = [...src.matchAll(/^const (\w+_NOTE) = (["`])([\s\S]*?)\2;$/gm)];
+  const noteHits = notes.filter(([, , , body]) => named(body).length).map(([, n]) => n);
+  ok(notes.length >= 2 && noteHits.length === 0, `the kit's answer notes name no switched-off tool (${notes.length} read; naming one: ${noteHits.join(", ") || "none"})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -561,8 +561,8 @@ const byLiquidity = (a, b) => (b.liquidityUsd || 0) - (a.liquidityUsd || 0);
 // the first mint's full pair list in another.
 const SEARCH_FALLBACK_MINTS = 5;
 const SEARCH_FALLBACK_SOURCES = ["dexscreener", "jupiter"];
-const SEARCH_NOTE = "Rows keep DexScreener relevance order. Several tokens can share a ticker; check hasProfile, liquidity and age, then confirm the mint with sol-token-safety.";
-const FALLBACK_NOTE = "No Solana pair in DexScreener's search matched the query, so the mints came from a Solana token index (verified first, listed in fallback.mints). Row order: the first mint's pairs where it is the base token, by liquidity; the other mints' pairs in that order; the search's own Solana rows in relevance order; then pairs that hold a listed mint only as the quote token. Several tokens can share a ticker; check hasProfile, liquidity and age, then confirm the mint with sol-token-safety.";
+const SEARCH_NOTE = "Rows keep DexScreener relevance order. Several tokens can share a ticker; check hasProfile, liquidity and age, then confirm the mint, its pairs and its liquidity with sol-token-pairs.";
+const FALLBACK_NOTE = "No Solana pair in DexScreener's search matched the query, so the mints came from a Solana token index (listed in fallback.mints). Row order: the first mint's pairs where it is the base token, by liquidity; the other mints' pairs in that order; the search's own Solana rows in relevance order; then pairs that hold a listed mint only as the quote token. Several tokens can share a ticker; check hasProfile, liquidity and age, then confirm the mint, its pairs and its liquidity with sol-token-pairs.";
 
 const searchKey = (v) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 /** The whole query and each word of it, folded to letters and digits. */
@@ -1134,7 +1134,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order. When that search holds no matching Solana pair (a ticker busy on other chains), the mints come from a Solana token index, verified first, and their pairs are read by mint. Each row: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not), with computed signals per row (liquidity and age bands, 24h buy share, turnover, flags). When several mints answer to the query's ticker, the answer names the one with the most liquidity and marks every other one's rows tickerShadow. Resolve a ticker to a mint before calling sol-token-safety or sol-price. Keyless.",
+      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order. When that search holds no matching Solana pair (a ticker busy on other chains), the mints come from a Solana token index, verified first, and their pairs are read by mint. Each row: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not), with computed signals per row (liquidity and age bands, 24h buy share, turnover, flags). When several mints answer to the query's ticker, the answer names the one with the most liquidity and marks every other one's rows tickerShadow. Resolve a ticker to a mint here before calling sol-token-pairs or sol-price, which take mint addresses, not tickers. Keyless.",
     tags: ["solana", "search", "token", "ticker", "dex", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
@@ -1244,7 +1244,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "What Solana tokens are being pushed right now: a public DEX pair index's top boosted tokens (paid promotion, ranked by boost amount - a signal of marketing spend, not quality) and the latest token profiles (fresh listings with a filled-in profile), both filtered to Solana. Each row carries the mint, the index's token page URL, description snippet and links. Computed on top: each boost's share of the Solana boost spend and the top five's share, the mints that are both boosted and newly profiled, community takeovers, and per row the link count and whether it lists a website and socials. Feed the mints into sol-token-safety to read each one's authorities, LP lock and holder share before going further. Keyless; two small reads in parallel.",
+      "What Solana tokens are being pushed right now: a public DEX pair index's top boosted tokens (paid promotion, ranked by boost amount - a signal of marketing spend, not quality) and the latest token profiles (fresh listings with a filled-in profile), both filtered to Solana. Each row carries the mint, the index's token page URL, description snippet and links. Computed on top: each boost's share of the Solana boost spend and the top five's share, the mints that are both boosted and newly profiled, community takeovers, and per row the link count and whether it lists a website and socials. Feed the mints into sol-token-pairs to read each one's pairs, liquidity, volume and pair age, or into sol-price for its USD price, before going further. Keyless; two small reads in parallel.",
     tags: ["solana", "trending", "boosts", "new-tokens", "memecoin", "discovery", "spl"],
     discovery: {
       bodyType: "json",
