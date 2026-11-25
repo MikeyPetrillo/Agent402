@@ -181,8 +181,9 @@ const counts = { refused: 0, refusedWithPayment: 0, byCountry: {}, lastAt: null,
 /**
  * The geo-payment event gate: resolves what to record for a refused paid
  * request, or null (a country blocked by choice: counted only). `verify(req)`
- * resolves { payer, nonce } for a payment whose signature proves its payer,
- * else null. A proven payment resolves its event (the same payment re-sent
+ * resolves { payer, nonce } for a payment whose payer is proven (in
+ * production only a Tempo push whose transfer to us the chain shows; an x402
+ * payment is never verified before the 451, so it has no `verify`), else null. A proven payment resolves its event (the same payment re-sent
  * too: the store adds an attempt to its row); past the per-client day bound
  * or the hourly bound, or unproven, it resolves `{ aggregate: true, kind,
  * reason, country, region }` for the hour's aggregate row. Exported for the
@@ -257,8 +258,9 @@ export function __resetSanctionedRegionsForTests() {
  * The middleware. Mount after the CDN resolver (it sets req.viaCdn) and
  * before every payment gate, idempotency cache and async-job replay.
  * `trustedOf(req)` says whether the Cloudflare headers are Cloudflare's;
- * `verify(req)` resolves { payer, nonce } for a payment whose signature
- * proves its payer (else null); `record(event)` keeps a refused paid request
+ * `verify(req)` resolves { payer, nonce } for a payment whose payer is
+ * proven (else null; production passes none, since the 451 comes before any
+ * payment is verified, and records a push through `pushSender`); `record(event)` keeps a refused paid request
  * as the gate resolved it: an event with its proven payer, or an aggregate
  * (`aggregate: true`, kind, reason; best effort, never awaited).
  */

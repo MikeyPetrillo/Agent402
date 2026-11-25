@@ -238,7 +238,7 @@ ok(/required choice, to request that we start at once/.test(termsText), "terms: 
 }
 // The region block's sentences follow its switch on both pages, by content.
 {
-  const geoPrivacy = /we read only the country and the region, in memory, to refuse requests from the countries and regions we do not serve \(see the terms\) and, for the analytics choice above, the country, and we do not store or log any of them, with one exception: a request refused from a region under U\.S\. sanctions that carried a payment whose signature proves the paying wallet, or that named a transfer already sent whose sender the chain shows, keeps the country or region code as the reason it was refused/;
+  const geoPrivacy = /we read only the country and the region, in memory, to refuse requests from the countries and regions we do not serve \(see the terms\) and, for the analytics choice above, the country, and we do not store or log any of them, with one exception: a request refused from a region under U\.S\. sanctions that carried a payment keeps the country or region code as the reason it was refused, in an hourly count, or, when it named a transfer already sent whose sender the chain shows, with that sender \(see Retention\)/;
   ok(geoPrivacy.test(privacyText) && /or refused because it came from a region under U\.S\. sanctions/.test(privacyText), "privacy: the location sentence and the retention clause, as worded, while the block is on");
   ok(/a transfer that a payment credential says was already sent is not claimed for it/.test(termsText), "terms: a push transfer from a refused region is not claimed");
   const prior = process.env.SANCTIONS_GEO_BLOCK;
